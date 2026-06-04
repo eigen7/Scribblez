@@ -1,4 +1,4 @@
-"""Torch ``Dataset`` over Scribblez JSON game logs.
+"""Torch ``Dataset`` over Scribblez GCG game logs.
 
 Each *example* is a single turn from a game. The dataset replays each game
 forward, so that for every turn we can produce:
@@ -28,7 +28,6 @@ how to consume it.
 from __future__ import annotations
 
 import dataclasses
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +35,8 @@ from typing import Any, Iterable, Iterator, List, Sequence
 
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+from scribblez.gcg import parse_gcg
 
 EMPTY = 26  # sentinel value for an empty board cell in the integer board tensor
 
@@ -117,7 +118,7 @@ def _replay_game(game: dict, game_path: str) -> List[TurnSample]:
 
 
 class GameLogDataset(Dataset):
-    """Dataset of per-turn examples drawn from a directory or list of JSON logs.
+    """Dataset of per-turn examples drawn from a directory or list of GCG logs.
 
     The whole corpus is loaded and replayed eagerly into memory. This is fine
     for development-scale corpora (thousands of games); the eventual binary
@@ -129,14 +130,13 @@ class GameLogDataset(Dataset):
         for s in sources:
             p = Path(s)
             if p.is_dir():
-                paths.extend(sorted(p.glob("*.json")))
+                paths.extend(sorted(p.glob("*.gcg")))
             else:
                 paths.append(p)
         self._paths = paths
         self._samples: List[TurnSample] = []
         for p in paths:
-            with p.open() as f:
-                game = json.load(f)
+            game = parse_gcg(p)
             self._samples.extend(_replay_game(game, str(p)))
 
     def __len__(self) -> int:

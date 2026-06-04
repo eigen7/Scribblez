@@ -1,7 +1,7 @@
 """Quick smoke test for the GameLogDataset.
 
 Usage:
-    python -m scripts.inspect_log path/to/game.json [more.json ...]
+    python -m scripts.inspect_log path/to/game.gcg [more.gcg ...]
 """
 
 from __future__ import annotations
