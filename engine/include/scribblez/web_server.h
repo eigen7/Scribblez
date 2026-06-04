@@ -1,4 +1,5 @@
 #pragma once
+
 #include "scribblez/agent.h"
 #include "scribblez/board.h"
 #include "scribblez/move.h"

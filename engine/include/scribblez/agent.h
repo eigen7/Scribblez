@@ -1,9 +1,9 @@
 #pragma once
+
 #include "scribblez/board.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
-#include <memory>
 #include <random>
 #include <string>
 #include <vector>
