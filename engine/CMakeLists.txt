@@ -1,5 +1,6 @@
 add_library(scribblez_core STATIC
   src/tile.cpp
+  src/tile_counts.cpp
   src/rack.cpp
   src/bag.cpp
   src/board.cpp

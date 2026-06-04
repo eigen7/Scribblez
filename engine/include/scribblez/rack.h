@@ -1,43 +1,40 @@
 #pragma once
 
 #include "scribblez/tile.h"
+#include "scribblez/tile_counts.h"
 
 #include <array>
 #include <string>
 
 namespace scribblez {
 
-// A Rack is a multiset of tiles, each tile being a letter A..Z or a blank.
+// A Rack holds up to RACK_SIZE tiles. It stores them as a sorted, fixed-size
+// array (A..Z then blanks, unused slots empty) -- compact and trivially
+// serializable. For histogram-style bookkeeping, ask for counts().
 class Rack {
  public:
-  Rack() { counts_.fill(0); }
+  void add(Tile t);     // insert, keeping the array sorted
+  bool remove(Tile t);  // remove one occurrence; false if absent
+  int count(Tile t) const;
+  int blanks() const { return count(BLANK); }
 
-  void add(Tile t) { ++counts_[t]; }
-  bool remove(Tile t) {
-    if (counts_[t] == 0) return false;
-    --counts_[t];
-    return true;
-  }
-  int count(Tile t) const { return counts_[t]; }
-  int blanks() const { return counts_[BLANK]; }
+  int size() const { return size_; }
+  bool empty() const { return size_ == 0; }
 
-  int size() const {
-    int s = 0;
-    for (int c : counts_) s += c;
-    return s;
-  }
-  bool empty() const { return size() == 0; }
-
-  // String form: letters in alphabetical order followed by '?' for blanks.
+  // Letters in alphabetical order followed by '?' for each blank.
   std::string to_string() const;
 
-  // Sum of tile values currently in the rack (blanks count as 0).
+  // Sum of tile values currently on the rack (blanks count as 0).
   int point_value() const;
 
-  const std::array<int, 27>& counts() const { return counts_; }
+  // Histogram view (e.g. for movegen's scratch).
+  TileCounts counts() const;
+
+  const std::array<Tile, RACK_SIZE>& tiles() const { return tiles_; }
 
  private:
-  std::array<int, 27> counts_{};
+  std::array<Tile, RACK_SIZE> tiles_{};  // sorted ascending; unused slots empty
+  int size_ = 0;
 };
 
 }  // namespace scribblez

@@ -265,7 +265,7 @@ struct GenState {
   const Dictionary& dict;
   const std::vector<CrossCheck>& cross;
   const std::vector<bool>& anchor;
-  Rack rack;
+  TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
 
   // Recursion state for the current word being built.
@@ -461,7 +461,7 @@ struct GaddagGen {
   const Dictionary& dict;
   const std::vector<CrossCheck>& cross;
   const std::vector<bool>& anchor;
-  Rack rack;
+  TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
 
   int current_row = 0;
@@ -574,11 +574,11 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
     auto cross = compute_cross_checks(view, dict_);
     if (algo == GenAlgo::GADDAG) {
       auto anchors = compute_gaddag_anchors(view);
-      GaddagGen st{view, dict_, cross, anchors, rack, out};
+      GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
     } else {
       auto anchors = compute_anchors(view);
-      GenState st{view, dict_, cross, anchors, rack, out};
+      GenState st{view, dict_, cross, anchors, rack.counts(), out};
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
     }
   }
