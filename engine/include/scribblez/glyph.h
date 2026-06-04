@@ -1,0 +1,61 @@
+#pragma once
+
+#include "scribblez/tile.h"
+
+#include <cstdint>
+
+namespace scribblez {
+
+// The face of a board square (or a slot in a move): empty, a played letter
+// (optionally a designated blank), or an unassigned blank (a blank with no
+// chosen letter -- only meaningful in a move/rack, never on the board).
+//
+// One byte, with Empty == 0 so a zero-filled board/array is all-empty:
+//   0        empty
+//   1..26    played letter A..Z            (letter index = code - 1)
+//   27..52   designated blank, shows A..Z  (letter index = code - 27)
+//   53       unassigned blank
+class Glyph {
+ public:
+  constexpr Glyph() = default;  // empty
+
+  static constexpr Glyph empty() { return Glyph(0); }
+  static constexpr Glyph of(Tile letter) { return Glyph(static_cast<uint8_t>(letter.index() + 1)); }
+  static constexpr Glyph of_blank(Tile letter) {
+    return Glyph(static_cast<uint8_t>(letter.index() + 27));
+  }
+  static constexpr Glyph blank() { return Glyph(53); }  // unassigned
+
+  // A tile played as a designated blank renders that letter but scores nothing.
+  static constexpr Glyph played(Tile letter, bool is_blank) {
+    return is_blank ? of_blank(letter) : of(letter);
+  }
+
+  constexpr bool is_empty() const { return code_ == 0; }
+  constexpr bool is_blank() const { return code_ >= 27; }            // designated or not
+  constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
+  constexpr Tile letter() const {  // valid iff has_letter()
+    return Tile::of(code_ <= 26 ? code_ - 1 : code_ - 27);
+  }
+  int value() const { return has_letter() && !is_blank() ? letter().value() : 0; }
+  constexpr char to_char() const {
+    if (is_empty()) return '.';
+    if (code_ == 53) return '?';
+    return static_cast<char>('A' + (code_ <= 26 ? code_ - 1 : code_ - 27));
+  }
+  constexpr uint8_t code() const { return code_; }
+
+  constexpr bool operator==(Glyph o) const { return code_ == o.code_; }
+  constexpr bool operator!=(Glyph o) const { return code_ != o.code_; }
+
+ private:
+  explicit constexpr Glyph(uint8_t code) : code_(code) {}
+  uint8_t code_ = 0;
+};
+
+static_assert(sizeof(Glyph) == 1, "Glyph must pack into one byte");
+
+// Free helper so existing `is_empty(cell)` call sites keep working.
+inline bool is_empty(Glyph g) { return g.is_empty(); }
+
+}  // namespace scribblez

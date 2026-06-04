@@ -19,7 +19,7 @@ constexpr uint32_t ALL_LETTERS_MASK = (1u << 26) - 1u;
 struct View {
   const Board& board;
   bool transposed;
-  Square at(int r, int c) const { return transposed ? board.at(c, r) : board.at(r, c); }
+  Glyph at(int r, int c) const { return transposed ? board.at(c, r) : board.at(r, c); }
   Premium premium_at(int r, int c) const {
     return transposed ? board.premium_at(c, r) : board.premium_at(r, c);
   }
@@ -43,7 +43,7 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
   std::vector<CrossCheck> out(BOARD_SIZE * BOARD_SIZE);
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      Square here = view.at(r, c);
+      Glyph here = view.at(r, c);
       if (!is_empty(here)) continue;  // cross-check only meaningful for empty squares
 
       // Walk up (decreasing r at fixed c) collecting existing letters (top-to-bottom order: from
@@ -68,20 +68,20 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
         int prefix_score = 0;
         bool prefix_ok = true;
         for (int rr = top; rr <= r - 1; ++rr) {
-          Square sq = view.at(rr, c);
-          auto tr = dict.step(prefix_node, sq.letter);
+          Glyph sq = view.at(rr, c);
+          auto tr = dict.step(prefix_node, sq.letter());
           if (!tr.valid) {
             prefix_ok = false;
             break;
           }
           prefix_node = tr.next;
-          if (!sq.is_blank) prefix_score += TILE_VALUES[sq.letter];
+          if (!sq.is_blank()) prefix_score += TILE_VALUES[sq.letter()];
         }
         // Sum suffix score upfront.
         int suffix_score = 0;
         for (int rr = r + 1; rr <= bot; ++rr) {
-          Square sq = view.at(rr, c);
-          if (!sq.is_blank) suffix_score += TILE_VALUES[sq.letter];
+          Glyph sq = view.at(rr, c);
+          if (!sq.is_blank()) suffix_score += TILE_VALUES[sq.letter()];
         }
         cc.score = prefix_score + suffix_score;
         uint32_t mask = 0;
@@ -93,7 +93,7 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
             uint32_t n = tr_l.next;
             bool ok = true;
             for (int rr = r + 1; rr <= bot; ++rr) {
-              auto tr_s = dict.step(n, view.at(rr, c).letter);
+              auto tr_s = dict.step(n, view.at(rr, c).letter());
               if (!tr_s.valid) {
                 ok = false;
                 break;
@@ -172,20 +172,20 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
   int cross_total = 0;
 
   for (int c = start_col; c < end_col_excl; ++c) {
-    Square sq = view.at(row, c);
+    Glyph sq = view.at(row, c);
     Tile L;
     bool is_blank;
     bool newly_placed;
     if (!is_empty(sq)) {
-      L = sq.letter;
-      is_blank = sq.is_blank;
+      L = sq.letter();
+      is_blank = sq.is_blank();
       newly_placed = false;
     } else {
       L = placed_letter[c];
       is_blank = placed_blank[c];
       newly_placed = true;
       auto bc = view.to_board(row, c);
-      placed_board.push_back(PlacedTile{bc.first, bc.second, L, is_blank});
+      placed_board.push_back(PlacedTile{bc.first, bc.second, Glyph::played(L, is_blank)});
     }
     word.push_back(L.to_char());
 
@@ -346,7 +346,7 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
       }
     }
   } else {
-    Tile L = view.at(current_row, col).letter;
+    Tile L = view.at(current_row, col).letter();
     auto tr = dict.step(node, L);
     if (!tr.valid) return;
     extend_right(col + 1, tr.next, tr.accepts);
@@ -394,7 +394,7 @@ void GenState::generate_for_row(int row) {
       uint32_t node = dict.root();
       bool ok = true;
       for (int x = start_c; x < col; ++x) {
-        auto tr = dict.step(node, view.at(row, x).letter);
+        auto tr = dict.step(node, view.at(row, x).letter());
         if (!tr.valid) {
           ok = false;
           break;
@@ -433,7 +433,8 @@ void dedupe(std::vector<Move>& moves) {
     });
     for (const auto& t : tiles) {
       char buf[16];
-      std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.letter, (int)t.is_blank);
+      std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.glyph.letter(),
+                    (int)t.glyph.is_blank());
       k += buf;
     }
     return k;
@@ -517,12 +518,12 @@ struct GaddagGen {
 
   // Gordon's Gen: at board column `col`, GADDAG node `node`.
   void recursive_gen(int col, uint32_t node, int leftstrip, int rightstrip) {
-    Square here = view.at(current_row, col);
+    Glyph here = view.at(current_row, col);
     if (!is_empty(here)) {
       // A tile is already here: follow its arc only.
-      auto tr = dict.step(node, here.letter);
+      auto tr = dict.step(node, here.letter());
       if (tr.valid) {
-        go_on(col, here.letter, here.is_blank, tr.next, tr.accepts, leftstrip, rightstrip);
+        go_on(col, here.letter(), here.is_blank(), tr.next, tr.accepts, leftstrip, rightstrip);
       }
       return;
     }

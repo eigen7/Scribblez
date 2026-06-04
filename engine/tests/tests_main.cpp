@@ -90,9 +90,9 @@ static void test_movegen_cross_word() {
   Board b;
   // Place CAT at the center horizontally.
   std::vector<PlacedTile> cat = {
-    {CENTER, CENTER, Tile::from_char('C'), false},
-    {CENTER, CENTER + 1, Tile::from_char('A'), false},
-    {CENTER, CENTER + 2, Tile::from_char('T'), false},
+    {CENTER, CENTER, Glyph::of(Tile::from_char('C'))},
+    {CENTER, CENTER + 1, Glyph::of(Tile::from_char('A'))},
+    {CENTER, CENTER + 2, Glyph::of(Tile::from_char('T'))},
   };
   b.apply(cat);
   MoveGenerator gen(b, d);
@@ -111,7 +111,7 @@ static void test_bingo_bonus() {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
   // Place an A at the center to provide an anchor.
-  b.apply({{CENTER, CENTER, Tile::from_char('A'), false}});
+  b.apply({{CENTER, CENTER, Glyph::of(Tile::from_char('A'))}});
   MoveGenerator gen(b, d);
   // Rack PRTIED + something already used (the A is on the board).
   Rack r = rack_from("PRTIED?");  // blank as 7th, won't be needed; ensure 7 tiles
@@ -145,7 +145,8 @@ static std::string move_key(const Move& m) {
   std::string k;
   char buf[32];
   for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.letter, (int)t.is_blank);
+    std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.glyph.letter(),
+                  (int)t.glyph.is_blank());
     k += buf;
   }
   std::snprintf(buf, sizeof(buf), "|%d", m.score);

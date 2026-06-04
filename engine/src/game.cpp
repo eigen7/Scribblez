@@ -57,7 +57,7 @@ void Game::play() {
     if (m.type == MoveType::PLAY) {
       // Remove placed tiles from rack, apply to board.
       for (const auto& t : m.tiles) {
-        Tile rack_tile = t.is_blank ? BLANK : t.letter;
+        Tile rack_tile = t.glyph.is_blank() ? BLANK : t.glyph.letter();
         bool ok = racks_[cur].remove(rack_tile);
         (void)ok;
         assert(ok);

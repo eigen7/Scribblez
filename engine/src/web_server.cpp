@@ -244,13 +244,13 @@ std::string move_to_notation(const Board& board, const Move& move) {
     int r = move.horizontal ? sr : sr + static_cast<int>(i);
     int c = move.horizontal ? sc + static_cast<int>(i) : sc;
     bool is_blank = false;
-    Square sq = board.at(r, c);
+    Glyph sq = board.at(r, c);
     if (!is_empty(sq)) {
-      is_blank = sq.is_blank;
+      is_blank = sq.is_blank();
     } else {
       for (const auto& t : move.tiles) {
         if (t.row == r && t.col == c) {
-          is_blank = t.is_blank;
+          is_blank = t.glyph.is_blank();
           break;
         }
       }
@@ -277,12 +277,12 @@ std::string game_state_json(const StateView& v) {
   for (int r = 0; r < BOARD_SIZE; ++r) {
     json::array row;
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      Square sq = v.board.at(r, c);
+      Glyph sq = v.board.at(r, c);
       if (is_empty(sq)) {
         row.emplace_back(nullptr);
       } else {
-        char ch = sq.letter.to_char();
-        if (sq.is_blank) ch = ch - 'A' + 'a';
+        char ch = sq.letter().to_char();
+        if (sq.is_blank()) ch = ch - 'A' + 'a';
         row.emplace_back(std::string(1, ch));
       }
     }

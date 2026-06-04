@@ -59,7 +59,7 @@ std::array<Premium, BOARD_SIZE * BOARD_SIZE> build_premium() {
 const std::array<Premium, BOARD_SIZE * BOARD_SIZE> Board::PREMIUM = build_premium();
 
 Board::Board() {
-  for (auto& s : squares_) s = Square{EMPTY_SQUARE, false};
+  for (auto& s : squares_) s = Glyph::empty();
 }
 
 bool Board::empty_board() const {
@@ -70,7 +70,7 @@ bool Board::empty_board() const {
 
 void Board::apply(const std::vector<PlacedTile>& tiles) {
   for (const auto& t : tiles) {
-    set(t.row, t.col, Square{t.letter, t.is_blank});
+    set(t.row, t.col, t.glyph);
   }
 }
 
@@ -88,7 +88,7 @@ std::string Board::to_string() const {
     std::snprintf(buf, sizeof(buf), "%2d ", r + 1);
     s += buf;
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      Square sq = at(r, c);
+      Glyph sq = at(r, c);
       if (is_empty(sq)) {
         switch (premium_at(r, c)) {
           case Premium::NONE:
@@ -108,8 +108,8 @@ std::string Board::to_string() const {
             break;
         }
       } else {
-        s.push_back(sq.is_blank ? static_cast<char>('a' + sq.letter)
-                                : static_cast<char>('A' + sq.letter));
+        s.push_back(sq.is_blank() ? static_cast<char>('a' + sq.letter())
+                                  : static_cast<char>('A' + sq.letter()));
         s.push_back(' ');
       }
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scribblez/glyph.h"
 #include "scribblez/tile.h"
 
 #include <array>
@@ -13,26 +14,18 @@ constexpr int CENTER = 7;
 
 enum class Premium : uint8_t { NONE = 0, DLS, TLS, DWS, TWS };
 
-struct Square {
-  Tile letter = EMPTY_SQUARE;  // 0..25 if occupied, EMPTY_SQUARE otherwise
-  bool is_blank = false;       // true if the placed tile was originally a blank
-};
-
-inline bool is_empty(Square s) { return s.letter == EMPTY_SQUARE; }
-
 struct PlacedTile {
   int row;
   int col;
-  Tile letter;    // 0..25 (the letter shown on the board)
-  bool is_blank;  // true iff this tile came from a blank in the rack
+  Glyph glyph;  // the played tile's face (letter + blank-ness)
 };
 
 class Board {
  public:
   Board();
 
-  Square at(int r, int c) const { return squares_[r * BOARD_SIZE + c]; }
-  void set(int r, int c, Square s) { squares_[r * BOARD_SIZE + c] = s; }
+  Glyph at(int r, int c) const { return squares_[r * BOARD_SIZE + c]; }
+  void set(int r, int c, Glyph g) { squares_[r * BOARD_SIZE + c] = g; }
   bool in_bounds(int r, int c) const {
     return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
   }
@@ -49,7 +42,7 @@ class Board {
   static const std::array<Premium, BOARD_SIZE * BOARD_SIZE> PREMIUM;
 
  private:
-  std::array<Square, BOARD_SIZE * BOARD_SIZE> squares_{};
+  std::array<Glyph, BOARD_SIZE * BOARD_SIZE> squares_{};
 };
 
 }  // namespace scribblez

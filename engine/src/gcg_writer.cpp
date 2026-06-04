@@ -44,7 +44,7 @@ std::string played_word(const Board& board_before, const Move& m) {
     bool blank = false;
     for (const auto& t : m.tiles) {
       if (t.row == r && t.col == c) {
-        blank = t.is_blank;
+        blank = t.glyph.is_blank();
         break;
       }
     }
