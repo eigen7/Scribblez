@@ -306,7 +306,7 @@ void GenState::emit_move(int start_col, int end_col_excl) {
     }
   }
   out.push_back(
-      build_play(view, cross, current_row, start_col, end_col_excl, placed_letter, placed_blank));
+    build_play(view, cross, current_row, start_col, end_col_excl, placed_letter, placed_blank));
 }
 
 void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
@@ -473,7 +473,7 @@ struct GaddagGen {
 
   void record(int leftstrip, int rightstrip) {
     out.push_back(
-        build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
+      build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
   }
 
   // Gordon's GoOn: we have just transitioned to `new_node` by placing/using
@@ -505,7 +505,7 @@ struct GaddagGen {
     } else {
       rightstrip = col;
       const bool no_letter_right =
-          (col == BOARD_SIZE - 1) || is_empty(view.at(current_row, col + 1));
+        (col == BOARD_SIZE - 1) || is_empty(view.at(current_row, col + 1));
       if (accepts && no_letter_right && tiles_played > 0) {
         record(leftstrip, rightstrip);
       }

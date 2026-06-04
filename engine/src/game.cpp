@@ -1,9 +1,9 @@
 #include "scribblez/game.h"
 
+#include "scribblez/movegen.h"
+
 #include <cassert>
 #include <utility>
-
-#include "scribblez/movegen.h"
 
 namespace scribblez {
 

@@ -1,9 +1,9 @@
 #pragma once
+#include "scribblez/tile.h"
+
 #include <array>
 #include <string>
 #include <vector>
-
-#include "scribblez/tile.h"
 
 namespace scribblez {
 

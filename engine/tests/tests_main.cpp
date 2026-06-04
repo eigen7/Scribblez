@@ -1,5 +1,10 @@
 // Minimal hand-rolled tests for the engine. Exits nonzero on failure.
 
+#include "scribblez/board.h"
+#include "scribblez/dictionary.h"
+#include "scribblez/movegen.h"
+#include "scribblez/rack.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -9,11 +14,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "scribblez/board.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/movegen.h"
-#include "scribblez/rack.h"
 
 #define CHECK(cond)                                                                \
   do {                                                                             \
@@ -90,9 +90,9 @@ static void test_movegen_cross_word() {
   Board b;
   // Place CAT at the center horizontally.
   std::vector<PlacedTile> cat = {
-      {CENTER, CENTER, char_to_letter('C'), false},
-      {CENTER, CENTER + 1, char_to_letter('A'), false},
-      {CENTER, CENTER + 2, char_to_letter('T'), false},
+    {CENTER, CENTER, char_to_letter('C'), false},
+    {CENTER, CENTER + 1, char_to_letter('A'), false},
+    {CENTER, CENTER + 2, char_to_letter('T'), false},
   };
   b.apply(cat);
   MoveGenerator gen(b, d);
@@ -212,19 +212,18 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
 // more of the generator than the tiny dict does.
 static Dictionary medium_dict() {
   return Dictionary::build_from_words(
-      {"AA",      "AB",      "AD",    "AE",      "AG",      "AH",      "AI",     "AL",
-       "AN",      "AR",      "AS",    "AT",      "AW",      "AX",      "AY",     "BA",
-       "BE",      "BI",      "BO",    "BY",      "CAB",     "CAR",     "CARS",   "CART",
-       "CARTS",   "CAT",     "CATS",  "CARE",    "CARES",   "CARET",   "CARETS", "CASTE",
-       "CASTER",  "CASTERS", "DOG",   "DOGS",    "DOT",     "DOTS",    "EAR",    "EARS",
-       "EAT",     "EATS",    "RAT",   "RATE",    "RATES",   "RATS",    "STARE",  "STARED",
-       "TARE",    "TARES",   "TEAR",  "TEARS",   "REACT",   "REACTS",  "TRACE",  "TRACES",
-       "CRATE",   "CRATES",  "CATER", "CATERS",  "RECAST",  "RECASTS", "TASTE",  "TASTER",
-       "TASTERS", "SET",     "SET",   "TASTERS", "PARTIED", "AERIES",  "OX",     "OXEN",
-       "QI",      "ZA",      "JO",    "GO",      "NO",      "ON",      "TO",     "IT",
-       "IS",      "HE",      "OH",    "OW",      "WO",      "WORD",    "WORDS",  "WORDIER",
-       "TIE",     "TIES",    "TIED",  "DIET",    "DIETS",   "EDIT",    "EDITS",  "TIDE",
-       "TIDES",   "SITE",    "SITED", "STIED"});
+    {"AA",     "AB",      "AD",     "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
+     "AR",     "AS",      "AT",     "AW",     "AX",      "AY",      "BA",      "BE",      "BI",
+     "BO",     "BY",      "CAB",    "CAR",    "CARS",    "CART",    "CARTS",   "CAT",     "CATS",
+     "CARE",   "CARES",   "CARET",  "CARETS", "CASTE",   "CASTER",  "CASTERS", "DOG",     "DOGS",
+     "DOT",    "DOTS",    "EAR",    "EARS",   "EAT",     "EATS",    "RAT",     "RATE",    "RATES",
+     "RATS",   "STARE",   "STARED", "TARE",   "TARES",   "TEAR",    "TEARS",   "REACT",   "REACTS",
+     "TRACE",  "TRACES",  "CRATE",  "CRATES", "CATER",   "CATERS",  "RECAST",  "RECASTS", "TASTE",
+     "TASTER", "TASTERS", "SET",    "SET",    "TASTERS", "PARTIED", "AERIES",  "OX",      "OXEN",
+     "QI",     "ZA",      "JO",     "GO",     "NO",      "ON",      "TO",      "IT",      "IS",
+     "HE",     "OH",      "OW",     "WO",     "WORD",    "WORDS",   "WORDIER", "TIE",     "TIES",
+     "TIED",   "DIET",    "DIETS",  "EDIT",   "EDITS",   "TIDE",    "TIDES",   "SITE",    "SITED",
+     "STIED"});
 }
 
 static void test_gaddag_vs_dawg_inmemory() {

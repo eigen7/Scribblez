@@ -1,10 +1,10 @@
 #pragma once
-#include <vector>
-
 #include "scribblez/board.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
+
+#include <vector>
 
 namespace scribblez {
 

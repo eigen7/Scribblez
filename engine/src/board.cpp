@@ -9,11 +9,25 @@ namespace {
 
 // Encoded as: '.' NONE, 'd' DLS, 't' TLS, 'D' DWS, 'T' TWS.
 // Center (7,7) is treated as DWS for first-move scoring.
+// clang-format off
 constexpr const char* kPremiumLayout[BOARD_SIZE] = {
-    "T..d...T...d..T", ".D...t...t...D.", "..D...d.d...D..", "d..D...d...D..d", "....D.....D....",
-    ".t...t...t...t.", "..d...d.d...d..", "T..d...D...d..T", "..d...d.d...d..", ".t...t...t...t.",
-    "....D.....D....", "d..D...d...D..d", "..D...d.d...D..", ".D...t...t...D.", "T..d...T...d..T",
+    "T..d...T...d..T",
+    ".D...t...t...D.",
+    "..D...d.d...D..",
+    "d..D...d...D..d",
+    "....D.....D....",
+    ".t...t...t...t.",
+    "..d...d.d...d..",
+    "T..d...D...d..T",
+    "..d...d.d...d..",
+    ".t...t...t...t.",
+    "....D.....D....",
+    "d..D...d...D..d",
+    "..D...d.d...D..",
+    ".D...t...t...D.",
+    "T..d...T...d..T",
 };
+// clang-format on
 
 Premium decode(char c) {
   switch (c) {

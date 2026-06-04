@@ -1,15 +1,15 @@
 #pragma once
-#include <array>
-#include <memory>
-#include <string>
-#include <vector>
-
 #include "scribblez/agent.h"
 #include "scribblez/bag.h"
 #include "scribblez/board.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
+
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace scribblez {
 

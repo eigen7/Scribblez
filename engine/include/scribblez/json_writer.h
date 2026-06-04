@@ -1,8 +1,8 @@
 #pragma once
+#include "scribblez/game.h"
+
 #include <ostream>
 #include <string>
-
-#include "scribblez/game.h"
 
 namespace scribblez {
 
