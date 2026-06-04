@@ -10,11 +10,16 @@ add_library(scribblez_core STATIC
   src/json_writer.cpp
 )
 target_include_directories(scribblez_core PUBLIC include)
+target_link_libraries(scribblez_core PUBLIC Boost::json)
 
-add_executable(play_game apps/play_game.cpp src/web_server.cpp)
+add_executable(play_game
+  apps/play_game.cpp
+  src/web_server.cpp
+  src/player_factory.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core
   Boost::program_options
+  Boost::json
   Boost::filesystem
   Boost::system
   Threads::Threads)

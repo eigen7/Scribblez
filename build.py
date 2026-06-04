@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Build Scribblez: compile the C++ engine and install the web UI's npm deps.
 
-This is the one command you run before playing. It mirrors the
-AlphaZeroArcade recipe: the build step installs the front-end's npm packages,
-and the engine (play_game) launches the Vite dev server itself at play time --
-so you never invoke npm by hand.
+This is the one command you run before playing. The build step installs the
+front-end's npm packages, and the engine (play_game) launches the Vite dev
+server itself at play time -- so you never invoke npm by hand.
 
 Usage:
     ./build.py [--debug] [--clean] [-j N]
 
 Then play a human-vs-AI game with:
-    ./build/engine/play_game --players human,greedy
+    ./build/engine/play_game --player "--type=human" --player "--type=greedy"
 """
 import argparse
 import os
