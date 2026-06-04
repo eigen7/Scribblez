@@ -11,7 +11,7 @@ std::optional<Tile> Bag::draw() {
   if (remaining_ == 0) return std::nullopt;
   std::uniform_int_distribution<int> dist(0, remaining_ - 1);
   int k = dist(rng_);
-  for (Tile l = 0; l < counts_.size(); ++l) {
+  for (Tile l = Tile::of(0); l < counts_.size(); ++l) {
     if (k < counts_[l]) {
       --counts_[l];
       --remaining_;

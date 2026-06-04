@@ -281,7 +281,7 @@ std::string game_state_json(const StateView& v) {
       if (is_empty(sq)) {
         row.emplace_back(nullptr);
       } else {
-        char ch = tile_to_char(sq.letter);
+        char ch = sq.letter.to_char();
         if (sq.is_blank) ch = ch - 'A' + 'a';
         row.emplace_back(std::string(1, ch));
       }
@@ -307,10 +307,10 @@ std::string game_state_json(const StateView& v) {
 
   // rack: letters then blanks ('?'), with per-tile score.
   json::array rack;
-  for (Tile L = 0; L < 26; ++L) {
+  for (Tile L = Tile::of(0); L < 26; ++L) {
     for (int i = 0; i < v.my_rack.count(L); ++i) {
       rack.emplace_back(
-        json::object{{"letter", std::string(1, tile_to_char(L))}, {"score", TILE_VALUES[L]}});
+        json::object{{"letter", std::string(1, L.to_char())}, {"score", TILE_VALUES[L]}});
     }
   }
   for (int i = 0; i < v.my_rack.blanks(); ++i) {
@@ -327,8 +327,8 @@ std::string game_state_json(const StateView& v) {
 
   // tile_scores map: { "A": 1, "B": 3, ... }.
   json::object tile_scores;
-  for (Tile L = 0; L < 26; ++L) {
-    tile_scores[std::string(1, tile_to_char(L))] = TILE_VALUES[L];
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    tile_scores[std::string(1, L.to_char())] = TILE_VALUES[L];
   }
   o["tile_scores"] = std::move(tile_scores);
 
@@ -641,7 +641,7 @@ Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
         Move m;
         m.type = MoveType::EXCHANGE;
         for (char c : str_field(obj, "letters")) {
-          Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : char_to_tile(c);
+          Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : Tile::from_char(c);
           if (ctx.my_rack.count(L) > 0) m.exchanged.push_back(L);
         }
         if (!m.exchanged.empty()) return m;

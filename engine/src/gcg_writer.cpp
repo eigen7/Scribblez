@@ -55,7 +55,7 @@ std::string played_word(const Board& board_before, const Move& m) {
 
 std::string exchanged_tiles(const Move& m) {
   std::string s;
-  for (Tile t : m.exchanged) s.push_back(tile_to_char(t));
+  for (Tile t : m.exchanged) s.push_back(t.to_char());
   return s;
 }
 

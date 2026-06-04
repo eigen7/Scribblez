@@ -90,7 +90,7 @@ bool Dictionary::contains(const std::string& word) const {
     char c = word[k];
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     if (c < 'A' || c > 'Z') return false;
-    Tile L = static_cast<Tile>(c - 'A');
+    Tile L = Tile::of(c - 'A');
     Step s = step(node, L);
     if (!s.valid) return false;
     acc = s.accepts;

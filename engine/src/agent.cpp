@@ -18,7 +18,7 @@ Move GreedyAgent::choose(const AgentContext& ctx, std::mt19937_64& rng) {
   if (ctx.bag_size >= RACK_SIZE) {
     Move m;
     m.type = MoveType::EXCHANGE;
-    for (Tile L = 0; L <= BLANK; ++L) {
+    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
       for (int i = 0; i < ctx.my_rack.count(L); ++i) m.exchanged.push_back(L);
     }
     return m;

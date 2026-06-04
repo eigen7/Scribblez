@@ -86,7 +86,7 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
         cc.score = prefix_score + suffix_score;
         uint32_t mask = 0;
         if (prefix_ok) {
-          for (Tile L = 0; L < 26; ++L) {
+          for (Tile L = Tile::of(0); L < 26; ++L) {
             auto tr_l = dict.step(prefix_node, L);
             if (!tr_l.valid) continue;
             bool acc = tr_l.accepts;
@@ -187,7 +187,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
       auto bc = view.to_board(row, c);
       placed_board.push_back(PlacedTile{bc.first, bc.second, L, is_blank});
     }
-    word.push_back(tile_to_char(L));
+    word.push_back(L.to_char());
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
     if (newly_placed) {
@@ -326,7 +326,7 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
     if (off_board) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
     uint32_t cmask = cc.mask;
-    for (Tile L = 0; L < 26; ++L) {
+    for (Tile L = Tile::of(0); L < 26; ++L) {
       if ((cmask & (1u << L)) == 0) continue;
       auto tr = dict.step(node, L);
       if (!tr.valid) continue;
@@ -359,7 +359,7 @@ void GenState::left_part(int limit, uint32_t node) {
   // (the emit guard requires col > anchor_col), so any value is safe.
   extend_right(current_anchor_col, node, /*accepts_here=*/false);
   if (limit <= 0) return;
-  for (Tile L = 0; L < 26; ++L) {
+  for (Tile L = Tile::of(0); L < 26; ++L) {
     auto tr = dict.step(node, L);
     if (!tr.valid) continue;
     if (rack.count(L) > 0) {
@@ -528,7 +528,7 @@ struct GaddagGen {
     }
     if (rack.empty()) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
-    for (Tile L = 0; L < 26; ++L) {
+    for (Tile L = Tile::of(0); L < 26; ++L) {
       if ((cc.mask & (1u << L)) == 0) continue;  // fails the perpendicular check
       auto tr = dict.step(node, L);
       if (!tr.valid) continue;
