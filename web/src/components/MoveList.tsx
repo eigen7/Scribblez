@@ -15,6 +15,10 @@ const MoveList: React.FC<MoveListProps> = ({ moves, selectedIndex, onPreview, di
     ? moves.filter((m) => m.text.toLowerCase().includes(filter.toLowerCase()))
     : moves;
 
+  // Show highest-scoring moves first. Copy before sorting so we never mutate
+  // the moves prop (and the engine-assigned move.index stays intact).
+  const sorted = [...filtered].sort((a, b) => b.score - a.score);
+
   return (
     <div className="move-list">
       <div className="move-list-header">
@@ -28,7 +32,7 @@ const MoveList: React.FC<MoveListProps> = ({ moves, selectedIndex, onPreview, di
         />
       </div>
       <div className="move-list-scroll">
-        {filtered.map((m) => (
+        {sorted.map((m) => (
           <button
             key={m.index}
             className={`move-item${selectedIndex === m.index ? ' selected' : ''}`}

@@ -46,11 +46,21 @@ function App() {
   const [blankPending, setBlankPending] = useState<{ row: number; col: number; rackIndex: number } | null>(null);
 
   const connect = useCallback(() => {
+    // Don't open a duplicate socket. React 18 StrictMode invokes effects
+    // twice in dev (mount → unmount → mount); without this guard the second
+    // mount would open a redundant connection.
+    const existing = wsRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      if (wsRef.current === ws) setConnected(true);
+    };
 
     ws.onmessage = (event) => {
       const data: GameState = JSON.parse(event.data);
@@ -60,8 +70,14 @@ function App() {
     };
 
     ws.onclose = () => {
-      setConnected(false);
-      wsRef.current = null;
+      // Only react if this is still the active socket. A stale socket closing
+      // (e.g. StrictMode's first, discarded mount) must not null out wsRef or
+      // mark us disconnected while a newer socket is live -- otherwise every
+      // move send would be silently dropped by submitMove's readyState guard.
+      if (wsRef.current === ws) {
+        setConnected(false);
+        wsRef.current = null;
+      }
     };
   }, []);
 
@@ -191,6 +207,28 @@ function App() {
       if (!state?.your_turn || state.game_over) return;
       if (cursorRow === null || cursorCol === null || cursorDir === null) return;
       if (blankPending) return; // modal is open
+
+      // Arrow keys move the highlighted (cursor) square. Left/right also set
+      // the typing direction to horizontal, up/down to vertical, so subsequent
+      // typing flows the way you just moved.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
+          e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (e.key === 'ArrowLeft') {
+          setCursorCol(Math.max(0, cursorCol - 1));
+          setCursorDir('horizontal');
+        } else if (e.key === 'ArrowRight') {
+          setCursorCol(Math.min(14, cursorCol + 1));
+          setCursorDir('horizontal');
+        } else if (e.key === 'ArrowUp') {
+          setCursorRow(Math.max(0, cursorRow - 1));
+          setCursorDir('vertical');
+        } else {
+          setCursorRow(Math.min(14, cursorRow + 1));
+          setCursorDir('vertical');
+        }
+        return;
+      }
 
       if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault();
