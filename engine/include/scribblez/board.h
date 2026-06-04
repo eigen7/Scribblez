@@ -22,8 +22,8 @@ inline bool is_empty(Square s) { return s.letter == EMPTY_SQUARE; }
 struct PlacedTile {
   int row;
   int col;
-  Letter letter;     // 0..25 (the letter shown on the board)
-  bool is_blank;     // true iff this tile came from a blank in the rack
+  Letter letter;  // 0..25 (the letter shown on the board)
+  bool is_blank;  // true iff this tile came from a blank in the rack
 };
 
 class Board {

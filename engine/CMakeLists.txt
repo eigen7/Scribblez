@@ -12,7 +12,12 @@ add_library(scribblez_core STATIC
 target_include_directories(scribblez_core PUBLIC include)
 
 add_executable(play_game apps/play_game.cpp src/web_server.cpp)
-target_link_libraries(play_game PRIVATE scribblez_core)
+target_link_libraries(play_game PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
 
 add_executable(scribblez_tests tests/tests_main.cpp)
 target_link_libraries(scribblez_tests PRIVATE scribblez_core)

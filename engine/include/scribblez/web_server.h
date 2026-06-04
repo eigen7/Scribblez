@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -8,24 +9,62 @@
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
+// Forward declarations so we can hold boost::process handles without dragging
+// the (heavy) boost::process headers into every translation unit.
+namespace boost::process {
+class child;
+class group;
+}  // namespace boost::process
+
 namespace scribblez {
 
-// A minimal, single-client HTTP + WebSocket server (POSIX sockets, blocking).
-// It serves the built web UI as static files and upgrades GET /ws to a
+// Spawns `npm run dev` (the Vite dev server) as a child process to serve the
+// front-end, and terminates it (and its whole process group) on destruction.
+// The browser loads the UI from Vite, which proxies the `/ws` WebSocket back to
+// the WebSession. The build step installs the npm deps, and the engine launches
+// the dev server itself, so no npm commands are ever run by hand.
+class ViteDevServer {
+ public:
+  // Launch `npm run dev` with cwd `web_dir` (the front-end package directory).
+  // `dev_port` is the port Vite listens on; `ws_port` is the WebSession port
+  // Vite proxies `/ws` to (passed through as env vars VITE_DEV_PORT /
+  // VITE_WS_PORT). Throws if the child process cannot be started.
+  ViteDevServer(std::string web_dir, int dev_port, int ws_port);
+  ~ViteDevServer();
+
+  ViteDevServer(const ViteDevServer&) = delete;
+  ViteDevServer& operator=(const ViteDevServer&) = delete;
+
+  // Block until Vite is accepting connections, or until `timeout_ms` elapses.
+  // Returns false on timeout or if the child exited early.
+  bool wait_until_ready(int timeout_ms = 60000);
+
+  // URL to open in the browser, e.g. "http://localhost:5173".
+  std::string url() const;
+  int dev_port() const { return dev_port_; }
+
+ private:
+  int dev_port_;
+  int ws_port_;
+  std::unique_ptr<boost::process::group> group_;
+  std::unique_ptr<boost::process::child> child_;
+};
+
+// A minimal, single-client WebSocket server (POSIX sockets, blocking). It
+// upgrades the `/ws` connection (proxied in by the Vite dev server) to a
 // WebSocket that drives a human player. Designed for local human-vs-AI play:
 // exactly one browser tab, one game, no concurrency.
 class WebSession {
  public:
-  // Bind and listen on `port`, serving static files from `web_dir`. Throws
-  // std::runtime_error on failure.
-  WebSession(int port, std::string web_dir);
+  // Bind and listen on `port`. Throws std::runtime_error on failure.
+  explicit WebSession(int port);
   ~WebSession();
 
   WebSession(const WebSession&) = delete;
   WebSession& operator=(const WebSession&) = delete;
 
-  // Block accepting connections -- serving any static-file requests inline --
-  // until a browser completes the WebSocket handshake. Returns immediately if a
+  // Block accepting connections until a client completes the WebSocket
+  // handshake (non-WebSocket requests are closed). Returns immediately if a
   // client is already connected. Returns false only on unrecoverable error.
   bool wait_for_client();
 
@@ -45,11 +84,9 @@ class WebSession {
   void linger_after_final_message();
 
  private:
-  void serve_static(int fd, const std::string& path);
   bool do_handshake(int fd, const std::string& request);
 
   int port_;
-  std::string web_dir_;
   int listen_fd_ = -1;
   int ws_fd_ = -1;
 };

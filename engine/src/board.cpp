@@ -10,30 +10,23 @@ namespace {
 // Encoded as: '.' NONE, 'd' DLS, 't' TLS, 'D' DWS, 'T' TWS.
 // Center (7,7) is treated as DWS for first-move scoring.
 constexpr const char* kPremiumLayout[BOARD_SIZE] = {
-    "T..d...T...d..T",
-    ".D...t...t...D.",
-    "..D...d.d...D..",
-    "d..D...d...D..d",
-    "....D.....D....",
-    ".t...t...t...t.",
-    "..d...d.d...d..",
-    "T..d...D...d..T",
-    "..d...d.d...d..",
-    ".t...t...t...t.",
-    "....D.....D....",
-    "d..D...d...D..d",
-    "..D...d.d...D..",
-    ".D...t...t...D.",
-    "T..d...T...d..T",
+    "T..d...T...d..T", ".D...t...t...D.", "..D...d.d...D..", "d..D...d...D..d", "....D.....D....",
+    ".t...t...t...t.", "..d...d.d...d..", "T..d...D...d..T", "..d...d.d...d..", ".t...t...t...t.",
+    "....D.....D....", "d..D...d...D..d", "..D...d.d...D..", ".D...t...t...D.", "T..d...T...d..T",
 };
 
 Premium decode(char c) {
   switch (c) {
-    case 'd': return Premium::DLS;
-    case 't': return Premium::TLS;
-    case 'D': return Premium::DWS;
-    case 'T': return Premium::TWS;
-    default: return Premium::NONE;
+    case 'd':
+      return Premium::DLS;
+    case 't':
+      return Premium::TLS;
+    case 'D':
+      return Premium::DWS;
+    case 'T':
+      return Premium::TWS;
+    default:
+      return Premium::NONE;
   }
 }
 
@@ -84,11 +77,21 @@ std::string Board::to_string() const {
       Square sq = at(r, c);
       if (is_empty(sq)) {
         switch (premium_at(r, c)) {
-          case Premium::NONE: s += ". "; break;
-          case Premium::DLS:  s += "d "; break;
-          case Premium::TLS:  s += "t "; break;
-          case Premium::DWS:  s += "D "; break;
-          case Premium::TWS:  s += "T "; break;
+          case Premium::NONE:
+            s += ". ";
+            break;
+          case Premium::DLS:
+            s += "d ";
+            break;
+          case Premium::TLS:
+            s += "t ";
+            break;
+          case Premium::DWS:
+            s += "D ";
+            break;
+          case Premium::TWS:
+            s += "T ";
+            break;
         }
       } else {
         s.push_back(sq.is_blank ? static_cast<char>('a' + sq.letter)

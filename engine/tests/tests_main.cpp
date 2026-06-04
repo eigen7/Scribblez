@@ -15,28 +15,27 @@
 #include "scribblez/movegen.h"
 #include "scribblez/rack.h"
 
-#define CHECK(cond) do { \
-  if (!(cond)) { \
-    std::cerr << "CHECK failed: " #cond " at " __FILE__ ":" << __LINE__ << "\n"; \
-    std::exit(1); \
-  } \
-} while (0)
+#define CHECK(cond)                                                                \
+  do {                                                                             \
+    if (!(cond)) {                                                                 \
+      std::cerr << "CHECK failed: " #cond " at " __FILE__ ":" << __LINE__ << "\n"; \
+      std::exit(1);                                                                \
+    }                                                                              \
+  } while (0)
 
 using namespace scribblez;
 
 static Dictionary tiny_dict() {
-  return Dictionary::build_from_words({
-      "CAT", "CATS", "AT", "AS", "BAT", "BATS",
-      "HE", "TO", "ON", "NO", "IT", "IS",
-      "OAT", "OATS", "HAT", "HATS", "RAT", "RATS",
-      "DOG", "GOD", "GO", "OD", "DO",
-      "AERIES", "PARTIED"});
+  return Dictionary::build_from_words({"CAT", "CATS", "AT",     "AS",     "BAT", "BATS", "HE",
+                                       "TO",  "ON",   "NO",     "IT",     "IS",  "OAT",  "OATS",
+                                       "HAT", "HATS", "RAT",    "RATS",   "DOG", "GOD",  "GO",
+                                       "OD",  "DO",   "AERIES", "PARTIED"});
 }
 
 static void test_dict_basic() {
   Dictionary d = tiny_dict();
   CHECK(d.contains("CAT"));
-  CHECK(d.contains("cat"));      // case-insensitive
+  CHECK(d.contains("cat"));  // case-insensitive
   CHECK(!d.contains("CATX"));
   CHECK(!d.contains("Z"));
   CHECK(d.contains("AERIES"));
@@ -45,8 +44,10 @@ static void test_dict_basic() {
 static Rack rack_from(const std::string& s) {
   Rack r;
   for (char c : s) {
-    if (c == '?') r.add(BLANK);
-    else r.add(char_to_letter(c));
+    if (c == '?')
+      r.add(BLANK);
+    else
+      r.add(char_to_letter(c));
   }
   return r;
 }
@@ -64,7 +65,10 @@ static void test_movegen_opening() {
     CHECK(m.type == MoveType::PLAY);
     bool covers = false;
     for (const auto& t : m.tiles) {
-      if (t.row == CENTER && t.col == CENTER) { covers = true; break; }
+      if (t.row == CENTER && t.col == CENTER) {
+        covers = true;
+        break;
+      }
     }
     CHECK(covers);
   }
@@ -72,7 +76,10 @@ static void test_movegen_opening() {
   int best = 0;
   const Move* best_move = nullptr;
   for (const auto& m : moves) {
-    if (m.score > best) { best = m.score; best_move = &m; }
+    if (m.score > best) {
+      best = m.score;
+      best_move = &m;
+    }
   }
   CHECK(best_move != nullptr);
   CHECK(d.contains(best_move->main_word));
@@ -83,7 +90,7 @@ static void test_movegen_cross_word() {
   Board b;
   // Place CAT at the center horizontally.
   std::vector<PlacedTile> cat = {
-      {CENTER, CENTER,     char_to_letter('C'), false},
+      {CENTER, CENTER, char_to_letter('C'), false},
       {CENTER, CENTER + 1, char_to_letter('A'), false},
       {CENTER, CENTER + 2, char_to_letter('T'), false},
   };
@@ -166,8 +173,8 @@ static Rack random_rack(std::mt19937& rng) {
 // enumerate exactly the same set of legal plays (with identical scores) from any
 // position. We stress this by walking random games: at each step we compare the
 // two generators, then advance the board by applying a random generated play.
-static void cross_validate(const Dictionary& d, const char* label, unsigned seed,
-                           int games, int steps_per_game) {
+static void cross_validate(const Dictionary& d, const char* label, unsigned seed, int games,
+                           int steps_per_game) {
   std::mt19937 rng(seed);
   long compared = 0;
   for (int g = 0; g < games; ++g) {
@@ -204,19 +211,20 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
 // A medium word list (overlaps, plurals, hooks, a 7-letter bingo) to exercise
 // more of the generator than the tiny dict does.
 static Dictionary medium_dict() {
-  return Dictionary::build_from_words({
-      "AA", "AB", "AD", "AE", "AG", "AH", "AI", "AL", "AN", "AR", "AS", "AT",
-      "AW", "AX", "AY", "BA", "BE", "BI", "BO", "BY", "CAB", "CAR", "CARS",
-      "CART", "CARTS", "CAT", "CATS", "CARE", "CARES", "CARET", "CARETS",
-      "CASTE", "CASTER", "CASTERS", "DOG", "DOGS", "DOT", "DOTS", "EAR",
-      "EARS", "EAT", "EATS", "RAT", "RATE", "RATES", "RATS", "STARE", "STARED",
-      "TARE", "TARES", "TEAR", "TEARS", "REACT", "REACTS", "TRACE", "TRACES",
-      "CRATE", "CRATES", "CATER", "CATERS", "RECAST", "RECASTS", "TASTE",
-      "TASTER", "TASTERS", "SET", "SET", "TASTERS", "PARTIED", "AERIES",
-      "OX", "OXEN", "QI", "ZA", "JO", "GO", "NO", "ON", "TO", "IT", "IS",
-      "HE", "OH", "OW", "WO", "WORD", "WORDS", "WORDIER", "TIE", "TIES",
-      "TIED", "DIET", "DIETS", "EDIT", "EDITS", "TIDE", "TIDES", "SITE",
-      "SITED", "STIED"});
+  return Dictionary::build_from_words(
+      {"AA",      "AB",      "AD",    "AE",      "AG",      "AH",      "AI",     "AL",
+       "AN",      "AR",      "AS",    "AT",      "AW",      "AX",      "AY",     "BA",
+       "BE",      "BI",      "BO",    "BY",      "CAB",     "CAR",     "CARS",   "CART",
+       "CARTS",   "CAT",     "CATS",  "CARE",    "CARES",   "CARET",   "CARETS", "CASTE",
+       "CASTER",  "CASTERS", "DOG",   "DOGS",    "DOT",     "DOTS",    "EAR",    "EARS",
+       "EAT",     "EATS",    "RAT",   "RATE",    "RATES",   "RATS",    "STARE",  "STARED",
+       "TARE",    "TARES",   "TEAR",  "TEARS",   "REACT",   "REACTS",  "TRACE",  "TRACES",
+       "CRATE",   "CRATES",  "CATER", "CATERS",  "RECAST",  "RECASTS", "TASTE",  "TASTER",
+       "TASTERS", "SET",     "SET",   "TASTERS", "PARTIED", "AERIES",  "OX",     "OXEN",
+       "QI",      "ZA",      "JO",    "GO",      "NO",      "ON",      "TO",     "IT",
+       "IS",      "HE",      "OH",    "OW",      "WO",      "WORD",    "WORDS",  "WORDIER",
+       "TIE",     "TIES",    "TIED",  "DIET",    "DIETS",   "EDIT",    "EDITS",  "TIDE",
+       "TIDES",   "SITE",    "SITED", "STIED"});
 }
 
 static void test_gaddag_vs_dawg_inmemory() {

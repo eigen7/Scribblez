@@ -3,10 +3,17 @@
 //
 // Usage:
 //   play_game [--players P0,P1] [--kwg <path>] [--seed N]
-//             [--out game.json] [--port N] [--web-dir DIR] [--verbose]
+//             [--out game.json] [--port N] [--web-dir DIR] [--vite-port N]
+//             [--verbose]
 //   where each Pi is "greedy" or "human" (default: greedy,greedy).
+//
+// For human play the engine launches the front-end's Vite dev server itself
+// (npm run dev) and opens the browser at it -- you never run npm by hand. Run
+// ./build.py once first to install the web dependencies.
 
 #include <array>
+#include <boost/algorithm/string.hpp>
+#include <boost/program_options.hpp>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -15,6 +22,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <vector>
 
 #include "scribblez/agent.h"
 #include "scribblez/dictionary.h"
@@ -28,69 +36,66 @@ namespace {
 // binary is not committed (it encodes a copyrighted wordlist); place or symlink
 // it here, or point --kwg elsewhere.
 constexpr const char* kDefaultKwg = "data/lexica/NWL23.kwg";
-constexpr const char* kDefaultWebDir = "web/dist";
-
-void usage() {
-  std::cerr << "Usage: play_game [--players P0,P1] [--kwg <lexicon.kwg>] "
-               "[--seed N] [--out game.json] [--port N] [--web-dir DIR] "
-               "[--verbose]\n"
-               "  --players: each of P0,P1 is 'greedy' or 'human' "
-               "(default: greedy,greedy)\n"
-               "  --kwg defaults to "
-            << kDefaultKwg << "\n"
-            << "  --port defaults to 8080, --web-dir to " << kDefaultWebDir
-            << " (used only when a human plays)\n";
-}
-
-std::string to_lower(std::string s) {
-  for (char& c : s) if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
-  return s;
-}
+// Front-end package directory (containing package.json). The engine runs
+// `npm run dev` here for human play.
+constexpr const char* kDefaultWebDir = "web";
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  std::string kwg_path;
-  std::string out_path;
-  std::string web_dir = kDefaultWebDir;
-  std::array<std::string, 2> player_types = {"greedy", "greedy"};
-  int port = 8080;
+  namespace po = boost::program_options;
+
+  std::string kwg_path, dict_path, out_path, web_dir, players;
+  int port = 0, vite_port = 0;
   uint64_t seed = 0;
-  bool seed_given = false;
   bool verbose = false;
 
-  for (int i = 1; i < argc; ++i) {
-    std::string a = argv[i];
-    auto need = [&](const std::string& flag) -> std::string {
-      if (i + 1 >= argc) {
-        std::cerr << "Missing argument for " << flag << "\n";
-        std::exit(2);
-      }
-      return argv[++i];
-    };
-    if (a == "--kwg" || a == "--dict") kwg_path = need(a);
-    else if (a == "--out") out_path = need(a);
-    else if (a == "--seed") { seed = std::stoull(need(a)); seed_given = true; }
-    else if (a == "--port") port = std::stoi(need(a));
-    else if (a == "--web-dir") web_dir = need(a);
-    else if (a == "--players") {
-      std::string spec = need(a);
-      size_t comma = spec.find(',');
-      if (comma == std::string::npos) {
-        std::cerr << "--players expects two comma-separated types, e.g. "
-                     "human,greedy\n";
-        return 2;
-      }
-      player_types[0] = to_lower(spec.substr(0, comma));
-      player_types[1] = to_lower(spec.substr(comma + 1));
-    }
-    else if (a == "--verbose" || a == "-v") verbose = true;
-    else if (a == "--help" || a == "-h") { usage(); return 0; }
-    else {
-      std::cerr << "Unknown argument: " << a << "\n";
-      usage();
+  // One option per statement so the declarations stay readable (chaining the
+  // operator() calls together formats into an unreadable blob).
+  po::options_description desc("play_game options");
+  auto opt = desc.add_options();
+  opt("help,h", "show this help message and exit");
+  opt("players", po::value<std::string>(&players)->default_value("greedy,greedy"),
+      "comma-separated seats P0,P1; each is 'greedy' or 'human' (at most one human)");
+  opt("kwg", po::value<std::string>(&kwg_path)->default_value(kDefaultKwg),
+      "lexicon .kwg file to load");
+  opt("dict", po::value<std::string>(&dict_path), "alias for --kwg");
+  opt("seed", po::value<uint64_t>(&seed), "PRNG seed (default: hardware random)");
+  opt("out", po::value<std::string>(&out_path), "write the game-log JSON here (default: stdout)");
+  opt("port", po::value<int>(&port)->default_value(8080), "engine WebSocket port");
+  opt("vite-port", po::value<int>(&vite_port)->default_value(5173), "browser UI (Vite) port");
+  opt("web-dir", po::value<std::string>(&web_dir)->default_value(kDefaultWebDir),
+      "front-end package dir, used only when a human plays");
+  opt("verbose,v", po::bool_switch(&verbose), "print final score and turn count to stderr");
+
+  po::variables_map vm;
+  try {
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    po::notify(vm);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n\n" << desc << "\n";
+    return 2;
+  }
+  if (vm.count("help")) {
+    std::cout << desc << "\n";
+    return 0;
+  }
+  // --dict is an accepted alias for --kwg.
+  if (vm.count("dict")) kwg_path = dict_path;
+  const bool seed_given = vm.count("seed") > 0;
+
+  // Parse the two player seats (e.g. "human,greedy").
+  std::array<std::string, 2> player_types;
+  {
+    std::vector<std::string> parts;
+    boost::split(parts, players, boost::is_any_of(","));
+    if (parts.size() != 2) {
+      std::cerr << "--players expects two comma-separated types, e.g. "
+                   "human,greedy\n";
       return 2;
     }
+    player_types[0] = boost::to_lower_copy(boost::trim_copy(parts[0]));
+    player_types[1] = boost::to_lower_copy(boost::trim_copy(parts[1]));
   }
 
   // Validate player types and locate the human seat (at most one supported,
@@ -111,8 +116,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Resolve the lexicon: explicit flag, else the default path.
-  if (kwg_path.empty()) kwg_path = kDefaultKwg;
+  // Resolve the seed (the lexicon path already defaulted via program_options).
   if (!seed_given) {
     std::random_device rd;
     seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
@@ -123,7 +127,8 @@ int main(int argc, char** argv) {
     dict = scribblez::Dictionary::load_kwg(kwg_path);
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n"
-              << "No lexicon at '" << kwg_path << "'. Place or symlink an NWL "
+              << "No lexicon at '" << kwg_path
+              << "'. Place or symlink an NWL "
                  ".kwg there, or pass --kwg <path>.\n";
     return 1;
   }
@@ -138,28 +143,37 @@ int main(int argc, char** argv) {
   };
 
   // Stand up the web server up front (if a human is playing) so the browser can
-  // connect before the game loop reaches the human's first turn.
+  // connect before the game loop reaches the human's first turn. The engine
+  // also launches the front-end's Vite dev server itself and opens the browser
+  // at it -- so no npm commands need to be run by hand.
   std::unique_ptr<scribblez::WebSession> session;
+  std::unique_ptr<scribblez::ViteDevServer> vite;
   if (human_seat >= 0) {
     try {
-      session = std::make_unique<scribblez::WebSession>(port, web_dir);
+      session = std::make_unique<scribblez::WebSession>(port);
+      vite = std::make_unique<scribblez::ViteDevServer>(web_dir, vite_port, port);
     } catch (const std::exception& e) {
       std::cerr << "Error: " << e.what() << "\n";
       return 1;
     }
+    std::cerr << "\n  Starting the web UI (npm run dev in " << web_dir << ")...\n";
+    if (!vite->wait_until_ready()) {
+      std::cerr << "Error: the Vite dev server did not start. See " << web_dir
+                << "/.vite-dev.log for details.\n"
+                << "Did you run ./build.py to install the web dependencies?\n";
+      return 1;
+    }
     std::cerr << "\n  Human-vs-AI game ready.\n"
-              << "  Open  http://localhost:" << port << "  in your browser to play.\n\n";
-    std::string cmd = "xdg-open http://localhost:" + std::to_string(port) +
-                      " >/dev/null 2>&1 &";
+              << "  Open  " << vite->url() << "  in your browser to play.\n\n";
+    std::string cmd = "xdg-open " + vite->url() + " >/dev/null 2>&1 &";
     int rc = std::system(cmd.c_str());  // best-effort; ignore failure
     (void)rc;
   }
 
   auto make_agent = [&](int seat) -> std::unique_ptr<scribblez::Agent> {
     if (player_types[seat] == "human") {
-      return std::make_unique<scribblez::HumanWebAgent>(
-          *session, name_for(player_types[seat]),
-          name_for(player_types[1 - seat]));
+      return std::make_unique<scribblez::HumanWebAgent>(*session, name_for(player_types[seat]),
+                                                        name_for(player_types[1 - seat]));
     }
     return std::make_unique<scribblez::GreedyAgent>();
   };
@@ -201,8 +215,8 @@ int main(int argc, char** argv) {
   }
 
   if (verbose) {
-    std::cerr << "Final scores: " << log.final_scores[0] << " - "
-              << log.final_scores[1] << "  (" << log.end_reason << ")\n";
+    std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
+              << log.end_reason << ")\n";
     std::cerr << "Turns: " << log.turns.size() << "\n";
   }
   return 0;

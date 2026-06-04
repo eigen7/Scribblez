@@ -118,8 +118,8 @@ Dictionary Dictionary::load_kwg(const std::string& path) {
   if (d.nodes_.size() < 2) {
     throw std::runtime_error("KWG file too small: " + path);
   }
-  d.root_ = d.nodes_[0] & ARC_MASK;          // DAWG root.
-  d.gaddag_root_ = d.nodes_[1] & ARC_MASK;   // GADDAG root.
+  d.root_ = d.nodes_[0] & ARC_MASK;         // DAWG root.
+  d.gaddag_root_ = d.nodes_[1] & ARC_MASK;  // GADDAG root.
   return d;
 }
 
@@ -144,7 +144,7 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
       for (int j = i - 1; j >= 0; --j) path.push_back(tiles[j]);  // rev(c1..ci)
       if (i < n) {
         path.push_back(SEPARATOR);
-        for (int j = i; j < n; ++j) path.push_back(tiles[j]);      // c(i+1..n)
+        for (int j = i; j < n; ++j) path.push_back(tiles[j]);  // c(i+1..n)
       }
       insert(&gaddag, path);
     }

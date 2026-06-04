@@ -66,8 +66,8 @@ class Dictionary {
   size_t num_nodes() const { return nodes_.size(); }
 
   // KWG bit layout constants (also used by the in-memory builder).
-  static constexpr uint32_t ARC_MASK    = 0x003fffffu;
-  static constexpr uint32_t IS_END_BIT  = 0x00400000u;
+  static constexpr uint32_t ARC_MASK = 0x003fffffu;
+  static constexpr uint32_t IS_END_BIT = 0x00400000u;
   static constexpr uint32_t ACCEPTS_BIT = 0x00800000u;
 
  private:

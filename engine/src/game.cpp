@@ -7,9 +7,7 @@
 
 namespace scribblez {
 
-Game::Game(std::unique_ptr<Agent> p0,
-           std::unique_ptr<Agent> p1,
-           const Dictionary& dict,
+Game::Game(std::unique_ptr<Agent> p0, std::unique_ptr<Agent> p1, const Dictionary& dict,
            uint64_t seed)
     : dict_(dict), seed_(seed), bag_(seed), rng_(seed ^ 0x9E3779B97F4A7C15ULL) {
   players_[0] = std::move(p0);
@@ -37,19 +35,15 @@ void Game::play() {
   int cur = 0;
   int consecutive_zero_turns = 0;
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
-  constexpr int kMaxTurns = 400;  // safety net
+  constexpr int kMaxTurns = 400;          // safety net
 
   while ((int)log_.turns.size() < kMaxTurns) {
     // Generate legal plays for current player.
     MoveGenerator gen(board_, dict_);
     std::vector<Move> legal = gen.generate(racks_[cur]);
 
-    AgentContext ctx{board_,
-                     racks_[cur],
-                     scores_[cur],
-                     scores_[1 - cur],
-                     bag_.size(),
-                     racks_[1 - cur].size(),
+    AgentContext ctx{board_,           racks_[cur], scores_[cur],
+                     scores_[1 - cur], bag_.size(), racks_[1 - cur].size(),
                      std::move(legal)};
     Move m = players_[cur]->choose(ctx, rng_);
 

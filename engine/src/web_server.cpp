@@ -5,15 +5,22 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <boost/asio/connect.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/process.hpp>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <fstream>
+#include <iostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 #include <thread>
 
 #include "scribblez/tile.h"
@@ -70,14 +77,31 @@ void sha1(const std::string& msg, uint8_t out[20]) {
     uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
     for (int i = 0; i < 80; ++i) {
       uint32_t f, k;
-      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999u; }
-      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
-      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
-      else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5A827999u;
+      } else if (i < 40) {
+        f = b ^ c ^ d;
+        k = 0x6ED9EBA1u;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8F1BBCDCu;
+      } else {
+        f = b ^ c ^ d;
+        k = 0xCA62C1D6u;
+      }
       uint32_t tmp = rol(a, 5) + f + e + k + w[i];
-      e = d; d = c; c = rol(b, 30); b = a; a = tmp;
+      e = d;
+      d = c;
+      c = rol(b, 30);
+      b = a;
+      a = tmp;
     }
-    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += d;
+    h[4] += e;
   }
   for (int i = 0; i < 5; ++i) {
     out[i * 4] = (h[i] >> 24) & 0xff;
@@ -88,8 +112,7 @@ void sha1(const std::string& msg, uint8_t out[20]) {
 }
 
 std::string base64(const uint8_t* data, size_t len) {
-  static const char* tbl =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   std::string out;
   for (size_t i = 0; i < len; i += 3) {
     uint32_t n = data[i] << 16;
@@ -106,7 +129,8 @@ std::string base64(const uint8_t* data, size_t len) {
 // --------------------------- HTTP / WS helpers ---------------------------
 
 std::string to_lower(std::string s) {
-  for (char& c : s) if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+  for (char& c : s)
+    if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
   return s;
 }
 
@@ -124,39 +148,27 @@ std::string header_value(const std::string& req, const std::string& name) {
   return a == std::string::npos ? "" : val.substr(a, b - a + 1);
 }
 
-std::string request_path(const std::string& req) {
-  size_t s = req.find(' ');
-  if (s == std::string::npos) return "/";
-  size_t e = req.find(' ', s + 1);
-  if (e == std::string::npos) return "/";
-  return req.substr(s + 1, e - s - 1);
-}
-
-std::string content_type(const std::string& path) {
-  auto ends = [&](const char* ext) {
-    size_t n = std::strlen(ext);
-    return path.size() >= n && path.compare(path.size() - n, n, ext) == 0;
-  };
-  if (ends(".html")) return "text/html; charset=utf-8";
-  if (ends(".js")) return "text/javascript; charset=utf-8";
-  if (ends(".css")) return "text/css; charset=utf-8";
-  if (ends(".json")) return "application/json";
-  if (ends(".svg")) return "image/svg+xml";
-  if (ends(".ico")) return "image/x-icon";
-  return "application/octet-stream";
-}
-
 // --------------------------- JSON serialization --------------------------
 
 std::string json_quote(const std::string& s) {
   std::string out = "\"";
   for (char c : s) {
     switch (c) {
-      case '"': out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\n': out += "\\n"; break;
-      case '\r': out += "\\r"; break;
-      case '\t': out += "\\t"; break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
@@ -173,11 +185,16 @@ std::string json_quote(const std::string& s) {
 
 const char* premium_code(Premium p) {
   switch (p) {
-    case Premium::DLS: return "DL";
-    case Premium::TLS: return "TL";
-    case Premium::DWS: return "DW";
-    case Premium::TWS: return "TW";
-    default: return nullptr;
+    case Premium::DLS:
+      return "DL";
+    case Premium::TLS:
+      return "TL";
+    case Premium::DWS:
+      return "DW";
+    case Premium::TWS:
+      return "TW";
+    default:
+      return nullptr;
   }
 }
 
@@ -210,6 +227,57 @@ bool json_int_field(const std::string& s, const std::string& key, long& out) {
   return true;
 }
 
+// ----------------------------- port freeing ------------------------------
+
+// PIDs currently listening on / connected to `port`, via `lsof -t -i :port`.
+std::set<int> pids_on_port(int port) {
+  namespace bp = boost::process;
+  std::set<int> pids;
+  boost::filesystem::path lsof = bp::search_path("lsof");
+  if (lsof.empty()) return pids;  // can't probe; treat as free
+
+  bp::ipstream out;
+  std::error_code ec;
+  bp::child c(lsof, "-t", "-i", ":" + std::to_string(port), bp::std_out > out,
+              bp::std_err > bp::null, ec);
+  if (ec) return pids;
+  std::string line;
+  while (out && std::getline(out, line)) {
+    boost::trim(line);
+    if (!line.empty()) {
+      try {
+        pids.insert(std::stoi(line));
+      } catch (const std::exception&) {
+      }
+    }
+  }
+  c.wait();
+  return pids;
+}
+
+// Kill any process holding `port` and wait for the OS to release it, so we can
+// (re)bind / relaunch cleanly even after a previous run was killed abruptly and
+// orphaned its child processes. Best-effort: silently no-op if lsof is absent.
+void free_port(int port) {
+  std::set<int> pids = pids_on_port(port);
+  pid_t self = ::getpid();
+  bool killed_any = false;
+  for (int pid : pids) {
+    if (pid == self) continue;
+    std::cerr << "  Port " << port << " is in use by pid " << pid << "; freeing it.\n";
+    ::kill(pid, SIGKILL);
+    killed_any = true;
+  }
+  if (!killed_any) return;
+
+  for (int i = 0; i < 10; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::set<int> still = pids_on_port(port);
+    still.erase(self);
+    if (still.empty()) return;
+  }
+}
+
 }  // namespace
 
 // --------------------------- move notation -------------------------------
@@ -236,7 +304,10 @@ std::string move_to_notation(const Board& board, const Move& move) {
       is_blank = sq.is_blank;
     } else {
       for (const auto& t : move.tiles) {
-        if (t.row == r && t.col == c) { is_blank = t.is_blank; break; }
+        if (t.row == r && t.col == c) {
+          is_blank = t.is_blank;
+          break;
+        }
       }
     }
     char ch = move.main_word[i];
@@ -281,7 +352,10 @@ std::string game_state_json(const StateView& v) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       if (c) o << ",";
       const char* code = premium_code(v.board.premium_at(r, c));
-      if (code) o << "\"" << code << "\""; else o << "null";
+      if (code)
+        o << "\"" << code << "\"";
+      else
+        o << "null";
     }
     o << "]";
   }
@@ -325,8 +399,7 @@ std::string game_state_json(const StateView& v) {
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
       if (i) o << ",";
-      o << "{\"index\":" << i
-        << ",\"text\":" << json_quote(move_to_notation(v.board, m))
+      o << "{\"index\":" << i << ",\"text\":" << json_quote(move_to_notation(v.board, m))
         << ",\"score\":" << m.score << "}";
     }
     o << "]";
@@ -342,12 +415,76 @@ std::string game_state_json(const StateView& v) {
   return o.str();
 }
 
+// ------------------------------ ViteDevServer ----------------------------
+
+ViteDevServer::ViteDevServer(std::string web_dir, int dev_port, int ws_port)
+    : dev_port_(dev_port), ws_port_(ws_port) {
+  namespace bp = boost::process;
+
+  // Reclaim the dev-server port in case a previous run's Vite was orphaned.
+  free_port(dev_port_);
+
+  // Pass the ports through to vite.config.ts so the browser UI and the engine's
+  // WebSocket server always agree on which ports to use / proxy.
+  bp::environment env = boost::this_process::environment();
+  env["VITE_DEV_PORT"] = std::to_string(dev_port_);
+  env["VITE_WS_PORT"] = std::to_string(ws_port_);
+
+  // Redirect Vite's chatty output to a log file so it can never corrupt
+  // play_game's own stdout (which may carry the game-log JSON).
+  boost::filesystem::path log = boost::filesystem::path(web_dir) / ".vite-dev.log";
+
+  boost::filesystem::path npm = bp::search_path("npm");
+  if (npm.empty()) {
+    throw std::runtime_error("npm not found on PATH (needed to launch the web UI); run ./build.py");
+  }
+
+  // A process group lets us terminate the whole tree on exit: `npm run dev`
+  // spawns vite as a grandchild that would otherwise be orphaned.
+  group_ = std::make_unique<bp::group>();
+  child_ = std::make_unique<bp::child>(npm, "run", "dev", bp::start_dir = web_dir,
+                                       bp::std_out > log, bp::std_err > log, env, *group_);
+}
+
+ViteDevServer::~ViteDevServer() {
+  boost::system::error_code ec;
+  if (group_) group_->terminate(ec);  // kill the whole process group
+  if (child_) child_->wait(ec);       // reap
+}
+
+bool ViteDevServer::wait_until_ready(int timeout_ms) {
+  namespace asio = boost::asio;
+  using tcp = asio::ip::tcp;
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"),
+                         static_cast<unsigned short>(dev_port_));
+  while (std::chrono::steady_clock::now() < deadline) {
+    // Fail fast if the dev server already exited (e.g. deps not installed).
+    if (child_ && !child_->running()) return false;
+
+    asio::io_context io;
+    tcp::socket sock(io);
+    boost::system::error_code ec;
+    static_cast<void>(sock.connect(endpoint, ec));
+    if (!ec) return true;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
+  return false;
+}
+
+std::string ViteDevServer::url() const { return "http://localhost:" + std::to_string(dev_port_); }
+
 // ------------------------------ WebSession -------------------------------
 
-WebSession::WebSession(int port, std::string web_dir)
-    : port_(port), web_dir_(std::move(web_dir)) {
+WebSession::WebSession(int port) : port_(port) {
   std::signal(SIGPIPE, SIG_IGN);
-  listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+  // Reclaim the port if a previous run left something holding it.
+  free_port(port_);
+  // SOCK_CLOEXEC so the Vite dev server we later fork/exec does not inherit (and
+  // keep alive) this listening socket.
+  listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
   int yes = 1;
   ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -378,48 +515,17 @@ void WebSession::disconnect() {
   }
 }
 
-void WebSession::serve_static(int fd, const std::string& path) {
-  // Map and sanitize the path.
-  std::string rel = path == "/" ? "/index.html" : path;
-  if (size_t q = rel.find('?'); q != std::string::npos) rel = rel.substr(0, q);
-  if (rel.find("..") != std::string::npos) {
-    std::string body = "Forbidden";
-    std::string resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n"
-                       "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
-    write_all(fd, resp.data(), resp.size());
-    return;
-  }
-
-  std::ifstream f(web_dir_ + rel, std::ios::binary);
-  if (!f) {
-    std::string body = "Not found: " + rel +
-                       "\n(Did you build the web UI? See web/README or run "
-                       "`npm --prefix web run build`.)";
-    std::string resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n"
-                       "Content-Type: text/plain\r\nContent-Length: " +
-                       std::to_string(body.size()) + "\r\n\r\n" + body;
-    write_all(fd, resp.data(), resp.size());
-    return;
-  }
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  std::string body = ss.str();
-  std::string resp = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: " +
-                     content_type(rel) + "\r\nContent-Length: " +
-                     std::to_string(body.size()) + "\r\n\r\n";
-  write_all(fd, resp.data(), resp.size());
-  write_all(fd, body.data(), body.size());
-}
-
 bool WebSession::do_handshake(int fd, const std::string& request) {
   std::string key = header_value(request, "Sec-WebSocket-Key");
   if (key.empty()) return false;
   uint8_t digest[20];
   sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", digest);
   std::string accept = base64(digest, 20);
-  std::string resp = "HTTP/1.1 101 Switching Protocols\r\n"
-                     "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-                     "Sec-WebSocket-Accept: " + accept + "\r\n\r\n";
+  std::string resp =
+      "HTTP/1.1 101 Switching Protocols\r\n"
+      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Accept: " +
+      accept + "\r\n\r\n";
   return write_all(fd, resp.data(), resp.size());
 }
 
@@ -440,7 +546,10 @@ bool WebSession::wait_for_client() {
       req.append(buf, static_cast<size_t>(r));
       if (req.size() > 64 * 1024) break;
     }
-    if (req.empty()) { ::close(conn); continue; }
+    if (req.empty()) {
+      ::close(conn);
+      continue;
+    }
 
     if (to_lower(header_value(req, "Upgrade")) == "websocket") {
       if (do_handshake(conn, req)) {
@@ -450,7 +559,8 @@ bool WebSession::wait_for_client() {
       ::close(conn);
       continue;
     }
-    serve_static(conn, request_path(req));
+    // Not a WebSocket upgrade. The UI is served by the Vite dev server, which
+    // only proxies `/ws` here, so any other request is stray -- just close it.
     ::close(conn);
   }
 }
@@ -479,24 +589,39 @@ std::optional<std::string> WebSession::recv_text() {
   if (ws_fd_ < 0) return std::nullopt;
   for (;;) {
     uint8_t hdr[2];
-    if (!read_n(ws_fd_, hdr, 2)) { disconnect(); return std::nullopt; }
+    if (!read_n(ws_fd_, hdr, 2)) {
+      disconnect();
+      return std::nullopt;
+    }
     int opcode = hdr[0] & 0x0f;
     bool masked = (hdr[1] & 0x80) != 0;
     uint64_t len = hdr[1] & 0x7f;
     if (len == 126) {
       uint8_t ext[2];
-      if (!read_n(ws_fd_, ext, 2)) { disconnect(); return std::nullopt; }
+      if (!read_n(ws_fd_, ext, 2)) {
+        disconnect();
+        return std::nullopt;
+      }
       len = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
     } else if (len == 127) {
       uint8_t ext[8];
-      if (!read_n(ws_fd_, ext, 8)) { disconnect(); return std::nullopt; }
+      if (!read_n(ws_fd_, ext, 8)) {
+        disconnect();
+        return std::nullopt;
+      }
       len = 0;
       for (int i = 0; i < 8; ++i) len = (len << 8) | ext[i];
     }
     uint8_t mask[4] = {0, 0, 0, 0};
-    if (masked && !read_n(ws_fd_, mask, 4)) { disconnect(); return std::nullopt; }
+    if (masked && !read_n(ws_fd_, mask, 4)) {
+      disconnect();
+      return std::nullopt;
+    }
     std::string payload(len, '\0');
-    if (len && !read_n(ws_fd_, payload.data(), len)) { disconnect(); return std::nullopt; }
+    if (len && !read_n(ws_fd_, payload.data(), len)) {
+      disconnect();
+      return std::nullopt;
+    }
     if (masked)
       for (uint64_t i = 0; i < len; ++i) payload[i] ^= mask[i & 3];
 
@@ -511,7 +636,10 @@ std::optional<std::string> WebSession::recv_text() {
         frame.push_back(static_cast<char>(0x8a));
         frame.push_back(static_cast<char>(payload.size() & 0x7f));
         frame += payload;
-        if (!write_all(ws_fd_, frame.data(), frame.size())) { disconnect(); return std::nullopt; }
+        if (!write_all(ws_fd_, frame.data(), frame.size())) {
+          disconnect();
+          return std::nullopt;
+        }
         break;
       }
       default:
@@ -527,20 +655,12 @@ void WebSession::linger_after_final_message() {
 
 // ------------------------------ HumanWebAgent ----------------------------
 
-HumanWebAgent::HumanWebAgent(WebSession& session, std::string my_name,
-                             std::string opp_name)
+HumanWebAgent::HumanWebAgent(WebSession& session, std::string my_name, std::string opp_name)
     : session_(session), my_name_(std::move(my_name)), opp_name_(std::move(opp_name)) {}
 
 Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
-  StateView view{ctx.board,
-                 ctx.my_rack,
-                 ctx.my_score,
-                 ctx.opp_score,
-                 ctx.bag_size,
-                 ctx.opp_rack_size,
-                 my_name_,
-                 opp_name_,
-                 &ctx.legal_plays,
+  StateView view{ctx.board,          ctx.my_rack, ctx.my_score, ctx.opp_score,    ctx.bag_size,
+                 ctx.opp_rack_size,  my_name_,    opp_name_,    &ctx.legal_plays,
                  /*your_turn=*/true,
                  /*game_over=*/false};
   const std::string msg = game_state_json(view);

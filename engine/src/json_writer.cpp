@@ -11,11 +11,21 @@ std::string quote(const std::string& s) {
   std::string out = "\"";
   for (char c : s) {
     switch (c) {
-      case '"': out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\n': out += "\\n"; break;
-      case '\r': out += "\\r"; break;
-      case '\t': out += "\\t"; break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
@@ -44,9 +54,15 @@ std::string move_to_json(const Move& m, const std::string& indent) {
   os << "{\n";
   os << i1 << "\"type\": ";
   switch (m.type) {
-    case MoveType::PLAY:     os << quote("play"); break;
-    case MoveType::EXCHANGE: os << quote("exchange"); break;
-    case MoveType::PASS:     os << quote("pass"); break;
+    case MoveType::PLAY:
+      os << quote("play");
+      break;
+    case MoveType::EXCHANGE:
+      os << quote("exchange");
+      break;
+    case MoveType::PASS:
+      os << quote("pass");
+      break;
   }
   if (m.type == MoveType::PLAY) {
     os << ",\n" << i1 << "\"horizontal\": " << (m.horizontal ? "true" : "false");
@@ -91,8 +107,8 @@ std::string game_log_to_json(const GameLog& log) {
     os << "      \"bag_size_before\": " << t.bag_size_before << ",\n";
     os << "      \"move\": " << move_to_json(t.move, "      ") << ",\n";
     os << "      \"score_delta\": " << t.score_delta << ",\n";
-    os << "      \"cumulative_scores\": [" << t.cumulative_scores[0]
-       << ", " << t.cumulative_scores[1] << "],\n";
+    os << "      \"cumulative_scores\": [" << t.cumulative_scores[0] << ", "
+       << t.cumulative_scores[1] << "],\n";
     os << "      \"drawn\": " << quote(letters_to_string(t.drawn)) << "\n";
     os << "    }" << (i + 1 < log.turns.size() ? "," : "") << "\n";
   }
@@ -103,8 +119,6 @@ std::string game_log_to_json(const GameLog& log) {
   return os.str();
 }
 
-void write_game_log_json(const GameLog& log, std::ostream& out) {
-  out << game_log_to_json(log);
-}
+void write_game_log_json(const GameLog& log, std::ostream& out) { out << game_log_to_json(log); }
 
 }  // namespace scribblez

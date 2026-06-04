@@ -16,5 +16,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Boost: program_options for the CLI, and process/asio/filesystem (header-only,
+# but they need filesystem+system+threads linked) for launching the web UI.
+find_package(Boost REQUIRED COMPONENTS program_options filesystem system)
+find_package(Threads REQUIRED)
+
 enable_testing()
 add_subdirectory(engine)
