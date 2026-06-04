@@ -64,7 +64,7 @@ static void test_movegen_opening() {
   for (const auto& m : moves) {
     CHECK(m.type == MoveType::PLAY);
     bool covers = false;
-    for (const auto& t : m.tiles) {
+    for (const auto& t : m.placed_tiles(b)) {
       if (t.row == CENTER && t.col == CENTER) {
         covers = true;
         break;
@@ -82,7 +82,7 @@ static void test_movegen_opening() {
     }
   }
   CHECK(best_move != nullptr);
-  CHECK(d.contains(best_move->main_word));
+  CHECK(d.contains(best_move->main_word(b)));
 }
 
 static void test_movegen_cross_word() {
@@ -102,7 +102,7 @@ static void test_movegen_cross_word() {
   CHECK(!moves.empty());
   bool found_cats = false;
   for (const auto& m : moves) {
-    if (m.main_word == "CATS") found_cats = true;
+    if (m.main_word(b) == "CATS") found_cats = true;
   }
   CHECK(found_cats);
 }
@@ -119,14 +119,14 @@ static void test_bingo_bonus() {
   // Look for a 7-tile play that uses the A. Bingo should give +50.
   bool found_bingo = false;
   for (const auto& m : moves) {
-    if ((int)m.tiles.size() == RACK_SIZE) found_bingo = true;
+    if (m.num_glyphs() == RACK_SIZE) found_bingo = true;
   }
   // Note: rack has 6 non-blank tiles + 1 blank, total 7. PARTIED needs P,A,R,T,I,E,D;
   // A is on the board; the other 6 must come from the rack. So we'd place 6 tiles, not 7.
   // So no bingo here. But ensure PARTIED is generated.
   bool found_partied = false;
   for (const auto& m : moves) {
-    if (m.main_word == "PARTIED") found_partied = true;
+    if (m.main_word(b) == "PARTIED") found_partied = true;
   }
   CHECK(found_partied);
   (void)found_bingo;
@@ -136,8 +136,8 @@ static void test_bingo_bonus() {
 // plays with the same key are the same move for legality/scoring purposes (the
 // `main_word` of a single-tile cross play is orientation-dependent and is not
 // part of the key).
-static std::string move_key(const Move& m) {
-  std::vector<PlacedTile> tiles = m.tiles;
+static std::string move_key(const Board& board, const Move& m) {
+  std::vector<PlacedTile> tiles = m.placed_tiles(board);
   std::sort(tiles.begin(), tiles.end(), [](const PlacedTile& a, const PlacedTile& b) {
     if (a.row != b.row) return a.row < b.row;
     return a.col < b.col;
@@ -145,8 +145,7 @@ static std::string move_key(const Move& m) {
   std::string k;
   char buf[32];
   for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.glyph.letter(),
-                  (int)t.glyph.is_blank());
+    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.row, t.col, (int)t.glyph.code());
     k += buf;
   }
   std::snprintf(buf, sizeof(buf), "|%d", m.score);
@@ -154,9 +153,9 @@ static std::string move_key(const Move& m) {
   return k;
 }
 
-static std::set<std::string> key_set(const std::vector<Move>& ms) {
+static std::set<std::string> key_set(const Board& board, const std::vector<Move>& ms) {
   std::set<std::string> s;
-  for (const auto& m : ms) s.insert(move_key(m));
+  for (const auto& m : ms) s.insert(move_key(board, m));
   return s;
 }
 
@@ -185,8 +184,8 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
       MoveGenerator gen(b, d);
       auto via_gaddag = gen.generate(r, GenAlgo::GADDAG);
       auto via_dawg = gen.generate(r, GenAlgo::DAWG);
-      auto kg = key_set(via_gaddag);
-      auto kd = key_set(via_dawg);
+      auto kg = key_set(b, via_gaddag);
+      auto kd = key_set(b, via_dawg);
       if (kg != kd) {
         std::cerr << "MISMATCH [" << label << "] game " << g << " step " << s
                   << ": GADDAG=" << kg.size() << " DAWG=" << kd.size() << "\n";
@@ -203,7 +202,7 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
       if (via_gaddag.empty()) break;
       // Advance: apply a random generated play.
       std::uniform_int_distribution<size_t> pick(0, via_gaddag.size() - 1);
-      b.apply(via_gaddag[pick(rng)].tiles);
+      via_gaddag[pick(rng)].apply_to(b);
     }
   }
   std::cout << "  cross-validated " << compared << " positions [" << label << "]\n";

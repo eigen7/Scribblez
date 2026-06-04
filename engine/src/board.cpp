@@ -64,7 +64,7 @@ Board::Board() {
 
 bool Board::empty_board() const {
   for (auto& s : squares_)
-    if (!is_empty(s)) return false;
+    if (!s.is_empty()) return false;
   return true;
 }
 
@@ -89,7 +89,7 @@ std::string Board::to_string() const {
     s += buf;
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph sq = at(r, c);
-      if (is_empty(sq)) {
+      if (sq.is_empty()) {
         switch (premium_at(r, c)) {
           case Premium::NONE:
             s += ". ";

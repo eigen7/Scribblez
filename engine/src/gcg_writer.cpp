@@ -33,29 +33,31 @@ std::string position(const Move& m) {
 // this move (played through), and a lowercase letter for a designated blank.
 std::string played_word(const Board& board_before, const Move& m) {
   std::string out;
-  for (size_t i = 0; i < m.main_word.size(); ++i) {
-    int r = m.horizontal ? m.start_row : m.start_row + static_cast<int>(i);
-    int c = m.horizontal ? m.start_col + static_cast<int>(i) : m.start_col;
-    if (!is_empty(board_before.at(r, c))) {
-      out.push_back('.');
-      continue;
+  const int dr = m.horizontal ? 0 : 1, dc = m.horizontal ? 1 : 0;
+  const int n = m.num_glyphs();
+  int r = m.start_row, c = m.start_col, gi = 0;
+  while (board_before.in_bounds(r, c)) {
+    if (!board_before.at(r, c).is_empty()) {
+      out.push_back('.');  // played through an existing tile
+    } else if (gi < n) {
+      Glyph g = m.glyphs[gi++];
+      char ch = g.letter().to_char();
+      out.push_back(g.is_blank() ? static_cast<char>(ch - 'A' + 'a') : ch);
+    } else {
+      break;
     }
-    char ch = m.main_word[i];
-    bool blank = false;
-    for (const auto& t : m.tiles) {
-      if (t.row == r && t.col == c) {
-        blank = t.glyph.is_blank();
-        break;
-      }
-    }
-    out.push_back(blank ? static_cast<char>(ch - 'A' + 'a') : ch);
+    r += dr;
+    c += dc;
   }
   return out;
 }
 
 std::string exchanged_tiles(const Move& m) {
   std::string s;
-  for (Tile t : m.exchanged) s.push_back(t.to_char());
+  for (Glyph g : m.glyphs) {
+    if (g.is_empty()) break;
+    s.push_back(g.rack_tile().to_char());
+  }
   return s;
 }
 
@@ -89,7 +91,7 @@ std::string game_log_to_gcg(const GameLog& log) {
       case MoveType::PLAY:
         o << rack << " " << position(m) << " " << played_word(board, m) << " +" << m.score << " "
           << cumulative << "\n";
-        board.apply(m.tiles);
+        m.apply_to(board);
         break;
       case MoveType::EXCHANGE:
         o << rack << " -" << exchanged_tiles(m) << " +0 " << cumulative << "\n";

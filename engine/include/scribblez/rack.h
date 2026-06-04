@@ -4,6 +4,7 @@
 #include "scribblez/tile_counts.h"
 
 #include <array>
+#include <cstdint>
 #include <string>
 
 namespace scribblez {
@@ -34,7 +35,9 @@ class Rack {
 
  private:
   std::array<Tile, RACK_SIZE> tiles_{};  // sorted ascending; unused slots empty
-  int size_ = 0;
+  int8_t size_ = 0;
 };
+
+static_assert(sizeof(Rack) == 8, "Rack should pack into 8 bytes");
 
 }  // namespace scribblez

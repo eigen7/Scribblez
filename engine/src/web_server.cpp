@@ -240,24 +240,23 @@ std::string move_to_notation(const Board& board, const Move& move) {
 
   // Render the main word, lowercasing blank tiles (new or already on board).
   std::string word;
-  for (size_t i = 0; i < move.main_word.size(); ++i) {
-    int r = move.horizontal ? sr : sr + static_cast<int>(i);
-    int c = move.horizontal ? sc + static_cast<int>(i) : sc;
-    bool is_blank = false;
-    Glyph sq = board.at(r, c);
-    if (!is_empty(sq)) {
-      is_blank = sq.is_blank();
+  const int dr = move.horizontal ? 0 : 1, dc = move.horizontal ? 1 : 0;
+  const int n = move.num_glyphs();
+  int r = sr, c = sc, gi = 0;
+  while (board.in_bounds(r, c)) {
+    Glyph cell = board.at(r, c);
+    Glyph g;
+    if (!cell.is_empty()) {
+      g = cell;  // existing tile
+    } else if (gi < n) {
+      g = move.glyphs[gi++];  // newly placed tile
     } else {
-      for (const auto& t : move.tiles) {
-        if (t.row == r && t.col == c) {
-          is_blank = t.glyph.is_blank();
-          break;
-        }
-      }
+      break;
     }
-    char ch = move.main_word[i];
-    if (is_blank && ch >= 'A' && ch <= 'Z') ch = ch - 'A' + 'a';
-    word.push_back(ch);
+    char ch = g.letter().to_char();
+    word.push_back(g.is_blank() ? static_cast<char>(ch - 'A' + 'a') : ch);
+    r += dr;
+    c += dc;
   }
 
   return pos + " " + word + " " + std::to_string(move.score);
@@ -278,7 +277,7 @@ std::string game_state_json(const StateView& v) {
     json::array row;
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph sq = v.board.at(r, c);
-      if (is_empty(sq)) {
+      if (sq.is_empty()) {
         row.emplace_back(nullptr);
       } else {
         char ch = sq.letter().to_char();
@@ -640,11 +639,12 @@ Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
         // Optional: front-end may send {"type":"exchange","letters":"AB?"}.
         Move m;
         m.type = MoveType::EXCHANGE;
+        int gi = 0;
         for (char c : str_field(obj, "letters")) {
           Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : Tile::from_char(c);
-          if (ctx.my_rack.count(L) > 0) m.exchanged.push_back(L);
+          if (ctx.my_rack.count(L) > 0 && gi < RACK_SIZE) m.glyphs[gi++] = Glyph::exchanging(L);
         }
-        if (!m.exchanged.empty()) return m;
+        if (gi > 0) return m;
       }
       // Unknown / invalid: keep waiting for a usable message.
     }

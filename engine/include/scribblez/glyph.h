@@ -32,7 +32,7 @@ class Glyph {
   }
 
   constexpr bool is_empty() const { return code_ == 0; }
-  constexpr bool is_blank() const { return code_ >= 27; }            // designated or not
+  constexpr bool is_blank() const { return code_ >= 27; }  // designated or not
   constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
   constexpr Tile letter() const {  // valid iff has_letter()
     return Tile::of(code_ <= 26 ? code_ - 1 : code_ - 27);
@@ -45,6 +45,13 @@ class Glyph {
   }
   constexpr uint8_t code() const { return code_; }
 
+  // The rack tile this glyph consumes when played or exchanged (any blank
+  // consumes a blank tile).
+  constexpr Tile rack_tile() const { return is_blank() ? BLANK : letter(); }
+
+  // The glyph for surrendering a rack tile in an exchange.
+  static constexpr Glyph exchanging(Tile t) { return t.is_blank() ? blank() : of(t); }
+
   constexpr bool operator==(Glyph o) const { return code_ == o.code_; }
   constexpr bool operator!=(Glyph o) const { return code_ != o.code_; }
 
@@ -54,8 +61,5 @@ class Glyph {
 };
 
 static_assert(sizeof(Glyph) == 1, "Glyph must pack into one byte");
-
-// Free helper so existing `is_empty(cell)` call sites keep working.
-inline bool is_empty(Glyph g) { return g.is_empty(); }
 
 }  // namespace scribblez

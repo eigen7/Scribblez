@@ -1,28 +1,52 @@
 #pragma once
 
 #include "scribblez/board.h"
+#include "scribblez/glyph.h"
 #include "scribblez/tile.h"
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace scribblez {
 
-enum class MoveType { PLAY, EXCHANGE, PASS };
+enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 
+// A move in compact, fixed-size form (16 bytes). The full word and tile
+// positions are not stored -- they are reconstructed from the board.
+//
+// PLAY:     `glyphs` are the newly placed tiles in order along the main word;
+//           start_row/col is the word's first square and `horizontal` its
+//           direction. Squares between/after that are read from the board.
+// EXCHANGE: `glyphs` are the tiles surrendered (an unassigned blank is
+//           Glyph::blank()).
+// PASS:     `glyphs` is empty.
+// Unused trailing slots are empty glyphs.
 struct Move {
   MoveType type = MoveType::PASS;
+  bool horizontal = true;
+  int8_t start_row = 0;
+  int8_t start_col = 0;
+  std::array<Glyph, RACK_SIZE> glyphs{};
+  int score = 0;
 
-  // For PLAY:
-  std::vector<PlacedTile> tiles;  // tiles newly placed, ordered along main word
-  bool horizontal = true;         // direction of main word
-  int start_row = 0;              // first square of main word (may be an existing tile)
-  int start_col = 0;
-  std::string main_word;  // full main word (including tiles already on board)
-  int score = 0;          // total score of the play
+  // Number of leading non-empty glyphs (placed/surrendered tiles).
+  int num_glyphs() const {
+    int n = 0;
+    for (Glyph g : glyphs) {
+      if (g.is_empty()) break;
+      ++n;
+    }
+    return n;
+  }
 
-  // For EXCHANGE:
-  std::vector<Tile> exchanged;  // tiles taken from rack and returned to bag
+  // Reconstructions against the board as it stood *before* this move:
+  std::string main_word(const Board& board) const;  // full word, uppercase
+  std::vector<PlacedTile> placed_tiles(const Board& board) const;
+  void apply_to(Board& board) const;  // place this move's tiles on the board
 };
+
+static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
 
 }  // namespace scribblez

@@ -4,6 +4,7 @@ add_library(scribblez_core STATIC
   src/rack.cpp
   src/bag.cpp
   src/board.cpp
+  src/move.cpp
   src/dictionary.cpp
   src/movegen.cpp
   src/agent.cpp

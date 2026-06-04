@@ -44,17 +44,17 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph here = view.at(r, c);
-      if (!is_empty(here)) continue;  // cross-check only meaningful for empty squares
+      if (!here.is_empty()) continue;  // cross-check only meaningful for empty squares
 
       // Walk up (decreasing r at fixed c) collecting existing letters (top-to-bottom order: from
       // `top` row to r-1).
       int top = r - 1;
-      while (top >= 0 && !is_empty(view.at(top, c))) --top;
+      while (top >= 0 && !view.at(top, c).is_empty()) --top;
       ++top;  // top is now first existing row above r (or r if none)
 
       // Walk down (increasing r at fixed c).
       int bot = r + 1;
-      while (bot < BOARD_SIZE && !is_empty(view.at(bot, c))) ++bot;
+      while (bot < BOARD_SIZE && !view.at(bot, c).is_empty()) ++bot;
       --bot;  // bot is last existing row below r (or r if none)
 
       CrossCheck cc;
@@ -120,7 +120,7 @@ std::vector<bool> compute_anchors(const View& view) {
   bool any_tile = false;
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!is_empty(view.at(r, c))) {
+      if (!view.at(r, c).is_empty()) {
         any_tile = true;
         break;
       }
@@ -135,11 +135,11 @@ std::vector<bool> compute_anchors(const View& view) {
   static const int dc[4] = {0, 0, -1, 1};
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!is_empty(view.at(r, c))) continue;
+      if (!view.at(r, c).is_empty()) continue;
       for (int k = 0; k < 4; ++k) {
         int nr = r + dr[k], nc = c + dc[k];
         if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
-        if (!is_empty(view.at(nr, nc))) {
+        if (!view.at(nr, nc).is_empty()) {
           anchor[idx(r, c)] = true;
           break;
         }
@@ -165,7 +165,6 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
   m.start_row = start_bc.first;
   m.start_col = start_bc.second;
 
-  std::string word;
   std::vector<PlacedTile> placed_board;
   int main_letter_sum = 0;
   int word_mult = 1;
@@ -176,7 +175,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
     Tile L;
     bool is_blank;
     bool newly_placed;
-    if (!is_empty(sq)) {
+    if (!sq.is_empty()) {
       L = sq.letter();
       is_blank = sq.is_blank();
       newly_placed = false;
@@ -187,7 +186,6 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
       auto bc = view.to_board(row, c);
       placed_board.push_back(PlacedTile{bc.first, bc.second, Glyph::played(L, is_blank)});
     }
-    word.push_back(L.to_char());
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
     if (newly_placed) {
@@ -217,8 +215,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
 
   m.score = main_letter_sum * word_mult + cross_total;
   if (static_cast<int>(placed_board.size()) == RACK_SIZE) m.score += 50;  // bingo
-  m.main_word = std::move(word);
-  m.tiles = std::move(placed_board);
+  for (size_t i = 0; i < placed_board.size(); ++i) m.glyphs[i] = placed_board[i].glyph;
   return m;
 }
 
@@ -238,18 +235,18 @@ std::vector<bool> compute_gaddag_anchors(const View& view) {
   bool any_tile = false;
   for (int r = 0; r < BOARD_SIZE && !any_tile; ++r)
     for (int c = 0; c < BOARD_SIZE && !any_tile; ++c)
-      if (!is_empty(view.at(r, c))) any_tile = true;
+      if (!view.at(r, c).is_empty()) any_tile = true;
   if (!any_tile) {
     anchor[idx(CENTER, CENTER)] = true;
     return anchor;
   }
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      const bool here = !is_empty(view.at(r, c));
-      const bool tile_left = c > 0 && !is_empty(view.at(r, c - 1));
-      const bool tile_right = c < BOARD_SIZE - 1 && !is_empty(view.at(r, c + 1));
-      const bool tile_above = r > 0 && !is_empty(view.at(r - 1, c));
-      const bool tile_below = r < BOARD_SIZE - 1 && !is_empty(view.at(r + 1, c));
+      const bool here = !view.at(r, c).is_empty();
+      const bool tile_left = c > 0 && !view.at(r, c - 1).is_empty();
+      const bool tile_right = c < BOARD_SIZE - 1 && !view.at(r, c + 1).is_empty();
+      const bool tile_above = r > 0 && !view.at(r - 1, c).is_empty();
+      const bool tile_below = r < BOARD_SIZE - 1 && !view.at(r + 1, c).is_empty();
       if (here) {
         if (!tile_right) anchor[idx(r, c)] = true;
       } else if (!tile_left && !tile_right && (tile_above || tile_below)) {
@@ -294,7 +291,7 @@ void GenState::emit_move(int start_col, int end_col_excl) {
   std::array<bool, BOARD_SIZE> placed_blank{};
   int li = 0, ri = 0;
   for (int c = start_col; c < end_col_excl; ++c) {
-    if (!is_empty(view.at(current_row, c))) continue;  // existing tile
+    if (!view.at(current_row, c).is_empty()) continue;  // existing tile
     if (case_b_start_col < 0 && c < current_anchor_col) {
       placed_letter[c] = left_letters[li].first;
       placed_blank[c] = left_letters[li].second;
@@ -311,7 +308,7 @@ void GenState::emit_move(int start_col, int end_col_excl) {
 
 void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
   bool off_board = (col >= BOARD_SIZE);
-  bool stop_here = off_board || is_empty(view.at(current_row, col));
+  bool stop_here = off_board || view.at(current_row, col).is_empty();
   if (stop_here) {
     int total_placed = (int)left_letters.size() + (int)right_placed.size();
     if (accepts_here && col > current_anchor_col && total_placed > 0) {
@@ -386,10 +383,10 @@ void GenState::generate_for_row(int row) {
     current_anchor_col = col;
 
     // Decide between case A (no immediate-left filled tile) and case B (immediate-left filled).
-    if (col > 0 && !is_empty(view.at(row, col - 1))) {
+    if (col > 0 && !view.at(row, col - 1).is_empty()) {
       // Case B: walk left through existing tiles to find prefix start.
       int start_c = col - 1;
-      while (start_c - 1 >= 0 && !is_empty(view.at(row, start_c - 1))) --start_c;
+      while (start_c - 1 >= 0 && !view.at(row, start_c - 1).is_empty()) --start_c;
       // Traverse the dictionary through the existing prefix.
       uint32_t node = dict.root();
       bool ok = true;
@@ -410,7 +407,7 @@ void GenState::generate_for_row(int row) {
       // Case A: compute left limit.
       int limit = 0;
       int c2 = col - 1;
-      while (c2 >= 0 && is_empty(view.at(row, c2)) && !anchor[idx(row, c2)]) {
+      while (c2 >= 0 && view.at(row, c2).is_empty() && !anchor[idx(row, c2)]) {
         ++limit;
         --c2;
       }
@@ -422,15 +419,16 @@ void GenState::generate_for_row(int row) {
 // Deduplicate moves whose placed-tile sets are identical (same positions, same
 // letters, same blank flags). This handles the rare case of a single-tile
 // placement that forms multi-letter words in both directions.
-void dedupe(std::vector<Move>& moves) {
-  auto key = [](const Move& m) {
-    std::string k;
-    k.reserve(m.tiles.size() * 6);
-    std::vector<PlacedTile> tiles = m.tiles;
+void dedupe(std::vector<Move>& moves, const Board& board) {
+  // Key on the placed tiles' board positions + faces, so the same tile recorded
+  // under both orientations collapses (the positions come out identical).
+  auto key = [&board](const Move& m) {
+    std::vector<PlacedTile> tiles = m.placed_tiles(board);
     std::sort(tiles.begin(), tiles.end(), [](const PlacedTile& a, const PlacedTile& b) {
       if (a.row != b.row) return a.row < b.row;
       return a.col < b.col;
     });
+    std::string k;
     for (const auto& t : tiles) {
       char buf[16];
       std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.glyph.letter(),
@@ -481,7 +479,7 @@ struct GaddagGen {
   // letter L at `col`; `accepts` says the path so far spells a complete word.
   void go_on(int col, Tile L, bool is_blank, uint32_t new_node, bool accepts, int leftstrip,
              int rightstrip) {
-    const bool placed = is_empty(view.at(current_row, col));
+    const bool placed = view.at(current_row, col).is_empty();
     if (placed) {
       strip_letter[col] = L;
       strip_blank[col] = is_blank;
@@ -489,7 +487,7 @@ struct GaddagGen {
 
     if (col <= current_anchor_col) {
       leftstrip = col;
-      const bool no_letter_left = (col == 0) || is_empty(view.at(current_row, col - 1));
+      const bool no_letter_left = (col == 0) || view.at(current_row, col - 1).is_empty();
       if (accepts && no_letter_left && tiles_played > 0) {
         record(leftstrip, rightstrip);
       }
@@ -506,7 +504,7 @@ struct GaddagGen {
     } else {
       rightstrip = col;
       const bool no_letter_right =
-        (col == BOARD_SIZE - 1) || is_empty(view.at(current_row, col + 1));
+        (col == BOARD_SIZE - 1) || view.at(current_row, col + 1).is_empty();
       if (accepts && no_letter_right && tiles_played > 0) {
         record(leftstrip, rightstrip);
       }
@@ -519,7 +517,7 @@ struct GaddagGen {
   // Gordon's Gen: at board column `col`, GADDAG node `node`.
   void recursive_gen(int col, uint32_t node, int leftstrip, int rightstrip) {
     Glyph here = view.at(current_row, col);
-    if (!is_empty(here)) {
+    if (!here.is_empty()) {
       // A tile is already here: follow its arc only.
       auto tr = dict.step(node, here.letter());
       if (tr.valid) {
@@ -583,7 +581,7 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
     }
   }
-  dedupe(out);
+  dedupe(out, board_);
   return out;
 }
 
