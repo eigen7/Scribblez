@@ -1,0 +1,16 @@
+build/
+*.o
+*.a
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+
+# Lexicon binaries are not committed (encode a copyrighted wordlist).
+# Place or symlink NWL*.kwg under data/lexica/ locally.
+data/lexica/
+
+# Editor / tooling caches and generated files
+.cache/
+compile_commands.json
+.claude/settings.local.json
