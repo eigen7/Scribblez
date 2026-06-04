@@ -16,7 +16,7 @@ Game::Game(std::unique_ptr<Agent> p0, std::unique_ptr<Agent> p1, const Dictionar
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }
 
-void Game::refill_rack(int p, std::vector<Letter>& drawn) {
+void Game::refill_rack(int p, std::vector<Tile>& drawn) {
   while (racks_[p].size() < RACK_SIZE) {
     auto t = bag_.draw();
     if (!t) break;
@@ -28,7 +28,7 @@ void Game::refill_rack(int p, std::vector<Letter>& drawn) {
 void Game::play() {
   // Initial draws.
   for (int p = 0; p < 2; ++p) {
-    std::vector<Letter> dummy;
+    std::vector<Tile> dummy;
     refill_rack(p, dummy);
   }
 
@@ -57,7 +57,7 @@ void Game::play() {
     if (m.type == MoveType::PLAY) {
       // Remove placed tiles from rack, apply to board.
       for (const auto& t : m.tiles) {
-        Letter rack_tile = t.is_blank ? BLANK : t.letter;
+        Tile rack_tile = t.is_blank ? BLANK : t.letter;
         bool ok = racks_[cur].remove(rack_tile);
         (void)ok;
         assert(ok);
@@ -73,13 +73,13 @@ void Game::play() {
       }
     } else if (m.type == MoveType::EXCHANGE) {
       // Remove tiles from rack, draw new ones, then put exchanged tiles back.
-      for (Letter L : m.exchanged) {
+      for (Tile L : m.exchanged) {
         bool ok = racks_[cur].remove(L);
         (void)ok;
         assert(ok);
       }
       refill_rack(cur, rec.drawn);
-      for (Letter L : m.exchanged) bag_.put_back(L);
+      for (Tile L : m.exchanged) bag_.put_back(L);
       ++consecutive_zero_turns;
     } else {
       // PASS

@@ -14,8 +14,8 @@ class Bag {
   // Initialize from the standard English tile distribution.
   explicit Bag(uint64_t seed);
 
-  std::optional<Letter> draw();
-  void put_back(Letter t);
+  std::optional<Tile> draw();
+  void put_back(Tile t);
   int size() const { return remaining_; }
   const std::array<int, 27>& counts() const { return counts_; }
 

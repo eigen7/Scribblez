@@ -78,7 +78,7 @@ Dictionary::Step Dictionary::step_tile(uint32_t node, uint8_t tile_value) const 
   }
 }
 
-Dictionary::Step Dictionary::step(uint32_t node, Letter letter) const {
+Dictionary::Step Dictionary::step(uint32_t node, Tile letter) const {
   return step_tile(node, static_cast<uint8_t>(letter + 1));  // KWG is 1-indexed
 }
 
@@ -90,7 +90,7 @@ bool Dictionary::contains(const std::string& word) const {
     char c = word[k];
     if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
     if (c < 'A' || c > 'Z') return false;
-    Letter L = static_cast<Letter>(c - 'A');
+    Tile L = static_cast<Tile>(c - 'A');
     Step s = step(node, L);
     if (!s.valid) return false;
     acc = s.accepts;

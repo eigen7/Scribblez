@@ -47,7 +47,7 @@ static Rack rack_from(const std::string& s) {
     if (c == '?')
       r.add(BLANK);
     else
-      r.add(char_to_letter(c));
+      r.add(char_to_tile(c));
   }
   return r;
 }
@@ -90,9 +90,9 @@ static void test_movegen_cross_word() {
   Board b;
   // Place CAT at the center horizontally.
   std::vector<PlacedTile> cat = {
-    {CENTER, CENTER, char_to_letter('C'), false},
-    {CENTER, CENTER + 1, char_to_letter('A'), false},
-    {CENTER, CENTER + 2, char_to_letter('T'), false},
+    {CENTER, CENTER, char_to_tile('C'), false},
+    {CENTER, CENTER + 1, char_to_tile('A'), false},
+    {CENTER, CENTER + 2, char_to_tile('T'), false},
   };
   b.apply(cat);
   MoveGenerator gen(b, d);
@@ -111,7 +111,7 @@ static void test_bingo_bonus() {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
   // Place an A at the center to provide an anchor.
-  b.apply({{CENTER, CENTER, char_to_letter('A'), false}});
+  b.apply({{CENTER, CENTER, char_to_tile('A'), false}});
   MoveGenerator gen(b, d);
   // Rack PRTIED + something already used (the A is on the board).
   Rack r = rack_from("PRTIED?");  // blank as 7th, won't be needed; ensure 7 tiles
@@ -164,7 +164,7 @@ static Rack random_rack(std::mt19937& rng) {
   std::uniform_int_distribution<int> pick(0, 26);  // 26 -> blank, ~1/27 of tiles
   for (int i = 0; i < RACK_SIZE; ++i) {
     int v = pick(rng);
-    r.add(v == 26 ? BLANK : static_cast<Letter>(v));
+    r.add(v == 26 ? BLANK : static_cast<Tile>(v));
   }
   return r;
 }

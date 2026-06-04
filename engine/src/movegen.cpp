@@ -31,7 +31,7 @@ struct View {
 
 struct CrossCheck {
   uint32_t mask = ALL_LETTERS_MASK;
-  int score = 0;  // sum of LETTER_VALUES of existing perpendicular letters (blanks = 0)
+  int score = 0;  // sum of TILE_VALUES of existing perpendicular letters (blanks = 0)
   bool has_neighbor = false;
 };
 
@@ -75,18 +75,18 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
             break;
           }
           prefix_node = tr.next;
-          if (!sq.is_blank) prefix_score += LETTER_VALUES[sq.letter];
+          if (!sq.is_blank) prefix_score += TILE_VALUES[sq.letter];
         }
         // Sum suffix score upfront.
         int suffix_score = 0;
         for (int rr = r + 1; rr <= bot; ++rr) {
           Square sq = view.at(rr, c);
-          if (!sq.is_blank) suffix_score += LETTER_VALUES[sq.letter];
+          if (!sq.is_blank) suffix_score += TILE_VALUES[sq.letter];
         }
         cc.score = prefix_score + suffix_score;
         uint32_t mask = 0;
         if (prefix_ok) {
-          for (Letter L = 0; L < 26; ++L) {
+          for (Tile L = 0; L < 26; ++L) {
             auto tr_l = dict.step(prefix_node, L);
             if (!tr_l.valid) continue;
             bool acc = tr_l.accepts;
@@ -156,7 +156,7 @@ std::vector<bool> compute_anchors(const View& view) {
 // Scoring (premiums, cross-words, bingo) is shared by both generators so the
 // two algorithms produce byte-identical moves.
 Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row, int start_col,
-                int end_col_excl, const std::array<Letter, BOARD_SIZE>& placed_letter,
+                int end_col_excl, const std::array<Tile, BOARD_SIZE>& placed_letter,
                 const std::array<bool, BOARD_SIZE>& placed_blank) {
   Move m;
   m.type = MoveType::PLAY;
@@ -173,7 +173,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
 
   for (int c = start_col; c < end_col_excl; ++c) {
     Square sq = view.at(row, c);
-    Letter L;
+    Tile L;
     bool is_blank;
     bool newly_placed;
     if (!is_empty(sq)) {
@@ -187,9 +187,9 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
       auto bc = view.to_board(row, c);
       placed_board.push_back(PlacedTile{bc.first, bc.second, L, is_blank});
     }
-    word.push_back(letter_to_char(L));
+    word.push_back(tile_to_char(L));
 
-    int letter_value = is_blank ? 0 : LETTER_VALUES[L];
+    int letter_value = is_blank ? 0 : TILE_VALUES[L];
     if (newly_placed) {
       Premium p = view.premium_at(row, c);
       int letter_mult = 1;
@@ -207,7 +207,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
 
       const CrossCheck& cc = cross[idx(row, c)];
       if (cc.has_neighbor) {
-        int placed_v = is_blank ? 0 : LETTER_VALUES[L];
+        int placed_v = is_blank ? 0 : TILE_VALUES[L];
         placed_v *= letter_mult;
         cross_total += (cc.score + placed_v) * wm;
       }
@@ -269,10 +269,10 @@ struct GenState {
   std::vector<Move>& out;
 
   // Recursion state for the current word being built.
-  std::vector<std::pair<Letter, bool>> left_letters;  // (letter, is_blank) in left-to-right order
+  std::vector<std::pair<Tile, bool>> left_letters;  // (letter, is_blank) in left-to-right order
   struct RightTile {
     int col;
-    Letter letter;
+    Tile letter;
     bool is_blank;
   };
   std::vector<RightTile> right_placed;
@@ -290,7 +290,7 @@ struct GenState {
 void GenState::emit_move(int start_col, int end_col_excl) {
   // Lay the recursion's placed tiles into a per-column strip, then defer to the
   // shared scorer.
-  std::array<Letter, BOARD_SIZE> placed_letter{};
+  std::array<Tile, BOARD_SIZE> placed_letter{};
   std::array<bool, BOARD_SIZE> placed_blank{};
   int li = 0, ri = 0;
   for (int c = start_col; c < end_col_excl; ++c) {
@@ -326,7 +326,7 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
     if (off_board) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
     uint32_t cmask = cc.mask;
-    for (Letter L = 0; L < 26; ++L) {
+    for (Tile L = 0; L < 26; ++L) {
       if ((cmask & (1u << L)) == 0) continue;
       auto tr = dict.step(node, L);
       if (!tr.valid) continue;
@@ -346,7 +346,7 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
       }
     }
   } else {
-    Letter L = view.at(current_row, col).letter;
+    Tile L = view.at(current_row, col).letter;
     auto tr = dict.step(node, L);
     if (!tr.valid) return;
     extend_right(col + 1, tr.next, tr.accepts);
@@ -359,7 +359,7 @@ void GenState::left_part(int limit, uint32_t node) {
   // (the emit guard requires col > anchor_col), so any value is safe.
   extend_right(current_anchor_col, node, /*accepts_here=*/false);
   if (limit <= 0) return;
-  for (Letter L = 0; L < 26; ++L) {
+  for (Tile L = 0; L < 26; ++L) {
     auto tr = dict.step(node, L);
     if (!tr.valid) continue;
     if (rack.count(L) > 0) {
@@ -468,7 +468,7 @@ struct GaddagGen {
   int current_anchor_col = 0;
   int last_anchor_col = 100;  // sentinel: no previous anchor this row
   int tiles_played = 0;
-  std::array<Letter, BOARD_SIZE> strip_letter{};
+  std::array<Tile, BOARD_SIZE> strip_letter{};
   std::array<bool, BOARD_SIZE> strip_blank{};
 
   void record(int leftstrip, int rightstrip) {
@@ -478,7 +478,7 @@ struct GaddagGen {
 
   // Gordon's GoOn: we have just transitioned to `new_node` by placing/using
   // letter L at `col`; `accepts` says the path so far spells a complete word.
-  void go_on(int col, Letter L, bool is_blank, uint32_t new_node, bool accepts, int leftstrip,
+  void go_on(int col, Tile L, bool is_blank, uint32_t new_node, bool accepts, int leftstrip,
              int rightstrip) {
     const bool placed = is_empty(view.at(current_row, col));
     if (placed) {
@@ -528,7 +528,7 @@ struct GaddagGen {
     }
     if (rack.empty()) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
-    for (Letter L = 0; L < 26; ++L) {
+    for (Tile L = 0; L < 26; ++L) {
       if ((cc.mask & (1u << L)) == 0) continue;  // fails the perpendicular check
       auto tr = dict.step(node, L);
       if (!tr.valid) continue;

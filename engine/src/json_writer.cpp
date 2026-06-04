@@ -10,9 +10,9 @@ namespace {
 
 namespace json = boost::json;
 
-std::string letters_to_string(const std::vector<Letter>& v) {
+std::string letters_to_string(const std::vector<Tile>& v) {
   std::string s;
-  for (Letter L : v) s.push_back(L == BLANK ? '?' : letter_to_char(L));
+  for (Tile L : v) s.push_back(L == BLANK ? '?' : tile_to_char(L));
   return s;
 }
 
@@ -39,7 +39,7 @@ json::object move_to_json(const Move& m) {
     for (const auto& t : m.tiles) {
       tiles.push_back(json::object{{"row", t.row},
                                    {"col", t.col},
-                                   {"letter", std::string(1, letter_to_char(t.letter))},
+                                   {"letter", std::string(1, tile_to_char(t.letter))},
                                    {"is_blank", t.is_blank}});
     }
     o["tiles"] = std::move(tiles);

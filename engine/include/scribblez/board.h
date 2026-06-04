@@ -14,8 +14,8 @@ constexpr int CENTER = 7;
 enum class Premium : uint8_t { NONE = 0, DLS, TLS, DWS, TWS };
 
 struct Square {
-  Letter letter = EMPTY_SQUARE;  // 0..25 if occupied, EMPTY_SQUARE otherwise
-  bool is_blank = false;         // true if the placed tile was originally a blank
+  Tile letter = EMPTY_SQUARE;  // 0..25 if occupied, EMPTY_SQUARE otherwise
+  bool is_blank = false;       // true if the placed tile was originally a blank
 };
 
 inline bool is_empty(Square s) { return s.letter == EMPTY_SQUARE; }
@@ -23,7 +23,7 @@ inline bool is_empty(Square s) { return s.letter == EMPTY_SQUARE; }
 struct PlacedTile {
   int row;
   int col;
-  Letter letter;  // 0..25 (the letter shown on the board)
+  Tile letter;    // 0..25 (the letter shown on the board)
   bool is_blank;  // true iff this tile came from a blank in the rack
 };
 

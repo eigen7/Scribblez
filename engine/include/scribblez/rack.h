@@ -12,13 +12,13 @@ class Rack {
  public:
   Rack() { counts_.fill(0); }
 
-  void add(Letter t) { ++counts_[t]; }
-  bool remove(Letter t) {
+  void add(Tile t) { ++counts_[t]; }
+  bool remove(Tile t) {
     if (counts_[t] == 0) return false;
     --counts_[t];
     return true;
   }
-  int count(Letter t) const { return counts_[t]; }
+  int count(Tile t) const { return counts_[t]; }
   int blanks() const { return counts_[BLANK]; }
 
   int size() const {

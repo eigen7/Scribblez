@@ -52,7 +52,7 @@ class Dictionary {
 
   // Transition from `node` by `letter` (0..25). If `letter` is not a valid
   // sibling at `node`, returns {0, false, false}.
-  Step step(uint32_t node, Letter letter) const;
+  Step step(uint32_t node, Tile letter) const;
 
   // Transition from `node` by a raw KWG tile value (0 = GADDAG separator,
   // 1..26 = letters A..Z). The low-level primitive behind step().

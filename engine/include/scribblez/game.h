@@ -21,7 +21,7 @@ struct TurnRecord {
   Move move;
   int score_delta;  // points scored on this turn (may be 0 or negative)
   std::array<int, 2> cumulative_scores;
-  std::vector<Letter> drawn;  // tiles drawn from bag after the move (in draw order)
+  std::vector<Tile> drawn;  // tiles drawn from bag after the move (in draw order)
 };
 
 struct GameLog {
@@ -57,7 +57,7 @@ class Game {
   std::mt19937_64 rng_;
   GameLog log_;
 
-  void refill_rack(int p, std::vector<Letter>& drawn);
+  void refill_rack(int p, std::vector<Tile>& drawn);
 };
 
 }  // namespace scribblez

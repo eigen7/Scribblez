@@ -22,7 +22,7 @@ struct Move {
   int score = 0;          // total score of the play
 
   // For EXCHANGE:
-  std::vector<Letter> exchanged;  // tiles taken from rack and returned to bag
+  std::vector<Tile> exchanged;  // tiles taken from rack and returned to bag
 };
 
 }  // namespace scribblez
