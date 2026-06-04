@@ -11,9 +11,11 @@ that consumes the logs.
 ## Layout
 
 ```
+build.py        one-shot build: compile the engine + install web deps
 engine/         C++ core (CMake)
   include/scribblez/    public headers
-  src/                  implementation (incl. web_server.cpp: HTTP+WebSocket)
+  src/                  implementation (incl. web_server.cpp: WebSocket server +
+                        Vite dev-server launcher; player_factory.cpp: --player CLI)
   apps/play_game.cpp    CLI to play one game (greedy/human in any combination)
   tests/                hand-rolled unit tests
 web/            React + TypeScript front-end for human play (Vite)
@@ -24,18 +26,26 @@ docs/                   design document
 
 ## Build
 
-Requires CMake >= 3.16 and a C++17 compiler.
+Requires CMake >= 3.16, a C++17 compiler, Boost (>= 1.83), and -- for
+human-vs-AI web play -- Node.js/npm. The one-shot build script compiles the
+engine and installs the web UI's npm dependencies:
 
 ```bash
-cmake -S . -B build
-cmake --build build -j
-ctest --test-dir build         # runs engine unit tests
+./build.py            # cmake configure+build, then `npm ci` in web/
+./build.py --debug    # debug build
+./build.py --clean    # wipe build/ first
+ctest --test-dir build   # runs engine unit tests
 ```
+
+(You can still drive CMake directly -- `cmake -S . -B build && cmake --build
+build -j` -- but then install the web deps yourself with `npm --prefix web ci`.)
 
 This produces:
 
 * `build/engine/play_game` -- run a single game.
 * `build/engine/scribblez_tests` -- unit tests.
+
+Release builds use link-time optimization (LTO) where the toolchain supports it.
 
 ## Dictionary
 
@@ -65,43 +75,44 @@ DAWG+GADDAG and is used by the unit tests.
 ```
 
 Flags:
-* `--players P0,P1` -- each of `P0`,`P1` is `greedy` or `human`
-  (default: `greedy,greedy`). At most one `human` is supported.
+* `--player "--type=T"` -- add one seat; repeat once per seat, e.g.
+  `--player "--type=human" --player "--type=greedy"`. Each spec is its own
+  little option string: `--type` is `greedy` or `human` and an optional
+  `--name=...` sets the display name. Defaults to two greedy players; at most
+  one `human` is supported.
 * `--kwg PATH` (alias `--dict`) -- lexicon to use. Defaults to
   `data/lexica/NWL23.kwg`.
 * `--seed N` (default: hardware random)
 * `--out PATH` (default: stdout)
-* `--port N` -- web UI port for human play (default: 8080)
-* `--web-dir DIR` -- built web UI to serve (default: `web/dist`)
+* `--port N` -- engine WebSocket port for human play (default: 8080)
+* `--vite-port N` -- browser UI (Vite) port for human play (default: 5173)
+* `--web-dir DIR` -- front-end package directory (default: `web`)
 * `--verbose` -- print final score and turn count to stderr
 
 ## Play against the AI (web UI)
 
-A `human` player is driven through a small web app. `play_game` itself serves
-the UI and speaks WebSocket to it -- no Node.js needed at runtime, just a built
-front-end in `web/dist`. Build it once:
+A `human` player is driven through a small React web app. You don't run any npm
+commands yourself: after `./build.py` has installed the web dependencies,
+`play_game` launches the front-end's Vite dev server itself, speaks WebSocket to
+it, and opens your browser:
 
 ```bash
-npm --prefix web install
-npm --prefix web run build
+./build/engine/play_game --player "--type=human" --player "--type=greedy"
+# -> starts Vite, then: Open http://localhost:5173 in your browser to play.
 ```
 
-Then start a human-vs-Greedy game and open the printed URL:
+The browser loads the UI from Vite (port 5173), which proxies the `/ws`
+WebSocket back to the engine (port 8080). The engine frees those ports if a
+previous run left something holding them, and shuts the dev server down when the
+game ends.
 
-```bash
-./build/engine/play_game --players human,greedy
-# -> Open http://localhost:8080 in your browser to play.
-```
-
-Place tiles by clicking a square and typing, or by dragging tiles from your
-rack; click a placed square to remove it, click a cell twice to flip typing
-direction, and press a letter onto a blank to choose its value. When your tiles
-form a legal play the "Play Move" button appears; "Pass" is always available.
-Tick **Show legal moves** to browse/preview the engine's move list. Use
-`--players greedy,human` to take the second seat.
-
-During the front-end's own dev server (`npm --prefix web run dev`), Vite proxies
-`/ws` to `localhost:8080`, so run `play_game --players human,greedy` alongside it.
+Place tiles by clicking a square and typing (use the **arrow keys** to move the
+highlighted square), or by dragging tiles from your rack; click a placed square
+to remove it, click a cell twice to flip typing direction, and press a letter
+onto a blank to choose its value. When your tiles form a legal play the "Play
+Move" button appears; "Pass" is always available. Tick **Show legal moves** to
+browse/preview the engine's move list (sorted by score, highest first). Swap the
+`--player` order to take the second seat.
 
 ## Game log JSON format
 
