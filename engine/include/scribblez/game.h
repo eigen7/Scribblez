@@ -29,7 +29,8 @@ struct GameLog {
   std::array<std::string, 2> player_names;
   std::vector<TurnRecord> turns;
   std::array<int, 2> final_scores = {0, 0};
-  std::string end_reason;  // "out", "stalemate", or "max_turns"
+  std::array<Rack, 2> final_racks;  // tiles left on each rack at game end
+  std::string end_reason;           // "out", "stalemate", or "max_turns"
 };
 
 class Game {

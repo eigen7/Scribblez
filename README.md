@@ -4,7 +4,7 @@ A research codebase for building a superhuman Scrabble AI.
 See [docs/Scribblez.pdf](docs/Scribblez.pdf) for the design document.
 
 This snapshot contains the v0 game engine: a C++ Scrabble core (GADDAG move
-generator + scoring + game loop) plus a Greedy baseline agent, a JSON game-log
+generator + scoring + game loop) plus a Greedy baseline agent, a GCG game-log
 writer, a browser UI for playing against the AI, and a Python `torch` dataset
 that consumes the logs.
 
@@ -19,7 +19,7 @@ engine/         C++ core (CMake)
   apps/play_game.cpp    CLI to play one game (greedy/human in any combination)
   tests/                hand-rolled unit tests
 web/            React + TypeScript front-end for human play (Vite)
-python/scribblez/       torch Dataset + DataLoader over JSON logs
+python/scribblez/       torch Dataset + DataLoader over GCG logs
 python/scripts/         small utilities
 docs/                   design document
 ```
@@ -70,7 +70,7 @@ DAWG+GADDAG and is used by the unit tests.
 ```bash
 ./build/engine/play_game \
     --seed 42 \
-    --out /tmp/game.json \
+    --out /tmp/game.gcg \
     --verbose
 ```
 
@@ -114,50 +114,39 @@ Move" button appears; "Pass" is always available. Tick **Show legal moves** to
 browse/preview the engine's move list (sorted by score, highest first). Swap the
 `--player` order to take the second seat.
 
-## Game log JSON format
+## Game log format (GCG)
 
-```jsonc
-{
-  "seed": 42,
-  "players": [{"name": "Greedy"}, {"name": "Greedy"}],
-  "turns": [
-    {
-      "player": 0,
-      "rack_before": "ADNORRV",
-      "bag_size_before": 86,
-      "move": {
-        "type": "play",                // or "exchange" / "pass"
-        "horizontal": true,
-        "start_row": 7, "start_col": 3,
-        "main_word": "VONDA",
-        "score": 26,
-        "tiles": [
-          {"row": 7, "col": 3, "letter": "V", "is_blank": false},
-          ...
-        ]
-      },
-      "score_delta": 26,
-      "cumulative_scores": [26, 0],    // after the move
-      "drawn": "TYSIA"                  // tiles drawn from the bag after the move
-    },
-    ...
-  ],
-  "final_scores": [463, 373],
-  "end_reason": "out"                  // "out" | "stalemate" | "max_turns"
-}
+Games are logged in **GCG**, the de-facto standard Scrabble game-log format
+(as written/read by Macondo and Quackle). Header pragmata define the players,
+then one event line per turn:
+
+```text
+#character-encoding UTF-8
+#player1 Alice Alice
+#player2 Bob Bob
+>Alice: ADNORRV H8 ANDRO +14 14
+>Bob: AEIIMOQ 10F QA.I +34 34
+>Bob: EEHNTW? B1 WrE.THEN +92 376
+>Bob: (ADGUY) +10 386
+>Alice: ADGUY (ADGUY) -10 428
 ```
 
-End-of-game scoring is included in `final_scores`:
-* `"out"`: the going-out player adds opponent's remaining tile values to
-  their score, and the opponent subtracts their own remaining tile values.
-* `"stalemate"` (6 consecutive zero-point turns): each player subtracts
-  their own remaining tile values.
+Each event is `>nick: rack ...`:
+* **play** -- `POS WORD +score cumulative`. `POS` is the main word's first
+  square (`8D` across, `D8` down). In `WORD`, a `.` is a tile already on the
+  board (played through) and a lowercase letter is a designated blank.
+* **exchange** -- `-TILES +0 cumulative`.
+* **pass** -- `- +0 cumulative`.
+* **end-of-game** -- the player who goes out gains the opponent's leftover
+  tiles, `(TILES) +points cumulative`; a player left holding tiles loses their
+  value, `rack (TILES) -points cumulative`. Stalemate (6 consecutive zero-point
+  turns) records a penalty line for each player.
 
 ## Python: consume logs
 
 ```bash
 pip install -r python/requirements.txt
-PYTHONPATH=python python -m scripts.inspect_log /tmp/game.json
+PYTHONPATH=python python -m scripts.inspect_log /tmp/game.gcg
 ```
 
 `scribblez.GameLogDataset` replays each game forward and yields one
@@ -168,6 +157,6 @@ the tensor fields and keeps the variable-length `move` dicts as a list.
 
 ## Status / next steps
 
-* v0: engine + Greedy agent + JSON logs + torch Dataset (this snapshot).
+* v0: engine + Greedy agent + GCG logs + torch Dataset (this snapshot).
 * Planned: binary log format + FFI loader; pybind11 bindings for in-process
   move generation; first neural network heads.

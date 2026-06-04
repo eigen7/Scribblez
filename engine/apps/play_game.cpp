@@ -16,7 +16,7 @@
 #include "scribblez/agent.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
-#include "scribblez/json_writer.h"
+#include "scribblez/gcg_writer.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/web_server.h"
 
@@ -193,16 +193,16 @@ int main(int argc, char** argv) {
     session->linger_after_final_message();
   }
 
-  std::string json = scribblez::game_log_to_json(log);
+  std::string gcg = scribblez::game_log_to_gcg(log);
   if (out_path.empty()) {
-    std::cout << json;
+    std::cout << gcg;
   } else {
     std::ofstream of(out_path);
     if (!of) {
       std::cerr << "Failed to open output file: " << out_path << "\n";
       return 1;
     }
-    of << json;
+    of << gcg;
   }
 
   if (verbose) {

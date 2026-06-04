@@ -110,6 +110,7 @@ void Game::play() {
   }
   if (log_.end_reason.empty()) log_.end_reason = "max_turns";
   log_.final_scores = scores_;
+  log_.final_racks = {racks_[0], racks_[1]};
 }
 
 }  // namespace scribblez

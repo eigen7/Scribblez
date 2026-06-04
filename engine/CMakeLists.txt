@@ -7,10 +7,9 @@ add_library(scribblez_core STATIC
   src/movegen.cpp
   src/agent.cpp
   src/game.cpp
-  src/json_writer.cpp
+  src/gcg_writer.cpp
 )
 target_include_directories(scribblez_core PUBLIC include)
-target_link_libraries(scribblez_core PUBLIC Boost::json)
 
 add_executable(play_game
   apps/play_game.cpp
