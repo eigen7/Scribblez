@@ -41,6 +41,13 @@ class Game {
   void play();
   const GameLog& log() const { return log_; }
 
+  // Live game accessors (valid after construction; reflect final state after
+  // play() returns). Used by the web front-end to render the end-of-game board.
+  const Board& board() const { return board_; }
+  int score(int player) const { return scores_[player]; }
+  const Rack& rack(int player) const { return racks_[player]; }
+  int bag_size() const { return bag_.size(); }
+
  private:
   std::unique_ptr<Agent> players_[2];
   const Dictionary& dict_;

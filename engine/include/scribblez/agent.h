@@ -16,6 +16,7 @@ struct AgentContext {
   int my_score;
   int opp_score;
   int bag_size;
+  int opp_rack_size;              // tiles on the opponent's rack (hidden contents)
   std::vector<Move> legal_plays;  // PLAY moves only; agent may pass/exchange
 };
 

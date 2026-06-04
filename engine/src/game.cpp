@@ -44,8 +44,13 @@ void Game::play() {
     MoveGenerator gen(board_, dict_);
     std::vector<Move> legal = gen.generate(racks_[cur]);
 
-    AgentContext ctx{
-        board_, racks_[cur], scores_[cur], scores_[1 - cur], bag_.size(), std::move(legal)};
+    AgentContext ctx{board_,
+                     racks_[cur],
+                     scores_[cur],
+                     scores_[1 - cur],
+                     bag_.size(),
+                     racks_[1 - cur].size(),
+                     std::move(legal)};
     Move m = players_[cur]->choose(ctx, rng_);
 
     TurnRecord rec;

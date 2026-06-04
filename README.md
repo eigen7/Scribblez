@@ -3,18 +3,20 @@
 A research codebase for building a superhuman Scrabble AI.
 See [docs/Scribblez.pdf](docs/Scribblez.pdf) for the design document.
 
-This snapshot contains the v0 game engine: a C++ Scrabble core (move
-generator + scoring + game loop) plus a Greedy baseline agent, a JSON
-game-log writer, and a Python `torch` dataset that consumes the logs.
+This snapshot contains the v0 game engine: a C++ Scrabble core (GADDAG move
+generator + scoring + game loop) plus a Greedy baseline agent, a JSON game-log
+writer, a browser UI for playing against the AI, and a Python `torch` dataset
+that consumes the logs.
 
 ## Layout
 
 ```
 engine/         C++ core (CMake)
   include/scribblez/    public headers
-  src/                  implementation
-  apps/play_game.cpp    CLI to play one Greedy-vs-Greedy game
+  src/                  implementation (incl. web_server.cpp: HTTP+WebSocket)
+  apps/play_game.cpp    CLI to play one game (greedy/human in any combination)
   tests/                hand-rolled unit tests
+web/            React + TypeScript front-end for human play (Vite)
 python/scribblez/       torch Dataset + DataLoader over JSON logs
 python/scripts/         small utilities
 docs/                   design document
@@ -63,11 +65,43 @@ DAWG+GADDAG and is used by the unit tests.
 ```
 
 Flags:
+* `--players P0,P1` -- each of `P0`,`P1` is `greedy` or `human`
+  (default: `greedy,greedy`). At most one `human` is supported.
 * `--kwg PATH` (alias `--dict`) -- lexicon to use. Defaults to
   `data/lexica/NWL23.kwg`.
 * `--seed N` (default: hardware random)
 * `--out PATH` (default: stdout)
+* `--port N` -- web UI port for human play (default: 8080)
+* `--web-dir DIR` -- built web UI to serve (default: `web/dist`)
 * `--verbose` -- print final score and turn count to stderr
+
+## Play against the AI (web UI)
+
+A `human` player is driven through a small web app. `play_game` itself serves
+the UI and speaks WebSocket to it -- no Node.js needed at runtime, just a built
+front-end in `web/dist`. Build it once:
+
+```bash
+npm --prefix web install
+npm --prefix web run build
+```
+
+Then start a human-vs-Greedy game and open the printed URL:
+
+```bash
+./build/engine/play_game --players human,greedy
+# -> Open http://localhost:8080 in your browser to play.
+```
+
+Place tiles by clicking a square and typing, or by dragging tiles from your
+rack; click a placed square to remove it, click a cell twice to flip typing
+direction, and press a letter onto a blank to choose its value. When your tiles
+form a legal play the "Play Move" button appears; "Pass" is always available.
+Tick **Show legal moves** to browse/preview the engine's move list. Use
+`--players greedy,human` to take the second seat.
+
+During the front-end's own dev server (`npm --prefix web run dev`), Vite proxies
+`/ws` to `localhost:8080`, so run `play_game --players human,greedy` alongside it.
 
 ## Game log JSON format
 
