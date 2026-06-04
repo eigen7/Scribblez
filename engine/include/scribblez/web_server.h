@@ -1,13 +1,13 @@
 #pragma once
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
-
 #include "scribblez/agent.h"
 #include "scribblez/board.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 // Forward declarations so we can hold boost::process handles without dragging
 // the (heavy) boost::process headers into every translation unit.

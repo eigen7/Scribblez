@@ -1,29 +1,28 @@
 #include "scribblez/web_server.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "scribblez/tile.h"
 
+#include <arpa/inet.h>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/json.hpp>
 #include <boost/process.hpp>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
 #include <iostream>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
-
-#include "scribblez/tile.h"
+#include <unistd.h>
 
 namespace scribblez {
 
@@ -150,39 +149,6 @@ std::string header_value(const std::string& req, const std::string& name) {
 
 // --------------------------- JSON serialization --------------------------
 
-std::string json_quote(const std::string& s) {
-  std::string out = "\"";
-  for (char c : s) {
-    switch (c) {
-      case '"':
-        out += "\\\"";
-        break;
-      case '\\':
-        out += "\\\\";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        if (static_cast<unsigned char>(c) < 0x20) {
-          char buf[8];
-          std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-          out += buf;
-        } else {
-          out += c;
-        }
-    }
-  }
-  out += "\"";
-  return out;
-}
-
 const char* premium_code(Premium p) {
   switch (p) {
     case Premium::DLS:
@@ -198,33 +164,12 @@ const char* premium_code(Premium p) {
   }
 }
 
-// Find a tiny field in a client JSON message. Messages are small and generated
-// by our own front-end, so a lenient scan suffices.
-std::string json_string_field(const std::string& s, const std::string& key) {
-  size_t k = s.find("\"" + key + "\"");
-  if (k == std::string::npos) return "";
-  size_t colon = s.find(':', k);
-  if (colon == std::string::npos) return "";
-  size_t q1 = s.find('"', colon);
-  if (q1 == std::string::npos) return "";
-  size_t q2 = s.find('"', q1 + 1);
-  if (q2 == std::string::npos) return "";
-  return s.substr(q1 + 1, q2 - q1 - 1);
-}
-
-bool json_int_field(const std::string& s, const std::string& key, long& out) {
-  size_t k = s.find("\"" + key + "\"");
-  if (k == std::string::npos) return false;
-  size_t colon = s.find(':', k);
-  if (colon == std::string::npos) return false;
-  size_t i = colon + 1;
-  while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
-  size_t start = i;
-  if (i < s.size() && (s[i] == '-' || s[i] == '+')) ++i;
-  while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
-  if (i == start) return false;
-  out = std::stol(s.substr(start, i - start));
-  return true;
+// Best-effort string field from a parsed client message (empty if absent or
+// not a string).
+std::string str_field(const boost::json::object& obj, boost::json::string_view key) {
+  auto it = obj.find(key);
+  if (it == obj.end() || !it->value().is_string()) return "";
+  return std::string(it->value().as_string().c_str());
 }
 
 // ----------------------------- port freeing ------------------------------
@@ -321,98 +266,91 @@ std::string move_to_notation(const Board& board, const Move& move) {
 // --------------------------- state serialization -------------------------
 
 std::string game_state_json(const StateView& v) {
-  std::ostringstream o;
+  namespace json = boost::json;
   const bool game_over = v.game_over;
-  o << "{";
-  o << "\"type\":" << (game_over ? "\"game_over\"" : "\"state\"");
+
+  json::object o;
+  o["type"] = game_over ? "game_over" : "state";
 
   // board: 15x15, uppercase letters, lowercase for blanks, null for empty.
-  o << ",\"board\":[";
+  json::array board;
   for (int r = 0; r < BOARD_SIZE; ++r) {
-    o << (r ? ",[" : "[");
+    json::array row;
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Square sq = v.board.at(r, c);
-      if (c) o << ",";
       if (is_empty(sq)) {
-        o << "null";
+        row.emplace_back(nullptr);
       } else {
         char ch = letter_to_char(sq.letter);
         if (sq.is_blank) ch = ch - 'A' + 'a';
-        o << "\"" << ch << "\"";
+        row.emplace_back(std::string(1, ch));
       }
     }
-    o << "]";
+    board.emplace_back(std::move(row));
   }
-  o << "]";
+  o["board"] = std::move(board);
 
   // bonuses: DL/TL/DW/TW or null.
-  o << ",\"bonuses\":[";
+  json::array bonuses;
   for (int r = 0; r < BOARD_SIZE; ++r) {
-    o << (r ? ",[" : "[");
+    json::array row;
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (c) o << ",";
       const char* code = premium_code(v.board.premium_at(r, c));
       if (code)
-        o << "\"" << code << "\"";
+        row.emplace_back(code);
       else
-        o << "null";
+        row.emplace_back(nullptr);
     }
-    o << "]";
+    bonuses.emplace_back(std::move(row));
   }
-  o << "]";
+  o["bonuses"] = std::move(bonuses);
 
   // rack: letters then blanks ('?'), with per-tile score.
-  o << ",\"rack\":[";
-  bool first = true;
+  json::array rack;
   for (Letter L = 0; L < 26; ++L) {
     for (int i = 0; i < v.my_rack.count(L); ++i) {
-      if (!first) o << ",";
-      first = false;
-      o << "{\"letter\":\"" << letter_to_char(L) << "\",\"score\":" << LETTER_VALUES[L] << "}";
+      rack.emplace_back(
+        json::object{{"letter", std::string(1, letter_to_char(L))}, {"score", LETTER_VALUES[L]}});
     }
   }
   for (int i = 0; i < v.my_rack.blanks(); ++i) {
-    if (!first) o << ",";
-    first = false;
-    o << "{\"letter\":\"?\",\"score\":0}";
+    rack.emplace_back(json::object{{"letter", "?"}, {"score", 0}});
   }
-  o << "]";
+  o["rack"] = std::move(rack);
 
-  o << ",\"scores\":[" << v.my_score << "," << v.opp_score << "]";
-  o << ",\"player_names\":[" << json_quote(v.my_name) << "," << json_quote(v.opp_name) << "]";
-  o << ",\"bag_count\":" << v.bag_size;
-  o << ",\"opponent_rack_count\":" << v.opp_rack_size;
-  o << ",\"your_turn\":" << (v.your_turn ? "true" : "false");
-  o << ",\"game_over\":" << (game_over ? "true" : "false");
+  o["scores"] = {v.my_score, v.opp_score};
+  o["player_names"] = {v.my_name, v.opp_name};
+  o["bag_count"] = v.bag_size;
+  o["opponent_rack_count"] = v.opp_rack_size;
+  o["your_turn"] = v.your_turn;
+  o["game_over"] = game_over;
 
-  // tile_scores map.
-  o << ",\"tile_scores\":{";
+  // tile_scores map: { "A": 1, "B": 3, ... }.
+  json::object tile_scores;
   for (Letter L = 0; L < 26; ++L) {
-    if (L) o << ",";
-    o << "\"" << letter_to_char(L) << "\":" << LETTER_VALUES[L];
+    tile_scores[std::string(1, letter_to_char(L))] = LETTER_VALUES[L];
   }
-  o << "}";
+  o["tile_scores"] = std::move(tile_scores);
 
   // moves: only on the human's live turn.
   if (v.legal_plays && v.your_turn && !game_over) {
-    o << ",\"moves\":[";
+    json::array moves;
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
-      if (i) o << ",";
-      o << "{\"index\":" << i << ",\"text\":" << json_quote(move_to_notation(v.board, m))
-        << ",\"score\":" << m.score << "}";
+      moves.emplace_back(json::object{{"index", static_cast<int>(i)},
+                                      {"text", move_to_notation(v.board, m)},
+                                      {"score", m.score}});
     }
-    o << "]";
+    o["moves"] = std::move(moves);
   }
 
   if (game_over) {
     int winner = v.my_score > v.opp_score ? 0 : (v.opp_score > v.my_score ? 1 : -1);
-    o << ",\"winner\":" << winner;
-    o << ",\"final_scores\":[" << v.my_score << "," << v.opp_score << "]";
+    o["winner"] = winner;
+    o["final_scores"] = {v.my_score, v.opp_score};
   }
 
-  o << "}";
-  return o.str();
+  return json::serialize(o);
 }
 
 // ------------------------------ ViteDevServer ----------------------------
@@ -522,10 +460,10 @@ bool WebSession::do_handshake(int fd, const std::string& request) {
   sha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", digest);
   std::string accept = base64(digest, 20);
   std::string resp =
-      "HTTP/1.1 101 Switching Protocols\r\n"
-      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-      "Sec-WebSocket-Accept: " +
-      accept + "\r\n\r\n";
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+    "Sec-WebSocket-Accept: " +
+    accept + "\r\n\r\n";
   return write_all(fd, resp.data(), resp.size());
 }
 
@@ -675,12 +613,24 @@ Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
     for (;;) {
       auto in = session_.recv_text();
       if (!in) break;  // disconnected: re-send on reconnect
-      const std::string type = json_string_field(*in, "type");
+
+      boost::json::value parsed;
+      try {
+        parsed = boost::json::parse(*in);
+      } catch (const std::exception&) {
+        continue;  // malformed: keep waiting for a usable message
+      }
+      if (!parsed.is_object()) continue;
+      const boost::json::object& obj = parsed.as_object();
+      const std::string type = str_field(obj, "type");
+
       if (type == "move") {
-        long idx = -1;
-        if (json_int_field(*in, "index", idx) && idx >= 0 &&
-            static_cast<size_t>(idx) < ctx.legal_plays.size()) {
-          return ctx.legal_plays[static_cast<size_t>(idx)];
+        auto it = obj.find("index");
+        if (it != obj.end() && it->value().is_int64()) {
+          long idx = static_cast<long>(it->value().as_int64());
+          if (idx >= 0 && static_cast<size_t>(idx) < ctx.legal_plays.size()) {
+            return ctx.legal_plays[static_cast<size_t>(idx)];
+          }
         }
       } else if (type == "pass") {
         Move m;
@@ -690,8 +640,7 @@ Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
         // Optional: front-end may send {"type":"exchange","letters":"AB?"}.
         Move m;
         m.type = MoveType::EXCHANGE;
-        const std::string letters = json_string_field(*in, "letters");
-        for (char c : letters) {
+        for (char c : str_field(obj, "letters")) {
           Letter L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : char_to_letter(c);
           if (ctx.my_rack.count(L) > 0) m.exchanged.push_back(L);
         }
