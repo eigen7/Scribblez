@@ -2,18 +2,27 @@
 // and writes a JSON log. A Human player is driven through a local web UI.
 //
 // Usage:
-//   play_game [--players P0,P1] [--kwg <path>] [--seed N]
+//   play_game [--player "--type=T"]... [--kwg <path>] [--seed N]
 //             [--out game.json] [--port N] [--web-dir DIR] [--vite-port N]
 //             [--verbose]
-//   where each Pi is "greedy" or "human" (default: greedy,greedy).
+//   where each --player spec selects a seat, e.g.
+//   --player "--type=human" --player "--type=greedy"
+//   (repeat once per seat; defaults to two greedy players, at most one human).
 //
 // For human play the engine launches the front-end's Vite dev server itself
 // (npm run dev) and opens the browser at it -- you never run npm by hand. Run
 // ./build.py once first to install the web dependencies.
 
-#include <array>
-#include <boost/algorithm/string.hpp>
+#include "scribblez/agent.h"
+#include "scribblez/dictionary.h"
+#include "scribblez/game.h"
+#include "scribblez/json_writer.h"
+#include "scribblez/player_factory.h"
+#include "scribblez/web_server.h"
+
 #include <boost/program_options.hpp>
+
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -23,12 +32,6 @@
 #include <random>
 #include <string>
 #include <vector>
-
-#include "scribblez/agent.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/game.h"
-#include "scribblez/json_writer.h"
-#include "scribblez/web_server.h"
 
 namespace {
 
@@ -45,7 +48,8 @@ constexpr const char* kDefaultWebDir = "web";
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
 
-  std::string kwg_path, dict_path, out_path, web_dir, players;
+  std::string kwg_path, dict_path, out_path, web_dir;
+  std::vector<std::string> player_specs;
   int port = 0, vite_port = 0;
   uint64_t seed = 0;
   bool verbose = false;
@@ -55,8 +59,9 @@ int main(int argc, char** argv) {
   po::options_description desc("play_game options");
   auto opt = desc.add_options();
   opt("help,h", "show this help message and exit");
-  opt("players", po::value<std::string>(&players)->default_value("greedy,greedy"),
-      "comma-separated seats P0,P1; each is 'greedy' or 'human' (at most one human)");
+  opt("player", po::value<std::vector<std::string>>(&player_specs)->composing(),
+      "add a seat, e.g. --player \"--type=human\" --player \"--type=greedy\" "
+      "(repeat once per seat; default: two greedy, at most one human)");
   opt("kwg", po::value<std::string>(&kwg_path)->default_value(kDefaultKwg),
       "lexicon .kwg file to load");
   opt("dict", po::value<std::string>(&dict_path), "alias for --kwg");
@@ -84,30 +89,25 @@ int main(int argc, char** argv) {
   if (vm.count("dict")) kwg_path = dict_path;
   const bool seed_given = vm.count("seed") > 0;
 
-  // Parse the two player seats (e.g. "human,greedy").
-  std::array<std::string, 2> player_types;
-  {
-    std::vector<std::string> parts;
-    boost::split(parts, players, boost::is_any_of(","));
-    if (parts.size() != 2) {
-      std::cerr << "--players expects two comma-separated types, e.g. "
-                   "human,greedy\n";
-      return 2;
-    }
-    player_types[0] = boost::to_lower_copy(boost::trim_copy(parts[0]));
-    player_types[1] = boost::to_lower_copy(boost::trim_copy(parts[1]));
+  // Resolve the two player seats, defaulting to two greedy players. Each spec
+  // is parsed by the player factory (e.g. --player "--type=human").
+  if (player_specs.empty()) {
+    player_specs = {"--type=greedy", "--type=greedy"};
   }
-
-  // Validate player types and locate the human seat (at most one supported,
-  // since a single browser drives the game).
+  if (player_specs.size() != 2) {
+    std::cerr << "Expected exactly two --player specs (got " << player_specs.size() << ").\n";
+    return 2;
+  }
+  std::array<scribblez::PlayerSpec, 2> players;
   int human_seat = -1;
   for (int s = 0; s < 2; ++s) {
-    if (player_types[s] != "greedy" && player_types[s] != "human") {
-      std::cerr << "Unknown player type '" << player_types[s]
-                << "' (expected 'greedy' or 'human')\n";
+    try {
+      players[s] = scribblez::parse_player_spec(player_specs[s]);
+    } catch (const std::exception& e) {
+      std::cerr << "Error: " << e.what() << "\n";
       return 2;
     }
-    if (player_types[s] == "human") {
+    if (players[s].type == scribblez::PlayerType::Human) {
       if (human_seat >= 0) {
         std::cerr << "At most one human player is supported.\n";
         return 2;
@@ -136,11 +136,6 @@ int main(int argc, char** argv) {
     std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from " << kwg_path << "\n";
     std::cerr << "Seed: " << seed << "\n";
   }
-
-  // Names: a human shows as "You", the AI as "Greedy".
-  auto name_for = [](const std::string& type) {
-    return type == "human" ? std::string("You") : std::string("Greedy");
-  };
 
   // Stand up the web server up front (if a human is playing) so the browser can
   // connect before the game loop reaches the human's first turn. The engine
@@ -171,11 +166,7 @@ int main(int argc, char** argv) {
   }
 
   auto make_agent = [&](int seat) -> std::unique_ptr<scribblez::Agent> {
-    if (player_types[seat] == "human") {
-      return std::make_unique<scribblez::HumanWebAgent>(*session, name_for(player_types[seat]),
-                                                        name_for(player_types[1 - seat]));
-    }
-    return std::make_unique<scribblez::GreedyAgent>();
+    return scribblez::make_player(players[seat], session.get(), players[1 - seat].display_name());
   };
 
   scribblez::Game game(make_agent(0), make_agent(1), dict, seed);
@@ -193,8 +184,8 @@ int main(int argc, char** argv) {
                                     game.score(opp),
                                     game.bag_size(),
                                     game.rack(opp).size(),
-                                    name_for(player_types[human_seat]),
-                                    name_for(player_types[opp]),
+                                    players[human_seat].display_name(),
+                                    players[opp].display_name(),
                                     /*legal_plays=*/nullptr,
                                     /*your_turn=*/false,
                                     /*game_over=*/true};

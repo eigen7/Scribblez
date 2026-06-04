@@ -1,12 +1,12 @@
 #pragma once
+#include "scribblez/board.h"
+#include "scribblez/move.h"
+#include "scribblez/rack.h"
+
 #include <memory>
 #include <random>
 #include <string>
 #include <vector>
-
-#include "scribblez/board.h"
-#include "scribblez/move.h"
-#include "scribblez/rack.h"
 
 namespace scribblez {
 
@@ -31,8 +31,12 @@ class Agent {
 // (if the bag has >= RACK_SIZE tiles), otherwise passes. Ties broken randomly.
 class GreedyAgent : public Agent {
  public:
-  std::string name() const override { return "Greedy"; }
+  explicit GreedyAgent(std::string name = "Greedy") : name_(std::move(name)) {}
+  std::string name() const override { return name_; }
   Move choose(const AgentContext& ctx, std::mt19937_64& rng) override;
+
+ private:
+  std::string name_;
 };
 
 }  // namespace scribblez
