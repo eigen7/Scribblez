@@ -1,5 +1,3 @@
-#pragma once
-
 #include "scribblez/tile_counts.h"
 
 namespace scribblez {

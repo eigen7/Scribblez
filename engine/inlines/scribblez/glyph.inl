@@ -1,5 +1,3 @@
-#pragma once
-
 #include "scribblez/glyph.h"
 
 namespace scribblez {

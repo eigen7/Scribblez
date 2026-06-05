@@ -1,5 +1,3 @@
-#pragma once
-
 #include "scribblez/move.h"
 
 namespace scribblez {
