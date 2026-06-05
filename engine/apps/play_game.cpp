@@ -18,6 +18,7 @@
 #include "scribblez/game.h"
 #include "scribblez/gcg_writer.h"
 #include "scribblez/player_factory.h"
+#include "scribblez/seed_producer.h"
 #include "scribblez/web_server.h"
 
 #include <boost/program_options.hpp>
@@ -86,6 +87,8 @@ int main(int argc, char** argv) {
   }
   if (vm.count("help")) {
     std::cout << desc << "\n";
+    std::cout << "Player types (use --player \"--type=X [options]\"):\n\n"
+              << scribblez::all_player_types_help();
     return 0;
   }
   // --dict is an accepted alias for --kwg.
@@ -127,11 +130,32 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // Eager validation for non-human seats: construct (and discard) the agent
+  // once so option errors surface here, before we resolve the seed or launch
+  // the web UI. Done BEFORE SeedProducer is seeded so any seeds this consumes
+  // don't shift the deterministic sequence the real agents will receive.
+  // (Human seats need a live WebSession to construct, so we let those errors
+  // surface lazily in the game loop.)
+  for (int s = 0; s < 2; ++s) {
+    if (players[s].is_human()) continue;
+    try {
+      auto a = scribblez::make_player(players[s], nullptr, players[1 - s].display_name());
+      (void)a;
+    } catch (const std::exception& e) {
+      std::cerr << "Error: " << e.what() << "\n";
+      return 2;
+    }
+  }
+
   // Resolve the seed (the lexicon path already defaulted via program_options).
   if (!seed_given) {
     std::random_device rd;
     seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
   }
+  // Seed the process-wide SeedProducer so every RNG-using object constructed
+  // after this point (e.g. GreedyAgent's tie-breaker) is deterministic when
+  // --seed was given. Per-agent --seed options still override locally.
+  scribblez::SeedProducer::instance().seed(seed);
 
   scribblez::Dictionary dict;
   try {
@@ -198,7 +222,15 @@ int main(int argc, char** argv) {
   long total_turns = 0;
   auto t0 = std::chrono::steady_clock::now();
   for (int gi = 0; gi < games; ++gi) {
-    scribblez::Game game(make_agent(0), make_agent(1), dict, seed + static_cast<uint64_t>(gi));
+    std::unique_ptr<scribblez::Agent> a0, a1;
+    try {
+      a0 = make_agent(0);
+      a1 = make_agent(1);
+    } catch (const std::exception& e) {
+      std::cerr << "Error: " << e.what() << "\n";
+      return 2;
+    }
+    scribblez::Game game(std::move(a0), std::move(a1), dict, seed + static_cast<uint64_t>(gi));
     game.play();
     const scribblez::GameLog& log = game.log();
 
