@@ -35,10 +35,12 @@ function sortMoves(moves: MoveOption[], col: SortColumn, dir: SortDir): MoveOpti
   return copy;
 }
 
-// "▲"/"▼" indicator next to the active sort column.
-function arrow(active: boolean, dir: SortDir): string {
-  if (!active) return '';
-  return dir === 'asc' ? ' ▲' : ' ▼';
+// "▲"/"▼" indicator next to the active sort column. Always rendered (even on
+// inactive columns) as a fixed-width span so the surrounding header text
+// doesn't shift sideways when the sort column changes.
+function SortArrow({ active, dir }: { active: boolean; dir: SortDir }) {
+  const glyph = !active ? '\u00A0' : dir === 'asc' ? '▲' : '▼';
+  return <span className="sort-arrow">{glyph}</span>;
 }
 
 // Drop the trailing score token from a move's display text -- e.g. turn
@@ -89,13 +91,13 @@ const MoveList: React.FC<MoveListProps> = ({ moves, selectedIndex, onPreview, di
           <thead>
             <tr>
               <th className="move-col-text sortable" onClick={() => onHeaderClick('text')}>
-                Move{arrow(sortCol === 'text', sortDir)}
+                Move<SortArrow active={sortCol === 'text'} dir={sortDir} />
               </th>
               <th className="move-col-num sortable" onClick={() => onHeaderClick('score')}>
-                Pts{arrow(sortCol === 'score', sortDir)}
+                Pts<SortArrow active={sortCol === 'score'} dir={sortDir} />
               </th>
               <th className="move-col-num sortable" onClick={() => onHeaderClick('equity')}>
-                Equity{arrow(sortCol === 'equity', sortDir)}
+                Equity<SortArrow active={sortCol === 'equity'} dir={sortDir} />
               </th>
             </tr>
           </thead>

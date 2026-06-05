@@ -318,6 +318,17 @@ h1 {
   color: #ecf0f1;
 }
 
+/* Sort indicator: always rendered (with a non-breaking space when inactive)
+   at a fixed width so the header label doesn't shift sideways when the
+   active sort column changes. */
+.sort-arrow {
+  display: inline-block;
+  width: 1em;
+  margin-left: 4px;
+  text-align: center;
+  font-size: 0.85em;
+}
+
 .move-table th.move-col-num,
 .move-table td.move-col-num {
   text-align: right;
