@@ -98,7 +98,9 @@ std::string move_to_notation(const Board& board, const Move& move);
 
 // Build the GameState JSON the front-end expects, from the human's perspective
 // (index 0 is always the human). `legal_plays` is rendered as the selectable
-// move list only when `your_turn` is true.
+// move list only when `your_turn` is true. `legal_play_equities`, when
+// provided, must be parallel to `legal_plays` and is emitted per-move as the
+// `equity` field (null for entries without a value).
 struct StateView {
   const Board& board;
   const Rack& my_rack;
@@ -109,6 +111,7 @@ struct StateView {
   std::string my_name;
   std::string opp_name;
   const std::vector<Move>* legal_plays = nullptr;
+  const std::vector<std::optional<double>>* legal_play_equities = nullptr;
   bool your_turn = false;
   bool game_over = false;
 };

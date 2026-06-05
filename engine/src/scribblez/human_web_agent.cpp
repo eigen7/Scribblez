@@ -1,13 +1,16 @@
 #include "scribblez/human_web_agent.h"
 
+#include "scribblez/macondo.h"
 #include "scribblez/tile.h"
 #include "scribblez/web_server.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
 
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace scribblez {
 
@@ -27,8 +30,32 @@ HumanWebAgent::HumanWebAgent(WebSession& session, std::string my_name, std::stri
     : session_(session), my_name_(std::move(my_name)), opp_name_(std::move(opp_name)) {}
 
 Move HumanWebAgent::make_move(const MoveRequest& req) {
-  StateView view{req.board,          req.my_rack, req.my_score, req.opp_score,    req.bag_size,
-                 req.opp_rack_size,  my_name_,    opp_name_,    &req.legal_plays,
+  // Best-effort: ask Macondo to evaluate every legal play so we can show its
+  // equity column in the cheat-mode move list. If Macondo isn't configured
+  // (e.g. running on a machine without the binary), or the subprocess fails,
+  // we just send the position without equities and the front-end leaves the
+  // column blank.
+  std::vector<std::optional<double>> equities;
+  if (Macondo::initialized()) {
+    try {
+      auto result = Macondo::instance().evaluate(req.board, req.my_rack, req.my_score,
+                                                  req.opp_score, req.legal_plays);
+      equities = std::move(result.equities);
+    } catch (const std::exception&) {
+      equities.clear();
+    }
+  }
+
+  StateView view{req.board,
+                 req.my_rack,
+                 req.my_score,
+                 req.opp_score,
+                 req.bag_size,
+                 req.opp_rack_size,
+                 my_name_,
+                 opp_name_,
+                 &req.legal_plays,
+                 equities.empty() ? nullptr : &equities,
                  /*your_turn=*/true,
                  /*game_over=*/false};
   const std::string msg = game_state_json(view);

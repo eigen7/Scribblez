@@ -328,9 +328,18 @@ std::string game_state_json(const StateView& v) {
     json::array moves;
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
-      moves.emplace_back(json::object{{"index", static_cast<int>(i)},
-                                      {"text", move_to_notation(v.board, m)},
-                                      {"score", m.score}});
+      json::object mo{{"index", static_cast<int>(i)},
+                      {"text", move_to_notation(v.board, m)},
+                      {"score", m.score}};
+      // equity: null when we have no Macondo evaluation (or no value for
+      // this particular play). The front-end renders the null cells blank.
+      if (v.legal_play_equities && i < v.legal_play_equities->size() &&
+          (*v.legal_play_equities)[i].has_value()) {
+        mo["equity"] = (*v.legal_play_equities)[i].value();
+      } else {
+        mo["equity"] = nullptr;
+      }
+      moves.emplace_back(std::move(mo));
     }
     o["moves"] = std::move(moves);
   }
