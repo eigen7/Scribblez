@@ -8,6 +8,7 @@ add_library(scribblez_core STATIC
   src/dictionary.cpp
   src/movegen.cpp
   src/agent.cpp
+  src/seed_producer.cpp
   src/game.cpp
   src/gcg_writer.cpp
 )
