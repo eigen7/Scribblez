@@ -66,7 +66,7 @@ def main():
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
     print("\nBuild complete. Play a human-vs-AI game with:")
-    print("    ./build/engine/play_game --players human,greedy")
+    print('    ./build/engine/play_game --player "--type=human" --player "--type=greedy"')
 
 
 if __name__ == "__main__":
