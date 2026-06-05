@@ -119,12 +119,12 @@ std::string move_to_notation(const Board& board, const Move& move);
 struct StateView {
   // Active-turn ctor used by the human agent on every make_move() call. The
   // resulting view always has your_turn=true, game_over=false.
-  StateView(const MoveRequest& req, std::string my_name, std::string opp_name,
+  StateView(const MoveRequest& req, const std::string& my_name, const std::string& opp_name,
             const std::vector<std::optional<double>>* legal_play_equities = nullptr);
 
   // Game-derived ctor used at game-over (or any other Game-anchored view).
   // `my_seat` selects which side is "me" (0 or 1).
-  StateView(const Game& game, int my_seat, std::string my_name, std::string opp_name,
+  StateView(const Game& game, int my_seat, const std::string& my_name, const std::string& opp_name,
             bool your_turn, bool game_over);
 
   const Board& board;
