@@ -518,6 +518,50 @@ h1 {
   color: #95a5a6;
 }
 
+/* Unseen tiles: 10x10 grid of the standard tile distribution. Cells stay at
+   a fixed slot index per letter, so as tiles are played their slots empty
+   out and the remaining shape is easy to scan at a glance. */
+.unseen-tiles {
+  background: #34495e;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.unseen-tiles-label {
+  font-size: 13px;
+  color: #bdc3c7;
+  margin-bottom: 8px;
+}
+
+.unseen-tiles-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+}
+
+.unseen-cell {
+  aspect-ratio: 1 / 1;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  font-weight: bold;
+  user-select: none;
+}
+
+.unseen-cell.present {
+  background: var(--tile-bg);
+  color: #2c3e50;
+  border: 1px solid var(--tile-border);
+}
+
+.unseen-cell.absent {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 /* Cheat mode toggle */
 .cheat-toggle {
   background: #34495e;

@@ -3,6 +3,7 @@ import Board from './components/Board';
 import Rack from './components/Rack';
 import MoveList from './components/MoveList';
 import ScoreBoard from './components/ScoreBoard';
+import UnseenTiles from './components/UnseenTiles';
 import { GameState, PlacedTile, EntryDirection } from './types';
 import {
   findRackTile,
@@ -486,6 +487,10 @@ function App() {
             gameOver={state.game_over}
             winner={state.winner}
           />
+
+          {/* Unseen tiles: bag + opponent rack, laid out as a 10x10 of the
+              standard distribution; played/in-my-rack slots render blank. */}
+          <UnseenTiles state={state} />
 
           {/* Cheat mode toggle */}
           <div className="cheat-toggle">
