@@ -9,7 +9,7 @@ namespace scribblez {
 
 Game::Game(std::unique_ptr<Agent> p0, std::unique_ptr<Agent> p1, const Dictionary& dict,
            uint64_t seed)
-    : dict_(dict), seed_(seed), bag_(seed), rng_(seed ^ 0x9E3779B97F4A7C15ULL) {
+    : dict_(dict), seed_(seed), bag_(seed) {
   players_[0] = std::move(p0);
   players_[1] = std::move(p1);
   log_.seed = seed;
@@ -42,10 +42,10 @@ void Game::play() {
     MoveGenerator gen(board_, dict_);
     std::vector<Move> legal = gen.generate(racks_[cur]);
 
-    AgentContext ctx{board_,           racks_[cur], scores_[cur],
-                     scores_[1 - cur], bag_.size(), racks_[1 - cur].size(),
-                     std::move(legal)};
-    Move m = players_[cur]->choose(ctx, rng_);
+    MoveRequest ctx{board_,           racks_[cur], scores_[cur],
+                    scores_[1 - cur], bag_.size(), racks_[1 - cur].size(),
+                    std::move(legal)};
+    Move m = players_[cur]->make_move(ctx);
 
     TurnRecord rec;
     rec.player = cur;

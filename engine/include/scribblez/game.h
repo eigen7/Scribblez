@@ -55,7 +55,6 @@ class Game {
   Board board_;
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};
-  std::mt19937_64 rng_;
   GameLog log_;
 
   void refill_rack(int p, std::vector<Tile>& drawn);

@@ -4,13 +4,16 @@
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
 
 namespace scribblez {
 
-struct AgentContext {
+// Everything an agent needs in order to choose a move on its turn. Constructed
+// by the game loop and passed to Agent::make_move().
+struct MoveRequest {
   const Board& board;
   const Rack& my_rack;
   int my_score;
@@ -24,19 +27,33 @@ class Agent {
  public:
   virtual ~Agent() = default;
   virtual std::string name() const = 0;
-  virtual Move choose(const AgentContext& ctx, std::mt19937_64& rng) = 0;
+  virtual Move make_move(const MoveRequest& req) = 0;
 };
 
 // Picks the highest-scoring PLAY. If none exists, exchanges the entire rack
-// (if the bag has >= RACK_SIZE tiles), otherwise passes. Ties broken randomly.
+// (if the bag has >= RACK_SIZE tiles), otherwise passes. Ties broken randomly
+// using the agent's own RNG (seeded by SeedProducer by default, or by an
+// explicit --seed=N option).
 class GreedyAgent : public Agent {
  public:
-  explicit GreedyAgent(std::string name = "Greedy") : name_(std::move(name)) {}
+  explicit GreedyAgent(std::string name = "Greedy");
+  GreedyAgent(std::string name, uint64_t seed);
+
   std::string name() const override { return name_; }
-  Move choose(const AgentContext& ctx, std::mt19937_64& rng) override;
+  Move make_move(const MoveRequest& req) override;
+
+  // Build a GreedyAgent from `--player "--type=greedy [options]"` tokens
+  // (after the factory has stripped --type and --name). `name` is the resolved
+  // display name. Throws std::runtime_error on bad input.
+  static std::unique_ptr<GreedyAgent> from_spec(const std::vector<std::string>& tokens,
+                                                std::string name);
+
+  // Human-readable description + options, shown by `play_game --help`.
+  static std::string options_help();
 
  private:
   std::string name_;
+  std::mt19937_64 rng_;
 };
 
 }  // namespace scribblez

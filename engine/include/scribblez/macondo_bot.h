@@ -2,7 +2,9 @@
 
 #include "scribblez/agent.h"
 
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace scribblez {
 
@@ -14,7 +16,15 @@ class HastyBotAgent : public Agent {
  public:
   HastyBotAgent(std::string macondo_binary, std::string name);
   std::string name() const override { return name_; }
-  Move choose(const AgentContext& ctx, std::mt19937_64& rng) override;
+  Move make_move(const MoveRequest& req) override;
+
+  // Build a HastyBotAgent from `--player "--type=hastybot [options]"` tokens
+  // (after the factory has stripped --type and --name). Throws on bad input.
+  static std::unique_ptr<HastyBotAgent> from_spec(const std::vector<std::string>& tokens,
+                                                  std::string name);
+
+  // Human-readable description + options, shown by `play_game --help`.
+  static std::string options_help();
 
  private:
   std::string macondo_binary_;

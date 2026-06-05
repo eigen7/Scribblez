@@ -164,14 +164,6 @@ const char* premium_code(Premium p) {
   }
 }
 
-// Best-effort string field from a parsed client message (empty if absent or
-// not a string).
-std::string str_field(const boost::json::object& obj, boost::json::string_view key) {
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->value().is_string()) return "";
-  return std::string(it->value().as_string().c_str());
-}
-
 // ----------------------------- port freeing ------------------------------
 
 // PIDs currently listening on / connected to `port`, via `lsof -t -i :port`.
@@ -588,67 +580,6 @@ std::optional<std::string> WebSession::recv_text() {
 void WebSession::linger_after_final_message() {
   // Give the kernel a moment to flush the final frame before we close.
   std::this_thread::sleep_for(std::chrono::milliseconds(700));
-}
-
-// ------------------------------ HumanWebAgent ----------------------------
-
-HumanWebAgent::HumanWebAgent(WebSession& session, std::string my_name, std::string opp_name)
-    : session_(session), my_name_(std::move(my_name)), opp_name_(std::move(opp_name)) {}
-
-Move HumanWebAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
-  StateView view{ctx.board,          ctx.my_rack, ctx.my_score, ctx.opp_score,    ctx.bag_size,
-                 ctx.opp_rack_size,  my_name_,    opp_name_,    &ctx.legal_plays,
-                 /*your_turn=*/true,
-                 /*game_over=*/false};
-  const std::string msg = game_state_json(view);
-
-  for (;;) {
-    if (!session_.connected() && !session_.wait_for_client()) {
-      Move m;
-      m.type = MoveType::PASS;
-      return m;
-    }
-    session_.send_text(msg);
-    for (;;) {
-      auto in = session_.recv_text();
-      if (!in) break;  // disconnected: re-send on reconnect
-
-      boost::json::value parsed;
-      try {
-        parsed = boost::json::parse(*in);
-      } catch (const std::exception&) {
-        continue;  // malformed: keep waiting for a usable message
-      }
-      if (!parsed.is_object()) continue;
-      const boost::json::object& obj = parsed.as_object();
-      const std::string type = str_field(obj, "type");
-
-      if (type == "move") {
-        auto it = obj.find("index");
-        if (it != obj.end() && it->value().is_int64()) {
-          long idx = static_cast<long>(it->value().as_int64());
-          if (idx >= 0 && static_cast<size_t>(idx) < ctx.legal_plays.size()) {
-            return ctx.legal_plays[static_cast<size_t>(idx)];
-          }
-        }
-      } else if (type == "pass") {
-        Move m;
-        m.type = MoveType::PASS;
-        return m;
-      } else if (type == "exchange") {
-        // Optional: front-end may send {"type":"exchange","letters":"AB?"}.
-        Move m;
-        m.type = MoveType::EXCHANGE;
-        int gi = 0;
-        for (char c : str_field(obj, "letters")) {
-          Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : Tile::from_char(c);
-          if (ctx.my_rack.count(L) > 0 && gi < RACK_SIZE) m.glyphs[gi++] = Glyph::exchanging(L);
-        }
-        if (gi > 0) return m;
-      }
-      // Unknown / invalid: keep waiting for a usable message.
-    }
-  }
 }
 
 }  // namespace scribblez

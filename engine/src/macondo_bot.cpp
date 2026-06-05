@@ -6,9 +6,11 @@
 #include "scribblez/rack.h"
 
 #include <boost/process.hpp>
+#include <boost/program_options.hpp>
 
 #include <array>
 #include <cctype>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 
@@ -145,7 +147,7 @@ bool parse_coord(const std::string& s, bool& horizontal, int& sr, int& sc) {
   return sr >= 0 && sr < BOARD_SIZE && sc >= 0 && sc < BOARD_SIZE;
 }
 
-Move parse_play(const std::string& play, const AgentContext& ctx) {
+Move parse_play(const std::string& play, const MoveRequest& req) {
   Move pass;
   pass.type = MoveType::PASS;
   if (play.empty() || play.find("Pass") != std::string::npos) return pass;
@@ -184,7 +186,7 @@ Move parse_play(const std::string& play, const AgentContext& ctx) {
 
   // Return the matching legal play (gives the correct Scribblez score and
   // confirms Macondo's choice is legal in our engine).
-  for (const Move& lp : ctx.legal_plays) {
+  for (const Move& lp : req.legal_plays) {
     if (lp.start_row == m.start_row && lp.start_col == m.start_col &&
         lp.horizontal == m.horizontal && lp.glyphs == m.glyphs) {
       return lp;
@@ -198,10 +200,38 @@ Move parse_play(const std::string& play, const AgentContext& ctx) {
 HastyBotAgent::HastyBotAgent(std::string macondo_binary, std::string name)
     : macondo_binary_(std::move(macondo_binary)), name_(std::move(name)) {}
 
-Move HastyBotAgent::choose(const AgentContext& ctx, std::mt19937_64&) {
-  std::string cgp = to_cgp(ctx.board, ctx.my_rack, ctx.my_score, ctx.opp_score);
+Move HastyBotAgent::make_move(const MoveRequest& req) {
+  std::string cgp = to_cgp(req.board, req.my_rack, req.my_score, req.opp_score);
   std::string play = Macondo::get(macondo_binary_).best_play(cgp);
-  return parse_play(play, ctx);
+  return parse_play(play, req);
+}
+
+std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
+                                                        std::string name) {
+  namespace po = boost::program_options;
+  std::string macondo;
+
+  po::options_description desc("hastybot options");
+  desc.add_options()                                              //
+    ("macondo", po::value<std::string>(&macondo)->required(),     //
+     "path to the macondo binary (required)");
+
+  try {
+    po::variables_map vm;
+    po::store(po::command_line_parser(tokens).options(desc).run(), vm);
+    po::notify(vm);
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
+  }
+
+  return std::make_unique<HastyBotAgent>(std::move(macondo), std::move(name));
+}
+
+std::string HastyBotAgent::options_help() {
+  return "  Macondo's HastyBot (best static play), shelled out to a persistent\n"
+         "  `macondo` process.\n"
+         "  Options:\n"
+         "    --macondo=PATH    path to the macondo binary (required)\n";
 }
 
 }  // namespace scribblez

@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
       std::cerr << "Error: " << e.what() << "\n";
       return 2;
     }
-    if (players[s].type == scribblez::PlayerType::Human) {
+    if (players[s].is_human()) {
       if (human_seat >= 0) {
         std::cerr << "At most one human player is supported.\n";
         return 2;

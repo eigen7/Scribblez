@@ -92,20 +92,6 @@ class WebSession {
   int ws_fd_ = -1;
 };
 
-// A human player driven through a WebSession: renders the position to the
-// browser and blocks until the user submits a move (or passes / exchanges).
-class HumanWebAgent : public Agent {
- public:
-  HumanWebAgent(WebSession& session, std::string my_name, std::string opp_name);
-  std::string name() const override { return my_name_; }
-  Move choose(const AgentContext& ctx, std::mt19937_64& rng) override;
-
- private:
-  WebSession& session_;
-  std::string my_name_;
-  std::string opp_name_;
-};
-
 // Standard Scrabble coordinate notation for a play, e.g. "8H WAREZ 54"
 // (horizontal) or "H8 WAREZ 54" (vertical). Newly placed blanks are lowercased.
 std::string move_to_notation(const Board& board, const Move& move);
