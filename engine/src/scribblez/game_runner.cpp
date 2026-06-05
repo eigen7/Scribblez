@@ -2,6 +2,7 @@
 
 #include "scribblez/exception.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/seed_producer.h"
 
 #include <boost/program_options.hpp>
 
@@ -79,10 +80,10 @@ void GameRunner::Params::add_options(boost::program_options::options_description
 
 // --------------------------- ctor / run ----------------------------------
 
-GameRunner::GameRunner(const Params& params, PlayerFactory::Players players, uint64_t seed)
+GameRunner::GameRunner(const Params& params, PlayerFactory::Players players)
     : params_(params),
       agents_(std::move(players)),
-      seed_(seed),
+      seed_(SeedProducer::instance().next()),
       out_(&std::cout) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";

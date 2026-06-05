@@ -24,7 +24,6 @@
 
 #include <boost/program_options.hpp>
 
-#include <cstdint>
 #include <exception>
 #include <iostream>
 
@@ -34,15 +33,15 @@ int main(int argc, char** argv) {
     // Each subsystem owns its own Params + add_options() so this top-level
     // function never has to know which knobs belong to whom.
     scribblez::Macondo::Params macondo_params;
-    scribblez::PlayerFactory::Params player_params;
     scribblez::SeedProducer::Params seed_params;
+    scribblez::PlayerFactory::Params player_params;
     scribblez::GameRunner::Params runner_params;
 
     po::options_description desc("play_game options");
     desc.add_options()("help,h", "show this help message and exit");
     macondo_params.add_options(desc);
-    player_params.add_options(desc);
     seed_params.add_options(desc);
+    player_params.add_options(desc);
     runner_params.add_options(desc);
 
     scribblez::parse_command_line(
@@ -51,10 +50,12 @@ int main(int argc, char** argv) {
             scribblez::PlayerFactory::all_player_types_help());
 
     scribblez::Macondo::set_params(macondo_params);
-    uint64_t seed = scribblez::SeedProducer::instance().seed(seed_params);
-
+    // Reseed the global SeedProducer first so every RNG-owning object built
+    // below (agents in make_players, the bag inside GameRunner) draws from a
+    // deterministic stream when --seed is set.
+    scribblez::SeedProducer::instance().seed(seed_params);
     auto players = scribblez::PlayerFactory::make_players(player_params);
-    scribblez::GameRunner runner(runner_params, std::move(players), seed);
+    scribblez::GameRunner runner(runner_params, std::move(players));
     runner.run();
     return 0;
   } catch (const scribblez::CleanExit&) {

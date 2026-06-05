@@ -32,13 +32,15 @@ class GameRunner {
     void add_options(boost::program_options::options_description& desc);
   };
 
-  // Takes ownership of `players.agents` and loads the lexicon named by
-  // params.kwg_path. `seed` decides who starts game 1 (low bit) and seeds
-  // the bag (seed, seed+1, ...) for successive games. Throws
-  // scribblez::Exception on user-visible errors (bad --games, missing
-  // lexicon, failed output file), having already printed an explanation
-  // to stderr.
-  GameRunner(const Params& params, PlayerFactory::Players players, uint64_t seed);
+  // Takes ownership of `players` and loads the lexicon named by
+  // params.kwg_path. Pulls its starting seed from SeedProducer::instance()
+  // (which the caller is responsible for having reseeded from --seed if
+  // reproducibility is desired); the starting seed decides who starts
+  // game 1 (low bit) and seeds the bag (seed, seed+1, ...) for successive
+  // games. Throws scribblez::Exception on user-visible errors (bad
+  // --games, missing lexicon, failed output file), having already printed
+  // an explanation to stderr.
+  GameRunner(const Params& params, PlayerFactory::Players players);
   ~GameRunner();
 
   // Run the game loop. Throws on output-file failures; returns normally on
