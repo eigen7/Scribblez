@@ -24,6 +24,7 @@ namespace scribblez {
 class GameRunner {
  public:
   struct Params {
+    std::string kwg_path = "data/lexica/NWL23.kwg";  // lexicon file to load
     int games = 1;            // minimum number of games to play
     std::string out_path;     // empty => stdout
     bool verbose = false;     // per-game + batch summaries to stderr
@@ -31,11 +32,13 @@ class GameRunner {
     void add_options(boost::program_options::options_description& desc);
   };
 
-  // Takes ownership of `players.agents`. `dict` and `seed` are captured;
-  // `dict` must outlive the runner. `seed` decides who starts game 1 (low
-  // bit) and seeds the bag (seed, seed+1, ...) for successive games.
-  GameRunner(const Params& params, PlayerFactory::Players players, const Dictionary& dict,
-             uint64_t seed);
+  // Takes ownership of `players.agents` and loads the lexicon named by
+  // params.kwg_path. `seed` decides who starts game 1 (low bit) and seeds
+  // the bag (seed, seed+1, ...) for successive games. Throws
+  // scribblez::Exception on user-visible errors (bad --games, missing
+  // lexicon, failed output file), having already printed an explanation
+  // to stderr.
+  GameRunner(const Params& params, PlayerFactory::Players players, uint64_t seed);
   ~GameRunner();
 
   // Run the game loop. Throws on output-file failures; returns normally on
@@ -53,7 +56,7 @@ class GameRunner {
   Params params_;
   std::array<std::unique_ptr<Agent>, 2> agents_;
   std::array<std::string, 2> display_names_;
-  const Dictionary& dict_;
+  Dictionary dict_;
   uint64_t seed_;
 
   std::ofstream of_;   // owns the file iff params_.out_path is non-empty

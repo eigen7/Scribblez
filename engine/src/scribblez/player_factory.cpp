@@ -1,12 +1,14 @@
 #include "scribblez/player_factory.h"
 
 #include "scribblez/agent.h"
+#include "scribblez/exception.h"
 #include "scribblez/human_web_agent.h"
 #include "scribblez/macondo_bot.h"
 
 #include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
 
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -92,23 +94,30 @@ void PlayerFactory::Params::add_options(boost::program_options::options_descript
 }
 
 PlayerFactory::Players PlayerFactory::make_players(const Params& params) {
-  std::vector<std::string> raw = params.specs;
-  if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
-  if (raw.size() != 2) {
-    throw std::runtime_error("expected exactly two --player specs (got " +
-                             std::to_string(raw.size()) + ")");
+  try {
+    std::vector<std::string> raw = params.specs;
+    if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
+    if (raw.size() != 2) {
+      throw std::runtime_error("expected exactly two --player specs (got " +
+                               std::to_string(raw.size()) + ")");
+    }
+
+    std::array<PlayerSpec, 2> specs;
+    for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
+
+    Players out;
+    out.display_names = {specs[0].display_name(), specs[1].display_name()};
+    // Build both agents. A Human agent's ctor blocks on its Vite dev server
+    // coming up, so this is the point at which the browser UI appears.
+    out.agents[0] = make_one(specs[0], out.display_names[1]);
+    out.agents[1] = make_one(specs[1], out.display_names[0]);
+    return out;
+  } catch (const Exception&) {
+    throw;  // already-printed user-facing error from a nested make_one()
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n";
+    throw Exception(e.what());
   }
-
-  std::array<PlayerSpec, 2> specs;
-  for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
-
-  Players out;
-  out.display_names = {specs[0].display_name(), specs[1].display_name()};
-  // Build both agents. A Human agent's ctor blocks on its Vite dev server
-  // coming up, so this is the point at which the browser UI appears.
-  out.agents[0] = make_one(specs[0], out.display_names[1]);
-  out.agents[1] = make_one(specs[1], out.display_names[0]);
-  return out;
 }
 
 std::string PlayerFactory::all_player_types_help() {

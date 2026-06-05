@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <random>
+
+namespace boost::program_options { class options_description; }
 
 namespace scribblez {
 
@@ -20,14 +21,21 @@ namespace scribblez {
 // receives. This is the same caveat as the prior master-mt19937 scheme.
 class SeedProducer {
  public:
+  // Configuration collected from the command line.
+  struct Params {
+    // 0 (the default) is the sentinel for "pick a fresh seed from
+    // std::random_device"; any other value is used as-is. Yes, this means
+    // an explicit --seed=0 isn't reachable; that's fine.
+    uint64_t seed = 0;
+
+    void add_options(boost::program_options::options_description& desc);
+  };
+
   static SeedProducer& instance();
 
-  // Re-seed the producer. If `requested` is provided, uses that value;
-  // otherwise generates a fresh 64-bit seed from std::random_device. In
-  // either case returns the seed that was actually used, so callers can
-  // print it / reuse it elsewhere without having to repeat the
-  // "--seed given or not?" branching.
-  uint64_t seed(std::optional<uint64_t> requested);
+  // Re-seed the producer from `params`. Returns the seed actually used
+  // (the one from params, or the freshly generated one if params.seed == 0).
+  uint64_t seed(const Params& params);
 
   // Produce a fresh 64-bit seed.
   uint64_t next();

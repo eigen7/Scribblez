@@ -7,7 +7,6 @@ add_library(scribblez_core STATIC
   src/scribblez/move.cpp
   src/scribblez/dictionary.cpp
   src/scribblez/movegen.cpp
-  src/scribblez/seed_producer.cpp
   src/scribblez/game.cpp
   src/scribblez/gcg_writer.cpp
 )
@@ -24,11 +23,13 @@ target_include_directories(scribblez_core PUBLIC
 add_executable(play_game
   apps/play_game.cpp
   src/scribblez/agent.cpp
+  src/scribblez/cli.cpp
   src/scribblez/game_runner.cpp
   src/scribblez/human_web_agent.cpp
   src/scribblez/macondo.cpp
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
+  src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core

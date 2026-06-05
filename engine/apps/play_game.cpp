@@ -15,7 +15,8 @@
 // (npm run dev) and opens the browser at it -- you never run npm by hand. Run
 // ./build.py once first to install the web dependencies.
 
-#include "scribblez/dictionary.h"
+#include "scribblez/cli.h"
+#include "scribblez/exception.h"
 #include "scribblez/game_runner.h"
 #include "scribblez/macondo.h"
 #include "scribblez/player_factory.h"
@@ -26,87 +27,50 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <optional>
-#include <string>
-
-namespace {
-
-// Default lexicon location, relative to the current working directory. The .kwg
-// binary is not committed (it encodes a copyrighted wordlist); place or symlink
-// it here, or point --kwg elsewhere.
-constexpr const char* kDefaultKwg = "data/lexica/NWL23.kwg";
-
-}  // namespace
 
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
-
-  // Each subsystem owns its own Params + add_options() so this top-level
-  // function never has to know which knobs belong to whom.
-  scribblez::Macondo::Params macondo_params;
-  scribblez::PlayerFactory::Params player_params;
-  scribblez::GameRunner::Params runner_params;
-
-  std::string kwg_path;
-  uint64_t seed_value = 0;
-  bool seed_given_flag = false;
-
-  po::options_description desc("play_game options");
-  desc.add_options()                                                                       //
-      ("help,h", "show this help message and exit")                                        //
-      ("kwg", po::value<std::string>(&kwg_path)->default_value(kDefaultKwg),               //
-       "lexicon .kwg file to load")                                                        //
-      ("seed",                                                                             //
-       po::value<uint64_t>(&seed_value)->notifier([&](uint64_t) { seed_given_flag = true; }),
-       "PRNG seed (default: hardware random)");
-  macondo_params.add_options(desc);
-  player_params.add_options(desc);
-  runner_params.add_options(desc);
-
-  po::variables_map vm;
   try {
-    po::store(po::parse_command_line(argc, argv, desc), vm);
-    po::notify(vm);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n\n" << desc << "\n";
-    return 2;
-  }
-  if (vm.count("help")) {
-    std::cout << desc << "\n";
-    std::cout << "Player types (use --player \"--type=X [options]\"):\n\n"
-              << scribblez::PlayerFactory::all_player_types_help();
-    return 0;
-  }
+    // Each subsystem owns its own Params + add_options() so this top-level
+    // function never has to know which knobs belong to whom.
+    scribblez::Macondo::Params macondo_params;
+    scribblez::PlayerFactory::Params player_params;
+    scribblez::SeedProducer::Params seed_params;
+    scribblez::GameRunner::Params runner_params;
 
-  scribblez::Macondo::set_params(macondo_params);
+    po::options_description desc("play_game options");
+    desc.add_options()("help,h", "show this help message and exit");
+    macondo_params.add_options(desc);
+    player_params.add_options(desc);
+    seed_params.add_options(desc);
+    runner_params.add_options(desc);
 
-  // Seed the process-wide SeedProducer (random-device fallback handled
-  // inside seed()). All RNG-using objects constructed after this point are
-  // deterministic for a given --seed.
-  std::optional<uint64_t> requested = seed_given_flag ? std::optional{seed_value} : std::nullopt;
-  uint64_t seed = scribblez::SeedProducer::instance().seed(requested);
+    scribblez::parse_command_line(
+        argc, argv, desc,
+        "Player types (use --player \"--type=X [options]\"):\n\n" +
+            scribblez::PlayerFactory::all_player_types_help());
 
-  scribblez::Dictionary dict;
-  try {
-    dict = scribblez::Dictionary::load_kwg(kwg_path);
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n"
-              << "No lexicon at '" << kwg_path
-              << "'. Place or symlink an NWL .kwg there, or pass --kwg <path>.\n";
-    return 1;
-  }
-  if (runner_params.verbose) {
-    std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from " << kwg_path << "\n"
-              << "Seed: " << seed << "\n";
-  }
+    scribblez::Macondo::set_params(macondo_params);
+    // Seed the process-wide SeedProducer. All RNG-using objects constructed
+    // after this point are deterministic for a given --seed.
+    uint64_t seed = scribblez::SeedProducer::instance().seed(seed_params);
 
-  try {
     auto players = scribblez::PlayerFactory::make_players(player_params);
-    scribblez::GameRunner runner(runner_params, std::move(players), dict, seed);
+    scribblez::GameRunner runner(runner_params, std::move(players), seed);
     runner.run();
+    return 0;
+  } catch (const scribblez::CleanExit&) {
+    // --help (or other intentional early exit): the help text has already
+    // been printed; we just need to exit cleanly.
+    return 0;
+  } catch (const scribblez::Exception&) {
+    // A user-facing error whose source already printed a complete message
+    // to stderr. Exit non-zero without re-printing.
+    return 1;
   } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
+    // Unexpected: nothing printed by the source, so this catch-all is the
+    // only place that mentions the error. Indicates a bug, not bad input.
+    std::cerr << "Unexpected error: " << e.what() << "\n";
     return 1;
   }
-  return 0;
 }

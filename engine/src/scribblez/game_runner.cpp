@@ -1,5 +1,6 @@
 #include "scribblez/game_runner.h"
 
+#include "scribblez/exception.h"
 #include "scribblez/gcg_writer.h"
 
 #include <boost/program_options.hpp>
@@ -8,7 +9,6 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
-#include <stdexcept>
 #include <utility>
 
 namespace scribblez {
@@ -66,6 +66,8 @@ class GameRunner::Results {
 void GameRunner::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()                                                                  //
+      ("kwg", po::value<std::string>(&kwg_path)->default_value(kwg_path),             //
+       "lexicon .kwg file to load")                                                   //
       ("games", po::value<int>(&games)->default_value(games),                         //
        "play at least this many games in one process (seeds seed, seed+1, ...); "
        "humans may extend the loop via the Play Again button")                        //
@@ -77,21 +79,35 @@ void GameRunner::Params::add_options(boost::program_options::options_description
 
 // --------------------------- ctor / run ----------------------------------
 
-GameRunner::GameRunner(const Params& params, PlayerFactory::Players players, const Dictionary& dict,
-                       uint64_t seed)
+GameRunner::GameRunner(const Params& params, PlayerFactory::Players players, uint64_t seed)
     : params_(params),
       agents_(std::move(players.agents)),
       display_names_(std::move(players.display_names)),
-      dict_(dict),
       seed_(seed),
       out_(&std::cout) {
   if (params_.games < 1) {
-    throw std::runtime_error("--games must be >= 1");
+    std::cerr << "Error: --games must be >= 1\n";
+    throw Exception("--games must be >= 1");
+  }
+  try {
+    dict_ = Dictionary::load_kwg(params_.kwg_path);
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n"
+              << "No lexicon at '" << params_.kwg_path
+              << "'. Place or symlink an NWL .kwg there, or pass --kwg <path>.\n";
+    throw Exception(e.what());
   }
   if (!params_.out_path.empty()) {
     of_.open(params_.out_path);
-    if (!of_) throw std::runtime_error("failed to open output file: " + params_.out_path);
+    if (!of_) {
+      std::cerr << "Error: failed to open output file: " << params_.out_path << "\n";
+      throw Exception("failed to open output file: " + params_.out_path);
+    }
     out_ = &of_;
+  }
+  if (params_.verbose) {
+    std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << params_.kwg_path << "\n"
+              << "Seed: " << seed_ << "\n";
   }
   results_ = std::make_unique<Results>(display_names_, *out_);
 }
