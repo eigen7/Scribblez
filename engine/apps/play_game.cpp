@@ -17,6 +17,7 @@
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/macondo.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
 #include "scribblez/web_server.h"
@@ -45,12 +46,22 @@ constexpr const char* kDefaultKwg = "data/lexica/NWL23.kwg";
 // `npm run dev` here for human play.
 constexpr const char* kDefaultWebDir = "web";
 
+// Default path to the macondo binary, used by HastyBot (move selection) and
+// by the human player (equity annotations in the cheat-mode move list).
+// Resolved relative to $HOME at startup; if $HOME is unset we fall back to
+// the literal string and rely on the user to override with --macondo.
+std::string default_macondo_path() {
+  const char* home = std::getenv("HOME");
+  std::string base = home ? home : "~";
+  return base + "/checkouts/macondo/bin/shell";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
 
-  std::string kwg_path, dict_path, out_path, web_dir;
+  std::string kwg_path, dict_path, out_path, web_dir, macondo_path;
   std::vector<std::string> player_specs;
   int port = 0, vite_port = 0, games = 1;
   uint64_t seed = 0;
@@ -73,6 +84,9 @@ int main(int argc, char** argv) {
   opt("vite-port", po::value<int>(&vite_port)->default_value(5173), "browser UI (Vite) port");
   opt("web-dir", po::value<std::string>(&web_dir)->default_value(kDefaultWebDir),
       "front-end package dir, used only when a human plays");
+  opt("macondo", po::value<std::string>(&macondo_path)->default_value(default_macondo_path()),
+      "path to the macondo binary; used by HastyBot and (best-effort) by the "
+      "human player to annotate the move list with equity");
   opt("games", po::value<int>(&games)->default_value(1),
       "play this many games in one process (seeds seed, seed+1, ...); no human");
   opt("verbose,v", po::bool_switch(&verbose), "print final score and turn count to stderr");
@@ -145,6 +159,18 @@ int main(int argc, char** argv) {
       std::cerr << "Error: " << e.what() << "\n";
       return 2;
     }
+  }
+
+  // Initialize the Macondo singleton if any seat might use it: HastyBot
+  // requires it, and the human player uses it (best-effort) to annotate the
+  // cheat-mode move list with equity. The subprocess is spawned lazily on
+  // first evaluate(), so configuring the path is free if no one calls it.
+  bool needs_macondo = false;
+  for (int s = 0; s < 2; ++s) {
+    if (players[s].is_human() || players[s].type == "hastybot") needs_macondo = true;
+  }
+  if (needs_macondo) {
+    scribblez::Macondo::initialize(macondo_path);
   }
 
   // Resolve the seed (the lexicon path already defaulted via program_options).
@@ -246,6 +272,7 @@ int main(int argc, char** argv) {
                                       players[human_seat].display_name(),
                                       players[opp].display_name(),
                                       /*legal_plays=*/nullptr,
+                                      /*legal_play_equities=*/nullptr,
                                       /*your_turn=*/false,
                                       /*game_over=*/true};
       session->send_text(scribblez::game_state_json(final_view));

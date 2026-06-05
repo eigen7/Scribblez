@@ -25,6 +25,7 @@ add_executable(play_game
   apps/play_game.cpp
   src/scribblez/agent.cpp
   src/scribblez/human_web_agent.cpp
+  src/scribblez/macondo.cpp
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/web_server.cpp)
