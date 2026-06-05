@@ -297,6 +297,28 @@ Macondo::EvalResult Macondo::evaluate(const Board& board, const Rack& my_rack, i
     if (rank == 1) result.best_index = idx;
   }
 
+  // Opening-symmetry fill: on an empty board, every 1D play "8D STEARIN" has
+  // a vertical mirror "H4 STEARIN" that scores identically (no cross-words
+  // either way) and forms an isomorphic position; Macondo dedups these and
+  // returns only one orientation, leaving the other unmatched in our
+  // legal_plays. Propagate the equity from a play's transposed sibling --
+  // gated on equal scores, so genuinely-distinct mid-game H/V plays (which
+  // diverge via cross-word scoring) never bleed equity into each other.
+  for (size_t i = 0; i < legal_plays.size(); ++i) {
+    if (result.equities[i].has_value()) continue;
+    const Move& m = legal_plays[i];
+    if (m.type != MoveType::PLAY) continue;
+    MoveKey tk = key_of(m);
+    std::swap(tk.start_row, tk.start_col);
+    tk.horizontal = !tk.horizontal;
+    auto it = by_key.find(tk);
+    if (it == by_key.end()) continue;
+    int j = it->second;
+    if (!result.equities[j].has_value()) continue;
+    if (legal_plays[j].score != m.score) continue;
+    result.equities[i] = result.equities[j];
+  }
+
   return result;
 }
 
