@@ -102,7 +102,7 @@ class BatchResults {
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
 
-  std::string kwg_path, dict_path, out_path;
+  std::string kwg_path, out_path;
   std::vector<std::string> player_specs;
   int games = 1;
   uint64_t seed = 0;
@@ -120,7 +120,6 @@ int main(int argc, char** argv) {
       "(repeat once per seat; default: two greedy)");
   opt("kwg", po::value<std::string>(&kwg_path)->default_value(kDefaultKwg),
       "lexicon .kwg file to load");
-  opt("dict", po::value<std::string>(&dict_path), "alias for --kwg");
   opt("seed", po::value<uint64_t>(&seed), "PRNG seed (default: hardware random)");
   opt("out", po::value<std::string>(&out_path), "write the GCG game logs here (default: stdout)");
   opt("games", po::value<int>(&games)->default_value(1),
@@ -143,8 +142,6 @@ int main(int argc, char** argv) {
               << scribblez::all_player_types_help();
     return 0;
   }
-  // --dict is an accepted alias for --kwg.
-  if (vm.count("dict")) kwg_path = dict_path;
   const bool seed_given = vm.count("seed") > 0;
 
   // Resolve the two player seats, defaulting to two greedy players. Each spec
