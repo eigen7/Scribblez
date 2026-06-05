@@ -27,6 +27,13 @@ function App() {
   const [cheatMode, setCheatMode] = useState(false);
   const [selectedMoveIndex, setSelectedMoveIndex] = useState<number | null>(null);
 
+  // Exchange mode: clicking rack tiles toggles them into `exchangeSelected`,
+  // and the action bar's confirm button sends them as a single exchange move.
+  // Mutually exclusive with board entry (you can only enter exchange mode
+  // when there are no candidate tiles on the board).
+  const [exchangeMode, setExchangeMode] = useState(false);
+  const [exchangeSelected, setExchangeSelected] = useState<Set<number>>(new Set());
+
   // Blank designation dialog.
   const [blankPending, setBlankPending] = useState<{ row: number; col: number; rackIndex: number } | null>(null);
 
@@ -79,6 +86,8 @@ function App() {
     setCursorDir(null);
     setSelectedMoveIndex(null);
     setBlankPending(null);
+    setExchangeMode(false);
+    setExchangeSelected(new Set());
   };
 
   // --- Move submission ---
@@ -95,6 +104,33 @@ function App() {
     wsRef.current.send(JSON.stringify({ type: 'pass' }));
     setState((prev) => (prev ? { ...prev, your_turn: false } : prev));
     clearEntry();
+  };
+
+  // Send the staged exchange. The backend accepts a `letters` string where
+  // each char names one tile to discard ('?' for a blank); we just concat
+  // the chosen rack tiles in their rack order.
+  const submitExchange = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!state) return;
+    if (exchangeSelected.size === 0) return;
+    const letters = state.rack
+      .map((t, i) => (exchangeSelected.has(i) ? t.letter : ''))
+      .join('');
+    wsRef.current.send(JSON.stringify({ type: 'exchange', letters }));
+    setState((prev) => (prev ? { ...prev, your_turn: false } : prev));
+    clearEntry();
+  };
+
+  // Toggle one rack tile in/out of the exchange selection. No-op outside
+  // exchange mode (the rack's interactive prop guards drag-to-board there).
+  const handleRackTileClick = (index: number) => {
+    if (!exchangeMode) return;
+    setExchangeSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
   };
 
   const matchingMoveIndex = state
@@ -361,31 +397,72 @@ function App() {
             usedIndices={usedRackIndices}
             label="Your Rack"
             interactive={state.your_turn && !state.game_over}
+            exchangeMode={exchangeMode}
+            exchangeSelected={exchangeSelected}
+            onTileClick={handleRackTileClick}
           />
 
           {/* Action buttons */}
           {state.your_turn && !state.game_over && (
             <div className="action-bar">
-              {candidateTiles.length > 0 && (
-                <button className="btn btn-clear" onClick={clearEntry}>
-                  Clear
-                </button>
-              )}
-              {canSubmit && (
-                <button
-                  className="btn btn-submit"
-                  onClick={() => submitMove(matchingMoveIndex)}
-                >
-                  Play Move ({state.moves?.find((m) => m.index === matchingMoveIndex)?.score ?? 0} pts)
-                </button>
-              )}
-              {!canSubmit && candidateTiles.length > 0 && (
-                <span className="invalid-move-hint">Not a valid move</span>
-              )}
-              {candidateTiles.length === 0 && (
-                <button className="btn btn-pass" onClick={passTurn}>
-                  Pass
-                </button>
+              {exchangeMode ? (
+                <>
+                  <button
+                    className="btn btn-submit"
+                    onClick={submitExchange}
+                    disabled={exchangeSelected.size === 0}
+                  >
+                    Exchange {exchangeSelected.size} tile
+                    {exchangeSelected.size === 1 ? '' : 's'}
+                  </button>
+                  <button
+                    className="btn btn-clear"
+                    onClick={() => {
+                      setExchangeMode(false);
+                      setExchangeSelected(new Set());
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  {candidateTiles.length > 0 && (
+                    <button className="btn btn-clear" onClick={clearEntry}>
+                      Clear
+                    </button>
+                  )}
+                  {canSubmit && (
+                    <button
+                      className="btn btn-submit"
+                      onClick={() => submitMove(matchingMoveIndex)}
+                    >
+                      Play Move ({state.moves?.find((m) => m.index === matchingMoveIndex)?.score ?? 0} pts)
+                    </button>
+                  )}
+                  {!canSubmit && candidateTiles.length > 0 && (
+                    <span className="invalid-move-hint">Not a valid move</span>
+                  )}
+                  {candidateTiles.length === 0 && (
+                    <>
+                      <button className="btn btn-pass" onClick={passTurn}>
+                        Pass
+                      </button>
+                      <button
+                        className="btn btn-exchange"
+                        onClick={() => setExchangeMode(true)}
+                        disabled={state.bag_count < 7}
+                        title={
+                          state.bag_count < 7
+                            ? 'Need at least 7 tiles in the bag to exchange'
+                            : undefined
+                        }
+                      >
+                        Exchange
+                      </button>
+                    </>
+                  )}
+                </>
               )}
             </div>
           )}

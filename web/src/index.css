@@ -425,6 +425,29 @@ h1 {
   cursor: grabbing;
 }
 
+/* Exchange mode: tiles become click-to-toggle, with a highlight ring and
+   a small "↻" badge on tiles staged for exchange. */
+.rack-tile.clickable-tile {
+  cursor: pointer;
+}
+
+.rack-tile.selected-for-exchange {
+  outline: 3px solid #e67e22;
+  outline-offset: -3px;
+  box-shadow: 0 2px 6px rgba(230, 126, 34, 0.5);
+}
+
+.rack-tile.selected-for-exchange::after {
+  content: '↻';
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 12px;
+  color: #e67e22;
+  font-weight: bold;
+  line-height: 1;
+}
+
 /* Action bar */
 .action-bar {
   margin-top: 12px;
@@ -467,6 +490,20 @@ h1 {
 
 .btn-pass:hover {
   background: #d68910;
+}
+
+.btn-exchange {
+  background: #2980b9;
+  color: white;
+}
+
+.btn-exchange:hover:not(:disabled) {
+  background: #3498db;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .invalid-move-hint {
