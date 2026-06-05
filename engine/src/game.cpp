@@ -62,7 +62,7 @@ void Game::play() {
         (void)ok;
         assert(ok);
       }
-      m.apply_to(board_);
+      board_.apply(m);
       scores_[cur] += m.score;
       rec.score_delta = m.score;
       consecutive_zero_turns = 0;

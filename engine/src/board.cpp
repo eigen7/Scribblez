@@ -1,5 +1,7 @@
 #include "scribblez/board.h"
 
+#include "scribblez/move.h"
+
 #include <array>
 #include <string>
 
@@ -68,9 +70,21 @@ bool Board::empty_board() const {
   return true;
 }
 
-void Board::apply(const std::vector<PlacedTile>& tiles) {
-  for (const auto& t : tiles) {
-    set(t.row, t.col, t.glyph);
+void Board::apply(const Move& move) {
+  if (move.type != MoveType::PLAY) return;
+  const int dr = move.horizontal ? 0 : 1;
+  const int dc = move.horizontal ? 1 : 0;
+  int r = move.start_row, c = move.start_col;
+  const int n = move.num_glyphs();
+  for (int gi = 0; gi < n; ++gi) {
+    while (in_bounds(r, c) && !at(r, c).is_empty()) {
+      r += dr;
+      c += dc;
+    }
+    if (!in_bounds(r, c)) break;
+    set(r, c, move.glyphs[gi]);
+    r += dr;
+    c += dc;
   }
 }
 

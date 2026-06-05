@@ -5,7 +5,6 @@
 
 #include <array>
 #include <string>
-#include <vector>
 
 namespace scribblez {
 
@@ -14,11 +13,7 @@ constexpr int CENTER = 7;
 
 enum class Premium : uint8_t { NONE = 0, DLS, TLS, DWS, TWS };
 
-struct PlacedTile {
-  int row;
-  int col;
-  Glyph glyph;  // the played tile's face (letter + blank-ness)
-};
+struct Move;  // forward declaration
 
 class Board {
  public:
@@ -33,8 +28,8 @@ class Board {
 
   Premium premium_at(int r, int c) const { return PREMIUM[r * BOARD_SIZE + c]; }
 
-  // Apply a list of placed tiles to the board.
-  void apply(const std::vector<PlacedTile>& tiles);
+  // Place the move's new tiles on the board.
+  void apply(const Move& move);
 
   // Pretty-print the board to a string.
   std::string to_string() const;

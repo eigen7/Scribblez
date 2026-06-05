@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace scribblez {
 
@@ -41,10 +40,9 @@ struct Move {
     return n;
   }
 
-  // Reconstructions against the board as it stood *before* this move:
-  std::string main_word(const Board& board) const;  // full word, uppercase
-  std::vector<PlacedTile> placed_tiles(const Board& board) const;
-  void apply_to(Board& board) const;  // place this move's tiles on the board
+  // Reconstruct the move's main word (full word, uppercase) from the board
+  // as it stood *before* this move was applied.
+  std::string main_word(const Board& board) const;
 };
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");

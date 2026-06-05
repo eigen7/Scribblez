@@ -52,6 +52,21 @@ static Rack rack_from(const std::string& s) {
   return r;
 }
 
+// Build a PLAY Move from a starting square, direction, and ordered new glyphs.
+static Move make_play(int row, int col, bool horizontal, std::initializer_list<Glyph> gs) {
+  Move m;
+  m.type = MoveType::PLAY;
+  m.horizontal = horizontal;
+  m.start_row = static_cast<int8_t>(row);
+  m.start_col = static_cast<int8_t>(col);
+  int i = 0;
+  for (Glyph g : gs) {
+    if (i >= RACK_SIZE) break;
+    m.glyphs[i++] = g;
+  }
+  return m;
+}
+
 static void test_movegen_opening() {
   Dictionary d = tiny_dict();
   Board b;
@@ -61,11 +76,14 @@ static void test_movegen_opening() {
   auto moves = gen.generate(r);
   CHECK(!moves.empty());
   // Every opening move must cover the center square (CENTER, CENTER).
+  // The board is empty, so placements are at consecutive squares from start.
   for (const auto& m : moves) {
     CHECK(m.type == MoveType::PLAY);
+    const int dr = m.horizontal ? 0 : 1;
+    const int dc = m.horizontal ? 1 : 0;
     bool covers = false;
-    for (const auto& t : m.placed_tiles(b)) {
-      if (t.row == CENTER && t.col == CENTER) {
+    for (int i = 0; i < m.num_glyphs(); ++i) {
+      if (m.start_row + i * dr == CENTER && m.start_col + i * dc == CENTER) {
         covers = true;
         break;
       }
@@ -89,12 +107,11 @@ static void test_movegen_cross_word() {
   Dictionary d = tiny_dict();
   Board b;
   // Place CAT at the center horizontally.
-  std::vector<PlacedTile> cat = {
-    {CENTER, CENTER, Glyph::of(Tile::from_char('C'))},
-    {CENTER, CENTER + 1, Glyph::of(Tile::from_char('A'))},
-    {CENTER, CENTER + 2, Glyph::of(Tile::from_char('T'))},
-  };
-  b.apply(cat);
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {
+    Glyph::of(Tile::from_char('C')),
+    Glyph::of(Tile::from_char('A')),
+    Glyph::of(Tile::from_char('T')),
+  }));
   MoveGenerator gen(b, d);
   // Now play with rack "S" -> can extend to CATS by placing S at (CENTER, CENTER+3).
   Rack r = rack_from("SSSSSSS");
@@ -111,7 +128,8 @@ static void test_bingo_bonus() {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
   // Place an A at the center to provide an anchor.
-  b.apply({{CENTER, CENTER, Glyph::of(Tile::from_char('A'))}});
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                    {Glyph::of(Tile::from_char('A'))}));
   MoveGenerator gen(b, d);
   // Rack PRTIED + something already used (the A is on the board).
   Rack r = rack_from("PRTIED?");  // blank as 7th, won't be needed; ensure 7 tiles
@@ -137,15 +155,35 @@ static void test_bingo_bonus() {
 // `main_word` of a single-tile cross play is orientation-dependent and is not
 // part of the key).
 static std::string move_key(const Board& board, const Move& m) {
-  std::vector<PlacedTile> tiles = m.placed_tiles(board);
-  std::sort(tiles.begin(), tiles.end(), [](const PlacedTile& a, const PlacedTile& b) {
-    if (a.row != b.row) return a.row < b.row;
-    return a.col < b.col;
+  struct Placement {
+    int r, c;
+    Glyph g;
+  };
+  std::vector<Placement> tiles;
+  if (m.type == MoveType::PLAY) {
+    const int dr = m.horizontal ? 0 : 1;
+    const int dc = m.horizontal ? 1 : 0;
+    int r = m.start_row, c = m.start_col;
+    const int n = m.num_glyphs();
+    for (int gi = 0; gi < n; ++gi) {
+      while (board.in_bounds(r, c) && !board.at(r, c).is_empty()) {
+        r += dr;
+        c += dc;
+      }
+      if (!board.in_bounds(r, c)) break;
+      tiles.push_back({r, c, m.glyphs[gi]});
+      r += dr;
+      c += dc;
+    }
+  }
+  std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
+    if (a.r != b.r) return a.r < b.r;
+    return a.c < b.c;
   });
   std::string k;
   char buf[32];
   for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.row, t.col, (int)t.glyph.code());
+    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, (int)t.g.code());
     k += buf;
   }
   std::snprintf(buf, sizeof(buf), "|%d", m.score);
@@ -202,7 +240,7 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
       if (via_gaddag.empty()) break;
       // Advance: apply a random generated play.
       std::uniform_int_distribution<size_t> pick(0, via_gaddag.size() - 1);
-      via_gaddag[pick(rng)].apply_to(b);
+      b.apply(via_gaddag[pick(rng)]);
     }
   }
   std::cout << "  cross-validated " << compared << " positions [" << label << "]\n";

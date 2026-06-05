@@ -91,7 +91,7 @@ std::string game_log_to_gcg(const GameLog& log) {
       case MoveType::PLAY:
         o << rack << " " << position(m) << " " << played_word(board, m) << " +" << m.score << " "
           << cumulative << "\n";
-        m.apply_to(board);
+        board.apply(m);
         break;
       case MoveType::EXCHANGE:
         o << rack << " -" << exchanged_tiles(m) << " +0 " << cumulative << "\n";
