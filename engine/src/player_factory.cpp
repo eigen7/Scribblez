@@ -1,6 +1,7 @@
 #include "scribblez/player_factory.h"
 
 #include "scribblez/agent.h"
+#include "scribblez/macondo_bot.h"
 #include "scribblez/web_server.h"
 
 #include <boost/algorithm/string.hpp>
@@ -12,7 +13,15 @@ namespace scribblez {
 
 std::string PlayerSpec::display_name() const {
   if (!name.empty()) return name;
-  return type == PlayerType::Human ? "You" : "Greedy";
+  switch (type) {
+    case PlayerType::Human:
+      return "You";
+    case PlayerType::HastyBot:
+      return "HastyBot";
+    case PlayerType::Greedy:
+      break;
+  }
+  return "Greedy";
 }
 
 PlayerSpec parse_player_spec(const std::string& spec) {
@@ -24,9 +33,11 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   po::options_description desc("player options");
   desc.add_options()                                         //
     ("type", po::value<std::string>(&type_str)->required(),  //
-     "player type: greedy | human")                          //
+     "player type: greedy | human | hastybot")               //
     ("name", po::value<std::string>(&out.name),              //
-     "display name shown in the UI");
+     "display name shown in the UI")                         //
+    ("macondo", po::value<std::string>(&out.macondo),        //
+     "path to the macondo binary (for type=hastybot)");
 
   try {
     // Each --player value is its own little option string; tokenize it the way
@@ -44,9 +55,15 @@ PlayerSpec parse_player_spec(const std::string& spec) {
     out.type = PlayerType::Greedy;
   } else if (t == "human") {
     out.type = PlayerType::Human;
+  } else if (t == "hastybot") {
+    out.type = PlayerType::HastyBot;
+    if (out.macondo.empty()) {
+      throw std::runtime_error("bad --player spec \"" + spec +
+                               "\": type=hastybot requires --macondo=<path to macondo binary>");
+    }
   } else {
     throw std::runtime_error("bad --player spec \"" + spec + "\": unknown type '" + type_str +
-                             "' (expected greedy or human)");
+                             "' (expected greedy, human, or hastybot)");
   }
   return out;
 }
@@ -61,6 +78,8 @@ std::unique_ptr<Agent> make_player(const PlayerSpec& spec, WebSession* session,
       return std::make_unique<HumanWebAgent>(*session, spec.display_name(), opp_name);
     case PlayerType::Greedy:
       return std::make_unique<GreedyAgent>(spec.display_name());
+    case PlayerType::HastyBot:
+      return std::make_unique<HastyBotAgent>(spec.macondo, spec.display_name());
   }
   throw std::runtime_error("unhandled player type");
 }

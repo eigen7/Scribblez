@@ -16,7 +16,8 @@ target_include_directories(scribblez_core PUBLIC include)
 add_executable(play_game
   apps/play_game.cpp
   src/web_server.cpp
-  src/player_factory.cpp)
+  src/player_factory.cpp
+  src/macondo_bot.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core
   Boost::program_options

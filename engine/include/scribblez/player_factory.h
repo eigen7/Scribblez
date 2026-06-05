@@ -10,15 +10,16 @@ namespace scribblez {
 class WebSession;
 
 // The kind of agent a seat is played by.
-enum class PlayerType { Greedy, Human };
+enum class PlayerType { Greedy, Human, HastyBot };
 
 // A parsed `--player` specification, e.g. `--player "--type=human --name=Dave"`.
 struct PlayerSpec {
   PlayerType type = PlayerType::Greedy;
-  std::string name;  // explicit display name, or empty to use the default
+  std::string name;     // explicit display name, or empty to use the default
+  std::string macondo;  // path to the macondo binary (for type=hastybot)
 
   // Display name to show for this player (the explicit --name, else a default
-  // based on the type: "You" for a human, "Greedy" for the greedy agent).
+  // based on the type, e.g. "You" for a human, "Greedy"/"HastyBot" for a bot).
   std::string display_name() const;
 };
 

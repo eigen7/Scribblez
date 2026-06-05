@@ -77,9 +77,14 @@ DAWG+GADDAG and is used by the unit tests.
 Flags:
 * `--player "--type=T"` -- add one seat; repeat once per seat, e.g.
   `--player "--type=human" --player "--type=greedy"`. Each spec is its own
-  little option string: `--type` is `greedy` or `human` and an optional
-  `--name=...` sets the display name. Defaults to two greedy players; at most
-  one `human` is supported.
+  little option string: `--type` is `greedy`, `human`, or `hastybot`, with an
+  optional `--name=...` for the display name. Defaults to two greedy players;
+  at most one `human` is supported.
+  * `hastybot` delegates each move to **Macondo**'s best static play. It needs
+    the path to a built `macondo` shell binary via `--macondo=...`, e.g.
+    `--player "--type=hastybot --macondo=/path/to/macondo/bin/shell"`. One
+    persistent Macondo process is shared across all turns/games. Macondo must
+    use the same lexicon (Scribblez forces NWL23 in the position it sends).
 * `--kwg PATH` (alias `--dict`) -- lexicon to use. Defaults to
   `data/lexica/NWL23.kwg`.
 * `--seed N` (default: hardware random)
