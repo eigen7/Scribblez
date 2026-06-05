@@ -71,6 +71,15 @@ class Dictionary {
   static constexpr uint32_t IS_END_BIT = 0x00400000u;
   static constexpr uint32_t ACCEPTS_BIT = 0x00800000u;
 
+  // Iterate a node's child arcs directly (faster than 26 step() scans when you
+  // want all available transitions): the arc list starts at the node's index
+  // and runs until the arc carrying IS_END_BIT:
+  //   for (uint32_t i = node; node; ++i) {
+  //     uint32_t a = arc(i); uint8_t t = arc_tile(a); ...; if (a & IS_END_BIT) break;
+  //   }
+  uint32_t arc(uint32_t i) const { return nodes_[i]; }
+  static uint8_t arc_tile(uint32_t a) { return static_cast<uint8_t>(a >> 24); }
+
  private:
   std::vector<uint32_t> nodes_;
   uint32_t root_ = 0;

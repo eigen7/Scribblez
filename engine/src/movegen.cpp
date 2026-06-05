@@ -466,6 +466,9 @@ struct GaddagGen {
   int tiles_played = 0;
   std::array<Tile, BOARD_SIZE> strip_letter{};
   std::array<bool, BOARD_SIZE> strip_blank{};
+  // The current row's cells, flattened once per row so the recursion indexes a
+  // plain array instead of going through View::at()'s transpose branch.
+  std::array<Glyph, BOARD_SIZE> row_cells{};
 
   void record(int leftstrip, int rightstrip) {
     out.push_back(
@@ -476,7 +479,7 @@ struct GaddagGen {
   // letter L at `col`; `accepts` says the path so far spells a complete word.
   void go_on(int col, Tile L, bool is_blank, uint32_t new_node, bool accepts, int leftstrip,
              int rightstrip) {
-    const bool placed = view.at(current_row, col).is_empty();
+    const bool placed = row_cells[col].is_empty();
     if (placed) {
       strip_letter[col] = L;
       strip_blank[col] = is_blank;
@@ -484,7 +487,7 @@ struct GaddagGen {
 
     if (col <= current_anchor_col) {
       leftstrip = col;
-      const bool no_letter_left = (col == 0) || view.at(current_row, col - 1).is_empty();
+      const bool no_letter_left = (col == 0) || row_cells[col - 1].is_empty();
       if (accepts && no_letter_left && tiles_played > 0) {
         record(leftstrip, rightstrip);
       }
@@ -500,8 +503,7 @@ struct GaddagGen {
       }
     } else {
       rightstrip = col;
-      const bool no_letter_right =
-        (col == BOARD_SIZE - 1) || view.at(current_row, col + 1).is_empty();
+      const bool no_letter_right = (col == BOARD_SIZE - 1) || row_cells[col + 1].is_empty();
       if (accepts && no_letter_right && tiles_played > 0) {
         record(leftstrip, rightstrip);
       }
@@ -513,7 +515,7 @@ struct GaddagGen {
 
   // Gordon's Gen: at board column `col`, GADDAG node `node`.
   void recursive_gen(int col, uint32_t node, int leftstrip, int rightstrip) {
-    Glyph here = view.at(current_row, col);
+    Glyph here = row_cells[col];
     if (!here.is_empty()) {
       // A tile is already here: follow its arc only.
       auto tr = dict.step(node, here.letter());
@@ -522,32 +524,40 @@ struct GaddagGen {
       }
       return;
     }
-    if (rack.empty()) return;
+    if (node == 0 || rack.empty()) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      if ((cc.mask & (1u << L)) == 0) continue;  // fails the perpendicular check
-      auto tr = dict.step(node, L);
-      if (!tr.valid) continue;
-      if (rack.count(L) > 0) {
-        rack.remove(L);
-        ++tiles_played;
-        go_on(col, L, false, tr.next, tr.accepts, leftstrip, rightstrip);
-        --tiles_played;
-        rack.add(L);
+    // Iterate this node's child arcs once (KWG arcs are sorted by tile value, so
+    // letters come out A..Z) rather than scanning the arc list 26 times.
+    for (uint32_t i = node;; ++i) {
+      uint32_t a = dict.arc(i);
+      uint8_t tv = Dictionary::arc_tile(a);  // 0 = separator, 1..26 = A..Z
+      if (tv >= 1 && tv <= 26 && (cc.mask & (1u << (tv - 1)))) {
+        Tile L = Tile::of(tv - 1);
+        uint32_t next = a & Dictionary::ARC_MASK;
+        bool accepts = (a & Dictionary::ACCEPTS_BIT) != 0;
+        if (rack.count(L) > 0) {
+          rack.remove(L);
+          ++tiles_played;
+          go_on(col, L, false, next, accepts, leftstrip, rightstrip);
+          --tiles_played;
+          rack.add(L);
+        }
+        if (rack.blanks() > 0) {
+          rack.remove(BLANK);
+          ++tiles_played;
+          go_on(col, L, true, next, accepts, leftstrip, rightstrip);
+          --tiles_played;
+          rack.add(BLANK);
+        }
       }
-      if (rack.blanks() > 0) {
-        rack.remove(BLANK);
-        ++tiles_played;
-        go_on(col, L, true, tr.next, tr.accepts, leftstrip, rightstrip);
-        --tiles_played;
-        rack.add(BLANK);
-      }
+      if (a & Dictionary::IS_END_BIT) break;
     }
   }
 
   void generate_for_row(int row) {
     current_row = row;
     last_anchor_col = 100;
+    for (int col = 0; col < BOARD_SIZE; ++col) row_cells[col] = view.at(row, col);
     for (int col = 0; col < BOARD_SIZE; ++col) {
       if (!anchor[idx(row, col)]) continue;
       current_anchor_col = col;
