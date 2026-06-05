@@ -291,36 +291,70 @@ h1 {
   gap: 2px;
 }
 
-.move-item {
-  display: flex;
-  justify-content: space-between;
+.move-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.move-table thead th {
+  position: sticky;
+  top: 0;
+  background: #2c3e50;
+  color: #bdc3c7;
+  font-weight: bold;
+  text-align: left;
   padding: 6px 10px;
-  border: none;
-  border-radius: 3px;
+  border-bottom: 1px solid #4a6278;
+  user-select: none;
+}
+
+.move-table th.sortable {
+  cursor: pointer;
+}
+
+.move-table th.sortable:hover {
+  color: #ecf0f1;
+}
+
+.move-table th.move-col-num,
+.move-table td.move-col-num {
+  text-align: right;
+  width: 60px;
+  white-space: nowrap;
+}
+
+.move-table tbody tr.move-row {
   background: #2c3e50;
   color: #ecf0f1;
   cursor: pointer;
-  font-size: 13px;
-  font-family: 'Courier New', monospace;
-  text-align: left;
 }
 
-.move-item:hover:not(:disabled) {
+.move-table tbody tr.move-row:nth-child(even) {
+  background: #324558;
+}
+
+.move-table tbody tr.move-row:hover {
   background: #1a7a3a;
 }
 
-.move-item:disabled {
+.move-table tbody tr.move-row.selected {
+  background: #1a7a3a;
+  outline: 1px solid #aed581;
+}
+
+.move-table tbody tr.move-row.disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.move-item.selected {
-  background: #1a7a3a;
-  border: 1px solid #aed581;
+.move-table tbody tr.move-row.disabled:hover {
+  background: #2c3e50;
 }
 
-.move-text {
-  flex: 1;
+.move-table td {
+  padding: 6px 10px;
 }
 
 /* Candidate tiles (manually placed or selected from move list, not yet submitted) */

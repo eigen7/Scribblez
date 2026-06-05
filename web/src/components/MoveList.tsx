@@ -8,16 +8,69 @@ interface MoveListProps {
   disabled: boolean;
 }
 
+type SortColumn = 'text' | 'score' | 'equity';
+type SortDir = 'asc' | 'desc';
+
+// Sort moves by the chosen column. Equity-null rows are sorted to the bottom
+// regardless of direction so an unevaluated row never displaces an evaluated
+// one in the visible top of the list.
+function sortMoves(moves: MoveOption[], col: SortColumn, dir: SortDir): MoveOption[] {
+  const sign = dir === 'asc' ? 1 : -1;
+  const copy = [...moves];
+  copy.sort((a, b) => {
+    if (col === 'text') {
+      return a.text.localeCompare(b.text) * sign;
+    }
+    if (col === 'score') {
+      return (a.score - b.score) * sign;
+    }
+    // equity
+    const ae = a.equity ?? null;
+    const be = b.equity ?? null;
+    if (ae === null && be === null) return 0;
+    if (ae === null) return 1; // nulls last
+    if (be === null) return -1;
+    return (ae - be) * sign;
+  });
+  return copy;
+}
+
+// "▲"/"▼" indicator next to the active sort column.
+function arrow(active: boolean, dir: SortDir): string {
+  if (!active) return '';
+  return dir === 'asc' ? ' ▲' : ' ▼';
+}
+
+// Drop the trailing score token from a move's display text -- e.g. turn
+// "8H WAREZ 54" into "8H WAREZ" -- so we don't duplicate the Pts column.
+// Non-play moves like "(pass)" or "(exch ABC)" are returned unchanged.
+function moveDisplay(text: string): string {
+  const m = text.match(/^(.*\S)\s+-?\d+$/);
+  return m ? m[1] : text;
+}
+
 const MoveList: React.FC<MoveListProps> = ({ moves, selectedIndex, onPreview, disabled }) => {
   const [filter, setFilter] = useState('');
+  // Default: best (highest) equity first. Clicking a column header sorts by
+  // that column; clicking the same header again flips direction.
+  const [sortCol, setSortCol] = useState<SortColumn>('equity');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const filtered = filter
     ? moves.filter((m) => m.text.toLowerCase().includes(filter.toLowerCase()))
     : moves;
+  const sorted = sortMoves(filtered, sortCol, sortDir);
 
-  // Show highest-scoring moves first. Copy before sorting so we never mutate
-  // the moves prop (and the engine-assigned move.index stays intact).
-  const sorted = [...filtered].sort((a, b) => b.score - a.score);
+  const onHeaderClick = (col: SortColumn) => {
+    if (col === sortCol) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortCol(col);
+      // Numeric columns default to descending (best first); the move-text
+      // column defaults to ascending (A→Z reads more naturally).
+      setSortDir(col === 'text' ? 'asc' : 'desc');
+    }
+  };
 
   return (
     <div className="move-list">
@@ -32,16 +85,41 @@ const MoveList: React.FC<MoveListProps> = ({ moves, selectedIndex, onPreview, di
         />
       </div>
       <div className="move-list-scroll">
-        {sorted.map((m) => (
-          <button
-            key={m.index}
-            className={`move-item${selectedIndex === m.index ? ' selected' : ''}`}
-            onClick={() => onPreview(m.index)}
-            disabled={disabled}
-          >
-            <span className="move-text">{m.text}</span>
-          </button>
-        ))}
+        <table className="move-table">
+          <thead>
+            <tr>
+              <th className="move-col-text sortable" onClick={() => onHeaderClick('text')}>
+                Move{arrow(sortCol === 'text', sortDir)}
+              </th>
+              <th className="move-col-num sortable" onClick={() => onHeaderClick('score')}>
+                Pts{arrow(sortCol === 'score', sortDir)}
+              </th>
+              <th className="move-col-num sortable" onClick={() => onHeaderClick('equity')}>
+                Equity{arrow(sortCol === 'equity', sortDir)}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((m) => {
+              const selected = selectedIndex === m.index;
+              return (
+                <tr
+                  key={m.index}
+                  className={`move-row${selected ? ' selected' : ''}${disabled ? ' disabled' : ''}`}
+                  onClick={() => {
+                    if (!disabled) onPreview(m.index);
+                  }}
+                >
+                  <td className="move-col-text">{moveDisplay(m.text)}</td>
+                  <td className="move-col-num">{m.score}</td>
+                  <td className="move-col-num">
+                    {m.equity === null || m.equity === undefined ? '' : m.equity.toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );

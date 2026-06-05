@@ -7,6 +7,10 @@ export interface MoveOption {
   index: number;
   text: string;
   score: number;
+  // Macondo's static equity for this play, or null if Macondo isn't
+  // available (no binary configured / subprocess failure) or didn't return
+  // this particular play. The UI renders null cells blank.
+  equity?: number | null;
 }
 
 export interface GameState {
