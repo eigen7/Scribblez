@@ -88,7 +88,8 @@ int main(int argc, char** argv) {
       "path to the macondo binary; used by HastyBot and (best-effort) by the "
       "human player to annotate the move list with equity");
   opt("games", po::value<int>(&games)->default_value(1),
-      "play this many games in one process (seeds seed, seed+1, ...); no human");
+      "play this many games in one process (seeds seed, seed+1, ...); "
+      "bot-only -- ignored when a human plays (use Play Again in the UI instead)");
   opt("verbose,v", po::bool_switch(&verbose), "print final score and turn count to stderr");
 
   po::variables_map vm;
@@ -140,8 +141,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   if (games > 1 && human_seat >= 0) {
-    std::cerr << "--games > 1 is for bot-only batches; a human plays one game.\n";
-    return 2;
+    std::cerr << "Note: --games is ignored when a human plays; use the Play Again "
+                 "button in the browser.\n";
   }
 
   // Eager validation for non-human seats: construct (and discard) the agent
@@ -241,44 +242,20 @@ int main(int argc, char** argv) {
     out = &of;
   }
 
-  // Play `games` games (back to back, reusing the loaded dictionary), writing
-  // each GCG to the output and tallying results.
+  // Play games back to back, reusing the loaded dictionary, writing each GCG
+  // to the output and tallying results. Two flows:
+  //   * bot-only: respect --games (deterministic seeds seed, seed+1, ...).
+  //   * human:    ignore --games; the human drives the loop via the UI's
+  //               Play Again / Quit buttons (handled by HumanWebAgent::
+  //               end_game()). Between rounds the seats swap so the human and
+  //               the bot alternate who starts; who starts game 1 is chosen
+  //               by the low bit of the seed.
   std::array<int, 2> wins = {0, 0};
   int draws = 0;
   long total_turns = 0;
   auto t0 = std::chrono::steady_clock::now();
-  for (int gi = 0; gi < games; ++gi) {
-    std::unique_ptr<scribblez::Agent> a0, a1;
-    try {
-      a0 = make_agent(0);
-      a1 = make_agent(1);
-    } catch (const std::exception& e) {
-      std::cerr << "Error: " << e.what() << "\n";
-      return 2;
-    }
-    scribblez::Game game(std::move(a0), std::move(a1), dict, seed + static_cast<uint64_t>(gi));
-    game.play();
-    const scribblez::GameLog& log = game.log();
 
-    // Send the final position to the human (single-game human play only).
-    if (human_seat >= 0 && session->connected()) {
-      int opp = 1 - human_seat;
-      scribblez::StateView final_view{game.board(),
-                                      game.rack(human_seat),
-                                      game.score(human_seat),
-                                      game.score(opp),
-                                      game.bag_size(),
-                                      game.rack(opp).size(),
-                                      players[human_seat].display_name(),
-                                      players[opp].display_name(),
-                                      /*legal_plays=*/nullptr,
-                                      /*legal_play_equities=*/nullptr,
-                                      /*your_turn=*/false,
-                                      /*game_over=*/true};
-      session->send_text(scribblez::game_state_json(final_view));
-      session->linger_after_final_message();
-    }
-
+  auto record_log = [&](const scribblez::GameLog& log) {
     *out << scribblez::game_log_to_gcg(log);
     total_turns += static_cast<long>(log.turns.size());
     if (log.final_scores[0] > log.final_scores[1])
@@ -287,15 +264,74 @@ int main(int argc, char** argv) {
       ++wins[1];
     else
       ++draws;
+  };
 
-    if (verbose && games == 1) {
-      std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
-                << log.end_reason << ")\n";
-      std::cerr << "Turns: " << log.turns.size() << "\n";
+  if (human_seat < 0) {
+    // Bot-only batch.
+    for (int gi = 0; gi < games; ++gi) {
+      std::unique_ptr<scribblez::Agent> a0, a1;
+      try {
+        a0 = make_agent(0);
+        a1 = make_agent(1);
+      } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 2;
+      }
+      scribblez::Game game(std::move(a0), std::move(a1), dict, seed + static_cast<uint64_t>(gi));
+      game.play();
+      const scribblez::GameLog& log = game.log();
+      record_log(log);
+      if (verbose && games == 1) {
+        std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1]
+                  << "  (" << log.end_reason << ")\n";
+        std::cerr << "Turns: " << log.turns.size() << "\n";
+      }
     }
+  } else {
+    // Human mode: do/while loop driven by HumanWebAgent::end_game(). The seat
+    // assignment alternates each round; the seed's low bit picks who starts
+    // the very first game.
+    const scribblez::PlayerSpec human_spec = players[human_seat];
+    const scribblez::PlayerSpec bot_spec = players[1 - human_seat];
+    int current_human_seat = static_cast<int>(seed & 1ULL);
+    uint64_t game_idx = 0;
+    for (;;) {
+      // Refresh `players[]` so any code that reads display names sees the
+      // current seating.
+      players[current_human_seat] = human_spec;
+      players[1 - current_human_seat] = bot_spec;
+
+      std::unique_ptr<scribblez::Agent> a0, a1;
+      try {
+        a0 = make_agent(0);
+        a1 = make_agent(1);
+      } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return 2;
+      }
+      // Keep a non-owning pointer to the human agent so we can call its
+      // end_game() override after Game has consumed the unique_ptrs.
+      scribblez::Agent* human_agent_ptr = (current_human_seat == 0) ? a0.get() : a1.get();
+      scribblez::Game game(std::move(a0), std::move(a1), dict, seed + game_idx);
+      game.play();
+      const scribblez::GameLog& log = game.log();
+      record_log(log);
+      if (verbose) {
+        std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1]
+                  << "  (" << log.end_reason << ")\n";
+        std::cerr << "Turns: " << log.turns.size() << "\n";
+      }
+
+      // Surface the final board and the Play Again / Quit prompt to the user.
+      auto egr = human_agent_ptr->end_game(game, current_human_seat);
+      if (egr.action != scribblez::EndGameAction::PLAY_AGAIN) break;
+      current_human_seat = 1 - current_human_seat;
+      ++game_idx;
+    }
+    if (session) session->linger_after_final_message();
   }
 
-  if (verbose && games > 1) {
+  if (verbose && games > 1 && human_seat < 0) {
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     std::cerr << games << " games in " << secs << "s -> " << (games / secs) << " games/s, "
               << total_turns << " turns -> " << (total_turns / secs) << " moves/s\n";
