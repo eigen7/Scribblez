@@ -10,7 +10,7 @@ namespace scribblez {
 
 // A HastyBot player: delegates each move to Macondo's "best static play"
 // (HastyBot) via the process-wide Macondo singleton. The path to the
-// `macondo` binary is configured once via Macondo::initialize() at process
+// `macondo` binary is configured once via Macondo::set_params() at process
 // startup (driven by play_game's --macondo option), so every HastyBot seat
 // shares one subprocess that loads its lexicon/leaves exactly once.
 class HastyBotAgent : public Agent {

@@ -7,11 +7,10 @@
 
 namespace scribblez {
 
-Game::Game(std::unique_ptr<Agent> p0, std::unique_ptr<Agent> p1, const Dictionary& dict,
-           uint64_t seed)
+Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
     : dict_(dict), seed_(seed), bag_(seed) {
-  players_[0] = std::move(p0);
-  players_[1] = std::move(p1);
+  players_[0] = &p0;
+  players_[1] = &p1;
   log_.seed = seed;
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }

@@ -35,7 +35,11 @@ struct GameLog {
 
 class Game {
  public:
-  Game(std::unique_ptr<Agent> p0, std::unique_ptr<Agent> p1, const Dictionary& dict, uint64_t seed);
+  // The Game does not own the agents; the caller (typically play_game) keeps
+  // them alive across multiple Game instances. This lets the same human or
+  // bot persist (including any per-process state like a WebSession or a
+  // background Macondo subprocess) over a series of games.
+  Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed);
 
   void play();
   const GameLog& log() const { return log_; }
@@ -48,7 +52,7 @@ class Game {
   int bag_size() const { return bag_.size(); }
 
  private:
-  std::unique_ptr<Agent> players_[2];
+  Agent* players_[2];
   const Dictionary& dict_;
   uint64_t seed_;
   Bag bag_;

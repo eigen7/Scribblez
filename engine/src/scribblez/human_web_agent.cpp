@@ -8,6 +8,8 @@
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
 
+#include <cstdlib>
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -27,38 +29,61 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
 
 }  // namespace
 
-HumanWebAgent::HumanWebAgent(WebSession& session, const std::string& my_name, const std::string& opp_name)
-    : session_(session), my_name_(my_name), opp_name_(opp_name) {}
+HumanWebAgent::HumanWebAgent(const Params& params, const std::string& my_name,
+                             const std::string& opp_name)
+    : my_name_(my_name), opp_name_(opp_name) {
+  // The order matters: the WebSocket server must be bound (so its port is
+  // listening) before we launch Vite, since Vite proxies /ws to it. Then we
+  // block until Vite is accepting browser connections, and best-effort open
+  // the URL in the user's browser.
+  session_ = std::make_unique<WebSession>(params.port);
+  vite_ = std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port);
+  std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
+  if (!vite_->wait_until_ready()) {
+    throw std::runtime_error("the Vite dev server did not start. See " + params.web_dir +
+                             "/.vite-dev.log for details. Did you run ./build.py to install "
+                             "the web dependencies?");
+  }
+  std::cerr << "\n  Human-vs-AI game ready.\n"
+            << "  Open  " << vite_->url() << "  in your browser to play.\n\n";
+  std::string cmd = "xdg-open " + vite_->url() + " >/dev/null 2>&1 &";
+  int rc = std::system(cmd.c_str());  // best-effort; ignore failure
+  (void)rc;
+}
+
+HumanWebAgent::~HumanWebAgent() {
+  // Give the kernel a moment to flush any final WebSocket frame before the
+  // session is destroyed; otherwise the browser may miss the last message
+  // (e.g. "Thanks for playing.") on a clean quit.
+  if (session_) session_->linger_after_final_message();
+}
 
 Move HumanWebAgent::make_move(const MoveRequest& req) {
   // Best-effort: ask Macondo to evaluate every legal play so we can show its
-  // equity column in the cheat-mode move list. If Macondo isn't configured
-  // (e.g. running on a machine without the binary), or the subprocess fails,
-  // we just send the position without equities and the front-end leaves the
-  // column blank.
+  // equity column in the cheat-mode move list. If Macondo isn't reachable
+  // (binary missing, subprocess crash, ...) we just send the position
+  // without equities and the front-end leaves the column blank.
   std::vector<std::optional<double>> equities;
-  if (Macondo::initialized()) {
-    try {
-      auto result = Macondo::instance().evaluate(req.board, req.my_rack, req.my_score,
-                                                  req.opp_score, req.legal_plays);
-      equities = std::move(result.equities);
-    } catch (const std::exception&) {
-      equities.clear();
-    }
+  try {
+    auto result = Macondo::instance().evaluate(req.board, req.my_rack, req.my_score,
+                                                req.opp_score, req.legal_plays);
+    equities = std::move(result.equities);
+  } catch (const std::exception&) {
+    equities.clear();
   }
 
   StateView view(req, my_name_, opp_name_, equities.empty() ? nullptr : &equities);
   const std::string msg = game_state_json(view);
 
   for (;;) {
-    if (!session_.connected() && !session_.wait_for_client()) {
+    if (!session_->connected() && !session_->wait_for_client()) {
       Move m;
       m.type = MoveType::PASS;
       return m;
     }
-    session_.send_text(msg);
+    session_->send_text(msg);
     for (;;) {
-      auto in = session_.recv_text();
+      auto in = session_->recv_text();
       if (!in) break;  // disconnected: re-send on reconnect
 
       boost::json::value parsed;
@@ -107,13 +132,13 @@ EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
   const std::string msg = game_state_json(view);
 
   for (;;) {
-    if (!session_.connected() && !session_.wait_for_client()) {
+    if (!session_->connected() && !session_->wait_for_client()) {
       // Browser is gone for good: nothing more to do for this human.
       return {EndGameAction::QUIT};
     }
-    session_.send_text(msg);
+    session_->send_text(msg);
     for (;;) {
-      auto in = session_.recv_text();
+      auto in = session_->recv_text();
       if (!in) break;  // disconnected: re-send on reconnect (or give up above)
 
       boost::json::value parsed;
@@ -133,11 +158,18 @@ EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
 }
 
 std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        const std::string& name, WebSession& session,
+                                                        const std::string& name,
                                                         const std::string& opp_name) {
   namespace po = boost::program_options;
+  Params params;
   po::options_description desc("human options");
-  // No agent-specific options at present (kept for symmetry / future use).
+  desc.add_options()                                                                //
+      ("port", po::value<int>(&params.port)->default_value(params.port),            //
+       "engine WebSocket port")                                                     //
+      ("vite-port", po::value<int>(&params.vite_port)->default_value(params.vite_port),  //
+       "browser UI (Vite) port")                                                    //
+      ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
+       "front-end package dir (cwd of `npm run dev`)");
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
@@ -145,12 +177,15 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=human options: ") + e.what());
   }
-  return std::make_unique<HumanWebAgent>(session, name, opp_name);
+  return std::make_unique<HumanWebAgent>(params, name, opp_name);
 }
 
 std::string HumanWebAgent::options_help() {
   return "  A human player driven through the local browser UI.\n"
-         "  Options: (none)\n";
+         "  Options:\n"
+         "    --port=N        engine WebSocket port (default 8080)\n"
+         "    --vite-port=N   browser UI (Vite) port (default 5173)\n"
+         "    --web-dir=DIR   front-end package dir (default \"web\")\n";
 }
 
 }  // namespace scribblez

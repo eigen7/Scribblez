@@ -9,6 +9,11 @@
 #include <string>
 #include <vector>
 
+// Forward-declared so we can take a po::options_description by reference in
+// Params::add_options() without dragging the heavyweight program_options
+// headers into every consumer of macondo.h.
+namespace boost::program_options { class options_description; }
+
 namespace scribblez {
 
 // A persistent `macondo` shell subprocess, shared by every consumer that needs
@@ -17,20 +22,37 @@ namespace scribblez {
 // equity. Loaded once (lexicon/leaves) and driven a position at a time over
 // its stdin/stdout.
 //
-// Usage: call initialize() once at process startup with the path to the
-// `macondo` binary, then access via instance(). The subprocess itself is
-// spawned lazily on the first evaluate() call -- so configuring the path
-// without ever evaluating is free.
+// Usage: call set_params() at process startup (cheap; doesn't spawn anything).
+// The first instance() call after that lazily builds the singleton from the
+// stored params, and the first evaluate() call lazily spawns the subprocess.
+// Consumers that never need Macondo never pay any cost.
 class Macondo {
  public:
-  // Configure the singleton with the path to the macondo binary. May be
-  // called only once per process; subsequent calls throw.
-  static void initialize(const std::string& binary_path);
+  // Configuration knobs. Owns whatever options Macondo needs from the user
+  // (presently just the binary path). Default-constructs to sensible values
+  // so callers that just want Macondo with its defaults can skip set_params.
+  struct Params {
+    // Path to the macondo binary. Resolved relative to $HOME at construction
+    // time; if $HOME is unset, falls back to a literal "~/..." string and the
+    // user is expected to override via --macondo.
+    std::string binary_path;
 
-  // True iff initialize() has been called.
-  static bool initialized();
+    Params();
 
-  // The singleton instance. Throws std::runtime_error if not initialized.
+    // Register Params's user-facing options (presently just --macondo) on the
+    // given options_description. Call this in main() before parsing the
+    // command line, then pass the (mutated) Params to set_params().
+    void add_options(boost::program_options::options_description& desc);
+  };
+
+  // Configure the singleton. May be called any number of times before the
+  // first instance() call; the last set wins. After instance() has been
+  // built, further set_params() calls throw (the subprocess can't be
+  // reconfigured on the fly).
+  static void set_params(const Params& params);
+
+  // The singleton instance, lazily built from the most recent set_params()
+  // (or from a default-constructed Params if set_params was never called).
   static Macondo& instance();
 
   // The results of one `gen` evaluation, matched back to the engine's

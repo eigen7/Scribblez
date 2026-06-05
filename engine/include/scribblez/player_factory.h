@@ -8,8 +8,6 @@
 
 namespace scribblez {
 
-class WebSession;
-
 // A parsed `--player` specification, e.g. `--player "--type=human --name=Dave"`.
 // The factory extracts the universal options (--type and --name) and forwards
 // everything else (`remaining_tokens`) to the chosen agent's static from_spec().
@@ -22,7 +20,7 @@ struct PlayerSpec {
   // based on the type, e.g. "You" for a human, "Greedy"/"HastyBot" for a bot).
   std::string display_name() const;
 
-  // True iff this seat is a human player (needs a WebSession at construction).
+  // True iff this seat is a human player.
   bool is_human() const;
 };
 
@@ -32,11 +30,10 @@ struct PlayerSpec {
 PlayerSpec parse_player_spec(const std::string& spec);
 
 // Construct the agent for a parsed spec by dispatching to the chosen Agent
-// subclass's from_spec(). A Human seat is driven through the browser, so
-// `session` must be non-null when `spec.is_human()` (and is ignored otherwise).
+// subclass's from_spec(). Human seats internally stand up their own web
+// server + Vite dev server; no shared resources need to be threaded through.
 // `opp_name` is the opponent's display name, shown in the UI for humans.
-std::unique_ptr<Agent> make_player(const PlayerSpec& spec, WebSession* session,
-                                   const std::string& opp_name);
+std::unique_ptr<Agent> make_player(const PlayerSpec& spec, const std::string& opp_name);
 
 // Concatenated help text for every registered agent type, formatted for
 // `play_game --help`. Each block is the agent's options_help().

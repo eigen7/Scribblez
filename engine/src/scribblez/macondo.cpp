@@ -4,6 +4,7 @@
 #include "scribblez/tile.h"
 
 #include <boost/process.hpp>
+#include <boost/program_options.hpp>
 
 #include <cctype>
 #include <cstdlib>
@@ -215,21 +216,45 @@ std::unique_ptr<Macondo>& singleton_slot() {
   static std::unique_ptr<Macondo> instance;
   return instance;
 }
+Macondo::Params& pending_params() {
+  static Macondo::Params p;
+  return p;
+}
 }  // namespace
 
-void Macondo::initialize(const std::string& binary_path) {
-  auto& slot = singleton_slot();
-  if (slot) throw std::runtime_error("Macondo::initialize called twice");
-  // Construct via reset() rather than make_unique so we can keep the ctor
-  // private and still wire up the singleton from this friend-free helper.
-  slot.reset(new Macondo(binary_path));
+namespace {
+// Default path for the macondo binary, used when Params is default-constructed.
+std::string default_macondo_path() {
+  const char* home = std::getenv("HOME");
+  std::string base = home ? home : "~";
+  return base + "/checkouts/macondo/bin/shell";
+}
+}  // namespace
+
+Macondo::Params::Params() : binary_path(default_macondo_path()) {}
+
+void Macondo::Params::add_options(boost::program_options::options_description& desc) {
+  namespace po = boost::program_options;
+  desc.add_options()(
+      "macondo", po::value<std::string>(&binary_path)->default_value(binary_path),
+      "path to the macondo binary; used by HastyBot and (best-effort) by the "
+      "human player to annotate the move list with equity");
 }
 
-bool Macondo::initialized() { return static_cast<bool>(singleton_slot()); }
+void Macondo::set_params(const Params& params) {
+  if (singleton_slot()) {
+    throw std::runtime_error("Macondo::set_params called after instance() was built");
+  }
+  pending_params() = params;
+}
 
 Macondo& Macondo::instance() {
   auto& slot = singleton_slot();
-  if (!slot) throw std::runtime_error("Macondo::instance called before initialize()");
+  if (!slot) {
+    // Construct via reset() rather than make_unique so we can keep the ctor
+    // private and still wire up the singleton from this friend-free helper.
+    slot.reset(new Macondo(pending_params().binary_path));
+  }
   return *slot;
 }
 
