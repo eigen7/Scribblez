@@ -19,6 +19,11 @@ class HumanWebAgent : public Agent {
   std::string name() const override { return my_name_; }
   Move make_move(const MoveRequest& req) override;
 
+  // Surfaces the final board to the user and prompts them with Play Again /
+  // Quit buttons; blocks until the browser responds, then returns the
+  // corresponding EndGameAction.
+  EndGameResult end_game(const Game& game, int my_seat) override;
+
   // Build a HumanWebAgent from `--player "--type=human [options]"` tokens
   // (after the factory has stripped --type and --name). `session` is the
   // already-bound WebSession the browser will talk to. Throws on bad input.

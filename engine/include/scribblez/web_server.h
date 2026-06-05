@@ -19,6 +19,11 @@ class group;
 
 namespace scribblez {
 
+// Forward decl so StateView can hold a Game-based ctor without web_server.h
+// having to include game.h (game.h pulls in <vector>/<array>/etc. via the
+// player log machinery and is not needed by anything else here).
+class Game;
+
 // Spawns `npm run dev` (the Vite dev server) as a child process to serve the
 // front-end, and terminates it (and its whole process group) on destruction.
 // The browser loads the UI from Vite, which proxies the `/ws` WebSocket back to
@@ -96,24 +101,44 @@ class WebSession {
 // (horizontal) or "H8 WAREZ 54" (vertical). Newly placed blanks are lowercased.
 std::string move_to_notation(const Board& board, const Move& move);
 
-// Build the GameState JSON the front-end expects, from the human's perspective
-// (index 0 is always the human). `legal_plays` is rendered as the selectable
-// move list only when `your_turn` is true. `legal_play_equities`, when
-// provided, must be parallel to `legal_plays` and is emitted per-move as the
-// `equity` field (null for entries without a value).
+// Build the GameState JSON the front-end expects, from the perspective of
+// one seat ("my" side). Two constructors cover the only two places we ever
+// build one of these:
+//
+//   * mid-game, from a MoveRequest (the human's own turn) -- the agent
+//     already has every field of `req` parallel-named; we just relay them
+//     and tag on the agent-supplied display names and optional Macondo
+//     equities.
+//   * end-of-game (or any other view derived from a live Game) -- pulled
+//     directly from the Game itself, so callers no longer have to splat 11
+//     positional fields into a brace-init list.
+//
+// `legal_play_equities`, when non-null, must be parallel to `legal_plays`
+// and is emitted per-move as the JSON `equity` field (null for entries
+// without a value).
 struct StateView {
+  // Active-turn ctor used by the human agent on every make_move() call. The
+  // resulting view always has your_turn=true, game_over=false.
+  StateView(const MoveRequest& req, std::string my_name, std::string opp_name,
+            const std::vector<std::optional<double>>* legal_play_equities = nullptr);
+
+  // Game-derived ctor used at game-over (or any other Game-anchored view).
+  // `my_seat` selects which side is "me" (0 or 1).
+  StateView(const Game& game, int my_seat, std::string my_name, std::string opp_name,
+            bool your_turn, bool game_over);
+
   const Board& board;
   const Rack& my_rack;
-  int my_score = 0;
-  int opp_score = 0;
-  int bag_size = 0;
-  int opp_rack_size = 0;
+  int my_score;
+  int opp_score;
+  int bag_size;
+  int opp_rack_size;
   std::string my_name;
   std::string opp_name;
-  const std::vector<Move>* legal_plays = nullptr;
-  const std::vector<std::optional<double>>* legal_play_equities = nullptr;
-  bool your_turn = false;
-  bool game_over = false;
+  const std::vector<Move>* legal_plays;
+  const std::vector<std::optional<double>>* legal_play_equities;
+  bool your_turn;
+  bool game_over;
 };
 std::string game_state_json(const StateView& view);
 

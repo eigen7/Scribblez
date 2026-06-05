@@ -1,5 +1,6 @@
 #include "scribblez/web_server.h"
 
+#include "scribblez/game.h"
 #include "scribblez/tile.h"
 
 #include <arpa/inet.h>
@@ -258,6 +259,36 @@ std::string move_to_notation(const Board& board, const Move& move) {
 }
 
 // --------------------------- state serialization -------------------------
+
+StateView::StateView(const MoveRequest& req, std::string my_name, std::string opp_name,
+                     const std::vector<std::optional<double>>* equities)
+    : board(req.board),
+      my_rack(req.my_rack),
+      my_score(req.my_score),
+      opp_score(req.opp_score),
+      bag_size(req.bag_size),
+      opp_rack_size(req.opp_rack_size),
+      my_name(std::move(my_name)),
+      opp_name(std::move(opp_name)),
+      legal_plays(&req.legal_plays),
+      legal_play_equities(equities),
+      your_turn(true),
+      game_over(false) {}
+
+StateView::StateView(const Game& game, int my_seat, std::string my_name, std::string opp_name,
+                     bool your_turn, bool game_over)
+    : board(game.board()),
+      my_rack(game.rack(my_seat)),
+      my_score(game.score(my_seat)),
+      opp_score(game.score(1 - my_seat)),
+      bag_size(game.bag_size()),
+      opp_rack_size(game.rack(1 - my_seat).size()),
+      my_name(std::move(my_name)),
+      opp_name(std::move(opp_name)),
+      legal_plays(nullptr),
+      legal_play_equities(nullptr),
+      your_turn(your_turn),
+      game_over(game_over) {}
 
 std::string game_state_json(const StateView& v) {
   namespace json = boost::json;

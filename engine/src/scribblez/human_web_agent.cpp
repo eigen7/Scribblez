@@ -1,5 +1,6 @@
 #include "scribblez/human_web_agent.h"
 
+#include "scribblez/game.h"
 #include "scribblez/macondo.h"
 #include "scribblez/tile.h"
 #include "scribblez/web_server.h"
@@ -46,18 +47,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
     }
   }
 
-  StateView view{req.board,
-                 req.my_rack,
-                 req.my_score,
-                 req.opp_score,
-                 req.bag_size,
-                 req.opp_rack_size,
-                 my_name_,
-                 opp_name_,
-                 &req.legal_plays,
-                 equities.empty() ? nullptr : &equities,
-                 /*your_turn=*/true,
-                 /*game_over=*/false};
+  StateView view(req, my_name_, opp_name_, equities.empty() ? nullptr : &equities);
   const std::string msg = game_state_json(view);
 
   for (;;) {
@@ -105,6 +95,39 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
         if (gi > 0) return m;
       }
       // Unknown / invalid: keep waiting for a usable message.
+    }
+  }
+}
+
+EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
+  // Render the final board from our seat, with no legal-play list (the game
+  // is over) and the Play Again / Quit buttons enabled on the front-end.
+  StateView view(game, my_seat, my_name_, opp_name_, /*your_turn=*/false,
+                 /*game_over=*/true);
+  const std::string msg = game_state_json(view);
+
+  for (;;) {
+    if (!session_.connected() && !session_.wait_for_client()) {
+      // Browser is gone for good: nothing more to do for this human.
+      return {EndGameAction::QUIT};
+    }
+    session_.send_text(msg);
+    for (;;) {
+      auto in = session_.recv_text();
+      if (!in) break;  // disconnected: re-send on reconnect (or give up above)
+
+      boost::json::value parsed;
+      try {
+        parsed = boost::json::parse(*in);
+      } catch (const std::exception&) {
+        continue;
+      }
+      if (!parsed.is_object()) continue;
+      const std::string type = str_field(parsed.as_object(), "type");
+      if (type == "play_again") return {EndGameAction::PLAY_AGAIN};
+      if (type == "quit") return {EndGameAction::QUIT};
+      // Any other message (stale move/pass/exchange from before the game
+      // ended) is ignored; keep waiting for an explicit choice.
     }
   }
 }
