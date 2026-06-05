@@ -38,6 +38,11 @@ function App() {
   // Blank designation dialog.
   const [blankPending, setBlankPending] = useState<{ row: number; col: number; rackIndex: number } | null>(null);
 
+  // Once the user clicks Play Again / Quit on the game-over screen, the
+  // server takes over (either starts a new game or hangs up). We disable
+  // the buttons in the meantime and display a status line.
+  const [endGameChoice, setEndGameChoice] = useState<'play_again' | 'quit' | null>(null);
+
   const connect = useCallback(() => {
     // Don't open a duplicate socket. React 18 StrictMode invokes effects
     // twice in dev (mount → unmount → mount); without this guard the second
@@ -58,8 +63,11 @@ function App() {
     ws.onmessage = (event) => {
       const data: GameState = JSON.parse(event.data);
       setState(data);
-      // Clear all entry state on new turn.
+      // Clear all entry state on new turn. A fresh `state` message that
+      // isn't game_over also clears the end-game prompt selection (we're in
+      // a new game now).
       clearEntry();
+      if (!data.game_over) setEndGameChoice(null);
     };
 
     ws.onclose = () => {
@@ -120,6 +128,15 @@ function App() {
     wsRef.current.send(JSON.stringify({ type: 'exchange', letters }));
     setState((prev) => (prev ? { ...prev, your_turn: false } : prev));
     clearEntry();
+  };
+
+  // Game-over choices: tell the server to start another game (with seats
+  // swapped) or to quit. The server's response either drives a new `state`
+  // message (Play Again) or closes the socket (Quit).
+  const sendEndGameChoice = (choice: 'play_again' | 'quit') => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: choice }));
+    setEndGameChoice(choice);
   };
 
   // Toggle one rack tile in/out of the exchange selection. No-op outside
@@ -464,6 +481,27 @@ function App() {
                     </>
                   )}
                 </>
+              )}
+            </div>
+          )}
+
+          {/* Game-over prompt: ask the user whether to play another game
+              (seats will swap) or to quit. */}
+          {state.game_over && (
+            <div className="action-bar">
+              {endGameChoice === null ? (
+                <>
+                  <button className="btn btn-submit" onClick={() => sendEndGameChoice('play_again')}>
+                    Play Again
+                  </button>
+                  <button className="btn btn-clear" onClick={() => sendEndGameChoice('quit')}>
+                    Quit
+                  </button>
+                </>
+              ) : endGameChoice === 'play_again' ? (
+                <span className="endgame-status">Starting next game…</span>
+              ) : (
+                <span className="endgame-status">Thanks for playing.</span>
               )}
             </div>
           )}

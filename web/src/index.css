@@ -456,6 +456,11 @@ h1 {
   align-items: center;
 }
 
+.endgame-status {
+  font-style: italic;
+  color: #555;
+}
+
 .btn {
   padding: 8px 18px;
   border: none;
