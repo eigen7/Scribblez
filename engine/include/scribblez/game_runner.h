@@ -2,7 +2,6 @@
 
 #include "scribblez/agent.h"
 #include "scribblez/dictionary.h"
-#include "scribblez/game.h"
 #include "scribblez/player_factory.h"
 
 #include <array>

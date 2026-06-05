@@ -49,11 +49,8 @@ int main(int argc, char** argv) {
         "Player types (use --player \"--type=X [options]\"):\n\n" +
             scribblez::PlayerFactory::all_player_types_help());
 
-    scribblez::Macondo::set_params(macondo_params);
-    // Reseed the global SeedProducer first so every RNG-owning object built
-    // below (agents in make_players, the bag inside GameRunner) draws from a
-    // deterministic stream when --seed is set.
     scribblez::SeedProducer::instance().seed(seed_params);
+    scribblez::Macondo::set_params(macondo_params);
     auto players = scribblez::PlayerFactory::make_players(player_params);
     scribblez::GameRunner runner(runner_params, std::move(players));
     runner.run();

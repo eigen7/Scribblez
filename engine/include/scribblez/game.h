@@ -8,7 +8,6 @@
 #include "scribblez/rack.h"
 
 #include <array>
-#include <memory>
 #include <string>
 #include <vector>
 
