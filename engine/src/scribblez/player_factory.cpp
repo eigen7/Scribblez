@@ -12,16 +12,10 @@
 
 namespace scribblez {
 
-std::string PlayerSpec::display_name() const {
-  if (!name.empty()) return name;
-  if (type == "human") return "You";
-  if (type == "hastybot") return "HastyBot";
-  if (type == "greedy") return "Greedy";
-  return type;  // unknown types: fall back to the literal type string
-}
+namespace {
 
-bool PlayerSpec::is_human() const { return type == "human"; }
-
+// Parse one --player spec string into a PlayerSpec. Implementation detail of
+// PlayerFactory::make_players(); not part of the public API.
 PlayerSpec parse_player_spec(const std::string& spec) {
   namespace po = boost::program_options;
 
@@ -62,7 +56,8 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   return out;
 }
 
-std::unique_ptr<Agent> make_player(const PlayerSpec& spec, const std::string& opp_name) {
+// Dispatch one parsed spec to the chosen Agent subclass's from_spec().
+std::unique_ptr<Agent> make_one(const PlayerSpec& spec, const std::string& opp_name) {
   std::string name = spec.display_name();
   if (spec.type == "greedy") {
     return GreedyAgent::from_spec(spec.remaining_tokens, name);
@@ -76,7 +71,47 @@ std::unique_ptr<Agent> make_player(const PlayerSpec& spec, const std::string& op
   throw std::runtime_error("unhandled player type: " + spec.type);
 }
 
-std::string all_player_types_help() {
+}  // namespace
+
+std::string PlayerSpec::display_name() const {
+  if (!name.empty()) return name;
+  if (type == "human") return "You";
+  if (type == "hastybot") return "HastyBot";
+  if (type == "greedy") return "Greedy";
+  return type;  // unknown types: fall back to the literal type string
+}
+
+bool PlayerSpec::is_human() const { return type == "human"; }
+
+void PlayerFactory::Params::add_options(boost::program_options::options_description& desc) {
+  namespace po = boost::program_options;
+  desc.add_options()(
+      "player", po::value<std::vector<std::string>>(&specs)->composing(),
+      "add a seat, e.g. --player \"--type=human\" --player \"--type=greedy\" "
+      "(repeat once per seat; default: two greedy)");
+}
+
+PlayerFactory::Players PlayerFactory::make_players(const Params& params) {
+  std::vector<std::string> raw = params.specs;
+  if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
+  if (raw.size() != 2) {
+    throw std::runtime_error("expected exactly two --player specs (got " +
+                             std::to_string(raw.size()) + ")");
+  }
+
+  std::array<PlayerSpec, 2> specs;
+  for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
+
+  Players out;
+  out.display_names = {specs[0].display_name(), specs[1].display_name()};
+  // Build both agents. A Human agent's ctor blocks on its Vite dev server
+  // coming up, so this is the point at which the browser UI appears.
+  out.agents[0] = make_one(specs[0], out.display_names[1]);
+  out.agents[1] = make_one(specs[1], out.display_names[0]);
+  return out;
+}
+
+std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
   o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";

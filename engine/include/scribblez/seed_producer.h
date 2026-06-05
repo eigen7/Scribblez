@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <random>
 
 namespace scribblez {
@@ -21,8 +22,12 @@ class SeedProducer {
  public:
   static SeedProducer& instance();
 
-  // Re-seed the producer. Call once at startup if --seed was provided.
-  void seed(uint64_t s);
+  // Re-seed the producer. If `requested` is provided, uses that value;
+  // otherwise generates a fresh 64-bit seed from std::random_device. In
+  // either case returns the seed that was actually used, so callers can
+  // print it / reuse it elsewhere without having to repeat the
+  // "--seed given or not?" branching.
+  uint64_t seed(std::optional<uint64_t> requested);
 
   // Produce a fresh 64-bit seed.
   uint64_t next();

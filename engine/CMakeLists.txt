@@ -24,6 +24,7 @@ target_include_directories(scribblez_core PUBLIC
 add_executable(play_game
   apps/play_game.cpp
   src/scribblez/agent.cpp
+  src/scribblez/game_runner.cpp
   src/scribblez/human_web_agent.cpp
   src/scribblez/macondo.cpp
   src/scribblez/macondo_bot.cpp
