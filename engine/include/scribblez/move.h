@@ -31,14 +31,7 @@ struct Move {
   int score = 0;
 
   // Number of leading non-empty glyphs (placed/surrendered tiles).
-  int num_glyphs() const {
-    int n = 0;
-    for (Glyph g : glyphs) {
-      if (g.is_empty()) break;
-      ++n;
-    }
-    return n;
-  }
+  int num_glyphs() const;
 
   // Reconstruct the move's main word (full word, uppercase) from the board
   // as it stood *before* this move was applied.
@@ -48,3 +41,5 @@ struct Move {
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/move.inl"

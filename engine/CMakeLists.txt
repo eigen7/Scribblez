@@ -1,28 +1,33 @@
 add_library(scribblez_core STATIC
-  src/tile.cpp
-  src/tile_counts.cpp
-  src/rack.cpp
-  src/bag.cpp
-  src/board.cpp
-  src/move.cpp
-  src/dictionary.cpp
-  src/movegen.cpp
-  src/seed_producer.cpp
-  src/game.cpp
-  src/gcg_writer.cpp
+  src/scribblez/tile.cpp
+  src/scribblez/tile_counts.cpp
+  src/scribblez/rack.cpp
+  src/scribblez/bag.cpp
+  src/scribblez/board.cpp
+  src/scribblez/move.cpp
+  src/scribblez/dictionary.cpp
+  src/scribblez/movegen.cpp
+  src/scribblez/seed_producer.cpp
+  src/scribblez/game.cpp
+  src/scribblez/gcg_writer.cpp
 )
-target_include_directories(scribblez_core PUBLIC include)
+target_include_directories(scribblez_core PUBLIC
+  include
+  # Engine root: lets headers do `#include "inlines/scribblez/foo.inl"` for
+  # out-of-class inline definitions kept out of the public header.
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 # Concrete Agent implementations live in play_game (not scribblez_core) because
 # they pull in Boost (program_options for from_spec(), boost::json/process for
 # the web human agent and macondo bot). scribblez_core only sees the Agent ABC.
 add_executable(play_game
   apps/play_game.cpp
-  src/agent.cpp
-  src/human_web_agent.cpp
-  src/macondo_bot.cpp
-  src/player_factory.cpp
-  src/web_server.cpp)
+  src/scribblez/agent.cpp
+  src/scribblez/human_web_agent.cpp
+  src/scribblez/macondo_bot.cpp
+  src/scribblez/player_factory.cpp
+  src/scribblez/web_server.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core
   Boost::program_options

@@ -27,10 +27,7 @@ class Tile {
   constexpr char to_char() const;
   int value() const;  // Scrabble points; a blank or empty scores 0.
 
-  constexpr Tile& operator++() {
-    ++code_;
-    return *this;
-  }
+  constexpr Tile& operator++();
 
  private:
   static constexpr uint8_t kBlank = 26;
@@ -52,18 +49,6 @@ extern const std::array<int, 26> TILE_VALUES;
 // Standard English tile counts. Index 0..25 = A..Z, index 26 = blank.
 extern const std::array<int, 27> TILE_COUNTS;
 
-constexpr char Tile::to_char() const {
-  if (code_ == kBlank) return '?';
-  if (code_ == kEmpty) return '.';
-  return static_cast<char>('A' + code_);
-}
-
-constexpr Tile Tile::from_char(char c) {
-  if (c == '?' || c == '_') return blank();
-  if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-  return of(c - 'A');
-}
-
-inline int Tile::value() const { return (is_blank() || is_empty()) ? 0 : TILE_VALUES[code_]; }
-
 }  // namespace scribblez
+
+#include "inlines/scribblez/tile.inl"

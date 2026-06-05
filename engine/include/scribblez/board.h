@@ -21,9 +21,7 @@ class Board {
 
   Glyph at(int r, int c) const { return squares_[r * BOARD_SIZE + c]; }
   void set(int r, int c, Glyph g) { squares_[r * BOARD_SIZE + c] = g; }
-  bool in_bounds(int r, int c) const {
-    return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
-  }
+  bool in_bounds(int r, int c) const;
   bool empty_board() const;
 
   Premium premium_at(int r, int c) const { return PREMIUM[r * BOARD_SIZE + c]; }
@@ -41,3 +39,5 @@ class Board {
 };
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/board.inl"

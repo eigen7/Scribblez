@@ -21,28 +21,18 @@ class Glyph {
 
   static constexpr Glyph empty() { return Glyph(0); }
   static constexpr Glyph of(Tile letter) { return Glyph(static_cast<uint8_t>(letter.index() + 1)); }
-  static constexpr Glyph of_blank(Tile letter) {
-    return Glyph(static_cast<uint8_t>(letter.index() + 27));
-  }
+  static constexpr Glyph of_blank(Tile letter);
   static constexpr Glyph blank() { return Glyph(53); }  // unassigned
 
   // A tile played as a designated blank renders that letter but scores nothing.
-  static constexpr Glyph played(Tile letter, bool is_blank) {
-    return is_blank ? of_blank(letter) : of(letter);
-  }
+  static constexpr Glyph played(Tile letter, bool is_blank);
 
   constexpr bool is_empty() const { return code_ == 0; }
   constexpr bool is_blank() const { return code_ >= 27; }  // designated or not
   constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
-  constexpr Tile letter() const {  // valid iff has_letter()
-    return Tile::of(code_ <= 26 ? code_ - 1 : code_ - 27);
-  }
+  constexpr Tile letter() const;  // valid iff has_letter()
   int value() const { return has_letter() && !is_blank() ? letter().value() : 0; }
-  constexpr char to_char() const {
-    if (is_empty()) return '.';
-    if (code_ == 53) return '?';
-    return static_cast<char>('A' + (code_ <= 26 ? code_ - 1 : code_ - 27));
-  }
+  constexpr char to_char() const;
   constexpr uint8_t code() const { return code_; }
 
   // The rack tile this glyph consumes when played or exchanged (any blank
@@ -63,3 +53,5 @@ class Glyph {
 static_assert(sizeof(Glyph) == 1, "Glyph must pack into one byte");
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/glyph.inl"

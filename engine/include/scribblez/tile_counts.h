@@ -14,19 +14,11 @@ namespace scribblez {
 class TileCounts {
  public:
   void add(Tile t) { ++counts_[t]; }
-  bool remove(Tile t) {
-    if (counts_[t] == 0) return false;
-    --counts_[t];
-    return true;
-  }
+  bool remove(Tile t);
   int count(Tile t) const { return counts_[t]; }
   int blanks() const { return counts_[BLANK]; }
 
-  int size() const {
-    int s = 0;
-    for (int c : counts_) s += c;
-    return s;
-  }
+  int size() const;
   bool empty() const { return size() == 0; }
 
   // Sum of tile values (blanks count as 0).
@@ -40,3 +32,5 @@ class TileCounts {
 };
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/tile_counts.inl"
