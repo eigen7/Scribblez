@@ -260,6 +260,10 @@ Anchors compute_gaddag_anchors(const View& view) {
 }
 
 struct GenState {
+  GenState(const View& view, const Dictionary& dict, const CrossChecks& cross,
+           const Anchors& anchor, TileCounts rack, std::vector<Move>& out)
+      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {}
+
   const View& view;
   const Dictionary& dict;
   const CrossChecks& cross;
@@ -453,6 +457,10 @@ void dedupe(std::vector<Move>& moves, const Board& board) {
 // (recorded under both orientations) are collapsed by the shared dedupe().
 // ---------------------------------------------------------------------------
 struct GaddagGen {
+  GaddagGen(const View& view, const Dictionary& dict, const CrossChecks& cross,
+            const Anchors& anchor, TileCounts rack, std::vector<Move>& out)
+      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {}
+
   const View& view;
   const Dictionary& dict;
   const CrossChecks& cross;
