@@ -23,6 +23,7 @@
 #include <boost/program_options.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
 
   std::string kwg_path, dict_path, out_path, web_dir;
   std::vector<std::string> player_specs;
-  int port = 0, vite_port = 0;
+  int port = 0, vite_port = 0, games = 1;
   uint64_t seed = 0;
   bool verbose = false;
 
@@ -71,6 +72,8 @@ int main(int argc, char** argv) {
   opt("vite-port", po::value<int>(&vite_port)->default_value(5173), "browser UI (Vite) port");
   opt("web-dir", po::value<std::string>(&web_dir)->default_value(kDefaultWebDir),
       "front-end package dir, used only when a human plays");
+  opt("games", po::value<int>(&games)->default_value(1),
+      "play this many games in one process (seeds seed, seed+1, ...); no human");
   opt("verbose,v", po::bool_switch(&verbose), "print final score and turn count to stderr");
 
   po::variables_map vm;
@@ -114,6 +117,14 @@ int main(int argc, char** argv) {
       }
       human_seat = s;
     }
+  }
+  if (games < 1) {
+    std::cerr << "--games must be >= 1\n";
+    return 2;
+  }
+  if (games > 1 && human_seat >= 0) {
+    std::cerr << "--games > 1 is for bot-only batches; a human plays one game.\n";
+    return 2;
   }
 
   // Resolve the seed (the lexicon path already defaulted via program_options).
@@ -169,46 +180,68 @@ int main(int argc, char** argv) {
     return scribblez::make_player(players[seat], session.get(), players[1 - seat].display_name());
   };
 
-  scribblez::Game game(make_agent(0), make_agent(1), dict, seed);
-  game.play();
-
-  const auto& log = game.log();
-
-  // Send the final position to the human and hold the connection briefly so the
-  // game-over banner is delivered.
-  if (human_seat >= 0 && session->connected()) {
-    int opp = 1 - human_seat;
-    scribblez::StateView final_view{game.board(),
-                                    game.rack(human_seat),
-                                    game.score(human_seat),
-                                    game.score(opp),
-                                    game.bag_size(),
-                                    game.rack(opp).size(),
-                                    players[human_seat].display_name(),
-                                    players[opp].display_name(),
-                                    /*legal_plays=*/nullptr,
-                                    /*your_turn=*/false,
-                                    /*game_over=*/true};
-    session->send_text(scribblez::game_state_json(final_view));
-    session->linger_after_final_message();
-  }
-
-  std::string gcg = scribblez::game_log_to_gcg(log);
-  if (out_path.empty()) {
-    std::cout << gcg;
-  } else {
-    std::ofstream of(out_path);
+  std::ofstream of;
+  std::ostream* out = &std::cout;
+  if (!out_path.empty()) {
+    of.open(out_path);
     if (!of) {
       std::cerr << "Failed to open output file: " << out_path << "\n";
       return 1;
     }
-    of << gcg;
+    out = &of;
   }
 
-  if (verbose) {
-    std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
-              << log.end_reason << ")\n";
-    std::cerr << "Turns: " << log.turns.size() << "\n";
+  // Play `games` games (back to back, reusing the loaded dictionary), writing
+  // each GCG to the output and tallying results.
+  std::array<int, 2> wins = {0, 0};
+  int draws = 0;
+  long total_turns = 0;
+  auto t0 = std::chrono::steady_clock::now();
+  for (int gi = 0; gi < games; ++gi) {
+    scribblez::Game game(make_agent(0), make_agent(1), dict, seed + static_cast<uint64_t>(gi));
+    game.play();
+    const scribblez::GameLog& log = game.log();
+
+    // Send the final position to the human (single-game human play only).
+    if (human_seat >= 0 && session->connected()) {
+      int opp = 1 - human_seat;
+      scribblez::StateView final_view{game.board(),
+                                      game.rack(human_seat),
+                                      game.score(human_seat),
+                                      game.score(opp),
+                                      game.bag_size(),
+                                      game.rack(opp).size(),
+                                      players[human_seat].display_name(),
+                                      players[opp].display_name(),
+                                      /*legal_plays=*/nullptr,
+                                      /*your_turn=*/false,
+                                      /*game_over=*/true};
+      session->send_text(scribblez::game_state_json(final_view));
+      session->linger_after_final_message();
+    }
+
+    *out << scribblez::game_log_to_gcg(log);
+    total_turns += static_cast<long>(log.turns.size());
+    if (log.final_scores[0] > log.final_scores[1])
+      ++wins[0];
+    else if (log.final_scores[1] > log.final_scores[0])
+      ++wins[1];
+    else
+      ++draws;
+
+    if (verbose && games == 1) {
+      std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
+                << log.end_reason << ")\n";
+      std::cerr << "Turns: " << log.turns.size() << "\n";
+    }
+  }
+
+  if (verbose && games > 1) {
+    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::cerr << games << " games in " << secs << "s -> " << (games / secs) << " games/s, "
+              << total_turns << " turns -> " << (total_turns / secs) << " moves/s\n";
+    std::cerr << players[0].display_name() << " W/L/D vs " << players[1].display_name() << ": "
+              << wins[0] << " / " << wins[1] << " / " << draws << "\n";
   }
   return 0;
 }

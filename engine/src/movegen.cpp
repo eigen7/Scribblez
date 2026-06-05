@@ -2,9 +2,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cstdint>
-#include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,12 +34,17 @@ struct CrossCheck {
   bool has_neighbor = false;
 };
 
+// Per-square scratch for one generate() pass -- stack-allocated, so a turn's
+// move generation does no heap allocation for these.
+using CrossChecks = std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE>;
+using Anchors = std::array<bool, BOARD_SIZE * BOARD_SIZE>;
+
 constexpr int idx(int r, int c) { return r * BOARD_SIZE + c; }
 
 // Compute cross-checks for one orientation. cross[r*15+c] applies to placing a
 // tile at view position (r, c); the perpendicular run is along increasing/decreasing r at fixed c.
-std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary& dict) {
-  std::vector<CrossCheck> out(BOARD_SIZE * BOARD_SIZE);
+CrossChecks compute_cross_checks(const View& view, const Dictionary& dict) {
+  CrossChecks out{};
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph here = view.at(r, c);
@@ -115,8 +119,8 @@ std::vector<CrossCheck> compute_cross_checks(const View& view, const Dictionary&
 // Compute anchor squares for this view. An anchor is an empty square adjacent
 // (in any of the 4 directions) to a filled square. Special case: if the board
 // is completely empty, the single anchor is the center square.
-std::vector<bool> compute_anchors(const View& view) {
-  std::vector<bool> anchor(BOARD_SIZE * BOARD_SIZE, false);
+Anchors compute_anchors(const View& view) {
+  Anchors anchor{};
   bool any_tile = false;
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
@@ -155,7 +159,7 @@ std::vector<bool> compute_anchors(const View& view) {
 // placed and their (letter, is_blank) come from `placed_letter`/`placed_blank`.
 // Scoring (premiums, cross-words, bingo) is shared by both generators so the
 // two algorithms produce byte-identical moves.
-Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row, int start_col,
+Move build_play(const View& view, const CrossChecks& cross, int row, int start_col,
                 int end_col_excl, const std::array<Tile, BOARD_SIZE>& placed_letter,
                 const std::array<bool, BOARD_SIZE>& placed_blank) {
   Move m;
@@ -165,7 +169,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
   m.start_row = start_bc.first;
   m.start_col = start_bc.second;
 
-  std::vector<PlacedTile> placed_board;
+  int n_placed = 0;
   int main_letter_sum = 0;
   int word_mult = 1;
   int cross_total = 0;
@@ -183,8 +187,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
       L = placed_letter[c];
       is_blank = placed_blank[c];
       newly_placed = true;
-      auto bc = view.to_board(row, c);
-      placed_board.push_back(PlacedTile{bc.first, bc.second, Glyph::played(L, is_blank)});
+      m.glyphs[n_placed++] = Glyph::played(L, is_blank);  // in word order
     }
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
@@ -214,8 +217,7 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
   }
 
   m.score = main_letter_sum * word_mult + cross_total;
-  if (static_cast<int>(placed_board.size()) == RACK_SIZE) m.score += 50;  // bingo
-  for (size_t i = 0; i < placed_board.size(); ++i) m.glyphs[i] = placed_board[i].glyph;
+  if (n_placed == RACK_SIZE) m.score += 50;  // bingo
   return m;
 }
 
@@ -230,8 +232,8 @@ Move build_play(const View& view, const std::vector<CrossCheck>& cross, int row,
 //   - An empty square is an anchor iff both its left and right neighbors are
 //     empty and it has a tile directly above or below (a pure cross-hook).
 // The empty board is special-cased to a single anchor at the center.
-std::vector<bool> compute_gaddag_anchors(const View& view) {
-  std::vector<bool> anchor(BOARD_SIZE * BOARD_SIZE, false);
+Anchors compute_gaddag_anchors(const View& view) {
+  Anchors anchor{};
   bool any_tile = false;
   for (int r = 0; r < BOARD_SIZE && !any_tile; ++r)
     for (int c = 0; c < BOARD_SIZE && !any_tile; ++c)
@@ -260,8 +262,8 @@ std::vector<bool> compute_gaddag_anchors(const View& view) {
 struct GenState {
   const View& view;
   const Dictionary& dict;
-  const std::vector<CrossCheck>& cross;
-  const std::vector<bool>& anchor;
+  const CrossChecks& cross;
+  const Anchors& anchor;
   TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
 
@@ -417,30 +419,25 @@ void GenState::generate_for_row(int row) {
 }
 
 // Deduplicate moves whose placed-tile sets are identical (same positions, same
-// letters, same blank flags). This handles the rare case of a single-tile
-// placement that forms multi-letter words in both directions.
+// letters, same blank flags). Only a *single-tile* play can be generated twice
+// -- once per orientation, when its one tile forms words in both directions;
+// multi-tile plays have an unambiguous orientation and are never duplicated. So
+// we only need to dedupe single-tile plays, keyed by their placed square+face.
 void dedupe(std::vector<Move>& moves, const Board& board) {
-  // Key on the placed tiles' board positions + faces, so the same tile recorded
-  // under both orientations collapses (the positions come out identical).
-  auto key = [&board](const Move& m) {
-    std::vector<PlacedTile> tiles = m.placed_tiles(board);
-    std::sort(tiles.begin(), tiles.end(), [](const PlacedTile& a, const PlacedTile& b) {
-      if (a.row != b.row) return a.row < b.row;
-      return a.col < b.col;
-    });
-    std::string k;
-    for (const auto& t : tiles) {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d;", t.row, t.col, (int)t.glyph.letter(),
-                    (int)t.glyph.is_blank());
-      k += buf;
-    }
-    return k;
-  };
-  std::sort(moves.begin(), moves.end(),
-            [&](const Move& a, const Move& b) { return key(a) < key(b); });
-  moves.erase(std::unique(moves.begin(), moves.end(),
-                          [&](const Move& a, const Move& b) { return key(a) == key(b); }),
+  std::unordered_set<int> seen;  // (square * 64 + glyph code) of a placed tile
+  moves.erase(std::remove_if(moves.begin(), moves.end(),
+                             [&](const Move& m) {
+                               if (m.num_glyphs() != 1) return false;
+                               // Walk to the one empty square the tile fills.
+                               int dr = m.horizontal ? 0 : 1, dc = m.horizontal ? 1 : 0;
+                               int r = m.start_row, c = m.start_col;
+                               while (board.in_bounds(r, c) && !board.at(r, c).is_empty()) {
+                                 r += dr;
+                                 c += dc;
+                               }
+                               int k = (r * BOARD_SIZE + c) * 64 + m.glyphs[0].code();
+                               return !seen.insert(k).second;  // drop if already seen
+                             }),
               moves.end());
 }
 
@@ -458,8 +455,8 @@ void dedupe(std::vector<Move>& moves, const Board& board) {
 struct GaddagGen {
   const View& view;
   const Dictionary& dict;
-  const std::vector<CrossCheck>& cross;
-  const std::vector<bool>& anchor;
+  const CrossChecks& cross;
+  const Anchors& anchor;
   TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
 
