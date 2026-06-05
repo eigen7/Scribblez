@@ -3,28 +3,13 @@ import Board from './components/Board';
 import Rack from './components/Rack';
 import MoveList from './components/MoveList';
 import ScoreBoard from './components/ScoreBoard';
-import { GameState, PlacedTile, parseMove, EntryDirection } from './types';
-
-// Find which rack tile index to consume for a given letter.
-// Returns -1 if no matching tile available.
-function findRackTile(
-  rack: { letter: string; score: number }[],
-  usedIndices: Set<number>,
-  letter: string,
-  preferBlank: boolean,
-): number {
-  if (preferBlank) {
-    const blankIdx = rack.findIndex((t, i) => !usedIndices.has(i) && t.letter === '?');
-    if (blankIdx >= 0) return blankIdx;
-  }
-  // Try exact match first.
-  const exactIdx = rack.findIndex(
-    (t, i) => !usedIndices.has(i) && t.letter.toUpperCase() === letter.toUpperCase(),
-  );
-  if (exactIdx >= 0) return exactIdx;
-  // Fall back to blank.
-  return rack.findIndex((t, i) => !usedIndices.has(i) && t.letter === '?');
-}
+import { GameState, PlacedTile, EntryDirection } from './types';
+import {
+  findRackTile,
+  findMatchingMove,
+  candidatesFromMove,
+  rebuildUsedIndices as rebuildUsedIndicesPure,
+} from './lib/moveMatch';
 
 function App() {
   const [state, setState] = useState<GameState | null>(null);
@@ -112,48 +97,9 @@ function App() {
     clearEntry();
   };
 
-  // Check if the current candidate tiles match a legal move. Returns the move index or -1.
-  const findMatchingMove = (): number => {
-    if (!state?.moves || candidateTiles.length === 0) return -1;
-
-    for (const move of state.moves) {
-      const parsed = parseMove(move.text);
-      if (!parsed) continue;
-
-      // Extract newly placed positions from this legal move.
-      const newTiles: { row: number; col: number; letter: string }[] = [];
-      for (let i = 0; i < parsed.word.length; i++) {
-        const r = parsed.dir === 'vertical' ? parsed.row + i : parsed.row;
-        const c = parsed.dir === 'horizontal' ? parsed.col + i : parsed.col;
-        if (!state.board[r]?.[c]) {
-          newTiles.push({ row: r, col: c, letter: parsed.word[i] });
-        }
-      }
-
-      if (newTiles.length !== candidateTiles.length) continue;
-
-      // Check if every candidate tile matches a new tile in this move.
-      let allMatch = true;
-      for (const candidate of candidateTiles) {
-        const match = newTiles.find(
-          (t) =>
-            t.row === candidate.row &&
-            t.col === candidate.col &&
-            (candidate.isBlank
-              ? t.letter === t.letter.toLowerCase() && t.letter.toUpperCase() === candidate.letter.toUpperCase()
-              : t.letter === candidate.letter.toUpperCase()),
-        );
-        if (!match) {
-          allMatch = false;
-          break;
-        }
-      }
-      if (allMatch) return move.index;
-    }
-    return -1;
-  };
-
-  const matchingMoveIndex = findMatchingMove();
+  const matchingMoveIndex = state
+    ? findMatchingMove(candidateTiles, state.moves, state.board)
+    : -1;
 
   // --- Board click handling ---
 
@@ -352,26 +298,11 @@ function App() {
       return;
     }
 
-    const parsed = parseMove(move.text);
-    if (!parsed) return;
+    const result = candidatesFromMove(move, state.board, state.rack);
+    if (!result) return;
 
-    // Place the new tiles from this move as candidates.
-    const newCandidates: PlacedTile[] = [];
-    const newUsed = new Set<number>();
-    for (let i = 0; i < parsed.word.length; i++) {
-      const r = parsed.dir === 'vertical' ? parsed.row + i : parsed.row;
-      const c = parsed.dir === 'horizontal' ? parsed.col + i : parsed.col;
-      if (!state.board[r]?.[c]) {
-        const ch = parsed.word[i];
-        const isBlank = ch === ch.toLowerCase() && ch !== ch.toUpperCase();
-        const rackIdx = findRackTile(state.rack, newUsed, ch, isBlank);
-        if (rackIdx >= 0) newUsed.add(rackIdx);
-        newCandidates.push({ row: r, col: c, letter: ch.toUpperCase(), isBlank });
-      }
-    }
-
-    setCandidateTiles(newCandidates);
-    setUsedRackIndices(newUsed);
+    setCandidateTiles(result.candidates);
+    setUsedRackIndices(result.usedRackIndices);
     setCursorRow(null);
     setCursorCol(null);
     setCursorDir(null);
@@ -382,12 +313,7 @@ function App() {
 
   const rebuildUsedIndices = (tiles: PlacedTile[]) => {
     if (!state) return;
-    const newUsed = new Set<number>();
-    for (const t of tiles) {
-      const idx = findRackTile(state.rack, newUsed, t.letter, t.isBlank);
-      if (idx >= 0) newUsed.add(idx);
-    }
-    setUsedRackIndices(newUsed);
+    setUsedRackIndices(rebuildUsedIndicesPure(tiles, state.rack));
   };
 
   // --- Render ---
