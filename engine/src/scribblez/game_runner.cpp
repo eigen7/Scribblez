@@ -81,8 +81,7 @@ void GameRunner::Params::add_options(boost::program_options::options_description
 
 GameRunner::GameRunner(const Params& params, PlayerFactory::Players players, uint64_t seed)
     : params_(params),
-      agents_(std::move(players.agents)),
-      display_names_(std::move(players.display_names)),
+      agents_(std::move(players)),
       seed_(seed),
       out_(&std::cout) {
   if (params_.games < 1) {
@@ -109,7 +108,8 @@ GameRunner::GameRunner(const Params& params, PlayerFactory::Players players, uin
     std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << params_.kwg_path << "\n"
               << "Seed: " << seed_ << "\n";
   }
-  results_ = std::make_unique<Results>(display_names_, *out_);
+  results_ = std::make_unique<Results>(
+      std::array<std::string, 2>{agents_[0]->name(), agents_[1]->name()}, *out_);
 }
 
 GameRunner::~GameRunner() = default;

@@ -55,7 +55,6 @@ class GameRunner {
 
   Params params_;
   std::array<std::unique_ptr<Agent>, 2> agents_;
-  std::array<std::string, 2> display_names_;
   Dictionary dict_;
   uint64_t seed_;
 

@@ -105,12 +105,11 @@ PlayerFactory::Players PlayerFactory::make_players(const Params& params) {
     std::array<PlayerSpec, 2> specs;
     for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
 
-    Players out;
-    out.display_names = {specs[0].display_name(), specs[1].display_name()};
     // Build both agents. A Human agent's ctor blocks on its Vite dev server
     // coming up, so this is the point at which the browser UI appears.
-    out.agents[0] = make_one(specs[0], out.display_names[1]);
-    out.agents[1] = make_one(specs[1], out.display_names[0]);
+    Players out;
+    out[0] = make_one(specs[0], specs[1].display_name());
+    out[1] = make_one(specs[1], specs[0].display_name());
     return out;
   } catch (const Exception&) {
     throw;  // already-printed user-facing error from a nested make_one()

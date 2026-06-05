@@ -44,13 +44,8 @@ class PlayerFactory {
     void add_options(boost::program_options::options_description& desc);
   };
 
-  // The output of make_players(): the two owned agents plus their display
-  // names (handy for batch-results headers, since once we move() the agents
-  // into the game runner we'd otherwise lose access to their names).
-  struct Players {
-    std::array<std::unique_ptr<Agent>, 2> agents;
-    std::array<std::string, 2> display_names;
-  };
+  // The two owned agents. Display names are reachable via agent->name().
+  using Players = std::array<std::unique_ptr<Agent>, 2>;
 
   // Validate the raw `--player` specs in `params`, parse them, and construct
   // both agents. Defaults to two greedy players when no --player was given.
