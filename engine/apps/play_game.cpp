@@ -51,8 +51,6 @@ int main(int argc, char** argv) {
             scribblez::PlayerFactory::all_player_types_help());
 
     scribblez::Macondo::set_params(macondo_params);
-    // Seed the process-wide SeedProducer. All RNG-using objects constructed
-    // after this point are deterministic for a given --seed.
     uint64_t seed = scribblez::SeedProducer::instance().seed(seed_params);
 
     auto players = scribblez::PlayerFactory::make_players(player_params);
@@ -60,16 +58,10 @@ int main(int argc, char** argv) {
     runner.run();
     return 0;
   } catch (const scribblez::CleanExit&) {
-    // --help (or other intentional early exit): the help text has already
-    // been printed; we just need to exit cleanly.
     return 0;
   } catch (const scribblez::Exception&) {
-    // A user-facing error whose source already printed a complete message
-    // to stderr. Exit non-zero without re-printing.
     return 1;
-  } catch (const std::exception& e) {
-    // Unexpected: nothing printed by the source, so this catch-all is the
-    // only place that mentions the error. Indicates a bug, not bad input.
+  } catch (const std::exception& e) {  // unexpected
     std::cerr << "Unexpected error: " << e.what() << "\n";
     return 1;
   }
