@@ -10,7 +10,7 @@
 
 namespace scribblez {
 
-HastyBotAgent::HastyBotAgent(std::string name) : name_(std::move(name)) {}
+HastyBotAgent::HastyBotAgent(const std::string& name) : name_(name) {}
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
   // Delegate to the shared Macondo subprocess. HastyBot just needs its top
@@ -28,7 +28,7 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
 }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        std::string name) {
+                                                        const std::string& name) {
   namespace po = boost::program_options;
 
   // No agent-specific options at present: the path to the macondo binary is
@@ -44,7 +44,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
     throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
   }
 
-  return std::make_unique<HastyBotAgent>(std::move(name));
+  return std::make_unique<HastyBotAgent>(name);
 }
 
 std::string HastyBotAgent::options_help() {

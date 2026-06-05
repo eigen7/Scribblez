@@ -217,12 +217,12 @@ std::unique_ptr<Macondo>& singleton_slot() {
 }
 }  // namespace
 
-void Macondo::initialize(std::string binary_path) {
+void Macondo::initialize(const std::string& binary_path) {
   auto& slot = singleton_slot();
   if (slot) throw std::runtime_error("Macondo::initialize called twice");
   // Construct via reset() rather than make_unique so we can keep the ctor
   // private and still wire up the singleton from this friend-free helper.
-  slot.reset(new Macondo(std::move(binary_path)));
+  slot.reset(new Macondo(binary_path));
 }
 
 bool Macondo::initialized() { return static_cast<bool>(singleton_slot()); }
@@ -233,7 +233,7 @@ Macondo& Macondo::instance() {
   return *slot;
 }
 
-Macondo::Macondo(std::string binary) : binary_(std::move(binary)) {}
+Macondo::Macondo(const std::string& binary) : binary_(binary) {}
 
 Macondo::~Macondo() = default;
 

@@ -10,11 +10,11 @@
 
 namespace scribblez {
 
-GreedyAgent::GreedyAgent(std::string name)
-    : name_(std::move(name)), rng_(SeedProducer::instance().next()) {}
+GreedyAgent::GreedyAgent(const std::string& name)
+    : name_(name), rng_(SeedProducer::instance().next()) {}
 
-GreedyAgent::GreedyAgent(std::string name, uint64_t seed)
-    : name_(std::move(name)), rng_(seed) {}
+GreedyAgent::GreedyAgent(const std::string& name, uint64_t seed)
+    : name_(name), rng_(seed) {}
 
 Move GreedyAgent::make_move(const MoveRequest& req) {
   if (!req.legal_plays.empty()) {
@@ -42,7 +42,7 @@ Move GreedyAgent::make_move(const MoveRequest& req) {
 }
 
 std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::string>& tokens,
-                                                    std::string name) {
+                                                    const std::string& name) {
   namespace po = boost::program_options;
   uint64_t seed = 0;
   bool have_seed = false;
@@ -62,8 +62,8 @@ std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::strin
     throw std::runtime_error(std::string("bad --type=greedy options: ") + e.what());
   }
 
-  if (have_seed) return std::make_unique<GreedyAgent>(std::move(name), seed);
-  return std::make_unique<GreedyAgent>(std::move(name));
+  if (have_seed) return std::make_unique<GreedyAgent>(name, seed);
+  return std::make_unique<GreedyAgent>(name);
 }
 
 std::string GreedyAgent::options_help() {

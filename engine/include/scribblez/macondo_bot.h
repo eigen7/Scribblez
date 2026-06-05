@@ -15,14 +15,14 @@ namespace scribblez {
 // shares one subprocess that loads its lexicon/leaves exactly once.
 class HastyBotAgent : public Agent {
  public:
-  explicit HastyBotAgent(std::string name);
+  explicit HastyBotAgent(const std::string& name);
   std::string name() const override { return name_; }
   Move make_move(const MoveRequest& req) override;
 
   // Build a HastyBotAgent from `--player "--type=hastybot [options]"` tokens
   // (after the factory has stripped --type and --name). Throws on bad input.
   static std::unique_ptr<HastyBotAgent> from_spec(const std::vector<std::string>& tokens,
-                                                  std::string name);
+                                                  const std::string& name);
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();

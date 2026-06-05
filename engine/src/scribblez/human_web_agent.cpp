@@ -26,8 +26,8 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
 
 }  // namespace
 
-HumanWebAgent::HumanWebAgent(WebSession& session, std::string my_name, std::string opp_name)
-    : session_(session), my_name_(std::move(my_name)), opp_name_(std::move(opp_name)) {}
+HumanWebAgent::HumanWebAgent(WebSession& session, const std::string& my_name, const std::string& opp_name)
+    : session_(session), my_name_(my_name), opp_name_(opp_name) {}
 
 Move HumanWebAgent::make_move(const MoveRequest& req) {
   // Best-effort: ask Macondo to evaluate every legal play so we can show its
@@ -110,8 +110,8 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
 }
 
 std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        std::string name, WebSession& session,
-                                                        std::string opp_name) {
+                                                        const std::string& name, WebSession& session,
+                                                        const std::string& opp_name) {
   namespace po = boost::program_options;
   po::options_description desc("human options");
   // No agent-specific options at present (kept for symmetry / future use).
@@ -122,7 +122,7 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=human options: ") + e.what());
   }
-  return std::make_unique<HumanWebAgent>(session, std::move(name), std::move(opp_name));
+  return std::make_unique<HumanWebAgent>(session, name, opp_name);
 }
 
 std::string HumanWebAgent::options_help() {

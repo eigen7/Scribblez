@@ -14,7 +14,7 @@ class WebSession;
 // browser and blocks until the user submits a move (or passes / exchanges).
 class HumanWebAgent : public Agent {
  public:
-  HumanWebAgent(WebSession& session, std::string my_name, std::string opp_name);
+  HumanWebAgent(WebSession& session, const std::string& my_name, const std::string& opp_name);
 
   std::string name() const override { return my_name_; }
   Move make_move(const MoveRequest& req) override;
@@ -23,8 +23,8 @@ class HumanWebAgent : public Agent {
   // (after the factory has stripped --type and --name). `session` is the
   // already-bound WebSession the browser will talk to. Throws on bad input.
   static std::unique_ptr<HumanWebAgent> from_spec(const std::vector<std::string>& tokens,
-                                                  std::string name, WebSession& session,
-                                                  std::string opp_name);
+                                                  const std::string& name, WebSession& session,
+                                                  const std::string& opp_name);
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();

@@ -25,7 +25,7 @@ class Macondo {
  public:
   // Configure the singleton with the path to the macondo binary. May be
   // called only once per process; subsequent calls throw.
-  static void initialize(std::string binary_path);
+  static void initialize(const std::string& binary_path);
 
   // True iff initialize() has been called.
   static bool initialized();
@@ -58,7 +58,7 @@ class Macondo {
   ~Macondo();
 
  private:
-  explicit Macondo(std::string binary);
+  explicit Macondo(const std::string& binary);
   void ensure_started();
 
   struct Impl;                    // hides boost::process from the header

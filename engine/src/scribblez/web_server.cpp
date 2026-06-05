@@ -127,7 +127,7 @@ std::string base64(const uint8_t* data, size_t len) {
 
 // --------------------------- HTTP / WS helpers ---------------------------
 
-std::string to_lower(std::string s) {
+std::string& to_lower(std::string& s) {
   for (char& c : s)
     if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
   return s;
@@ -135,8 +135,11 @@ std::string to_lower(std::string s) {
 
 // Extract a header value (case-insensitive name) from a raw HTTP request.
 std::string header_value(const std::string& req, const std::string& name) {
-  std::string lower = to_lower(req);
-  std::string key = to_lower(name) + ":";
+  std::string lower = req;
+  to_lower(lower);
+  std::string key = name;
+  to_lower(key);
+  key += ":";
   size_t pos = lower.find(key);
   if (pos == std::string::npos) return "";
   pos += key.size();
@@ -355,7 +358,7 @@ std::string game_state_json(const StateView& v) {
 
 // ------------------------------ ViteDevServer ----------------------------
 
-ViteDevServer::ViteDevServer(std::string web_dir, int dev_port, int ws_port)
+ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_port)
     : dev_port_(dev_port), ws_port_(ws_port) {
   namespace bp = boost::process;
 
@@ -489,7 +492,9 @@ bool WebSession::wait_for_client() {
       continue;
     }
 
-    if (to_lower(header_value(req, "Upgrade")) == "websocket") {
+    std::string upgrade = header_value(req, "Upgrade");
+    to_lower(upgrade);
+    if (upgrade == "websocket") {
       if (do_handshake(conn, req)) {
         ws_fd_ = conn;
         return true;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "scribblez/glyph.h"
-#include "scribblez/tile.h"
 
 #include <array>
 #include <string>

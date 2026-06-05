@@ -36,8 +36,8 @@ class Agent {
 // explicit --seed=N option).
 class GreedyAgent : public Agent {
  public:
-  explicit GreedyAgent(std::string name = "Greedy");
-  GreedyAgent(std::string name, uint64_t seed);
+  explicit GreedyAgent(const std::string& name = "Greedy");
+  GreedyAgent(const std::string& name, uint64_t seed);
 
   std::string name() const override { return name_; }
   Move make_move(const MoveRequest& req) override;
@@ -46,7 +46,7 @@ class GreedyAgent : public Agent {
   // (after the factory has stripped --type and --name). `name` is the resolved
   // display name. Throws std::runtime_error on bad input.
   static std::unique_ptr<GreedyAgent> from_spec(const std::vector<std::string>& tokens,
-                                                std::string name);
+                                                const std::string& name);
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();

@@ -30,7 +30,7 @@ class ViteDevServer {
   // `dev_port` is the port Vite listens on; `ws_port` is the WebSession port
   // Vite proxies `/ws` to (passed through as env vars VITE_DEV_PORT /
   // VITE_WS_PORT). Throws if the child process cannot be started.
-  ViteDevServer(std::string web_dir, int dev_port, int ws_port);
+  ViteDevServer(const std::string& web_dir, int dev_port, int ws_port);
   ~ViteDevServer();
 
   ViteDevServer(const ViteDevServer&) = delete;

@@ -66,16 +66,16 @@ std::unique_ptr<Agent> make_player(const PlayerSpec& spec, WebSession* session,
                                    const std::string& opp_name) {
   std::string name = spec.display_name();
   if (spec.type == "greedy") {
-    return GreedyAgent::from_spec(spec.remaining_tokens, std::move(name));
+    return GreedyAgent::from_spec(spec.remaining_tokens, name);
   }
   if (spec.type == "hastybot") {
-    return HastyBotAgent::from_spec(spec.remaining_tokens, std::move(name));
+    return HastyBotAgent::from_spec(spec.remaining_tokens, name);
   }
   if (spec.type == "human") {
     if (!session) {
       throw std::runtime_error("a human player needs a web session");
     }
-    return HumanWebAgent::from_spec(spec.remaining_tokens, std::move(name), *session, opp_name);
+    return HumanWebAgent::from_spec(spec.remaining_tokens, name, *session, opp_name);
   }
   throw std::runtime_error("unhandled player type: " + spec.type);
 }
