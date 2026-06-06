@@ -114,7 +114,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
     throw Exception("--threads must be >= 1");
   }
   // Build the first pair to check parallelism support before creating the rest.
-  agents_.push_back(PlayerFactory::make_players(player_params));
+  agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/0));
   bool parallel_ok =
       agents_[0][0]->supports_parallelism() && agents_[0][1]->supports_parallelism();
   if (!parallel_ok && params_.threads > 1) {
@@ -122,7 +122,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
     params_.threads = 1;
   }
   for (int i = 1; i < params_.threads; ++i) {
-    agents_.push_back(PlayerFactory::make_players(player_params));
+    agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/i));
   }
   const std::string path = params_.kwg_path();
   try {

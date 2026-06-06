@@ -1,7 +1,8 @@
 #include "scribblez/human_web_agent.h"
 
 #include "scribblez/game.h"
-#include "scribblez/macondo.h"
+#include "scribblez/macondo_oracle.h"
+#include "scribblez/macondo_oracle_pool.h"
 #include "scribblez/tile.h"
 #include "scribblez/web_server.h"
 
@@ -29,9 +30,9 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
 
 }  // namespace
 
-HumanWebAgent::HumanWebAgent(const Params& params, const std::string& my_name,
+HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                              const std::string& opp_name)
-    : my_name_(my_name), opp_name_(opp_name) {
+    : Agent(thread_id, my_name), opp_name_(opp_name) {
   // The order matters: the WebSocket server must be bound (so its port is
   // listening) before we launch Vite, since Vite proxies /ws to it. Then we
   // block until Vite is accepting browser connections, and best-effort open
@@ -65,14 +66,15 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
   // without equities and the front-end leaves the column blank.
   std::vector<std::optional<double>> equities;
   try {
-    auto result = Macondo::instance().evaluate(req.board, req.my_rack, req.my_score,
-                                                req.opp_score, req.legal_plays);
+    auto& oracle = MacondoOraclePool::instance().get(thread_id_);
+    auto result = oracle.evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
+                                  req.legal_plays);
     equities = std::move(result.equities);
   } catch (const std::exception&) {
     equities.clear();
   }
 
-  StateView view(req, my_name_, opp_name_, equities.empty() ? nullptr : &equities);
+  StateView view(req, name_, opp_name_, equities.empty() ? nullptr : &equities);
   const std::string msg = game_state_json(view);
 
   for (;;) {
@@ -127,7 +129,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
 EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
   // Render the final board from our seat, with no legal-play list (the game
   // is over) and the Play Again / Quit buttons enabled on the front-end.
-  StateView view(game, my_seat, my_name_, opp_name_, /*your_turn=*/false,
+  StateView view(game, my_seat, name_, opp_name_, /*your_turn=*/false,
                  /*game_over=*/true);
   const std::string msg = game_state_json(view);
 
@@ -158,7 +160,7 @@ EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
 }
 
 std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        const std::string& name,
+                                                        int thread_id, const std::string& name,
                                                         const std::string& opp_name) {
   namespace po = boost::program_options;
   Params params;
@@ -177,7 +179,7 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=human options: ") + e.what());
   }
-  return std::make_unique<HumanWebAgent>(params, name, opp_name);
+  return std::make_unique<HumanWebAgent>(thread_id, params, name, opp_name);
 }
 
 std::string HumanWebAgent::options_help() {

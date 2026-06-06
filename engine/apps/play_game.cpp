@@ -18,7 +18,7 @@
 #include "scribblez/cli.h"
 #include "scribblez/exception.h"
 #include "scribblez/game_runner.h"
-#include "scribblez/macondo.h"
+#include "scribblez/macondo_oracle_pool.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
 
@@ -32,14 +32,13 @@ int main(int argc, char** argv) {
   try {
     // Each subsystem owns its own Params + add_options() so this top-level
     // function never has to know which knobs belong to whom.
-    scribblez::Macondo::Params macondo_params;
     scribblez::SeedProducer::Params seed_params;
     scribblez::PlayerFactory::Params player_params;
     scribblez::GameRunner::Params runner_params;
 
     po::options_description desc("play_game options");
     desc.add_options()("help,h", "show this help message and exit");
-    macondo_params.add_options(desc);
+    scribblez::MacondoOraclePool::instance().add_options(desc);
     seed_params.add_options(desc);
     player_params.add_options(desc);
     runner_params.add_options(desc);
@@ -51,8 +50,9 @@ int main(int argc, char** argv) {
 
     scribblez::SeedProducer::instance().seed(seed_params);
     // Macondo's CGP needs the same lexicon name we loaded for the engine.
-    macondo_params.lexicon = runner_params.lexicon;
-    scribblez::Macondo::set_params(macondo_params);
+    // The pool's --macondo value was bound by add_options() above; we only
+    // need to inject the lexicon, which isn't its own CLI option.
+    scribblez::MacondoOraclePool::instance().set_lexicon(runner_params.lexicon);
 
     scribblez::GameRunner runner(runner_params, player_params);
     runner.run();

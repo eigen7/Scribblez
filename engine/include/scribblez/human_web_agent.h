@@ -30,11 +30,10 @@ class HumanWebAgent : public Agent {
   // Constructs the engine-side WebSocket server, spawns `npm run dev` from
   // `params.web_dir`, blocks until Vite is ready, and best-effort opens the
   // browser at the Vite URL. Throws if any of those steps fail.
-  HumanWebAgent(const Params& params, const std::string& my_name,
+  HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                 const std::string& opp_name);
   ~HumanWebAgent() override;
 
-  std::string name() const override { return my_name_; }
   Move make_move(const MoveRequest& req) override;
 
   // Surfaces the final board to the user and prompts them with Play Again /
@@ -49,7 +48,7 @@ class HumanWebAgent : public Agent {
   // Build a HumanWebAgent from `--player "--type=human [options]"` tokens
   // (after the factory has stripped --type and --name). Throws on bad input.
   static std::unique_ptr<HumanWebAgent> from_spec(const std::vector<std::string>& tokens,
-                                                  const std::string& name,
+                                                  int thread_id, const std::string& name,
                                                   const std::string& opp_name);
 
   // Human-readable description + options, shown by `play_game --help`.
@@ -58,7 +57,6 @@ class HumanWebAgent : public Agent {
  private:
   std::unique_ptr<WebSession> session_;
   std::unique_ptr<ViteDevServer> vite_;
-  std::string my_name_;
   std::string opp_name_;
 };
 

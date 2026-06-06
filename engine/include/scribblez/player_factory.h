@@ -49,8 +49,11 @@ class PlayerFactory {
 
   // Validate the raw `--player` specs in `params`, parse them, and construct
   // both agents. Defaults to two greedy players when no --player was given.
-  // Throws std::runtime_error with a human-readable message on bad input.
-  static Players make_players(const Params& params);
+  // `thread_id` is the GameRunner thread index this pair will run on; it is
+  // forwarded to each Agent's constructor (so agents can key per-thread
+  // resources like MacondoOraclePool off it). Throws std::runtime_error with
+  // a human-readable message on bad input.
+  static Players make_players(const Params& params, int thread_id);
 
   // Concatenated help text for every registered agent type, formatted for
   // `play_game --help`.

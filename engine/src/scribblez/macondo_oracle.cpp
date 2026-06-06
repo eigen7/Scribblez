@@ -1,15 +1,13 @@
-#include "scribblez/macondo.h"
+#include "scribblez/macondo_oracle.h"
 
 #include "scribblez/glyph.h"
 #include "scribblez/tile.h"
 
 #include <boost/process.hpp>
-#include <boost/program_options.hpp>
 
 #include <cctype>
 #include <cstdlib>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -196,7 +194,7 @@ constexpr int kGenLimit = 10000;
 
 // --------------------------- the subprocess ------------------------------
 
-struct Macondo::Impl {
+struct MacondoOracle::Impl {
   bp::opstream to;
   bp::ipstream from;
   bp::child child;
@@ -211,61 +209,25 @@ struct Macondo::Impl {
   }
 };
 
-// --------------------------- singleton plumbing --------------------------
+// --------------------------- ctor / params -------------------------------
 
-namespace {
-std::unique_ptr<Macondo>& singleton_slot() {
-  static std::unique_ptr<Macondo> instance;
-  return instance;
-}
-Macondo::Params& pending_params() {
-  static Macondo::Params p;
-  return p;
-}
-}  // namespace
+MacondoOracle::Params::Params() : binary_path("/workspace/mount/macondo/bin/shell") {}
 
-Macondo::Params::Params() : binary_path("/workspace/mount/macondo/bin/shell") {}
+MacondoOracle::MacondoOracle(const Params& params)
+    : binary_(params.binary_path), lexicon_(params.lexicon) {}
 
-void Macondo::Params::add_options(boost::program_options::options_description& desc) {
-  namespace po = boost::program_options;
-  desc.add_options()(
-      "macondo", po::value<std::string>(&binary_path)->default_value(binary_path),
-      "path to the macondo binary; used by HastyBot and (best-effort) by the "
-      "human player to annotate the move list with equity");
-}
+MacondoOracle::~MacondoOracle() = default;
 
-void Macondo::set_params(const Params& params) {
-  if (singleton_slot()) {
-    throw std::runtime_error("Macondo::set_params called after instance() was built");
-  }
-  pending_params() = params;
-}
-
-Macondo& Macondo::instance() {
-  auto& slot = singleton_slot();
-  if (!slot) {
-    // Construct via reset() rather than make_unique so we can keep the ctor
-    // private and still wire up the singleton from this friend-free helper.
-    const Params& p = pending_params();
-    slot.reset(new Macondo(p.binary_path, p.lexicon));
-  }
-  return *slot;
-}
-
-Macondo::Macondo(const std::string& binary, const std::string& lexicon)
-    : binary_(binary), lexicon_(lexicon) {}
-
-Macondo::~Macondo() = default;
-
-void Macondo::ensure_started() {
+void MacondoOracle::ensure_started() {
   if (impl_) return;
   impl_ = std::make_unique<Impl>(binary_);
 }
 
 // --------------------------- evaluate ------------------------------------
 
-Macondo::EvalResult Macondo::evaluate(const Board& board, const Rack& my_rack, int my_score,
-                                      int opp_score, const std::vector<Move>& legal_plays) {
+MacondoOracle::EvalResult MacondoOracle::evaluate(const Board& board, const Rack& my_rack,
+                                                  int my_score, int opp_score,
+                                                  const std::vector<Move>& legal_plays) {
   ensure_started();
 
   EvalResult result;

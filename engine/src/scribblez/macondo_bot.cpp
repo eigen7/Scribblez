@@ -1,6 +1,7 @@
 #include "scribblez/macondo_bot.h"
 
-#include "scribblez/macondo.h"
+#include "scribblez/macondo_oracle.h"
+#include "scribblez/macondo_oracle_pool.h"
 #include "scribblez/move.h"
 
 #include <boost/program_options.hpp>
@@ -10,14 +11,16 @@
 
 namespace scribblez {
 
-HastyBotAgent::HastyBotAgent(const std::string& name) : name_(name) {}
+HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
+    : Agent(thread_id, name) {}
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
-  // Delegate to the shared Macondo subprocess. HastyBot just needs its top
-  // pick; the equities for every other play are computed too but only the
-  // human player consumes them (for the cheat-mode column).
-  auto eval = Macondo::instance().evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
-                                           req.legal_plays);
+  // Delegate to this thread's Macondo subprocess. HastyBot just needs its
+  // top pick; the equities for every other play are computed too but only
+  // the human player consumes them (for the cheat-mode column).
+  auto& oracle = MacondoOraclePool::instance().get(thread_id_);
+  auto eval = oracle.evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
+                              req.legal_plays);
   if (eval.best_index >= 0) return req.legal_plays[static_cast<size_t>(eval.best_index)];
 
   // Macondo's best play wasn't a legal Scribblez play here (e.g. it picked
@@ -28,7 +31,7 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
 }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        const std::string& name) {
+                                                        int thread_id, const std::string& name) {
   namespace po = boost::program_options;
 
   // No agent-specific options at present: the path to the macondo binary is
@@ -44,7 +47,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
     throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
   }
 
-  return std::make_unique<HastyBotAgent>(name);
+  return std::make_unique<HastyBotAgent>(thread_id, name);
 }
 
 std::string HastyBotAgent::options_help() {

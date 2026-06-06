@@ -37,8 +37,19 @@ struct MoveRequest {
 
 class Agent {
  public:
+  Agent(int thread_id, std::string name) : thread_id_(thread_id), name_(std::move(name)) {}
   virtual ~Agent() = default;
-  virtual std::string name() const = 0;
+
+  // Display name shown in logs / UI. Set at construction time and never
+  // changed, so this is intentionally non-virtual.
+  const std::string& name() const { return name_; }
+
+  // Index of the GameRunner thread this agent runs on (0..threads-1). Agents
+  // that need a per-thread external resource (e.g. a Macondo subprocess) key
+  // off this id via the corresponding pool, ensuring two agents on the same
+  // thread share the resource while different threads never contend.
+  int thread_id() const { return thread_id_; }
+
   virtual Move make_move(const MoveRequest& req) = 0;
 
   // Called once after the game ends, on each seat's agent. The returned
@@ -53,6 +64,10 @@ class Agent {
   // concurrently). Bot agents return true; the human web agent returns false
   // because it owns a browser session and interactive I/O.
   virtual bool supports_parallelism() const { return true; }
+
+ protected:
+  int thread_id_;
+  std::string name_;
 };
 
 // Picks the highest-scoring PLAY. If none exists, exchanges the entire rack
@@ -61,23 +76,21 @@ class Agent {
 // explicit --seed=N option).
 class GreedyAgent : public Agent {
  public:
-  explicit GreedyAgent(const std::string& name = "Greedy");
-  GreedyAgent(const std::string& name, uint64_t seed);
+  explicit GreedyAgent(int thread_id, const std::string& name = "Greedy");
+  GreedyAgent(int thread_id, const std::string& name, uint64_t seed);
 
-  std::string name() const override { return name_; }
   Move make_move(const MoveRequest& req) override;
 
   // Build a GreedyAgent from `--player "--type=greedy [options]"` tokens
   // (after the factory has stripped --type and --name). `name` is the resolved
   // display name. Throws std::runtime_error on bad input.
   static std::unique_ptr<GreedyAgent> from_spec(const std::vector<std::string>& tokens,
-                                                const std::string& name);
+                                                int thread_id, const std::string& name);
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
 
  private:
-  std::string name_;
   std::mt19937_64 rng_;
 };
 

@@ -26,7 +26,8 @@ add_executable(play_game
   src/scribblez/cli.cpp
   src/scribblez/game_runner.cpp
   src/scribblez/human_web_agent.cpp
-  src/scribblez/macondo.cpp
+  src/scribblez/macondo_oracle.cpp
+  src/scribblez/macondo_oracle_pool.cpp
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
