@@ -46,11 +46,7 @@ class Agent {
   // means "no opinion" (the bot batch loop / single-game exit governs).
   // The human web agent overrides this to surface the final position and a
   // Play Again / Quit prompt to the user.
-  virtual EndGameResult end_game(const Game& game, int my_seat) {
-    (void)game;
-    (void)my_seat;
-    return {};
-  }
+  virtual EndGameResult end_game(const Game& game, int my_seat) { return {}; }
 };
 
 // Picks the highest-scoring PLAY. If none exists, exchanges the entire rack
