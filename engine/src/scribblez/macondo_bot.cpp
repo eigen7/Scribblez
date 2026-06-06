@@ -12,15 +12,15 @@
 namespace scribblez {
 
 HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
-    : Agent(thread_id, name) {}
+    : Agent(thread_id, name), oracle_(&MacondoOraclePool::instance().get(thread_id)) {}
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
-  // Delegate to this thread's Macondo subprocess. HastyBot just needs its
-  // top pick; the equities for every other play are computed too but only
-  // the human player consumes them (for the cheat-mode column).
-  auto& oracle = MacondoOraclePool::instance().get(thread_id_);
-  auto eval = oracle.evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
-                              req.legal_plays);
+  // Delegate to this thread's Macondo subprocess (cached at construction).
+  // HastyBot just needs its top pick; the equities for every other play are
+  // computed too but only the human player consumes them (for the cheat-mode
+  // column).
+  auto eval = oracle_->evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
+                                req.legal_plays);
   if (eval.best_index >= 0) return req.legal_plays[static_cast<size_t>(eval.best_index)];
 
   // Macondo's best play wasn't a legal Scribblez play here (e.g. it picked

@@ -1,7 +1,9 @@
 #include "scribblez/game_runner.h"
 
+#include "scribblez/dictionary.h"
 #include "scribblez/exception.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/lexicon.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
 #include "scribblez/unique_id.h"
@@ -78,12 +80,6 @@ class GameRunner::Results {
 void GameRunner::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()                                                                  //
-      ("lexicon", po::value<std::string>(&lexicon)->default_value(lexicon),           //
-       "lexicon name; loaded from <lexica-dir>/<lexicon>.kwg. Run "
-       "setup_wizard.py outside the Docker container to install lexica.")             //
-      ("lexica-dir",                                                                  //
-       po::value<std::string>(&lexica_dir)->default_value(lexica_dir),                //
-       "directory holding .kwg files (rarely overridden)")                            //
       ("games", po::value<int>(&games)->default_value(games),                         //
        "play at least this many games in one process (seeds seed, seed+1, ...); "
        "humans may extend the loop via the Play Again button")                        //
@@ -94,10 +90,6 @@ void GameRunner::Params::add_options(boost::program_options::options_description
        "parallelism, i.e. no human players)")                                         //
       ("verbose,v", po::bool_switch(&verbose),                                        //
        "print final score and turn count to stderr");
-}
-
-std::string GameRunner::Params::kwg_path() const {
-  return lexica_dir + "/" + lexicon + ".kwg";
 }
 
 // --------------------------- ctor / run ----------------------------------
@@ -124,12 +116,16 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
   for (int i = 1; i < params_.threads; ++i) {
     agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/i));
   }
-  const std::string path = params_.kwg_path();
+  // Force the lexicon load now so any I/O error surfaces at construction
+  // time (rather than mid-game), and so the verbose summary below has the
+  // node count to report.
+  const Dictionary* dict = nullptr;
   try {
-    dict_ = Dictionary::load_kwg(path);
+    dict = &Lexicon::instance().dict();
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n"
-              << "Lexicon '" << params_.lexicon << "' is not installed at " << path << ".\n"
+              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
+              << Lexicon::instance().kwg_path() << ".\n"
               << "Run setup_wizard.py outside the Docker container to install it.\n";
     throw Exception(e.what());
   }
@@ -141,7 +137,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
     }
   }
   if (params_.verbose) {
-    std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << path << "\n"
+    std::cerr << "Loaded KWG (" << dict->num_nodes() << " nodes) from "
+              << Lexicon::instance().kwg_path() << "\n"
               << "Seed: " << seed_ << "\n";
   }
   results_ = std::make_unique<Results>(
@@ -154,7 +151,7 @@ std::pair<EndGameAction, EndGameAction> GameRunner::play_one_game(
     int thread_idx, const std::array<int, 2>& seats, uint64_t game_idx) {
   Agent& seat0 = *agents_[thread_idx][seats[0]];
   Agent& seat1 = *agents_[thread_idx][seats[1]];
-  Game game(seat0, seat1, dict_, seed_ + game_idx);
+  Game game(seat0, seat1, Lexicon::instance().dict(), seed_ + game_idx);
   game.play();
   const GameLog& log = game.log();
 

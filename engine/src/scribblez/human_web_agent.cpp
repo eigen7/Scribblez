@@ -32,7 +32,9 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
 
 HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                              const std::string& opp_name)
-    : Agent(thread_id, my_name), opp_name_(opp_name) {
+    : Agent(thread_id, my_name),
+      opp_name_(opp_name),
+      oracle_(&MacondoOraclePool::instance().get(thread_id)) {
   // The order matters: the WebSocket server must be bound (so its port is
   // listening) before we launch Vite, since Vite proxies /ws to it. Then we
   // block until Vite is accepting browser connections, and best-effort open
@@ -66,9 +68,8 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
   // without equities and the front-end leaves the column blank.
   std::vector<std::optional<double>> equities;
   try {
-    auto& oracle = MacondoOraclePool::instance().get(thread_id_);
-    auto result = oracle.evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
-                                  req.legal_plays);
+    auto result = oracle_->evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
+                                    req.legal_plays);
     equities = std::move(result.equities);
   } catch (const std::exception&) {
     equities.clear();

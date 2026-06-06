@@ -1,7 +1,6 @@
 #pragma once
 
 #include "scribblez/agent.h"
-#include "scribblez/dictionary.h"
 #include "scribblez/player_factory.h"
 
 #include <array>
@@ -24,22 +23,12 @@ namespace scribblez {
 class GameRunner {
  public:
   struct Params {
-    // Lexicon name (e.g. "NWL23", "CSW24"). The .kwg is loaded from
-    // <lexica_dir>/<lexicon>.kwg. Use the setup_wizard.py "install lexica"
-    // step to fetch additional lexica.
-    std::string lexicon = "NWL23";
-    // Directory holding the .kwg files. Defaults to the Docker mount layout
-    // (/workspace/mount/lexica); rarely overridden.
-    std::string lexica_dir = "/workspace/mount/lexica";
     int games = 1;            // minimum number of games to play
     std::string log_dir;      // if non-empty, write one <id>.gcg per game here
     int threads = 1;          // number of parallel game threads
     bool verbose = false;     // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
-
-    // Resolved path to the .kwg for params.lexicon.
-    std::string kwg_path() const;
   };
 
   // Constructs the runner from the two Params structs. Validates the params,
@@ -71,7 +60,6 @@ class GameRunner {
 
   Params params_;
   std::vector<PlayerFactory::Players> agents_;
-  Dictionary dict_;
   uint64_t seed_;
 
   std::unique_ptr<Results> results_;

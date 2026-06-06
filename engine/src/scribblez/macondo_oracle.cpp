@@ -1,6 +1,7 @@
 #include "scribblez/macondo_oracle.h"
 
 #include "scribblez/glyph.h"
+#include "scribblez/lexicon.h"
 #include "scribblez/tile.h"
 
 #include <boost/process.hpp>
@@ -214,7 +215,7 @@ struct MacondoOracle::Impl {
 MacondoOracle::Params::Params() : binary_path("/workspace/mount/macondo/bin/shell") {}
 
 MacondoOracle::MacondoOracle(const Params& params)
-    : binary_(params.binary_path), lexicon_(params.lexicon) {}
+    : binary_(params.binary_path) {}
 
 MacondoOracle::~MacondoOracle() = default;
 
@@ -245,7 +246,7 @@ MacondoOracle::EvalResult MacondoOracle::evaluate(const Board& board, const Rack
 
   // Drive Macondo: load the position, generate N plays, print a sentinel so
   // we know when its response ends.
-  std::string cgp = to_cgp(board, my_rack, my_score, opp_score, lexicon_);
+  std::string cgp = to_cgp(board, my_rack, my_score, opp_score, Lexicon::instance().name());
   impl_->to << "load cgp " << cgp << "\ngen " << kGenLimit << "\nSCRIBBLEZ_DONE\n" << std::flush;
 
   std::string line;

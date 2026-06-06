@@ -20,33 +20,15 @@ void MacondoOraclePool::add_options(boost::program_options::options_description&
       "human player to annotate the move list with equity");
 }
 
-void MacondoOraclePool::set_params(const MacondoOracle::Params& params) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!oracles_.empty()) {
-    throw std::runtime_error(
-        "MacondoOraclePool::set_params called after an oracle was built");
-  }
-  params_ = params;
-}
-
-void MacondoOraclePool::set_lexicon(const std::string& lexicon) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!oracles_.empty()) {
-    throw std::runtime_error(
-        "MacondoOraclePool::set_lexicon called after an oracle was built");
-  }
-  params_.lexicon = lexicon;
-}
-
 MacondoOracle& MacondoOraclePool::get(int thread_id) {
+  if (thread_id < 0) throw std::runtime_error("MacondoOraclePool::get: negative thread_id");
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = oracles_.find(thread_id);
-  if (it == oracles_.end()) {
-    auto [inserted, _] =
-        oracles_.emplace(thread_id, std::make_unique<MacondoOracle>(params_));
-    it = inserted;
+  if (static_cast<size_t>(thread_id) >= oracles_.size()) {
+    oracles_.resize(static_cast<size_t>(thread_id) + 1);
   }
-  return *it->second;
+  auto& slot = oracles_[static_cast<size_t>(thread_id)];
+  if (!slot) slot = std::make_unique<MacondoOracle>(params_);
+  return *slot;
 }
 
 }  // namespace scribblez

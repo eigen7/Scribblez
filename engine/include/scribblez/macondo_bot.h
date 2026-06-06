@@ -8,6 +8,8 @@
 
 namespace scribblez {
 
+class MacondoOracle;
+
 // A HastyBot player: delegates each move to Macondo's "best static play"
 // (HastyBot) via a per-thread MacondoOracle keyed off this agent's
 // thread_id() (see MacondoOraclePool). The path to the `macondo` binary is
@@ -25,6 +27,9 @@ class HastyBotAgent : public Agent {
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
+
+ private:
+  MacondoOracle* oracle_;
 };
 
 }  // namespace scribblez
