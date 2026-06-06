@@ -10,7 +10,34 @@ namespace scribblez {
 constexpr int BOARD_SIZE = 15;
 constexpr int CENTER = 7;
 
-enum class Premium : uint8_t { NONE = 0, DLS, TLS, DWS, TWS };
+class Premium {
+ public:
+  enum Kind : uint8_t { kNone = 0, kDLS, kTLS, kDWS, kTWS };
+
+  constexpr Premium() : kind_(kNone) {}
+  constexpr explicit Premium(Kind k) : kind_(k) {}
+
+  static const Premium NONE;
+  static const Premium DLS;
+  static const Premium TLS;
+  static const Premium DWS;
+  static const Premium TWS;
+
+  constexpr bool operator==(Premium o) const { return kind_ == o.kind_; }
+  constexpr bool operator!=(Premium o) const { return kind_ != o.kind_; }
+
+  constexpr int letter_mult() const { return kind_ == kDLS ? 2 : kind_ == kTLS ? 3 : 1; }
+  constexpr int word_mult()   const { return kind_ == kDWS ? 2 : kind_ == kTWS ? 3 : 1; }
+
+  constexpr char display_char() const;
+
+  // Returns "DL"/"TL"/"DW"/"TW" for premium squares, nullptr for NONE.
+  constexpr const char* code() const;
+
+ private:
+  Kind kind_;
+};
+static_assert(sizeof(Premium) == 1);
 
 struct Move;  // forward declaration
 

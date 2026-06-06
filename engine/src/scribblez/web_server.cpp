@@ -153,21 +153,6 @@ std::string header_value(const std::string& req, const std::string& name) {
 
 // --------------------------- JSON serialization --------------------------
 
-const char* premium_code(Premium p) {
-  switch (p) {
-    case Premium::DLS:
-      return "DL";
-    case Premium::TLS:
-      return "TL";
-    case Premium::DWS:
-      return "DW";
-    case Premium::TWS:
-      return "TW";
-    default:
-      return nullptr;
-  }
-}
-
 // ----------------------------- port freeing ------------------------------
 
 // PIDs currently listening on / connected to `port`, via `lsof -t -i :port`.
@@ -320,7 +305,7 @@ std::string game_state_json(const StateView& v) {
   for (int r = 0; r < BOARD_SIZE; ++r) {
     json::array row;
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      const char* code = premium_code(v.board.premium_at(r, c));
+      const char* code = v.board.premium_at(r, c).code();
       if (code)
         row.emplace_back(code);
       else

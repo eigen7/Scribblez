@@ -192,24 +192,14 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
     if (newly_placed) {
       Premium p = view.premium_at(row, c);
-      int letter_mult = 1;
-      int wm = 1;
-      if (p == Premium::DLS)
-        letter_mult = 2;
-      else if (p == Premium::TLS)
-        letter_mult = 3;
-      else if (p == Premium::DWS)
-        wm = 2;
-      else if (p == Premium::TWS)
-        wm = 3;
-      letter_value *= letter_mult;
-      word_mult *= wm;
+      letter_value *= p.letter_mult();
+      word_mult *= p.word_mult();
 
       const CrossCheck& cc = cross[idx(row, c)];
       if (cc.has_neighbor) {
         int placed_v = is_blank ? 0 : TILE_VALUES[L];
-        placed_v *= letter_mult;
-        cross_total += (cc.score + placed_v) * wm;
+        placed_v *= p.letter_mult();
+        cross_total += (cc.score + placed_v) * p.word_mult();
       }
     }
     main_letter_sum += letter_value;

@@ -7,6 +7,11 @@
 
 namespace scribblez {
 
+const Premium Premium::NONE = Premium(Premium::kNone);
+const Premium Premium::DLS  = Premium(Premium::kDLS);
+const Premium Premium::TLS  = Premium(Premium::kTLS);
+const Premium Premium::DWS  = Premium(Premium::kDWS);
+const Premium Premium::TWS  = Premium(Premium::kTWS);
 namespace {
 
 // Encoded as: '.' NONE, 'd' DLS, 't' TLS, 'D' DWS, 'T' TWS.
@@ -104,23 +109,8 @@ std::string Board::to_string() const {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph sq = at(r, c);
       if (sq.is_empty()) {
-        switch (premium_at(r, c)) {
-          case Premium::NONE:
-            s += ". ";
-            break;
-          case Premium::DLS:
-            s += "d ";
-            break;
-          case Premium::TLS:
-            s += "t ";
-            break;
-          case Premium::DWS:
-            s += "D ";
-            break;
-          case Premium::TWS:
-            s += "T ";
-            break;
-        }
+        s.push_back(premium_at(r, c).display_char());
+        s.push_back(' ');
       } else {
         s.push_back(sq.is_blank() ? static_cast<char>('a' + sq.letter())
                                   : static_cast<char>('A' + sq.letter()));
