@@ -6,13 +6,13 @@ Run this *outside* the Docker container. It:
      the container at /workspace/mount. Build artifacts that need to outlive a
      single container, plus large data files (Macondo, lexica), live there.
   2. Verifies you can run `docker` without sudo.
-  3. Clones + builds Macondo (the static-equity engine Scribblez delegates to)
-     into <mount>/macondo. The shell binary lands at <mount>/macondo/bin/shell.
-  4. Downloads .kwg lexicon files from the public Woogles/liwords repo into
+  3. Downloads .kwg lexicon files from the public Woogles/liwords repo into
      <mount>/lexica/, and symlinks them into Macondo's own data dir so the
      macondo subprocess can find them too. The KWG files are not redistributed
      by Scribblez; we just automate the same fetch-from-upstream the user
      would do by hand.
+
+The Macondo checkout and binary are managed by build.py, not this wizard.
 
 Re-run the wizard any time you want to install additional lexica.
 """
@@ -28,7 +28,6 @@ from setup_common import (
     CONTAINER_MOUNT_PATH,
     DEFAULT_LEXICA,
     LIWORDS_KWG_URL_TEMPLATE,
-    MACONDO_REPO_URL,
     get_env_json,
     in_docker_container,
     is_subpath,
@@ -104,51 +103,13 @@ def check_docker_permissions() -> None:
     raise SetupException()
 
 
-# ---- Step 3: macondo ----------------------------------------------------
+# ---- helpers -----------------------------------------------------------
 
 def _have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-def setup_macondo(mount: Path) -> None:
-    macondo_dir = mount / "macondo"
-    shell_bin = macondo_dir / "bin" / "shell"
-
-    if shell_bin.exists():
-        print_green(f"Macondo already built at {shell_bin}.")
-        return
-
-    if not _have("git"):
-        print_red("`git` is required but not on PATH.")
-        raise SetupException()
-    if not _have("go"):
-        print_red("`go` is required to build Macondo but was not found on PATH.")
-        print("Install from https://go.dev/dl/ (>= 1.21) and re-run the wizard.")
-        raise SetupException()
-
-    if not macondo_dir.exists():
-        print(f"Cloning Macondo into {macondo_dir} ...")
-        rc = subprocess.run(
-            ["git", "clone", "--depth", "1", MACONDO_REPO_URL, str(macondo_dir)]
-        ).returncode
-        if rc != 0:
-            print_red("git clone failed.")
-            raise SetupException()
-
-    print(f"Building Macondo (go build) -> {shell_bin} ...")
-    macondo_dir.joinpath("bin").mkdir(exist_ok=True)
-    rc = subprocess.run(
-        ["go", "build", "-o", "bin/shell", "./cmd/shell"],
-        cwd=str(macondo_dir),
-    ).returncode
-    if rc != 0:
-        print_red("`go build` failed.")
-        raise SetupException()
-
-    print_green(f"Built Macondo: {shell_bin}")
-
-
-# ---- Step 4: lexica -----------------------------------------------------
+# ---- Step 3: lexica -----------------------------------------------------
 
 def installed_lexica(mount: Path) -> list[str]:
     lex_dir = mount / "lexica"
@@ -264,8 +225,6 @@ def main() -> None:
         mount = setup_mount_dir()
         print("*" * 78)
         check_docker_permissions()
-        print("*" * 78)
-        setup_macondo(mount)
         print("*" * 78)
         setup_lexica(mount)
         print("*" * 78)

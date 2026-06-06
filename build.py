@@ -19,6 +19,13 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# Pinned Macondo release. build.py will clone this tag if the repo is absent,
+# and will error if the existing checkout is at a different tag (unless
+# --skip-macondo-tag-check is passed).
+MACONDO_TAG = "v0.13.1"
+MACONDO_DIR = "/workspace/mount/macondo"
+MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
+
 
 def run(cmd, cwd=None):
     print(f"$ {cmd}")
@@ -42,6 +49,10 @@ def main():
                         help="skip installing the web UI npm dependencies")
     parser.add_argument("--skip-macondo", action="store_true",
                         help="skip rebuilding the Macondo shell binary")
+    parser.add_argument("--skip-macondo-tag-check", action="store_true",
+                        help="skip verifying that the macondo checkout is at "
+                             f"the expected tag ({MACONDO_TAG}); useful when "
+                             "fiddling with the macondo source")
     args = parser.parse_args()
 
     build_dir = os.path.join(ROOT, "build")
@@ -67,19 +78,34 @@ def main():
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
-    # 3. Rebuild the Macondo shell binary so it stays in sync with the
-    #    checkout at /workspace/mount/macondo. setup_wizard.py did the initial
-    #    clone + build; this picks up any subsequent `git pull` there.
+    # 3. Clone (if absent) and build the Macondo shell binary.
     if not args.skip_macondo:
-        macondo_dir = "/workspace/mount/macondo"
-        if not os.path.isdir(macondo_dir):
-            print(f"\nWARNING: {macondo_dir} not found -- skipping Macondo build.\n"
-                  "Run ./setup_wizard.py on the host to clone it.")
+        if shutil.which("git") is None:
+            print("\nWARNING: `git` not found on PATH -- skipping Macondo build.")
         elif shutil.which("go") is None:
             print("\nWARNING: `go` not found on PATH -- skipping Macondo build.")
         else:
-            os.makedirs(os.path.join(macondo_dir, "bin"), exist_ok=True)
-            run("go build -o bin/shell ./cmd/shell", cwd=macondo_dir)
+            if not os.path.isdir(MACONDO_DIR):
+                print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
+                run(f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
+                    f"{MACONDO_REPO_URL} {MACONDO_DIR}")
+            elif not args.skip_macondo_tag_check:
+                result = subprocess.run(
+                    ["git", "describe", "--tags", "--exact-match", "HEAD"],
+                    capture_output=True, text=True, cwd=MACONDO_DIR,
+                )
+                current_tag = result.stdout.strip()
+                if result.returncode != 0 or current_tag != MACONDO_TAG:
+                    display = current_tag or "(not on an exact tag)"
+                    print(
+                        f"\nError: macondo at {MACONDO_DIR} is at '{display}', "
+                        f"but this project expects '{MACONDO_TAG}'.\n"
+                        "Update MACONDO_TAG in build.py, re-clone the directory, "
+                        "or pass --skip-macondo-tag-check to build anyway."
+                    )
+                    sys.exit(1)
+            os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
+            run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
 
     print("\nBuild complete. Play a human-vs-AI game with:")
     print('    ./build/engine/play_game --player "--type=human" --player "--type=greedy"')
