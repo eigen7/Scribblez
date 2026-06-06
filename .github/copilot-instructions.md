@@ -1,4 +1,8 @@
-# Scribblez C++ Conventions
+# Doc
+
+Please reference docs/Scribblez.pdf to understand the overall goal of this project.
+
+# C++ Code
 
 ## Inline methods
 
@@ -8,3 +12,7 @@
   directly in the header.
 - Every `.inl` file `#include`s its own header at the top and is `#include`d
   at the bottom of that header.
+
+## Clang-format
+
+After editing any file, make sure to sanitize it with clang-format
