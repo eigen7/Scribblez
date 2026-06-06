@@ -9,6 +9,8 @@ add_library(scribblez_core STATIC
   src/scribblez/movegen.cpp
   src/scribblez/game.cpp
   src/scribblez/gcg_writer.cpp
+  src/scribblez/binary_log.cpp
+  src/scribblez/unique_id.cpp
 )
 target_include_directories(scribblez_core PUBLIC
   include
@@ -32,7 +34,6 @@ add_executable(play_game
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
-  src/scribblez/unique_id.cpp
   src/scribblez/web_server.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core

@@ -37,7 +37,7 @@ struct MoveRequest {
 
 class Agent {
  public:
-  Agent(int thread_id, std::string name) : thread_id_(thread_id), name_(std::move(name)) {}
+  Agent(int thread_id, const std::string& name) : thread_id_(thread_id), name_(name) {}
   virtual ~Agent() = default;
 
   // Display name shown in logs / UI. Set at construction time and never
