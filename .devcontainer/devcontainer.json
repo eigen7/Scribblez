@@ -1,0 +1,6 @@
+{
+  // Tells VS Code to run terminals, tasks, and extensions as devuser rather
+  // than as root. The container is started externally by run_docker.py;
+  // VS Code reads this file when attaching to the running container.
+  "remoteUser": "devuser"
+}
