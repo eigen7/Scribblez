@@ -47,6 +47,12 @@ class Agent {
   // The human web agent overrides this to surface the final position and a
   // Play Again / Quit prompt to the user.
   virtual EndGameResult end_game(const Game& game, int my_seat) { return {}; }
+
+  // Returns true if this agent can safely run in a multi-threaded game loop
+  // (i.e. multiple independent instances of this agent class can execute
+  // concurrently). Bot agents return true; the human web agent returns false
+  // because it owns a browser session and interactive I/O.
+  virtual bool supports_parallelism() const { return true; }
 };
 
 // Picks the highest-scoring PLAY. If none exists, exchanges the entire rack

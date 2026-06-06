@@ -2,15 +2,23 @@
 
 #include "scribblez/exception.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
+#include "scribblez/unique_id.h"
 
 #include <boost/program_options.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <mutex>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 
@@ -18,31 +26,34 @@ namespace scribblez {
 
 class GameRunner::Results {
  public:
-  Results(std::array<std::string, 2> names, std::ostream& gcg_out)
-      : names_(std::move(names)), gcg_out_(gcg_out) {}
+  explicit Results(std::array<std::string, 2> names) : names_(std::move(names)) {}
 
-  // Append the game's GCG to the output, and tally win/loss/draw and turn
-  // count. `player_at_seat[s]` is the persistent player index (0 or 1) that
-  // sat at seat `s` in this game; used to translate per-seat final scores
-  // back into per-player tallies.
-  void record(const GameLog& log, const std::array<int, 2>& player_at_seat) {
-    gcg_out_ << game_log_to_gcg(log);
+  // Append the game tally. `seats[s]` is the persistent player index (0 or 1)
+  // that sat at seat `s` in this game. Thread-safe.
+  void record(const GameLog& log, const std::array<int, 2>& seats, bool verbose) {
+    int winning_seat = -1;
+    if (log.final_scores[0] != log.final_scores[1])
+      winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
+
+    std::lock_guard<std::mutex> lock(mutex_);
     total_turns_ += static_cast<long>(log.turns.size());
     ++games_played_;
-    if (log.final_scores[0] == log.final_scores[1]) {
+    if (winning_seat < 0) {
       ++draws_;
     } else {
-      int winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
-      ++wins_[player_at_seat[winning_seat]];
+      ++wins_[seats[winning_seat]];
+    }
+    if (verbose) {
+      std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1]
+                << "  (" << log.end_reason << ")\n"
+                << "Turns: " << log.turns.size() << "\n";
     }
   }
 
-  int games_played() const { return games_played_; }
-
-  void print_game_summary(std::ostream& os, const GameLog& log) const {
-    os << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
-       << log.end_reason << ")\n"
-       << "Turns: " << log.turns.size() << "\n";
+  // Returns the number of games recorded so far. Thread-safe.
+  int games_played() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return games_played_;
   }
 
   void print_batch_summary(std::ostream& os, double elapsed_secs) const {
@@ -54,8 +65,8 @@ class GameRunner::Results {
   }
 
  private:
+  mutable std::mutex mutex_;
   std::array<std::string, 2> names_;
-  std::ostream& gcg_out_;
   std::array<int, 2> wins_ = {0, 0};
   int draws_ = 0;
   int games_played_ = 0;
@@ -76,8 +87,11 @@ void GameRunner::Params::add_options(boost::program_options::options_description
       ("games", po::value<int>(&games)->default_value(games),                         //
        "play at least this many games in one process (seeds seed, seed+1, ...); "
        "humans may extend the loop via the Play Again button")                        //
-      ("out", po::value<std::string>(&out_path),                                      //
-       "write the GCG game logs here (default: stdout)")                              //
+      ("log-dir", po::value<std::string>(&log_dir),                                   //
+       "directory to write one <timestamp>.gcg log per game (omit to suppress logs)") //
+      ("threads,t", po::value<int>(&threads)->default_value(threads),                 //
+       "number of parallel game threads (>1 requires all players to support "
+       "parallelism, i.e. no human players)")                                         //
       ("verbose,v", po::bool_switch(&verbose),                                        //
        "print final score and turn count to stderr");
 }
@@ -88,14 +102,27 @@ std::string GameRunner::Params::kwg_path() const {
 
 // --------------------------- ctor / run ----------------------------------
 
-GameRunner::GameRunner(const Params& params, PlayerFactory::Players players)
+GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params),
-      agents_(std::move(players)),
-      seed_(SeedProducer::instance().next()),
-      out_(&std::cout) {
+      seed_(SeedProducer::instance().next()) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";
     throw Exception("--games must be >= 1");
+  }
+  if (params_.threads < 1) {
+    std::cerr << "Error: --threads must be >= 1\n";
+    throw Exception("--threads must be >= 1");
+  }
+  // Build the first pair to check parallelism support before creating the rest.
+  agents_.push_back(PlayerFactory::make_players(player_params));
+  bool parallel_ok =
+      agents_[0][0]->supports_parallelism() && agents_[0][1]->supports_parallelism();
+  if (!parallel_ok && params_.threads > 1) {
+    std::cerr << "Warning: a player does not support parallelism; running single-threaded.\n";
+    params_.threads = 1;
+  }
+  for (int i = 1; i < params_.threads; ++i) {
+    agents_.push_back(PlayerFactory::make_players(player_params));
   }
   const std::string path = params_.kwg_path();
   try {
@@ -106,54 +133,90 @@ GameRunner::GameRunner(const Params& params, PlayerFactory::Players players)
               << "Run setup_wizard.py outside the Docker container to install it.\n";
     throw Exception(e.what());
   }
-  if (!params_.out_path.empty()) {
-    of_.open(params_.out_path);
-    if (!of_) {
-      std::cerr << "Error: failed to open output file: " << params_.out_path << "\n";
-      throw Exception("failed to open output file: " + params_.out_path);
+  if (!params_.log_dir.empty()) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(params_.log_dir, ec)) {
+      std::cerr << "Error: --log-dir '" << params_.log_dir << "' is not a directory\n";
+      throw Exception("--log-dir is not a directory: " + params_.log_dir);
     }
-    out_ = &of_;
   }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << path << "\n"
               << "Seed: " << seed_ << "\n";
   }
   results_ = std::make_unique<Results>(
-      std::array<std::string, 2>{agents_[0]->name(), agents_[1]->name()}, *out_);
+      std::array<std::string, 2>{agents_[0][0]->name(), agents_[0][1]->name()});
 }
 
 GameRunner::~GameRunner() = default;
 
-bool GameRunner::play_one_game(std::array<int, 2>& player_at_seat, uint64_t game_idx) {
-  Agent& seat0 = *agents_[player_at_seat[0]];
-  Agent& seat1 = *agents_[player_at_seat[1]];
+std::pair<EndGameAction, EndGameAction> GameRunner::play_one_game(
+    int thread_idx, const std::array<int, 2>& seats, uint64_t game_idx) {
+  Agent& seat0 = *agents_[thread_idx][seats[0]];
+  Agent& seat1 = *agents_[thread_idx][seats[1]];
   Game game(seat0, seat1, dict_, seed_ + game_idx);
   game.play();
   const GameLog& log = game.log();
-  results_->record(log, player_at_seat);
-  if (params_.verbose) results_->print_game_summary(std::cerr, log);
+
+  if (!params_.log_dir.empty()) {
+    std::string path =
+        params_.log_dir + "/" + std::to_string(get_unique_id()) + ".gcg";
+    std::ofstream f(path);
+    if (f) {
+      write_game_log_gcg(log, f);
+    } else {
+      std::cerr << "Warning: failed to open log file: " << path << "\n";
+    }
+  }
+
+  results_->record(log, seats, params_.verbose);
 
   auto r0 = seat0.end_game(game, 0);
   auto r1 = seat1.end_game(game, 1);
-  bool quit = r0.action == EndGameAction::QUIT || r1.action == EndGameAction::QUIT;
-  bool play_again =
-      r0.action == EndGameAction::PLAY_AGAIN || r1.action == EndGameAction::PLAY_AGAIN;
-  if (quit) return false;
-  if (!play_again && results_->games_played() >= params_.games) return false;
-  return true;
+  return {r0.action, r1.action};
 }
 
 void GameRunner::run() {
-  // Seats swap every game so the two players alternate who starts; who
-  // starts game 1 is decided by the low bit of the seed.
-  std::array<int, 2> player_at_seat = {static_cast<int>(seed_ & 1ULL),
-                                       static_cast<int>(1 - (seed_ & 1ULL))};
-  uint64_t game_idx = 0;
   auto t0 = std::chrono::steady_clock::now();
-  while (play_one_game(player_at_seat, game_idx)) {
-    std::swap(player_at_seat[0], player_at_seat[1]);
-    ++game_idx;
+
+  if (agents_.size() == 1) {
+    // Serial mode: supports PLAY_AGAIN / QUIT signalling from agents.
+    // Seats swap every game so the two players alternate who starts; who
+    // starts game 1 is decided by the low bit of the seed.
+    std::array<int, 2> player_at_seat = {static_cast<int>(seed_ & 1ULL),
+                                         static_cast<int>(1 - (seed_ & 1ULL))};
+    uint64_t game_idx = 0;
+    while (true) {
+      auto [a0, a1] = play_one_game(0, player_at_seat, game_idx);
+      bool quit = a0 == EndGameAction::QUIT || a1 == EndGameAction::QUIT;
+      bool play_again = a0 == EndGameAction::PLAY_AGAIN || a1 == EndGameAction::PLAY_AGAIN;
+      if (quit) break;
+      if (!play_again && results_->games_played() >= params_.games) break;
+      std::swap(player_at_seat[0], player_at_seat[1]);
+      ++game_idx;
+    }
+  } else {
+    // Parallel mode: play exactly params_.games games across a thread pool.
+    // Each game's seat assignment alternates with game_idx so overall balance
+    // is preserved across any interleaving of threads.
+    std::atomic<uint64_t> next_game{0};
+    const uint64_t total = static_cast<uint64_t>(params_.games);
+    std::vector<std::thread> workers;
+    workers.reserve(agents_.size());
+    for (int t = 0; t < static_cast<int>(agents_.size()); ++t) {
+      workers.emplace_back([&, t]() {
+        while (true) {
+          uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
+          if (idx >= total) break;
+          int seat0_player = static_cast<int>((seed_ + idx) & 1ULL);
+          std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
+          play_one_game(t, seats, idx);
+        }
+      });
+    }
+    for (auto& w : workers) w.join();
   }
+
   if (params_.verbose && results_->games_played() > 1) {
     double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     results_->print_batch_summary(std::cerr, secs);

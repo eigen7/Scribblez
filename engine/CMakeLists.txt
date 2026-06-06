@@ -30,6 +30,7 @@ add_executable(play_game
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
+  src/scribblez/unique_id.cpp
   src/scribblez/web_server.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core

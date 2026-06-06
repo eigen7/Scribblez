@@ -5,10 +5,9 @@
 #include "scribblez/player_factory.h"
 
 #include <array>
-#include <fstream>
-#include <iosfwd>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Forward-declared so Params::add_options() can register options without
 // pulling boost::program_options into every consumer of this header.
@@ -16,10 +15,12 @@ namespace boost::program_options { class options_description; }
 
 namespace scribblez {
 
-// Owns the agents, the GCG output stream, the win/loss tally, and the game
-// loop. Plays a series of games on a fixed dictionary, alternating seats
-// each game and honoring each agent's EndGameResult to extend (PLAY_AGAIN)
-// or shorten (QUIT) the series past the requested `--games` count.
+// Owns the agents, the win/loss tally, and the game loop. Plays a series of
+// games on a fixed dictionary, alternating seats each game and honoring each
+// agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT) the series
+// past the requested `--games` count. Supports parallel execution via a
+// thread pool (--threads / -t); human players disable parallelism because they
+// own an interactive browser session.
 class GameRunner {
  public:
   struct Params {
@@ -31,7 +32,8 @@ class GameRunner {
     // (/workspace/mount/lexica); rarely overridden.
     std::string lexica_dir = "/workspace/mount/lexica";
     int games = 1;            // minimum number of games to play
-    std::string out_path;     // empty => stdout
+    std::string log_dir;      // if non-empty, write one <id>.gcg per game here
+    int threads = 1;          // number of parallel game threads
     bool verbose = false;     // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
@@ -40,36 +42,38 @@ class GameRunner {
     std::string kwg_path() const;
   };
 
-  // Takes ownership of `players` and loads the lexicon named by
-  // params.lexicon. Pulls its starting seed from SeedProducer::instance()
-  // (which the caller is responsible for having reseeded from --seed if
-  // reproducibility is desired); the starting seed decides who starts
-  // game 1 (low bit) and seeds the bag (seed, seed+1, ...) for successive
-  // games. Throws scribblez::Exception on user-visible errors (bad
-  // --games, missing lexicon, failed output file), having already printed
-  // an explanation to stderr.
-  GameRunner(const Params& params, PlayerFactory::Players players);
+  // Constructs the runner from the two Params structs. Validates the params,
+  // builds one agent pair per thread (checking parallelism support and
+  // downgrading to 1 thread with a warning if any player cannot run in
+  // parallel), and loads the lexicon. Pulls its starting seed from
+  // SeedProducer::instance() (which the caller is responsible for having
+  // reseeded from --seed if reproducibility is desired). Throws
+  // scribblez::Exception on user-visible errors (bad --games/--threads,
+  // missing lexicon, bad log dir), having already printed an explanation
+  // to stderr.
+  GameRunner(const Params& runner_params, const PlayerFactory::Params& player_params);
   ~GameRunner();
 
-  // Run the game loop. Throws on output-file failures; returns normally on
-  // a clean end (whether by --games count, PLAY_AGAIN extension, or QUIT).
+  // Run the game loop. For threads==1 the loop honors PLAY_AGAIN/QUIT from
+  // agents; for threads>1 it plays exactly params.games games in parallel.
+  // Returns normally on a clean end.
   void run();
 
  private:
   // Per-game-and-batch tally, indexed by *player identity* rather than seat
-  // (seats alternate every game).
+  // (seats alternate every game). Thread-safe via an internal mutex.
   class Results;
 
-  // One iteration of the loop. Returns false if the loop should terminate.
-  bool play_one_game(std::array<int, 2>& player_at_seat, uint64_t game_idx);
+  // Play one game using agents_[thread_idx]. Returns the EndGameActions from
+  // each seat's agent (only meaningful for the serial/single-thread path).
+  std::pair<EndGameAction, EndGameAction> play_one_game(
+      int thread_idx, const std::array<int, 2>& seats, uint64_t game_idx);
 
   Params params_;
-  std::array<std::unique_ptr<Agent>, 2> agents_;
+  std::vector<PlayerFactory::Players> agents_;
   Dictionary dict_;
   uint64_t seed_;
 
-  std::ofstream of_;   // owns the file iff params_.out_path is non-empty
-  std::ostream* out_;  // points at of_ or std::cout (never null)
   std::unique_ptr<Results> results_;
 };
 

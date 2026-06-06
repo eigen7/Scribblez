@@ -1,10 +1,10 @@
 // play_game: runs Scrabble games between two agents (Greedy, HastyBot, or
-// Human) and writes one GCG-format game log per game to the output. A Human
-// player is driven through a local web UI.
+// Human) and optionally writes one GCG-format game log per game to a
+// directory. A Human player is driven through a local web UI.
 //
 // Usage:
 //   play_game [--player "--type=T [opts]"]... [--lexicon NAME] [--seed N]
-//             [--out PATH] [--macondo PATH] [--games N] [--verbose]
+//             [--log-dir DIR] [--games N] [--threads N] [--verbose]
 //
 // Each --player spec selects a seat; repeat once per seat (defaults to two
 // greedy players). The human agent's own --port / --vite-port / --web-dir
@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
     // Macondo's CGP needs the same lexicon name we loaded for the engine.
     macondo_params.lexicon = runner_params.lexicon;
     scribblez::Macondo::set_params(macondo_params);
-    auto players = scribblez::PlayerFactory::make_players(player_params);
-    scribblez::GameRunner runner(runner_params, std::move(players));
+
+    scribblez::GameRunner runner(runner_params, player_params);
     runner.run();
     return 0;
   } catch (const scribblez::CleanExit&) {

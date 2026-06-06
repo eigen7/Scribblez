@@ -42,6 +42,10 @@ class HumanWebAgent : public Agent {
   // corresponding EndGameAction.
   EndGameResult end_game(const Game& game, int my_seat) override;
 
+  // Human players drive an interactive browser session and cannot safely run
+  // concurrently with other games in a thread pool.
+  bool supports_parallelism() const override { return false; }
+
   // Build a HumanWebAgent from `--player "--type=human [options]"` tokens
   // (after the factory has stripped --type and --name). Throws on bad input.
   static std::unique_ptr<HumanWebAgent> from_spec(const std::vector<std::string>& tokens,
