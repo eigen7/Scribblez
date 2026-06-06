@@ -40,6 +40,8 @@ def main():
                         help="parallel build jobs (default: all CPUs)")
     parser.add_argument("--skip-web", action="store_true",
                         help="skip installing the web UI npm dependencies")
+    parser.add_argument("--skip-macondo", action="store_true",
+                        help="skip rebuilding the Macondo shell binary")
     args = parser.parse_args()
 
     build_dir = os.path.join(ROOT, "build")
@@ -64,6 +66,20 @@ def main():
                 run("npm ci --no-audit --no-fund", cwd=web_dir)
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
+
+    # 3. Rebuild the Macondo shell binary so it stays in sync with the
+    #    checkout at /workspace/mount/macondo. setup_wizard.py did the initial
+    #    clone + build; this picks up any subsequent `git pull` there.
+    if not args.skip_macondo:
+        macondo_dir = "/workspace/mount/macondo"
+        if not os.path.isdir(macondo_dir):
+            print(f"\nWARNING: {macondo_dir} not found -- skipping Macondo build.\n"
+                  "Run ./setup_wizard.py on the host to clone it.")
+        elif shutil.which("go") is None:
+            print("\nWARNING: `go` not found on PATH -- skipping Macondo build.")
+        else:
+            os.makedirs(os.path.join(macondo_dir, "bin"), exist_ok=True)
+            run("go build -o bin/shell ./cmd/shell", cwd=macondo_dir)
 
     print("\nBuild complete. Play a human-vs-AI game with:")
     print('    ./build/engine/play_game --player "--type=human" --player "--type=greedy"')
