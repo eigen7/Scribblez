@@ -11,6 +11,11 @@ const wsPort = Number(process.env.VITE_WS_PORT ?? 8080);
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Listen on all interfaces so that when play_game runs inside a Docker
+    // container (see run_docker.py), the host's browser can reach the dev
+    // server through the forwarded port. Defaults to 127.0.0.1, which is
+    // unreachable from outside the container.
+    host: true,
     port: devPort,
     strictPort: true,
     proxy: {
