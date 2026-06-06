@@ -26,19 +26,31 @@ docs/                   design document
 
 ## Build
 
-Requires CMake >= 3.16, a C++17 compiler, Boost (>= 1.83), and -- for
-human-vs-AI web play -- Node.js/npm. The one-shot build script compiles the
-engine and installs the web UI's npm dependencies:
+Scribblez is developed and run inside a Docker container. All build tools,
+Boost, Node, Python, CUDA-capable PyTorch, and the rest are baked into the
+image; you don't install any of them on the host.
+
+**One-time host setup** (`docker` and `go` are the only host requirements; the
+wizard checks the rest):
 
 ```bash
-./build.py            # cmake configure+build, then `npm ci` in web/
-./build.py --debug    # debug build
-./build.py --clean    # wipe build/ first
-ctest --test-dir build   # runs engine unit tests
+./setup_wizard.py        # picks a mount dir, clones+builds Macondo, fetches lexica
+./build_docker_image.py  # builds the local `scribblez` docker image
 ```
 
-(You can still drive CMake directly -- `cmake -S . -B build && cmake --build
-build -j` -- but then install the web deps yourself with `npm --prefix web ci`.)
+**Every dev session**, launch the container and build inside it:
+
+```bash
+./run_docker.py          # drop into a shell at /workspace/repo
+# (inside the container)
+./build.py               # cmake + npm install
+ctest --test-dir build   # engine unit tests
+```
+
+`./run_docker.py` bind-mounts the repo and your mount dir, so build artifacts
+in `build/` and downloaded data both persist on the host between container
+runs. Re-running it while a container is already up just `exec`s into the
+running one.
 
 This produces:
 
@@ -49,16 +61,15 @@ Release builds use link-time optimization (LTO) where the toolchain supports it.
 
 ## Dictionary
 
-The engine loads a lexicon from a **KWG** file (the wolges/Macondo binary word-graph
-format). The default lexicon is **NWL23** (NASPA Word List 2023). The wordlist
-itself is copyrighted, so the `.kwg` binary -- which encodes it -- is **not
-committed**; obtain it from a Macondo checkout (`data/lexica/gaddag/NWL23.kwg`)
-and place or symlink it under `data/lexica/` here:
-
-```bash
-mkdir -p data/lexica
-ln -s /path/to/macondo/data/lexica/gaddag/NWL23.kwg data/lexica/NWL23.kwg
-```
+The engine loads a lexicon from a **KWG** file (the wolges/Macondo binary
+word-graph format). The default lexicon is **NWL23** (NASPA Word List 2023).
+The NWL wordlist is copyrighted, so the `.kwg` binary is **not** committed,
+and we don't bake it into the Docker image either. Instead, `setup_wizard.py`
+downloads it on the host from the public Woogles/liwords URL into your mount
+directory at `<mount>/lexica/NWL23.kwg`, which the container sees at
+`/workspace/mount/lexica/NWL23.kwg`. The wizard's "install lexica" step is
+re-runnable; it lists what you already have and prompts for any additional
+lexica to fetch (CSW24, NSWL23, NWL20, etc.).
 
 A KWG bundles both a forward DAWG (node 0) and a GADDAG (node 1). The move
 generator uses the GADDAG (Gordon's algorithm); whole-word lookup and cross-checks
@@ -80,13 +91,15 @@ Flags:
   little option string: `--type` is `greedy`, `human`, or `hastybot`, with an
   optional `--name=...` for the display name. Defaults to two greedy players;
   at most one `human` is supported.
-  * `hastybot` delegates each move to **Macondo**'s best static play. It needs
-    the path to a built `macondo` shell binary via `--macondo=...`, e.g.
-    `--player "--type=hastybot --macondo=/path/to/macondo/bin/shell"`. One
-    persistent Macondo process is shared across all turns/games. Macondo must
-    use the same lexicon (Scribblez forces NWL23 in the position it sends).
-* `--kwg PATH` (alias `--dict`) -- lexicon to use. Defaults to
-  `data/lexica/NWL23.kwg`.
+  * `hastybot` delegates each move to **Macondo**'s best static play. The
+    macondo binary path defaults to `/workspace/mount/macondo/bin/shell`
+    (populated by `setup_wizard.py`); override with `--macondo=...` if needed.
+    One persistent Macondo process is shared across all turns/games, and the
+    engine forwards `--lexicon` into the position it sends so both sides agree.
+* `--lexicon NAME` -- lexicon to use (default: `NWL23`). The .kwg is loaded
+  from `<lexica-dir>/<NAME>.kwg`.
+* `--lexica-dir DIR` -- where to look for `.kwg` files (default:
+  `/workspace/mount/lexica`; rarely overridden).
 * `--seed N` (default: hardware random)
 * `--out PATH` (default: stdout)
 * `--port N` -- engine WebSocket port for human play (default: 8080)

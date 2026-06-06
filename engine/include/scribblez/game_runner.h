@@ -23,16 +23,25 @@ namespace scribblez {
 class GameRunner {
  public:
   struct Params {
-    std::string kwg_path = "data/lexica/NWL23.kwg";  // lexicon file to load
+    // Lexicon name (e.g. "NWL23", "CSW24"). The .kwg is loaded from
+    // <lexica_dir>/<lexicon>.kwg. Use the setup_wizard.py "install lexica"
+    // step to fetch additional lexica.
+    std::string lexicon = "NWL23";
+    // Directory holding the .kwg files. Defaults to the Docker mount layout
+    // (/workspace/mount/lexica); rarely overridden.
+    std::string lexica_dir = "/workspace/mount/lexica";
     int games = 1;            // minimum number of games to play
     std::string out_path;     // empty => stdout
     bool verbose = false;     // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
+
+    // Resolved path to the .kwg for params.lexicon.
+    std::string kwg_path() const;
   };
 
   // Takes ownership of `players` and loads the lexicon named by
-  // params.kwg_path. Pulls its starting seed from SeedProducer::instance()
+  // params.lexicon. Pulls its starting seed from SeedProducer::instance()
   // (which the caller is responsible for having reseeded from --seed if
   // reproducibility is desired); the starting seed decides who starts
   // game 1 (low bit) and seeds the bag (seed, seed+1, ...) for successive

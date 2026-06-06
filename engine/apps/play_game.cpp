@@ -3,7 +3,7 @@
 // player is driven through a local web UI.
 //
 // Usage:
-//   play_game [--player "--type=T [opts]"]... [--kwg PATH] [--seed N]
+//   play_game [--player "--type=T [opts]"]... [--lexicon NAME] [--seed N]
 //             [--out PATH] [--macondo PATH] [--games N] [--verbose]
 //
 // Each --player spec selects a seat; repeat once per seat (defaults to two
@@ -50,6 +50,8 @@ int main(int argc, char** argv) {
             scribblez::PlayerFactory::all_player_types_help());
 
     scribblez::SeedProducer::instance().seed(seed_params);
+    // Macondo's CGP needs the same lexicon name we loaded for the engine.
+    macondo_params.lexicon = runner_params.lexicon;
     scribblez::Macondo::set_params(macondo_params);
     auto players = scribblez::PlayerFactory::make_players(player_params);
     scribblez::GameRunner runner(runner_params, std::move(players));

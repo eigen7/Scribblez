@@ -7,8 +7,12 @@ __pycache__/
 .vscode/
 
 # Lexicon binaries are not committed (encode a copyrighted wordlist).
-# Place or symlink NWL*.kwg under data/lexica/ locally.
+# setup_wizard.py downloads them into the host mount dir; if you keep a local
+# copy here for any reason, it stays out of git.
 data/lexica/
+
+# Local state written by setup_wizard.py / run_docker.py.
+.env.json
 
 # Editor / tooling caches and generated files
 .cache/

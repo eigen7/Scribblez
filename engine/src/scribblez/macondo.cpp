@@ -50,11 +50,13 @@ std::string board_fen(const Board& b) {
   return fen;
 }
 
-// Full CGP for the on-move player (their rack/score first), forcing NWL23 to
-// match Scribblez (this Macondo build defaults to NWL20).
-std::string to_cgp(const Board& board, const Rack& rack, int my_score, int opp_score) {
+// Full CGP for the on-move player (their rack/score first), explicitly setting
+// the `lex` clause to whatever Scribblez is using (so it matches the kwg the
+// engine loaded, regardless of macondo's own DEFAULT_LEXICON).
+std::string to_cgp(const Board& board, const Rack& rack, int my_score, int opp_score,
+                   const std::string& lexicon) {
   return board_fen(board) + " " + rack.to_string() + "/ " + std::to_string(my_score) + "/" +
-         std::to_string(opp_score) + " 0 lex NWL23;";
+         std::to_string(opp_score) + " 0 lex " + lexicon + ";";
 }
 
 // ----------------------- Macondo line parsing ----------------------------
@@ -222,16 +224,7 @@ Macondo::Params& pending_params() {
 }
 }  // namespace
 
-namespace {
-// Default path for the macondo binary, used when Params is default-constructed.
-std::string default_macondo_path() {
-  const char* home = std::getenv("HOME");
-  std::string base = home ? home : "~";
-  return base + "/checkouts/macondo/bin/shell";
-}
-}  // namespace
-
-Macondo::Params::Params() : binary_path(default_macondo_path()) {}
+Macondo::Params::Params() : binary_path("/workspace/mount/macondo/bin/shell") {}
 
 void Macondo::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
@@ -253,12 +246,14 @@ Macondo& Macondo::instance() {
   if (!slot) {
     // Construct via reset() rather than make_unique so we can keep the ctor
     // private and still wire up the singleton from this friend-free helper.
-    slot.reset(new Macondo(pending_params().binary_path));
+    const Params& p = pending_params();
+    slot.reset(new Macondo(p.binary_path, p.lexicon));
   }
   return *slot;
 }
 
-Macondo::Macondo(const std::string& binary) : binary_(binary) {}
+Macondo::Macondo(const std::string& binary, const std::string& lexicon)
+    : binary_(binary), lexicon_(lexicon) {}
 
 Macondo::~Macondo() = default;
 
@@ -288,7 +283,7 @@ Macondo::EvalResult Macondo::evaluate(const Board& board, const Rack& my_rack, i
 
   // Drive Macondo: load the position, generate N plays, print a sentinel so
   // we know when its response ends.
-  std::string cgp = to_cgp(board, my_rack, my_score, opp_score);
+  std::string cgp = to_cgp(board, my_rack, my_score, opp_score, lexicon_);
   impl_->to << "load cgp " << cgp << "\ngen " << kGenLimit << "\nSCRIBBLEZ_DONE\n" << std::flush;
 
   std::string line;

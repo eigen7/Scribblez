@@ -32,10 +32,15 @@ class Macondo {
   // (presently just the binary path). Default-constructs to sensible values
   // so callers that just want Macondo with its defaults can skip set_params.
   struct Params {
-    // Path to the macondo binary. Resolved relative to $HOME at construction
-    // time; if $HOME is unset, falls back to a literal "~/..." string and the
-    // user is expected to override via --macondo.
+    // Path to the macondo binary. Defaults to the Docker-mount layout
+    // (/workspace/mount/macondo/bin/shell, populated by setup_wizard.py);
+    // override via --macondo for non-standard locations.
     std::string binary_path;
+
+    // Lexicon name (e.g. "NWL23") used in the CGP `lex` clause; must match
+    // a .kwg installed under macondo's data dir. Set by play_game from
+    // GameRunner::Params::lexicon -- not its own CLI option.
+    std::string lexicon = "NWL23";
 
     Params();
 
@@ -80,12 +85,13 @@ class Macondo {
   ~Macondo();
 
  private:
-  explicit Macondo(const std::string& binary);
+  Macondo(const std::string& binary, const std::string& lexicon);
   void ensure_started();
 
   struct Impl;                    // hides boost::process from the header
   std::unique_ptr<Impl> impl_;
   std::string binary_;
+  std::string lexicon_;
 };
 
 }  // namespace scribblez

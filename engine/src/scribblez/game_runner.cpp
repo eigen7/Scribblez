@@ -67,8 +67,12 @@ class GameRunner::Results {
 void GameRunner::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()                                                                  //
-      ("kwg", po::value<std::string>(&kwg_path)->default_value(kwg_path),             //
-       "lexicon .kwg file to load")                                                   //
+      ("lexicon", po::value<std::string>(&lexicon)->default_value(lexicon),           //
+       "lexicon name; loaded from <lexica-dir>/<lexicon>.kwg. Run "
+       "setup_wizard.py outside the Docker container to install lexica.")             //
+      ("lexica-dir",                                                                  //
+       po::value<std::string>(&lexica_dir)->default_value(lexica_dir),                //
+       "directory holding .kwg files (rarely overridden)")                            //
       ("games", po::value<int>(&games)->default_value(games),                         //
        "play at least this many games in one process (seeds seed, seed+1, ...); "
        "humans may extend the loop via the Play Again button")                        //
@@ -76,6 +80,10 @@ void GameRunner::Params::add_options(boost::program_options::options_description
        "write the GCG game logs here (default: stdout)")                              //
       ("verbose,v", po::bool_switch(&verbose),                                        //
        "print final score and turn count to stderr");
+}
+
+std::string GameRunner::Params::kwg_path() const {
+  return lexica_dir + "/" + lexicon + ".kwg";
 }
 
 // --------------------------- ctor / run ----------------------------------
@@ -89,12 +97,13 @@ GameRunner::GameRunner(const Params& params, PlayerFactory::Players players)
     std::cerr << "Error: --games must be >= 1\n";
     throw Exception("--games must be >= 1");
   }
+  const std::string path = params_.kwg_path();
   try {
-    dict_ = Dictionary::load_kwg(params_.kwg_path);
+    dict_ = Dictionary::load_kwg(path);
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n"
-              << "No lexicon at '" << params_.kwg_path
-              << "'. Place or symlink an NWL .kwg there, or pass --kwg <path>.\n";
+              << "Lexicon '" << params_.lexicon << "' is not installed at " << path << ".\n"
+              << "Run setup_wizard.py outside the Docker container to install it.\n";
     throw Exception(e.what());
   }
   if (!params_.out_path.empty()) {
@@ -106,7 +115,7 @@ GameRunner::GameRunner(const Params& params, PlayerFactory::Players players)
     out_ = &of_;
   }
   if (params_.verbose) {
-    std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << params_.kwg_path << "\n"
+    std::cerr << "Loaded KWG (" << dict_.num_nodes() << " nodes) from " << path << "\n"
               << "Seed: " << seed_ << "\n";
   }
   results_ = std::make_unique<Results>(
