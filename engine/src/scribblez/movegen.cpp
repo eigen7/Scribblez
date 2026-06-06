@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -422,29 +421,6 @@ void GenState::generate_for_row(int row) {
   }
 }
 
-// Deduplicate moves whose placed-tile sets are identical (same positions, same
-// letters, same blank flags). Only a *single-tile* play can be generated twice
-// -- once per orientation, when its one tile forms words in both directions;
-// multi-tile plays have an unambiguous orientation and are never duplicated. So
-// we only need to dedupe single-tile plays, keyed by their placed square+face.
-void dedupe(std::vector<Move>& moves, const Board& board) {
-  std::unordered_set<int> seen;  // (square * 64 + glyph code) of a placed tile
-  moves.erase(std::remove_if(moves.begin(), moves.end(),
-                             [&](const Move& m) {
-                               if (m.num_glyphs() != 1) return false;
-                               // Walk to the one empty square the tile fills.
-                               int dr = m.horizontal ? 0 : 1, dc = m.horizontal ? 1 : 0;
-                               int r = m.start_row, c = m.start_col;
-                               while (board.in_bounds(r, c) && !board.at(r, c).is_empty()) {
-                                 r += dr;
-                                 c += dc;
-                               }
-                               int k = (r * BOARD_SIZE + c) * 64 + m.glyphs[0].code();
-                               return !seen.insert(k).second;  // drop if already seen
-                             }),
-              moves.end());
-}
-
 // ---------------------------------------------------------------------------
 // GADDAG generator (Gordon's algorithm).
 //
@@ -453,8 +429,8 @@ void dedupe(std::vector<Move>& moves, const Board& board) {
 // (following reversed-prefix arcs), then "shift direction" through the
 // separator token to place tiles rightward. Cross-checks (computed from the
 // forward DAWG, identical to the reference generator) gate perpendicular-word
-// validity, and build_play() does the scoring. Duplicate single-tile plays
-// (recorded under both orientations) are collapsed by the shared dedupe().
+// validity, and build_play() does the scoring. Single-tile plays are only
+// emitted from the horizontal pass to avoid duplicates.
 // ---------------------------------------------------------------------------
 struct GaddagGen {
   GaddagGen(const View& view, const Dictionary& dict, const CrossChecks& cross,
@@ -586,6 +562,7 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
     bool transposed = (orient == 1);
     View view{board_, transposed};
     auto cross = compute_cross_checks(view, dict_);
+    const auto before = out.size();
     if (algo == GenAlgo::GADDAG) {
       auto anchors = compute_gaddag_anchors(view);
       GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
@@ -595,8 +572,14 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
       GenState st{view, dict_, cross, anchors, rack.counts(), out};
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
     }
+    // Single-tile plays are produced by both orientations; treat horizontal as
+    // canonical and suppress them from the transposed (vertical) pass.
+    if (transposed) {
+      out.erase(std::remove_if(out.begin() + before, out.end(),
+                               [](const Move& m) { return m.num_glyphs() == 1; }),
+                out.end());
+    }
   }
-  dedupe(out, board_);
   return out;
 }
 
