@@ -10,6 +10,8 @@ add_library(scribblez_core STATIC
   src/scribblez/game.cpp
   src/scribblez/gcg_writer.cpp
   src/scribblez/binary_log.cpp
+  src/scribblez/input_encoder.cpp
+  src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
 )
 target_include_directories(scribblez_core PUBLIC
@@ -51,3 +53,8 @@ target_link_libraries(scribblez_tests PRIVATE scribblez_core)
 target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="${CMAKE_SOURCE_DIR}/data/lexica/NWL23.kwg")
 add_test(NAME scribblez_tests COMMAND scribblez_tests)
+
+# Standalone ad-hoc driver for the binary-log DataLoader. Lets us point it at
+# a directory of .slog files and verify load() produces well-formed rows.
+add_executable(dataloader_smoke apps/dataloader_smoke.cpp)
+target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)

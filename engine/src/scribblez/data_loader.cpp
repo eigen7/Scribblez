@@ -1,5 +1,7 @@
 #include "scribblez/data_loader.h"
 
+#include "scribblez/input_encoder.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -16,26 +18,6 @@ namespace scribblez {
 namespace binlog {
 
 namespace {
-
-// Placeholder input encoder. Writes a tiny synthetic feature vector derived
-// from a few PositionRecord fields so the loader has something to validate.
-// Real encoder lands in the next milestone (todo #5).
-void encode_input(const PositionRecord& r, bool /*apply_flip*/, float* out) {
-  out[0] = static_cast<float>(r.score_active - r.score_opp) / 100.0f;
-  out[1] = static_cast<float>(r.active_rack.size()) / 7.0f;
-  out[2] = static_cast<float>(r.active_player);
-  out[3] = static_cast<float>(r.position_kind);
-  out[4] = static_cast<float>(r.move_number) / 50.0f;
-  int board_filled = 0;
-  for (int i = 0; i < 225; ++i)
-    if (!r.board[i].is_empty()) ++board_filled;
-  out[5] = static_cast<float>(board_filled) / 225.0f;
-  int unseen = 0;
-  for (int i = 0; i < 27; ++i) unseen += r.bag_counts[i];
-  out[6] = static_cast<float>(unseen) / 100.0f;
-  out[7] = static_cast<float>(r.last_opp_move.score) / 60.0f;
-  static_assert(kInputFloats == 8, "placeholder encoder writes 8 floats");
-}
 
 // Compute [win, draw, loss] from the active player's POV given the game's
 // final scores.

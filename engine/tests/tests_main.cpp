@@ -53,6 +53,8 @@ static Rack rack_from(const std::string& s) {
 }
 
 // Build a PLAY Move from a starting square, direction, and ordered new glyphs.
+// Assumes every glyph is newly placed (sufficient for the tests' empty-board
+// setups); set square_mask accordingly.
 static Move make_play(int row, int col, bool horizontal, std::initializer_list<Glyph> gs) {
   Move m;
   m.type = MoveType::PLAY;
@@ -64,6 +66,7 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
     if (i >= RACK_SIZE) break;
     m.glyphs[i++] = g;
   }
+  m.square_mask = static_cast<uint16_t>((1u << i) - 1u);
   return m;
 }
 
@@ -107,11 +110,12 @@ static void test_movegen_cross_word() {
   Dictionary d = tiny_dict();
   Board b;
   // Place CAT at the center horizontally.
-  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {
-    Glyph::of(Tile::from_char('C')),
-    Glyph::of(Tile::from_char('A')),
-    Glyph::of(Tile::from_char('T')),
-  }));
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                    {
+                      Glyph::of(Tile::from_char('C')),
+                      Glyph::of(Tile::from_char('A')),
+                      Glyph::of(Tile::from_char('T')),
+                    }));
   MoveGenerator gen(b, d);
   // Now play with rack "S" -> can extend to CATS by placing S at (CENTER, CENTER+3).
   Rack r = rack_from("SSSSSSS");
@@ -128,8 +132,7 @@ static void test_bingo_bonus() {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
   // Place an A at the center to provide an anchor.
-  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
-                    {Glyph::of(Tile::from_char('A'))}));
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {Glyph::of(Tile::from_char('A'))}));
   MoveGenerator gen(b, d);
   // Rack PRTIED + something already used (the A is on the board).
   Rack r = rack_from("PRTIED?");  // blank as 7th, won't be needed; ensure 7 tiles

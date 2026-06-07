@@ -40,6 +40,7 @@
 // budget.
 
 #include "scribblez/binary_log.h"
+#include "scribblez/input_encoder.h"
 
 #include <cstdint>
 #include <deque>
@@ -51,14 +52,7 @@
 namespace scribblez {
 namespace binlog {
 
-// ---- input feature size ----------------------------------------------------
-//
-// Placeholder for this turn -- a real feature pipeline (board planes, rack /
-// bag counts, last-opp-move encoding, etc.) lands in the next milestone.
-// Defined here rather than in a separate input_encoder.h so the loader can
-// be tested end-to-end with synthetic features before we commit to a final
-// layout.
-inline constexpr int kInputFloats = 8;
+// `kInputFloats` is owned by input_encoder.h; the label floats follow.
 
 inline constexpr int kWldFloats = 3;
 inline constexpr int kScoreDiffFloats = 1;

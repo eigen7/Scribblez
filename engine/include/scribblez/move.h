@@ -17,18 +17,25 @@ enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 //
 // PLAY:     `glyphs` are the newly placed tiles in order along the main word;
 //           start_row/col is the word's first square and `horizontal` its
-//           direction. Squares between/after that are read from the board.
+//           direction. `square_mask` bit i == 1 iff the i-th cell along the
+//           word (counting from start_row/col in the move direction) was a
+//           NEWLY placed tile (vs a pre-existing cross-tile in the run).
+//           Squares between/after that are read from the board.
 // EXCHANGE: `glyphs` are the tiles surrendered (an unassigned blank is
-//           Glyph::blank()).
-// PASS:     `glyphs` is empty.
+//           Glyph::blank()). `square_mask` is unused (0).
+// PASS:     `glyphs` is empty. `square_mask` is unused (0).
 // Unused trailing slots are empty glyphs.
+//
+// `score` is an unsigned 16-bit count; the theoretical Scrabble maximum for a
+// single play is well under 2^16.
 struct Move {
   MoveType type = MoveType::PASS;
   bool horizontal = true;
   int8_t start_row = 0;
   int8_t start_col = 0;
   std::array<Glyph, RACK_SIZE> glyphs{};
-  int score = 0;
+  uint16_t square_mask = 0;  // PLAY only; see comment above
+  uint16_t score = 0;
 
   // Number of leading non-empty glyphs (placed/surrendered tiles).
   int num_glyphs() const;

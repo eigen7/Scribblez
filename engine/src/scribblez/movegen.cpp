@@ -167,6 +167,7 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
   auto start_bc = view.to_board(row, start_col);
   m.start_row = start_bc.first;
   m.start_col = start_bc.second;
+  m.square_mask = 0;
 
   int n_placed = 0;
   int main_letter_sum = 0;
@@ -187,6 +188,7 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
       is_blank = placed_blank[c];
       newly_placed = true;
       m.glyphs[n_placed++] = Glyph::played(L, is_blank);  // in word order
+      m.square_mask |= static_cast<uint16_t>(1u << (c - start_col));
     }
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
