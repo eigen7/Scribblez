@@ -634,9 +634,9 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
 static void test_extract_positions_movegen_roundtrip() {
   Dictionary dict = medium_dict();
 
-  // A handful of games at different seeds; sample every eligible position
-  // (samples_per_game large) so we test pre- AND post-move kinds at every
-  // turn.
+  // A handful of games at different seeds; extract_positions now emits one
+  // record per eligible position (pre-move at every turn, post-move after
+  // every PLAY turn) -- no sampling.
   const std::vector<uint64_t> seeds = {42, 1337, 0xDEADBEEFULL};
   long positions_compared = 0;
 
@@ -645,8 +645,8 @@ static void test_extract_positions_movegen_roundtrip() {
     CHECK(!log.turns.empty());
 
     auto live_snaps = live_replay_all_snapshots(log);
-    auto records = scribblez::binlog::extract_positions(log, /*samples_per_game=*/10000);
-    CHECK(records.size() <= live_snaps.size());
+    auto records = scribblez::binlog::extract_positions(log);
+    CHECK(records.size() == live_snaps.size());
 
     // Index live snapshots by (turn_index, kind) so we can look them up by
     // each record's coordinates.
@@ -707,11 +707,9 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
 
   // Write a small batch through the public writer (separate games -> one file).
   constexpr int kGames = 3;
-  constexpr int kSamplesPerGame = 12;
   std::vector<scribblez::GameLog> logs;
   {
-    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames,
-                                              kSamplesPerGame);
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames);
     for (int i = 0; i < kGames; ++i) {
       scribblez::GameLog log = play_test_game(dict, /*seed=*/100ULL + i);
       writer.append(log);
@@ -799,8 +797,8 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     const auto* recs =
       reinterpret_cast<const scribblez::binlog::PositionRecord*>(raw.data() + gm.start_offset);
     // GameMetadata is written in the order games were appended, so logs[gi]
-    // corresponds to metas[gi].
-    CHECK(gm.seed == logs[gi].seed);
+    // corresponds to metas[gi]. num_turns must match the GameLog.
+    CHECK(gm.num_turns == logs[gi].turns.size());
     auto live_snaps = live_replay_all_snapshots(logs[gi]);
     std::unordered_map<uint64_t, const LiveSnapshot*> by_key;
     auto key = [](int turn, scribblez::binlog::PositionKind k) {
@@ -1213,36 +1211,132 @@ static void test_game_end_stalemate_penalty() {
 // LabelEncoder
 // ===========================================================================
 
+namespace {
+
+// Helper: build a GameLogView with just the fields encode_labels reads for
+// heads 0 and 1 (no moves required when has_next_move() returns false).
+scribblez::binlog::GameLogView make_scores_view(int fs_active, int fs_opp, int active_player,
+                                                bool apply_flip = false) {
+  using namespace scribblez::binlog;
+  GameLogView v{};
+  v.moves = nullptr;
+  v.num_turns = 0;
+  v.turn_index = 0;  // turn_index + 1 (== 1) >= num_turns (== 0) -> no next move
+  v.kind = PositionKind::kPreMove;
+  v.active_player = active_player;
+  v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
+  v.final_score_p1 = active_player == 0 ? fs_opp : fs_active;
+  v.apply_flip = apply_flip;
+  return v;
+}
+
+// Convenience: call encode_labels into one contiguous buffer of size
+// kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
+void encode_labels_flat(const scribblez::binlog::GameLogView& view, float* flat) {
+  using namespace scribblez::binlog;
+  float* heads[kNumLabelHeads] = {
+    flat + 0,
+    flat + kWldFloats,
+    flat + kWldFloats + kScoreDiffFloats,
+  };
+  encode_labels(view, heads);
+}
+
+}  // namespace
+
 static void test_encode_labels() {
   using namespace scribblez::binlog;
-  float out[kLabelFloats];
+  float flat[kLabelFloats];
 
   // Win.
-  encode_labels(/*fs_active=*/120, /*fs_opp=*/100, out);
-  CHECK(out[0] == 1.0f);
-  CHECK(out[1] == 0.0f);
-  CHECK(out[2] == 0.0f);
-  CHECK(out[3] == 20.0f);
+  auto v_win = make_scores_view(/*fs_active=*/120, /*fs_opp=*/100, /*active_player=*/0);
+  encode_labels_flat(v_win, flat);
+  CHECK(flat[0] == 1.0f);
+  CHECK(flat[1] == 0.0f);
+  CHECK(flat[2] == 0.0f);
+  CHECK(flat[3] == 20.0f);
 
   // Draw.
-  encode_labels(75, 75, out);
-  CHECK(out[0] == 0.0f);
-  CHECK(out[1] == 1.0f);
-  CHECK(out[2] == 0.0f);
-  CHECK(out[3] == 0.0f);
+  auto v_draw = make_scores_view(75, 75, 1);
+  encode_labels_flat(v_draw, flat);
+  CHECK(flat[0] == 0.0f);
+  CHECK(flat[1] == 1.0f);
+  CHECK(flat[2] == 0.0f);
+  CHECK(flat[3] == 0.0f);
 
   // Loss with negative score_diff.
-  encode_labels(80, 95, out);
-  CHECK(out[0] == 0.0f);
-  CHECK(out[1] == 0.0f);
-  CHECK(out[2] == 1.0f);
-  CHECK(out[3] == -15.0f);
+  auto v_loss = make_scores_view(80, 95, 0);
+  encode_labels_flat(v_loss, flat);
+  CHECK(flat[0] == 0.0f);
+  CHECK(flat[1] == 0.0f);
+  CHECK(flat[2] == 1.0f);
+  CHECK(flat[3] == -15.0f);
 
   // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
-    encode_labels(a, b, out);
-    CHECK(out[0] + out[1] + out[2] == 1.0f);
+    auto v = make_scores_view(a, b, 0);
+    encode_labels_flat(v, flat);
+    CHECK(flat[0] + flat[1] + flat[2] == 1.0f);
   }
+
+  // With no next move, head 2 (opp_next_placement) is all zeros.
+  encode_labels_flat(v_win, flat);
+  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
+    CHECK(flat[kWldFloats + kScoreDiffFloats + i] == 0.0f);
+  }
+
+  // Build a tiny 2-move sequence: moves[0] = anything (current turn),
+  // moves[1] = horizontal PLAY at (4, 2) covering 3 cells (squares 0, 1, 2 of
+  // the move direction; col 2, 3, 4 of row 4). The opp-next-placement head
+  // should light up exactly those three cells in canonical orientation, and
+  // exactly their transposed cells when apply_flip=true.
+  Move moves[2] = {};
+  moves[0].type =
+    MoveType::PASS;  // unused by encode_labels (we only ever read moves[turn_index+1])
+  moves[1].type = MoveType::PLAY;
+  moves[1].horizontal = 1;
+  moves[1].start_row = 4;
+  moves[1].start_col = 2;
+  moves[1].square_mask = 0b0000000000000111;  // bits 0,1,2
+
+  GameLogView v_with_next{};
+  v_with_next.moves = moves;
+  v_with_next.num_turns = 2;
+  v_with_next.turn_index = 0;
+  v_with_next.kind = PositionKind::kPreMove;
+  v_with_next.active_player = 0;
+  v_with_next.final_score_p0 = 100;
+  v_with_next.final_score_p1 = 80;
+  v_with_next.apply_flip = false;
+
+  encode_labels_flat(v_with_next, flat);
+  const float* plane = flat + kWldFloats + kScoreDiffFloats;
+  int set_cells = 0;
+  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
+    if (plane[i] == 1.0f) ++set_cells;
+  }
+  CHECK(set_cells == 3);
+  CHECK(plane[4 * 15 + 2] == 1.0f);
+  CHECK(plane[4 * 15 + 3] == 1.0f);
+  CHECK(plane[4 * 15 + 4] == 1.0f);
+
+  // apply_flip transposes (r,c) -> (c,r).
+  v_with_next.apply_flip = true;
+  encode_labels_flat(v_with_next, flat);
+  set_cells = 0;
+  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
+    if (plane[i] == 1.0f) ++set_cells;
+  }
+  CHECK(set_cells == 3);
+  CHECK(plane[2 * 15 + 4] == 1.0f);
+  CHECK(plane[3 * 15 + 4] == 1.0f);
+  CHECK(plane[4 * 15 + 4] == 1.0f);
+
+  // EXCHANGE / PASS next move -> all zeros.
+  moves[1].type = MoveType::EXCHANGE;
+  v_with_next.apply_flip = false;
+  encode_labels_flat(v_with_next, flat);
+  for (int i = 0; i < kOppNextPlacementFloats; ++i) CHECK(plane[i] == 0.0f);
 }
 
 // ===========================================================================
@@ -1250,8 +1344,10 @@ static void test_encode_labels() {
 // ===========================================================================
 
 // Build a one-game, one-position .slog file under `dir` with a single record
-// whose board has an asymmetric placement (a 'Q' at (3,5)). Returns the file
-// path and the on-disk size.
+// whose board has an asymmetric placement (a 'Q' at (3,5)). The game has a
+// single PASS turn (so the opp-next-placement label head reads no next move
+// and is all-zeros -- keeping the symmetry check straightforward). Returns
+// the file path and the on-disk size.
 static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
   const std::filesystem::path& dir) {
   using namespace scribblez::binlog;
@@ -1259,9 +1355,14 @@ static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
   PositionRecord rec{};
   rec.active_player = 0;
   rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
+  rec.move_number = 0;
   rec.score_active = 10;
   rec.score_opp = 4;
   rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('Q'));
+
+  // A single PASS move for the (single) turn.
+  Move pass_move{};
+  pass_move.type = MoveType::PASS;
 
   FileHeader hdr{};
   hdr.magic = kMagic;
@@ -1273,7 +1374,7 @@ static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_positions = 1;
   gm.data_size = sizeof(PositionRecord);
-  gm.seed = 0xC0FFEEULL;
+  gm.num_turns = 1;
   gm.final_score_p0 = 350;  // active=p0 -> win, score_diff=+150
   gm.final_score_p1 = 200;
 
@@ -1283,6 +1384,7 @@ static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
     f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
     f.write(reinterpret_cast<const char*>(&gm), sizeof(gm));
     f.write(reinterpret_cast<const char*>(&rec), sizeof(rec));
+    f.write(reinterpret_cast<const char*>(&pass_move), sizeof(pass_move));
     CHECK(f);
   }  // f destructor flushes + closes before we measure file_size
   int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
@@ -1321,9 +1423,12 @@ static void test_dataloader_per_row_symmetry() {
   // Sanity: the two encodings differ (asymmetric Q placement).
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
 
-  // Expected labels for active=p0 (win, score_diff=+150).
+  // Expected labels for active=p0 (win, score_diff=+150). The fixture's game
+  // has only a single PASS turn, so the opp-next-placement head is all zeros
+  // regardless of flip -- making the whole label tail flip-invariant.
   float ref_labels[kLabelFloats];
-  encode_labels(/*fs_active=*/350, /*fs_opp=*/200, ref_labels);
+  encode_labels_flat(make_scores_view(/*fs_active=*/350, /*fs_opp=*/200, /*active_player=*/0),
+                     ref_labels);
 
   DataLoader::Params params;
   params.num_worker_threads = 1;

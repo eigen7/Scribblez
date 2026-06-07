@@ -1,19 +1,26 @@
 #pragma once
 
 // Binary game-log format for training. One file holds many games (configurable
-// via --games-per-file); within a file, each game contributes K self-contained
-// PositionRecords (K = --samples-per-game). The format is designed for a
-// custom C++ data loader that reinterpret_casts straight into memory-mapped
-// or read() buffers (everything is fixed-size POD, naturally aligned).
+// via --games-per-file). Each game is stored in full -- every eligible
+// PositionRecord (pre-move at every turn, plus post-move at every PLAY turn)
+// plus the full sequence of moves played. Train-time sampling of K positions
+// per file is done by the DataLoader; the on-disk format is a faithful record
+// of the game and does not depend on any RNG seed.
 //
 // File layout
 // -----------
 //   [FileHeader              16 B]
 //   [GameMetadata  num_games 32 B]
-//   [PositionRecord blobs, grouped by game, back-to-back]
+//   For each game g in [0, num_games):
+//     [PositionRecord  num_positions(g) * 304 B]
+//     [Move            num_turns(g)     * 16 B]   // full move sequence;
+//                                                  // labels read moves[k+1]
+//                                                  // for the opp-next-placement
+//                                                  // auxiliary head.
 //
-// Each GameMetadata's start_offset / data_size point at that game's contiguous
-// run of (num_positions * sizeof(PositionRecord)) bytes inside the blob region.
+// Each GameMetadata's start_offset points at that game's first PositionRecord;
+// data_size = num_positions * sizeof(PositionRecord); the moves blob lives at
+// (start_offset + data_size) and is (num_turns * sizeof(Move)) bytes long.
 //
 // Why self-contained position records (no shared "history" buffer)?
 // AlphaZeroArcade has to materialize a sliding window of past frames at
@@ -40,7 +47,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 1;
+inline constexpr uint16_t kVersion = 2;
 
 // Position kind. PLAY turns produce BOTH a pre-move and a post-move record;
 // EXCHANGE / PASS turns produce only a pre-move record.
@@ -58,17 +65,20 @@ struct FileHeader {
   uint16_t version;  // kVersion
   uint16_t reserved;
   uint32_t num_games;      // games in this file
-  uint32_t num_positions;  // total sampled positions across all games
+  uint32_t num_positions;  // total eligible positions across all games
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
   uint64_t start_offset;   // file offset of this game's first PositionRecord
   uint32_t data_size;      // bytes = num_positions * sizeof(PositionRecord)
-  uint32_t num_positions;  // sampled positions for this game
-  uint64_t seed;           // game seed (for traceability)
+  uint32_t num_positions;  // eligible positions for this game
+  uint32_t num_turns;      // moves played; moves blob lives at
+                           // (start_offset + data_size), length
+                           // num_turns * sizeof(Move).
   int32_t final_score_p0;
   int32_t final_score_p1;
+  uint32_t reserved;
 };
 static_assert(sizeof(GameMetadata) == 32, "GameMetadata must be 32 bytes");
 
@@ -102,16 +112,13 @@ static_assert(sizeof(PositionRecord) % 16 == 0, "PositionRecord must be 16-align
 
 #pragma pack(pop)
 
-// Replay a game and extract self-contained PositionRecords for K sampled
-// positions. The per-game RNG is seeded deterministically from the game's
-// seed so a given log always yields the same samples. Returns at most K
-// records (fewer if the game produced fewer than K eligible positions, which
-// only happens for pathologically short games).
+// Replay a game and return one PositionRecord for every eligible position.
+// No sampling and no RNG: the same GameLog always produces the same vector.
 //
 // Eligible positions:
 //   - pre-move snapshot before every turn
 //   - post-move snapshot after every PLAY turn (skipped for EXCHANGE/PASS)
-std::vector<PositionRecord> extract_positions(const GameLog& log, int samples_per_game);
+std::vector<PositionRecord> extract_positions(const GameLog& log);
 
 // Thread-safe writer that accumulates GameLog objects from one or more
 // GameRunner threads and flushes them to .slog files as fixed-size batches.
@@ -120,7 +127,7 @@ std::vector<PositionRecord> extract_positions(const GameLog& log, int samples_pe
 // file off the critical path so other threads aren't blocked by I/O.
 class BinaryLogWriter {
  public:
-  BinaryLogWriter(const std::string& dir, int games_per_file, int samples_per_game);
+  BinaryLogWriter(const std::string& dir, int games_per_file);
   ~BinaryLogWriter();  // flushes any pending games
 
   BinaryLogWriter(const BinaryLogWriter&) = delete;
@@ -141,7 +148,6 @@ class BinaryLogWriter {
 
   std::string dir_;
   int games_per_file_;
-  int samples_per_game_;
   std::mutex mutex_;
   std::vector<GameLog> pending_;
 };

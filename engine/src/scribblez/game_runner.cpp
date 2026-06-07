@@ -88,13 +88,11 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "directory to write one <timestamp>.gcg log per game (omit to suppress logs)")  //
     ("binary-log-dir", po::value<std::string>(&binary_log_dir),                      //
      "directory to write batched binary .slog files (one file per "
-     "--games-per-file games; positions inside are sampled for training)")                    //
-    ("games-per-file", po::value<int>(&games_per_file)->default_value(games_per_file),        //
-     "games per .slog file (only used with --binary-log-dir)")                                //
-    ("samples-per-game", po::value<int>(&samples_per_game)->default_value(samples_per_game),  //
-     "sampled positions per game written to .slog (chosen uniformly from all "
-     "pre-move positions plus post-move positions of PLAY turns)")   //
-    ("threads,t", po::value<int>(&threads)->default_value(threads),  //
+     "--games-per-file games; every eligible position is written -- "
+     "train-time sampling is done by the DataLoader)")                                  //
+    ("games-per-file", po::value<int>(&games_per_file)->default_value(games_per_file),  //
+     "games per .slog file (only used with --binary-log-dir)")                          //
+    ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
      "number of parallel game threads (>1 requires all players to support "
      "parallelism, i.e. no human players)")   //
     ("verbose,v", po::bool_switch(&verbose),  //
@@ -154,12 +152,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
       std::cerr << "Error: --games-per-file must be >= 1\n";
       throw Exception("--games-per-file must be >= 1");
     }
-    if (params_.samples_per_game < 1) {
-      std::cerr << "Error: --samples-per-game must be >= 1\n";
-      throw Exception("--samples-per-game must be >= 1");
-    }
-    binary_writer_ = std::make_unique<binlog::BinaryLogWriter>(
-      params_.binary_log_dir, params_.games_per_file, params_.samples_per_game);
+    binary_writer_ =
+      std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, params_.games_per_file);
   }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict->num_nodes() << " nodes) from "

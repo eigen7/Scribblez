@@ -33,7 +33,6 @@ class GameRunner {
     std::string log_dir;         // if non-empty, write one <id>.gcg per game here
     std::string binary_log_dir;  // if non-empty, write batched .slog files here
     int games_per_file = 100;    // games per .slog file (only used with binary_log_dir)
-    int samples_per_game = 1;    // sampled positions per game written to .slog
     int threads = 1;             // number of parallel game threads
     bool verbose = false;        // per-game + batch summaries to stderr
 

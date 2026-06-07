@@ -19,9 +19,10 @@
 //
 // Output row layout (row_size_floats() floats per row, n_samples rows)
 // -------------------------------------------------------------------
-//   [ input_floats:    kInputFloats ]
-//   [ wld onehot:      3            ]  // [win, draw, loss] from active POV
-//   [ score_diff:      1            ]  // final_active - final_opp
+//   [ input_floats:    kInputFloats              ]
+//   [ wld onehot:      kWldFloats              3 ]  // [win, draw, loss] (POV)
+//   [ score_diff:      kScoreDiffFloats        1 ]  // final_active - final_opp
+//   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
 //
 // (Label layout is owned by label_encoder.h; the constants are re-exported
 // from this header for downstream convenience.)
@@ -99,9 +100,9 @@ class DataLoader {
   //
   // If `apply_symmetry` is true, each output row independently gets a fair
   // coin flip: a 0 keeps the row in canonical orientation; a 1 transposes
-  // every spatial plane across the main diagonal. Labels are flip-invariant
-  // (score and WLD only depend on the final cumulative scores), so this is
-  // a label-preserving augmentation.
+  // every spatial plane across the main diagonal. Heads 0 (WLD) and 1
+  // (score diff) are flip-invariant; head 2 (opp next placement) is also
+  // transposed in lockstep with the input planes so it stays aligned.
   void load(int64_t window_start, int64_t window_end, int n_samples, bool apply_symmetry,
             float* output);
 

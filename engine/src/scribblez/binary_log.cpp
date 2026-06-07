@@ -11,8 +11,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <numeric>
-#include <random>
 #include <utility>
 
 namespace scribblez {
@@ -123,7 +121,7 @@ PositionRecord make_record(const GameLog& log, const EligibleRef& ref, const Boa
 
 }  // namespace
 
-std::vector<PositionRecord> extract_positions(const GameLog& log, int samples_per_game) {
+std::vector<PositionRecord> extract_positions(const GameLog& log) {
   // ---- pass 1: enumerate eligible positions -------------------------------
   std::vector<EligibleRef> eligible;
   eligible.reserve(log.turns.size() * 2);
@@ -135,29 +133,13 @@ std::vector<PositionRecord> extract_positions(const GameLog& log, int samples_pe
   }
   if (eligible.empty()) return {};
 
-  // ---- pick K without replacement (deterministic per game) ----------------
-  const int k = std::min<int>(samples_per_game, static_cast<int>(eligible.size()));
-  std::mt19937_64 rng(log.seed ^ 0x9E3779B97F4A7C15ULL);  // hash-style salt
-  std::vector<int> indices(eligible.size());
-  std::iota(indices.begin(), indices.end(), 0);
-  // Partial Fisher-Yates: first k entries become the chosen sample.
-  for (int i = 0; i < k; ++i) {
-    std::uniform_int_distribution<int> dist(i, static_cast<int>(indices.size()) - 1);
-    std::swap(indices[i], indices[dist(rng)]);
-  }
-  std::vector<EligibleRef> chosen;
-  chosen.reserve(k);
-  for (int i = 0; i < k; ++i) chosen.push_back(eligible[indices[i]]);
-  // Sort by (turn_index, kind) so we make a single forward pass through the
-  // replay below.
-  std::sort(chosen.begin(), chosen.end(), [](const EligibleRef& a, const EligibleRef& b) {
-    if (a.turn_index != b.turn_index) return a.turn_index < b.turn_index;
-    return static_cast<int>(a.kind) < static_cast<int>(b.kind);
-  });
+  // No sampling: emit every eligible position, in (turn_index, kind) order
+  // (already that order from the enumeration above).
+  const std::vector<EligibleRef>& chosen = eligible;
 
   // ---- pass 2: replay, emit records for chosen positions ------------------
   std::vector<PositionRecord> out;
-  out.reserve(k);
+  out.reserve(chosen.size());
 
   Board board;
   Rack racks[2];
@@ -212,10 +194,9 @@ std::vector<PositionRecord> extract_positions(const GameLog& log, int samples_pe
 // BinaryLogWriter
 // ---------------------------------------------------------------------------
 
-BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file, int samples_per_game)
-    : dir_(dir), games_per_file_(games_per_file), samples_per_game_(samples_per_game) {
+BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file)
+    : dir_(dir), games_per_file_(games_per_file) {
   if (games_per_file_ < 1) games_per_file_ = 1;
-  if (samples_per_game_ < 1) samples_per_game_ = 1;
 }
 
 BinaryLogWriter::~BinaryLogWriter() {
@@ -248,14 +229,22 @@ void BinaryLogWriter::flush() {
 }
 
 void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
-  // Extract sampled positions for each game.
-  std::vector<std::vector<PositionRecord>> per_game;
-  per_game.reserve(games.size());
+  // Extract every eligible position for each game; also collect the per-game
+  // moves array (one Move per TurnRecord, in turn order).
+  std::vector<std::vector<PositionRecord>> per_game_recs;
+  std::vector<std::vector<Move>> per_game_moves;
+  per_game_recs.reserve(games.size());
+  per_game_moves.reserve(games.size());
   uint32_t total_positions = 0;
   for (const GameLog& g : games) {
-    auto recs = extract_positions(g, samples_per_game_);
+    auto recs = extract_positions(g);
     total_positions += static_cast<uint32_t>(recs.size());
-    per_game.push_back(std::move(recs));
+    per_game_recs.push_back(std::move(recs));
+
+    std::vector<Move> moves;
+    moves.reserve(g.turns.size());
+    for (const TurnRecord& t : g.turns) moves.push_back(t.move);
+    per_game_moves.push_back(std::move(moves));
   }
 
   // Build metadata table (in-memory; we know all offsets up front).
@@ -268,12 +257,12 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
   for (size_t i = 0; i < games.size(); ++i) {
     GameMetadata gm{};
     gm.start_offset = cursor;
-    gm.num_positions = static_cast<uint32_t>(per_game[i].size());
+    gm.num_positions = static_cast<uint32_t>(per_game_recs[i].size());
     gm.data_size = gm.num_positions * static_cast<uint32_t>(sizeof(PositionRecord));
-    gm.seed = games[i].seed;
+    gm.num_turns = static_cast<uint32_t>(per_game_moves[i].size());
     gm.final_score_p0 = games[i].final_scores[0];
     gm.final_score_p1 = games[i].final_scores[1];
-    cursor += gm.data_size;
+    cursor += gm.data_size + static_cast<uint64_t>(gm.num_turns) * sizeof(Move);
     meta.push_back(gm);
   }
 
@@ -297,10 +286,17 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),
           static_cast<std::streamsize>(meta.size() * sizeof(GameMetadata)));
-  for (const auto& recs : per_game) {
-    if (recs.empty()) continue;
-    f.write(reinterpret_cast<const char*>(recs.data()),
-            static_cast<std::streamsize>(recs.size() * sizeof(PositionRecord)));
+  for (size_t i = 0; i < games.size(); ++i) {
+    const auto& recs = per_game_recs[i];
+    if (!recs.empty()) {
+      f.write(reinterpret_cast<const char*>(recs.data()),
+              static_cast<std::streamsize>(recs.size() * sizeof(PositionRecord)));
+    }
+    const auto& moves = per_game_moves[i];
+    if (!moves.empty()) {
+      f.write(reinterpret_cast<const char*>(moves.data()),
+              static_cast<std::streamsize>(moves.size() * sizeof(Move)));
+    }
   }
   if (!f) {
     std::cerr << "Warning: I/O error writing binary log: " << path << "\n";

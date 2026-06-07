@@ -87,9 +87,25 @@ void decode_block(const char* buf, const std::string& path, const int64_t* local
     float* row = output + (output_row_start + static_cast<int64_t>(i)) * kRowFloats;
     encode_input(*rec, /*apply_flip=*/flips[i] != 0, row);
 
-    const int fs_active = rec->active_player == 0 ? gm.final_score_p0 : gm.final_score_p1;
-    const int fs_opp = rec->active_player == 0 ? gm.final_score_p1 : gm.final_score_p0;
-    encode_labels(fs_active, fs_opp, row + kInputFloats);
+    // Build a GameLogView over this game's moves blob (which sits in the
+    // file right after the game's PositionRecord blob).
+    const Move* moves = reinterpret_cast<const Move*>(buf + gm.start_offset + gm.data_size);
+    GameLogView view{};
+    view.moves = moves;
+    view.num_turns = static_cast<int>(gm.num_turns);
+    view.turn_index = rec->move_number;
+    view.kind = static_cast<PositionKind>(rec->position_kind);
+    view.active_player = rec->active_player;
+    view.final_score_p0 = gm.final_score_p0;
+    view.final_score_p1 = gm.final_score_p1;
+    view.apply_flip = flips[i] != 0;
+
+    float* heads[kNumLabelHeads] = {
+      row + kInputFloats,
+      row + kInputFloats + kWldFloats,
+      row + kInputFloats + kWldFloats + kScoreDiffFloats,
+    };
+    encode_labels(view, heads);
   }
 }
 
