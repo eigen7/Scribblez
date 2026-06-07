@@ -33,8 +33,8 @@ Rack rack_from_initial(const std::array<Tile, RACK_SIZE>& tiles, uint8_t n) {
 }  // namespace
 
 void BlockDecoder::decode(const char* buf, const std::string& path, const int64_t* local_indices,
-                          const uint8_t* flips, std::size_t n_indices, int64_t output_row_start,
-                          float* output) {
+                          const uint8_t* flips, std::size_t n_indices, bool post_move,
+                          int64_t output_row_start, float* output) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
     std::cerr << "BlockDecoder: bad magic in " << path << "\n";
@@ -52,16 +52,18 @@ void BlockDecoder::decode(const char* buf, const std::string& path, const int64_
   std::size_t cursor = 0;
   while (cursor < requests_.size()) {
     const uint32_t game_idx = requests_[cursor].game;
-    replay_game(buf, game_idx, flips, output_row_start, output, cursor);
+    replay_game(buf, game_idx, flips, post_move, output_row_start, output, cursor);
   }
 }
 
 void BlockDecoder::build_requests(const GameMetadata* metas, uint32_t num_games,
                                   const int64_t* local_indices, std::size_t n_indices) {
-  // Prefix sum: prefix[g] == total positions in games [0, g).
+  // Prefix sum: prefix[g] == total positions in games [0, g) == sum of
+  // num_turns over those games (the master-array universe is one row per
+  // turn, shared by both pre-move and post-move sampling).
   std::vector<uint32_t> prefix(num_games + 1, 0);
   for (uint32_t g = 0; g < num_games; ++g) {
-    prefix[g + 1] = prefix[g] + metas[g].num_positions;
+    prefix[g + 1] = prefix[g] + metas[g].num_turns;
   }
 
   requests_.clear();
@@ -81,7 +83,8 @@ void BlockDecoder::build_requests(const GameMetadata* metas, uint32_t num_games,
 }
 
 void BlockDecoder::replay_game(const char* buf, uint32_t game_idx, const uint8_t* flips,
-                               int64_t output_row_start, float* output, std::size_t& cursor) {
+                               bool post_move, int64_t output_row_start, float* output,
+                               std::size_t& cursor) {
   const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
   const GameMetadata& gm = metas[game_idx];
 
@@ -93,38 +96,42 @@ void BlockDecoder::replay_game(const char* buf, uint32_t game_idx, const uint8_t
   racks_[0] = rack_from_initial(ir->p0, ir->n0);
   racks_[1] = rack_from_initial(ir->p1, ir->n1);
 
-  // Walk turns, emitting samples whose intra index matches.
-  uint32_t pos = 0;  // position index within this game
+  // Walk turns; one sample per turn. requests_[cursor].intra is just the
+  // turn index k. For pre-move sampling we emit BEFORE applying the move;
+  // for post-move sampling we emit AFTER applying the move and removing
+  // played/exchanged tiles from the mover's rack but BEFORE the mover
+  // draws replacements.
   for (uint32_t k = 0;
        k < gm.num_turns && cursor < requests_.size() && requests_[cursor].game == game_idx; ++k) {
-    // Pre-move row for turn k.
-    while (cursor < requests_.size() && requests_[cursor].game == game_idx &&
-           requests_[cursor].intra == pos) {
-      emit_row(requests_[cursor], flips, output_row_start, output,
-               /*maybe_play_for_post=*/nullptr, gm, turns);
-      ++cursor;
-    }
-    ++pos;
+    const int mover = enc_.active_player();
 
-    // Post-move row only for PLAY turns; emitted from the SAME pre-apply
-    // state (encode_input_post_play is non-mutating).
-    if (turns[k].move.type == MoveType::PLAY) {
+    if (!post_move) {
       while (cursor < requests_.size() && requests_[cursor].game == game_idx &&
-             requests_[cursor].intra == pos) {
-        emit_row(requests_[cursor], flips, output_row_start, output,
-                 /*maybe_play_for_post=*/&turns[k].move, gm, turns);
+             requests_[cursor].intra == k) {
+        emit_row(requests_[cursor], flips, output_row_start, output, mover, gm, turns);
         ++cursor;
       }
-      ++pos;
     }
 
-    // Advance both the encoder and the per-game rack tracking.
-    const int active = enc_.active_player();
+    // Apply the move's board/score/rack effect from the mover's side.
     if (turns[k].move.type == MoveType::PLAY || turns[k].move.type == MoveType::EXCHANGE) {
-      remove_played_or_exchanged(racks_[active], turns[k].move);
+      remove_played_or_exchanged(racks_[mover], turns[k].move);
     }
-    for (uint8_t i = 0; i < turns[k].num_drawn; ++i) racks_[active].add(turns[k].drawn[i]);
     enc_.apply_move(turns[k].move);
+
+    if (post_move) {
+      while (cursor < requests_.size() && requests_[cursor].game == game_idx &&
+             requests_[cursor].intra == k) {
+        emit_row(requests_[cursor], flips, output_row_start, output, mover, gm, turns);
+        ++cursor;
+      }
+    }
+
+    // Mover draws replacements; this finishes their turn from a bookkeeping
+    // POV. We update racks_ *after* the post-row emit so the post-row sees
+    // the pre-draw rack (matching the unseen-pool composition the active
+    // player observes immediately after placing their tiles).
+    for (uint8_t i = 0; i < turns[k].num_drawn; ++i) racks_[mover].add(turns[k].drawn[i]);
   }
   // Defensive: skip past any unconsumed requests for this game (shouldn't
   // happen given the prefix sums computed in build_requests).
@@ -132,33 +139,29 @@ void BlockDecoder::replay_game(const char* buf, uint32_t game_idx, const uint8_t
 }
 
 void BlockDecoder::emit_row(const Request& req, const uint8_t* flips, int64_t output_row_start,
-                            float* output, const Move* maybe_play_for_post, const GameMetadata& gm,
+                            float* output, int pov_player, const GameMetadata& gm,
                             const TurnBlob* turns) {
   const bool flip = flips[req.out_i] != 0;
   float* row = output + (output_row_start + static_cast<int64_t>(req.out_i)) * kRowFloats;
 
-  // The active player POV for label heads is whoever is on move at this
-  // sample. For a post-move row that's still the player who just played
-  // (no turn alternation has happened in the encoder yet).
-  const int active = enc_.active_player();
+  enc_.encode_input(pov_player, racks_[pov_player], flip, row);
 
-  if (maybe_play_for_post != nullptr) {
-    enc_.encode_input_post_play(*maybe_play_for_post, racks_[active], flip, row);
-  } else {
-    enc_.encode_input(racks_[active], flip, row);
-  }
+  // The "opponent next move" is the opponent's reply to pov_player's most
+  // recent turn. Cases:
+  //   pre-move sample  -> enc_.active_player() == pov_player (turn k not
+  //                       applied yet), so the reply is turns[k+1] =
+  //                       turns[enc_.turn_index() + 1].
+  //   post-move sample -> enc_.active_player() == 1 - pov_player (turn k
+  //                       already applied), so the reply is turns[k+1] =
+  //                       turns[enc_.turn_index()].
+  const int next_idx = enc_.turn_index() + (enc_.active_player() == pov_player ? 1 : 0);
 
-  // The "opponent next move" comes from the opponent's reply to the active
-  // player's turn k. With strict alternation that's turns[k+1] -- the same
-  // expression whether this is a pre-move or post-move row (in both cases
-  // the encoder has not yet applied turn k).
-  const int next_turn_idx = enc_.turn_index() + 1;
   GameLogView view{};
-  if (next_turn_idx < static_cast<int>(gm.num_turns)) {
-    view.next_move = turns[next_turn_idx].move;
+  if (next_idx < static_cast<int>(gm.num_turns)) {
+    view.next_move = turns[next_idx].move;
     view.has_next_move = true;
   }
-  view.active_player = active;
+  view.active_player = pov_player;
   view.final_score_p0 = gm.final_score_p0;
   view.final_score_p1 = gm.final_score_p1;
   view.apply_flip = flip;

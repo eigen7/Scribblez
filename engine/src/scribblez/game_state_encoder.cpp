@@ -145,14 +145,6 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& last_opp_mo
   encode_scalars(my_rack, unseen, last_opp_move, score_active, score_opp, out + kSpatialFloats);
 }
 
-void remove_glyph_tiles_from_rack(Rack& rack, const Move& m) {
-  const int n = m.num_glyphs();
-  for (int i = 0; i < n; ++i) {
-    [[maybe_unused]] bool ok = rack.remove(m.glyphs[i].rack_tile());
-    assert(ok);
-  }
-}
-
 }  // namespace
 
 void GameStateEncoder::apply_move(const Move& move) {
@@ -166,29 +158,11 @@ void GameStateEncoder::apply_move(const Move& move) {
   ++turn_index_;
 }
 
-void GameStateEncoder::encode_input(const Rack& my_rack, bool apply_flip, float* out) const {
-  const int opp = 1 - active_;
-  encode_pov(board_, my_rack, last_move_by_[opp], scores_[active_], scores_[opp], apply_flip, out);
-}
-
-void GameStateEncoder::encode_input_post_play(const Move& play_move, const Rack& my_rack,
-                                              bool apply_flip, float* out) const {
-  assert(play_move.type == MoveType::PLAY);
-  const int opp = 1 - active_;
-
-  // Materialize the transient post-PLAY state without mutating *this*.
-  Board board_post = board_;
-  board_post.apply(play_move);
-
-  Rack rack_post = my_rack;
-  remove_glyph_tiles_from_rack(rack_post, play_move);
-
-  const int score_active_post = scores_[active_] + play_move.score;
-
-  // From the active player's POV the most recent opponent move is unchanged
-  // (the opp hasn't moved since their previous turn).
-  encode_pov(board_post, rack_post, last_move_by_[opp], score_active_post, scores_[opp], apply_flip,
-             out);
+void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_flip,
+                                    float* out) const {
+  assert(player == 0 || player == 1);
+  const int opp = 1 - player;
+  encode_pov(board_, my_rack, last_move_by_[opp], scores_[player], scores_[opp], apply_flip, out);
 }
 
 }  // namespace binlog

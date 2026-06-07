@@ -32,16 +32,6 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
-// Eligible positions emitted per game: pre-move at every turn + post-move at
-// every PLAY turn.
-uint32_t count_positions(const GameLog& log) {
-  uint32_t n = static_cast<uint32_t>(log.turns.size());
-  for (const TurnRecord& t : log.turns) {
-    if (t.move.type == MoveType::PLAY) ++n;
-  }
-  return n;
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -95,7 +85,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
     turns.reserve(g.turns.size());
     for (const TurnRecord& t : g.turns) turns.push_back(to_blob(t));
     per_game_turns.push_back(std::move(turns));
-    total_positions += count_positions(g);
+    total_positions += static_cast<uint32_t>(g.turns.size());
   }
 
   // Build metadata table (in-memory; we know all offsets up front).
@@ -108,7 +98,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
     GameMetadata gm{};
     gm.start_offset = cursor;
     gm.num_turns = static_cast<uint32_t>(per_game_turns[i].size());
-    gm.num_positions = count_positions(games[i]);
+    gm.reserved = 0;
     gm.final_score_p0 = games[i].final_scores[0];
     gm.final_score_p1 = games[i].final_scores[1];
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);

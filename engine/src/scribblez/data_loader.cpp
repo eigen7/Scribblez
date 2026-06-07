@@ -98,8 +98,8 @@ int64_t DataLoader::resident_bytes() const {
 // load(): main entry point
 // ===========================================================================
 
-void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, bool apply_symmetry,
-                      float* output) {
+void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, bool post_move,
+                      bool apply_symmetry, float* output) {
   if (n_samples <= 0) return;
   if (output == nullptr) throw std::invalid_argument("DataLoader::load: output is null");
 
@@ -143,6 +143,7 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
     if (global_indices[cursor] >= f->chrono_end) continue;
     WorkUnit u;
     u.file = f.get();
+    u.post_move = post_move;
     u.output_row_start = row_cursor;
     while (cursor < global_indices.size() && global_indices[cursor] < f->chrono_end) {
       u.local_indices.push_back(global_indices[cursor] - f->chrono_start);
@@ -241,7 +242,7 @@ void DataLoader::decode_unit_loop(std::atomic<std::size_t>& next_unit,
     if (i >= units.size()) return;
     const WorkUnit& u = units[i];
     bd.decode(u.file->buffer.get(), u.file->path, u.local_indices.data(), u.flips.data(),
-              u.local_indices.size(), u.output_row_start, output);
+              u.local_indices.size(), u.post_move, u.output_row_start, output);
   }
 }
 

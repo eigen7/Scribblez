@@ -9,8 +9,13 @@
 //   2. Register every existing .slog file in chronological order via
 //      add_file(). The loader assumes a strict newest-last add order.
 //   3. Per training epoch, call load(window_start, window_end, n_samples,
-//      apply_symmetry, output_buffer). Returns when output_buffer is fully
-//      populated and shuffled.
+//      post_move, apply_symmetry, output_buffer). `post_move` selects
+//      whether each sample row is a pre-move position (POV = active player
+//      about to move) or a post-move position (POV = the same player,
+//      immediately after they applied their move and before they draw
+//      replacement tiles). Both choices share the same per-game position
+//      count and the same master-array index space; only the encoding
+//      differs. Returns when output_buffer is fully populated and shuffled.
 //   4. Optionally call add_file() between load()s as new self-play data
 //      arrives.
 //
@@ -92,17 +97,21 @@ class DataLoader {
   // Decode `n_samples` rows into `output` (must have capacity for at least
   // n_samples * row_size_floats() floats). Indices are drawn uniformly with
   // replacement from the master-array slice [window_start, window_end);
-  // window_end is clamped to num_positions(). Rows are written in
-  // file-grouped order then chunked-shuffled, so each output row is a
-  // uniform random sample.
+  // window_end is clamped to num_positions(). `post_move` controls which
+  // snapshot the encoder takes at each sampled position: false = pre-move
+  // (POV = player about to move, just before the move is applied), true =
+  // post-move (POV = same player, immediately after their move is applied
+  // but BEFORE they draw replacement tiles, so the unseen-pool composition
+  // is unchanged). Rows are written in file-grouped order then
+  // chunked-shuffled, so each output row is a uniform random sample.
   //
   // If `apply_symmetry` is true, each output row independently gets a fair
   // coin flip: a 0 keeps the row in canonical orientation; a 1 transposes
   // every spatial plane across the main diagonal. Heads 0 (WLD) and 1
   // (score diff) are flip-invariant; head 2 (opp next placement) is also
   // transposed in lockstep with the input planes so it stays aligned.
-  void load(int64_t window_start, int64_t window_end, int n_samples, bool apply_symmetry,
-            float* output);
+  void load(int64_t window_start, int64_t window_end, int n_samples, bool post_move,
+            bool apply_symmetry, float* output);
 
   static constexpr int row_size_floats() { return kRowFloats; }
   static constexpr int input_size_floats() { return kInputFloats; }
@@ -127,6 +136,7 @@ class DataLoader {
   // called with apply_symmetry=false.
   struct WorkUnit {
     DataFile* file = nullptr;
+    bool post_move = false;
     std::vector<int64_t> local_indices;
     std::vector<uint8_t> flips;  // aligned with local_indices
     int64_t output_row_start = 0;

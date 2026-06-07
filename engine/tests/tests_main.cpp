@@ -349,7 +349,7 @@ static void test_encoder_basic_layout() {
   active_rack.add(BLANK);
 
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -431,7 +431,7 @@ static void test_encoder_last_opp_plane_mask() {
 
   Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   const float* plane = out.data() + 31 * 225;
   for (int r = 0; r < 15; ++r) {
@@ -477,8 +477,8 @@ static void test_encoder_flip_symmetry() {
 
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  enc.encode_input(active_rack, /*apply_flip=*/false, normal.data());
-  enc.encode_input(active_rack, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/true, flipped.data());
 
   // Scalars are flip-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
@@ -799,7 +799,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   const int64_t total_positions = hdr->num_positions;
   CHECK(total_positions > 0);
 
-  // Register with DataLoader and drain all rows in one load().
+  // Register with DataLoader and drain rows in one load() per phase.
   scribblez::binlog::DataLoader::Params dl_params;
   dl_params.num_worker_threads = 2;
   dl_params.num_prefetch_threads = 1;
@@ -807,11 +807,16 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   loader.add_file(slog.string(), total_positions, fsize);
   CHECK(loader.num_positions() == total_positions);
 
-  const int n_samples = static_cast<int>(total_positions) * 4;  // oversample
+  const int n_per_phase = static_cast<int>(total_positions) * 4;  // oversample
+  const int n_samples = n_per_phase * 2;
   std::vector<float> rows(static_cast<size_t>(n_samples) *
                           scribblez::binlog::DataLoader::row_size_floats());
-  loader.load(/*window_start=*/0, /*window_end=*/total_positions, n_samples,
-              /*apply_symmetry=*/false, rows.data());
+  loader.load(/*window_start=*/0, /*window_end=*/total_positions, n_per_phase,
+              /*post_move=*/false, /*apply_symmetry=*/false, rows.data());
+  loader.load(/*window_start=*/0, /*window_end=*/total_positions, n_per_phase,
+              /*post_move=*/true, /*apply_symmetry=*/false,
+              rows.data() + static_cast<size_t>(n_per_phase) *
+                              scribblez::binlog::DataLoader::row_size_floats());
 
   // Build the set of valid (WLD label, score_diff) pairs across all games.
   std::set<std::tuple<int, int, int, int>> valid_labels;  // (W,D,L,score_diff)
@@ -914,7 +919,9 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     }
     CHECK(snap_idx == live_snaps.size());
   }
-  CHECK(compared == total_positions);
+  // `compared` includes one pre-snapshot per turn + one post-snapshot per PLAY
+  // turn; total_positions counts only one row per turn (shared between pre/post).
+  CHECK(compared >= total_positions);
   std::cout << "  file+DataLoader round-trip OK (" << kGames << " games, " << total_positions
             << " positions, " << n_samples << " loader rows)\n";
 }
@@ -1518,12 +1525,12 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = 1;
-  hdr.num_positions = 3;  // 2 turns + 1 PLAY -> 3 positions
+  hdr.num_positions = 2;  // one row per turn
 
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.num_positions = 3;
+  gm.reserved = 0;
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
@@ -1539,7 +1546,7 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   }
   int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
 
-  // Build the canonical state for position index 2 (pre-move turn 1):
+  // Build the canonical state for position index 1 (pre-move turn 1):
   //   board has Q at (3,5); active is p1 (empty rack); opp is p0 (now
   //   holding the 6 As after Q was placed); last_opp_move == q_play;
   //   score_active=0, score_opp=42.
@@ -1581,18 +1588,20 @@ static void test_dataloader_per_row_symmetry() {
   std::vector<float> ref_flipped(kInputFloats, 0.0f);
   {
     // Replay the q_play so the encoder lands in the state that exists at
-    // sampled position 2 (pre-move turn 1): active=p1, last_move_by_p0 =
+    // sampled position 1 (pre-move turn 1): active=p1, last_move_by_p0 =
     // q_play, board has Q at (3,5), scores=[42,0].
     GameStateEncoder ref_enc;
     ref_enc.apply_move(fix.last_opp_move);
-    ref_enc.encode_input(fix.active_rack, /*apply_flip=*/false, ref_normal.data());
-    ref_enc.encode_input(fix.active_rack, /*apply_flip=*/true, ref_flipped.data());
+    ref_enc.encode_input(ref_enc.active_player(), fix.active_rack, /*apply_flip=*/false,
+                         ref_normal.data());
+    ref_enc.encode_input(ref_enc.active_player(), fix.active_rack, /*apply_flip=*/true,
+                         ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
 
   // Expected labels for active=p1 (final p0=350 vs p1=200 -> active loses by
-  // 150). The fixture's "next move" after sampled position 2 doesn't exist
+  // 150). The fixture's "next move" after sampled position 1 doesn't exist
   // (it's the last turn), so the opp-next-placement head is all-zero,
   // making the whole label tail flip-invariant.
   float ref_labels[kLabelFloats];
@@ -1605,18 +1614,19 @@ static void test_dataloader_per_row_symmetry() {
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
-  loader.add_file(fix.path.string(), /*num_positions=*/3, fix.fsize);
+  loader.add_file(fix.path.string(), /*num_positions=*/2, fix.fsize);
 
-  // Sample only the asymmetric position (index 2) by restricting the window
-  // to [2, 3).
-  const int64_t kSampleIdx = 2;
+  // Sample only the asymmetric position (index 1) by restricting the window
+  // to [1, 2).
+  const int64_t kSampleIdx = 1;
 
   // apply_symmetry=false: every row must match the canonical (unflipped)
   // encoding.
   {
     constexpr int n = 64;
     std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(kSampleIdx, kSampleIdx + 1, n, /*apply_symmetry=*/false, rows.data());
+    loader.load(kSampleIdx, kSampleIdx + 1, n, /*post_move=*/false,
+                /*apply_symmetry=*/false, rows.data());
     for (int i = 0; i < n; ++i) {
       const float* row = rows.data() + i * DataLoader::row_size_floats();
       CHECK(std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0);
@@ -1630,7 +1640,8 @@ static void test_dataloader_per_row_symmetry() {
   {
     constexpr int n = 200;
     std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(kSampleIdx, kSampleIdx + 1, n, /*apply_symmetry=*/true, rows.data());
+    loader.load(kSampleIdx, kSampleIdx + 1, n, /*post_move=*/false,
+                /*apply_symmetry=*/true, rows.data());
     int normal_count = 0, flipped_count = 0;
     for (int i = 0; i < n; ++i) {
       const float* row = rows.data() + i * DataLoader::row_size_floats();

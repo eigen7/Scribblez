@@ -31,9 +31,13 @@ class BlockDecoder {
   // intra-file linear index in the .slog file pointed to by `buf`) directly
   // into the row layout starting at `output[output_row_start * kRowFloats]`.
   // `flips[i] != 0` selects diagonal-symmetry augmentation for that row.
-  // `path` is used only for diagnostic messages on malformed buffers.
+  // `post_move` selects whether each row encodes the pre-move snapshot at
+  // the sampled turn (false) or the post-move snapshot (true; same player,
+  // immediately after their move was applied but before they drew). `path`
+  // is used only for diagnostic messages on malformed buffers.
   void decode(const char* buf, const std::string& path, const int64_t* local_indices,
-              const uint8_t* flips, std::size_t n_indices, int64_t output_row_start, float* output);
+              const uint8_t* flips, std::size_t n_indices, bool post_move, int64_t output_row_start,
+              float* output);
 
  private:
   // One requested sample, post-resolution: which game it lives in, where
@@ -46,21 +50,24 @@ class BlockDecoder {
   };
 
   // Resolve raw local indices into per-game Requests, sorted by (game,
-  // intra) so each game is replayed once in forward order.
+  // intra) so each game is replayed once in forward order. `intra` is
+  // simply the turn index k within the game.
   void build_requests(const GameMetadata* metas, uint32_t num_games, const int64_t* local_indices,
                       std::size_t n_indices);
 
   // Replay one game forward from its initial state, calling emit_row() at
-  // every requested position. `cursor` indexes the next pending Request in
+  // every requested turn. `cursor` indexes the next pending Request in
   // requests_; it is advanced past all Requests for this game.
-  void replay_game(const char* buf, uint32_t game_idx, const uint8_t* flips,
+  void replay_game(const char* buf, uint32_t game_idx, const uint8_t* flips, bool post_move,
                    int64_t output_row_start, float* output, std::size_t& cursor);
 
-  // Write one sample row (input encoding + label encoding). When
-  // `maybe_play_for_post` is non-null this is a post-PLAY sample for that
-  // move; otherwise it's a pre-move sample.
+  // Write one sample row (input encoding + label encoding) from
+  // `pov_player`'s POV. Whether the sample is pre-move or post-move is
+  // implicit in the current state of enc_ at the call site: pre-move iff
+  // enc_.active_player() == pov_player (turn k not yet applied), post-move
+  // iff they differ (turn k already applied, enc has flipped active).
   void emit_row(const Request& req, const uint8_t* flips, int64_t output_row_start, float* output,
-                const Move* maybe_play_for_post, const GameMetadata& gm, const TurnBlob* turns);
+                int pov_player, const GameMetadata& gm, const TurnBlob* turns);
 
   // Per-decode buffer reused across calls.
   std::vector<Request> requests_;

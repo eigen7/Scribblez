@@ -1,7 +1,8 @@
 // dataloader_smoke: ad-hoc test driver for the DataLoader.
 //
 // Usage:
-//   dataloader_smoke DIR [--samples N] [--workers W] [--prefetch P] [--budget MB]
+//   dataloader_smoke DIR [--samples N] [--workers W] [--prefetch P] [--budget MB] [--phase
+//   pre|post]
 //
 // Walks DIR for *.slog files (in lexicographic == chronological order),
 // registers them, then runs one load() over the full window and prints
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   int n_samples = 64;
   DataLoader::Params params;
+  bool post_move = false;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];
     auto next = [&]() -> std::string {
@@ -59,7 +61,17 @@ int main(int argc, char** argv) {
       params.memory_budget = static_cast<int64_t>(std::stoll(next()));
     else if (a == "--budget")
       params.memory_budget = static_cast<int64_t>(std::stoll(next())) * 1024 * 1024;
-    else {
+    else if (a == "--phase") {
+      const std::string v = next();
+      if (v == "pre")
+        post_move = false;
+      else if (v == "post")
+        post_move = true;
+      else {
+        std::cerr << "--phase must be 'pre' or 'post'\n";
+        return 2;
+      }
+    } else {
       std::cerr << "unknown flag: " << a << "\n";
       return 2;
     }
@@ -96,7 +108,8 @@ int main(int argc, char** argv) {
   std::vector<float> out(static_cast<size_t>(n_samples) * DataLoader::row_size_floats());
 
   auto t0 = std::chrono::steady_clock::now();
-  loader.load(0, loader.num_positions(), n_samples, /*apply_symmetry=*/false, out.data());
+  loader.load(0, loader.num_positions(), n_samples, post_move, /*apply_symmetry=*/false,
+              out.data());
   auto t1 = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t1 - t0).count();
 

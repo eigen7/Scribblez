@@ -40,7 +40,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 3;
+inline constexpr uint16_t kVersion = 4;
 
 #pragma pack(push, 1)
 
@@ -49,17 +49,19 @@ struct FileHeader {
   uint16_t version;  // kVersion
   uint16_t reserved;
   uint32_t num_games;      // games in this file
-  uint32_t num_positions;  // total eligible positions across all games
-                           // (== sum over games of num_positions); used as
-                           // the master-array width by the DataLoader.
+  uint32_t num_positions;  // total sample positions across all games
+                           // (== sum over games of num_turns); used as the
+                           // master-array width by the DataLoader. The same
+                           // index space serves both pre- and post-move
+                           // training phases (selected per load() call).
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
-  uint64_t start_offset;   // file offset of this game's InitialRacks blob
-  uint32_t num_turns;      // length of the TurnBlob array
-  uint32_t num_positions;  // num_turns + count of PLAY turns
-                           // (pre-move at every turn + post-move at PLAY)
+  uint64_t start_offset;  // file offset of this game's InitialRacks blob
+  uint32_t num_turns;     // length of the TurnBlob array (== position
+                          // count contributed by this game)
+  uint32_t reserved;
   int32_t final_score_p0;
   int32_t final_score_p1;
 };

@@ -70,18 +70,19 @@ class GameStateEncoder {
   const Move& last_move_by(int p) const { return last_move_by_[p]; }
 
   // --- encoders -----------------------------------------------------------
-  // Encode the current (pre-move) state into `out` (kInputFloats long) from
-  // the active player's POV. `my_rack` is the active player's own rack right
-  // now; everything else the encoder needs is in its tracked state.
-  void encode_input(const Rack& my_rack, bool apply_flip, float* out) const;
-
-  // Encode a post-PLAY view: as if the active player just applied
-  // `play_move` (no draw yet, so the unseen-pool composition is unchanged
-  // from pre-move). Does NOT mutate this encoder. `play_move` must be a
-  // PLAY-typed move. `my_rack` is the PRE-play rack; the played tiles are
-  // removed inside this method.
-  void encode_input_post_play(const Move& play_move, const Rack& my_rack, bool apply_flip,
-                              float* out) const;
+  // Encode the current state into `out` (kInputFloats long) from `player`'s
+  // POV. `my_rack` is `player`'s own rack right now.
+  //
+  // For a pre-move sample, callers pass player == active_player(). For a
+  // post-PLAY sample (the player who just moved, before any draw and before
+  // the opp has responded), the canonical sequence is:
+  //     enc.apply_move(my_play);  // advances board+score, flips active
+  //     enc.encode_input(/*player=*/the_player_who_just_played,
+  //                      /*my_rack=*/rack_after_play_pre_draw, ...);
+  // The encoder's own active_player() is now the opponent; passing the
+  // pre-flip player here keeps the encode anchored to their POV (so labels
+  // and last_opp_move both attach correctly to that player).
+  void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
 
  private:
   Board board_{};
