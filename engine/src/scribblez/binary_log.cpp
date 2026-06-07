@@ -5,7 +5,6 @@
 #include "scribblez/tile.h"
 #include "scribblez/unique_id.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <filesystem>
@@ -182,7 +181,7 @@ std::vector<PositionRecord> extract_positions(const GameLog& log) {
       remove_exchanged_tiles_from_rack(racks[active], turn.move);
     }
     // Refill (the log tells us exactly which tiles were drawn).
-    for (Tile t : turn.drawn) racks[active].add(t);
+    for (uint8_t di = 0; di < turn.num_drawn; ++di) racks[active].add(turn.drawn[di]);
 
     last_move_by[active] = turn.move;
   }

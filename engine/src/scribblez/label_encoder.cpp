@@ -1,7 +1,5 @@
 #include "scribblez/label_encoder.h"
 
-#include "scribblez/binary_log.h"  // for PositionKind (referenced via GameLogView)
-
 #include <algorithm>
 
 namespace scribblez {

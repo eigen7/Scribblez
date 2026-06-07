@@ -1,5 +1,6 @@
 #include "scribblez/data_loader.h"
 
+#include "scribblez/binary_log.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/label_encoder.h"
 

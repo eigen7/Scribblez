@@ -46,8 +46,6 @@
 
 #include "scribblez/binary_log.h"
 
-#include <cstdint>
-
 namespace scribblez {
 namespace binlog {
 

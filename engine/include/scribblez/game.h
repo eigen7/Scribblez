@@ -20,7 +20,11 @@ struct TurnRecord {
   Move move;
   int score_delta;  // points scored on this turn (may be 0 or negative)
   std::array<int, 2> cumulative_scores;
-  std::vector<Tile> drawn;  // tiles drawn from bag after the move (in draw order)
+  // Tiles drawn from the bag after the move (in draw order). The first
+  // `num_drawn` entries of `drawn` are valid; the rest are empty Tiles.
+  // A turn draws at most RACK_SIZE tiles.
+  std::array<Tile, RACK_SIZE> drawn{};
+  uint8_t num_drawn = 0;
 };
 
 struct GameLog {
@@ -60,7 +64,10 @@ class Game {
   std::array<int, 2> scores_{0, 0};
   GameLog log_;
 
-  void refill_rack(int p, std::vector<Tile>& drawn);
+  // Draw from the bag until the player's rack is at RACK_SIZE. If
+  // `drawn_out` is non-null, the drawn tiles are written there (up to
+  // RACK_SIZE) and `*num_drawn_out` is set to the count.
+  void refill_rack(int p, Tile* drawn_out, uint8_t* num_drawn_out);
 };
 
 }  // namespace scribblez

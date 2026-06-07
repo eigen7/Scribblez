@@ -43,7 +43,6 @@
 // referenced by the just-completed load) until total resident bytes <=
 // budget.
 
-#include "scribblez/binary_log.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/label_encoder.h"
 

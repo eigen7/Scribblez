@@ -5,7 +5,6 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
-#include <sstream>
 #include <stdexcept>
 
 namespace scribblez {

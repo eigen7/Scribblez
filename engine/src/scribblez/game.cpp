@@ -15,20 +15,22 @@ Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }
 
-void Game::refill_rack(int p, std::vector<Tile>& drawn) {
+void Game::refill_rack(int p, Tile* drawn_out, uint8_t* num_drawn_out) {
+  uint8_t n = 0;
   while (racks_[p].size() < RACK_SIZE) {
     auto t = bag_.draw();
     if (!t) break;
     racks_[p].add(*t);
-    drawn.push_back(*t);
+    if (drawn_out) drawn_out[n] = *t;
+    ++n;
   }
+  if (num_drawn_out) *num_drawn_out = n;
 }
 
 void Game::play() {
   // Initial draws.
   for (int p = 0; p < 2; ++p) {
-    std::vector<Tile> dummy;
-    refill_rack(p, dummy);
+    refill_rack(p, /*drawn_out=*/nullptr, /*num_drawn_out=*/nullptr);
   }
 
   int cur = 0;
@@ -66,7 +68,7 @@ void Game::play() {
       rec.score_delta = m.score;
       consecutive_zero_turns = 0;
       // Draw replacement tiles.
-      refill_rack(cur, rec.drawn);
+      refill_rack(cur, rec.drawn.data(), &rec.num_drawn);
       if (racks_[cur].empty() && bag_.size() == 0) {
         rack_emptied = true;
       }
@@ -77,7 +79,7 @@ void Game::play() {
         (void)ok;
         assert(ok);
       }
-      refill_rack(cur, rec.drawn);
+      refill_rack(cur, rec.drawn.data(), &rec.num_drawn);
       for (int i = 0; i < n_glyphs; ++i) bag_.put_back(m.glyphs[i].rack_tile());
       ++consecutive_zero_turns;
     } else {

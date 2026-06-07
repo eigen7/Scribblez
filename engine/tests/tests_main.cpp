@@ -550,7 +550,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLog& lo
       const int n = turn.move.num_glyphs();
       for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyphs[g].rack_tile());
     }
-    for (Tile t : turn.drawn) racks[active].add(t);
+    for (uint8_t di = 0; di < turn.num_drawn; ++di) racks[active].add(turn.drawn[di]);
     last_by[active] = turn.move;
   }
   return out;

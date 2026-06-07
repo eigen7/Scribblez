@@ -79,7 +79,6 @@ int main(int argc, char** argv) {
   }
 
   DataLoader loader(params);
-  int64_t total_positions = 0;
   for (auto& p : paths) {
     FileHeader hdr{};
     if (!read_header(p.string(), hdr) || hdr.magic != kMagic) {
@@ -88,7 +87,6 @@ int main(int argc, char** argv) {
     }
     const int64_t fsz = std::filesystem::file_size(p);
     loader.add_file(p.string(), hdr.num_positions, fsz);
-    total_positions += hdr.num_positions;
     std::cout << "registered " << p.filename() << ": positions=" << hdr.num_positions
               << " bytes=" << fsz << "\n";
   }
