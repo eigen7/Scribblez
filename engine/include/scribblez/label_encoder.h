@@ -7,8 +7,15 @@
 //     [win, draw, loss] from the active player's POV. Mutually exclusive
 //     one-hot, sums to 1.0.
 //
-//   Head 1 -- ScoreDiff (kScoreDiffFloats = 1):
-//     final_score_active - final_score_opp (signed, can exceed 100).
+//   Head 1 -- ScoreDiff distribution (kScoreDiffFloats = kScoreDiffBins):
+//     One-hot mass over integer score differences from the active player's
+//     POV. The true differential (final_score_active - final_score_opp) is
+//     clipped to [-kScoreDiffClip, +kScoreDiffClip] and placed at bin index
+//     (clipped_diff + kScoreDiffClip). Layout follows KataGo's score-belief
+//     head (Wu 2019, Appendix B); the model is trained with cross-entropy
+//     against this distribution plus a CDF-MSE term, with an unanchored
+//     scalar mean / stddev self-prediction regularizer driven by the
+//     model's own predicted pdf.
 //
 //   Head 2 -- OppNextPlacement (kOppNextPlacementFloats = 225):
 //     A 15x15 binary mask. Cell (r,c) is 1.0 iff the OPPONENT placed a tile
@@ -28,12 +35,19 @@ namespace scribblez {
 namespace binlog {
 
 inline constexpr int kWldFloats = 3;
-inline constexpr int kScoreDiffFloats = 1;
+
+// Score-difference distribution. Differentials are clipped (not rejected)
+// to a symmetric range; 400 covers essentially every realistic Scrabble
+// game while keeping the head at a tractable 801 bins.
+inline constexpr int kScoreDiffClip = 400;
+inline constexpr int kScoreDiffBins = 2 * kScoreDiffClip + 1;  // 801
+inline constexpr int kScoreDiffFloats = kScoreDiffBins;
+
 inline constexpr int kOppNextPlacementSide = 15;
 inline constexpr int kOppNextPlacementFloats =
   kOppNextPlacementSide * kOppNextPlacementSide;  // 225
 inline constexpr int kNumLabelHeads = 3;
-inline constexpr int kLabelFloats = kWldFloats + kScoreDiffFloats + kOppNextPlacementFloats;  // 229
+inline constexpr int kLabelFloats = kWldFloats + kScoreDiffFloats + kOppNextPlacementFloats;
 
 // Sizes of each head's buffer, indexed by head id (0..kNumLabelHeads-1).
 inline constexpr int kHeadFloats[kNumLabelHeads] = {

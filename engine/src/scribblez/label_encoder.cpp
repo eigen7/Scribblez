@@ -56,8 +56,15 @@ void encode_labels(const GameLogView& view, float** out) {
     wld[2] = 1.0f;
   }
 
-  // Head 1: signed score difference.
-  out[1][0] = static_cast<float>(active - opp);
+  // Head 1: score-difference distribution (one-hot over clipped integer
+  // bins, KataGo-style). Bin i corresponds to a differential of
+  // (i - kScoreDiffClip); the true diff is clipped into range so end-pile
+  // mass is handled by the CDF loss without distorting nearby bins.
+  float* sd = out[1];
+  std::fill_n(sd, kScoreDiffFloats, 0.0f);
+  const int diff = active - opp;
+  const int clipped = std::clamp(diff, -kScoreDiffClip, kScoreDiffClip);
+  sd[clipped + kScoreDiffClip] = 1.0f;
 
   // Head 2: opponent's next placement (15x15 binary mask).
   encode_opp_next_placement(view, out[2]);

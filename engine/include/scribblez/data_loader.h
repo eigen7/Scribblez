@@ -17,8 +17,8 @@
 // Output row layout (row_size_floats() floats per row, n_samples rows)
 // -------------------------------------------------------------------
 //   [ input_floats:    kInputFloats              ]
-//   [ wld onehot:      kWldFloats              3 ]  // [win, draw, loss] (POV)
-//   [ score_diff:      kScoreDiffFloats        1 ]  // final_active - final_opp
+//   [ wld onehot:      kWldFloats              3   ]  // [win, draw, loss] (POV)
+//   [ score_diff pdf:  kScoreDiffFloats        801 ]  // one-hot over clipped bins
 //   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
 //
 // (Label layout is owned by label_encoder.h; the constants are re-exported
