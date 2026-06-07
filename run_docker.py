@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from setup_common import (
+    DEFAULT_INSTANCE_NAME,
     LOCAL_DOCKER_IMAGE,
     MINIMUM_REQUIRED_IMAGE_VERSION,
     REQUIRED_PORTS,
@@ -32,7 +33,6 @@ from setup_common import (
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_INSTANCE_NAME = "scribblez_instance"
 
 
 def get_args() -> argparse.Namespace:
