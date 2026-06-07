@@ -9,6 +9,7 @@
 #include "scribblez/game.h"
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/label_encoder.h"
 #include "scribblez/movegen.h"
 #include "scribblez/rack.h"
 
@@ -1208,6 +1209,171 @@ static void test_game_end_stalemate_penalty() {
   }
 }
 
+// ===========================================================================
+// LabelEncoder
+// ===========================================================================
+
+static void test_encode_labels() {
+  using namespace scribblez::binlog;
+  float out[kLabelFloats];
+
+  // Win.
+  encode_labels(/*fs_active=*/120, /*fs_opp=*/100, out);
+  CHECK(out[0] == 1.0f);
+  CHECK(out[1] == 0.0f);
+  CHECK(out[2] == 0.0f);
+  CHECK(out[3] == 20.0f);
+
+  // Draw.
+  encode_labels(75, 75, out);
+  CHECK(out[0] == 0.0f);
+  CHECK(out[1] == 1.0f);
+  CHECK(out[2] == 0.0f);
+  CHECK(out[3] == 0.0f);
+
+  // Loss with negative score_diff.
+  encode_labels(80, 95, out);
+  CHECK(out[0] == 0.0f);
+  CHECK(out[1] == 0.0f);
+  CHECK(out[2] == 1.0f);
+  CHECK(out[3] == -15.0f);
+
+  // WLD entries are mutually exclusive and sum to 1.0 for every case.
+  for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
+    encode_labels(a, b, out);
+    CHECK(out[0] + out[1] + out[2] == 1.0f);
+  }
+}
+
+// ===========================================================================
+// DataLoader: per-row diagonal-flip symmetry
+// ===========================================================================
+
+// Build a one-game, one-position .slog file under `dir` with a single record
+// whose board has an asymmetric placement (a 'Q' at (3,5)). Returns the file
+// path and the on-disk size.
+static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
+  const std::filesystem::path& dir) {
+  using namespace scribblez::binlog;
+
+  PositionRecord rec{};
+  rec.active_player = 0;
+  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
+  rec.score_active = 10;
+  rec.score_opp = 4;
+  rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('Q'));
+
+  FileHeader hdr{};
+  hdr.magic = kMagic;
+  hdr.version = kVersion;
+  hdr.num_games = 1;
+  hdr.num_positions = 1;
+
+  GameMetadata gm{};
+  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
+  gm.num_positions = 1;
+  gm.data_size = sizeof(PositionRecord);
+  gm.seed = 0xC0FFEEULL;
+  gm.final_score_p0 = 350;  // active=p0 -> win, score_diff=+150
+  gm.final_score_p1 = 200;
+
+  std::filesystem::path path = dir / "one_position.slog";
+  {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+    f.write(reinterpret_cast<const char*>(&gm), sizeof(gm));
+    f.write(reinterpret_cast<const char*>(&rec), sizeof(rec));
+    CHECK(f);
+  }  // f destructor flushes + closes before we measure file_size
+  int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
+  return {path, fsize};
+}
+
+static void test_dataloader_per_row_symmetry() {
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  fs::path dir = fs::temp_directory_path() / ("scribblez_sym_" + std::to_string(::getpid()) + "_" +
+                                              std::to_string(std::random_device{}()));
+  fs::create_directories(dir);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{dir};
+
+  auto [slog, fsize] = write_one_position_slog(dir);
+
+  // Build the two reference encodings we expect to see in the output rows.
+  PositionRecord rec{};
+  rec.active_player = 0;
+  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
+  rec.score_active = 10;
+  rec.score_opp = 4;
+  rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('Q'));
+
+  std::vector<float> ref_normal(kInputFloats, 0.0f);
+  std::vector<float> ref_flipped(kInputFloats, 0.0f);
+  encode_input(rec, /*apply_flip=*/false, ref_normal.data());
+  encode_input(rec, /*apply_flip=*/true, ref_flipped.data());
+  // Sanity: the two encodings differ (asymmetric Q placement).
+  CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
+
+  // Expected labels for active=p0 (win, score_diff=+150).
+  float ref_labels[kLabelFloats];
+  encode_labels(/*fs_active=*/350, /*fs_opp=*/200, ref_labels);
+
+  DataLoader::Params params;
+  params.num_worker_threads = 1;
+  params.num_prefetch_threads = 1;
+  DataLoader loader(params);
+  loader.add_file(slog.string(), /*num_positions=*/1, fsize);
+
+  // apply_symmetry=false: every row must match the canonical (unflipped)
+  // encoding.
+  {
+    constexpr int n = 64;
+    std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
+    loader.load(0, 1, n, /*apply_symmetry=*/false, rows.data());
+    for (int i = 0; i < n; ++i) {
+      const float* row = rows.data() + i * DataLoader::row_size_floats();
+      CHECK(std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0);
+      CHECK(std::memcmp(row + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
+    }
+  }
+
+  // apply_symmetry=true: each row independently coin-flipped. Over many rows
+  // we expect both buckets to appear and every row to match one of the two
+  // reference encodings exactly.
+  {
+    constexpr int n = 200;
+    std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
+    loader.load(0, 1, n, /*apply_symmetry=*/true, rows.data());
+    int normal_count = 0, flipped_count = 0;
+    for (int i = 0; i < n; ++i) {
+      const float* row = rows.data() + i * DataLoader::row_size_floats();
+      const bool is_normal = std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0;
+      const bool is_flipped =
+        std::memcmp(row, ref_flipped.data(), kInputFloats * sizeof(float)) == 0;
+      CHECK(is_normal || is_flipped);  // every row matches one of the two
+      if (is_normal)
+        ++normal_count;
+      else
+        ++flipped_count;
+      // Labels are flip-invariant.
+      CHECK(std::memcmp(row + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
+    }
+    // With n=200 fair coin flips, the probability that one bucket is empty
+    // is 2 * 2^-200; the test is effectively deterministic.
+    CHECK(normal_count > 0);
+    CHECK(flipped_count > 0);
+    std::cout << "  DataLoader per-row symmetry: " << normal_count << " normal / " << flipped_count
+              << " flipped (of " << n << ")\n";
+  }
+}
+
 int main() {
   test_dict_basic();
   test_movegen_opening();
@@ -1228,6 +1394,8 @@ int main() {
   test_movegen_blank_scores_zero();
   test_game_end_rack_out_bonus();
   test_game_end_stalemate_penalty();
+  test_encode_labels();
+  test_dataloader_per_row_symmetry();
   std::cout << "All tests passed.\n";
   return 0;
 }

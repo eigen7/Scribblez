@@ -23,6 +23,9 @@
 //   [ wld onehot:      3            ]  // [win, draw, loss] from active POV
 //   [ score_diff:      1            ]  // final_active - final_opp
 //
+// (Label layout is owned by label_encoder.h; the constants are re-exported
+// from this header for downstream convenience.)
+//
 // Concurrency model
 // -----------------
 // load() is synchronous: it spawns up to `num_prefetch_threads` workers to
@@ -41,6 +44,7 @@
 
 #include "scribblez/binary_log.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/label_encoder.h"
 
 #include <cstdint>
 #include <deque>
@@ -52,11 +56,10 @@
 namespace scribblez {
 namespace binlog {
 
-// `kInputFloats` is owned by input_encoder.h; the label floats follow.
+// `kInputFloats` is owned by input_encoder.h; the label constants
+// (kWldFloats / kScoreDiffFloats / kLabelFloats) are owned by
+// label_encoder.h and re-included above.
 
-inline constexpr int kWldFloats = 3;
-inline constexpr int kScoreDiffFloats = 1;
-inline constexpr int kLabelFloats = kWldFloats + kScoreDiffFloats;  // 4
 inline constexpr int kRowFloats = kInputFloats + kLabelFloats;
 
 class DataLoader {
@@ -93,6 +96,12 @@ class DataLoader {
   // window_end is clamped to num_positions(). Rows are written in
   // file-grouped order then chunked-shuffled, so each output row is a
   // uniform random sample.
+  //
+  // If `apply_symmetry` is true, each output row independently gets a fair
+  // coin flip: a 0 keeps the row in canonical orientation; a 1 transposes
+  // every spatial plane across the main diagonal. Labels are flip-invariant
+  // (score and WLD only depend on the final cumulative scores), so this is
+  // a label-preserving augmentation.
   void load(int64_t window_start, int64_t window_end, int n_samples, bool apply_symmetry,
             float* output);
 
@@ -113,12 +122,15 @@ class DataLoader {
 
   // One unit of decoder work: a contiguous block of output rows fed by one
   // file. local_indices are positions-within-the-file (0..num_positions-1),
-  // sorted ascending so the decoder walks the file linearly.
+  // sorted ascending so the decoder walks the file linearly. `flips[i]`
+  // selects whether output row (output_row_start + i) gets the diagonal
+  // symmetry applied (1) or not (0); always zero-filled when load() was
+  // called with apply_symmetry=false.
   struct WorkUnit {
     DataFile* file = nullptr;
     std::vector<int64_t> local_indices;
+    std::vector<uint8_t> flips;  // aligned with local_indices
     int64_t output_row_start = 0;
-    bool apply_symmetry = false;
   };
 
   Params params_;

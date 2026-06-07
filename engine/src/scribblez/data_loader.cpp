@@ -1,6 +1,7 @@
 #include "scribblez/data_loader.h"
 
 #include "scribblez/input_encoder.h"
+#include "scribblez/label_encoder.h"
 
 #include <algorithm>
 #include <atomic>
@@ -18,24 +19,6 @@ namespace scribblez {
 namespace binlog {
 
 namespace {
-
-// Compute [win, draw, loss] from the active player's POV given the game's
-// final scores.
-void encode_wld(int score_active_final, int score_opp_final, float* out3) {
-  if (score_active_final > score_opp_final) {
-    out3[0] = 1.0f;
-    out3[1] = 0.0f;
-    out3[2] = 0.0f;
-  } else if (score_active_final == score_opp_final) {
-    out3[0] = 0.0f;
-    out3[1] = 1.0f;
-    out3[2] = 0.0f;
-  } else {
-    out3[0] = 0.0f;
-    out3[1] = 0.0f;
-    out3[2] = 1.0f;
-  }
-}
 
 // Read `expected_size` bytes from `path` into a fresh heap buffer.
 std::unique_ptr<char[]> read_whole_file(const std::string& path, int64_t expected_size) {
@@ -69,9 +52,10 @@ void chunked_shuffle(float* base, int64_t n, int row_size, std::mt19937_64& rng)
 
 // Decode the positions named by `local_indices` (within the file whose buffer
 // is `buf`) directly into `output`. Assumes the buffer is loaded and stable
-// for the duration of the call.
+// for the duration of the call. `flips[i]` selects whether output row
+// (output_row_start + i) gets the diagonal symmetry applied.
 void decode_block(const char* buf, const std::string& path, const int64_t* local_indices,
-                  size_t n_indices, int64_t output_row_start, bool apply_symmetry, float* output) {
+                  const uint8_t* flips, size_t n_indices, int64_t output_row_start, float* output) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
     std::cerr << "DataLoader: bad magic in " << path << "\n";
@@ -101,12 +85,11 @@ void decode_block(const char* buf, const std::string& path, const int64_t* local
       buf + gm.start_offset + intra * sizeof(PositionRecord));
 
     float* row = output + (output_row_start + static_cast<int64_t>(i)) * kRowFloats;
-    encode_input(*rec, apply_symmetry, row);
+    encode_input(*rec, /*apply_flip=*/flips[i] != 0, row);
 
     const int fs_active = rec->active_player == 0 ? gm.final_score_p0 : gm.final_score_p1;
     const int fs_opp = rec->active_player == 0 ? gm.final_score_p1 : gm.final_score_p0;
-    encode_wld(fs_active, fs_opp, row + kInputFloats);
-    row[kInputFloats + kWldFloats] = static_cast<float>(fs_active - fs_opp);
+    encode_labels(fs_active, fs_opp, row + kInputFloats);
   }
 }
 
@@ -185,6 +168,14 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
 
   // ---- bucket by file ----------------------------------------------------
   std::sort(global_indices.begin(), global_indices.end());
+  // Per-row flip bits (one per output row, aligned with global_indices after
+  // the sort). When apply_symmetry is false they're all zero.
+  std::vector<uint8_t> per_row_flips(n_samples, 0);
+  if (apply_symmetry) {
+    std::bernoulli_distribution coin(0.5);
+    for (int i = 0; i < n_samples; ++i) per_row_flips[i] = coin(rng) ? 1u : 0u;
+  }
+
   std::vector<WorkUnit> units;
   std::vector<std::shared_ptr<DataFile>> needed_files;
   size_t cursor = 0;
@@ -194,10 +185,10 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
     if (global_indices[cursor] >= f->chrono_end) continue;
     WorkUnit u;
     u.file = f.get();
-    u.apply_symmetry = apply_symmetry;
     u.output_row_start = row_cursor;
     while (cursor < global_indices.size() && global_indices[cursor] < f->chrono_end) {
       u.local_indices.push_back(global_indices[cursor] - f->chrono_start);
+      u.flips.push_back(per_row_flips[cursor]);
       ++cursor;
     }
     row_cursor += static_cast<int64_t>(u.local_indices.size());
@@ -271,8 +262,8 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
         const size_t i = next_unit.fetch_add(1, std::memory_order_acq_rel);
         if (i >= units.size()) return;
         const WorkUnit& u = units[i];
-        decode_block(u.file->buffer.get(), u.file->path, u.local_indices.data(),
-                     u.local_indices.size(), u.output_row_start, u.apply_symmetry, output);
+        decode_block(u.file->buffer.get(), u.file->path, u.local_indices.data(), u.flips.data(),
+                     u.local_indices.size(), u.output_row_start, output);
       }
     };
     const int n_threads = std::min<int>(params_.num_worker_threads, static_cast<int>(units.size()));
