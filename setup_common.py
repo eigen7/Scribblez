@@ -20,8 +20,8 @@ LOCAL_DOCKER_IMAGE = "scribblez"
 DEFAULT_INSTANCE_NAME = "scribblez_instance"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
-# to rebuild. Mirrors AlphaZeroArcade's MINIMUM_REQUIRED_IMAGE_VERSION; checked
-# at run_docker.py launch time against the running image's `version` label.
+# to rebuild. Checked at run_docker.py launch time against the running image's
+# `version` label.
 MINIMUM_REQUIRED_IMAGE_VERSION = "0.1.0"
 
 # Ports forwarded host -> container by run_docker.py.

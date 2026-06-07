@@ -16,3 +16,8 @@ Please reference docs/Scribblez.pdf to understand the overall goal of this proje
 ## Clang-format
 
 After editing any file, make sure to sanitize it with clang-format
+
+## Backwards compatibility
+
+This project is completely self-contained, and there are thus no backwards-compatibility
+requirements. Never compromise on interface for the sake of backwards-compatibility.

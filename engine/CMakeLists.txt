@@ -10,8 +10,9 @@ add_library(scribblez_core STATIC
   src/scribblez/game.cpp
   src/scribblez/gcg_writer.cpp
   src/scribblez/binary_log.cpp
-  src/scribblez/input_encoder.cpp
+  src/scribblez/game_state_encoder.cpp
   src/scribblez/label_encoder.cpp
+  src/scribblez/block_decoder.cpp
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
 )

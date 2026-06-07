@@ -15,8 +15,8 @@ inline int plane_idx(int r, int c, bool flip) {
 
 void encode_opp_next_placement(const GameLogView& view, float* out) {
   std::fill_n(out, kOppNextPlacementFloats, 0.0f);
-  if (!view.has_next_move()) return;
-  const Move& m = view.next_move();
+  if (!view.has_next_move) return;
+  const Move& m = view.next_move;
   if (m.type != MoveType::PLAY) return;
   const int dr = m.horizontal ? 0 : 1;
   const int dc = m.horizontal ? 1 : 0;

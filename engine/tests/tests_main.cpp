@@ -7,6 +7,7 @@
 #include "scribblez/data_loader.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
+#include "scribblez/game_state_encoder.h"
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/label_encoder.h"
@@ -26,7 +27,6 @@
 #include <system_error>
 #include <tuple>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 #define CHECK(cond)                                                                \
@@ -315,21 +315,41 @@ static void test_real_kwg_optional() {
 
 static void test_encoder_basic_layout() {
   using namespace scribblez::binlog;
-  PositionRecord rec{};
-  rec.active_player = 0;
-  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
-  rec.score_active = 50;
-  rec.score_opp = 30;
-  rec.bag_counts[0] = 3;   // 3 A's in bag
-  rec.bag_counts[26] = 1;  // 1 blank in bag
-  rec.active_rack.add(Tile::from_char('Q'));
-  rec.active_rack.add(Tile::from_char('Z'));
-  rec.active_rack.add(BLANK);
-  rec.board[7 * 15 + 7] = Glyph::of(Tile::from_char('C'));
-  rec.board[3 * 15 + 3] = Glyph::played(Tile::from_char('D'), /*is_blank=*/true);
+  // Build state via apply_move only: p0 plays a single 'C' at (7,7) for 50
+  // points; p1 then plays a single blank-as-D at (3,3) for 30 points. After
+  // these two moves the encoder's active player is p0 with last_move_by_p1
+  // = the D play, scores=[50,30], and a board with C@(7,7) and D@(3,3).
+  // (Board::apply doesn't enforce legality, so the disconnected placements
+  // are fine for an encoder-layout test.)
+  Move p0_play;
+  p0_play.type = MoveType::PLAY;
+  p0_play.horizontal = true;
+  p0_play.start_row = 7;
+  p0_play.start_col = 7;
+  p0_play.glyphs[0] = Glyph::of(Tile::from_char('C'));
+  p0_play.square_mask = 0b1;
+  p0_play.score = 50;
+
+  Move p1_play;
+  p1_play.type = MoveType::PLAY;
+  p1_play.horizontal = true;
+  p1_play.start_row = 3;
+  p1_play.start_col = 3;
+  p1_play.glyphs[0] = Glyph::played(Tile::from_char('D'), /*is_blank=*/true);
+  p1_play.square_mask = 0b1;
+  p1_play.score = 30;
+
+  GameStateEncoder enc;
+  enc.apply_move(p0_play);
+  enc.apply_move(p1_play);
+
+  Rack active_rack;
+  active_rack.add(Tile::from_char('Q'));
+  active_rack.add(Tile::from_char('Z'));
+  active_rack.add(BLANK);
 
   std::vector<float> out(kInputFloats, -1.0f);
-  encode_input(rec, /*apply_flip=*/false, out.data());
+  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/false, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -350,47 +370,70 @@ static void test_encoder_basic_layout() {
     }
   }
 
-  // Last-opp-placement plane (31): record's last_opp_move defaults to PASS, so all-zero.
-  for (int i = 0; i < 225; ++i) CHECK(out[31 * 225 + i] == 0.0f);
+  // Last-opp-placement plane (31): only (3,3) is lit (p1's most recent move).
+  for (int r = 0; r < 15; ++r) {
+    for (int c = 0; c < 15; ++c) {
+      const float expected = (r == 3 && c == 3) ? 1.0f : 0.0f;
+      CHECK(out[31 * 225 + r * 15 + c] == expected);
+    }
+  }
 
-  // Scalars: rack[27] + bag[27] + (score_diff, bag_size, rack_size, last_opp_num_glyphs).
+  // Scalars: rack[27] + unseen[27] + (score_diff, unseen_size, active_rack_size,
+  // opp_rack_size, last_opp_num_glyphs).
   const float* scalars = out.data() + kSpatialFloats;
   CHECK(scalars[Tile::from_char('Q')] == 1.0f);
   CHECK(scalars[Tile::from_char('Z')] == 1.0f);
   CHECK(scalars[26] == 1.0f);  // blank count in rack
   CHECK(scalars[Tile::from_char('A')] == 0.0f);
-  CHECK(scalars[27 + 0] == 3.0f);   // 3 A's in bag
-  CHECK(scalars[27 + 26] == 1.0f);  // 1 blank in bag
-  CHECK(scalars[54] == 20.0f);      // score_diff
-  CHECK(scalars[55] == 4.0f);       // bag_size = sum of bag_counts
-  CHECK(scalars[56] == 3.0f);       // active_rack_size
-  CHECK(scalars[57] == 0.0f);       // PASS -> num_glyphs == 0
+
+  // Derived unseen pool: TILE_COUNTS minus board and active_rack only (the
+  // opp rack tiles, if any, are part of the unseen pool from the POV).
+  CHECK(scalars[27 + 0] == static_cast<float>(TILE_COUNTS[0]));  // A
+  CHECK(scalars[27 + Tile::from_char('C')] == TILE_COUNTS[Tile::from_char('C')] - 1.0f);
+  CHECK(scalars[27 + Tile::from_char('Q')] == TILE_COUNTS[Tile::from_char('Q')] - 1.0f);
+  CHECK(scalars[27 + Tile::from_char('Z')] == TILE_COUNTS[Tile::from_char('Z')] - 1.0f);
+  CHECK(scalars[27 + 26] == TILE_COUNTS[26] - 2.0f);  // 1 on board + 1 in rack
+  CHECK(scalars[54] == 20.0f);                        // score_diff
+  // unseen_size = 100 - (#tiles on board) - (#tiles in active rack) = 100-2-3 = 95.
+  CHECK(scalars[55] == 95.0f);
+  CHECK(scalars[56] == 3.0f);  // active_rack_size
+  CHECK(scalars[57] == 0.0f);  // opp_rack_size (caller passed 0)
+  CHECK(scalars[58] == 1.0f);  // last opp move placed 1 glyph
 }
 
 static void test_encoder_last_opp_plane_mask() {
   using namespace scribblez::binlog;
 
-  // Hand-build a record where the opponent played CAT horizontally starting at
-  // (7,6), interleaving an already-present A at (7,7): cells (7,6) and (7,8)
-  // were newly placed -> square_mask bits 0 and 2 set.
-  PositionRecord rec{};
-  rec.active_player = 1;
-  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
-  rec.board[7 * 15 + 7] = Glyph::of(Tile::from_char('A'));
+  // p0 plays a single 'A' at (7,7), then p1 plays "CAT" horizontally
+  // starting at (7,6), interleaving the existing A at (7,7): cells (7,6)
+  // and (7,8) were newly placed -> square_mask = 0b101.
+  Move p0_play;
+  p0_play.type = MoveType::PLAY;
+  p0_play.horizontal = true;
+  p0_play.start_row = 7;
+  p0_play.start_col = 7;
+  p0_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  p0_play.square_mask = 0b1;
+  p0_play.score = 1;
 
-  Move m;
-  m.type = MoveType::PLAY;
-  m.horizontal = true;
-  m.start_row = 7;
-  m.start_col = 6;
-  m.glyphs[0] = Glyph::of(Tile::from_char('C'));
-  m.glyphs[1] = Glyph::of(Tile::from_char('T'));
-  m.square_mask = 0b101;  // bit 0 (cell 7,6) + bit 2 (cell 7,8)
-  m.score = 5;
-  rec.last_opp_move = m;
+  Move opp_play;
+  opp_play.type = MoveType::PLAY;
+  opp_play.horizontal = true;
+  opp_play.start_row = 7;
+  opp_play.start_col = 6;
+  opp_play.glyphs[0] = Glyph::of(Tile::from_char('C'));
+  opp_play.glyphs[1] = Glyph::of(Tile::from_char('T'));
+  opp_play.square_mask = 0b101;  // bit 0 (cell 7,6) + bit 2 (cell 7,8)
+  opp_play.score = 5;
 
+  GameStateEncoder enc;
+  enc.apply_move(p0_play);
+  enc.apply_move(opp_play);
+
+  Rack active_rack, opp_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  encode_input(rec, /*apply_flip=*/false, out.data());
+  enc.encode_input(active_rack, /*opp_rack_size=*/static_cast<int>(opp_rack.size()),
+                   /*apply_flip=*/false, out.data());
 
   const float* plane = out.data() + 31 * 225;
   for (int r = 0; r < 15; ++r) {
@@ -399,39 +442,45 @@ static void test_encoder_last_opp_plane_mask() {
       CHECK(plane[r * 15 + c] == expected);
     }
   }
-  // num_glyphs scalar reflects placements (not cells walked).
-  CHECK(out[kSpatialFloats + 57] == 2.0f);
+  // num_glyphs scalar reflects placements (not cells walked). Index 58 in the
+  // new layout (opp_rack_size sits at 57).
+  CHECK(out[kSpatialFloats + 58] == 2.0f);
 }
 
 static void test_encoder_flip_symmetry() {
   using namespace scribblez::binlog;
 
-  PositionRecord rec{};
-  rec.active_player = 0;
-  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
-  rec.score_active = 30;
-  rec.score_opp = 12;
-  rec.active_rack.add(Tile::from_char('Q'));
-  rec.bag_counts[0] = 5;
-  rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('B'));
-  rec.board[1 * 15 + 9] = Glyph::played(Tile::from_char('E'), /*is_blank=*/true);
+  // p0 single 'B' at (3,5); p1 vertical "AX" at (0,4) (mask=0b11).
+  Move p0_play;
+  p0_play.type = MoveType::PLAY;
+  p0_play.horizontal = true;
+  p0_play.start_row = 3;
+  p0_play.start_col = 5;
+  p0_play.glyphs[0] = Glyph::of(Tile::from_char('B'));
+  p0_play.square_mask = 0b1;
+  p0_play.score = 30;
 
-  // A vertical opp move starting at (0,4) placing 'A' then 'X' (mask=0b11).
-  Move m;
-  m.type = MoveType::PLAY;
-  m.horizontal = false;
-  m.start_row = 0;
-  m.start_col = 4;
-  m.glyphs[0] = Glyph::of(Tile::from_char('A'));
-  m.glyphs[1] = Glyph::of(Tile::from_char('X'));
-  m.square_mask = 0b11;
-  m.score = 9;
-  rec.last_opp_move = m;
+  Move opp_play;
+  opp_play.type = MoveType::PLAY;
+  opp_play.horizontal = false;
+  opp_play.start_row = 0;
+  opp_play.start_col = 4;
+  opp_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  opp_play.glyphs[1] = Glyph::of(Tile::from_char('X'));
+  opp_play.square_mask = 0b11;
+  opp_play.score = 12;
+
+  GameStateEncoder enc;
+  enc.apply_move(p0_play);
+  enc.apply_move(opp_play);
+
+  Rack active_rack;
+  active_rack.add(Tile::from_char('Q'));
 
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  encode_input(rec, /*apply_flip=*/false, normal.data());
-  encode_input(rec, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/false, normal.data());
+  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/true, flipped.data());
 
   // Scalars are flip-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
@@ -479,8 +528,9 @@ class TestAgent : public scribblez::Agent {
   std::mt19937_64 rng_;
 };
 
-// Snapshot of game state at one eligible PositionRecord moment, captured
-// during a live in-memory replay. Mirrors what extract_positions builds.
+// Snapshot of game state at one eligible sample moment, captured during a
+// live in-memory replay. Used as the ground-truth reference for the
+// GameStateEncoder-driven replays under test.
 struct LiveSnapshot {
   scribblez::Board board;
   scribblez::Rack rack_active;
@@ -556,17 +606,6 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLog& lo
   return out;
 }
 
-// Reconstruct a Board from the raw 225-glyph array stored in a PositionRecord.
-scribblez::Board board_from_record(const scribblez::binlog::PositionRecord& rec) {
-  scribblez::Board b;
-  for (int r = 0; r < 15; ++r) {
-    for (int c = 0; c < 15; ++c) {
-      b.set(r, c, rec.board[r * 15 + c]);
-    }
-  }
-  return b;
-}
-
 bool boards_equal(const scribblez::Board& a, const scribblez::Board& b) {
   for (int r = 0; r < 15; ++r) {
     for (int c = 0; c < 15; ++c) {
@@ -628,15 +667,14 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
 }
 }  // anonymous namespace
 
-// extract_positions produces records whose (board, rack, last_opp_move,
-// scores) faithfully reproduce the live game state -- proven by running
-// movegen on both and demanding identical legal-play sets.
+// GameStateEncoder, replayed against a live in-memory replay, faithfully
+// reproduces every eligible position -- proven by running movegen on both and
+// demanding identical legal-play sets at the pre-move snapshot of each turn.
 static void test_extract_positions_movegen_roundtrip() {
   Dictionary dict = medium_dict();
 
-  // A handful of games at different seeds; extract_positions now emits one
-  // record per eligible position (pre-move at every turn, post-move after
-  // every PLAY turn) -- no sampling.
+  // A handful of games at different seeds; for every eligible position we
+  // compare encoder state against the independent live snapshot vector.
   const std::vector<uint64_t> seeds = {42, 1337, 0xDEADBEEFULL};
   long positions_compared = 0;
 
@@ -645,43 +683,65 @@ static void test_extract_positions_movegen_roundtrip() {
     CHECK(!log.turns.empty());
 
     auto live_snaps = live_replay_all_snapshots(log);
-    auto records = scribblez::binlog::extract_positions(log);
-    CHECK(records.size() == live_snaps.size());
 
-    // Index live snapshots by (turn_index, kind) so we can look them up by
-    // each record's coordinates.
-    auto key = [](int turn, scribblez::binlog::PositionKind k) {
-      return (static_cast<uint64_t>(turn) << 1) | static_cast<uint64_t>(k);
-    };
-    std::unordered_map<uint64_t, const LiveSnapshot*> by_key;
-    by_key.reserve(live_snaps.size());
-    for (const auto& s : live_snaps) by_key[key(s.turn_index, s.kind)] = &s;
+    scribblez::binlog::GameStateEncoder enc;
+    // The encoder no longer tracks racks (an outside observer cannot see
+    // opponent draws). The test, however, has full information, so we
+    // maintain a parallel rack pair alongside the encoder.
+    std::array<scribblez::Rack, 2> racks = {log.initial_racks[0], log.initial_racks[1]};
 
-    for (const auto& rec : records) {
-      auto k =
-        key(rec.move_number, static_cast<scribblez::binlog::PositionKind>(rec.position_kind));
-      auto it = by_key.find(k);
-      CHECK(it != by_key.end());
-      const LiveSnapshot& live = *it->second;
+    size_t snap_idx = 0;
+    for (size_t k = 0; k < log.turns.size(); ++k) {
+      const auto& turn = log.turns[k];
 
-      // 1. The PositionRecord faithfully encodes the live state.
-      CHECK(rec.active_player == live.active_player);
-      CHECK(rec.score_active == live.score_active);
-      CHECK(rec.score_opp == live.score_opp);
-      scribblez::Board recon_board = board_from_record(rec);
-      CHECK(boards_equal(recon_board, live.board));
-      CHECK(racks_equal(rec.active_rack, live.rack_active));
-      CHECK(moves_equal_for_replay(rec.last_opp_move, live.last_opp_move));
-
-      // 2. The killer test: movegen on the round-tripped state agrees
-      //    exactly with movegen on the live state.
-      check_movegen_equiv(dict, recon_board, rec.active_rack, live.board, live.rack_active,
-                          "extract_positions");
+      // ---- pre-move snapshot ----
+      CHECK(snap_idx < live_snaps.size());
+      const LiveSnapshot& pre = live_snaps[snap_idx++];
+      CHECK(pre.kind == scribblez::binlog::PositionKind::kPreMove);
+      const int active = enc.active_player();
+      CHECK(active == pre.active_player);
+      CHECK(enc.score(active) == pre.score_active);
+      CHECK(enc.score(1 - active) == pre.score_opp);
+      CHECK(boards_equal(enc.board(), pre.board));
+      CHECK(racks_equal(racks[active], pre.rack_active));
+      CHECK(moves_equal_for_replay(enc.last_move_by(1 - active), pre.last_opp_move));
+      check_movegen_equiv(dict, enc.board(), racks[active], pre.board, pre.rack_active,
+                          "GameStateEncoder-pre");
       ++positions_compared;
+
+      // ---- post-move snapshot (PLAY only) ----
+      if (turn.move.type == scribblez::MoveType::PLAY) {
+        CHECK(snap_idx < live_snaps.size());
+        const LiveSnapshot& post = live_snaps[snap_idx++];
+        CHECK(post.kind == scribblez::binlog::PositionKind::kPostMove);
+
+        // Materialize post-state from the encoder + parallel racks by hand
+        // and compare.
+        scribblez::Board post_board = enc.board();
+        post_board.apply(turn.move);
+        scribblez::Rack post_rack = racks[active];
+        const int n = turn.move.num_glyphs();
+        for (int g = 0; g < n; ++g) post_rack.remove(turn.move.glyphs[g].rack_tile());
+        const int post_score = enc.score(active) + turn.move.score;
+        CHECK(boards_equal(post_board, post.board));
+        CHECK(racks_equal(post_rack, post.rack_active));
+        CHECK(post_score == post.score_active);
+        ++positions_compared;
+      }
+
+      // Advance both encoder and parallel rack tracking.
+      if (turn.move.type == scribblez::MoveType::PLAY ||
+          turn.move.type == scribblez::MoveType::EXCHANGE) {
+        const int n = turn.move.num_glyphs();
+        for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyphs[g].rack_tile());
+      }
+      for (uint8_t d = 0; d < turn.num_drawn; ++d) racks[active].add(turn.drawn[d]);
+      enc.apply_move(turn.move);
     }
+    CHECK(snap_idx == live_snaps.size());
   }
   CHECK(positions_compared > 0);
-  std::cout << "  extract_positions+movegen round-trip OK (" << positions_compared
+  std::cout << "  GameStateEncoder replay+movegen round-trip OK (" << positions_compared
             << " positions across " << seeds.size() << " games)\n";
 }
 
@@ -785,40 +845,64 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     CHECK(valid_labels.count({w, dd, l, sd}) == 1);
   }
 
-  // Re-read the file's raw PositionRecords and verify each one still passes
-  // the movegen round-trip against its live snapshot. This exercises the
-  // disk-roundtrip path (writer -> file -> mmap-style reinterpret_cast)
-  // that the DataLoader itself uses internally.
+  // Re-read the file's raw TurnBlobs, replay each game via GameStateEncoder,
+  // and verify the round-tripped state passes the movegen equivalence check
+  // against the live snapshots. This exercises the writer -> file ->
+  // reinterpret_cast path that the DataLoader itself uses internally.
   const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
     raw.data() + sizeof(scribblez::binlog::FileHeader));
   long compared = 0;
   for (uint32_t gi = 0; gi < hdr->num_games; ++gi) {
     const auto& gm = metas[gi];
-    const auto* recs =
-      reinterpret_cast<const scribblez::binlog::PositionRecord*>(raw.data() + gm.start_offset);
     // GameMetadata is written in the order games were appended, so logs[gi]
     // corresponds to metas[gi]. num_turns must match the GameLog.
     CHECK(gm.num_turns == logs[gi].turns.size());
-    auto live_snaps = live_replay_all_snapshots(logs[gi]);
-    std::unordered_map<uint64_t, const LiveSnapshot*> by_key;
-    auto key = [](int turn, scribblez::binlog::PositionKind k) {
-      return (static_cast<uint64_t>(turn) << 1) | static_cast<uint64_t>(k);
-    };
-    for (const auto& s : live_snaps) by_key[key(s.turn_index, s.kind)] = &s;
 
-    for (uint32_t ri = 0; ri < gm.num_positions; ++ri) {
-      const auto& rec = recs[ri];
-      auto it = by_key.find(
-        key(rec.move_number, static_cast<scribblez::binlog::PositionKind>(rec.position_kind)));
-      CHECK(it != by_key.end());
-      const LiveSnapshot& live = *it->second;
-      scribblez::Board recon = board_from_record(rec);
-      CHECK(boards_equal(recon, live.board));
-      CHECK(racks_equal(rec.active_rack, live.rack_active));
-      check_movegen_equiv(dict, recon, rec.active_rack, live.board, live.rack_active,
+    const auto* ir =
+      reinterpret_cast<const scribblez::binlog::InitialRacks*>(raw.data() + gm.start_offset);
+    const auto* turns = reinterpret_cast<const scribblez::binlog::TurnBlob*>(
+      raw.data() + gm.start_offset + sizeof(scribblez::binlog::InitialRacks));
+
+    // Reconstruct the initial racks from the on-disk bytes and replay.
+    Rack r0_init, r1_init;
+    for (uint8_t k = 0; k < ir->n0; ++k) r0_init.add(ir->p0[k]);
+    for (uint8_t k = 0; k < ir->n1; ++k) r1_init.add(ir->p1[k]);
+    CHECK(racks_equal(r0_init, logs[gi].initial_racks[0]));
+    CHECK(racks_equal(r1_init, logs[gi].initial_racks[1]));
+
+    auto live_snaps = live_replay_all_snapshots(logs[gi]);
+    scribblez::binlog::GameStateEncoder enc;
+    std::array<scribblez::Rack, 2> racks = {r0_init, r1_init};
+
+    size_t snap_idx = 0;
+    for (uint32_t k = 0; k < gm.num_turns; ++k) {
+      CHECK(snap_idx < live_snaps.size());
+      const LiveSnapshot& pre = live_snaps[snap_idx++];
+      const int active = enc.active_player();
+      CHECK(boards_equal(enc.board(), pre.board));
+      CHECK(racks_equal(racks[active], pre.rack_active));
+      check_movegen_equiv(dict, enc.board(), racks[active], pre.board, pre.rack_active,
                           "file-roundtrip");
       ++compared;
+
+      if (turns[k].move.type == scribblez::MoveType::PLAY) {
+        CHECK(snap_idx < live_snaps.size());
+        const LiveSnapshot& post = live_snaps[snap_idx++];
+        scribblez::Board post_board = enc.board();
+        post_board.apply(turns[k].move);
+        CHECK(boards_equal(post_board, post.board));
+        ++compared;
+      }
+
+      if (turns[k].move.type == scribblez::MoveType::PLAY ||
+          turns[k].move.type == scribblez::MoveType::EXCHANGE) {
+        const int n = turns[k].move.num_glyphs();
+        for (int g = 0; g < n; ++g) racks[active].remove(turns[k].move.glyphs[g].rack_tile());
+      }
+      for (uint8_t d = 0; d < turns[k].num_drawn; ++d) racks[active].add(turns[k].drawn[d]);
+      enc.apply_move(turns[k].move);
     }
+    CHECK(snap_idx == live_snaps.size());
   }
   CHECK(compared == total_positions);
   std::cout << "  file+DataLoader round-trip OK (" << kGames << " games, " << total_positions
@@ -1214,15 +1298,12 @@ static void test_game_end_stalemate_penalty() {
 namespace {
 
 // Helper: build a GameLogView with just the fields encode_labels reads for
-// heads 0 and 1 (no moves required when has_next_move() returns false).
+// heads 0 and 1 (no next move set -> head 2 emits all zeros).
 scribblez::binlog::GameLogView make_scores_view(int fs_active, int fs_opp, int active_player,
                                                 bool apply_flip = false) {
   using namespace scribblez::binlog;
   GameLogView v{};
-  v.moves = nullptr;
-  v.num_turns = 0;
-  v.turn_index = 0;  // turn_index + 1 (== 1) >= num_turns (== 0) -> no next move
-  v.kind = PositionKind::kPreMove;
+  v.has_next_move = false;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
   v.final_score_p1 = active_player == 0 ? fs_opp : fs_active;
@@ -1285,25 +1366,21 @@ static void test_encode_labels() {
     CHECK(flat[kWldFloats + kScoreDiffFloats + i] == 0.0f);
   }
 
-  // Build a tiny 2-move sequence: moves[0] = anything (current turn),
-  // moves[1] = horizontal PLAY at (4, 2) covering 3 cells (squares 0, 1, 2 of
-  // the move direction; col 2, 3, 4 of row 4). The opp-next-placement head
-  // should light up exactly those three cells in canonical orientation, and
-  // exactly their transposed cells when apply_flip=true.
-  Move moves[2] = {};
-  moves[0].type =
-    MoveType::PASS;  // unused by encode_labels (we only ever read moves[turn_index+1])
-  moves[1].type = MoveType::PLAY;
-  moves[1].horizontal = 1;
-  moves[1].start_row = 4;
-  moves[1].start_col = 2;
-  moves[1].square_mask = 0b0000000000000111;  // bits 0,1,2
+  // Build a tiny "next move": a horizontal PLAY at (4, 2) covering 3 cells
+  // (squares 0, 1, 2 of the move direction; col 2, 3, 4 of row 4). The
+  // opp-next-placement head should light up exactly those three cells in
+  // canonical orientation, and exactly their transposed cells when
+  // apply_flip=true.
+  Move next_play{};
+  next_play.type = MoveType::PLAY;
+  next_play.horizontal = 1;
+  next_play.start_row = 4;
+  next_play.start_col = 2;
+  next_play.square_mask = 0b0000000000000111;  // bits 0,1,2
 
   GameLogView v_with_next{};
-  v_with_next.moves = moves;
-  v_with_next.num_turns = 2;
-  v_with_next.turn_index = 0;
-  v_with_next.kind = PositionKind::kPreMove;
+  v_with_next.next_move = next_play;
+  v_with_next.has_next_move = true;
   v_with_next.active_player = 0;
   v_with_next.final_score_p0 = 100;
   v_with_next.final_score_p1 = 80;
@@ -1333,7 +1410,7 @@ static void test_encode_labels() {
   CHECK(plane[4 * 15 + 4] == 1.0f);
 
   // EXCHANGE / PASS next move -> all zeros.
-  moves[1].type = MoveType::EXCHANGE;
+  v_with_next.next_move.type = MoveType::EXCHANGE;
   v_with_next.apply_flip = false;
   encode_labels_flat(v_with_next, flat);
   for (int i = 0; i < kOppNextPlacementFloats; ++i) CHECK(plane[i] == 0.0f);
@@ -1343,39 +1420,78 @@ static void test_encode_labels() {
 // DataLoader: per-row diagonal-flip symmetry
 // ===========================================================================
 
-// Build a one-game, one-position .slog file under `dir` with a single record
-// whose board has an asymmetric placement (a 'Q' at (3,5)). The game has a
-// single PASS turn (so the opp-next-placement label head reads no next move
-// and is all-zeros -- keeping the symmetry check straightforward). Returns
-// the file path and the on-disk size.
-static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
-  const std::filesystem::path& dir) {
+// Build a one-game .slog file under `dir` whose 2-turn game is:
+//   turn 0: p0 PLAYs a synthetic single-tile move placing 'Q' at (3,5)
+//   turn 1: p1 PASSes
+// This produces 3 eligible positions (turn 0 pre + turn 0 post + turn 1 pre);
+// the asymmetric one we want to test is position index 2 (the pre-move at
+// turn 1, where the board already holds the Q). Returns the file path, the
+// on-disk size, and the (path-independent) state describing position 2 so the
+// test can build its reference encoding.
+struct SymFixture {
+  std::filesystem::path path;
+  int64_t fsize;
+  // Reproducible inputs to encode_input for the position we'll sample.
+  scribblez::Board board;
+  scribblez::Rack active_rack;
+  scribblez::Rack opp_rack;
+  scribblez::Move last_opp_move;
+  int score_active;
+  int score_opp;
+  int final_score_p0;
+  int final_score_p1;
+  int active_player;
+};
+
+static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   using namespace scribblez::binlog;
+  using namespace scribblez;
 
-  PositionRecord rec{};
-  rec.active_player = 0;
-  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
-  rec.move_number = 0;
-  rec.score_active = 10;
-  rec.score_opp = 4;
-  rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('Q'));
+  // Initial racks. p0 gets Q + 6 As (no draws, so size never replenishes);
+  // p1 starts empty so the bag-derivation has no contribution from them.
+  Rack p0_init;
+  p0_init.add(Tile::from_char('Q'));
+  for (int i = 0; i < 6; ++i) p0_init.add(Tile::from_char('A'));
+  Rack p1_init;  // empty
 
-  // A single PASS move for the (single) turn.
-  Move pass_move{};
-  pass_move.type = MoveType::PASS;
+  // Synthetic 1-tile PLAY: place 'Q' at (3,5). Score is arbitrary; we'll
+  // record it in the move and recompute it in the reference.
+  Move q_play{};
+  q_play.type = MoveType::PLAY;
+  q_play.horizontal = true;
+  q_play.start_row = 3;
+  q_play.start_col = 5;
+  q_play.glyphs[0] = Glyph::of(Tile::from_char('Q'));
+  q_play.square_mask = 0b1;
+  q_play.score = 42;
+
+  Move p1_pass{};
+  p1_pass.type = MoveType::PASS;
+
+  InitialRacks ir{};
+  ir.p0 = p0_init.tiles();
+  ir.p1 = p1_init.tiles();
+  ir.n0 = static_cast<uint8_t>(p0_init.size());
+  ir.n1 = static_cast<uint8_t>(p1_init.size());
+
+  TurnBlob t0{};
+  t0.move = q_play;
+  t0.num_drawn = 0;
+  TurnBlob t1{};
+  t1.move = p1_pass;
+  t1.num_drawn = 0;
 
   FileHeader hdr{};
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = 1;
-  hdr.num_positions = 1;
+  hdr.num_positions = 3;  // 2 turns + 1 PLAY -> 3 positions
 
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
-  gm.num_positions = 1;
-  gm.data_size = sizeof(PositionRecord);
-  gm.num_turns = 1;
-  gm.final_score_p0 = 350;  // active=p0 -> win, score_diff=+150
+  gm.num_turns = 2;
+  gm.num_positions = 3;
+  gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
   std::filesystem::path path = dir / "one_position.slog";
@@ -1383,12 +1499,30 @@ static std::pair<std::filesystem::path, int64_t> write_one_position_slog(
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
     f.write(reinterpret_cast<const char*>(&gm), sizeof(gm));
-    f.write(reinterpret_cast<const char*>(&rec), sizeof(rec));
-    f.write(reinterpret_cast<const char*>(&pass_move), sizeof(pass_move));
+    f.write(reinterpret_cast<const char*>(&ir), sizeof(ir));
+    f.write(reinterpret_cast<const char*>(&t0), sizeof(t0));
+    f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
     CHECK(f);
-  }  // f destructor flushes + closes before we measure file_size
+  }
   int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
-  return {path, fsize};
+
+  // Build the canonical state for position index 2 (pre-move turn 1):
+  //   board has Q at (3,5); active is p1 (empty rack); opp is p0 (now
+  //   holding the 6 As after Q was placed); last_opp_move == q_play;
+  //   score_active=0, score_opp=42.
+  SymFixture out;
+  out.path = path;
+  out.fsize = fsize;
+  out.board.set(3, 5, Glyph::of(Tile::from_char('Q')));
+  // out.active_rack starts empty (p1)
+  for (int i = 0; i < 6; ++i) out.opp_rack.add(Tile::from_char('A'));
+  out.last_opp_move = q_play;
+  out.score_active = 0;
+  out.score_opp = 42;
+  out.final_score_p0 = gm.final_score_p0;
+  out.final_score_p1 = gm.final_score_p1;
+  out.active_player = 1;
+  return out;
 }
 
 static void test_dataloader_per_row_symmetry() {
@@ -1406,42 +1540,52 @@ static void test_dataloader_per_row_symmetry() {
     }
   } cleanup{dir};
 
-  auto [slog, fsize] = write_one_position_slog(dir);
+  SymFixture fix = write_one_position_slog(dir);
 
-  // Build the two reference encodings we expect to see in the output rows.
-  PositionRecord rec{};
-  rec.active_player = 0;
-  rec.position_kind = static_cast<uint8_t>(PositionKind::kPreMove);
-  rec.score_active = 10;
-  rec.score_opp = 4;
-  rec.board[3 * 15 + 5] = Glyph::of(Tile::from_char('Q'));
-
+  // Build the two reference input encodings (canonical + flipped) for the
+  // sampled position.
   std::vector<float> ref_normal(kInputFloats, 0.0f);
   std::vector<float> ref_flipped(kInputFloats, 0.0f);
-  encode_input(rec, /*apply_flip=*/false, ref_normal.data());
-  encode_input(rec, /*apply_flip=*/true, ref_flipped.data());
+  {
+    // Replay the q_play so the encoder lands in the state that exists at
+    // sampled position 2 (pre-move turn 1): active=p1, last_move_by_p0 =
+    // q_play, board has Q at (3,5), scores=[42,0].
+    GameStateEncoder ref_enc;
+    ref_enc.apply_move(fix.last_opp_move);
+    ref_enc.encode_input(fix.active_rack, static_cast<int>(fix.opp_rack.size()),
+                         /*apply_flip=*/false, ref_normal.data());
+    ref_enc.encode_input(fix.active_rack, static_cast<int>(fix.opp_rack.size()),
+                         /*apply_flip=*/true, ref_flipped.data());
+  }
   // Sanity: the two encodings differ (asymmetric Q placement).
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
 
-  // Expected labels for active=p0 (win, score_diff=+150). The fixture's game
-  // has only a single PASS turn, so the opp-next-placement head is all zeros
-  // regardless of flip -- making the whole label tail flip-invariant.
+  // Expected labels for active=p1 (final p0=350 vs p1=200 -> active loses by
+  // 150). The fixture's "next move" after sampled position 2 doesn't exist
+  // (it's the last turn), so the opp-next-placement head is all-zero,
+  // making the whole label tail flip-invariant.
   float ref_labels[kLabelFloats];
-  encode_labels_flat(make_scores_view(/*fs_active=*/350, /*fs_opp=*/200, /*active_player=*/0),
-                     ref_labels);
+  encode_labels_flat(
+    make_scores_view(/*fs_active=*/fix.final_score_p1, /*fs_opp=*/fix.final_score_p0,
+                     /*active_player=*/fix.active_player),
+    ref_labels);
 
   DataLoader::Params params;
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
-  loader.add_file(slog.string(), /*num_positions=*/1, fsize);
+  loader.add_file(fix.path.string(), /*num_positions=*/3, fix.fsize);
+
+  // Sample only the asymmetric position (index 2) by restricting the window
+  // to [2, 3).
+  const int64_t kSampleIdx = 2;
 
   // apply_symmetry=false: every row must match the canonical (unflipped)
   // encoding.
   {
     constexpr int n = 64;
     std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(0, 1, n, /*apply_symmetry=*/false, rows.data());
+    loader.load(kSampleIdx, kSampleIdx + 1, n, /*apply_symmetry=*/false, rows.data());
     for (int i = 0; i < n; ++i) {
       const float* row = rows.data() + i * DataLoader::row_size_floats();
       CHECK(std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0);
@@ -1455,7 +1599,7 @@ static void test_dataloader_per_row_symmetry() {
   {
     constexpr int n = 200;
     std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(0, 1, n, /*apply_symmetry=*/true, rows.data());
+    loader.load(kSampleIdx, kSampleIdx + 1, n, /*apply_symmetry=*/true, rows.data());
     int normal_count = 0, flipped_count = 0;
     for (int i = 0; i < n; ++i) {
       const float* row = rows.data() + i * DataLoader::row_size_floats();

@@ -1,8 +1,7 @@
 #include "scribblez/data_loader.h"
 
 #include "scribblez/binary_log.h"
-#include "scribblez/input_encoder.h"
-#include "scribblez/label_encoder.h"
+#include "scribblez/block_decoder.h"
 
 #include <algorithm>
 #include <atomic>
@@ -15,6 +14,7 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 namespace binlog {
@@ -48,65 +48,6 @@ void chunked_shuffle(float* base, int64_t n, int row_size, std::mt19937_64& rng)
     std::memcpy(tmp.data(), base + i * row_size, bytes);
     std::memcpy(base + i * row_size, base + j * row_size, bytes);
     std::memcpy(base + j * row_size, tmp.data(), bytes);
-  }
-}
-
-// Decode the positions named by `local_indices` (within the file whose buffer
-// is `buf`) directly into `output`. Assumes the buffer is loaded and stable
-// for the duration of the call. `flips[i]` selects whether output row
-// (output_row_start + i) gets the diagonal symmetry applied.
-void decode_block(const char* buf, const std::string& path, const int64_t* local_indices,
-                  const uint8_t* flips, size_t n_indices, int64_t output_row_start, float* output) {
-  const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
-  if (hdr->magic != kMagic) {
-    std::cerr << "DataLoader: bad magic in " << path << "\n";
-    return;
-  }
-  if (hdr->version != kVersion) {
-    std::cerr << "DataLoader: version mismatch in " << path << " (file=" << hdr->version
-              << " code=" << kVersion << ")\n";
-    return;
-  }
-  const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
-  const uint32_t num_games = hdr->num_games;
-
-  // Prefix sum: prefix[g] == total positions in games [0, g).
-  std::vector<uint32_t> prefix(num_games + 1, 0);
-  for (uint32_t g = 0; g < num_games; ++g) {
-    prefix[g + 1] = prefix[g] + metas[g].num_positions;
-  }
-
-  uint32_t game_cursor = 0;
-  for (size_t i = 0; i < n_indices; ++i) {
-    const int64_t li = local_indices[i];
-    while (game_cursor + 1 < num_games && prefix[game_cursor + 1] <= li) ++game_cursor;
-    const GameMetadata& gm = metas[game_cursor];
-    const uint32_t intra = static_cast<uint32_t>(li) - prefix[game_cursor];
-    const PositionRecord* rec = reinterpret_cast<const PositionRecord*>(
-      buf + gm.start_offset + intra * sizeof(PositionRecord));
-
-    float* row = output + (output_row_start + static_cast<int64_t>(i)) * kRowFloats;
-    encode_input(*rec, /*apply_flip=*/flips[i] != 0, row);
-
-    // Build a GameLogView over this game's moves blob (which sits in the
-    // file right after the game's PositionRecord blob).
-    const Move* moves = reinterpret_cast<const Move*>(buf + gm.start_offset + gm.data_size);
-    GameLogView view{};
-    view.moves = moves;
-    view.num_turns = static_cast<int>(gm.num_turns);
-    view.turn_index = rec->move_number;
-    view.kind = static_cast<PositionKind>(rec->position_kind);
-    view.active_player = rec->active_player;
-    view.final_score_p0 = gm.final_score_p0;
-    view.final_score_p1 = gm.final_score_p1;
-    view.apply_flip = flips[i] != 0;
-
-    float* heads[kNumLabelHeads] = {
-      row + kInputFloats,
-      row + kInputFloats + kWldFloats,
-      row + kInputFloats + kWldFloats + kScoreDiffFloats,
-    };
-    encode_labels(view, heads);
   }
 }
 
@@ -243,25 +184,7 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
   }
 
   if (!to_load.empty()) {
-    std::atomic<size_t> next_idx{0};
-    auto loader = [&]() {
-      while (true) {
-        const size_t i = next_idx.fetch_add(1, std::memory_order_acq_rel);
-        if (i >= to_load.size()) return;
-        DataFile* f = to_load[i];
-        auto buf = read_whole_file(f->path, f->file_size);
-        std::lock_guard<std::mutex> lock(mu_);
-        f->buffer = std::move(buf);
-        resident_bytes_ += f->file_size;
-      }
-    };
-    const int n_threads =
-      std::min<int>(params_.num_prefetch_threads, static_cast<int>(to_load.size()));
-    std::vector<std::thread> pool;
-    pool.reserve(n_threads);
-    for (int t = 0; t < n_threads - 1; ++t) pool.emplace_back(loader);
-    loader();  // current thread participates
-    for (auto& t : pool) t.join();
+    load_files_in_parallel(to_load);
   }
 
   // Sanity: every needed file is now loaded.
@@ -272,24 +195,7 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
   }
 
   // ---- decode work units in parallel -------------------------------------
-  {
-    std::atomic<size_t> next_unit{0};
-    auto decoder = [&]() {
-      while (true) {
-        const size_t i = next_unit.fetch_add(1, std::memory_order_acq_rel);
-        if (i >= units.size()) return;
-        const WorkUnit& u = units[i];
-        decode_block(u.file->buffer.get(), u.file->path, u.local_indices.data(), u.flips.data(),
-                     u.local_indices.size(), u.output_row_start, output);
-      }
-    };
-    const int n_threads = std::min<int>(params_.num_worker_threads, static_cast<int>(units.size()));
-    std::vector<std::thread> pool;
-    pool.reserve(n_threads);
-    for (int t = 0; t < n_threads - 1; ++t) pool.emplace_back(decoder);
-    decoder();
-    for (auto& t : pool) t.join();
-  }
+  decode_units_in_parallel(units, output);
 
   // ---- shuffle output rows so per-file grouping doesn't bias minibatches -
   chunked_shuffle(output, n_samples, kRowFloats, rng);
@@ -306,6 +212,63 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
       f->buffer.reset();
     }
   }
+}
+
+// ===========================================================================
+// Parallel I/O + decode helpers
+// ===========================================================================
+
+void DataLoader::file_loader_loop(std::atomic<std::size_t>& next_idx,
+                                  std::vector<DataFile*>& to_load) {
+  while (true) {
+    const std::size_t i = next_idx.fetch_add(1, std::memory_order_acq_rel);
+    if (i >= to_load.size()) return;
+    DataFile* f = to_load[i];
+    auto buf = read_whole_file(f->path, f->file_size);
+    std::lock_guard<std::mutex> lock(mu_);
+    f->buffer = std::move(buf);
+    resident_bytes_ += f->file_size;
+  }
+}
+
+void DataLoader::decode_unit_loop(std::atomic<std::size_t>& next_unit,
+                                  const std::vector<WorkUnit>& units, float* output) {
+  // One BlockDecoder per worker thread: holds reusable scratch buffers
+  // (and, eventually, a loaded Dictionary) across all units it picks up.
+  BlockDecoder bd;
+  while (true) {
+    const std::size_t i = next_unit.fetch_add(1, std::memory_order_acq_rel);
+    if (i >= units.size()) return;
+    const WorkUnit& u = units[i];
+    bd.decode(u.file->buffer.get(), u.file->path, u.local_indices.data(), u.flips.data(),
+              u.local_indices.size(), u.output_row_start, output);
+  }
+}
+
+void DataLoader::load_files_in_parallel(std::vector<DataFile*>& to_load) {
+  std::atomic<std::size_t> next_idx{0};
+  const int n_threads =
+    std::min<int>(params_.num_prefetch_threads, static_cast<int>(to_load.size()));
+  std::vector<std::thread> pool;
+  pool.reserve(n_threads);
+  for (int t = 0; t < n_threads - 1; ++t) {
+    pool.emplace_back(&DataLoader::file_loader_loop, this, std::ref(next_idx), std::ref(to_load));
+  }
+  file_loader_loop(next_idx, to_load);  // current thread participates
+  for (auto& t : pool) t.join();
+}
+
+void DataLoader::decode_units_in_parallel(const std::vector<WorkUnit>& units, float* output) {
+  std::atomic<std::size_t> next_unit{0};
+  const int n_threads = std::min<int>(params_.num_worker_threads, static_cast<int>(units.size()));
+  std::vector<std::thread> pool;
+  pool.reserve(n_threads);
+  for (int t = 0; t < n_threads - 1; ++t) {
+    pool.emplace_back(&DataLoader::decode_unit_loop, this, std::ref(next_unit), std::cref(units),
+                      output);
+  }
+  decode_unit_loop(next_unit, units, output);  // current thread participates
+  for (auto& t : pool) t.join();
 }
 
 }  // namespace binlog

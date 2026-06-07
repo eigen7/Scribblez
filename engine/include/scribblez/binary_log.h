@@ -1,39 +1,32 @@
 #pragma once
 
 // Binary game-log format for training. One file holds many games (configurable
-// via --games-per-file). Each game is stored in full -- every eligible
-// PositionRecord (pre-move at every turn, plus post-move at every PLAY turn)
-// plus the full sequence of moves played. Train-time sampling of K positions
-// per file is done by the DataLoader; the on-disk format is a faithful record
-// of the game and does not depend on any RNG seed.
+// via --games-per-file). Each game is stored as the minimum data needed to
+// faithfully replay every state: the initial racks dealt to each player and
+// the full sequence of moves they played (each move bundled with the tiles
+// drawn from the bag right after that move).
+//
+// The DataLoader at training time replays each game with a GameStateEncoder
+// to materialize every eligible position on-the-fly. Compared to storing a
+// fully-expanded per-position record, this is roughly 20x smaller on disk,
+// which translates to ~20x more games resident in the DataLoader's memory
+// budget for richer shuffling.
 //
 // File layout
 // -----------
 //   [FileHeader              16 B]
-//   [GameMetadata  num_games 32 B]
+//   [GameMetadata  num_games 24 B]
 //   For each game g in [0, num_games):
-//     [PositionRecord  num_positions(g) * 304 B]
-//     [Move            num_turns(g)     * 16 B]   // full move sequence;
-//                                                  // labels read moves[k+1]
-//                                                  // for the opp-next-placement
-//                                                  // auxiliary head.
+//     [InitialRacks                       16 B]
+//     [TurnBlob       num_turns(g)        24 B each]
 //
-// Each GameMetadata's start_offset points at that game's first PositionRecord;
-// data_size = num_positions * sizeof(PositionRecord); the moves blob lives at
-// (start_offset + data_size) and is (num_turns * sizeof(Move)) bytes long.
-//
-// Why self-contained position records (no shared "history" buffer)?
-// AlphaZeroArcade has to materialize a sliding window of past frames at
-// training time (to feed a stack-of-frames input encoder), so its on-disk
-// records carry only the minimal per-frame delta and the loader walks back via
-// per-frame offsets. Our win-probability model takes a single board snapshot
-// plus the last opponent move, so embedding the full state in every sampled
-// record costs ~300 B and removes all per-frame indirection.
+// Each GameMetadata's start_offset points at that game's InitialRacks; the
+// TurnBlob array starts at (start_offset + sizeof(InitialRacks)).
 
-#include "scribblez/glyph.h"
 #include "scribblez/move.h"
-#include "scribblez/rack.h"
+#include "scribblez/tile.h"
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -47,16 +40,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 2;
-
-// Position kind. PLAY turns produce BOTH a pre-move and a post-move record;
-// EXCHANGE / PASS turns produce only a pre-move record.
-enum class PositionKind : uint8_t {
-  kPreMove = 0,   // active player is about to play; full rack
-  kPostMove = 1,  // active player just played; rack has played-tiles removed,
-                  // refill has not happened yet (bag composition unchanged
-                  // from pre-move)
-};
+inline constexpr uint16_t kVersion = 3;
 
 #pragma pack(push, 1)
 
@@ -66,65 +50,50 @@ struct FileHeader {
   uint16_t reserved;
   uint32_t num_games;      // games in this file
   uint32_t num_positions;  // total eligible positions across all games
+                           // (== sum over games of num_positions); used as
+                           // the master-array width by the DataLoader.
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
-  uint64_t start_offset;   // file offset of this game's first PositionRecord
-  uint32_t data_size;      // bytes = num_positions * sizeof(PositionRecord)
-  uint32_t num_positions;  // eligible positions for this game
-  uint32_t num_turns;      // moves played; moves blob lives at
-                           // (start_offset + data_size), length
-                           // num_turns * sizeof(Move).
+  uint64_t start_offset;   // file offset of this game's InitialRacks blob
+  uint32_t num_turns;      // length of the TurnBlob array
+  uint32_t num_positions;  // num_turns + count of PLAY turns
+                           // (pre-move at every turn + post-move at PLAY)
   int32_t final_score_p0;
   int32_t final_score_p1;
-  uint32_t reserved;
 };
-static_assert(sizeof(GameMetadata) == 32, "GameMetadata must be 32 bytes");
+static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 
-struct PositionRecord {
-  // --- 16-byte small-field block --------------------------------------------
-  uint8_t active_player;  // 0 or 1; POV for label computation
-  uint8_t position_kind;  // PositionKind
-  int16_t move_number;    // 0-indexed turn index in the game
-  int32_t score_active;   // cumulative score for active player at this moment
-  int32_t score_opp;      // cumulative score for opponent at this moment
-  uint32_t reserved0;
-
-  // --- the last move the OPPONENT played (PASS-typed if game-start) ---------
-  Move last_opp_move;  // 16 B (sizeof(Move) statically asserted)
-
-  // --- active player's rack at this moment (partial for post-move PLAY) -----
-  Rack active_rack;  // 8 B (sizeof(Rack) statically asserted)
-
-  // --- bag composition: TILE_COUNTS - tiles_on_board - rack[0] - rack[1] ----
-  // Index 0..25 = A..Z, 26 = blank. (uint8 suffices: max 12 of any letter.)
-  uint8_t bag_counts[27];
-  uint8_t reserved1[5];  // pad so board[] starts at offset 72
-
-  // --- the 15x15 board (Glyph = 1 byte) -------------------------------------
-  Glyph board[225];
-
-  uint8_t reserved2[7];  // pad to multiple of 16
+// Per-game initial state: the tiles dealt to each player before play starts.
+// In standard rules `n0 == n1 == RACK_SIZE`, but we store the counts
+// explicitly so a starved bag is representable.
+struct InitialRacks {
+  std::array<Tile, RACK_SIZE> p0;  // 7 B
+  std::array<Tile, RACK_SIZE> p1;  // 7 B
+  uint8_t n0;                      // 1 B
+  uint8_t n1;                      // 1 B
 };
-static_assert(sizeof(PositionRecord) == 304, "PositionRecord must be 304 bytes");
-static_assert(sizeof(PositionRecord) % 16 == 0, "PositionRecord must be 16-aligned");
+static_assert(sizeof(InitialRacks) == 16, "InitialRacks must be 16 bytes");
+
+// One on-disk turn: the move that was played, plus the tiles drawn from the
+// bag immediately after the move resolved (and rack mutations applied).
+// `num_drawn` is 0..RACK_SIZE; the first `num_drawn` entries of `drawn`
+// are valid and the rest are empty Tiles.
+struct TurnBlob {
+  Move move;                          // 16 B (alignof=2; sizeof statically asserted)
+  std::array<Tile, RACK_SIZE> drawn;  // 7 B
+  uint8_t num_drawn;                  // 1 B
+};
+static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
-
-// Replay a game and return one PositionRecord for every eligible position.
-// No sampling and no RNG: the same GameLog always produces the same vector.
-//
-// Eligible positions:
-//   - pre-move snapshot before every turn
-//   - post-move snapshot after every PLAY turn (skipped for EXCHANGE/PASS)
-std::vector<PositionRecord> extract_positions(const GameLog& log);
 
 // Thread-safe writer that accumulates GameLog objects from one or more
 // GameRunner threads and flushes them to .slog files as fixed-size batches.
 //
-// On flush, the writer drops the lock, then extracts records and writes the
-// file off the critical path so other threads aren't blocked by I/O.
+// On flush, the writer drops the lock and then serializes + writes the file
+// off the critical path so other threads aren't blocked by I/O.
 class BinaryLogWriter {
  public:
   BinaryLogWriter(const std::string& dir, int games_per_file);

@@ -30,6 +30,7 @@ struct TurnRecord {
 struct GameLog {
   uint64_t seed = 0;
   std::array<std::string, 2> player_names;
+  std::array<Rack, 2> initial_racks;  // tiles dealt to each player at game start
   std::vector<TurnRecord> turns;
   std::array<int, 2> final_scores = {0, 0};
   std::array<Rack, 2> final_racks;  // tiles left on each rack at game end

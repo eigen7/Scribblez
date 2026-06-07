@@ -1,10 +1,7 @@
 #pragma once
 
 // Multithreaded loader that streams sampled training rows from a set of
-// .slog files into a caller-provided float buffer. Modelled on the
-// AlphaZeroArcade DataLoader but specialized for the Scribblez binary log
-// format (which has fixed-size, self-contained PositionRecords; no
-// per-frame history walk is needed).
+// .slog files into a caller-provided float buffer.
 //
 // Lifecycle
 // ---------
@@ -31,12 +28,12 @@
 // -----------------
 // load() is synchronous: it spawns up to `num_prefetch_threads` workers to
 // read any not-yet-resident files from disk in parallel, then spawns up to
-// `num_worker_threads` decoders to parse PositionRecords and write directly
-// into disjoint slices of the caller's output buffer. Both pools are
-// per-call (created/joined inside load()); thread-creation cost (~10us per
-// thread) is dwarfed by an entire epoch's worth of work. A future API
-// extension can add prefetch_next(...) -> std::future to overlap epoch N's
-// I/O with epoch N-1's training without changing this core API.
+// `num_worker_threads` decoders to replay games and write decoded sample
+// rows directly into disjoint slices of the caller's output buffer. Both
+// pools are per-call (created/joined inside load()); thread-creation cost
+// (~10us per thread) is dwarfed by an entire epoch's worth of work. A
+// future API extension can add prefetch_next(...) -> std::future to overlap
+// epoch N's I/O with epoch N-1's training without changing this core API.
 //
 // Resident files are managed against a `memory_budget`. After each load(),
 // the loader evicts files (chronological-oldest-first, skipping any still
@@ -46,6 +43,8 @@
 #include "scribblez/input_encoder.h"
 #include "scribblez/label_encoder.h"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -132,6 +131,22 @@ class DataLoader {
     std::vector<uint8_t> flips;  // aligned with local_indices
     int64_t output_row_start = 0;
   };
+
+  // Parallel I/O worker: pulls indices off `next_idx` and reads each
+  // `to_load[i]` into memory, publishing the resulting buffer under `mu_`.
+  // Invoked by load_files_in_parallel(); not intended for outside use.
+  void file_loader_loop(std::atomic<std::size_t>& next_idx, std::vector<DataFile*>& to_load);
+
+  // Parallel decode worker: pulls indices off `next_unit` and decodes each
+  // WorkUnit into `output` using a thread-local BlockDecoder. Invoked by
+  // decode_units_in_parallel(); not intended for outside use.
+  void decode_unit_loop(std::atomic<std::size_t>& next_unit, const std::vector<WorkUnit>& units,
+                        float* output);
+
+  // Pool drivers. Each spawns up to `n_threads` workers (current thread
+  // included) running the corresponding *_loop above, then joins them.
+  void load_files_in_parallel(std::vector<DataFile*>& to_load);
+  void decode_units_in_parallel(const std::vector<WorkUnit>& units, float* output);
 
   Params params_;
 

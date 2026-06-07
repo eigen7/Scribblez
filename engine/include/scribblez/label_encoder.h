@@ -18,18 +18,14 @@
 //     The mask is transposed across the main diagonal when view.apply_flip
 //     is true (so it stays aligned with the InputEncoder's spatial planes).
 //
-// Labels are produced from a GameLogView -- a lightweight slice over a
-// per-game moves array plus the sampled turn index, position kind, active
-// player, final scores, and the per-row symmetry flip flag.
+// Labels are produced from a GameLogView -- a tiny POD describing the
+// active player's POV, the final scores, the opponent's next move (if any),
+// and the per-row symmetry flip flag.
 
 #include "scribblez/move.h"
 
-#include <cstdint>
-
 namespace scribblez {
 namespace binlog {
-
-enum class PositionKind : uint8_t;  // forward; defined in binary_log.h
 
 inline constexpr int kWldFloats = 3;
 inline constexpr int kScoreDiffFloats = 1;
@@ -46,24 +42,20 @@ inline constexpr int kHeadFloats[kNumLabelHeads] = {
   kOppNextPlacementFloats,
 };
 
-// A lightweight view into one sampled position's slice of a GameLog. The
-// caller (the DataLoader's decode path) constructs this from the per-game
-// moves blob in the .slog file and a sampled PositionRecord.
+// A snapshot of the per-sample inputs needed to compute the three label
+// heads. The caller (the DataLoader's decode path, or a test) populates
+// this from the replay state at the sampled position.
 struct GameLogView {
-  const Move* moves;  // pointer into the per-game moves array
-  int num_turns;      // length of `moves`
-  int turn_index;     // sampled k in [0, num_turns); the "current" turn
-  PositionKind kind;  // kPreMove / kPostMove (informational)
-  int active_player;  // 0 or 1 -- the POV for WLD / score_diff
-  int final_score_p0;
-  int final_score_p1;
-  bool apply_flip;  // transpose spatial output for head 2 when true
+  Move next_move{};  // the opponent's response to the sampled position;
+                     // only consulted when has_next_move is true
+  bool has_next_move = false;
+  int active_player = 0;  // 0 or 1 -- the POV for WLD / score_diff
+  int final_score_p0 = 0;
+  int final_score_p1 = 0;
+  bool apply_flip = false;  // transpose spatial output for head 2 when true
 
   int final_active() const { return active_player == 0 ? final_score_p0 : final_score_p1; }
   int final_opp() const { return active_player == 0 ? final_score_p1 : final_score_p0; }
-
-  bool has_next_move() const { return turn_index + 1 < num_turns; }
-  const Move& next_move() const { return moves[turn_index + 1]; }
 };
 
 // Encode all kNumLabelHeads heads. `out` is an array of kNumLabelHeads float

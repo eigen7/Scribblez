@@ -32,6 +32,8 @@ void Game::play() {
   for (int p = 0; p < 2; ++p) {
     refill_rack(p, /*drawn_out=*/nullptr, /*num_drawn_out=*/nullptr);
   }
+  log_.initial_racks[0] = racks_[0];
+  log_.initial_racks[1] = racks_[1];
 
   int cur = 0;
   int consecutive_zero_turns = 0;
