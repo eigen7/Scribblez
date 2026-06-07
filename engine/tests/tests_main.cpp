@@ -349,7 +349,7 @@ static void test_encoder_basic_layout() {
   active_rack.add(BLANK);
 
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/false, out.data());
+  enc.encode_input(active_rack, /*apply_flip=*/false, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -378,8 +378,8 @@ static void test_encoder_basic_layout() {
     }
   }
 
-  // Scalars: rack[27] + unseen[27] + (score_diff, unseen_size, active_rack_size,
-  // opp_rack_size, last_opp_num_glyphs).
+  // Scalars: rack[27] + unseen[27] + (score_diff, unseen_size,
+  // active_rack_size, last_opp_num_glyphs).
   const float* scalars = out.data() + kSpatialFloats;
   CHECK(scalars[Tile::from_char('Q')] == 1.0f);
   CHECK(scalars[Tile::from_char('Z')] == 1.0f);
@@ -397,8 +397,7 @@ static void test_encoder_basic_layout() {
   // unseen_size = 100 - (#tiles on board) - (#tiles in active rack) = 100-2-3 = 95.
   CHECK(scalars[55] == 95.0f);
   CHECK(scalars[56] == 3.0f);  // active_rack_size
-  CHECK(scalars[57] == 0.0f);  // opp_rack_size (caller passed 0)
-  CHECK(scalars[58] == 1.0f);  // last opp move placed 1 glyph
+  CHECK(scalars[57] == 1.0f);  // last opp move placed 1 glyph
 }
 
 static void test_encoder_last_opp_plane_mask() {
@@ -430,10 +429,9 @@ static void test_encoder_last_opp_plane_mask() {
   enc.apply_move(p0_play);
   enc.apply_move(opp_play);
 
-  Rack active_rack, opp_rack;
+  Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(active_rack, /*opp_rack_size=*/static_cast<int>(opp_rack.size()),
-                   /*apply_flip=*/false, out.data());
+  enc.encode_input(active_rack, /*apply_flip=*/false, out.data());
 
   const float* plane = out.data() + 31 * 225;
   for (int r = 0; r < 15; ++r) {
@@ -442,9 +440,9 @@ static void test_encoder_last_opp_plane_mask() {
       CHECK(plane[r * 15 + c] == expected);
     }
   }
-  // num_glyphs scalar reflects placements (not cells walked). Index 58 in the
-  // new layout (opp_rack_size sits at 57).
-  CHECK(out[kSpatialFloats + 58] == 2.0f);
+  // num_glyphs scalar reflects placements (not cells walked); index 57 in
+  // the current scalar layout.
+  CHECK(out[kSpatialFloats + 57] == 2.0f);
 }
 
 static void test_encoder_flip_symmetry() {
@@ -479,8 +477,8 @@ static void test_encoder_flip_symmetry() {
 
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/false, normal.data());
-  enc.encode_input(active_rack, /*opp_rack_size=*/0, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input(active_rack, /*apply_flip=*/true, flipped.data());
 
   // Scalars are flip-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
@@ -1587,10 +1585,8 @@ static void test_dataloader_per_row_symmetry() {
     // q_play, board has Q at (3,5), scores=[42,0].
     GameStateEncoder ref_enc;
     ref_enc.apply_move(fix.last_opp_move);
-    ref_enc.encode_input(fix.active_rack, static_cast<int>(fix.opp_rack.size()),
-                         /*apply_flip=*/false, ref_normal.data());
-    ref_enc.encode_input(fix.active_rack, static_cast<int>(fix.opp_rack.size()),
-                         /*apply_flip=*/true, ref_flipped.data());
+    ref_enc.encode_input(fix.active_rack, /*apply_flip=*/false, ref_normal.data());
+    ref_enc.encode_input(fix.active_rack, /*apply_flip=*/true, ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);

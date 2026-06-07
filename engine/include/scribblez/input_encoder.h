@@ -26,9 +26,9 @@
 //                       opponent placed a tile on in their most recent turn.
 //                       All zero for EXCHANGE / PASS / game-start.
 //
-//   Scalar features -- 59 floats. All values reflect ONLY information the
+//   Scalar features -- 58 floats. All values reflect ONLY information the
 //   active player would have at the table -- in particular, the opponent's
-//   rack CONTENTS are not encoded; only the SIZE of the opponent's rack is.
+//   rack CONTENTS are not encoded.
 //
 //     [0..26]    active player's rack: per-tile counts (A..Z, blank).
 //     [27..53]   "unseen pool" per-tile counts (A..Z, blank): the tiles the
@@ -36,13 +36,16 @@
 //                    TILE_COUNTS - board - active_rack.
 //                This pool is the union of the bag and the opponent's rack;
 //                they are indistinguishable from the active player's POV.
+//                Scrabble's refill-to-7 rule pins the partition exactly:
+//                opp_rack_size == min(unseen_pool_size, 7) and
+//                bag_size == unseen_pool_size - opp_rack_size, so neither is
+//                emitted as a separate scalar -- the model can compute them
+//                from sum([27..53]).
 //     [54]       score_active - score_opp
 //     [55]       unseen_pool_size -- total tiles in the unseen pool
 //                (== bag size + opponent's rack size; sum of [27..53])
 //     [56]       active_rack_size
-//     [57]       opp_rack_size -- the player tracks every draw, so they
-//                know how many tiles the opponent holds (just not which)
-//     [58]       last opponent move: num_glyphs (0 = PASS; >0 with all-zero
+//     [57]       last opponent move: num_glyphs (0 = PASS; >0 with all-zero
 //                placement plane = EXCHANGE; >0 with nonzero placement plane
 //                = PLAY -- the model can derive the move type from those two
 //                signals, so we don't emit a separate type one-hot).
@@ -68,13 +71,12 @@ inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;      // 7200
 
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolCountFloats = 27;
-inline constexpr int kScalarMiscFloats =
-  4;  // score_diff, unseen_pool_size, active_rack_size, opp_rack_size
+inline constexpr int kScalarMiscFloats = 3;   // score_diff, unseen_pool_size, active_rack_size
 inline constexpr int kLastOppMoveFloats = 1;  // num_glyphs
 inline constexpr int kScalarFloats =
-  kRackCountFloats + kUnseenPoolCountFloats + kScalarMiscFloats + kLastOppMoveFloats;  // 59
+  kRackCountFloats + kUnseenPoolCountFloats + kScalarMiscFloats + kLastOppMoveFloats;  // 58
 
-inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 7259
+inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 7258
 
 }  // namespace binlog
 }  // namespace scribblez

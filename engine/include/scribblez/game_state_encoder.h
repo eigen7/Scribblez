@@ -10,21 +10,19 @@
 // opponent's draws or rack contents -- that data is intentionally absent
 // from this class. When the Agent needs to evaluate a model on the current
 // position, it calls encode_input() and supplies its OWN rack at that
-// moment (the Agent always knows its own rack) plus the size of the
-// opponent's rack (the Agent tracks both players' draw counts implicitly
-// from the move stream and the bag's initial size, so opp_rack_size is
-// also known to it; we just don't need to track it here).
+// moment (the Agent always knows its own rack).
 //
 // Internal state: board, both cumulative scores, both players'
 // most-recent moves, the active player index, and the turn index. All of
 // this is fully observable to a player at the table.
 //
 // Information leakage: encode_input()'s output depends only on the
-// caller-supplied my_rack and opp_rack_size plus this class's tracked
-// state -- never on hidden opponent tiles. The "unseen pool" scalar
-// feature lumps the bag and the opponent's rack together (they are
-// indistinguishable from the active player's POV); only the opp rack
-// SIZE is exposed as a separate scalar.
+// caller-supplied my_rack plus this class's tracked state -- never on
+// hidden opponent tiles. The "unseen pool" scalar feature lumps the bag
+// and the opponent's rack together (they are indistinguishable from the
+// active player's POV); the partition is recoverable from
+// unseen_pool_size via Scrabble's refill-to-7 rule, so no separate
+// opp-rack-size scalar is needed.
 //
 // Replay canonicalization: a default-constructed encoder is in the
 // game-start state (empty board, scores 0, both last-moves are PASS,
@@ -73,20 +71,17 @@ class GameStateEncoder {
 
   // --- encoders -----------------------------------------------------------
   // Encode the current (pre-move) state into `out` (kInputFloats long) from
-  // the active player's POV.
-  //   my_rack         -- the active player's own rack right now
-  //   opp_rack_size   -- the opponent's rack tile count (the active player
-  //                      knows this from the draw stream, but the encoder
-  //                      itself doesn't track it)
-  void encode_input(const Rack& my_rack, int opp_rack_size, bool apply_flip, float* out) const;
+  // the active player's POV. `my_rack` is the active player's own rack right
+  // now; everything else the encoder needs is in its tracked state.
+  void encode_input(const Rack& my_rack, bool apply_flip, float* out) const;
 
   // Encode a post-PLAY view: as if the active player just applied
   // `play_move` (no draw yet, so the unseen-pool composition is unchanged
   // from pre-move). Does NOT mutate this encoder. `play_move` must be a
   // PLAY-typed move. `my_rack` is the PRE-play rack; the played tiles are
   // removed inside this method.
-  void encode_input_post_play(const Move& play_move, const Rack& my_rack, int opp_rack_size,
-                              bool apply_flip, float* out) const;
+  void encode_input_post_play(const Move& play_move, const Rack& my_rack, bool apply_flip,
+                              float* out) const;
 
  private:
   Board board_{};

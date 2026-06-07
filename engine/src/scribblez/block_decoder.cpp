@@ -141,13 +141,11 @@ void BlockDecoder::emit_row(const Request& req, const uint8_t* flips, int64_t ou
   // sample. For a post-move row that's still the player who just played
   // (no turn alternation has happened in the encoder yet).
   const int active = enc_.active_player();
-  const int opp = 1 - active;
 
   if (maybe_play_for_post != nullptr) {
-    enc_.encode_input_post_play(*maybe_play_for_post, racks_[active], racks_[opp].size(), flip,
-                                row);
+    enc_.encode_input_post_play(*maybe_play_for_post, racks_[active], flip, row);
   } else {
-    enc_.encode_input(racks_[active], racks_[opp].size(), flip, row);
+    enc_.encode_input(racks_[active], flip, row);
   }
 
   // The "opponent next move" comes from the opponent's reply to the active

@@ -101,10 +101,10 @@ void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rac
   }
 }
 
-// All 59 scalar features. Raw counts/values throughout; the model handles
+// All 58 scalar features. Raw counts/values throughout; the model handles
 // normalization.
-void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], int opp_rack_size,
-                    const Move& last_opp_move, int score_active, int score_opp, float* out) {
+void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Move& last_opp_move,
+                    int score_active, int score_opp, float* out) {
   // Active-rack histogram (raw counts).
   int rack_hist[27] = {0};
   for (Tile t : my_rack.tiles()) {
@@ -120,11 +120,12 @@ void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], int opp_
     unseen_total += unseen_pool[i];
   }
 
-  // Misc scalars (raw).
+  // Misc scalars (raw). Note: opp_rack_size is intentionally absent --
+  // it equals min(unseen_total, 7) under Scrabble's refill rule, so the
+  // model can derive it from the unseen-pool scalars.
   *p++ = static_cast<float>(score_active - score_opp);
   *p++ = static_cast<float>(unseen_total);
   *p++ = static_cast<float>(my_rack.size());
-  *p++ = static_cast<float>(opp_rack_size);
 
   // Last opponent move: num_glyphs only. (Move type is recoverable as
   // num_glyphs==0 -> PASS, num_glyphs>0 with empty placement plane ->
@@ -134,16 +135,14 @@ void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], int opp_
 
 // Shared back-end for both pre-move and post-PLAY encoding. Takes only
 // POV-visible inputs.
-void encode_pov(const Board& board, const Rack& my_rack, int opp_rack_size,
-                const Move& last_opp_move, int score_active, int score_opp, bool apply_flip,
-                float* out) {
+void encode_pov(const Board& board, const Rack& my_rack, const Move& last_opp_move,
+                int score_active, int score_opp, bool apply_flip, float* out) {
   std::memset(out, 0, sizeof(float) * static_cast<size_t>(kInputFloats));
   encode_board_planes(board, apply_flip, out);
   encode_last_opp_plane(last_opp_move, apply_flip, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  encode_scalars(my_rack, unseen, opp_rack_size, last_opp_move, score_active, score_opp,
-                 out + kSpatialFloats);
+  encode_scalars(my_rack, unseen, last_opp_move, score_active, score_opp, out + kSpatialFloats);
 }
 
 void remove_glyph_tiles_from_rack(Rack& rack, const Move& m) {
@@ -167,16 +166,13 @@ void GameStateEncoder::apply_move(const Move& move) {
   ++turn_index_;
 }
 
-void GameStateEncoder::encode_input(const Rack& my_rack, int opp_rack_size, bool apply_flip,
-                                    float* out) const {
+void GameStateEncoder::encode_input(const Rack& my_rack, bool apply_flip, float* out) const {
   const int opp = 1 - active_;
-  encode_pov(board_, my_rack, opp_rack_size, last_move_by_[opp], scores_[active_], scores_[opp],
-             apply_flip, out);
+  encode_pov(board_, my_rack, last_move_by_[opp], scores_[active_], scores_[opp], apply_flip, out);
 }
 
 void GameStateEncoder::encode_input_post_play(const Move& play_move, const Rack& my_rack,
-                                              int opp_rack_size, bool apply_flip,
-                                              float* out) const {
+                                              bool apply_flip, float* out) const {
   assert(play_move.type == MoveType::PLAY);
   const int opp = 1 - active_;
 
@@ -190,10 +186,9 @@ void GameStateEncoder::encode_input_post_play(const Move& play_move, const Rack&
   const int score_active_post = scores_[active_] + play_move.score;
 
   // From the active player's POV the most recent opponent move is unchanged
-  // (the opp hasn't moved since their previous turn). The opp's rack size
-  // is also unchanged (no refill happens between the play and our encode).
-  encode_pov(board_post, rack_post, opp_rack_size, last_move_by_[opp], score_active_post,
-             scores_[opp], apply_flip, out);
+  // (the opp hasn't moved since their previous turn).
+  encode_pov(board_post, rack_post, last_move_by_[opp], score_active_post, scores_[opp], apply_flip,
+             out);
 }
 
 }  // namespace binlog
