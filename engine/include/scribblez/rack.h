@@ -5,7 +5,6 @@
 
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <string>
 
@@ -35,14 +34,17 @@ class Rack {
 
   const std::array<Tile, RACK_SIZE>& tiles() const { return tiles_; }
 
-  // DIAGNOSTIC: bits-based comparators on C++20
-  uint64_t bits() const {
-    uint64_t b;
-    std::memcpy(&b, this, sizeof(b));
-    return b;
-  }
-  bool operator<(const Rack& o) const { return bits() < o.bits(); }
+  // Comparisons and hashing operate on the 8-byte object representation (see
+  // bits()). Because the tile array is kept sorted with trailing empty slots,
+  // two racks with the same multiset have identical bytes -- so byte equality
+  // is exactly multiset equality, and the byte ordering is an arbitrary but
+  // consistent total order (all we need for sorting / run-grouping).
   bool operator==(const Rack& o) const { return bits() == o.bits(); }
+  bool operator<(const Rack& o) const { return bits() < o.bits(); }
+
+  // The 8-byte object representation, copied out via memcpy: defined behavior
+  // (Rack is trivially copyable) that the optimizer lowers to a single load.
+  uint64_t bits() const;
 
  private:
   std::array<Tile, RACK_SIZE> tiles_{};  // sorted ascending; unused slots empty

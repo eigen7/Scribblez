@@ -1,6 +1,14 @@
 #include "scribblez/rack.h"
 
+#include <cstring>
+
 namespace scribblez {
+
+uint64_t Rack::bits() const {
+  uint64_t b;
+  std::memcpy(&b, this, sizeof(b));
+  return b;
+}
 
 void Rack::add(Tile t) {
   // Insertion sort into the fixed array (RACK_SIZE is tiny). The caller never
