@@ -38,7 +38,7 @@ def main() -> int:
     )
     parser.add_argument("--num-blocks", type=int, default=8, help="Residual blocks.")
     parser.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
-    parser.add_argument("--lambda-sd", type=float, default=1.0, help="Score-diff loss weight.")
+    parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     args = parser.parse_args()
 
