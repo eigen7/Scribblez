@@ -1,2 +1,3 @@
 # For development. Adjust to your environment.
+numpy>=1.24
 torch>=2.0
