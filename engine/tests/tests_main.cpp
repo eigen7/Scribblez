@@ -9,9 +9,12 @@
 #include "scribblez/game.h"
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/glyph.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/leave_values.h"
 #include "scribblez/movegen.h"
 #include "scribblez/rack.h"
+#include "scribblez/tile_counts.h"
 #include "scribblez/training_targets.h"
 
 #include <algorithm>
@@ -2038,6 +2041,207 @@ static void test_epoch_shuffles_across_seeds() {
   std::cout << "  epoch seed-shuffle OK\n";
 }
 
+// =========================================================================
+// LeaveValues and HastyEquity tests
+// =========================================================================
+
+// Build and write a minimal .klv2 file in a temp path.
+// The KWG encodes two single-tile leaves: "A" (tile=1) and "B" (tile=2).
+// KWG node layout: bits 0..21 arc_index, 22 is_end, 23 accepts, 24..31 tile.
+//
+// Node 0 (root): arc_index=1, is_end=1, accepts=0, tile=0
+// Node 1 (A):    arc_index=0, is_end=0, accepts=1, tile=1
+// Node 2 (B):    arc_index=0, is_end=1, accepts=1, tile=2
+//
+// Word order: A(index 0) = 1.5f, B(index 1) = -2.5f.
+struct KlvFixture {
+  std::filesystem::path path;
+};
+
+KlvFixture write_synthetic_klv(const std::filesystem::path& dir) {
+  std::filesystem::path p = dir / "synthetic.klv2";
+  std::ofstream f(p, std::ios::binary | std::ios::trunc);
+
+  auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+  auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+
+  // kwg_node_count = 3
+  write_u32(3);
+  // Node 0: root; arc_index=1, is_end=1, accepts=0, tile=0
+  write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);
+  // Node 1: A; arc_index=0, is_end=0, accepts=1, tile=1
+  write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);
+  // Node 2: B; arc_index=0, is_end=1, accepts=1, tile=2
+  write_u32((2u << 24) | (1u << 22) | (1u << 23) | 0u);
+  // num_leaves = 2
+  write_u32(2);
+  write_f32(1.5f);
+  write_f32(-2.5f);
+  CHECK(f);
+  return KlvFixture{p};
+}
+
+static void test_leave_values_synthetic() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_klv_XXXXXX";
+  fs::create_directories(tmp);
+
+  KlvFixture fix = write_synthetic_klv(tmp);
+  LeaveValues lv = LeaveValues::load(fix.path.string());
+
+  // Leave "A"
+  TileCounts a;
+  a.add(Tile::from_char('A'));
+  CHECK(std::abs(lv.lookup(a) - 1.5f) < 1e-4f);
+
+  // Leave "B"
+  TileCounts b;
+  b.add(Tile::from_char('B'));
+  CHECK(std::abs(lv.lookup(b) - (-2.5f)) < 1e-4f);
+
+  // Empty leave → 0
+  TileCounts empty;
+  CHECK(lv.lookup(empty) == 0.0f);
+
+  // Unknown leave (C) → 0
+  TileCounts c;
+  c.add(Tile::from_char('C'));
+  CHECK(lv.lookup(c) == 0.0f);
+
+  fs::remove_all(tmp);
+  std::cout << "test_leave_values_synthetic passed\n";
+}
+
+static void test_leave_values_real_kwg_optional() {
+  // Use the real NWL23 KLV if available; skip otherwise.
+  // The default leaves file lives alongside the KWG.
+  std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
+  std::filesystem::path klv_path = std::filesystem::path(kwg_path).parent_path().parent_path() /
+                                   "strategy" / "NWL23" / "leaves.klv2";
+  if (!std::filesystem::exists(klv_path)) {
+    std::cout << "test_leave_values_real_kwg_optional: SKIPPED (no leaves.klv2 "
+                 "at "
+              << klv_path << ")\n";
+    return;
+  }
+
+  LeaveValues lv = LeaveValues::load(klv_path.string());
+
+  // Single blank is a well-known leave with strongly positive value.
+  TileCounts blank_leave;
+  blank_leave.add(BLANK);
+  float blank_val = lv.lookup(blank_leave);
+  CHECK(blank_val > 20.0f);  // known to be ~24..26 in Macondo NWL23
+
+  // Empty leave is 0.
+  TileCounts empty;
+  CHECK(lv.lookup(empty) == 0.0f);
+
+  std::cout << "test_leave_values_real_kwg_optional passed (blank leave = " << blank_val << ")\n";
+}
+
+static void test_hasty_equity_components() {
+  // Test the four equity components individually without initialising the
+  // singleton (we call the pure functions via a test harness that constructs
+  // a HastyEquity from a synthetic KLV).
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_XXXXXX";
+  fs::create_directories(tmp);
+
+  KlvFixture fix = write_synthetic_klv(tmp);
+  // Write an empty PEG JSON (valid empty array).
+  std::filesystem::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const HastyEquity& eq = HastyEquity::instance();
+  Board board;  // empty
+  Rack opp;
+
+  // --- leave equity: PLAY move that uses all 7 tiles (empty leave) mid-game
+  Move all_out{};
+  all_out.type = MoveType::PLAY;
+  all_out.horizontal = true;
+  all_out.start_row = 7;
+  all_out.start_col = 4;
+  all_out.score = 50;
+  for (int i = 0; i < 7; ++i) all_out.glyphs[i] = Glyph::of(Tile::from_char('A'));
+
+  Rack rack_7a;
+  for (int i = 0; i < 7; ++i) rack_7a.add(Tile::from_char('A'));
+
+  // With bag_size > 0, leave is empty → leave_equity = 0.
+  // Opening adjustment: tile A at columns 4..10; columns 6 and 8 are in
+  // penalty set, both have vowel A → 2 * -0.7 = -1.4.
+  double e_mid = eq.equity(all_out, board, 86, rack_7a, opp);
+  CHECK(std::abs(e_mid - (50.0 - 1.4)) < 1e-3);
+
+  // --- leave equity with non-empty leave (uses synthetic KLV: A=1.5, B=-2.5)
+  // Play a single A, leaving AAAAAA (6 A's). Our synthetic KLV only has
+  // single-tile leaves so the 6-tile leave returns 0.
+  Move one_a{};
+  one_a.type = MoveType::PLAY;
+  one_a.horizontal = true;
+  one_a.start_row = 7;
+  one_a.start_col = 7;  // center column
+  one_a.score = 2;
+  one_a.glyphs[0] = Glyph::of(Tile::from_char('A'));
+
+  // rack = single A; leave = empty after playing it.
+  Rack rack_1a;
+  rack_1a.add(Tile::from_char('A'));
+  double e_one = eq.equity(one_a, board, 86, rack_1a, opp);
+  // score=2, leave=empty(0), opening: center col=7 not in {2,6,8,12} → 0
+  CHECK(std::abs(e_one - 2.0) < 1e-3);
+
+  // --- endgame adjustment (bag_size = 0, non-out play)
+  // Leave a single B on the rack (leave value from KLV = -2.5 but ignored
+  // for endgame penalty which uses tile point values).
+  Move play_a_endgame{};
+  play_a_endgame.type = MoveType::PLAY;
+  play_a_endgame.horizontal = true;
+  play_a_endgame.start_row = 7;
+  play_a_endgame.start_col = 7;
+  play_a_endgame.score = 2;
+  play_a_endgame.glyphs[0] = Glyph::of(Tile::from_char('A'));
+
+  // Rack = AB, play A, leave = B (value 3). bag_size = 0.
+  // endgame_adjustment = -2 * 3 - 10 = -16.
+  Rack rack_ab;
+  rack_ab.add(Tile::from_char('A'));
+  rack_ab.add(Tile::from_char('B'));
+  Board board_with_tiles;                                       // non-empty so opening adj = 0
+  board_with_tiles.set(0, 0, Glyph::of(Tile::from_char('Q')));  // make non-empty
+  double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, rack_ab, opp);
+  // score=2, leave_equity=0 (bag=0), opening=0, peg=0, endgame=-16
+  CHECK(std::abs(e_eg - (2.0 - 16.0)) < 1e-3);
+
+  // --- endgame out-play (leave empty, bag = 0)
+  // Play both tiles A and B (2 tiles used, both in glyphs).
+  Move out_play{};
+  out_play.type = MoveType::PLAY;
+  out_play.horizontal = true;
+  out_play.start_row = 7;
+  out_play.start_col = 7;
+  out_play.score = 5;
+  out_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  out_play.glyphs[1] = Glyph::of(Tile::from_char('B'));
+
+  // Opponent has a Q (value=10) on their rack.
+  Rack opp_q;
+  opp_q.add(Tile::from_char('Q'));
+  // endgame bonus = 2 * 10 = 20.
+  double e_out = eq.equity(out_play, board_with_tiles, 0, rack_ab, opp_q);
+  CHECK(std::abs(e_out - (5.0 + 20.0)) < 1e-3);
+
+  fs::remove_all(tmp);
+  std::cout << "test_hasty_equity_components passed\n";
+}
+
 int main() {
   test_dict_basic();
   test_movegen_opening();
@@ -2064,6 +2268,9 @@ int main() {
   test_epoch_coverage();
   test_epoch_memory_budget_stress();
   test_epoch_shuffles_across_seeds();
+  test_leave_values_synthetic();
+  test_leave_values_real_kwg_optional();
+  test_hasty_equity_components();
   std::cout << "All tests passed.\n";
   return 0;
 }

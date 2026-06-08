@@ -1,7 +1,6 @@
 #include "scribblez/macondo_bot.h"
 
-#include "scribblez/macondo_oracle.h"
-#include "scribblez/macondo_oracle_pool.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/move.h"
 
 #include <boost/program_options.hpp>
@@ -11,20 +10,21 @@
 
 namespace scribblez {
 
-HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
-    : Agent(thread_id, name), oracle_(&MacondoOraclePool::instance().get(thread_id)) {}
+HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name) : Agent(thread_id, name) {}
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
-  // Delegate to this thread's Macondo subprocess (cached at construction).
-  // HastyBot just needs its top pick; the equities for every other play are
-  // computed too but only the human player consumes them (for the cheat-mode
-  // column).
-  auto eval = oracle_->evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
-                                req.legal_plays);
-  if (eval.best_index >= 0) return req.legal_plays[static_cast<size_t>(eval.best_index)];
+  const HastyEquity& eq = HastyEquity::instance();
+  int best = -1;
+  double best_equity = -1e18;
+  for (int i = 0; i < static_cast<int>(req.legal_plays.size()); ++i) {
+    double e = eq.equity(req.legal_plays[i], req.board, req.bag_size, req.my_rack, req.opp_rack);
+    if (e > best_equity) {
+      best_equity = e;
+      best = i;
+    }
+  }
+  if (best >= 0) return req.legal_plays[static_cast<size_t>(best)];
 
-  // Macondo's best play wasn't a legal Scribblez play here (e.g. it picked
-  // an exchange we don't enumerate). Pass rather than cheat.
   Move m;
   m.type = MoveType::PASS;
   return m;
@@ -51,8 +51,8 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 }
 
 std::string HastyBotAgent::options_help() {
-  return "  Macondo's HastyBot (best static play), shelled out to a persistent\n"
-         "  `macondo` process. Path is set process-wide via --macondo.\n"
+  return "  In-process HastyBot: enumerates all legal plays and picks the one\n"
+         "  with highest static equity (score + leave value + adjustments).\n"
          "  Options: (none)\n";
 }
 

@@ -1,8 +1,7 @@
 #include "scribblez/human_web_agent.h"
 
 #include "scribblez/game.h"
-#include "scribblez/macondo_oracle.h"
-#include "scribblez/macondo_oracle_pool.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/tile.h"
 #include "scribblez/web_server.h"
 
@@ -32,9 +31,7 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
 
 HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                              const std::string& opp_name)
-    : Agent(thread_id, my_name),
-      opp_name_(opp_name),
-      oracle_(&MacondoOraclePool::instance().get(thread_id)) {
+    : Agent(thread_id, my_name), opp_name_(opp_name) {
   // The order matters: the WebSocket server must be bound (so its port is
   // listening) before we launch Vite, since Vite proxies /ws to it. Then we
   // block until Vite is accepting browser connections, and best-effort open
@@ -62,15 +59,17 @@ HumanWebAgent::~HumanWebAgent() {
 }
 
 Move HumanWebAgent::make_move(const MoveRequest& req) {
-  // Best-effort: ask Macondo to evaluate every legal play so we can show its
-  // equity column in the cheat-mode move list. If Macondo isn't reachable
-  // (binary missing, subprocess crash, ...) we just send the position
-  // without equities and the front-end leaves the column blank.
+  // Annotate each legal play with its HastyBot static equity for the cheat-
+  // mode move list.  If HastyEquity was not initialised (--leaves-file absent)
+  // the column is left blank on the front-end.
   std::vector<std::optional<double>> equities;
   try {
-    auto result = oracle_->evaluate(req.board, req.my_rack, req.my_score, req.opp_score,
-                                    req.legal_plays);
-    equities = std::move(result.equities);
+    const HastyEquity& eq = HastyEquity::instance();
+    equities.resize(req.legal_plays.size());
+    for (size_t i = 0; i < req.legal_plays.size(); ++i) {
+      equities[i] =
+        eq.equity(req.legal_plays[i], req.board, req.bag_size, req.my_rack, req.opp_rack);
+    }
   } catch (const std::exception&) {
     equities.clear();
   }
@@ -166,13 +165,13 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
   namespace po = boost::program_options;
   Params params;
   po::options_description desc("human options");
-  desc.add_options()                                                                //
-      ("port", po::value<int>(&params.port)->default_value(params.port),            //
-       "engine WebSocket port")                                                     //
-      ("vite-port", po::value<int>(&params.vite_port)->default_value(params.vite_port),  //
-       "browser UI (Vite) port")                                                    //
-      ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
-       "front-end package dir (cwd of `npm run dev`)");
+  desc.add_options()                                                                   //
+    ("port", po::value<int>(&params.port)->default_value(params.port),                 //
+     "engine WebSocket port")                                                          //
+    ("vite-port", po::value<int>(&params.vite_port)->default_value(params.vite_port),  //
+     "browser UI (Vite) port")                                                         //
+    ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
+     "front-end package dir (cwd of `npm run dev`)");
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);

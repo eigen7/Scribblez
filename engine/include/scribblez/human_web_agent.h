@@ -10,7 +10,6 @@ namespace scribblez {
 
 class ViteDevServer;
 class WebSession;
-class MacondoOracle;
 
 // A human player driven through a WebSession: renders the position to the
 // browser and blocks until the user submits a move (or passes / exchanges).
@@ -23,8 +22,8 @@ class HumanWebAgent : public Agent {
   // Per-instance configuration parsed from `--player "--type=human ..."`.
   // Defaults match what the top-level CLI used to provide.
   struct Params {
-    int port = 8080;          // engine WebSocket port
-    int vite_port = 5173;     // browser UI (Vite) port
+    int port = 8080;              // engine WebSocket port
+    int vite_port = 5173;         // browser UI (Vite) port
     std::string web_dir = "web";  // front-end package dir (cwd of `npm run dev`)
   };
 
@@ -59,7 +58,6 @@ class HumanWebAgent : public Agent {
   std::unique_ptr<WebSession> session_;
   std::unique_ptr<ViteDevServer> vite_;
   std::string opp_name_;
-  MacondoOracle* oracle_;  // cached at construction; per-thread
 };
 
 }  // namespace scribblez

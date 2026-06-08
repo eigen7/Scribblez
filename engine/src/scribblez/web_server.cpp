@@ -252,7 +252,7 @@ StateView::StateView(const MoveRequest& req, const std::string& my_name, const s
       my_score(req.my_score),
       opp_score(req.opp_score),
       bag_size(req.bag_size),
-      opp_rack_size(req.opp_rack_size),
+      opp_rack_size(req.opp_rack.size()),
       my_name(my_name),
       opp_name(opp_name),
       legal_plays(&req.legal_plays),

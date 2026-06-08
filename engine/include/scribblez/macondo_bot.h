@@ -8,17 +8,15 @@
 
 namespace scribblez {
 
-class MacondoOracle;
-
-// A HastyBot player: delegates each move to Macondo's "best static play"
-// (HastyBot) via a per-thread MacondoOracle keyed off this agent's
-// thread_id() (see MacondoOraclePool). The path to the `macondo` binary is
-// configured once via MacondoOraclePool::set_params() at process startup
-// (driven by play_game's --macondo option).
+// An in-process HastyBot player: generates all legal plays and picks the one
+// with the highest static equity (score + leave value + opening/PEG/endgame
+// adjustments) using the process-wide HastyEquity singleton.  Thread-safe
+// after HastyEquity::init() has been called.
 class HastyBotAgent : public Agent {
  public:
   HastyBotAgent(int thread_id, const std::string& name);
   Move make_move(const MoveRequest& req) override;
+  bool supports_parallelism() const override { return true; }
 
   // Build a HastyBotAgent from `--player "--type=hastybot [options]"` tokens
   // (after the factory has stripped --type and --name). Throws on bad input.
@@ -27,9 +25,6 @@ class HastyBotAgent : public Agent {
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
-
- private:
-  MacondoOracle* oracle_;
 };
 
 }  // namespace scribblez

@@ -40,10 +40,10 @@ add_executable(play_game
   src/scribblez/agent.cpp
   src/scribblez/cli.cpp
   src/scribblez/game_runner.cpp
+  src/scribblez/hasty_equity.cpp
   src/scribblez/human_web_agent.cpp
+  src/scribblez/leave_values.cpp
   src/scribblez/lexicon.cpp
-  src/scribblez/macondo_oracle.cpp
-  src/scribblez/macondo_oracle_pool.cpp
   src/scribblez/macondo_bot.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
@@ -56,8 +56,11 @@ target_link_libraries(play_game PRIVATE
   Boost::system
   Threads::Threads)
 
-add_executable(scribblez_tests tests/tests_main.cpp)
-target_link_libraries(scribblez_tests PRIVATE scribblez_core)
+add_executable(scribblez_tests
+  tests/tests_main.cpp
+  src/scribblez/hasty_equity.cpp
+  src/scribblez/leave_values.cpp)
+target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json)
 # Point the tests at the conventional local lexicon path so they cross-validate
 # against the real GADDAG when one is present (the .kwg is not committed; the
 # test skips gracefully if absent).

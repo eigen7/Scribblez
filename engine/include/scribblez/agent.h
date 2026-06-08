@@ -28,10 +28,11 @@ struct EndGameResult {
 struct MoveRequest {
   const Board& board;
   const Rack& my_rack;
+  const Rack& opp_rack;  // opponent's rack (hidden during mid-game; fully
+                         // visible at endgame when bag is empty)
   int my_score;
   int opp_score;
   int bag_size;
-  int opp_rack_size;              // tiles on the opponent's rack (hidden contents)
   std::vector<Move> legal_plays;  // PLAY moves only; agent may pass/exchange
 };
 

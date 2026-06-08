@@ -5,6 +5,7 @@
 // Usage:
 //   play_game [--player "--type=T [opts]"]... [--lexicon NAME] [--seed N]
 //             [--log-dir DIR] [--games N] [--threads N] [--verbose]
+//             [--leaves-file PATH] [--peg-file PATH]
 //
 // Each --player spec selects a seat; repeat once per seat (defaults to two
 // greedy players). The human agent's own --port / --vite-port / --web-dir
@@ -18,8 +19,8 @@
 #include "scribblez/cli.h"
 #include "scribblez/exception.h"
 #include "scribblez/game_runner.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
-#include "scribblez/macondo_oracle_pool.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
 
@@ -27,6 +28,7 @@
 
 #include <exception>
 #include <iostream>
+#include <string>
 
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
@@ -37,18 +39,29 @@ int main(int argc, char** argv) {
     scribblez::PlayerFactory::Params player_params;
     scribblez::GameRunner::Params runner_params;
 
+    std::string leaves_file;
+    std::string peg_file;
+
     po::options_description desc("play_game options");
     desc.add_options()("help,h", "show this help message and exit");
+    desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
+                       "path to leaves.klv2 (required for --type=hastybot and equity "
+                       "annotations in human play)");
+    desc.add_options()("peg-file", po::value<std::string>(&peg_file)->default_value(""),
+                       "path to preendgame.json adjustment table (optional; omit to skip "
+                       "pre-endgame equity adjustment)");
     scribblez::Lexicon::instance().add_options(desc);
-    scribblez::MacondoOraclePool::instance().add_options(desc);
     seed_params.add_options(desc);
     player_params.add_options(desc);
     runner_params.add_options(desc);
 
-    scribblez::parse_command_line(
-        argc, argv, desc,
-        "Player types (use --player \"--type=X [options]\"):\n\n" +
-            scribblez::PlayerFactory::all_player_types_help());
+    scribblez::parse_command_line(argc, argv, desc,
+                                  "Player types (use --player \"--type=X [options]\"):\n\n" +
+                                    scribblez::PlayerFactory::all_player_types_help());
+
+    if (!leaves_file.empty()) {
+      scribblez::HastyEquity::init(leaves_file, peg_file);
+    }
 
     scribblez::SeedProducer::instance().seed(seed_params);
 

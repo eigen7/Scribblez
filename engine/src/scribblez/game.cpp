@@ -45,9 +45,8 @@ void Game::play() {
     MoveGenerator gen(board_, dict_);
     std::vector<Move> legal = gen.generate(racks_[cur]);
 
-    MoveRequest ctx{board_,           racks_[cur], scores_[cur],
-                    scores_[1 - cur], bag_.size(), racks_[1 - cur].size(),
-                    std::move(legal)};
+    MoveRequest ctx{board_,           racks_[cur], racks_[1 - cur], scores_[cur],
+                    scores_[1 - cur], bag_.size(), std::move(legal)};
     Move m = players_[cur]->make_move(ctx);
 
     TurnRecord rec;
