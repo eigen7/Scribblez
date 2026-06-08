@@ -35,6 +35,7 @@ from setup_common import (
     DEFAULT_INSTANCE_NAME,
     DEFAULT_LEXICA,
     LIWORDS_KWG_URL_TEMPLATE,
+    LOCAL_DOCKER_IMAGE,
     get_env_json,
     in_docker_container,
     is_subpath,
@@ -275,10 +276,65 @@ def build_docker_image() -> None:
     # Import lazily so a broken build_docker_image.py doesn't prevent the
     # earlier wizard steps from running.
     import build_docker_image as bdi
-    from setup_common import LOCAL_DOCKER_IMAGE
     rc = bdi.docker_build(LOCAL_DOCKER_IMAGE)
     if rc != 0:
         raise SetupException("Docker image build failed.")
+
+
+# ---- Step 6: NVIDIA GPU access ------------------------------------------
+
+def _image_exists(image: str) -> bool:
+    return subprocess.run(
+        ["docker", "image", "inspect", image],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def validate_nvidia_driver() -> None:
+    """Confirm the host NVIDIA driver is installed and working."""
+    print("Validating NVIDIA driver (nvidia-smi on host)...")
+    result = subprocess.run(
+        ["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+    )
+    if result.returncode == 0:
+        print_green("NVIDIA driver is installed and working.")
+        return
+    print_red("NVIDIA driver validation failed:")
+    print(result.stderr)
+    print("See NVIDIA's website for driver installation instructions.")
+    raise SetupException()
+
+
+def validate_nvidia_installation(image: str) -> None:
+    """Confirm the GPU is accessible inside Docker via the Container Toolkit.
+
+    Runs `docker run --gpus all <image> nvidia-smi`. On failure, first checks
+    the host driver to disambiguate a missing driver from a missing/misconfigured
+    NVIDIA Container Toolkit.
+    """
+    print("Validating NVIDIA Container Toolkit (GPU access inside Docker)...")
+    if not _image_exists(image):
+        print_red(f"Image {image} not found; skipping GPU-in-Docker validation.")
+        print("Build the image (re-run this wizard) and then re-validate.")
+        return
+    result = subprocess.run(
+        ["docker", "run", "--rm", "--gpus", "all", image, "nvidia-smi"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+    )
+    if result.returncode == 0:
+        print_green("NVIDIA Container Toolkit works; GPU is accessible in Docker.")
+        return
+
+    # Driver present but container toolkit broken (or driver missing).
+    validate_nvidia_driver()
+    print_red("NVIDIA Container Toolkit validation failed:")
+    print(result.stderr)
+    print("Install/configure the NVIDIA Container Toolkit:")
+    print("  https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/"
+          "latest/install-guide.html")
+    print("Likely applicable sections: 'Installing with Apt' and "
+          "'Configuring Docker'.")
+    raise SetupException()
 
 
 # ---- Driver -------------------------------------------------------------
@@ -310,6 +366,8 @@ def main() -> None:
         setup_vscode_attach_config()
         print("*" * 78)
         build_docker_image()
+        print("*" * 78)
+        validate_nvidia_installation(LOCAL_DOCKER_IMAGE)
         print("*" * 78)
         print_green("Setup complete.")
         print("Next: ./run_docker.py")
