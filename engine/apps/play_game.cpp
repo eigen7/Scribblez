@@ -45,8 +45,8 @@ int main(int argc, char** argv) {
     po::options_description desc("play_game options");
     desc.add_options()("help,h", "show this help message and exit");
     desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
-                       "path to leaves.klv2 (required for --type=hastybot and equity "
-                       "annotations in human play)");
+                       "path to leaves.klv2 (optional; HastyBot otherwise loads the "
+                       "default leaves for the active lexicon)");
     desc.add_options()("peg-file", po::value<std::string>(&peg_file)->default_value(""),
                        "path to preendgame.json adjustment table (optional; omit to skip "
                        "pre-endgame equity adjustment)");

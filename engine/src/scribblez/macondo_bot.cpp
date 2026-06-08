@@ -1,6 +1,7 @@
 #include "scribblez/macondo_bot.h"
 
 #include "scribblez/hasty_equity.h"
+#include "scribblez/lexicon.h"
 #include "scribblez/move.h"
 
 #include <boost/program_options.hpp>
@@ -36,10 +37,10 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
                                                         int thread_id, const std::string& name) {
   namespace po = boost::program_options;
 
-  // No agent-specific options at present: the path to the macondo binary is
-  // a process-wide option (--macondo) parsed by play_game, since the human
-  // player also uses Macondo (for equity annotations) and it'd be silly to
-  // re-specify the path per seat.
+  // No agent-specific options at present. The equity tables (leaves +
+  // pre-endgame) are process-wide: a play_game --leaves-file overrides them,
+  // but otherwise we lazily load Macondo's defaults for the active lexicon, so
+  // running a HastyBot never requires extra command-line flags.
   po::options_description desc("hastybot options");
   try {
     po::variables_map vm;
@@ -49,6 +50,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
     throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
   }
 
+  HastyEquity::ensure_initialized(Lexicon::instance().name());
   return std::make_unique<HastyBotAgent>(thread_id, name);
 }
 

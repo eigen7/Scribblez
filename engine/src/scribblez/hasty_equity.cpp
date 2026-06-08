@@ -16,6 +16,10 @@ namespace scribblez {
 
 namespace {
 
+// Root of Macondo's per-lexicon strategy data (leaves + pre-endgame tables),
+// from which HastyBot's default file locations are derived.
+constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
+
 // ---- leave computation --------------------------------------------------
 
 struct LeaveRunEntry {
@@ -105,6 +109,19 @@ void HastyEquity::init(const std::string& klv2_path, const std::string& peg_json
   inst.leave_values_ = LeaveValues::load(klv2_path);
   inst.peg_table_ = load_peg_table(peg_json_path);
   inst.ready_ = true;
+}
+
+void HastyEquity::ensure_initialized(const std::string& lexicon) {
+  if (instance().ready_) return;
+  init(default_leaves_path(lexicon), default_peg_path());
+}
+
+std::string HastyEquity::default_leaves_path(const std::string& lexicon) {
+  return std::string(kStrategyRoot) + "/" + lexicon + "/leaves.klv2";
+}
+
+std::string HastyEquity::default_peg_path() {
+  return std::string(kStrategyRoot) + "/default/preendgame.json";
 }
 
 double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& my_rack,

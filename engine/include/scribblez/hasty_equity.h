@@ -24,6 +24,19 @@ class HastyEquity {
   // values file and the pre-endgame adjustment JSON. Throws on I/O failure.
   static void init(const std::string& klv2_path, const std::string& peg_json_path);
 
+  // Lazy-initialization convenience for callers that just want HastyBot's
+  // defaults: if init() has not already been called, load the default
+  // leave-values and pre-endgame files for `lexicon` (see default_*_path()).
+  // A no-op once loaded. Intended to be called during single-threaded setup;
+  // not safe to race against concurrent equity() calls.
+  static void ensure_initialized(const std::string& lexicon);
+
+  // Default on-disk locations derived from Macondo's data layout: the
+  // per-lexicon leave-values file (.../strategy/<lexicon>/leaves.klv2) and the
+  // shared pre-endgame table (.../strategy/default/preendgame.json).
+  static std::string default_leaves_path(const std::string& lexicon);
+  static std::string default_peg_path();
+
   // Static HastyBot equity for `move` in the given position.
   //   bag_size : tiles remaining in the bag *before* the move
   //   my_rack  : on-move player's rack (used to compute the leave)
