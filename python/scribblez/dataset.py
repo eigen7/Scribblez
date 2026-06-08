@@ -126,6 +126,27 @@ class SlogDataset:
             batch_data = self._data[batch_idx]
             yield self._slice_batch(batch_data)
 
+    def iter_batches_streaming(
+        self,
+        batch_size: int,
+        seed: int = 42,
+        post_move: bool | None = None,
+        apply_symmetry: bool | None = None,
+    ):
+        """Yield batches via the v2 streaming C++ epoch API.
+
+        This does NOT require load() -- all data is streamed on-demand with
+        memory-budget-constrained LRU eviction. Deterministic for a given seed.
+        """
+        pm = post_move if post_move is not None else self.post_move
+        sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry
+        self._loader.epoch_start(batch_size, pm, sym, seed)
+        while True:
+            batch_data = self._loader.load_batch()
+            if batch_data is None:
+                return
+            yield self._slice_batch(batch_data)
+
     def _slice_batch(self, batch_data: np.ndarray) -> dict[str, torch.Tensor]:
         result: dict[str, torch.Tensor] = {}
         input_shapes = get_input_shapes()

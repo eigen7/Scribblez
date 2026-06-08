@@ -69,3 +69,8 @@ add_test(NAME scribblez_tests COMMAND scribblez_tests)
 # a directory of .slog files and verify load() produces well-formed rows.
 add_executable(dataloader_smoke apps/dataloader_smoke.cpp)
 target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
+
+# Test helper: writes .slog files using an in-memory dictionary for integration
+# testing (Python FFI tests, etc.).
+add_executable(test_slog_writer apps/test_slog_writer.cpp)
+target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)

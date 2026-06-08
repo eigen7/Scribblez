@@ -113,4 +113,25 @@ void scribblez_dl_load(DataLoaderHandle* h, int64_t start, int64_t stop, int pos
   h->loader.load(start, stop, post_move != 0, apply_symmetry != 0, output);
 }
 
+int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
+                             uint64_t seed) {
+  if (!h) return 0;
+  DataLoader::EpochConfig cfg;
+  cfg.batch_size = batch_size;
+  cfg.post_move = post_move != 0;
+  cfg.apply_symmetry = apply_symmetry != 0;
+  cfg.seed = seed;
+  return h->loader.epoch_start(cfg);
+}
+
+int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
+  if (!h || !output) return 0;
+  return h->loader.load_batch(output);
+}
+
+int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
+  if (!h) return 0;
+  return h->loader.resident_bytes();
+}
+
 }  // extern "C"

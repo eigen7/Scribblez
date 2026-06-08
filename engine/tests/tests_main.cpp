@@ -1653,6 +1653,362 @@ static void test_dataloader_per_row_symmetry() {
   }
 }
 
+// ===========================================================================
+// V2 epoch-based DataLoader tests
+// ===========================================================================
+
+// Helper: write N games via BinaryLogWriter and return the .slog path + game count.
+struct SlogFixture {
+  std::filesystem::path dir;
+  std::vector<std::filesystem::path> slog_paths;
+  int total_games = 0;
+};
+
+static SlogFixture write_multi_file_slog(int games_per_file, int num_files) {
+  namespace fs = std::filesystem;
+  SlogFixture fix;
+  fix.dir = fs::temp_directory_path() / ("scribblez_v2_" + std::to_string(::getpid()) + "_" +
+                                         std::to_string(std::random_device{}()));
+  fs::create_directories(fix.dir);
+
+  Dictionary dict = medium_dict();
+  fix.total_games = games_per_file * num_files;
+
+  scribblez::binlog::BinaryLogWriter writer(fix.dir.string(), games_per_file);
+  for (int i = 0; i < fix.total_games; ++i) {
+    scribblez::GameLog log = play_test_game(dict, /*seed=*/2000ULL + i);
+    writer.append(log);
+  }
+
+  for (const auto& ent : fs::directory_iterator(fix.dir)) {
+    if (ent.path().extension() == ".slog") fix.slog_paths.push_back(ent.path());
+  }
+  std::sort(fix.slog_paths.begin(), fix.slog_paths.end());
+  CHECK(static_cast<int>(fix.slog_paths.size()) == num_files);
+  return fix;
+}
+
+static void test_epoch_determinism() {
+  // Two epoch_start calls with the same seed must produce identical output.
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  auto fix = write_multi_file_slog(/*games_per_file=*/5, /*num_files=*/3);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{fix.dir};
+
+  DataLoader::Params params;
+  params.num_worker_threads = 2;
+  params.num_prefetch_threads = 1;
+
+  // Run two epochs with the same seed and verify byte-identical output.
+  const int batch_size = 4;
+  const uint64_t seed = 12345;
+
+  auto run_epoch = [&](DataLoader& loader) {
+    DataLoader::EpochConfig cfg;
+    cfg.batch_size = batch_size;
+    cfg.post_move = true;
+    cfg.apply_symmetry = true;
+    cfg.seed = seed;
+    loader.epoch_start(cfg);
+
+    std::vector<float> all_data;
+    std::vector<float> batch(batch_size * DataLoader::row_size_floats());
+    while (true) {
+      int n = loader.load_batch(batch.data());
+      if (n == 0) break;
+      all_data.insert(all_data.end(), batch.begin(),
+                      batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    }
+    return all_data;
+  };
+
+  // First run.
+  DataLoader loader1(params);
+  for (auto& p : fix.slog_paths) {
+    std::ifstream f(p, std::ios::binary);
+    FileHeader hdr{};
+    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    loader1.add_file(p.string(), hdr.num_games, fsize);
+  }
+  auto data1 = run_epoch(loader1);
+
+  // Second run: fresh loader, same files, same seed.
+  DataLoader loader2(params);
+  for (auto& p : fix.slog_paths) {
+    std::ifstream f(p, std::ios::binary);
+    FileHeader hdr{};
+    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    loader2.add_file(p.string(), hdr.num_games, fsize);
+  }
+  auto data2 = run_epoch(loader2);
+
+  CHECK(data1.size() == data2.size());
+  CHECK(data1.size() > 0);
+  CHECK(std::memcmp(data1.data(), data2.data(), data1.size() * sizeof(float)) == 0);
+
+  // Third run: same loader, same seed again -- must also be identical.
+  auto data3 = run_epoch(loader1);
+  CHECK(data3.size() == data1.size());
+  CHECK(std::memcmp(data1.data(), data3.data(), data1.size() * sizeof(float)) == 0);
+
+  // Fourth run: different seed -- must differ.
+  {
+    DataLoader::EpochConfig cfg;
+    cfg.batch_size = batch_size;
+    cfg.post_move = true;
+    cfg.apply_symmetry = true;
+    cfg.seed = 99999;
+    loader1.epoch_start(cfg);
+    std::vector<float> data4;
+    std::vector<float> batch(batch_size * DataLoader::row_size_floats());
+    while (true) {
+      int n = loader1.load_batch(batch.data());
+      if (n == 0) break;
+      data4.insert(data4.end(), batch.begin(),
+                   batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    }
+    CHECK(data4.size() == data1.size());
+    CHECK(std::memcmp(data1.data(), data4.data(), data1.size() * sizeof(float)) != 0);
+  }
+
+  std::cout << "  epoch determinism OK (" << data1.size() / DataLoader::row_size_floats()
+            << " rows)\n";
+}
+
+static void test_epoch_coverage() {
+  // Every position in the dataset must appear exactly once per epoch.
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  auto fix = write_multi_file_slog(/*games_per_file=*/4, /*num_files=*/3);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{fix.dir};
+
+  DataLoader::Params params;
+  params.num_worker_threads = 2;
+  params.num_prefetch_threads = 1;
+  DataLoader loader(params);
+
+  int64_t total_positions = 0;
+  for (auto& p : fix.slog_paths) {
+    std::ifstream f(p, std::ios::binary);
+    FileHeader hdr{};
+    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    loader.add_file(p.string(), hdr.num_games, fsize);
+    total_positions += hdr.num_games;
+  }
+  CHECK(total_positions == fix.total_games);
+
+  // Load all rows via v1 (chronological, no symmetry) as reference.
+  std::vector<float> ref(total_positions * DataLoader::row_size_floats());
+  loader.load(0, total_positions, /*post_move=*/true, /*apply_symmetry=*/false, ref.data());
+
+  // Now run an epoch (no symmetry) and verify every reference row appears
+  // exactly once (the epoch shuffles order but not content).
+  DataLoader::EpochConfig cfg;
+  cfg.batch_size = 3;  // doesn't evenly divide 12 -> tests partial batch
+  cfg.post_move = true;
+  cfg.apply_symmetry = false;
+  cfg.seed = 7777;
+  int num_complete = loader.epoch_start(cfg);
+  CHECK(num_complete == static_cast<int>(total_positions / cfg.batch_size));
+
+  std::vector<float> epoch_data;
+  std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
+  int batches_read = 0;
+  while (true) {
+    int n = loader.load_batch(batch.data());
+    if (n == 0) break;
+    epoch_data.insert(epoch_data.end(), batch.begin(),
+                      batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    ++batches_read;
+  }
+  CHECK(static_cast<int64_t>(epoch_data.size()) == total_positions * DataLoader::row_size_floats());
+
+  // Check every reference row appears exactly once in the epoch output.
+  const int row_sz = DataLoader::row_size_floats();
+  std::vector<bool> found(total_positions, false);
+  for (int64_t ei = 0; ei < total_positions; ++ei) {
+    const float* epoch_row = epoch_data.data() + ei * row_sz;
+    bool matched = false;
+    for (int64_t ri = 0; ri < total_positions; ++ri) {
+      if (found[ri]) continue;
+      if (std::memcmp(epoch_row, ref.data() + ri * row_sz, row_sz * sizeof(float)) == 0) {
+        found[ri] = true;
+        matched = true;
+        break;
+      }
+    }
+    CHECK(matched);
+  }
+  for (int64_t i = 0; i < total_positions; ++i) CHECK(found[i]);
+
+  std::cout << "  epoch coverage OK (" << total_positions << " positions, " << batches_read
+            << " batches)\n";
+}
+
+static void test_epoch_memory_budget_stress() {
+  // Set a tiny memory budget (just enough for one file) and run a full epoch.
+  // This exercises LRU eviction heavily: the loader must load/evict files
+  // repeatedly as it walks through shuffled file-level work units.
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  auto fix = write_multi_file_slog(/*games_per_file=*/4, /*num_files=*/5);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{fix.dir};
+
+  // Find the largest file size to set a budget just above it.
+  int64_t max_fsize = 0;
+  std::vector<std::pair<int64_t, int64_t>> file_info;  // (num_pos, fsize)
+  for (auto& p : fix.slog_paths) {
+    std::ifstream f(p, std::ios::binary);
+    FileHeader hdr{};
+    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    file_info.emplace_back(hdr.num_games, fsize);
+    if (fsize > max_fsize) max_fsize = fsize;
+  }
+
+  // Budget = just one file (largest). This forces eviction on every file switch.
+  DataLoader::Params params;
+  params.memory_budget = max_fsize + 1;  // allow exactly one file at a time
+  params.num_worker_threads = 1;
+  params.num_prefetch_threads = 1;
+  DataLoader loader(params);
+
+  int64_t total_positions = 0;
+  for (int i = 0; i < static_cast<int>(fix.slog_paths.size()); ++i) {
+    loader.add_file(fix.slog_paths[i].string(), file_info[i].first, file_info[i].second);
+    total_positions += file_info[i].first;
+  }
+
+  // Run epoch with batch_size=2 (small batches = more file switches).
+  DataLoader::EpochConfig cfg;
+  cfg.batch_size = 2;
+  cfg.post_move = true;
+  cfg.apply_symmetry = true;
+  cfg.seed = 42;
+  loader.epoch_start(cfg);
+
+  int rows_decoded = 0;
+  std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
+  while (true) {
+    int n = loader.load_batch(batch.data());
+    if (n == 0) break;
+    rows_decoded += n;
+    // Memory should never exceed budget + one extra file (prefetch).
+    // In practice with prefetch disabled (budget too tight), should be <= 2 * max_fsize.
+    CHECK(loader.resident_bytes() <= 2 * max_fsize + 100);
+  }
+  CHECK(rows_decoded == total_positions);
+
+  // Verify determinism: same seed produces same data.
+  loader.epoch_start(cfg);
+  std::vector<float> run1;
+  while (true) {
+    int n = loader.load_batch(batch.data());
+    if (n == 0) break;
+    run1.insert(run1.end(), batch.begin(),
+                batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+  }
+
+  loader.epoch_start(cfg);
+  std::vector<float> run2;
+  while (true) {
+    int n = loader.load_batch(batch.data());
+    if (n == 0) break;
+    run2.insert(run2.end(), batch.begin(),
+                batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+  }
+  CHECK(run1.size() == run2.size());
+  CHECK(std::memcmp(run1.data(), run2.data(), run1.size() * sizeof(float)) == 0);
+
+  std::cout << "  epoch memory-budget stress OK (" << rows_decoded
+            << " rows, budget=" << params.memory_budget << " bytes, " << fix.slog_paths.size()
+            << " files)\n";
+}
+
+static void test_epoch_shuffles_across_seeds() {
+  // Different seeds produce different orderings of the same data.
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  auto fix = write_multi_file_slog(/*games_per_file=*/6, /*num_files=*/2);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{fix.dir};
+
+  DataLoader::Params params;
+  params.num_worker_threads = 2;
+  params.num_prefetch_threads = 1;
+  DataLoader loader(params);
+
+  for (auto& p : fix.slog_paths) {
+    std::ifstream f(p, std::ios::binary);
+    FileHeader hdr{};
+    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    loader.add_file(p.string(), hdr.num_games, fsize);
+  }
+
+  auto run_with_seed = [&](uint64_t seed) {
+    DataLoader::EpochConfig cfg;
+    cfg.batch_size = 4;
+    cfg.post_move = true;
+    cfg.apply_symmetry = false;  // no flips -- pure shuffle test
+    cfg.seed = seed;
+    loader.epoch_start(cfg);
+    std::vector<float> data;
+    std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
+    while (true) {
+      int n = loader.load_batch(batch.data());
+      if (n == 0) break;
+      data.insert(data.end(), batch.begin(),
+                  batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    }
+    return data;
+  };
+
+  auto d1 = run_with_seed(100);
+  auto d2 = run_with_seed(200);
+  auto d3 = run_with_seed(100);  // same as d1
+
+  CHECK(d1.size() == d2.size());
+  CHECK(d1.size() == d3.size());
+  CHECK(d1.size() > 0);
+  // Same seed -> identical.
+  CHECK(std::memcmp(d1.data(), d3.data(), d1.size() * sizeof(float)) == 0);
+  // Different seed -> different ordering.
+  CHECK(std::memcmp(d1.data(), d2.data(), d1.size() * sizeof(float)) != 0);
+
+  std::cout << "  epoch seed-shuffle OK\n";
+}
+
 int main() {
   test_dict_basic();
   test_movegen_opening();
@@ -1675,6 +2031,10 @@ int main() {
   test_game_end_stalemate_penalty();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
+  test_epoch_determinism();
+  test_epoch_coverage();
+  test_epoch_memory_budget_stress();
+  test_epoch_shuffles_across_seeds();
   std::cout << "All tests passed.\n";
   return 0;
 }

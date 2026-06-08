@@ -117,6 +117,24 @@ def _setup_lib(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    lib.scribblez_dl_epoch_start.restype = ctypes.c_int
+    lib.scribblez_dl_epoch_start.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+    ]
+
+    lib.scribblez_dl_load_batch.restype = ctypes.c_int
+    lib.scribblez_dl_load_batch.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_float),
+    ]
+
+    lib.scribblez_dl_resident_bytes.restype = ctypes.c_int64
+    lib.scribblez_dl_resident_bytes.argtypes = [ctypes.c_void_p]
+
 
 _SETUP_DONE = False
 
@@ -233,3 +251,31 @@ class NativeDataLoader:
             self._handle, start, stop, int(post_move), int(apply_symmetry), ptr
         )
         return buf
+
+    def epoch_start(
+        self,
+        batch_size: int,
+        post_move: bool = True,
+        apply_symmetry: bool = True,
+        seed: int = 42,
+    ) -> int:
+        """Begin a new epoch. Returns number of complete batches."""
+        self._batch_size = batch_size
+        return self._lib.scribblez_dl_epoch_start(
+            self._handle, batch_size, int(post_move), int(apply_symmetry), seed
+        )
+
+    def load_batch(self) -> np.ndarray | None:
+        """Load the next batch. Returns None when epoch is exhausted."""
+        buf = np.empty((self._batch_size, self._row_floats), dtype=np.float32)
+        ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        n = self._lib.scribblez_dl_load_batch(self._handle, ptr)
+        if n == 0:
+            return None
+        if n < self._batch_size:
+            return buf[:n]
+        return buf
+
+    @property
+    def resident_bytes(self) -> int:
+        return int(self._lib.scribblez_dl_resident_bytes(self._handle))

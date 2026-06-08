@@ -56,12 +56,14 @@
 #include "scribblez/training_targets.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace scribblez {
@@ -120,6 +122,47 @@ class DataLoader {
   // transposed in lockstep with the input planes so it stays aligned.
   void load(int64_t start, int64_t stop, bool post_move, bool apply_symmetry, float* output);
 
+  // =========================================================================
+  // V2 epoch-based streaming API
+  // =========================================================================
+  // Shuffled iteration over the entire dataset in batch-sized chunks.
+  // All randomness is derived from `seed`, making the output sequence
+  // fully deterministic for a given (file set, batch_size, seed) triple.
+  //
+  // Shuffle strategy (designed for memory-budget friendliness):
+  //   1. File order is shuffled using `seed`.
+  //   2. Position indices within each file are shuffled using
+  //      `seed ^ (shuffled_file_index + 1)`.
+  //   3. Batches are formed by walking the flattened file-local
+  //      permutations in file-shuffled order. Consecutive positions in a
+  //      batch tend to come from the same file (=> locality).
+  //   4. Per-row diagonal flip bits are derived from
+  //      `seed ^ 0xDEAD'BEEF'CAFE'F00D` (independent of position order).
+  //
+  // Memory management: files are loaded on-demand and evicted LRU-style
+  // when total resident bytes exceed the memory budget. A background
+  // prefetch thread loads the next needed file while the current batch is
+  // being decoded.
+
+  struct EpochConfig {
+    int batch_size = 256;
+    bool post_move = true;
+    bool apply_symmetry = true;
+    uint64_t seed = 42;
+  };
+
+  // Begin a new epoch. Returns the number of complete batches that will be
+  // yielded (the last partial batch, if any, is also yielded -- so the
+  // caller will get num_batches + (1 if remainder else 0) calls to
+  // load_batch before it returns 0).
+  int epoch_start(const EpochConfig& config);
+
+  // Fill `output` with the next batch. Returns the number of rows written
+  // (== batch_size for full batches, < batch_size for the final partial
+  // batch, 0 when the epoch is exhausted). `output` must have capacity for
+  // at least batch_size * row_size_floats() floats.
+  int load_batch(float* output);
+
   static constexpr int row_size_floats() { return kRowFloats; }
   static constexpr int input_size_floats() { return kInputFloats; }
   static constexpr int label_size_floats() { return kLabelFloats; }
@@ -164,6 +207,17 @@ class DataLoader {
   void load_files_in_parallel(std::vector<DataFile*>& to_load);
   void decode_units_in_parallel(const std::vector<WorkUnit>& units, float* output);
 
+  // Ensure a specific file is resident (loading from disk if needed,
+  // evicting LRU to make room). Returns true if the file is loaded.
+  bool ensure_resident(DataFile* file);
+
+  // Evict files until resident_bytes_ <= budget. `keep` files are exempt.
+  void evict_until_budget(DataFile* keep = nullptr);
+
+  // Background prefetch: loads a single file asynchronously.
+  void start_prefetch(DataFile* file);
+  void wait_prefetch();
+
   Params params_;
 
   // Single mutex guards the file registry and resident_bytes_. load() takes
@@ -174,6 +228,39 @@ class DataLoader {
   std::deque<std::shared_ptr<DataFile>> files_chrono_;  // oldest first
   int64_t total_positions_ = 0;
   int64_t resident_bytes_ = 0;
+
+  // LRU tracking: most-recently-used files are at the back.
+  std::deque<DataFile*> lru_order_;
+  void touch_lru(DataFile* file);
+
+  // ---- Epoch iteration state ----
+  // Protected by epoch_mu_ (separate from mu_ to avoid holding the file
+  // registry lock during batch decode).
+  std::mutex epoch_mu_;
+  bool epoch_active_ = false;
+  EpochConfig epoch_config_;
+
+  // The flattened iteration order: (file_index_in_snapshot, local_position).
+  // Built by epoch_start(). file_index_in_snapshot indexes into epoch_files_.
+  struct EpochPosition {
+    int file_idx;       // index into epoch_files_
+    int64_t local_pos;  // position index within that file
+  };
+  std::vector<EpochPosition> epoch_order_;
+  int64_t epoch_cursor_ = 0;  // next position to yield in epoch_order_
+
+  // Snapshot of files at epoch_start time (shuffled order).
+  std::vector<std::shared_ptr<DataFile>> epoch_files_;
+
+  // Per-row flip bits for the entire epoch (pre-computed for determinism).
+  std::vector<uint8_t> epoch_flips_;
+
+  // Background prefetch thread state.
+  std::thread prefetch_thread_;
+  DataFile* prefetch_target_ = nullptr;
+  bool prefetch_done_ = false;
+  std::mutex prefetch_mu_;
+  std::condition_variable prefetch_cv_;
 };
 
 }  // namespace binlog

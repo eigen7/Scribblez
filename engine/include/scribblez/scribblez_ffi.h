@@ -72,6 +72,20 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 void scribblez_dl_load(DataLoaderHandle* h, int64_t start, int64_t stop, int post_move,
                        int apply_symmetry, float* output);
 
+// V2 epoch-based streaming API. Shuffles files and positions within files
+// deterministically based on `seed`. Returns the number of complete batches
+// in the epoch (the last partial batch, if any, is also yielded).
+int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
+                             uint64_t seed);
+
+// Fill `output` with the next batch of the current epoch. Returns the
+// number of rows written (0 = epoch exhausted). `output` must have capacity
+// for at least batch_size * scribblez_row_size_floats() floats.
+int scribblez_dl_load_batch(DataLoaderHandle* h, float* output);
+
+// Query current resident memory in bytes (useful for testing eviction).
+int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h);
+
 #ifdef __cplusplus
 }
 #endif
