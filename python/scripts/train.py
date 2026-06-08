@@ -29,7 +29,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
-    parser.add_argument("--device", type=str, default="cpu", help="Device (cpu or cuda).")
+    parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     parser.add_argument(
         "--data-root",
         type=str,
