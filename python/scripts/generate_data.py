@@ -17,8 +17,6 @@ import time
 from pathlib import Path
 
 PLAY_GAME = '/workspace/repo/build/engine/play_game'
-MACONDO = '/workspace/mount/macondo/bin/macondo'
-LEXICON = '/workspace/mount/lexica/NWL23.kwg'
 
 
 def main() -> int:
@@ -41,18 +39,14 @@ def main() -> int:
     args = parser.parse_args()
 
     play_game = PLAY_GAME
-    macondo = MACONDO
-    lexicon = LEXICON
 
     out_dir = Path(args.data_root) / args.tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         play_game,
-        "--player", "--type=hasty",
-        "--player", "--type=hasty",
-        "--lexicon", lexicon,
-        "--macondo-binary", macondo,
+        "--player", "--type=hastybot",
+        "--player", "--type=hastybot",
         "--binary-log-dir", str(out_dir),
         "--games-per-file", str(args.games_per_file),
         "--games", str(args.num_games),
