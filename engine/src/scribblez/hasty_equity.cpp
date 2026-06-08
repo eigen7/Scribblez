@@ -5,6 +5,7 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -17,38 +18,18 @@ namespace {
 
 // ---- leave computation --------------------------------------------------
 
-// Subtract the tiles placed by `move` from `rack`, yielding the leave.
-TileCounts compute_leave(const Rack& rack, const Move& move) {
-  TileCounts leave = rack.counts();
-  for (const Glyph& g : move.glyphs) {
-    if (g.is_empty()) break;
-    leave.remove(g.rack_tile());
+struct LeaveRunEntry {
+  Rack leave;
+  int move_index;
+};
+
+struct LeaveRunEntryLess {
+  bool operator()(const LeaveRunEntry& a, const LeaveRunEntry& b) const {
+    return a.leave < b.leave;
   }
-  return leave;
-}
-
-// ---- leave equity -------------------------------------------------------
-
-double leave_equity(const TileCounts& leave, int bag_size, const LeaveValues& lv) {
-  if (bag_size <= 0) return 0.0;
-  return static_cast<double>(lv.lookup(leave));
-}
+};
 
 // ---- opening adjustment -------------------------------------------------
-
-// Vowel tile indices (A=0, E=4, I=8, O=14, U=20).
-bool is_vowel(int letter_index) {
-  switch (letter_index) {
-    case 0:
-    case 4:
-    case 8:
-    case 14:
-    case 20:
-      return true;
-    default:
-      return false;
-  }
-}
 
 // 2LS column (or row) positions on a standard 15x15 board that adjoin the
 // star; identical set for horizontal and vertical first plays.
@@ -66,8 +47,7 @@ double opening_adjustment(const Move& move, const Board& board) {
   int gi = 0;
   for (const Glyph& g : move.glyphs) {
     if (g.is_empty()) break;
-    if (g.has_letter() && !g.is_blank() && is_penalised_position(start + gi) &&
-        is_vowel(g.letter().index())) {
+    if (is_penalised_position(start + gi) && g.is_vowel()) {
       penalty += kVowelPenalty;
     }
     ++gi;
@@ -86,9 +66,7 @@ double peg_adjustment(const Move& move, int bag_size, const std::vector<double>&
 
 // ---- endgame adjustment -------------------------------------------------
 
-// When the bag is empty: penalise non-out plays by leave tile value;
-// reward out plays by opponent rack value.  Matches Macondo's endgameAdjustment.
-double endgame_adjustment(const TileCounts& leave, const Rack& opp_rack, int bag_size) {
+double endgame_adjustment_rack(const Rack& leave, const Rack& opp_rack, int bag_size) {
   if (bag_size > 0) return 0.0;
   if (!leave.empty()) return -2.0 * leave.point_value() - 10.0;
   return 2.0 * opp_rack.point_value();
@@ -131,13 +109,47 @@ void HastyEquity::init(const std::string& klv2_path, const std::string& peg_json
 
 double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& my_rack,
                            const Rack& opp_rack) const {
+  std::vector<Move> one{move};
+  auto vals = equities(one, board, bag_size, my_rack, opp_rack);
+  return vals.empty() ? 0.0 : vals[0];
+}
+
+std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
+                                          int bag_size, const Rack& my_rack,
+                                          const Rack& opp_rack) const {
   if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
 
-  TileCounts leave = compute_leave(my_rack, move);
+  std::vector<double> out(moves.size(), 0.0);
+  if (moves.empty()) return out;
 
-  return static_cast<double>(move.score) + leave_equity(leave, bag_size, leave_values_) +
-         opening_adjustment(move, board) + peg_adjustment(move, bag_size, peg_table_) +
-         endgame_adjustment(leave, opp_rack, bag_size);
+  std::vector<LeaveRunEntry> entries;
+  entries.reserve(moves.size());
+  for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
+    entries.push_back(LeaveRunEntry{moves[i].leave(my_rack), i});
+  }
+
+  std::sort(entries.begin(), entries.end(), LeaveRunEntryLess());
+
+  size_t run_start = 0;
+  while (run_start < entries.size()) {
+    size_t run_end = run_start + 1;
+    while (run_end < entries.size() && entries[run_end].leave == entries[run_start].leave) {
+      ++run_end;
+    }
+
+    double lv =
+      (bag_size > 0) ? static_cast<double>(leave_values_.lookup(entries[run_start].leave)) : 0.0;
+    double eg = endgame_adjustment_rack(entries[run_start].leave, opp_rack, bag_size);
+
+    for (size_t k = run_start; k < run_end; ++k) {
+      int idx = entries[k].move_index;
+      out[idx] = static_cast<double>(moves[idx].score) + lv +
+                 opening_adjustment(moves[idx], board) +
+                 peg_adjustment(moves[idx], bag_size, peg_table_) + eg;
+    }
+    run_start = run_end;
+  }
+  return out;
 }
 
 }  // namespace scribblez

@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <string>
 
 namespace scribblez {
@@ -33,6 +35,15 @@ class Rack {
 
   const std::array<Tile, RACK_SIZE>& tiles() const { return tiles_; }
 
+  // DIAGNOSTIC: bits-based comparators on C++20
+  uint64_t bits() const {
+    uint64_t b;
+    std::memcpy(&b, this, sizeof(b));
+    return b;
+  }
+  bool operator<(const Rack& o) const { return bits() < o.bits(); }
+  bool operator==(const Rack& o) const { return bits() == o.bits(); }
+
  private:
   std::array<Tile, RACK_SIZE> tiles_{};  // sorted ascending; unused slots empty
   int8_t size_ = 0;
@@ -41,3 +52,10 @@ class Rack {
 static_assert(sizeof(Rack) == 8, "Rack should pack into 8 bytes");
 
 }  // namespace scribblez
+
+template <>
+struct std::hash<scribblez::Rack> {
+  size_t operator()(const scribblez::Rack& r) const noexcept {
+    return std::hash<uint64_t>()(r.bits());
+  }
+};

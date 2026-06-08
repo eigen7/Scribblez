@@ -2,6 +2,7 @@
 
 #include "scribblez/board.h"
 #include "scribblez/glyph.h"
+#include "scribblez/rack.h"
 #include "scribblez/tile.h"
 
 #include <array>
@@ -39,6 +40,9 @@ struct Move {
 
   // Number of leading non-empty glyphs (placed/surrendered tiles).
   int num_glyphs() const;
+
+  // The rack remaining after this move's tiles are removed from `rack`.
+  Rack leave(const Rack& rack) const;
 
   // Reconstruct the move's main word (full word, uppercase) from the board
   // as it stood *before* this move was applied.

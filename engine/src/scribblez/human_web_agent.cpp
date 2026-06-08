@@ -65,11 +65,10 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
   std::vector<std::optional<double>> equities;
   try {
     const HastyEquity& eq = HastyEquity::instance();
-    equities.resize(req.legal_plays.size());
-    for (size_t i = 0; i < req.legal_plays.size(); ++i) {
-      equities[i] =
-        eq.equity(req.legal_plays[i], req.board, req.bag_size, req.my_rack, req.opp_rack);
-    }
+    const std::vector<double> vals =
+      eq.equities(req.legal_plays, req.board, req.bag_size, req.my_rack, req.opp_rack);
+    equities.resize(vals.size());
+    for (size_t i = 0; i < vals.size(); ++i) equities[i] = vals[i];
   } catch (const std::exception&) {
     equities.clear();
   }

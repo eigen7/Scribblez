@@ -59,11 +59,7 @@ void Game::play() {
     const int n_glyphs = m.num_glyphs();
     if (m.type == MoveType::PLAY) {
       // Remove placed tiles from rack, apply to board.
-      for (int i = 0; i < n_glyphs; ++i) {
-        bool ok = racks_[cur].remove(m.glyphs[i].rack_tile());
-        (void)ok;
-        assert(ok);
-      }
+      racks_[cur] = m.leave(racks_[cur]);
       board_.apply(m);
       scores_[cur] += m.score;
       rec.score_delta = m.score;
@@ -75,11 +71,7 @@ void Game::play() {
       }
     } else if (m.type == MoveType::EXCHANGE) {
       // Remove tiles from rack, draw new ones, then put exchanged tiles back.
-      for (int i = 0; i < n_glyphs; ++i) {
-        bool ok = racks_[cur].remove(m.glyphs[i].rack_tile());
-        (void)ok;
-        assert(ok);
-      }
+      racks_[cur] = m.leave(racks_[cur]);
       refill_rack(cur, rec.drawn.data(), &rec.num_drawn);
       for (int i = 0; i < n_glyphs; ++i) bag_.put_back(m.glyphs[i].rack_tile());
       ++consecutive_zero_turns;

@@ -31,6 +31,15 @@ class HastyEquity {
   double equity(const Move& move, const Board& board, int bag_size, const Rack& my_rack,
                 const Rack& opp_rack) const;
 
+  // Batched static-equity evaluation for a full legal-play list.
+  //
+  // This path dedupes leaves by sorting {leave, move_index} records and
+  // performs one leave lookup per distinct leave, then fans the value out to
+  // all moves with that leave.  Intended for both HastyBot and human UI
+  // annotations to share one optimized implementation.
+  std::vector<double> equities(const std::vector<Move>& moves, const Board& board, int bag_size,
+                               const Rack& my_rack, const Rack& opp_rack) const;
+
  private:
   HastyEquity() = default;
 

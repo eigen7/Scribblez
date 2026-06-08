@@ -30,7 +30,8 @@ class Glyph {
   constexpr bool is_empty() const { return code_ == 0; }
   constexpr bool is_blank() const { return code_ >= 27; }  // designated or not
   constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
-  constexpr Tile letter() const;  // valid iff has_letter()
+  constexpr Tile letter() const;    // valid iff has_letter()
+  constexpr bool is_vowel() const;  // true iff has_letter() and letter is AEIOU
   int value() const { return has_letter() && !is_blank() ? letter().value() : 0; }
   constexpr char to_char() const;
   constexpr uint8_t code() const { return code_; }

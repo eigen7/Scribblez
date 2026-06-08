@@ -14,10 +14,12 @@ HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name) : Agent(thr
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
   const HastyEquity& eq = HastyEquity::instance();
+  const std::vector<double> vals =
+    eq.equities(req.legal_plays, req.board, req.bag_size, req.my_rack, req.opp_rack);
   int best = -1;
   double best_equity = -1e18;
-  for (int i = 0; i < static_cast<int>(req.legal_plays.size()); ++i) {
-    double e = eq.equity(req.legal_plays[i], req.board, req.bag_size, req.my_rack, req.opp_rack);
+  for (int i = 0; i < static_cast<int>(vals.size()); ++i) {
+    double e = vals[i];
     if (e > best_equity) {
       best_equity = e;
       best = i;

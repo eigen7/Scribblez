@@ -2090,21 +2090,21 @@ static void test_leave_values_synthetic() {
   LeaveValues lv = LeaveValues::load(fix.path.string());
 
   // Leave "A"
-  TileCounts a;
+  Rack a;
   a.add(Tile::from_char('A'));
   CHECK(std::abs(lv.lookup(a) - 1.5f) < 1e-4f);
 
   // Leave "B"
-  TileCounts b;
+  Rack b;
   b.add(Tile::from_char('B'));
   CHECK(std::abs(lv.lookup(b) - (-2.5f)) < 1e-4f);
 
   // Empty leave → 0
-  TileCounts empty;
+  Rack empty;
   CHECK(lv.lookup(empty) == 0.0f);
 
   // Unknown leave (C) → 0
-  TileCounts c;
+  Rack c;
   c.add(Tile::from_char('C'));
   CHECK(lv.lookup(c) == 0.0f);
 
@@ -2128,13 +2128,13 @@ static void test_leave_values_real_kwg_optional() {
   LeaveValues lv = LeaveValues::load(klv_path.string());
 
   // Single blank is a well-known leave with strongly positive value.
-  TileCounts blank_leave;
+  Rack blank_leave;
   blank_leave.add(BLANK);
   float blank_val = lv.lookup(blank_leave);
   CHECK(blank_val > 20.0f);  // known to be ~24..26 in Macondo NWL23
 
   // Empty leave is 0.
-  TileCounts empty;
+  Rack empty;
   CHECK(lv.lookup(empty) == 0.0f);
 
   std::cout << "test_leave_values_real_kwg_optional passed (blank leave = " << blank_val << ")\n";
