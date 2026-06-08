@@ -98,29 +98,30 @@ int main(int argc, char** argv) {
       continue;
     }
     const int64_t fsz = std::filesystem::file_size(p);
-    loader.add_file(p.string(), hdr.num_positions, fsz);
-    std::cout << "registered " << p.filename() << ": positions=" << hdr.num_positions
+    loader.add_file(p.string(), hdr.num_games, fsz);
+    std::cout << "registered " << p.filename() << ": positions=" << hdr.num_games
               << " bytes=" << fsz << "\n";
   }
   std::cout << "total positions across " << loader.num_files()
             << " files: " << loader.num_positions() << "\n";
 
-  std::vector<float> out(static_cast<size_t>(n_samples) * DataLoader::row_size_floats());
+  const int64_t total = loader.num_positions();
+  const int64_t n_load = std::min<int64_t>(n_samples, total);
+  std::vector<float> out(static_cast<size_t>(n_load) * DataLoader::row_size_floats());
 
   auto t0 = std::chrono::steady_clock::now();
-  loader.load(0, loader.num_positions(), n_samples, post_move, /*apply_symmetry=*/false,
-              out.data());
+  loader.load(0, n_load, post_move, /*apply_symmetry=*/false, out.data());
   auto t1 = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t1 - t0).count();
 
-  std::cout << "load(" << n_samples << ") in " << secs << "s (" << (n_samples / secs)
+  std::cout << "load(" << n_load << ") in " << secs << "s (" << (n_load / secs)
             << " rows/s); resident=" << loader.resident_bytes() << " B\n";
 
   // Summary: per-row WLD distribution and score-diff stats.
   int w = 0, d = 0, l = 0;
   double sd_sum = 0.0, sd_min = 1e9, sd_max = -1e9;
   const int RS = DataLoader::row_size_floats();
-  for (int i = 0; i < n_samples; ++i) {
+  for (int64_t i = 0; i < n_load; ++i) {
     const float* row = out.data() + i * RS;
     const float* wld = row + DataLoader::input_size_floats();
     if (wld[0] > 0.5f)
@@ -135,13 +136,13 @@ int main(int argc, char** argv) {
     sd_max = std::max<double>(sd_max, sd);
   }
   std::cout << "WLD distribution: W=" << w << " D=" << d << " L=" << l << "\n";
-  std::cout << "score_diff: mean=" << (sd_sum / n_samples) << " min=" << sd_min << " max=" << sd_max
+  std::cout << "score_diff: mean=" << (sd_sum / n_load) << " min=" << sd_min << " max=" << sd_max
             << "\n";
 
   // Show the label tail (last 4 floats) of the first 2 rows; the full 7000+
   // input floats are too noisy to dump.
   const int IS = DataLoader::input_size_floats();
-  for (int i = 0; i < std::min(2, n_samples); ++i) {
+  for (int64_t i = 0; i < std::min<int64_t>(2, n_load); ++i) {
     const float* row = out.data() + i * RS;
     std::cout << "row[" << i << "] labels:";
     for (int j = IS; j < RS; ++j) std::cout << " " << row[j];

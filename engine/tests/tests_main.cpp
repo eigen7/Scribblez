@@ -796,7 +796,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   CHECK(hdr->magic == scribblez::binlog::kMagic);
   CHECK(hdr->version == scribblez::binlog::kVersion);
   CHECK(hdr->num_games == static_cast<uint32_t>(kGames));
-  const int64_t total_positions = hdr->num_positions;
+  const int64_t total_positions = hdr->num_games;  // one sample per game
   CHECK(total_positions > 0);
 
   // Register with DataLoader and drain rows in one load() per phase.
@@ -807,14 +807,14 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   loader.add_file(slog.string(), total_positions, fsize);
   CHECK(loader.num_positions() == total_positions);
 
-  const int n_per_phase = static_cast<int>(total_positions) * 4;  // oversample
+  const int n_per_phase = static_cast<int>(total_positions);
   const int n_samples = n_per_phase * 2;
   std::vector<float> rows(static_cast<size_t>(n_samples) *
                           scribblez::binlog::DataLoader::row_size_floats());
-  loader.load(/*window_start=*/0, /*window_end=*/total_positions, n_per_phase,
-              /*post_move=*/false, /*apply_symmetry=*/false, rows.data());
-  loader.load(/*window_start=*/0, /*window_end=*/total_positions, n_per_phase,
-              /*post_move=*/true, /*apply_symmetry=*/false,
+  loader.load(/*start=*/0, /*stop=*/total_positions, /*post_move=*/false,
+              /*apply_symmetry=*/false, rows.data());
+  loader.load(/*start=*/0, /*stop=*/total_positions, /*post_move=*/true,
+              /*apply_symmetry=*/false,
               rows.data() + static_cast<size_t>(n_per_phase) *
                               scribblez::binlog::DataLoader::row_size_floats());
 
@@ -1525,12 +1525,12 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = 1;
-  hdr.num_positions = 2;  // one row per turn
+  hdr.reserved2 = 0;
 
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.reserved = 0;
+  gm.sampled_turn = 1;  // sample the pre-move state at turn 1
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
@@ -1614,47 +1614,41 @@ static void test_dataloader_per_row_symmetry() {
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
-  loader.add_file(fix.path.string(), /*num_positions=*/2, fix.fsize);
+  loader.add_file(fix.path.string(), /*num_positions=*/1, fix.fsize);
 
-  // Sample only the asymmetric position (index 1) by restricting the window
-  // to [1, 2).
-  const int64_t kSampleIdx = 1;
+  // The fixture has a single game contributing a single sample row.
 
-  // apply_symmetry=false: every row must match the canonical (unflipped)
-  // encoding.
+  // apply_symmetry=false: the single row must match the canonical
+  // (unflipped) encoding.
   {
-    constexpr int n = 64;
-    std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(kSampleIdx, kSampleIdx + 1, n, /*post_move=*/false,
+    std::vector<float> rows(DataLoader::row_size_floats(), 0.0f);
+    loader.load(/*start=*/0, /*stop=*/1, /*post_move=*/false,
                 /*apply_symmetry=*/false, rows.data());
-    for (int i = 0; i < n; ++i) {
-      const float* row = rows.data() + i * DataLoader::row_size_floats();
-      CHECK(std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0);
-      CHECK(std::memcmp(row + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
-    }
+    CHECK(std::memcmp(rows.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0);
+    CHECK(std::memcmp(rows.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
   }
 
-  // apply_symmetry=true: each row independently coin-flipped. Over many rows
-  // we expect both buckets to appear and every row to match one of the two
-  // reference encodings exactly.
+  // apply_symmetry=true: each call independently coin-flips that single
+  // row. Over many trials we expect both buckets to appear and every row
+  // to match one of the two reference encodings exactly.
   {
     constexpr int n = 200;
-    std::vector<float> rows(static_cast<size_t>(n) * DataLoader::row_size_floats(), 0.0f);
-    loader.load(kSampleIdx, kSampleIdx + 1, n, /*post_move=*/false,
-                /*apply_symmetry=*/true, rows.data());
+    std::vector<float> row(DataLoader::row_size_floats(), 0.0f);
     int normal_count = 0, flipped_count = 0;
     for (int i = 0; i < n; ++i) {
-      const float* row = rows.data() + i * DataLoader::row_size_floats();
-      const bool is_normal = std::memcmp(row, ref_normal.data(), kInputFloats * sizeof(float)) == 0;
+      loader.load(/*start=*/0, /*stop=*/1, /*post_move=*/false,
+                  /*apply_symmetry=*/true, row.data());
+      const bool is_normal =
+        std::memcmp(row.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0;
       const bool is_flipped =
-        std::memcmp(row, ref_flipped.data(), kInputFloats * sizeof(float)) == 0;
+        std::memcmp(row.data(), ref_flipped.data(), kInputFloats * sizeof(float)) == 0;
       CHECK(is_normal || is_flipped);  // every row matches one of the two
       if (is_normal)
         ++normal_count;
       else
         ++flipped_count;
       // Labels are flip-invariant.
-      CHECK(std::memcmp(row + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
+      CHECK(std::memcmp(row.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
     }
     // With n=200 fair coin flips, the probability that one bucket is empty
     // is 2 * 2^-200; the test is effectively deterministic.

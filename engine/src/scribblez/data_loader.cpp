@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -35,20 +34,6 @@ std::unique_ptr<char[]> read_whole_file(const std::string& path, int64_t expecte
     return nullptr;
   }
   return buf;
-}
-
-// In-place chunked Fisher-Yates shuffle of `n` rows, each `row_size` floats.
-void chunked_shuffle(float* base, int64_t n, int row_size, std::mt19937_64& rng) {
-  std::vector<float> tmp(row_size);
-  const size_t bytes = static_cast<size_t>(row_size) * sizeof(float);
-  for (int64_t i = n - 1; i > 0; --i) {
-    std::uniform_int_distribution<int64_t> dist(0, i);
-    const int64_t j = dist(rng);
-    if (i == j) continue;
-    std::memcpy(tmp.data(), base + i * row_size, bytes);
-    std::memcpy(base + i * row_size, base + j * row_size, bytes);
-    std::memcpy(base + j * row_size, tmp.data(), bytes);
-  }
 }
 
 }  // namespace
@@ -98,9 +83,8 @@ int64_t DataLoader::resident_bytes() const {
 // load(): main entry point
 // ===========================================================================
 
-void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, bool post_move,
-                      bool apply_symmetry, float* output) {
-  if (n_samples <= 0) return;
+void DataLoader::load(int64_t start, int64_t stop, bool post_move, bool apply_symmetry,
+                      float* output) {
   if (output == nullptr) throw std::invalid_argument("DataLoader::load: output is null");
 
   // ---- snapshot the file registry ----------------------------------------
@@ -111,51 +95,40 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
     files.assign(files_chrono_.begin(), files_chrono_.end());
     total = total_positions_;
   }
-  if (window_end > total) window_end = total;
-  if (window_start < 0) window_start = 0;
-  if (window_start >= window_end) {
-    throw std::invalid_argument("DataLoader::load: empty window after clamp");
+  if (stop > total) stop = total;
+  if (start < 0) start = 0;
+  if (start >= stop) {
+    throw std::invalid_argument("DataLoader::load: empty range after clamp");
   }
 
-  // ---- draw n_samples global indices uniformly with replacement ----------
-  std::random_device rd;
-  std::mt19937_64 rng(static_cast<uint64_t>(rd()) ^ 0x9E3779B97F4A7C15ULL);
-  std::uniform_int_distribution<int64_t> dist(window_start, window_end - 1);
-  std::vector<int64_t> global_indices(n_samples);
-  for (int i = 0; i < n_samples; ++i) global_indices[i] = dist(rng);
+  const int64_t n_rows = stop - start;
 
-  // ---- bucket by file ----------------------------------------------------
-  std::sort(global_indices.begin(), global_indices.end());
-  // Per-row flip bits (one per output row, aligned with global_indices after
-  // the sort). When apply_symmetry is false they're all zero.
-  std::vector<uint8_t> per_row_flips(n_samples, 0);
+  // ---- per-row flip bits (one per output row) ----------------------------
+  std::vector<uint8_t> per_row_flips(static_cast<size_t>(n_rows), 0);
   if (apply_symmetry) {
+    std::mt19937_64 rng(std::random_device{}());
     std::bernoulli_distribution coin(0.5);
-    for (int i = 0; i < n_samples; ++i) per_row_flips[i] = coin(rng) ? 1u : 0u;
+    for (int64_t i = 0; i < n_rows; ++i) per_row_flips[i] = coin(rng) ? 1u : 0u;
   }
 
+  // ---- carve the global range into per-file contiguous slices ------------
   std::vector<WorkUnit> units;
   std::vector<std::shared_ptr<DataFile>> needed_files;
-  size_t cursor = 0;
-  int64_t row_cursor = 0;
   for (auto& f : files) {
-    if (cursor >= global_indices.size()) break;
-    if (global_indices[cursor] >= f->chrono_end) continue;
+    if (f->chrono_end <= start) continue;
+    if (f->chrono_start >= stop) break;
+    const int64_t slice_start = std::max(f->chrono_start, start);
+    const int64_t slice_stop = std::min(f->chrono_end, stop);
     WorkUnit u;
     u.file = f.get();
     u.post_move = post_move;
-    u.output_row_start = row_cursor;
-    while (cursor < global_indices.size() && global_indices[cursor] < f->chrono_end) {
-      u.local_indices.push_back(global_indices[cursor] - f->chrono_start);
-      u.flips.push_back(per_row_flips[cursor]);
-      ++cursor;
-    }
-    row_cursor += static_cast<int64_t>(u.local_indices.size());
+    u.local_start = slice_start - f->chrono_start;
+    u.n_rows = slice_stop - slice_start;
+    u.output_row_start = slice_start - start;
+    u.flips = per_row_flips.data() + (slice_start - start);
     units.push_back(std::move(u));
     needed_files.push_back(f);
   }
-  assert(cursor == global_indices.size());
-  assert(row_cursor == n_samples);
 
   // ---- load any not-yet-resident files in parallel -----------------------
   // We hold the registry lock briefly to check which files need loading;
@@ -198,9 +171,6 @@ void DataLoader::load(int64_t window_start, int64_t window_end, int n_samples, b
   // ---- decode work units in parallel -------------------------------------
   decode_units_in_parallel(units, output);
 
-  // ---- shuffle output rows so per-file grouping doesn't bias minibatches -
-  chunked_shuffle(output, n_samples, kRowFloats, rng);
-
   // ---- post-load eviction: bring resident set back under budget ----------
   // (Best-effort. Files referenced by this load are eligible for eviction
   // now that we're done with them.)
@@ -241,8 +211,8 @@ void DataLoader::decode_unit_loop(std::atomic<std::size_t>& next_unit,
     const std::size_t i = next_unit.fetch_add(1, std::memory_order_acq_rel);
     if (i >= units.size()) return;
     const WorkUnit& u = units[i];
-    bd.decode(u.file->buffer.get(), u.file->path, u.local_indices.data(), u.flips.data(),
-              u.local_indices.size(), u.post_move, u.output_row_start, output);
+    bd.decode(u.file->buffer.get(), u.file->path, u.local_start, u.n_rows, u.flips, u.post_move,
+              u.output_row_start, output);
   }
 }
 

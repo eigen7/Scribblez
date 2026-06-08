@@ -16,12 +16,21 @@ add_library(scribblez_core STATIC
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
 )
+# Compiled with PIC so the shared `scribblez_ffi` library can statically link
+# in the core engine on Linux.
+set_target_properties(scribblez_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_core PUBLIC
   include
   # Engine root: lets headers do `#include "inlines/scribblez/foo.inl"` for
   # out-of-class inline definitions kept out of the public header.
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
+# so the resulting libscribblez_ffi.so is a single self-contained artifact
+# that exposes only the symbols declared in scribblez/scribblez_ffi.h.
+add_library(scribblez_ffi SHARED src/scribblez/scribblez_ffi.cpp)
+target_link_libraries(scribblez_ffi PRIVATE scribblez_core Threads::Threads)
 
 # Concrete Agent implementations live in play_game (not scribblez_core) because
 # they pull in Boost (program_options for from_spec(), boost::json/process for

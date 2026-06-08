@@ -8,19 +8,26 @@
 //   1. Construct with a Params (memory budget, thread counts).
 //   2. Register every existing .slog file in chronological order via
 //      add_file(). The loader assumes a strict newest-last add order.
-//   3. Per training epoch, call load(window_start, window_end, n_samples,
-//      post_move, apply_symmetry, output_buffer). `post_move` selects
-//      whether each sample row is a pre-move position (POV = active player
-//      about to move) or a post-move position (POV = the same player,
-//      immediately after they applied their move and before they draw
-//      replacement tiles). Both choices share the same per-game position
-//      count and the same master-array index space; only the encoding
-//      differs. Returns when output_buffer is fully populated and shuffled.
+//   3. To consume the master array, call load(start, stop, post_move,
+//      apply_symmetry, output_buffer). Rows are written sequentially into
+//      `output_buffer` (capacity at least (stop - start) rows) -- one row
+//      per game in the chronological window. `post_move` selects which
+//      snapshot the encoder takes for each game's sampled turn: pre-move
+//      (POV = active player about to move) or post-move (POV = same
+//      player, after the move is applied but before the draw).
 //   4. Optionally call add_file() between load()s as new self-play data
 //      arrives.
 //
-// Output row layout (row_size_floats() floats per row, n_samples rows)
-// -------------------------------------------------------------------
+// Sampling model
+// --------------
+// Each .slog file records one (turn-index) sample point per game, picked
+// at write-time. The loader does NOT shuffle: it walks the master array
+// in chronological order. Callers wanting a train/test split slice the
+// global index range into disjoint ranges; callers wanting shuffling
+// shuffle the resulting tensor on their end.
+//
+// Output row layout (row_size_floats() floats per row)
+// ----------------------------------------------------
 //   [ input_floats:    kInputFloats              ]
 //   [ wld onehot:      kWldFloats              3   ]  // [win, draw, loss] (POV)
 //   [ score_diff pdf:  kScoreDiffFloats        801 ]  // one-hot over clipped bins
@@ -94,24 +101,24 @@ class DataLoader {
   // Total bytes currently resident in memory across loaded file buffers.
   int64_t resident_bytes() const;
 
-  // Decode `n_samples` rows into `output` (must have capacity for at least
-  // n_samples * row_size_floats() floats). Indices are drawn uniformly with
-  // replacement from the master-array slice [window_start, window_end);
-  // window_end is clamped to num_positions(). `post_move` controls which
-  // snapshot the encoder takes at each sampled position: false = pre-move
-  // (POV = player about to move, just before the move is applied), true =
-  // post-move (POV = same player, immediately after their move is applied
-  // but BEFORE they draw replacement tiles, so the unseen-pool composition
-  // is unchanged). Rows are written in file-grouped order then
-  // chunked-shuffled, so each output row is a uniform random sample.
+  // Decode rows [start, stop) of the master array into `output`, in
+  // chronological order (one row per row index). `output` must have
+  // capacity for at least (stop - start) * row_size_floats() floats.
+  // `stop` is clamped to num_positions(); requires start < stop after
+  // clamping.
+  //
+  // `post_move` selects which snapshot the encoder takes for each game's
+  // sampled turn: false = pre-move (POV = player about to move, just
+  // before the move is applied); true = post-move (POV = same player,
+  // immediately after the move is applied but BEFORE they draw
+  // replacement tiles).
   //
   // If `apply_symmetry` is true, each output row independently gets a fair
   // coin flip: a 0 keeps the row in canonical orientation; a 1 transposes
   // every spatial plane across the main diagonal. Heads 0 (WLD) and 1
   // (score diff) are flip-invariant; head 2 (opp next placement) is also
   // transposed in lockstep with the input planes so it stays aligned.
-  void load(int64_t window_start, int64_t window_end, int n_samples, bool post_move,
-            bool apply_symmetry, float* output);
+  void load(int64_t start, int64_t stop, bool post_move, bool apply_symmetry, float* output);
 
   static constexpr int row_size_floats() { return kRowFloats; }
   static constexpr int input_size_floats() { return kInputFloats; }
@@ -128,18 +135,17 @@ class DataLoader {
     std::unique_ptr<char[]> buffer;  // nullptr iff not loaded
   };
 
-  // One unit of decoder work: a contiguous block of output rows fed by one
-  // file. local_indices are positions-within-the-file (0..num_positions-1),
-  // sorted ascending so the decoder walks the file linearly. `flips[i]`
-  // selects whether output row (output_row_start + i) gets the diagonal
-  // symmetry applied (1) or not (0); always zero-filled when load() was
-  // called with apply_symmetry=false.
+  // One unit of decoder work: the contiguous slice [local_start,
+  // local_start + n_rows) within one file, written into the rows
+  // [output_row_start, output_row_start + n_rows) of the caller's buffer.
+  // `flips` is an n_rows-long array of {0,1}, aligned with the rows.
   struct WorkUnit {
     DataFile* file = nullptr;
     bool post_move = false;
-    std::vector<int64_t> local_indices;
-    std::vector<uint8_t> flips;  // aligned with local_indices
+    int64_t local_start = 0;
+    int64_t n_rows = 0;
     int64_t output_row_start = 0;
+    const uint8_t* flips = nullptr;  // points into a load()-local vector
   };
 
   // Parallel I/O worker: pulls indices off `next_idx` and reads each

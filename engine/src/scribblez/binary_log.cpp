@@ -6,7 +6,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 namespace binlog {
@@ -30,6 +32,26 @@ InitialRacks initial_racks_of(const GameLog& log) {
   ir.n0 = static_cast<uint8_t>(log.initial_racks[0].size());
   ir.n1 = static_cast<uint8_t>(log.initial_racks[1].size());
   return ir;
+}
+
+// Pick a turn index for `log` uniformly at random among turns whose
+// `bag_size_before > 0` (i.e., pre-endgame positions). Returns -1 iff no
+// eligible turn exists (degenerate game), in which case the game must be
+// excluded from the file.
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
+  std::vector<int> eligible;
+  eligible.reserve(log.turns.size());
+  for (size_t k = 0; k < log.turns.size(); ++k) {
+    if (log.turns[k].bag_size_before > 0) eligible.push_back(static_cast<int>(k));
+  }
+  if (eligible.empty()) return -1;
+  std::uniform_int_distribution<size_t> dist(0, eligible.size() - 1);
+  return eligible[dist(rng)];
+}
+
+std::mt19937_64& sampler_rng() {
+  thread_local std::mt19937_64 rng(std::random_device{}());
+  return rng;
 }
 
 }  // namespace
@@ -73,34 +95,47 @@ void BinaryLogWriter::flush() {
 }
 
 void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
-  // Pre-build per-game blobs so we can compute offsets up front.
+  // Pre-build per-game blobs so we can compute offsets up front. Games
+  // with no eligible sampling turn (bag empty for every turn -- shouldn't
+  // happen in practice but we guard anyway) are dropped here.
   std::vector<InitialRacks> per_game_initial;
   std::vector<std::vector<TurnBlob>> per_game_turns;
+  std::vector<int> per_game_sampled_turn;
+  std::vector<const GameLog*> kept_games;
   per_game_initial.reserve(games.size());
   per_game_turns.reserve(games.size());
-  uint32_t total_positions = 0;
+  per_game_sampled_turn.reserve(games.size());
+  kept_games.reserve(games.size());
+  std::mt19937_64& rng = sampler_rng();
   for (const GameLog& g : games) {
+    const int sampled = pick_sampled_turn(g, rng);
+    if (sampled < 0) {
+      std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
+      continue;
+    }
     per_game_initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
     turns.reserve(g.turns.size());
     for (const TurnRecord& t : g.turns) turns.push_back(to_blob(t));
     per_game_turns.push_back(std::move(turns));
-    total_positions += static_cast<uint32_t>(g.turns.size());
+    per_game_sampled_turn.push_back(sampled);
+    kept_games.push_back(&g);
   }
+  if (kept_games.empty()) return;
 
   // Build metadata table (in-memory; we know all offsets up front).
-  const uint64_t meta_end = sizeof(FileHeader) + games.size() * sizeof(GameMetadata);
+  const uint64_t meta_end = sizeof(FileHeader) + kept_games.size() * sizeof(GameMetadata);
 
   std::vector<GameMetadata> meta;
-  meta.reserve(games.size());
+  meta.reserve(kept_games.size());
   uint64_t cursor = meta_end;
-  for (size_t i = 0; i < games.size(); ++i) {
+  for (size_t i = 0; i < kept_games.size(); ++i) {
     GameMetadata gm{};
     gm.start_offset = cursor;
     gm.num_turns = static_cast<uint32_t>(per_game_turns[i].size());
-    gm.reserved = 0;
-    gm.final_score_p0 = games[i].final_scores[0];
-    gm.final_score_p1 = games[i].final_scores[1];
+    gm.sampled_turn = static_cast<uint32_t>(per_game_sampled_turn[i]);
+    gm.final_score_p0 = kept_games[i]->final_scores[0];
+    gm.final_score_p1 = kept_games[i]->final_scores[1];
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }
@@ -120,12 +155,12 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.reserved = 0;
-  hdr.num_games = static_cast<uint32_t>(games.size());
-  hdr.num_positions = total_positions;
+  hdr.num_games = static_cast<uint32_t>(kept_games.size());
+  hdr.reserved2 = 0;
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),
           static_cast<std::streamsize>(meta.size() * sizeof(GameMetadata)));
-  for (size_t i = 0; i < games.size(); ++i) {
+  for (size_t i = 0; i < kept_games.size(); ++i) {
     f.write(reinterpret_cast<const char*>(&per_game_initial[i]), sizeof(InitialRacks));
     const auto& turns = per_game_turns[i];
     if (!turns.empty()) {

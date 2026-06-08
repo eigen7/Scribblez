@@ -40,7 +40,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 4;
+inline constexpr uint16_t kVersion = 5;
 
 #pragma pack(push, 1)
 
@@ -48,20 +48,21 @@ struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
   uint16_t reserved;
-  uint32_t num_games;      // games in this file
-  uint32_t num_positions;  // total sample positions across all games
-                           // (== sum over games of num_turns); used as the
-                           // master-array width by the DataLoader. The same
-                           // index space serves both pre- and post-move
-                           // training phases (selected per load() call).
+  uint32_t num_games;  // games in this file == sample positions in this
+                       // file (one sample per game, chosen at write-time)
+  uint32_t reserved2;
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
   uint64_t start_offset;  // file offset of this game's InitialRacks blob
-  uint32_t num_turns;     // length of the TurnBlob array (== position
-                          // count contributed by this game)
-  uint32_t reserved;
+  uint32_t num_turns;     // length of the TurnBlob array
+  uint32_t sampled_turn;  // 0-based turn index chosen for this game's sample
+                          // (pre-move snapshot encodes state AT this turn;
+                          // post-move snapshot encodes state AFTER this
+                          // turn's move is applied, before draw). Chosen
+                          // uniformly at write-time among turns where the
+                          // bag has > 0 tiles when the turn begins.
   int32_t final_score_p0;
   int32_t final_score_p1;
 };
