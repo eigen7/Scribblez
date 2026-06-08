@@ -20,7 +20,6 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
 
 namespace scribblez {
 namespace binlog {

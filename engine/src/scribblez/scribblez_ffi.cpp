@@ -7,7 +7,6 @@
 
 #include <cstdio>
 #include <filesystem>
-#include <utility>
 
 using scribblez::binlog::DataLoader;
 using scribblez::binlog::FileHeader;

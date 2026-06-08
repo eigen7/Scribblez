@@ -9,13 +9,10 @@
 // the lexicon -- and any other expensive-to-load infrastructure added in
 // the future -- need not be reloaded between calls.
 
-#include "scribblez/binary_log.h"
 #include "scribblez/game_state_encoder.h"
-#include "scribblez/move.h"
 #include "scribblez/rack.h"
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <string>
 

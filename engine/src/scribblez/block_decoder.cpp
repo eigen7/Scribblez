@@ -1,5 +1,6 @@
 #include "scribblez/block_decoder.h"
 
+#include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/training_targets.h"
