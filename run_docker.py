@@ -95,6 +95,7 @@ def run_container(args: argparse.Namespace) -> None:
 
     cmd = [
         "docker", "run", "--rm", "-it",
+        "--gpus", "all",
         "--name", args.instance_name,
         "-e", f"HOST_UID={uid}",
         "-e", f"HOST_GID={gid}",
