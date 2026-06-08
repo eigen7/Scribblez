@@ -11,64 +11,21 @@ This shells out to the C++ `play_game` binary with --binary-log-dir pointed at
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Repo root (two levels up from python/scripts/).
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-
-def find_play_game() -> Path:
-    """Locate the play_game binary."""
-    candidates = [
-        REPO_ROOT / "build" / "engine" / "play_game",
-        Path(os.environ.get("PLAY_GAME_BIN", "")),
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
-    raise FileNotFoundError(
-        "Cannot find play_game binary. Build the project first:\n"
-        "  python build.py"
-    )
-
-
-def find_macondo() -> Path:
-    """Locate the Macondo binary."""
-    candidates = [
-        REPO_ROOT / "build" / "macondo" / "macondo",
-        Path("/workspace/mount/macondo/bin/macondo"),
-        Path(os.environ.get("MACONDO_BIN", "")),
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
-    raise FileNotFoundError(
-        "Cannot find macondo binary. Build it first:\n"
-        "  python build.py --skip-web\n"
-        "Or set MACONDO_BIN=/path/to/macondo"
-    )
-
-
-def find_lexicon() -> Path:
-    """Locate the NWL23.kwg lexicon file."""
-    candidates = [
-        REPO_ROOT / "data" / "lexica" / "NWL23.kwg",
-        Path("/workspace/mount/lexica/NWL23.kwg"),
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    raise FileNotFoundError(
-        "Cannot find NWL23.kwg lexicon. Download it or symlink into data/lexica/."
-    )
+PLAY_GAME = '/workspace/repo/build/engine/play_game'
+MACONDO = '/workspace/mount/macondo/bin/macondo'
+LEXICON = '/workspace/mount/lexica/NWL23.kwg'
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate HastyBot self-play data.")
+    parser = argparse.ArgumentParser(
+        description="Generate HastyBot self-play data.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("-t", "--tag", required=True, help="Data subdirectory tag.")
     parser.add_argument("-n", "--num-games", type=int, default=1000, help="Number of games.")
     parser.add_argument("--threads", type=int, default=4, help="Parallel game threads.")
@@ -83,19 +40,19 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    play_game = find_play_game()
-    macondo = find_macondo()
-    lexicon = find_lexicon()
+    play_game = PLAY_GAME
+    macondo = MACONDO
+    lexicon = LEXICON
 
     out_dir = Path(args.data_root) / args.tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        str(play_game),
+        play_game,
         "--player", "--type=hasty",
         "--player", "--type=hasty",
-        "--lexicon", str(lexicon),
-        "--macondo-binary", str(macondo),
+        "--lexicon", lexicon,
+        "--macondo-binary", macondo,
         "--binary-log-dir", str(out_dir),
         "--games-per-file", str(args.games_per_file),
         "--games", str(args.num_games),

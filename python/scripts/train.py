@@ -20,7 +20,10 @@ from scribblez.model import ScribblezModel, compute_loss
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Train Scribblez value model.")
+    parser = argparse.ArgumentParser(
+        description="Train Scribblez value model.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("-t", "--tag", required=True, help="Data subdirectory tag.")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs.")
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")

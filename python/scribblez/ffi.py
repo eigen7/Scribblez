@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ctypes
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,31 +13,16 @@ import numpy as np
 # Library discovery
 # ---------------------------------------------------------------------------
 
+_FFI_LIB_PATH = '/workspace/repo/build/engine/libscribblez_ffi.so'
 _LIB: Optional[ctypes.CDLL] = None
 
 
-def _find_lib() -> ctypes.CDLL:
+def _load_lib() -> ctypes.CDLL:
     global _LIB
     if _LIB is not None:
         return _LIB
-
-    # Search order: env var, then relative to repo root.
-    env = os.environ.get("SCRIBBLEZ_FFI_LIB")
-    if env and os.path.isfile(env):
-        _LIB = ctypes.CDLL(env)
-        return _LIB
-
-    # Walk up from this file to find the repo root (contains build/).
-    here = Path(__file__).resolve().parent
-    for ancestor in [here, *here.parents]:
-        candidate = ancestor / "build" / "engine" / "libscribblez_ffi.so"
-        if candidate.is_file():
-            _LIB = ctypes.CDLL(str(candidate))
-            return _LIB
-
-    raise RuntimeError(
-        "Cannot find libscribblez_ffi.so. Set SCRIBBLEZ_FFI_LIB or build the project."
-    )
+    _LIB = ctypes.CDLL(_FFI_LIB_PATH)
+    return _LIB
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +115,7 @@ _SETUP_DONE = False
 
 def _lib() -> ctypes.CDLL:
     global _SETUP_DONE
-    lib = _find_lib()
+    lib = _load_lib()
     if not _SETUP_DONE:
         _setup_lib(lib)
         _SETUP_DONE = True
