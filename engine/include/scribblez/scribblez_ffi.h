@@ -64,15 +64,7 @@ void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_po
 
 int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 
-// Decode rows [start, stop) into `output`, sequentially in chronological
-// order. `output` must have capacity for at least (stop - start) *
-// scribblez_row_size_floats() floats. `post_move != 0` selects the
-// post-move snapshot at each game's sampled turn (default 0 = pre-move).
-// `apply_symmetry != 0` enables per-row random diagonal flips.
-void scribblez_dl_load(DataLoaderHandle* h, int64_t start, int64_t stop, int post_move,
-                       int apply_symmetry, float* output);
-
-// V2 epoch-based streaming API. Shuffles files and positions within files
+// Epoch-based streaming API. Shuffles files and positions within files
 // deterministically based on `seed`. Returns the number of complete batches
 // in the epoch (the last partial batch, if any, is also yielded).
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,

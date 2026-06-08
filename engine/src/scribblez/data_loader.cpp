@@ -1,10 +1,8 @@
 #include "scribblez/data_loader.h"
 
-#include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -21,17 +19,17 @@ namespace binlog {
 
 namespace {
 
-// Read `expected_size` bytes from `path` into a fresh heap buffer.
-std::unique_ptr<char[]> read_whole_file(const std::string& path, int64_t expected_size) {
+char* read_whole_file(const std::string& path, int64_t expected_size) {
   std::ifstream f(path, std::ios::binary);
   if (!f) {
     std::cerr << "DataLoader: failed to open " << path << "\n";
     return nullptr;
   }
-  std::unique_ptr<char[]> buf(new char[expected_size]);
-  f.read(buf.get(), expected_size);
+  char* buf = new char[expected_size];
+  f.read(buf, expected_size);
   if (!f) {
     std::cerr << "DataLoader: short read on " << path << "\n";
+    delete[] buf;
     return nullptr;
   }
   return buf;
@@ -40,364 +38,498 @@ std::unique_ptr<char[]> read_whole_file(const std::string& path, int64_t expecte
 }  // namespace
 
 // ===========================================================================
-// DataLoader: construction / registry
+// DataFile
 // ===========================================================================
 
-DataLoader::DataLoader(const Params& params) : params_(params) {
-  if (params_.num_worker_threads < 1) params_.num_worker_threads = 1;
-  if (params_.num_prefetch_threads < 1) params_.num_prefetch_threads = 1;
-  if (params_.memory_budget < static_cast<int64_t>(sizeof(FileHeader))) {
-    params_.memory_budget = 256LL * 1024 * 1024;
+DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size)
+    : path_(path), num_positions_(num_positions), file_size_(file_size) {}
+
+DataLoader::DataFile::~DataFile() { unload(); }
+
+bool DataLoader::DataFile::is_loaded() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return buffer_ != nullptr;
+}
+
+void DataLoader::DataFile::load() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!buffer_) {
+    buffer_ = read_whole_file(path_, file_size_);
+  }
+  lock.unlock();
+  cv_.notify_all();
+}
+
+int64_t DataLoader::DataFile::unload() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!buffer_) return 0;
+  delete[] buffer_;
+  buffer_ = nullptr;
+  lock.unlock();
+  cv_.notify_all();
+  return file_size_;
+}
+
+const char* DataLoader::DataFile::buffer() const {
+  std::unique_lock<std::mutex> lock(mutex_);
+  cv_.wait(lock, [this] { return buffer_ != nullptr; });
+  return buffer_;
+}
+
+// ===========================================================================
+// ThreadTable
+// ===========================================================================
+
+DataLoader::ThreadTable::ThreadTable(int n_threads) : n_threads_(n_threads) {
+  for (int i = 0; i < n_threads; ++i) {
+    available_ids_.push_back(i);
   }
 }
 
-DataLoader::~DataLoader() { wait_prefetch(); }
-
-void DataLoader::add_file(const std::string& path, int64_t num_positions, int64_t file_size) {
-  auto f = std::make_shared<DataFile>();
-  f->path = path;
-  f->num_positions = num_positions;
-  f->file_size = file_size;
-  std::lock_guard<std::mutex> lock(mu_);
-  f->chrono_start = total_positions_;
-  f->chrono_end = total_positions_ + num_positions;
-  total_positions_ = f->chrono_end;
-  files_chrono_.push_back(std::move(f));
+void DataLoader::ThreadTable::mark_as_available(int id) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  available_ids_.push_back(id);
+  lock.unlock();
+  cv_.notify_one();
 }
 
-int64_t DataLoader::num_positions() const {
-  std::lock_guard<std::mutex> lock(mu_);
-  return total_positions_;
+int DataLoader::ThreadTable::allocate_thread() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  cv_.wait(lock, [this] { return quitting_ || !available_ids_.empty(); });
+  if (quitting_) return -1;
+  int id = available_ids_.back();
+  available_ids_.pop_back();
+  return id;
 }
 
-int DataLoader::num_files() const {
-  std::lock_guard<std::mutex> lock(mu_);
-  return static_cast<int>(files_chrono_.size());
+void DataLoader::ThreadTable::wait_until_all_available() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  cv_.wait(lock,
+           [this] { return quitting_ || static_cast<int>(available_ids_.size()) == n_threads_; });
 }
 
-int64_t DataLoader::resident_bytes() const {
-  std::lock_guard<std::mutex> lock(mu_);
-  return resident_bytes_;
+void DataLoader::ThreadTable::quit() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  quitting_ = true;
+  lock.unlock();
+  cv_.notify_all();
 }
 
 // ===========================================================================
-// load(): main entry point
+// PrefetchThread
 // ===========================================================================
 
-void DataLoader::load(int64_t start, int64_t stop, bool post_move, bool apply_symmetry,
-                      float* output) {
-  if (output == nullptr) throw std::invalid_argument("DataLoader::load: output is null");
+DataLoader::PrefetchThread::PrefetchThread(ThreadTable* table, int id) : table_(table), id_(id) {
+  thread_ = std::thread(&PrefetchThread::loop, this);
+}
 
-  // ---- snapshot the file registry ----------------------------------------
-  std::vector<std::shared_ptr<DataFile>> files;
-  int64_t total;
+DataLoader::PrefetchThread::~PrefetchThread() { quit(); }
+
+void DataLoader::PrefetchThread::quit() {
   {
-    std::lock_guard<std::mutex> lock(mu_);
-    files.assign(files_chrono_.begin(), files_chrono_.end());
-    total = total_positions_;
+    std::unique_lock<std::mutex> lock(mutex_);
+    quitting_ = true;
   }
-  if (stop > total) stop = total;
-  if (start < 0) start = 0;
-  if (start >= stop) {
-    throw std::invalid_argument("DataLoader::load: empty range after clamp");
-  }
-
-  const int64_t n_rows = stop - start;
-
-  // ---- per-row flip bits (one per output row) ----------------------------
-  std::vector<uint8_t> per_row_flips(static_cast<size_t>(n_rows), 0);
-  if (apply_symmetry) {
-    std::mt19937_64 rng(std::random_device{}());
-    std::bernoulli_distribution coin(0.5);
-    for (int64_t i = 0; i < n_rows; ++i) per_row_flips[i] = coin(rng) ? 1u : 0u;
-  }
-
-  // ---- carve the global range into per-file contiguous slices ------------
-  std::vector<WorkUnit> units;
-  std::vector<std::shared_ptr<DataFile>> needed_files;
-  for (auto& f : files) {
-    if (f->chrono_end <= start) continue;
-    if (f->chrono_start >= stop) break;
-    const int64_t slice_start = std::max(f->chrono_start, start);
-    const int64_t slice_stop = std::min(f->chrono_end, stop);
-    WorkUnit u;
-    u.file = f.get();
-    u.post_move = post_move;
-    u.local_start = slice_start - f->chrono_start;
-    u.n_rows = slice_stop - slice_start;
-    u.output_row_start = slice_start - start;
-    u.flips = per_row_flips.data() + (slice_start - start);
-    units.push_back(std::move(u));
-    needed_files.push_back(f);
-  }
-
-  // ---- load any not-yet-resident files in parallel -----------------------
-  // We hold the registry lock briefly to check which files need loading;
-  // the actual disk I/O happens lock-free into per-file buffers. resident_bytes_
-  // is updated atomically by each loader (it's protected by mu_, but each
-  // loader takes the lock only at the end to publish its buffer).
-  std::vector<DataFile*> to_load;
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    for (auto& f : needed_files) {
-      if (!f->buffer) to_load.push_back(f.get());
-    }
-    // Make budget room for the new loads. Don't evict anything in
-    // `needed_files` -- it's about to be (or already is) referenced.
-    int64_t incoming = 0;
-    for (DataFile* f : to_load) incoming += f->file_size;
-    std::unordered_set<DataFile*> keep;
-    for (auto& f : needed_files) keep.insert(f.get());
-    // Evict oldest-first until resident_bytes_ + incoming <= budget.
-    for (auto& f : files_chrono_) {
-      if (resident_bytes_ + incoming <= params_.memory_budget) break;
-      if (!f->buffer) continue;
-      if (keep.count(f.get())) continue;
-      resident_bytes_ -= f->file_size;
-      f->buffer.reset();
-    }
-  }
-
-  if (!to_load.empty()) {
-    load_files_in_parallel(to_load);
-  }
-
-  // Sanity: every needed file is now loaded.
-  for (auto& f : needed_files) {
-    if (!f->buffer) {
-      throw std::runtime_error("DataLoader::load: failed to load file " + f->path);
-    }
-  }
-
-  // ---- decode work units in parallel -------------------------------------
-  decode_units_in_parallel(units, output);
-
-  // ---- post-load eviction: bring resident set back under budget ----------
-  // (Best-effort. Files referenced by this load are eligible for eviction
-  // now that we're done with them.)
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    for (auto& f : files_chrono_) {
-      if (resident_bytes_ <= params_.memory_budget) break;
-      if (!f->buffer) continue;
-      resident_bytes_ -= f->file_size;
-      f->buffer.reset();
-    }
-  }
+  cv_.notify_all();
+  if (thread_.joinable()) thread_.join();
 }
 
-// ===========================================================================
-// Parallel I/O + decode helpers
-// ===========================================================================
+void DataLoader::PrefetchThread::schedule_prefetch(DataFile* data_file) {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    file_ = data_file;
+  }
+  cv_.notify_all();
+}
 
-void DataLoader::file_loader_loop(std::atomic<std::size_t>& next_idx,
-                                  std::vector<DataFile*>& to_load) {
+void DataLoader::PrefetchThread::loop() {
   while (true) {
-    const std::size_t i = next_idx.fetch_add(1, std::memory_order_acq_rel);
-    if (i >= to_load.size()) return;
-    DataFile* f = to_load[i];
-    auto buf = read_whole_file(f->path, f->file_size);
-    std::lock_guard<std::mutex> lock(mu_);
-    f->buffer = std::move(buf);
-    resident_bytes_ += f->file_size;
-  }
-}
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this] { return quitting_ || file_ != nullptr; });
+    if (quitting_) return;
+    DataFile* f = file_;
+    file_ = nullptr;
+    lock.unlock();
 
-void DataLoader::decode_unit_loop(std::atomic<std::size_t>& next_unit,
-                                  const std::vector<WorkUnit>& units, float* output) {
-  // One BlockDecoder per worker thread: holds reusable scratch buffers
-  // (and, eventually, a loaded Dictionary) across all units it picks up.
-  BlockDecoder bd;
-  while (true) {
-    const std::size_t i = next_unit.fetch_add(1, std::memory_order_acq_rel);
-    if (i >= units.size()) return;
-    const WorkUnit& u = units[i];
-    bd.decode(u.file->buffer.get(), u.file->path, u.local_start, u.n_rows, u.flips, u.post_move,
-              u.output_row_start, output);
+    f->load();
+    table_->mark_as_available(id_);
   }
-}
-
-void DataLoader::load_files_in_parallel(std::vector<DataFile*>& to_load) {
-  std::atomic<std::size_t> next_idx{0};
-  const int n_threads =
-    std::min<int>(params_.num_prefetch_threads, static_cast<int>(to_load.size()));
-  std::vector<std::thread> pool;
-  pool.reserve(n_threads);
-  for (int t = 0; t < n_threads - 1; ++t) {
-    pool.emplace_back(&DataLoader::file_loader_loop, this, std::ref(next_idx), std::ref(to_load));
-  }
-  file_loader_loop(next_idx, to_load);  // current thread participates
-  for (auto& t : pool) t.join();
-}
-
-void DataLoader::decode_units_in_parallel(const std::vector<WorkUnit>& units, float* output) {
-  std::atomic<std::size_t> next_unit{0};
-  const int n_threads = std::min<int>(params_.num_worker_threads, static_cast<int>(units.size()));
-  std::vector<std::thread> pool;
-  pool.reserve(n_threads);
-  for (int t = 0; t < n_threads - 1; ++t) {
-    pool.emplace_back(&DataLoader::decode_unit_loop, this, std::ref(next_unit), std::cref(units),
-                      output);
-  }
-  decode_unit_loop(next_unit, units, output);  // current thread participates
-  for (auto& t : pool) t.join();
 }
 
 // ===========================================================================
-// LRU management
+// FileManager
 // ===========================================================================
 
-void DataLoader::touch_lru(DataFile* file) {
-  // Move `file` to the back of the LRU list (most recently used).
-  auto it = std::find(lru_order_.begin(), lru_order_.end(), file);
-  if (it != lru_order_.end()) {
-    lru_order_.erase(it);
+DataLoader::FileManager::FileManager(int64_t memory_budget, int num_prefetch_threads)
+    : memory_budget_(memory_budget), thread_table_(num_prefetch_threads) {
+  for (int i = 0; i < num_prefetch_threads; ++i) {
+    prefetch_threads_.push_back(new PrefetchThread(&thread_table_, i));
   }
-  lru_order_.push_back(file);
+  prefetch_loop_thread_ = std::thread(&FileManager::prefetch_loop, this);
 }
 
-void DataLoader::evict_until_budget(DataFile* keep) {
-  // Evict from front of LRU (least recently used) until under budget.
-  // Stop if we've cycled through all entries without evicting (only protected
-  // files remain).
-  size_t scanned = 0;
-  while (resident_bytes_ > params_.memory_budget && !lru_order_.empty()) {
-    if (scanned >= lru_order_.size()) break;  // no evictable files remain
-    DataFile* victim = lru_order_.front();
-    lru_order_.pop_front();
-    if (victim == keep || !victim->buffer) {
-      // Can't evict this one; put it back at the end and continue scanning.
-      lru_order_.push_back(victim);
-      ++scanned;
-      continue;
+DataLoader::FileManager::~FileManager() {
+  thread_table_.quit();
+  exit_prefetch_loop();
+
+  for (PrefetchThread* t : prefetch_threads_) delete t;
+  if (prefetch_loop_thread_.joinable()) prefetch_loop_thread_.join();
+  for (DataFile* f : all_files_) delete f;
+}
+
+void DataLoader::FileManager::append(const std::string& path, int64_t num_positions,
+                                     int64_t file_size) {
+  auto* f = new DataFile(path, num_positions, file_size);
+  std::lock_guard<std::mutex> lock(mutex_);
+  num_positions_ += num_positions;
+  all_files_.push_back(f);
+}
+
+int64_t DataLoader::FileManager::num_positions() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return num_positions_;
+}
+
+int DataLoader::FileManager::num_files() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(all_files_.size());
+}
+
+int64_t DataLoader::FileManager::memory_usage() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return memory_usage_;
+}
+
+std::vector<DataLoader::DataFile*> DataLoader::FileManager::snapshot_files() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return {all_files_.begin(), all_files_.end()};
+}
+
+void DataLoader::FileManager::add_to_unload_queue(DataFile* file) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  unload_queue_.push_back(file);
+  assert(active_file_count_ > 0);
+  active_file_count_--;
+  lock.unlock();
+  cv_.notify_all();
+}
+
+void DataLoader::FileManager::prepare_work_units(std::deque<WorkUnit>& work_units) {
+  std::unique_lock<std::mutex> lock(mutex_);
+
+  // Determine which files this batch needs.
+  std::unordered_set<DataFile*> needed;
+  for (const WorkUnit& unit : work_units) needed.insert(unit.file);
+
+  // Drain unload queue: unload files not needed by this batch.
+  while (!unload_queue_.empty()) {
+    DataFile* f = unload_queue_.front();
+    unload_queue_.pop_front();
+    if (!needed.count(f)) {
+      memory_usage_ -= f->unload();
     }
-    resident_bytes_ -= victim->file_size;
-    victim->buffer.reset();
-    scanned = 0;  // made progress; reset scan counter
   }
-}
 
-bool DataLoader::ensure_resident(DataFile* file) {
-  // Must be called with mu_ held.
-  if (file->buffer) {
-    touch_lru(file);
-    return true;
-  }
-  // Need to load -- evict first to make room.
-  evict_until_budget(file);
+  load_queue_.clear();
+  active_file_count_ = 0;
 
-  // Release mu_ during I/O (file identity is stable since we hold shared_ptr).
-  mu_.unlock();
-  auto buf = read_whole_file(file->path, file->file_size);
-  mu_.lock();
-
-  if (!buf) return false;
-  file->buffer = std::move(buf);
-  resident_bytes_ += file->file_size;
-  touch_lru(file);
-  evict_until_budget(file);
-  return true;
-}
-
-// ===========================================================================
-// Prefetch
-// ===========================================================================
-
-void DataLoader::start_prefetch(DataFile* file) {
-  wait_prefetch();  // join any prior prefetch
-  if (!file || file->buffer) return;
-  {
-    std::lock_guard<std::mutex> lock(prefetch_mu_);
-    prefetch_target_ = file;
-    prefetch_done_ = false;
-  }
-  prefetch_thread_ = std::thread([this, file]() {
-    auto buf = read_whole_file(file->path, file->file_size);
-    {
-      std::lock_guard<std::mutex> lock(mu_);
-      if (buf && !file->buffer) {
-        file->buffer = std::move(buf);
-        resident_bytes_ += file->file_size;
-        touch_lru(file);
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(prefetch_mu_);
-      prefetch_done_ = true;
-    }
-    prefetch_cv_.notify_one();
+  // Sort: loaded files first so workers can start immediately.
+  std::sort(work_units.begin(), work_units.end(), [](const WorkUnit& a, const WorkUnit& b) {
+    return a.file->is_loaded() > b.file->is_loaded();
   });
-}
 
-void DataLoader::wait_prefetch() {
-  if (prefetch_thread_.joinable()) {
-    prefetch_thread_.join();
+  for (const WorkUnit& unit : work_units) {
+    if (unit.file->is_loaded()) {
+      active_file_count_++;
+    } else {
+      load_queue_.push_back(unit.file);
+    }
   }
-  prefetch_target_ = nullptr;
+
+  lock.unlock();
+  cv_.notify_all();
 }
 
-// ===========================================================================
-// V2 epoch-based streaming API
-// ===========================================================================
-
-int DataLoader::epoch_start(const EpochConfig& config) {
-  wait_prefetch();
-
-  std::lock_guard<std::mutex> lock(epoch_mu_);
-
-  epoch_config_ = config;
-  epoch_cursor_ = 0;
-
-  // Snapshot and shuffle files.
+void DataLoader::FileManager::reset_prefetch_loop() {
   {
-    std::lock_guard<std::mutex> flock(mu_);
-    epoch_files_.assign(files_chrono_.begin(), files_chrono_.end());
+    std::unique_lock<std::mutex> lock(mutex_);
+    quitting_ = true;
   }
+  cv_.notify_all();
+  if (prefetch_loop_thread_.joinable()) prefetch_loop_thread_.join();
 
-  if (epoch_files_.empty() || config.batch_size <= 0) {
-    epoch_active_ = false;
-    epoch_order_.clear();
-    epoch_flips_.clear();
-    return 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    quitting_ = false;
   }
+  prefetch_loop_thread_ = std::thread(&FileManager::prefetch_loop, this);
+}
 
-  // Shuffle file order using the seed.
-  std::mt19937_64 file_rng(config.seed);
-  std::shuffle(epoch_files_.begin(), epoch_files_.end(), file_rng);
+DataLoader::FileManager::Instruction DataLoader::FileManager::get_next_instruction() const {
+  if (quitting_) return kQuit;
+  if (load_queue_.empty()) return kWait;
 
-  // Build the flattened iteration order: for each file in shuffled order,
-  // generate a permutation of its local positions.
-  int64_t total = 0;
-  for (auto& f : epoch_files_) total += f->num_positions;
+  DataFile* file = load_queue_.front();
+  assert(!file->is_loaded());
 
-  epoch_order_.clear();
-  epoch_order_.reserve(static_cast<size_t>(total));
+  if (memory_usage_ + file->file_size() <= memory_budget_) return kLoad;
+  if (!unload_queue_.empty()) return kUnload;
+  if (active_file_count_ > 0) return kWait;
 
-  for (int fi = 0; fi < static_cast<int>(epoch_files_.size()); ++fi) {
-    const int64_t n = epoch_files_[fi]->num_positions;
+  // Memory budget insufficient for this single file — load anyway.
+  return kLoad;
+}
+
+void DataLoader::FileManager::prefetch_loop() {
+  while (true) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    Instruction instr = kWait;
+    cv_.wait(lock, [&] {
+      instr = get_next_instruction();
+      return instr != kWait;
+    });
+
+    if (instr == kQuit) return;
+
+    if (instr == kLoad) {
+      DataFile* file = load_queue_.front();
+      int id = thread_table_.allocate_thread();
+      if (id < 0) return;  // quitting
+      prefetch_threads_[id]->schedule_prefetch(file);
+      memory_usage_ += file->file_size();
+      load_queue_.pop_front();
+      active_file_count_++;
+    } else if (instr == kUnload) {
+      DataFile* file = unload_queue_.front();
+      memory_usage_ -= file->unload();
+      unload_queue_.pop_front();
+    }
+  }
+}
+
+void DataLoader::FileManager::exit_prefetch_loop() {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    quitting_ = true;
+  }
+  cv_.notify_all();
+}
+
+// ===========================================================================
+// WorkerThread
+// ===========================================================================
+
+DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table, int id)
+    : file_manager_(file_manager), table_(table), id_(id) {
+  thread_ = std::thread(&WorkerThread::loop, this);
+}
+
+DataLoader::WorkerThread::~WorkerThread() { quit(); }
+
+void DataLoader::WorkerThread::quit() {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    quitting_ = true;
+  }
+  cv_.notify_all();
+  if (thread_.joinable()) thread_.join();
+}
+
+void DataLoader::WorkerThread::schedule_work(WorkUnit unit, const EpochConfig& config,
+                                             float* output) {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    unit_ = std::move(unit);
+    config_ = config;
+    output_ = output;
+    has_work_ = true;
+  }
+  cv_.notify_all();
+}
+
+void DataLoader::WorkerThread::loop() {
+  while (true) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this] { return quitting_ || has_work_; });
+    if (quitting_) return;
+
+    do_work();
+    has_work_ = false;
+    DataFile* file = unit_.file;
+    lock.unlock();
+
+    table_->mark_as_available(id_);
+    file_manager_->add_to_unload_queue(file);
+  }
+}
+
+void DataLoader::WorkerThread::do_work() {
+  if (unit_.local_positions.empty()) return;
+
+  DataFile* file = unit_.file;
+  const char* buf = file->buffer();  // blocks until loaded
+
+  for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
+    uint8_t flip = unit_.flips[i];
+    decoder_.decode(buf, file->path(), unit_.local_positions[i], /*n_rows=*/1, &flip,
+                    config_.post_move, /*output_row_start=*/unit_.output_indices[i], output_);
+  }
+}
+
+// ===========================================================================
+// WorkManager
+// ===========================================================================
+
+DataLoader::WorkManager::WorkManager(FileManager* file_manager, int num_threads)
+    : thread_table_(num_threads) {
+  for (int i = 0; i < num_threads; ++i) {
+    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i));
+  }
+}
+
+DataLoader::WorkManager::~WorkManager() {
+  thread_table_.quit();
+  for (WorkerThread* t : workers_) delete t;
+}
+
+void DataLoader::WorkManager::process(std::deque<WorkUnit>& work_units, const EpochConfig& config,
+                                      float* output) {
+  while (!work_units.empty()) {
+    int id = thread_table_.allocate_thread();
+    if (id < 0) return;  // quitting
+    workers_[id]->schedule_work(std::move(work_units.front()), config, output);
+    work_units.pop_front();
+  }
+  thread_table_.wait_until_all_available();
+}
+
+// ===========================================================================
+// SamplingManager
+// ===========================================================================
+
+void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& files,
+                                              const EpochConfig& config) {
+  cursor_ = 0;
+  batch_size_ = config.batch_size;
+
+  total_positions_ = 0;
+  for (auto* f : files) total_positions_ += f->num_positions();
+
+  // Build flattened iteration order: for each file (in caller-provided
+  // shuffled order), generate a permutation of its local positions.
+  order_.clear();
+  order_.reserve(static_cast<size_t>(total_positions_));
+
+  for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
+    const int64_t n = files[fi]->num_positions();
     std::vector<int64_t> perm(static_cast<size_t>(n));
     std::iota(perm.begin(), perm.end(), int64_t{0});
-    // Each file gets a deterministic sub-seed.
     std::mt19937_64 pos_rng(config.seed ^ static_cast<uint64_t>(fi + 1));
     std::shuffle(perm.begin(), perm.end(), pos_rng);
     for (int64_t p : perm) {
-      epoch_order_.push_back(EpochPosition{fi, p});
+      order_.push_back(EpochPosition{fi, p});
     }
   }
 
   // Pre-compute flip bits for the entire epoch.
-  epoch_flips_.resize(static_cast<size_t>(total));
+  flips_.resize(static_cast<size_t>(total_positions_));
   if (config.apply_symmetry) {
     std::mt19937_64 flip_rng(config.seed ^ 0xDEADBEEFCAFEF00DULL);
     std::bernoulli_distribution coin(0.5);
-    for (size_t i = 0; i < epoch_flips_.size(); ++i) {
-      epoch_flips_[i] = coin(flip_rng) ? 1u : 0u;
+    for (size_t i = 0; i < flips_.size(); ++i) {
+      flips_[i] = coin(flip_rng) ? 1u : 0u;
     }
   } else {
-    std::fill(epoch_flips_.begin(), epoch_flips_.end(), 0u);
+    std::fill(flips_.begin(), flips_.end(), 0u);
+  }
+}
+
+int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
+                                            const std::vector<DataFile*>& files) {
+  work_units.clear();
+  if (cursor_ >= static_cast<int64_t>(order_.size())) return 0;
+
+  const int64_t batch_start = cursor_;
+  const int64_t batch_end =
+    std::min(batch_start + batch_size_, static_cast<int64_t>(order_.size()));
+  const int n_rows = static_cast<int>(batch_end - batch_start);
+  cursor_ = batch_end;
+
+  // Group rows by file for locality.
+  struct TaggedRow {
+    int file_idx;
+    int64_t local_pos;
+    uint8_t flip;
+    int output_idx;
+  };
+  std::vector<TaggedRow> rows(static_cast<size_t>(n_rows));
+  for (int i = 0; i < n_rows; ++i) {
+    const auto& ep = order_[batch_start + i];
+    rows[i] = {ep.file_idx, ep.local_pos, flips_[batch_start + i], i};
+  }
+  std::sort(rows.begin(), rows.end(),
+            [](const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; });
+
+  // Build one WorkUnit per contiguous file group.
+  int i = 0;
+  while (i < n_rows) {
+    int fi = rows[i].file_idx;
+    WorkUnit unit;
+    unit.file = files[fi];
+    while (i < n_rows && rows[i].file_idx == fi) {
+      unit.local_positions.push_back(rows[i].local_pos);
+      unit.flips.push_back(rows[i].flip);
+      unit.output_indices.push_back(rows[i].output_idx);
+      ++i;
+    }
+    work_units.push_back(std::move(unit));
   }
 
+  return n_rows;
+}
+
+// ===========================================================================
+// DataLoader: top-level
+// ===========================================================================
+
+DataLoader::DataLoader(const Params& params)
+    : params_(params),
+      file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1)),
+      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1)) {}
+
+DataLoader::~DataLoader() = default;
+
+void DataLoader::add_file(const std::string& path, int64_t num_positions, int64_t file_size) {
+  file_manager_.append(path, num_positions, file_size);
+}
+
+int64_t DataLoader::num_positions() const { return file_manager_.num_positions(); }
+
+int DataLoader::num_files() const { return file_manager_.num_files(); }
+
+int64_t DataLoader::resident_bytes() const { return file_manager_.memory_usage(); }
+
+int DataLoader::epoch_start(const EpochConfig& config) {
+  file_manager_.reset_prefetch_loop();
+
+  std::lock_guard<std::mutex> lock(epoch_mu_);
+  epoch_config_ = config;
+
+  // Snapshot and shuffle files.
+  epoch_files_ = file_manager_.snapshot_files();
+
+  if (epoch_files_.empty() || config.batch_size <= 0) {
+    epoch_active_ = false;
+    return 0;
+  }
+
+  std::mt19937_64 file_rng(config.seed);
+  std::shuffle(epoch_files_.begin(), epoch_files_.end(), file_rng);
+
+  sampling_manager_.build_epoch(epoch_files_, config);
   epoch_active_ = true;
+
+  int64_t total = sampling_manager_.total_positions();
   return static_cast<int>(total / config.batch_size);
 }
 
@@ -407,132 +539,18 @@ int DataLoader::load_batch(float* output) {
   std::lock_guard<std::mutex> lock(epoch_mu_);
   if (!epoch_active_) return 0;
 
-  const int64_t total = static_cast<int64_t>(epoch_order_.size());
-  if (epoch_cursor_ >= total) {
+  std::deque<WorkUnit> work_units;
+  int n_rows = sampling_manager_.next_batch(work_units, epoch_files_);
+  if (n_rows == 0) {
     epoch_active_ = false;
     return 0;
   }
 
-  const int64_t batch_start = epoch_cursor_;
-  const int64_t batch_end = std::min(batch_start + epoch_config_.batch_size, total);
-  const int n_rows = static_cast<int>(batch_end - batch_start);
-  epoch_cursor_ = batch_end;
+  file_manager_.prepare_work_units(work_units);
+  work_manager_.process(work_units, epoch_config_, output);
+  file_manager_.reset_prefetch_loop();
 
-  // Determine which files this batch touches and identify the next file
-  // for prefetch.
-  std::unordered_set<int> needed_file_idxs;
-  for (int64_t i = batch_start; i < batch_end; ++i) {
-    needed_file_idxs.insert(epoch_order_[i].file_idx);
-  }
-
-  // Identify next file for prefetch (first file touched by the next batch).
-  DataFile* prefetch_file = nullptr;
-  if (batch_end < total) {
-    int next_fi = epoch_order_[batch_end].file_idx;
-    if (!epoch_files_[next_fi]->buffer &&
-        needed_file_idxs.find(next_fi) == needed_file_idxs.end()) {
-      prefetch_file = epoch_files_[next_fi].get();
-    }
-  }
-
-  // Ensure all needed files are resident.
-  wait_prefetch();
-
-  {
-    std::lock_guard<std::mutex> flock(mu_);
-    // First pass: load all needed files. We must be careful not to evict
-    // a file we need for this batch when loading another. So we temporarily
-    // mark all needed files as "keep" by loading them without evicting
-    // each other.
-    std::vector<DataFile*> batch_files;
-    for (int fi : needed_file_idxs) {
-      batch_files.push_back(epoch_files_[fi].get());
-    }
-
-    for (DataFile* f : batch_files) {
-      if (f->buffer) {
-        touch_lru(f);
-        continue;
-      }
-      // Evict, but protect all batch files.
-      // Evict from LRU front, skipping any file in batch_files.
-      size_t scanned = 0;
-      while (resident_bytes_ > params_.memory_budget && !lru_order_.empty() &&
-             scanned < lru_order_.size()) {
-        DataFile* victim = lru_order_.front();
-        lru_order_.pop_front();
-        bool is_needed = false;
-        for (DataFile* bf : batch_files) {
-          if (victim == bf) {
-            is_needed = true;
-            break;
-          }
-        }
-        if (is_needed || !victim->buffer) {
-          lru_order_.push_back(victim);
-          ++scanned;
-          continue;
-        }
-        resident_bytes_ -= victim->file_size;
-        victim->buffer.reset();
-        scanned = 0;
-      }
-
-      // Load the file (release mu_ during I/O).
-      mu_.unlock();
-      auto buf = read_whole_file(f->path, f->file_size);
-      mu_.lock();
-      if (!buf) {
-        throw std::runtime_error("DataLoader::load_batch: failed to load file " + f->path);
-      }
-      f->buffer = std::move(buf);
-      resident_bytes_ += f->file_size;
-      touch_lru(f);
-    }
-  }
-
-  // Start prefetch for the next file (after ensuring current files are loaded).
-  if (prefetch_file) {
-    start_prefetch(prefetch_file);
-  }
-
-  // Build work units and decode. For epoch batches, each row is potentially
-  // from a different local offset, so we create one WorkUnit per row. To
-  // allow parallel decode, we group consecutive rows touching the same file.
-  struct BatchRow {
-    int file_idx;
-    int64_t local_pos;
-    uint8_t flip;
-    int output_idx;
-  };
-  std::vector<BatchRow> rows(static_cast<size_t>(n_rows));
-  for (int i = 0; i < n_rows; ++i) {
-    const auto& ep = epoch_order_[batch_start + i];
-    rows[i] = {ep.file_idx, ep.local_pos, epoch_flips_[batch_start + i], i};
-  }
-
-  // Sort by file_idx for locality (groups consecutive same-file rows).
-  std::sort(rows.begin(), rows.end(),
-            [](const BatchRow& a, const BatchRow& b) { return a.file_idx < b.file_idx; });
-
-  // Decode rows using a BlockDecoder.
-  BlockDecoder bd;
-  for (const auto& row : rows) {
-    DataFile* file = epoch_files_[row.file_idx].get();
-    assert(file->buffer);
-    // Decode a single row.
-    uint8_t flip = row.flip;
-    bd.decode(file->buffer.get(), file->path, row.local_pos, /*n_rows=*/1, &flip,
-              epoch_config_.post_move, /*output_row_start=*/row.output_idx, output);
-  }
-
-  // Post-batch eviction.
-  {
-    std::lock_guard<std::mutex> flock(mu_);
-    evict_until_budget(prefetch_file);
-  }
-
-  if (batch_end >= total) {
+  if (n_rows < epoch_config_.batch_size) {
     epoch_active_ = false;
   }
 

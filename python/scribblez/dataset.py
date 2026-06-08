@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -19,11 +17,11 @@ from .ffi import (
 
 
 class SlogDataset:
-    """Loads all .slog files from a directory and provides epoch iteration.
+    """Streams training data from .slog files via the C++ epoch-based DataLoader.
 
-    For v1, all data is loaded into RAM at construction. Shuffling and
-    batching are handled in Python. The C++ DataLoader handles parallel
-    file I/O and game-replay decoding.
+    Data is loaded on-demand in batch-sized chunks, with memory-budget-
+    constrained LRU eviction. Shuffling and symmetry augmentation are
+    deterministic for a given seed.
     """
 
     def __init__(
@@ -70,73 +68,21 @@ class SlogDataset:
             self._targets.append((ts.name, offset, offset + size, ts.dims))
             offset += size
 
-        self._data: Optional[np.ndarray] = None
-
     @property
     def num_samples(self) -> int:
         return self._total
 
-    def load(self) -> None:
-        """Load all data into RAM (one big C++ load() call)."""
-        if self._data is not None:
-            return
-        self._data = self._loader.load(
-            0, self._total, self.post_move, self.apply_symmetry
-        )
-
-    def get_tensors(self) -> dict[str, torch.Tensor]:
-        """Return the full dataset as a dict of named torch tensors."""
-        self.load()
-        assert self._data is not None
-        data = self._data
-
-        result: dict[str, torch.Tensor] = {}
-
-        # Inputs: split into spatial + scalar based on shape info.
-        input_shapes = get_input_shapes()
-        offset = 0
-        for s in input_shapes:
-            size = _prod(s.dims)
-            arr = data[:, offset : offset + size]
-            result[s.name] = torch.from_numpy(arr.reshape(-1, *s.dims))
-            offset += size
-
-        # Targets.
-        for name, start, end, dims in self._targets:
-            arr = data[:, start:end]
-            result[name] = torch.from_numpy(arr.reshape(-1, *dims))
-
-        return result
-
     def iter_batches(
-        self, batch_size: int, shuffle: bool = True, drop_last: bool = True
-    ):
-        """Yield (batch_dict) for one epoch over the loaded data."""
-        self.load()
-        assert self._data is not None
-
-        n = self._total
-        indices = np.arange(n)
-        if shuffle:
-            np.random.shuffle(indices)
-
-        end = (n // batch_size) * batch_size if drop_last else n
-        for start in range(0, end, batch_size):
-            batch_idx = indices[start : start + batch_size]
-            batch_data = self._data[batch_idx]
-            yield self._slice_batch(batch_data)
-
-    def iter_batches_streaming(
         self,
         batch_size: int,
         seed: int = 42,
         post_move: bool | None = None,
         apply_symmetry: bool | None = None,
     ):
-        """Yield batches via the v2 streaming C++ epoch API.
+        """Yield batch dicts for one epoch, streaming from disk.
 
-        This does NOT require load() -- all data is streamed on-demand with
-        memory-budget-constrained LRU eviction. Deterministic for a given seed.
+        All data is loaded on-demand with LRU eviction. Deterministic for
+        a given seed.
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry

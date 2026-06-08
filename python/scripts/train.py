@@ -46,11 +46,10 @@ def main() -> int:
     device = torch.device(args.device)
     print(f"Device: {device}")
 
-    # Load data.
+    # Set up dataset.
     print(f"Loading data from {data_dir} ...")
     ds = SlogDataset(data_dir, post_move=True, apply_symmetry=True)
-    ds.load()
-    print(f"  {ds.num_samples} samples loaded")
+    print(f"  {ds.num_samples} samples")
 
     # Build model.
     model = ScribblezModel(
@@ -73,7 +72,9 @@ def main() -> int:
         correct_wld = 0
         total_samples = 0
 
-        for batch in ds.iter_batches(args.batch_size, shuffle=True, drop_last=True):
+        # Each epoch gets a unique deterministic seed.
+        epoch_seed = epoch * 1000003
+        for batch in ds.iter_batches(args.batch_size, seed=epoch_seed):
             # Move to device.
             input_spatial = batch["input_spatial"].to(device)
             input_scalar = batch["input_scalar"].to(device)

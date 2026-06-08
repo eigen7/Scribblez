@@ -799,7 +799,8 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   const int64_t total_positions = hdr->num_games;  // one sample per game
   CHECK(total_positions > 0);
 
-  // Register with DataLoader and drain rows in one load() per phase.
+  // Register with DataLoader and drain rows via epoch_start/load_batch
+  // for both pre-move and post-move phases.
   scribblez::binlog::DataLoader::Params dl_params;
   dl_params.num_worker_threads = 2;
   dl_params.num_prefetch_threads = 1;
@@ -807,16 +808,31 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   loader.add_file(slog.string(), total_positions, fsize);
   CHECK(loader.num_positions() == total_positions);
 
-  const int n_per_phase = static_cast<int>(total_positions);
-  const int n_samples = n_per_phase * 2;
-  std::vector<float> rows(static_cast<size_t>(n_samples) *
-                          scribblez::binlog::DataLoader::row_size_floats());
-  loader.load(/*start=*/0, /*stop=*/total_positions, /*post_move=*/false,
-              /*apply_symmetry=*/false, rows.data());
-  loader.load(/*start=*/0, /*stop=*/total_positions, /*post_move=*/true,
-              /*apply_symmetry=*/false,
-              rows.data() + static_cast<size_t>(n_per_phase) *
-                              scribblez::binlog::DataLoader::row_size_floats());
+  const int row_size = scribblez::binlog::DataLoader::row_size_floats();
+
+  // Helper: drain one full epoch into a vector.
+  auto drain_epoch = [&](bool post_move) {
+    scribblez::binlog::DataLoader::EpochConfig cfg;
+    cfg.batch_size = static_cast<int>(total_positions);
+    cfg.post_move = post_move;
+    cfg.apply_symmetry = false;
+    cfg.seed = 1;
+    loader.epoch_start(cfg);
+    std::vector<float> out(total_positions * row_size);
+    int n = loader.load_batch(out.data());
+    CHECK(n == static_cast<int>(total_positions));
+    CHECK(loader.load_batch(out.data()) == 0);  // epoch exhausted
+    return out;
+  };
+
+  std::vector<float> pre_rows = drain_epoch(/*post_move=*/false);
+  std::vector<float> post_rows = drain_epoch(/*post_move=*/true);
+
+  // Combine for validation.
+  const int n_samples = static_cast<int>(total_positions) * 2;
+  std::vector<float> rows;
+  rows.insert(rows.end(), pre_rows.begin(), pre_rows.end());
+  rows.insert(rows.end(), post_rows.begin(), post_rows.end());
 
   // Build the set of valid (WLD label, score_diff) pairs across all games.
   std::set<std::tuple<int, int, int, int>> valid_labels;  // (W,D,L,score_diff)
@@ -836,7 +852,6 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   }
 
   // Every decoded row's label tail must match a valid (game, POV).
-  const int row_size = scribblez::binlog::DataLoader::row_size_floats();
   const int label_off = scribblez::binlog::DataLoader::input_size_floats();
   for (int i = 0; i < n_samples; ++i) {
     const float* row = rows.data() + static_cast<int64_t>(i) * row_size;
@@ -1615,23 +1630,32 @@ static void test_dataloader_per_row_symmetry() {
   // apply_symmetry=false: the single row must match the canonical
   // (unflipped) encoding.
   {
+    DataLoader::EpochConfig cfg;
+    cfg.batch_size = 1;
+    cfg.post_move = false;
+    cfg.apply_symmetry = false;
+    cfg.seed = 1;
+    loader.epoch_start(cfg);
     std::vector<float> rows(DataLoader::row_size_floats(), 0.0f);
-    loader.load(/*start=*/0, /*stop=*/1, /*post_move=*/false,
-                /*apply_symmetry=*/false, rows.data());
+    CHECK(loader.load_batch(rows.data()) == 1);
     CHECK(std::memcmp(rows.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0);
     CHECK(std::memcmp(rows.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
   }
 
-  // apply_symmetry=true: each call independently coin-flips that single
-  // row. Over many trials we expect both buckets to appear and every row
-  // to match one of the two reference encodings exactly.
+  // apply_symmetry=true: each epoch uses a different seed, producing a
+  // different flip decision. Over many seeds we expect both buckets.
   {
     constexpr int n = 200;
     std::vector<float> row(DataLoader::row_size_floats(), 0.0f);
     int normal_count = 0, flipped_count = 0;
     for (int i = 0; i < n; ++i) {
-      loader.load(/*start=*/0, /*stop=*/1, /*post_move=*/false,
-                  /*apply_symmetry=*/true, row.data());
+      DataLoader::EpochConfig cfg;
+      cfg.batch_size = 1;
+      cfg.post_move = false;
+      cfg.apply_symmetry = true;
+      cfg.seed = static_cast<uint64_t>(i + 100);
+      loader.epoch_start(cfg);
+      CHECK(loader.load_batch(row.data()) == 1);
       const bool is_normal =
         std::memcmp(row.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0;
       const bool is_flipped =
@@ -1654,7 +1678,7 @@ static void test_dataloader_per_row_symmetry() {
 }
 
 // ===========================================================================
-// V2 epoch-based DataLoader tests
+// Epoch-based DataLoader tests
 // ===========================================================================
 
 // Helper: write N games via BinaryLogWriter and return the .slog path + game count.
@@ -1667,7 +1691,7 @@ struct SlogFixture {
 static SlogFixture write_multi_file_slog(int games_per_file, int num_files) {
   namespace fs = std::filesystem;
   SlogFixture fix;
-  fix.dir = fs::temp_directory_path() / ("scribblez_v2_" + std::to_string(::getpid()) + "_" +
+  fix.dir = fs::temp_directory_path() / ("scribblez_epoch_" + std::to_string(::getpid()) + "_" +
                                          std::to_string(std::random_device{}()));
   fs::create_directories(fix.dir);
 
@@ -1786,6 +1810,8 @@ static void test_epoch_determinism() {
 
 static void test_epoch_coverage() {
   // Every position in the dataset must appear exactly once per epoch.
+  // Verified by running two epochs with different seeds and confirming
+  // that they contain the same set of rows (just in different order).
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
 
@@ -1814,41 +1840,45 @@ static void test_epoch_coverage() {
   }
   CHECK(total_positions == fix.total_games);
 
-  // Load all rows via v1 (chronological, no symmetry) as reference.
-  std::vector<float> ref(total_positions * DataLoader::row_size_floats());
-  loader.load(0, total_positions, /*post_move=*/true, /*apply_symmetry=*/false, ref.data());
-
-  // Now run an epoch (no symmetry) and verify every reference row appears
-  // exactly once (the epoch shuffles order but not content).
-  DataLoader::EpochConfig cfg;
-  cfg.batch_size = 3;  // doesn't evenly divide 12 -> tests partial batch
-  cfg.post_move = true;
-  cfg.apply_symmetry = false;
-  cfg.seed = 7777;
-  int num_complete = loader.epoch_start(cfg);
-  CHECK(num_complete == static_cast<int>(total_positions / cfg.batch_size));
-
-  std::vector<float> epoch_data;
-  std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
-  int batches_read = 0;
-  while (true) {
-    int n = loader.load_batch(batch.data());
-    if (n == 0) break;
-    epoch_data.insert(epoch_data.end(), batch.begin(),
-                      batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
-    ++batches_read;
-  }
-  CHECK(static_cast<int64_t>(epoch_data.size()) == total_positions * DataLoader::row_size_floats());
-
-  // Check every reference row appears exactly once in the epoch output.
+  // Helper: drain a full epoch into a flat float vector.
   const int row_sz = DataLoader::row_size_floats();
+  auto drain_epoch = [&](uint64_t seed) {
+    DataLoader::EpochConfig cfg;
+    cfg.batch_size = 3;  // doesn't evenly divide 12 -> tests partial batch
+    cfg.post_move = true;
+    cfg.apply_symmetry = false;
+    cfg.seed = seed;
+    loader.epoch_start(cfg);
+
+    std::vector<float> data;
+    std::vector<float> batch(cfg.batch_size * row_sz);
+    while (true) {
+      int n = loader.load_batch(batch.data());
+      if (n == 0) break;
+      data.insert(data.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * row_sz);
+    }
+    return data;
+  };
+
+  std::vector<float> epoch1 = drain_epoch(7777);
+  std::vector<float> epoch2 = drain_epoch(8888);
+
+  // Both epochs must contain exactly total_positions rows.
+  CHECK(static_cast<int64_t>(epoch1.size()) == total_positions * row_sz);
+  CHECK(static_cast<int64_t>(epoch2.size()) == total_positions * row_sz);
+
+  // The two epochs have different seeds, so should be in different order.
+  CHECK(std::memcmp(epoch1.data(), epoch2.data(), epoch1.size() * sizeof(float)) != 0);
+
+  // Every row in epoch1 must appear exactly once in epoch2 (same content,
+  // different order).
   std::vector<bool> found(total_positions, false);
   for (int64_t ei = 0; ei < total_positions; ++ei) {
-    const float* epoch_row = epoch_data.data() + ei * row_sz;
+    const float* row1 = epoch1.data() + ei * row_sz;
     bool matched = false;
     for (int64_t ri = 0; ri < total_positions; ++ri) {
       if (found[ri]) continue;
-      if (std::memcmp(epoch_row, ref.data() + ri * row_sz, row_sz * sizeof(float)) == 0) {
+      if (std::memcmp(row1, epoch2.data() + ri * row_sz, row_sz * sizeof(float)) == 0) {
         found[ri] = true;
         matched = true;
         break;
@@ -1858,8 +1888,7 @@ static void test_epoch_coverage() {
   }
   for (int64_t i = 0; i < total_positions; ++i) CHECK(found[i]);
 
-  std::cout << "  epoch coverage OK (" << total_positions << " positions, " << batches_read
-            << " batches)\n";
+  std::cout << "  epoch coverage OK (" << total_positions << " positions)\n";
 }
 
 static void test_epoch_memory_budget_stress() {

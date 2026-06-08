@@ -107,12 +107,6 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h) {
   return h->loader.num_positions();
 }
 
-void scribblez_dl_load(DataLoaderHandle* h, int64_t start, int64_t stop, int post_move,
-                       int apply_symmetry, float* output) {
-  if (!h || !output) return;
-  h->loader.load(start, stop, post_move != 0, apply_symmetry != 0, output);
-}
-
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
                              uint64_t seed) {
   if (!h) return 0;

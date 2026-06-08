@@ -110,11 +110,20 @@ int main(int argc, char** argv) {
   std::vector<float> out(static_cast<size_t>(n_load) * DataLoader::row_size_floats());
 
   auto t0 = std::chrono::steady_clock::now();
-  loader.load(0, n_load, post_move, /*apply_symmetry=*/false, out.data());
+
+  // Drain one epoch using the streaming API.
+  DataLoader::EpochConfig cfg;
+  cfg.batch_size = static_cast<int>(n_load);
+  cfg.post_move = post_move;
+  cfg.apply_symmetry = false;
+  cfg.seed = 1;
+  loader.epoch_start(cfg);
+  int loaded = loader.load_batch(out.data());
+
   auto t1 = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t1 - t0).count();
 
-  std::cout << "load(" << n_load << ") in " << secs << "s (" << (n_load / secs)
+  std::cout << "load_batch(" << loaded << ") in " << secs << "s (" << (loaded / secs)
             << " rows/s); resident=" << loader.resident_bytes() << " B\n";
 
   // Summary: per-row WLD distribution and score-diff stats.

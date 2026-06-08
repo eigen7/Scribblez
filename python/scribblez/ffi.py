@@ -107,16 +107,6 @@ def _setup_lib(lib: ctypes.CDLL) -> None:
     lib.scribblez_dl_num_positions.restype = ctypes.c_int64
     lib.scribblez_dl_num_positions.argtypes = [ctypes.c_void_p]
 
-    lib.scribblez_dl_load.restype = None
-    lib.scribblez_dl_load.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_int64,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.POINTER(ctypes.c_float),
-    ]
-
     lib.scribblez_dl_epoch_start.restype = ctypes.c_int
     lib.scribblez_dl_epoch_start.argtypes = [
         ctypes.c_void_p,
@@ -233,24 +223,6 @@ class NativeDataLoader:
     @property
     def row_floats(self) -> int:
         return self._row_floats
-
-    def load(
-        self,
-        start: int,
-        stop: int,
-        post_move: bool = True,
-        apply_symmetry: bool = False,
-    ) -> np.ndarray:
-        """Load rows [start, stop) into a new numpy array."""
-        n_rows = stop - start
-        if n_rows <= 0:
-            return np.empty((0, self._row_floats), dtype=np.float32)
-        buf = np.empty((n_rows, self._row_floats), dtype=np.float32)
-        ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-        self._lib.scribblez_dl_load(
-            self._handle, start, stop, int(post_move), int(apply_symmetry), ptr
-        )
-        return buf
 
     def epoch_start(
         self,
