@@ -3,10 +3,11 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
-#include "scribblez/label_encoder.h"
+#include "scribblez/training_targets.h"
 
 #include <cstdio>
 #include <filesystem>
+#include <utility>
 
 using scribblez::binlog::DataLoader;
 using scribblez::binlog::FileHeader;
@@ -22,29 +23,42 @@ constexpr int kInputSpatialDims[3] = {scribblez::binlog::kSpatialPlanes,
                                       scribblez::binlog::kBoardSide, scribblez::binlog::kBoardSide};
 constexpr int kInputScalarDims[1] = {scribblez::binlog::kScalarFloats};
 
-constexpr int kWldDims[1] = {scribblez::binlog::kWldFloats};
-constexpr int kScoreDiffDims[1] = {scribblez::binlog::kScoreDiffFloats};
-constexpr int kOppNextDims[2] = {scribblez::binlog::kBoardSide, scribblez::binlog::kBoardSide};
-
 const ScribblezShape kInputShapes[] = {
   {"input_spatial", kInputSpatialDims, 3, -1},
   {"input_scalar", kInputScalarDims, 1, -1},
   {nullptr, nullptr, 0, 0},
 };
 
-const ScribblezShape kTargetShapes[] = {
-  {"wld", kWldDims, 1, 0},
-  {"score_diff", kScoreDiffDims, 1, 1},
-  {"opp_next_placement", kOppNextDims, 2, 2},
-  {nullptr, nullptr, 0, 0},
+// Build the (null-terminated) target shape table at compile time directly
+// from scribblez::binlog::AllTargets, so adding/removing a target struct
+// in training_targets.h automatically updates the FFI advertisement with
+// no edits here.
+template <typename List>
+struct TargetShapeTable;
+
+template <typename... Ts>
+struct TargetShapeTable<scribblez::binlog::TargetList<Ts...>> {
+  static constexpr std::size_t kCount = sizeof...(Ts);
+  static constexpr std::array<ScribblezShape, kCount + 1> kValue = []() {
+    std::array<ScribblezShape, kCount + 1> a{};
+    std::size_t i = 0;
+    (void)std::initializer_list<int>{
+      (a[i] = ScribblezShape{Ts::kName, Ts::kDims, static_cast<int>(std::size(Ts::kDims)),
+                             static_cast<int>(i)},
+       ++i, 0)...};
+    a[kCount] = ScribblezShape{nullptr, nullptr, 0, 0};
+    return a;
+  }();
 };
+
+constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::binlog::AllTargets>::kValue;
 
 }  // namespace
 
 extern "C" {
 
 const ScribblezShape* scribblez_input_shapes(void) { return kInputShapes; }
-const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapes; }
+const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.data(); }
 
 int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 

@@ -2,7 +2,7 @@
 
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
-#include "scribblez/label_encoder.h"
+#include "scribblez/training_targets.h"
 
 #include <cassert>
 #include <iostream>
@@ -107,12 +107,7 @@ void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip
   view.final_score_p1 = gm.final_score_p1;
   view.apply_flip = flip;
 
-  float* heads[kNumLabelHeads] = {
-    row + kInputFloats,
-    row + kInputFloats + kWldFloats,
-    row + kInputFloats + kWldFloats + kScoreDiffFloats,
-  };
-  encode_labels(view, heads);
+  AllTargets::encode_all(view, row + kInputFloats);
 }
 
 }  // namespace binlog

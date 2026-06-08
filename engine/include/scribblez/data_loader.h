@@ -33,8 +33,8 @@
 //   [ score_diff pdf:  kScoreDiffFloats        801 ]  // one-hot over clipped bins
 //   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
 //
-// (Label layout is owned by label_encoder.h; the constants are re-exported
-// from this header for downstream convenience.)
+// (Label layout is owned by training_targets.h; the constants are
+// re-exported from this header for downstream convenience.)
 //
 // Concurrency model
 // -----------------
@@ -53,7 +53,7 @@
 // budget.
 
 #include "scribblez/input_encoder.h"
-#include "scribblez/label_encoder.h"
+#include "scribblez/training_targets.h"
 
 #include <atomic>
 #include <cstddef>
@@ -69,7 +69,7 @@ namespace binlog {
 
 // `kInputFloats` is owned by input_encoder.h; the label constants
 // (kWldFloats / kScoreDiffFloats / kLabelFloats) are owned by
-// label_encoder.h and re-included above.
+// training_targets.h and re-included above.
 
 inline constexpr int kRowFloats = kInputFloats + kLabelFloats;
 

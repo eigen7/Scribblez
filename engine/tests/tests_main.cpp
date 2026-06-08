@@ -10,9 +10,9 @@
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
-#include "scribblez/label_encoder.h"
 #include "scribblez/movegen.h"
 #include "scribblez/rack.h"
+#include "scribblez/training_targets.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -1328,16 +1328,10 @@ scribblez::binlog::GameLogView make_scores_view(int fs_active, int fs_opp, int a
   return v;
 }
 
-// Convenience: call encode_labels into one contiguous buffer of size
-// kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
+// Convenience: call AllTargets::encode_all into one contiguous buffer of
+// size kLabelFloats laid out as [wld(3), score_diff(801), opp_next(225)].
 void encode_labels_flat(const scribblez::binlog::GameLogView& view, float* flat) {
-  using namespace scribblez::binlog;
-  float* heads[kNumLabelHeads] = {
-    flat + 0,
-    flat + kWldFloats,
-    flat + kWldFloats + kScoreDiffFloats,
-  };
-  encode_labels(view, heads);
+  scribblez::binlog::AllTargets::encode_all(view, flat);
 }
 
 }  // namespace
