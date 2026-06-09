@@ -424,8 +424,7 @@ bool ViteDevServer::wait_until_ready(int timeout_ms) {
     asio::io_context io;
     tcp::socket sock(io);
     boost::system::error_code ec;
-    static_cast<void>(sock.connect(endpoint, ec));
-    if (!ec) return true;
+    if (!sock.connect(endpoint, ec)) return true;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
