@@ -194,8 +194,8 @@ class TestStreamingDataset:
             assert "wld" in b
             assert "score_diff" in b
             assert "opp_next_placement" in b
-            assert b["input_spatial"].shape[1:] == (32, 15, 15)
-            assert b["input_scalar"].shape[1] == 58
+            assert b["input_spatial"].shape[1:] == (33, 15, 15)
+            assert b["input_scalar"].shape[1] == 936
             assert b["wld"].shape[1] == 3
             assert b["score_diff"].shape[1] == 801
             assert b["opp_next_placement"].shape[1:] == (15, 15)

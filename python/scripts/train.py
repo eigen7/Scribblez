@@ -54,9 +54,13 @@ def main() -> int:
     ds = SlogDataset(data_dir, post_move=True, apply_symmetry=True)
     print(f"  {ds.num_samples} samples")
 
-    # Build model.
+    # Build model. Input widths come from the C++ layout (single source of
+    # truth) so they never drift from the encoder.
     model = ScribblezModel(
-        num_blocks=args.num_blocks, trunk_channels=args.trunk_channels
+        spatial_planes=ds.input_shapes["input_spatial"][0],
+        scalar_size=ds.input_shapes["input_scalar"][0],
+        num_blocks=args.num_blocks,
+        trunk_channels=args.trunk_channels,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model: {n_params:,} parameters")

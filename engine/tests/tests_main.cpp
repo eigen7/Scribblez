@@ -316,6 +316,13 @@ static void test_real_kwg_optional() {
 // InputEncoder tests
 // ===========================================================================
 
+// First thermometer slot for `letter`'s region in the unseen-pool block.
+static int pool_region_start(int letter) {
+  int s = 0;
+  for (int i = 0; i < letter; ++i) s += TILE_COUNTS[i];
+  return s;
+}
+
 static void test_encoder_basic_layout() {
   using namespace scribblez::binlog;
   // Build state via apply_move only: p0 plays a single 'C' at (7,7) for 50
@@ -373,34 +380,62 @@ static void test_encoder_basic_layout() {
     }
   }
 
-  // Last-opp-placement plane (31): only (3,3) is lit (p1's most recent move).
+  // Self last-placement plane (31): only (7,7) is lit (p0's own most recent
+  // move). Opponent last-placement plane (32): only (3,3) is lit (p1's most
+  // recent move).
   for (int r = 0; r < 15; ++r) {
     for (int c = 0; c < 15; ++c) {
-      const float expected = (r == 3 && c == 3) ? 1.0f : 0.0f;
-      CHECK(out[31 * 225 + r * 15 + c] == expected);
+      const float self_expected = (r == 7 && c == 7) ? 1.0f : 0.0f;
+      const float opp_expected = (r == 3 && c == 3) ? 1.0f : 0.0f;
+      CHECK(out[kSelfPlacementPlane * 225 + r * 15 + c] == self_expected);
+      CHECK(out[kOppPlacementPlane * 225 + r * 15 + c] == opp_expected);
     }
   }
 
-  // Scalars: rack[27] + unseen[27] + (score_diff, unseen_size,
-  // active_rack_size, last_opp_num_glyphs).
   const float* scalars = out.data() + kSpatialFloats;
-  CHECK(scalars[Tile::from_char('Q')] == 1.0f);
-  CHECK(scalars[Tile::from_char('Z')] == 1.0f);
-  CHECK(scalars[26] == 1.0f);  // blank count in rack
-  CHECK(scalars[Tile::from_char('A')] == 0.0f);
 
-  // Derived unseen pool: TILE_COUNTS minus board and active_rack only (the
-  // opp rack tiles, if any, are part of the unseen pool from the POV).
-  CHECK(scalars[27 + 0] == static_cast<float>(TILE_COUNTS[0]));  // A
-  CHECK(scalars[27 + Tile::from_char('C')] == TILE_COUNTS[Tile::from_char('C')] - 1.0f);
-  CHECK(scalars[27 + Tile::from_char('Q')] == TILE_COUNTS[Tile::from_char('Q')] - 1.0f);
-  CHECK(scalars[27 + Tile::from_char('Z')] == TILE_COUNTS[Tile::from_char('Z')] - 1.0f);
-  CHECK(scalars[27 + 26] == TILE_COUNTS[26] - 2.0f);  // 1 on board + 1 in rack
-  CHECK(scalars[54] == 20.0f);                        // score_diff
-  // unseen_size = 100 - (#tiles on board) - (#tiles in active rack) = 100-2-3 = 95.
-  CHECK(scalars[55] == 95.0f);
-  CHECK(scalars[56] == 3.0f);  // active_rack_size
-  CHECK(scalars[57] == 1.0f);  // last opp move placed 1 glyph
+  // Rack: raw per-tile counts at kRackCountOffset.
+  CHECK(scalars[kRackCountOffset + Tile::from_char('Q')] == 1.0f);
+  CHECK(scalars[kRackCountOffset + Tile::from_char('Z')] == 1.0f);
+  CHECK(scalars[kRackCountOffset + 26] == 1.0f);  // blank count in rack
+  CHECK(scalars[kRackCountOffset + Tile::from_char('A')] == 0.0f);
+
+  // Unseen pool: per-letter thermometer at kUnseenPoolOffset. The pool is
+  // TILE_COUNTS minus board and active_rack only (opp-rack tiles, if any,
+  // remain in the pool from the POV).
+  const float* pool = scalars + kUnseenPoolOffset;
+  float pool_sum = 0.0f;
+  for (int i = 0; i < kUnseenPoolThermoFloats; ++i) pool_sum += pool[i];
+  CHECK(pool_sum == 95.0f);  // 100 - 2 on board - 3 in rack
+  // A: all 9 unseen -> region fully set.
+  CHECK(pool[pool_region_start(0) + 0] == 1.0f);
+  CHECK(pool[pool_region_start(0) + 8] == 1.0f);
+  // C: 1 of 2 unseen (one C on board) -> first slot set, hole at tail.
+  CHECK(pool[pool_region_start(Tile::from_char('C')) + 0] == 1.0f);
+  CHECK(pool[pool_region_start(Tile::from_char('C')) + 1] == 0.0f);
+  // Blank: 1 on board (blank-D) + 1 in rack -> 0 unseen.
+  CHECK(pool[pool_region_start(26) + 0] == 0.0f);
+  CHECK(pool[pool_region_start(26) + 1] == 0.0f);
+
+  // Score-diff thermometer at kScoreDiffOffset: diff = 50 - 30 = 20.
+  const float* sd = scalars + kScoreDiffOffset;
+  float sd_sum = 0.0f;
+  for (int i = 0; i < kScoreDiffThermoFloats; ++i) sd_sum += sd[i];
+  CHECK(sd_sum == static_cast<float>(kScoreDiffClip + 20 + 1));  // bins [0..diff+clip]
+  CHECK(sd[0] == 1.0f);                                          // diff >= -clip always
+  CHECK(sd[kScoreDiffClip + 20] == 1.0f);
+  CHECK(sd[kScoreDiffClip + 20 + 1] == 0.0f);
+
+  // Last-2-move metadata at kMoveMetaOffset: self move (p0's C play) then
+  // opponent move (p1's blank-D play); both are 1-glyph PLAYs.
+  const float* meta = scalars + kMoveMetaOffset;
+  CHECK(meta[static_cast<int>(MoveType::PLAY)] == 1.0f);
+  CHECK(meta[static_cast<int>(MoveType::EXCHANGE)] == 0.0f);
+  CHECK(meta[static_cast<int>(MoveType::PASS)] == 0.0f);
+  CHECK(meta[kMoveMetaTypeFloats] == 1.0f);  // self num_glyphs
+  const float* opp_meta = meta + kMoveMetaFloatsPerMove;
+  CHECK(opp_meta[static_cast<int>(MoveType::PLAY)] == 1.0f);
+  CHECK(opp_meta[kMoveMetaTypeFloats] == 1.0f);  // opp num_glyphs
 }
 
 static void test_encoder_last_opp_plane_mask() {
@@ -436,16 +471,16 @@ static void test_encoder_last_opp_plane_mask() {
   std::vector<float> out(kInputFloats, 0.0f);
   enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
-  const float* plane = out.data() + 31 * 225;
+  const float* plane = out.data() + kOppPlacementPlane * 225;
   for (int r = 0; r < 15; ++r) {
     for (int c = 0; c < 15; ++c) {
       const float expected = ((r == 7 && c == 6) || (r == 7 && c == 8)) ? 1.0f : 0.0f;
       CHECK(plane[r * 15 + c] == expected);
     }
   }
-  // num_glyphs scalar reflects placements (not cells walked); index 57 in
-  // the current scalar layout.
-  CHECK(out[kSpatialFloats + 57] == 2.0f);
+  // The opponent's num_glyphs reflects placements (2 = C, T), not cells walked.
+  const float* opp_meta = out.data() + kSpatialFloats + kMoveMetaOffset + kMoveMetaFloatsPerMove;
+  CHECK(opp_meta[kMoveMetaTypeFloats] == 2.0f);
 }
 
 static void test_encoder_flip_symmetry() {
@@ -487,7 +522,8 @@ static void test_encoder_flip_symmetry() {
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
     CHECK(normal[i] == flipped[i]);
   }
-  // Every spatial plane (including last-opp) is transposed under the flip.
+  // Every spatial plane (including both placement planes) is transposed under
+  // the flip.
   for (int p = 0; p < kSpatialPlanes; ++p) {
     for (int r = 0; r < 15; ++r) {
       for (int c = 0; c < 15; ++c) {

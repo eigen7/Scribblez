@@ -17,11 +17,6 @@ inline int plane_idx(int r, int c, bool flip) {
   return flip ? (c * kBoardSide + r) : (r * kBoardSide + c);
 }
 
-// Plane offsets within the spatial block.
-inline constexpr int kBlankPlane = kLetterPlanes;                          // 26
-inline constexpr int kPremiumPlane0 = kLetterPlanes + kBlankMarkerPlanes;  // 27
-inline constexpr int kLastOppPlane = kPremiumPlane0 + kPremiumPlanes;      // 31
-
 // Letter, blank-marker, and premium planes.
 void encode_board_planes(const Board& board, bool flip, float* planes_out) {
   for (int r = 0; r < kBoardSide; ++r) {
@@ -31,7 +26,7 @@ void encode_board_planes(const Board& board, bool flip, float* planes_out) {
       const int letter = g.letter().index();  // 0..25, valid for any non-empty glyph
       planes_out[letter * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
       if (g.is_blank()) {
-        planes_out[kBlankPlane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
+        planes_out[kBlankMarkerPlane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
       }
     }
   }
@@ -56,11 +51,12 @@ void encode_board_planes(const Board& board, bool flip, float* planes_out) {
   }
 }
 
-// Last-opp-placement plane: mark squares the opponent placed tiles on
-// during their most recent turn. Uses Move::square_mask -- bit i is set
-// iff the i-th cell along the move direction was a newly placed tile.
-void encode_last_opp_plane(const Move& m, bool flip, float* planes_out) {
-  if (m.type != MoveType::PLAY) return;  // EXCHANGE / PASS -> all zeros
+// Placement plane: mark squares `m` placed tiles on. Uses Move::square_mask
+// -- bit i is set iff the i-th cell along the move direction was a newly
+// placed tile. No-op for EXCHANGE / PASS / game-start (leaving the plane
+// all-zero).
+void encode_placement_plane(const Move& m, bool flip, int plane, float* planes_out) {
+  if (m.type != MoveType::PLAY) return;
   const int dr = m.horizontal ? 0 : 1;
   const int dc = m.horizontal ? 1 : 0;
   int r = m.start_row, c = m.start_col;
@@ -69,7 +65,7 @@ void encode_last_opp_plane(const Move& m, bool flip, float* planes_out) {
     if (r < 0 || r >= kBoardSide || c < 0 || c >= kBoardSide) break;
     if (mask == 0) break;
     if (mask & 1u) {
-      planes_out[kLastOppPlane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
+      planes_out[plane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
     }
     mask = static_cast<uint16_t>(mask >> 1);
     r += dr;
@@ -101,48 +97,66 @@ void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rac
   }
 }
 
-// All 58 scalar features. Raw counts/values throughout; the model handles
-// normalization.
-void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Move& last_opp_move,
-                    int score_active, int score_opp, float* out) {
-  // Active-rack histogram (raw counts).
-  int rack_hist[27] = {0};
+// Active player's rack as raw per-tile counts (27 floats).
+void encode_rack_counts(const Rack& my_rack, float* out) {
   for (Tile t : my_rack.tiles()) {
-    if (!t.is_empty()) ++rack_hist[t.index()];
+    if (!t.is_empty()) out[t.index()] += 1.0f;
   }
-  float* p = out;
-  for (int i = 0; i < 27; ++i) *p++ = static_cast<float>(rack_hist[i]);
+}
 
-  // Unseen-pool composition (raw counts).
-  int unseen_total = 0;
+// Unseen pool as a per-letter thermometer (100 floats): letter i owns a
+// region of width TILE_COUNTS[i]; its first unseen[i] slots are 1.0, holes
+// at the tail. Regions are concatenated in tile order (A..Z, blank).
+void encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
+  int offset = 0;
   for (int i = 0; i < 27; ++i) {
-    *p++ = static_cast<float>(unseen_pool[i]);
-    unseen_total += unseen_pool[i];
+    for (int j = 0; j < unseen[i]; ++j) out[offset + j] = 1.0f;
+    offset += TILE_COUNTS[i];
   }
+  assert(offset == kUnseenPoolThermoFloats);
+}
 
-  // Misc scalars (raw). Note: opp_rack_size is intentionally absent --
-  // it equals min(unseen_total, 7) under Scrabble's refill rule, so the
-  // model can derive it from the unseen-pool scalars.
-  *p++ = static_cast<float>(score_active - score_opp);
-  *p++ = static_cast<float>(unseen_total);
-  *p++ = static_cast<float>(my_rack.size());
+// Score differential as a thermometer (kScoreDiffBins floats): slot i is 1.0
+// iff the clipped diff >= (i - kScoreDiffClip).
+void encode_score_diff_thermometer(int score_diff, float* out) {
+  int clipped = score_diff;
+  if (clipped < -kScoreDiffClip) clipped = -kScoreDiffClip;
+  if (clipped > kScoreDiffClip) clipped = kScoreDiffClip;
+  const int bin = clipped + kScoreDiffClip;  // 0..2*kScoreDiffClip
+  for (int i = 0; i <= bin; ++i) out[i] = 1.0f;
+}
 
-  // Last opponent move: num_glyphs only. (Move type is recoverable as
-  // num_glyphs==0 -> PASS, num_glyphs>0 with empty placement plane ->
-  // EXCHANGE, num_glyphs>0 with nonzero placement plane -> PLAY.)
-  *p++ = static_cast<float>(last_opp_move.num_glyphs());
+// One move's metadata (kMoveMetaFloatsPerMove floats): move-type one-hot
+// (indexed by MoveType) followed by num_glyphs.
+void encode_move_meta(const Move& m, float* out) {
+  out[static_cast<int>(m.type)] = 1.0f;
+  out[kMoveMetaTypeFloats] = static_cast<float>(m.num_glyphs());
+}
+
+// All kScalarFloats scalar features. `self_move` / `opp_move` are the POV
+// player's and opponent's most-recent moves, respectively.
+void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Move& self_move,
+                    const Move& opp_move, int score_active, int score_opp, float* out) {
+  encode_rack_counts(my_rack, out + kRackCountOffset);
+  encode_unseen_pool_thermometer(unseen_pool, out + kUnseenPoolOffset);
+  encode_score_diff_thermometer(score_active - score_opp, out + kScoreDiffOffset);
+  encode_move_meta(self_move, out + kMoveMetaOffset);
+  encode_move_meta(opp_move, out + kMoveMetaOffset + kMoveMetaFloatsPerMove);
 }
 
 // Shared back-end for both pre-move and post-PLAY encoding. Takes only
 // POV-visible inputs.
-void encode_pov(const Board& board, const Rack& my_rack, const Move& last_opp_move,
-                int score_active, int score_opp, bool apply_flip, float* out) {
+void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
+                const Move& opp_move, int score_active, int score_opp, bool apply_flip,
+                float* out) {
   std::memset(out, 0, sizeof(float) * static_cast<size_t>(kInputFloats));
   encode_board_planes(board, apply_flip, out);
-  encode_last_opp_plane(last_opp_move, apply_flip, out);
+  encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
+  encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  encode_scalars(my_rack, unseen, last_opp_move, score_active, score_opp, out + kSpatialFloats);
+  encode_scalars(my_rack, unseen, self_move, opp_move, score_active, score_opp,
+                 out + kSpatialFloats);
 }
 
 }  // namespace
@@ -162,7 +176,8 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_
                                     float* out) const {
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
-  encode_pov(board_, my_rack, last_move_by_[opp], scores_[player], scores_[opp], apply_flip, out);
+  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp], scores_[player],
+             scores_[opp], apply_flip, out);
 }
 
 }  // namespace binlog

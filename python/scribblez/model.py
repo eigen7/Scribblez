@@ -1,8 +1,8 @@
 """Post-move value model for Scrabble position evaluation.
 
 Architecture:
-  - Spatial trunk: (32, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
-  - Scalar injection: (58,) -> FC -> 128 -> broadcast-add to spatial features
+  - Spatial trunk: (33, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
+  - Scalar injection: (936,) -> FC -> 128 -> broadcast-add to spatial features
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
@@ -39,8 +39,8 @@ class ScribblezModel(nn.Module):
 
     def __init__(
         self,
-        spatial_planes: int = 32,
-        scalar_size: int = 58,
+        spatial_planes: int,
+        scalar_size: int,
         trunk_channels: int = 128,
         num_blocks: int = 8,
         score_diff_bins: int = 801,
@@ -97,8 +97,8 @@ class ScribblezModel(nn.Module):
         """Forward pass.
 
         Args:
-            input_spatial: (B, 32, 15, 15)
-            input_scalar:  (B, 58)
+            input_spatial: (B, 33, 15, 15)
+            input_scalar:  (B, 936)
 
         Returns:
             Dict with keys: "wld" (B,3), "score_diff" (B,801),

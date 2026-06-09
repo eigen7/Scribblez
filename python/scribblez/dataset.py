@@ -72,6 +72,11 @@ class SlogDataset:
     def num_samples(self) -> int:
         return self._total
 
+    @property
+    def input_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Per-input tensor shapes (channel/feature dims), keyed by name."""
+        return {s.name: s.dims for s in get_input_shapes()}
+
     def iter_batches(
         self,
         batch_size: int,
