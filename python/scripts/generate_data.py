@@ -25,10 +25,10 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Data subdirectory tag.")
-    parser.add_argument("-n", "--num-games", type=int, default=1000, help="Number of games.")
-    parser.add_argument("--threads", type=int, default=4, help="Parallel game threads.")
+    parser.add_argument("-g", "--num-games", type=int, default=100000, help="Number of games.")
+    parser.add_argument("-T", "--threads", type=int, default=8, help="Parallel game threads.")
     parser.add_argument(
-        "--games-per-file", type=int, default=100, help="Games per .slog file."
+        "-p", "--games-per-file", type=int, default=10000, help="Games per .slog file."
     )
     parser.add_argument(
         "--data-root",
@@ -53,7 +53,8 @@ def main() -> int:
         "--threads", str(args.threads),
     ]
 
-    print(f"Running: {' '.join(cmd)}")
+    cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
+    print(f"Running: {cmd_str}")
     print(f"Output:  {out_dir}")
     t0 = time.time()
 
