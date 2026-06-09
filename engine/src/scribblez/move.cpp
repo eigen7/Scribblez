@@ -9,17 +9,6 @@ struct Step {
 Step step_of(const Move& m) { return m.horizontal() ? Step{0, 1} : Step{1, 0}; }
 }  // namespace
 
-Rack Move::leave() const {
-  // The leave was laid into the glyph tail in sorted order during move
-  // generation, so each Rack::add is an O(1) tail insert.
-  Rack r;
-  for (int i = num_played_; i < RACK_SIZE; ++i) {
-    if (glyphs_[i].is_empty()) break;
-    r.add(glyphs_[i].rack_tile());
-  }
-  return r;
-}
-
 std::pair<int, int> Move::word_origin(const Board& board) const {
   // The lowest set bit of the absolute mask is the first newly placed lane
   // cell; the word may extend left of it through pre-existing tiles.
@@ -71,7 +60,7 @@ int append_sorted(std::array<Glyph, RACK_SIZE>& glyphs, int j, const TileCounts&
 }  // namespace
 
 Move MoveFactory::play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
-                       const Glyph* played, int num_played, const TileCounts& leave) {
+                       const Glyph* played, int num_played, uint8_t leave_mask) {
   Move m;
   m.type_ = MoveType::PLAY;
   m.horizontal_ = horizontal;
@@ -79,8 +68,8 @@ Move MoveFactory::play(bool horizontal, int start, uint16_t square_mask, uint16_
   m.num_played_ = static_cast<uint8_t>(num_played);
   m.square_mask_ = square_mask;
   m.score_ = score;
+  m.leave_mask_ = leave_mask;
   for (int i = 0; i < num_played; ++i) m.glyphs_[i] = played[i];
-  append_sorted(m.glyphs_, num_played, leave);
   return m;
 }
 

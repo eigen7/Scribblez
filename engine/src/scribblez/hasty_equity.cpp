@@ -4,7 +4,8 @@
 
 #include <boost/json.hpp>
 
-#include <algorithm>
+#include <array>
+#include <bitset>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -21,15 +22,44 @@ constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 
 // ---- leave computation --------------------------------------------------
 
-struct LeaveRunEntry {
-  Rack leave;
-  int move_index;
-};
-
-struct LeaveRunEntryLess {
-  bool operator()(const LeaveRunEntry& a, const LeaveRunEntry& b) const {
-    return a.leave < b.leave;
+// Precomputes leave values for every subset of the mover's rack within a
+// single turn, indexed by the sorted-rack bitmask carried on each Move.
+// Values are filled lazily and cached, so each distinct leave is looked up
+// at most once per turn.
+class TurnLeaves {
+ public:
+  TurnLeaves(const Rack& rack, const LeaveValues& lv) : lv_(lv), size_(rack.size()) {
+    const auto& t = rack.tiles();
+    for (int i = 0; i < size_; ++i) tile_of_bit_[i] = t[i];
   }
+
+  double value(uint8_t mask) {
+    ensure(mask);
+    return static_cast<double>(value_[mask]);
+  }
+
+  int point_value(uint8_t mask) {
+    ensure(mask);
+    return pv_[mask];
+  }
+
+ private:
+  void ensure(uint8_t mask) {
+    if (computed_[mask]) return;
+    Rack leave;
+    for (int i = 0; i < size_; ++i)
+      if (mask & (1u << i)) leave.add(tile_of_bit_[i]);
+    value_[mask] = lv_.lookup(leave);
+    pv_[mask] = static_cast<int16_t>(leave.point_value());
+    computed_[mask] = true;
+  }
+
+  const LeaveValues& lv_;
+  int size_;
+  std::array<Tile, RACK_SIZE> tile_of_bit_{};
+  std::array<float, 128> value_{};
+  std::array<int16_t, 128> pv_{};
+  std::bitset<128> computed_{};
 };
 
 // ---- opening adjustment -------------------------------------------------
@@ -67,9 +97,10 @@ double peg_adjustment(const Move& move, int bag_size, const std::vector<double>&
 
 // ---- endgame adjustment -------------------------------------------------
 
-double endgame_adjustment_rack(const Rack& leave, const Rack& opp_rack, int bag_size) {
+double endgame_adjustment(int leave_point_value, bool leave_empty, const Rack& opp_rack,
+                          int bag_size) {
   if (bag_size > 0) return 0.0;
-  if (!leave.empty()) return -2.0 * leave.point_value() - 10.0;
+  if (!leave_empty) return -2.0 * leave_point_value - 10.0;
   return 2.0 * opp_rack.point_value();
 }
 
@@ -121,46 +152,37 @@ std::string HastyEquity::default_peg_path() {
   return std::string(kStrategyRoot) + "/default/preendgame.json";
 }
 
-double HastyEquity::equity(const Move& move, const Board& board, int bag_size,
-                           const Rack& opp_rack) const {
-  std::vector<Move> one{move};
-  auto vals = equities(one, board, bag_size, opp_rack);
-  return vals.empty() ? 0.0 : vals[0];
+double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
+                           const Rack& my_rack) const {
+  if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
+
+  // Derive the leave directly from the rack and the move's played tiles; the
+  // single-move path is not perf-critical, so it skips the per-turn table.
+  Rack leave = my_rack;
+  for (int i = 0; i < move.num_glyphs(); ++i) leave.remove(move.glyph(i).rack_tile());
+
+  double lv = (bag_size > 0) ? static_cast<double>(leave_values_.lookup(leave)) : 0.0;
+  double eg = endgame_adjustment(leave.point_value(), leave.empty(), opp_rack, bag_size);
+  return static_cast<double>(move.score()) + lv + opening_adjustment(move, board) +
+         peg_adjustment(move, bag_size, peg_table_) + eg;
 }
 
 std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
-                                          int bag_size, const Rack& opp_rack) const {
+                                          int bag_size, const Rack& opp_rack,
+                                          const Rack& my_rack) const {
   if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
 
   std::vector<double> out(moves.size(), 0.0);
   if (moves.empty()) return out;
 
-  std::vector<LeaveRunEntry> entries;
-  entries.reserve(moves.size());
+  TurnLeaves leaves(my_rack, leave_values_);
   for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
-    entries.push_back(LeaveRunEntry{moves[i].leave(), i});
-  }
-
-  std::sort(entries.begin(), entries.end(), LeaveRunEntryLess());
-
-  size_t run_start = 0;
-  while (run_start < entries.size()) {
-    size_t run_end = run_start + 1;
-    while (run_end < entries.size() && entries[run_end].leave == entries[run_start].leave) {
-      ++run_end;
-    }
-
-    double lv =
-      (bag_size > 0) ? static_cast<double>(leave_values_.lookup(entries[run_start].leave)) : 0.0;
-    double eg = endgame_adjustment_rack(entries[run_start].leave, opp_rack, bag_size);
-
-    for (size_t k = run_start; k < run_end; ++k) {
-      int idx = entries[k].move_index;
-      out[idx] = static_cast<double>(moves[idx].score()) + lv +
-                 opening_adjustment(moves[idx], board) +
-                 peg_adjustment(moves[idx], bag_size, peg_table_) + eg;
-    }
-    run_start = run_end;
+    const Move& m = moves[i];
+    const uint8_t mask = m.leave_mask();
+    const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
+    const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
+    out[i] = static_cast<double>(m.score()) + lv + opening_adjustment(m, board) +
+             peg_adjustment(m, bag_size, peg_table_) + eg;
   }
   return out;
 }

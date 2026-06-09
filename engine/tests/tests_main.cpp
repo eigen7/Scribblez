@@ -83,7 +83,8 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
   const int lane0 = horizontal ? col : row;
   uint16_t mask = 0;
   for (int i = 0; i < n; ++i) mask |= static_cast<uint16_t>(1u << (lane0 + i));
-  return MoveFactory::play(horizontal, start, mask, /*score=*/0, played.data(), n, TileCounts{});
+  return MoveFactory::play(horizontal, start, mask, /*score=*/0, played.data(), n,
+                           /*leave_mask=*/0);
 }
 
 // Build a PLAY Move with an explicit per-tile layout. `rel_mask` is the play's
@@ -91,8 +92,7 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
 // into the absolute lane mask the Move stores. `gs` are the newly placed glyphs
 // in word order (their count must equal popcount(rel_mask)).
 static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
-                           std::initializer_list<Glyph> gs,
-                           const TileCounts& leave = TileCounts{}) {
+                           std::initializer_list<Glyph> gs) {
   std::array<Glyph, RACK_SIZE> played{};
   int n = 0;
   for (Glyph g : gs) {
@@ -102,7 +102,7 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   const int start = horizontal ? row : col;
   const int lane0 = horizontal ? col : row;
   uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
-  return MoveFactory::play(horizontal, start, mask, score, played.data(), n, leave);
+  return MoveFactory::play(horizontal, start, mask, score, played.data(), n, /*leave_mask=*/0);
 }
 
 static void test_movegen_opening() {
@@ -2227,7 +2227,7 @@ static void test_hasty_equity_components() {
   // With bag_size > 0, leave is empty → leave_equity = 0.
   // Opening adjustment: tile A at columns 4..10; columns 6 and 8 are in
   // penalty set, both have vowel A → 2 * -0.7 = -1.4.
-  double e_mid = eq.equity(all_out, board, 86, opp);
+  double e_mid = eq.equity(all_out, board, 86, opp, rack_7a);
   CHECK(std::abs(e_mid - (50.0 - 1.4)) < 1e-3);
 
   // --- leave equity with non-empty leave (uses synthetic KLV: A=1.5, B=-2.5)
@@ -2238,17 +2238,15 @@ static void test_hasty_equity_components() {
   // rack = single A; leave = empty after playing it.
   Rack rack_1a;
   rack_1a.add(Tile::from_char('A'));
-  double e_one = eq.equity(one_a, board, 86, opp);
+  double e_one = eq.equity(one_a, board, 86, opp, rack_1a);
   // score=2, leave=empty(0), opening: center col=7 not in {2,6,8,12} → 0
   CHECK(std::abs(e_one - 2.0) < 1e-3);
 
   // --- endgame adjustment (bag_size = 0, non-out play)
   // Leave a single B on the rack (leave value from KLV = -2.5 but ignored
   // for endgame penalty which uses tile point values).
-  TileCounts leave_b;
-  leave_b.add(Tile::from_char('B'));
   Move play_a_endgame =
-    make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))}, leave_b);
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))});
 
   // Rack = AB, play A, leave = B (value 3). bag_size = 0.
   // endgame_adjustment = -2 * 3 - 10 = -16.
@@ -2257,7 +2255,7 @@ static void test_hasty_equity_components() {
   rack_ab.add(Tile::from_char('B'));
   Board board_with_tiles;                                       // non-empty so opening adj = 0
   board_with_tiles.set(0, 0, Glyph::of(Tile::from_char('Q')));  // make non-empty
-  double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, opp);
+  double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, opp, rack_ab);
   // score=2, leave_equity=0 (bag=0), opening=0, peg=0, endgame=-16
   CHECK(std::abs(e_eg - (2.0 - 16.0)) < 1e-3);
 
@@ -2271,7 +2269,7 @@ static void test_hasty_equity_components() {
   Rack opp_q;
   opp_q.add(Tile::from_char('Q'));
   // endgame bonus = 2 * 10 = 20.
-  double e_out = eq.equity(out_play, board_with_tiles, 0, opp_q);
+  double e_out = eq.equity(out_play, board_with_tiles, 0, opp_q, rack_ab);
   CHECK(std::abs(e_out - (5.0 + 20.0)) < 1e-3);
 
   fs::remove_all(tmp);

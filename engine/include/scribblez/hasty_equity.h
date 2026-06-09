@@ -39,17 +39,19 @@ class HastyEquity {
 
   // Static HastyBot equity for `move` in the given position.
   //   bag_size : tiles remaining in the bag *before* the move
+  //   my_rack  : the mover's rack *before* the move (used to derive the leave)
   //   opp_rack : opponent's rack (used only for the endgame adjustment)
-  double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack) const;
+  double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
+                const Rack& my_rack) const;
 
   // Batched static-equity evaluation for a full legal-play list.
   //
-  // This path dedupes leaves by sorting {leave, move_index} records and
-  // performs one leave lookup per distinct leave, then fans the value out to
-  // all moves with that leave.  Intended for both HastyBot and human UI
+  // Builds a per-turn leave table for `my_rack` once, then reads each move's
+  // leave value in O(1) via Move::leave_mask() -- no sorting, hashing, or
+  // per-move leave reconstruction.  Intended for both HastyBot and human UI
   // annotations to share one optimized implementation.
   std::vector<double> equities(const std::vector<Move>& moves, const Board& board, int bag_size,
-                               const Rack& opp_rack) const;
+                               const Rack& opp_rack, const Rack& my_rack) const;
 
  private:
   HastyEquity() = default;

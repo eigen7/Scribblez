@@ -60,7 +60,7 @@ void Game::play() {
     const int n_glyphs = m.num_glyphs();
     if (m.type() == MoveType::PLAY) {
       // Remove placed tiles from rack, apply to board.
-      racks_[cur] = m.leave();
+      for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
       board_.apply(m);
       scores_[cur] += m.score();
       rec.score_delta = m.score();
