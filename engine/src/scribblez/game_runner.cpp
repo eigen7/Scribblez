@@ -237,10 +237,8 @@ void GameRunner::run() {
     for (auto& w : workers) w.join();
   }
 
-  if (params_.verbose && results_->games_played() > 1) {
-    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    results_->print_batch_summary(std::cerr, secs);
-  }
+  double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  results_->print_batch_summary(std::cerr, secs);
 }
 
 }  // namespace scribblez
