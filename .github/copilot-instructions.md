@@ -26,7 +26,9 @@ Please reference docs/Scribblez.pdf to understand the overall goal of this proje
 - Don't define structs or lambdas within functions, unless there is a very good reason. This is
   almost always a violation of the above principles. Instead, define them outside the function.
 - Aim for high modularity. You want small, self-contained components with well-defined API
-  boundaries, and you want higher-level components to built on top of them.
+  boundaries, which can be reasoned about and optimized in isolation. Then, you want higher-level
+  components built on top of them. If you ever spot code that would permit this sort of separation,
+  suggest a change.
 
 ## Clang-format
 
