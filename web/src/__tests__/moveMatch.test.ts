@@ -3,6 +3,8 @@ import {
   findRackTile,
   findMatchingMove,
   candidatesFromMove,
+  parseExchangeMove,
+  rackIndicesForExchange,
   rebuildUsedIndices,
 } from '../lib/moveMatch';
 import { MoveOption, PlacedTile, TileInfo } from '../types';
@@ -220,5 +222,38 @@ describe('findMatchingMove', () => {
       { row: 7, col: 7, letter: 'A', isBlank: false },
     ];
     expect(findMatchingMove(candidates, undefined, board)).toBe(-1);
+  });
+});
+
+describe('parseExchangeMove', () => {
+  it('parses an exchange move into its letters', () => {
+    expect(parseExchangeMove('exch AQWW')).toEqual(['A', 'Q', 'W', 'W']);
+  });
+
+  it('treats a blank marker as its own letter', () => {
+    expect(parseExchangeMove('exch A?')).toEqual(['A', '?']);
+  });
+
+  it('returns null for plays and passes', () => {
+    expect(parseExchangeMove('8H WAREZ 54')).toBeNull();
+    expect(parseExchangeMove('pass')).toBeNull();
+  });
+});
+
+describe('rackIndicesForExchange', () => {
+  it('claims one rack tile per requested letter', () => {
+    const r = rack('AQWWXYZ');
+    expect(rackIndicesForExchange(r, ['A', 'Q', 'W', 'W'])).toEqual(new Set([0, 1, 2, 3]));
+  });
+
+  it('does not reuse a tile for a duplicated letter beyond supply', () => {
+    const r = rack('AWXYZBC');
+    // Only one W available; the second W request finds nothing more to claim.
+    expect(rackIndicesForExchange(r, ['W', 'W'])).toEqual(new Set([1]));
+  });
+
+  it('claims a blank for a "?" request', () => {
+    const r = rack('AB?DEFG');
+    expect(rackIndicesForExchange(r, ['?'])).toEqual(new Set([2]));
   });
 });

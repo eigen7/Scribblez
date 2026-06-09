@@ -99,6 +99,8 @@ class WebSession {
 
 // Standard Scrabble coordinate notation for a play, e.g. "8H WAREZ 54"
 // (horizontal) or "H8 WAREZ 54" (vertical). Newly placed blanks are lowercased.
+// Non-plays render as "exch AQWW" (surrendered tiles, '?' for a blank) or
+// "pass".
 std::string move_to_notation(const Board& board, const Move& move);
 
 // Build the GameState JSON the front-end expects, from the perspective of
@@ -118,8 +120,11 @@ std::string move_to_notation(const Board& board, const Move& move);
 // without a value).
 struct StateView {
   // Active-turn ctor used by the human agent on every make_move() call. The
-  // resulting view always has your_turn=true, game_over=false.
+  // resulting view always has your_turn=true, game_over=false. `display_moves`
+  // is the move list shown in the UI's "Legal Moves" panel (legal plays plus
+  // any synthesised exchange moves); it must outlive the StateView.
   StateView(const MoveRequest& req, const std::string& my_name, const std::string& opp_name,
+            const std::vector<Move>& display_moves,
             const std::vector<std::optional<double>>* legal_play_equities = nullptr);
 
   // Game-derived ctor used at game-over (or any other Game-anchored view).

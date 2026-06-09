@@ -108,6 +108,30 @@ export function findMatchingMove(
 }
 
 /**
+ * Parse an exchange move's display text ("exch AQWW") into its letters, or
+ * null if the text isn't an exchange. A '?' denotes a blank tile.
+ */
+export function parseExchangeMove(text: string): string[] | null {
+  const m = text.match(/^exch\s+(\S+)$/);
+  if (!m) return null;
+  return m[1].split('');
+}
+
+/**
+ * Choose the rack indices to exchange for the given letters. Each letter
+ * claims an unused matching rack tile ('?' claims a blank). Mirrors clicking
+ * those tiles in exchange mode.
+ */
+export function rackIndicesForExchange(rack: TileInfo[], letters: string[]): Set<number> {
+  const used = new Set<number>();
+  for (const ch of letters) {
+    const idx = rack.findIndex((t, i) => !used.has(i) && t.letter === ch);
+    if (idx >= 0) used.add(idx);
+  }
+  return used;
+}
+
+/**
  * Recompute the set of used rack indices from the given candidate tiles.
  * This mirrors what the UI does when tiles are removed/reordered: walk the
  * candidates in order and re-claim a rack tile for each.

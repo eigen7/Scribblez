@@ -209,6 +209,18 @@ void free_port(int port) {
 // --------------------------- move notation -------------------------------
 
 std::string move_to_notation(const Board& board, const Move& move) {
+  if (move.type() == MoveType::PASS) return "pass";
+  if (move.type() == MoveType::EXCHANGE) {
+    // The surrendered tiles are stored sorted (A..Z then blanks); render blanks
+    // as '?'. e.g. "exch AQWW".
+    std::string letters;
+    for (int i = 0; i < move.num_glyphs(); ++i) {
+      Glyph g = move.glyph(i);
+      letters.push_back(g.is_blank() ? '?' : g.letter().to_char());
+    }
+    return "exch " + letters;
+  }
+
   auto [sr, sc] = move.word_origin(board);
   std::string pos;
   char col_letter = static_cast<char>('A' + sc);
@@ -246,7 +258,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
 // --------------------------- state serialization -------------------------
 
 StateView::StateView(const MoveRequest& req, const std::string& my_name,
-                     const std::string& opp_name,
+                     const std::string& opp_name, const std::vector<Move>& display_moves,
                      const std::vector<std::optional<double>>* equities)
     : board(req.board),
       my_rack(req.my_rack),
@@ -256,7 +268,7 @@ StateView::StateView(const MoveRequest& req, const std::string& my_name,
       opp_rack_size(req.opp_rack.size()),
       my_name(my_name),
       opp_name(opp_name),
-      legal_plays(&req.legal_plays),
+      legal_plays(&display_moves),
       legal_play_equities(equities),
       your_turn(true),
       game_over(false) {}

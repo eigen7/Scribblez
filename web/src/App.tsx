@@ -9,6 +9,8 @@ import {
   findRackTile,
   findMatchingMove,
   candidatesFromMove,
+  parseExchangeMove,
+  rackIndicesForExchange,
   rebuildUsedIndices as rebuildUsedIndicesPure,
 } from './lib/moveMatch';
 
@@ -352,9 +354,27 @@ function App() {
       return;
     }
 
+    // Exchange move ("exch AQWW"): selecting it is equivalent to clicking
+    // Exchange and then picking the named tiles -- enter exchange mode with
+    // those rack tiles staged, leaving the confirm to the user.
+    const exchangeLetters = parseExchangeMove(move.text);
+    if (exchangeLetters) {
+      setCandidateTiles([]);
+      setUsedRackIndices(new Set());
+      setCursorRow(null);
+      setCursorCol(null);
+      setCursorDir(null);
+      setExchangeMode(true);
+      setExchangeSelected(rackIndicesForExchange(state.rack, exchangeLetters));
+      setSelectedMoveIndex(moveIndex);
+      return;
+    }
+
     const result = candidatesFromMove(move, state.board, state.rack);
     if (!result) return;
 
+    setExchangeMode(false);
+    setExchangeSelected(new Set());
     setCandidateTiles(result.candidates);
     setUsedRackIndices(result.usedRackIndices);
     setCursorRow(null);
@@ -438,6 +458,7 @@ function App() {
                     onClick={() => {
                       setExchangeMode(false);
                       setExchangeSelected(new Set());
+                      setSelectedMoveIndex(null);
                     }}
                   >
                     Cancel

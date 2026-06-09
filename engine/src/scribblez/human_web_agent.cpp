@@ -3,7 +3,10 @@
 #include "scribblez/game.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
+#include "scribblez/move.h"
+#include "scribblez/rack.h"
 #include "scribblez/tile.h"
+#include "scribblez/tile_counts.h"
 #include "scribblez/web_server.h"
 
 #include <boost/json.hpp>
@@ -14,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -26,6 +30,38 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
   auto it = obj.find(key);
   if (it == obj.end() || !it->value().is_string()) return "";
   return std::string(it->value().as_string().c_str());
+}
+
+// Append an EXCHANGE move for every distinct non-empty sub-multiset of
+// `available`, recursing one tile type at a time. `chosen` accumulates the
+// tiles surrendered so far and is restored before returning.
+void enumerate_exchanges(std::vector<Move>& out, const std::vector<std::pair<Tile, int>>& types,
+                         size_t idx, TileCounts& chosen) {
+  if (idx == types.size()) {
+    if (!chosen.empty()) out.push_back(Move::exchange(chosen));
+    return;
+  }
+  const auto [tile, max_count] = types[idx];
+  for (int k = 0; k <= max_count; ++k) {
+    enumerate_exchanges(out, types, idx + 1, chosen);
+    if (k < max_count) chosen.add(tile);
+  }
+  for (int k = 0; k < max_count; ++k) chosen.remove(tile);
+}
+
+// Append one EXCHANGE move per distinct non-empty subset of `rack` to `out`,
+// so the UI's move list can show exchanges (with their HastyBot equity)
+// alongside plays. The caller gates this on the bag being large enough to
+// exchange at all.
+void append_exchange_moves(std::vector<Move>& out, const Rack& rack) {
+  const TileCounts counts = rack.counts();
+  std::vector<std::pair<Tile, int>> types;
+  for (Tile t = Tile::of(0); t <= BLANK; ++t) {
+    const int c = counts.count(t);
+    if (c > 0) types.emplace_back(t, c);
+  }
+  TileCounts chosen;
+  enumerate_exchanges(out, types, 0, chosen);
 }
 
 }  // namespace
@@ -60,21 +96,30 @@ HumanWebAgent::~HumanWebAgent() {
 }
 
 Move HumanWebAgent::make_move(const MoveRequest& req) {
-  // Annotate each legal play with its HastyBot static equity for the cheat-
-  // mode move list.  If HastyEquity was not initialised (--leaves-file absent)
-  // the column is left blank on the front-end.
+  // The UI's move list shows every legal play plus -- when exchanging is even
+  // possible (bag has a full rack to draw from) -- every distinct exchange, so
+  // the human can see whether HastyBot would rather swap tiles than play a
+  // word. Plays keep their original indices so a `{"type":"move","index":...}`
+  // reply still selects the right play; exchanges sit past the end of the play
+  // list and are submitted via the `{"type":"exchange","letters":...}` path.
+  std::vector<Move> display_moves = req.legal_plays;
+  if (req.bag_size >= RACK_SIZE) append_exchange_moves(display_moves, req.my_rack);
+
+  // Annotate each displayed move with its HastyBot static equity for the
+  // cheat-mode move list.  If HastyEquity was not initialised (--leaves-file
+  // absent) the column is left blank on the front-end.
   std::vector<std::optional<double>> equities;
   try {
     const HastyEquity& eq = HastyEquity::instance();
     const std::vector<double> vals =
-      eq.equities(req.legal_plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+      eq.equities(display_moves, req.board, req.bag_size, req.opp_rack, req.my_rack);
     equities.resize(vals.size());
     for (size_t i = 0; i < vals.size(); ++i) equities[i] = vals[i];
   } catch (const std::exception&) {
     equities.clear();
   }
 
-  StateView view(req, name_, opp_name_, equities.empty() ? nullptr : &equities);
+  StateView view(req, name_, opp_name_, display_moves, equities.empty() ? nullptr : &equities);
   const std::string msg = game_state_json(view);
 
   for (;;) {
