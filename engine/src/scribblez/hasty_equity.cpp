@@ -5,6 +5,7 @@
 #include <boost/json.hpp>
 
 #include <array>
+#include <bit>
 #include <bitset>
 #include <fstream>
 #include <sstream>
@@ -22,15 +23,43 @@ constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 
 // ---- leave computation --------------------------------------------------
 
-// Precomputes leave values for every subset of the mover's rack within a
-// single turn, indexed by the sorted-rack bitmask carried on each Move.
-// Values are filled lazily and cached, so each distinct leave is looked up
-// at most once per turn.
+// Per-turn leave context for one mover's rack. Owns the sorted-rack bit
+// layout (bit i == the i-th sorted rack tile) and, for each candidate move,
+// derives the leave as a compact bitmask over that layout. Leave values are
+// then filled lazily and cached, so each distinct leave is looked up at most
+// once per turn. The mask is a private detail of this turn -- it lives here,
+// next to the rack it depends on, rather than on the Move.
 class TurnLeaves {
  public:
   TurnLeaves(const Rack& rack, const LeaveValues& lv) : lv_(lv), size_(rack.size()) {
     const auto& t = rack.tiles();
     for (int i = 0; i < size_; ++i) tile_of_bit_[i] = t[i];
+    // indices_[L] holds the leave-mask bits owned by copies of letter L: a run
+    // of count(L) set bits starting at L's base position. Sorted order (A..Z
+    // then blanks) keeps this consistent with tile_of_bit_ and value().
+    TileCounts counts = rack.counts();
+    int b = 0;
+    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
+      int c = counts.count(L);
+      indices_[L] = static_cast<uint8_t>(((1u << c) - 1u) << b);
+      b += c;
+    }
+    full_ = static_cast<uint8_t>((1u << size_) - 1);
+  }
+
+  // The move's leave as a bitmask: the full rack minus its played tiles. Each
+  // played tile claims its letter's lowest still-available bit, so duplicate
+  // plays of a letter consume successive bits of that letter's run.
+  uint8_t mask_for(const Move& move) const {
+    uint8_t mask = full_;
+    std::array<uint8_t, 27> indices = indices_;  // pristine layout, mutated below
+    for (int i = 0; i < move.num_glyphs(); ++i) {
+      uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
+      int bit = std::countr_zero(idx);  // L's lowest still-available bit
+      mask &= static_cast<uint8_t>(~(1u << bit));
+      idx &= static_cast<uint8_t>(idx - 1);  // clear that lowest set bit
+    }
+    return mask;
   }
 
   double value(uint8_t mask) {
@@ -57,6 +86,8 @@ class TurnLeaves {
   const LeaveValues& lv_;
   int size_;
   std::array<Tile, RACK_SIZE> tile_of_bit_{};
+  std::array<uint8_t, 27> indices_{};
+  uint8_t full_ = 0;
   std::array<float, 128> value_{};
   std::array<int16_t, 128> pv_{};
   std::bitset<128> computed_{};
@@ -178,7 +209,7 @@ std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const 
   TurnLeaves leaves(my_rack, leave_values_);
   for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
     const Move& m = moves[i];
-    const uint8_t mask = m.leave_mask();
+    const uint8_t mask = leaves.mask_for(m);
     const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
     const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
     out[i] = static_cast<double>(m.score()) + lv + opening_adjustment(m, board) +

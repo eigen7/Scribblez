@@ -28,7 +28,7 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
   }
   if (best >= 0) return req.legal_plays[static_cast<size_t>(best)];
 
-  return MoveFactory::pass();
+  return Move::pass();
 }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,

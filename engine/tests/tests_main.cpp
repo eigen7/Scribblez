@@ -83,8 +83,7 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
   const int lane0 = horizontal ? col : row;
   uint16_t mask = 0;
   for (int i = 0; i < n; ++i) mask |= static_cast<uint16_t>(1u << (lane0 + i));
-  return MoveFactory::play(horizontal, start, mask, /*score=*/0, played.data(), n,
-                           /*leave_mask=*/0);
+  return Move::play(horizontal, start, mask, /*score=*/0, played.data(), n);
 }
 
 // Build a PLAY Move with an explicit per-tile layout. `rel_mask` is the play's
@@ -102,7 +101,7 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   const int start = horizontal ? row : col;
   const int lane0 = horizontal ? col : row;
   uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
-  return MoveFactory::play(horizontal, start, mask, score, played.data(), n, /*leave_mask=*/0);
+  return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
 static void test_movegen_opening() {
@@ -600,7 +599,7 @@ class TestAgent : public scribblez::Agent {
       std::uniform_int_distribution<size_t> d(0, top.size() - 1);
       return *top[d(rng_)];
     }
-    return scribblez::MoveFactory::pass();
+    return scribblez::Move::pass();
   }
 
  private:
@@ -1261,7 +1260,7 @@ static void test_move_main_word_through_cross() {
   CHECK(pass.main_word(b).empty());
   TileCounts xch_tiles;
   xch_tiles.add(Tile::from_char('A'));
-  Move xch = MoveFactory::exchange(xch_tiles);
+  Move xch = Move::exchange(xch_tiles);
   CHECK(xch.main_word(b).empty());
 }
 
@@ -1329,7 +1328,7 @@ class AlwaysPassAgent : public scribblez::Agent {
  public:
   AlwaysPassAgent(int tid, std::string name) : scribblez::Agent(tid, std::move(name)) {}
   scribblez::Move make_move(const scribblez::MoveRequest&) override {
-    return scribblez::MoveFactory::pass();
+    return scribblez::Move::pass();
   }
 };
 
@@ -1525,7 +1524,7 @@ static void test_encode_labels() {
   // EXCHANGE / PASS next move -> all zeros.
   TileCounts xch_tiles;
   xch_tiles.add(Tile::from_char('A'));
-  v_with_next.next_move = MoveFactory::exchange(xch_tiles);
+  v_with_next.next_move = Move::exchange(xch_tiles);
   v_with_next.apply_flip = false;
   encode_labels_flat(v_with_next, flat);
   for (int i = 0; i < kOppNextPlacementFloats; ++i) CHECK(plane[i] == 0.0f);
@@ -1574,7 +1573,7 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   Move q_play =
     make_play_full(3, 5, /*horizontal=*/true, 0b1, 42, {Glyph::of(Tile::from_char('Q'))});
 
-  Move p1_pass = MoveFactory::pass();
+  Move p1_pass = Move::pass();
 
   InitialRacks ir{};
   ir.p0 = p0_init;

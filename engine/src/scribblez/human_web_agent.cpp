@@ -79,7 +79,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
 
   for (;;) {
     if (!session_->connected() && !session_->wait_for_client()) {
-      return MoveFactory::pass();
+      return Move::pass();
     }
     session_->send_text(msg);
     for (;;) {
@@ -105,7 +105,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
           }
         }
       } else if (type == "pass") {
-        return MoveFactory::pass();
+        return Move::pass();
       } else if (type == "exchange") {
         // Optional: front-end may send {"type":"exchange","letters":"AB?"}.
         TileCounts tiles;
@@ -113,7 +113,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
           Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : Tile::from_char(c);
           if (req.my_rack.count(L) > 0) tiles.add(L);
         }
-        if (!tiles.empty()) return MoveFactory::exchange(tiles);
+        if (!tiles.empty()) return Move::exchange(tiles);
       }
       // Unknown / invalid: keep waiting for a usable message.
     }

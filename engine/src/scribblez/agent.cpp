@@ -27,9 +27,9 @@ Move GreedyAgent::make_move(const MoveRequest& req) {
   }
   // No legal plays.
   if (req.bag_size >= RACK_SIZE) {
-    return MoveFactory::exchange(req.my_rack.counts());
+    return Move::exchange(req.my_rack.counts());
   }
-  return MoveFactory::pass();
+  return Move::pass();
 }
 
 std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::string>& tokens,

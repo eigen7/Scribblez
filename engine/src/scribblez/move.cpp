@@ -59,8 +59,8 @@ int append_sorted(std::array<Glyph, RACK_SIZE>& glyphs, int j, const TileCounts&
 }
 }  // namespace
 
-Move MoveFactory::play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
-                       const Glyph* played, int num_played, uint8_t leave_mask) {
+Move Move::play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
+                const Glyph* played, int num_played) {
   Move m;
   m.type_ = MoveType::PLAY;
   m.horizontal_ = horizontal;
@@ -68,12 +68,11 @@ Move MoveFactory::play(bool horizontal, int start, uint16_t square_mask, uint16_
   m.num_played_ = static_cast<uint8_t>(num_played);
   m.square_mask_ = square_mask;
   m.score_ = score;
-  m.leave_mask_ = leave_mask;
   for (int i = 0; i < num_played; ++i) m.glyphs_[i] = played[i];
   return m;
 }
 
-Move MoveFactory::exchange(const TileCounts& tiles) {
+Move Move::exchange(const TileCounts& tiles) {
   Move m;
   m.type_ = MoveType::EXCHANGE;
   m.num_played_ = static_cast<uint8_t>(append_sorted(m.glyphs_, 0, tiles));

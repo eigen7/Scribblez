@@ -2,7 +2,6 @@
 
 #include "scribblez/board.h"
 #include "scribblez/glyph.h"
-#include "scribblez/rack.h"
 #include "scribblez/tile.h"
 #include "scribblez/tile_counts.h"
 
@@ -19,10 +18,9 @@ enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 // positions are not stored -- they are reconstructed from the board.
 //
 // `glyphs` holds only the played/surrendered tiles: slots [0, num_glyphs())
-// (in word order for a PLAY); the remaining slots are empty. The leave is not
-// stored as tiles; instead `leave_mask()` is a compact bitmask over the
-// generating rack's sorted tiles, filled in O(1) during move generation so the
-// equity layer can index a per-turn leave table without recomputing anything.
+// (in word order for a PLAY); the remaining slots are empty. A move records no
+// leave: the leave is a property of the rack a move is generated against, not
+// of the move itself, so the equity layer derives it on demand.
 //
 // PLAY:     the played glyphs are the newly placed tiles in order along the
 //           main word. `start()` is the word's cross-axis coordinate (its row
@@ -39,7 +37,18 @@ enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 // single play is well under 2^16.
 class Move {
  public:
-  Move() = default;  // a PASS with no recorded leave
+  Move() = default;  // a PASS
+
+  // Factories -- the only places that populate Move's private representation.
+  //
+  // A PLAY: `played[0, num_played)` are the placed glyphs in word order (their
+  // count equals popcount(square_mask)).
+  static Move play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
+                   const Glyph* played, int num_played);
+  // An EXCHANGE surrendering `tiles` (laid out sorted).
+  static Move exchange(const TileCounts& tiles);
+  // A PASS.
+  static Move pass() { return Move{}; }
 
   MoveType type() const { return type_; }
   bool horizontal() const { return horizontal_; }
@@ -53,12 +62,6 @@ class Move {
   // The i-th played/surrendered glyph (0 <= i < num_glyphs()).
   Glyph glyph(int i) const { return glyphs_[i]; }
 
-  // Bitmask over the generating rack's sorted tiles (rack.tiles()): bit i is
-  // set iff the i-th sorted rack tile remains in the leave after this move.
-  // Turn-local -- only meaningful for a move produced by move generation
-  // against a known rack; 0 for agent-built PASS/EXCHANGE moves.
-  uint8_t leave_mask() const { return leave_mask_; }
-
   // (row, col) of the main word's first square, recovered by walking back
   // through existing tiles on `board` (the board as it stood before the move).
   std::pair<int, int> word_origin(const Board& board) const;
@@ -68,34 +71,16 @@ class Move {
   std::string main_word(const Board& board) const;
 
  private:
-  friend struct MoveFactory;
-
   MoveType type_ = MoveType::PASS;         // 1 B
   bool horizontal_ = true;                 // 1 B
   int8_t start_ = 0;                       // 1 B; cross-axis coord (PLAY only)
   uint8_t num_played_ = 0;                 // 1 B; played/surrendered tile count
   std::array<Glyph, RACK_SIZE> glyphs_{};  // 7 B; played/surrendered tiles only
-  uint8_t leave_mask_ = 0;                 // 1 B; sorted-rack leave bitmask
   uint16_t square_mask_ = 0;               // 2 B; PLAY only; see class comment
   uint16_t score_ = 0;                     // 2 B
 };
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
-
-// Assembles Moves on behalf of move generation, the agents, and tests -- the
-// single place allowed to populate Move's private representation.
-struct MoveFactory {
-  // A PLAY: `played[0, num_played)` are the placed glyphs in word order (their
-  // count equals popcount(square_mask)); `leave_mask` is the sorted-rack leave
-  // bitmask recorded on the move (see Move::leave_mask()).
-  static Move play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
-                   const Glyph* played, int num_played, uint8_t leave_mask);
-
-  // An EXCHANGE surrendering `tiles` (laid out sorted). No leave is recorded.
-  static Move exchange(const TileCounts& tiles);
-
-  static Move pass() { return Move{}; }
-};
 
 }  // namespace scribblez
 

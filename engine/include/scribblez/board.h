@@ -41,7 +41,7 @@ class Premium {
 };
 static_assert(sizeof(Premium) == 1);
 
-struct Move;       // forward declaration
+class Move;        // forward declaration
 class Dictionary;  // forward declaration
 
 // Bitmask with every letter A..Z allowed (the default cross-check).

@@ -32,7 +32,7 @@ class HastyAgent : public Agent {
       std::uniform_int_distribution<size_t> d(0, top.size() - 1);
       return *top[d(rng_)];
     }
-    return MoveFactory::pass();
+    return Move::pass();
   }
 
  private:

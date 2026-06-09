@@ -1,6 +1,5 @@
 #include "scribblez/movegen.h"
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <utility>
@@ -32,33 +31,6 @@ using CrossChecks = std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE>;
 using Anchors = std::array<bool, BOARD_SIZE * BOARD_SIZE>;
 
 constexpr int idx(int r, int c) { return r * BOARD_SIZE + c; }
-
-// Incremental leave-mask bookkeeping for one generate() pass. Each rack tile,
-// taken in sorted order (A..Z then blanks), owns one bit; the i-th sorted rack
-// tile owns bit i. `bit(L)` returns the bit for the next copy of L about to be
-// consumed -- movegen clears it when the tile is placed and restores it on
-// backtracking, so at any emit point the running mask is the move's leave as a
-// bitmask over the sorted rack (matching the equity layer's per-turn table).
-struct LeaveBits {
-  std::array<uint8_t, 27> base{};
-  std::array<uint8_t, 27> orig{};
-  uint8_t full = 0;
-
-  void init(const TileCounts& rack) {
-    int b = 0;
-    for (Tile t = Tile::of(0); t <= BLANK; ++t) {
-      base[t] = static_cast<uint8_t>(b);
-      orig[t] = static_cast<uint8_t>(rack.count(t));
-      b += orig[t];
-    }
-    full = static_cast<uint8_t>((1u << b) - 1);
-  }
-
-  // Bit owned by the next copy of L to consume; call BEFORE removing L.
-  uint8_t bit(Tile L, const TileCounts& rack) const {
-    return static_cast<uint8_t>(base[L] + (orig[L] - rack.count(L)));
-  }
-};
 
 // Compute anchor squares for this view. An anchor is an empty square adjacent
 // (in any of the 4 directions) to a filled square. Special case: if the board
@@ -97,16 +69,15 @@ Anchors compute_anchors(const View& view) {
   return anchor;
 }
 
-// Build a PLAY Move (placed tiles, main word, score, leave) for the run that
-// occupies view columns [start_col, end_col_excl) on `row`. Squares already
-// filled on the board contribute their existing letters; empty squares in the
-// span are newly placed and their (letter, is_blank) come from
-// `placed_letter`/`placed_blank`. `leave_mask` is the generator's running
-// leave bitmask (see LeaveBits). Scoring (premiums, cross-words, bingo) is
+// Build a PLAY Move (placed tiles, main word, score) for the run that occupies
+// view columns [start_col, end_col_excl) on `row`. Squares already filled on
+// the board contribute their existing letters; empty squares in the span are
+// newly placed and their (letter, is_blank) come from
+// `placed_letter`/`placed_blank`. Scoring (premiums, cross-words, bingo) is
 // shared by both generators so the two algorithms produce byte-identical moves.
 Move build_play(const View& view, const CrossChecks& cross, int row, int start_col,
                 int end_col_excl, const std::array<Tile, BOARD_SIZE>& placed_letter,
-                const std::array<bool, BOARD_SIZE>& placed_blank, uint8_t leave_mask) {
+                const std::array<bool, BOARD_SIZE>& placed_blank) {
   std::array<Glyph, RACK_SIZE> played{};
   int n_placed = 0;
   uint16_t square_mask = 0;
@@ -149,17 +120,14 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
 
   int score = main_letter_sum * word_mult + cross_total;
   if (n_placed == RACK_SIZE) score += 50;  // bingo
-  return MoveFactory::play(!view.transposed, row, square_mask, static_cast<uint16_t>(score),
-                           played.data(), n_placed, leave_mask);
+  return Move::play(!view.transposed, row, square_mask, static_cast<uint16_t>(score), played.data(),
+                    n_placed);
 }
 
 struct GenState {
   GenState(const View& view, const Dictionary& dict, const CrossChecks& cross,
            const Anchors& anchor, TileCounts rack, std::vector<Move>& out)
-      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {
-    bits.init(this->rack);
-    leave_mask = bits.full;
-  }
+      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {}
 
   const View& view;
   const Dictionary& dict;
@@ -167,22 +135,6 @@ struct GenState {
   const Anchors& anchor;
   TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
-
-  LeaveBits bits;          // sorted-rack bit layout for the leave mask
-  uint8_t leave_mask = 0;  // tiles still in the leave (set bits)
-
-  // Consume one copy of L (clearing its leave bit); returns the bit so the
-  // caller can restore it on backtrack via give().
-  uint8_t take(Tile L) {
-    uint8_t b = bits.bit(L, rack);
-    rack.remove(L);
-    leave_mask &= static_cast<uint8_t>(~(1u << b));
-    return b;
-  }
-  void give(Tile L, uint8_t b) {
-    rack.add(L);
-    leave_mask |= static_cast<uint8_t>(1u << b);
-  }
 
   // Recursion state for the current word being built.
   std::vector<std::pair<Tile, bool>> left_letters;  // (letter, is_blank) in left-to-right order
@@ -221,8 +173,8 @@ void GenState::emit_move(int start_col, int end_col_excl) {
       ++ri;
     }
   }
-  out.push_back(build_play(view, cross, current_row, start_col, end_col_excl, placed_letter,
-                           placed_blank, leave_mask));
+  out.push_back(
+    build_play(view, cross, current_row, start_col, end_col_excl, placed_letter, placed_blank));
 }
 
 void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
@@ -250,18 +202,18 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
       auto tr = dict.step(node, L);
       if (!tr.valid) continue;
       if (rack.count(L) > 0) {
-        uint8_t b = take(L);
+        rack.remove(L);
         right_placed.push_back(RightTile{col, L, false});
         extend_right(col + 1, tr.next, tr.accepts);
         right_placed.pop_back();
-        give(L, b);
+        rack.add(L);
       }
       if (rack.blanks() > 0) {
-        uint8_t b = take(BLANK);
+        rack.remove(BLANK);
         right_placed.push_back(RightTile{col, L, true});
         extend_right(col + 1, tr.next, tr.accepts);
         right_placed.pop_back();
-        give(BLANK, b);
+        rack.add(BLANK);
       }
     }
   } else {
@@ -282,18 +234,18 @@ void GenState::left_part(int limit, uint32_t node) {
     auto tr = dict.step(node, L);
     if (!tr.valid) continue;
     if (rack.count(L) > 0) {
-      uint8_t b = take(L);
+      rack.remove(L);
       left_letters.emplace_back(L, false);
       left_part(limit - 1, tr.next);
       left_letters.pop_back();
-      give(L, b);
+      rack.add(L);
     }
     if (rack.blanks() > 0) {
-      uint8_t b = take(BLANK);
+      rack.remove(BLANK);
       left_letters.emplace_back(L, true);
       left_part(limit - 1, tr.next);
       left_letters.pop_back();
-      give(BLANK, b);
+      rack.add(BLANK);
     }
   }
 }
@@ -352,10 +304,7 @@ void GenState::generate_for_row(int row) {
 struct GaddagGen {
   GaddagGen(const View& view, const Dictionary& dict, const CrossChecks& cross,
             const Anchors& anchor, TileCounts rack, std::vector<Move>& out)
-      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {
-    bits.init(this->rack);
-    leave_mask = bits.full;
-  }
+      : view(view), dict(dict), cross(cross), anchor(anchor), rack(std::move(rack)), out(out) {}
 
   const View& view;
   const Dictionary& dict;
@@ -364,8 +313,6 @@ struct GaddagGen {
   TileCounts rack;  // available-tile scratch (built from the player's rack)
   std::vector<Move>& out;
 
-  LeaveBits bits;          // sorted-rack bit layout for the leave mask
-  uint8_t leave_mask = 0;  // tiles still in the leave (set bits)
   int current_row = 0;
   int current_anchor_col = 0;
   int last_anchor_col = 100;  // sentinel: no previous anchor this row
@@ -376,25 +323,12 @@ struct GaddagGen {
   // plain array instead of going through View::at()'s transpose branch.
   std::array<Glyph, BOARD_SIZE> row_cells{};
 
-  // Consume one copy of L (clearing its leave bit); returns the bit so the
-  // caller can restore it on backtrack via give().
-  uint8_t take(Tile L) {
-    uint8_t b = bits.bit(L, rack);
-    rack.remove(L);
-    leave_mask &= static_cast<uint8_t>(~(1u << b));
-    return b;
-  }
-  void give(Tile L, uint8_t b) {
-    rack.add(L);
-    leave_mask |= static_cast<uint8_t>(1u << b);
-  }
-
   void record(int leftstrip, int rightstrip) {
     // Single-tile plays are produced by both orientations; treat horizontal as
     // canonical and never emit them from the transposed (vertical) pass.
     if (view.transposed && tiles_played == 1) return;
-    out.push_back(build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter,
-                             strip_blank, leave_mask));
+    out.push_back(
+      build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
   }
 
   // Gordon's GoOn: we have just transitioned to `new_node` by placing/using
@@ -458,18 +392,18 @@ struct GaddagGen {
         uint32_t next = a & Dictionary::ARC_MASK;
         bool accepts = (a & Dictionary::ACCEPTS_BIT) != 0;
         if (rack.count(L) > 0) {
-          uint8_t b = take(L);
+          rack.remove(L);
           ++tiles_played;
           go_on(col, L, false, next, accepts, leftstrip, rightstrip);
           --tiles_played;
-          give(L, b);
+          rack.add(L);
         }
         if (rack.blanks() > 0) {
-          uint8_t b = take(BLANK);
+          rack.remove(BLANK);
           ++tiles_played;
           go_on(col, L, true, next, accepts, leftstrip, rightstrip);
           --tiles_played;
-          give(BLANK, b);
+          rack.add(BLANK);
         }
       }
       if (a & Dictionary::IS_END_BIT) break;
