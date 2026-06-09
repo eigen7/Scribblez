@@ -1,7 +1,6 @@
 #include "scribblez/hasty_equity.h"
 
 #include "scribblez/glyph.h"
-#include "scribblez/tile.h"
 
 #include <boost/json.hpp>
 
