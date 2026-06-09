@@ -2097,14 +2097,18 @@ static void test_epoch_shuffles_across_seeds() {
 // =========================================================================
 
 // Build and write a minimal .klv2 file in a temp path.
-// The KWG encodes two single-tile leaves: "A" (tile=1) and "B" (tile=2).
+// The KWG encodes three single-tile leaves: the blank "?" (tile=0), "A"
+// (tile=1) and "B" (tile=2). Macondo's leave KWG numbers the blank as machine
+// letter 0 (sorting ahead of the letters), so including it here exercises the
+// blank-leave mapping that real exchanges depend on.
 // KWG node layout: bits 0..21 arc_index, 22 is_end, 23 accepts, 24..31 tile.
 //
 // Node 0 (root): arc_index=1, is_end=1, accepts=0, tile=0
-// Node 1 (A):    arc_index=0, is_end=0, accepts=1, tile=1
-// Node 2 (B):    arc_index=0, is_end=1, accepts=1, tile=2
+// Node 1 (?):    arc_index=0, is_end=0, accepts=1, tile=0
+// Node 2 (A):    arc_index=0, is_end=0, accepts=1, tile=1
+// Node 3 (B):    arc_index=0, is_end=1, accepts=1, tile=2
 //
-// Word order: A(index 0) = 1.5f, B(index 1) = -2.5f.
+// Word order: ?(index 0) = 12.0f, A(index 1) = 1.5f, B(index 2) = -2.5f.
 struct KlvFixture {
   std::filesystem::path path;
 };
@@ -2116,16 +2120,19 @@ KlvFixture write_synthetic_klv(const std::filesystem::path& dir) {
   auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
   auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
 
-  // kwg_node_count = 3
-  write_u32(3);
+  // kwg_node_count = 4
+  write_u32(4);
   // Node 0: root; arc_index=1, is_end=1, accepts=0, tile=0
   write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);
-  // Node 1: A; arc_index=0, is_end=0, accepts=1, tile=1
+  // Node 1: ? (blank); arc_index=0, is_end=0, accepts=1, tile=0
+  write_u32((0u << 24) | (0u << 22) | (1u << 23) | 0u);
+  // Node 2: A; arc_index=0, is_end=0, accepts=1, tile=1
   write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);
-  // Node 2: B; arc_index=0, is_end=1, accepts=1, tile=2
+  // Node 3: B; arc_index=0, is_end=1, accepts=1, tile=2
   write_u32((2u << 24) | (1u << 22) | (1u << 23) | 0u);
-  // num_leaves = 2
-  write_u32(2);
+  // num_leaves = 3
+  write_u32(3);
+  write_f32(12.0f);
   write_f32(1.5f);
   write_f32(-2.5f);
   CHECK(f);
@@ -2149,6 +2156,12 @@ static void test_leave_values_synthetic() {
   Rack b;
   b.add(Tile::from_char('B'));
   CHECK(std::abs(lv.lookup(b) - (-2.5f)) < 1e-4f);
+
+  // Leave "?" (blank). Macondo's leave KWG numbers the blank as machine letter
+  // 0; a regression here means blank-bearing leaves silently look up as 0.
+  Rack blank;
+  blank.add(BLANK);
+  CHECK(std::abs(lv.lookup(blank) - 12.0f) < 1e-4f);
 
   // Empty leave → 0
   Rack empty;
@@ -2275,6 +2288,50 @@ static void test_hasty_equity_components() {
   std::cout << "test_hasty_equity_components passed\n";
 }
 
+// Regression test for blank-bearing exchange equity. An EXCHANGE's equity is
+// just the leave value of the tiles kept (score 0, no opening/peg/endgame
+// adjustments mid-game), so a mis-keyed blank leave surfaces directly as a
+// wrong (typically 0) exchange equity in the web move list.
+static void test_hasty_equity_exchange_blank_leave() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_xch_XXXXXX";
+  fs::create_directories(tmp);
+
+  KlvFixture fix = write_synthetic_klv(tmp);  // ?=12.0, A=1.5, B=-2.5
+  std::filesystem::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+  const HastyEquity& eq = HastyEquity::instance();
+
+  Board board;  // empty
+  Rack opp;
+
+  // Rack = A + blank. Exchanging the A keeps the blank, so the equity must be
+  // the blank leave value (12.0), not 0. bag_size > 0 so no endgame term.
+  Rack rack_a_blank;
+  rack_a_blank.add(Tile::from_char('A'));
+  rack_a_blank.add(BLANK);
+
+  TileCounts surrender_a;
+  surrender_a.add(Tile::from_char('A'));
+  Move exch_a = Move::exchange(surrender_a);
+
+  // Single-move and batched paths must agree and both reflect the blank leave.
+  double single = eq.equity(exch_a, board, 50, opp, rack_a_blank);
+  CHECK(std::abs(single - 12.0) < 1e-3);
+
+  std::vector<Move> moves{exch_a};
+  std::vector<double> batched = eq.equities(moves, board, 50, opp, rack_a_blank);
+  CHECK(batched.size() == 1);
+  CHECK(std::abs(batched[0] - 12.0) < 1e-3);
+
+  fs::remove_all(tmp);
+  std::cout << "test_hasty_equity_exchange_blank_leave passed\n";
+}
+
 int main() {
   test_dict_basic();
   test_movegen_opening();
@@ -2305,6 +2362,7 @@ int main() {
   test_leave_values_synthetic();
   test_leave_values_real_kwg_optional();
   test_hasty_equity_components();
+  test_hasty_equity_exchange_blank_leave();
   std::cout << "All tests passed.\n";
   return 0;
 }

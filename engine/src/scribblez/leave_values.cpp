@@ -38,9 +38,13 @@ uint32_t read_u32(std::ifstream& in) {
   return v;
 }
 
-// Map a KLV tile code (A=1..Z=26, blank=27) to an engine Tile.
+// Map a KLV tile code to an engine Tile. Macondo's leave KWG uses the blank as
+// machine letter 0 (so it sorts ahead of the letters), with A..Z as 1..26 --
+// distinct from the word KWG's 1-indexed A..Z with no blank. Mapping the blank
+// to BLANK is what lets blank-bearing leaves (e.g. the lone "?") be keyed and
+// looked up correctly.
 Tile tile_from_klv_code(uint8_t code) {
-  return code == 27u ? BLANK : Tile::of(static_cast<int>(code) - 1);
+  return code == 0u ? BLANK : Tile::of(static_cast<int>(code) - 1);
 }
 
 // Enumerate every leave reachable from `node`'s arc list in word-index order,

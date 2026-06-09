@@ -4,6 +4,16 @@ Please reference docs/Scribblez.pdf to understand the overall goal of this proje
 
 # C++ Code
 
+## Building
+
+Build by running build.py
+
+## Macondo repo
+
+It is checked out at /workspace/mount/macondo/
+
+If you are asked questions regarding Macondo, please look there.
+
 ## Inline methods
 
 - **Multiline methods** cannot be defined inside of a class definition. They must be moved into a
