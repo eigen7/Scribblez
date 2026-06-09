@@ -22,4 +22,8 @@ inline bool Board::in_bounds(int r, int c) const {
   return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
 }
 
+inline Glyph Board::oriented_at(int r, int c, bool transposed) const {
+  return transposed ? at(c, r) : at(r, c);
+}
+
 }  // namespace scribblez

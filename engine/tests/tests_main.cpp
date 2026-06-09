@@ -289,6 +289,69 @@ static void test_gaddag_vs_dawg_inmemory() {
   cross_validate(d, "medium_dict", 1234u, /*games=*/12, /*steps_per_game=*/6);
 }
 
+// The board maintains its move-generation caches (cross-checks + GADDAG anchors)
+// incrementally as moves are applied. This must always agree with a from-scratch
+// full recompute of the same position. We stress that invariant by walking
+// random games and, after every applied play, comparing the incrementally
+// maintained caches against a freshly built board holding the same squares.
+static void check_caches_match_full(const Dictionary& d, const Board& incremental,
+                                    const char* label, int game, int step) {
+  // Rebuild a board with identical squares; set() invalidates the caches so
+  // ensure_movegen_caches() does a complete recompute.
+  Board fresh;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) fresh.set(r, c, incremental.at(r, c));
+  fresh.ensure_movegen_caches(d);
+
+  for (int t = 0; t < 2; ++t) {
+    const bool transposed = (t == 1);
+    const auto& ci = incremental.cross_checks(transposed);
+    const auto& cf = fresh.cross_checks(transposed);
+    const auto& ai = incremental.gaddag_anchors(transposed);
+    const auto& af = fresh.gaddag_anchors(transposed);
+    for (int i = 0; i < BOARD_SIZE * BOARD_SIZE; ++i) {
+      const bool cross_ok = ci[i].mask == cf[i].mask && ci[i].score == cf[i].score &&
+                            ci[i].has_neighbor == cf[i].has_neighbor;
+      if (!cross_ok || ai[i] != af[i]) {
+        std::cerr << "CACHE MISMATCH [" << label << "] game " << game << " step " << step
+                  << " transposed=" << transposed << " square (" << (i / BOARD_SIZE) << ","
+                  << (i % BOARD_SIZE) << "): "
+                  << "cross inc{mask=" << ci[i].mask << ",score=" << ci[i].score
+                  << ",nbr=" << ci[i].has_neighbor << "} full{mask=" << cf[i].mask
+                  << ",score=" << cf[i].score << ",nbr=" << cf[i].has_neighbor
+                  << "} anchor inc=" << ai[i] << " full=" << af[i] << "\n";
+        std::exit(1);
+      }
+    }
+  }
+}
+
+static void cache_consistency_stress(const Dictionary& d, const char* label, unsigned seed,
+                                     int games, int steps_per_game) {
+  std::mt19937 rng(seed);
+  long checked = 0;
+  for (int g = 0; g < games; ++g) {
+    Board b;
+    for (int s = 0; s < steps_per_game; ++s) {
+      Rack r = random_rack(rng);
+      MoveGenerator gen(b, d);
+      auto moves = gen.generate(r);  // builds/uses the incremental caches
+      check_caches_match_full(d, b, label, g, s);
+      ++checked;
+      if (moves.empty()) break;
+      std::uniform_int_distribution<size_t> pick(0, moves.size() - 1);
+      b.apply(moves[pick(rng)]);  // incremental cache update happens here
+      check_caches_match_full(d, b, label, g, s);
+    }
+  }
+  std::cout << "  cache-consistency checked " << checked << " positions [" << label << "]\n";
+}
+
+static void test_board_caches_incremental_matches_full() {
+  Dictionary d = medium_dict();
+  cache_consistency_stress(d, "medium_dict", 99887766u, /*games=*/30, /*steps_per_game=*/10);
+}
+
 // If the real lexicon is present locally, cross-validate against it too and
 // sanity-check a few known NWL words. The path comes from a compile-time define
 // (SCRIBBLEZ_DEFAULT_KWG, set by CMake to data/lexica/NWL23.kwg). Skipped (not
@@ -2284,6 +2347,7 @@ int main() {
   test_movegen_cross_word();
   test_bingo_bonus();
   test_gaddag_vs_dawg_inmemory();
+  test_board_caches_incremental_matches_full();
   test_real_kwg_optional();
   test_encoder_basic_layout();
   test_encoder_last_opp_plane_mask();

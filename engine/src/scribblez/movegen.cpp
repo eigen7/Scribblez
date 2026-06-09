@@ -10,8 +10,6 @@ namespace scribblez {
 
 namespace {
 
-constexpr uint32_t ALL_LETTERS_MASK = (1u << 26) - 1u;
-
 // A View presents the board with optional transpose, so the same generator can
 // produce both horizontal and vertical plays.
 struct View {
@@ -27,93 +25,13 @@ struct View {
   }
 };
 
-struct CrossCheck {
-  uint32_t mask = ALL_LETTERS_MASK;
-  int score = 0;  // sum of TILE_VALUES of existing perpendicular letters (blanks = 0)
-  bool has_neighbor = false;
-};
-
-// Per-square scratch for one generate() pass -- stack-allocated, so a turn's
-// move generation does no heap allocation for these.
+// Per-square scratch for one generate() pass. CrossCheck and the cross-check
+// values themselves live on the Board (persisted and incrementally maintained);
+// see board.h / board.cpp.
 using CrossChecks = std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE>;
 using Anchors = std::array<bool, BOARD_SIZE * BOARD_SIZE>;
 
 constexpr int idx(int r, int c) { return r * BOARD_SIZE + c; }
-
-// Compute cross-checks for one orientation. cross[r*15+c] applies to placing a
-// tile at view position (r, c); the perpendicular run is along increasing/decreasing r at fixed c.
-CrossChecks compute_cross_checks(const View& view, const Dictionary& dict) {
-  CrossChecks out{};
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      Glyph here = view.at(r, c);
-      if (!here.is_empty()) continue;  // cross-check only meaningful for empty squares
-
-      // Walk up (decreasing r at fixed c) collecting existing letters (top-to-bottom order: from
-      // `top` row to r-1).
-      int top = r - 1;
-      while (top >= 0 && !view.at(top, c).is_empty()) --top;
-      ++top;  // top is now first existing row above r (or r if none)
-
-      // Walk down (increasing r at fixed c).
-      int bot = r + 1;
-      while (bot < BOARD_SIZE && !view.at(bot, c).is_empty()) ++bot;
-      --bot;  // bot is last existing row below r (or r if none)
-
-      CrossCheck cc;
-      cc.has_neighbor = (top < r) || (bot > r);
-      if (!cc.has_neighbor) {
-        cc.mask = ALL_LETTERS_MASK;
-        cc.score = 0;
-      } else {
-        // Walk the dictionary through the existing prefix (top..r-1).
-        uint32_t prefix_node = dict.root();
-        int prefix_score = 0;
-        bool prefix_ok = true;
-        for (int rr = top; rr <= r - 1; ++rr) {
-          Glyph sq = view.at(rr, c);
-          auto tr = dict.step(prefix_node, sq.letter());
-          if (!tr.valid) {
-            prefix_ok = false;
-            break;
-          }
-          prefix_node = tr.next;
-          if (!sq.is_blank()) prefix_score += TILE_VALUES[sq.letter()];
-        }
-        // Sum suffix score upfront.
-        int suffix_score = 0;
-        for (int rr = r + 1; rr <= bot; ++rr) {
-          Glyph sq = view.at(rr, c);
-          if (!sq.is_blank()) suffix_score += TILE_VALUES[sq.letter()];
-        }
-        cc.score = prefix_score + suffix_score;
-        uint32_t mask = 0;
-        if (prefix_ok) {
-          for (Tile L = Tile::of(0); L < 26; ++L) {
-            auto tr_l = dict.step(prefix_node, L);
-            if (!tr_l.valid) continue;
-            bool acc = tr_l.accepts;
-            uint32_t n = tr_l.next;
-            bool ok = true;
-            for (int rr = r + 1; rr <= bot; ++rr) {
-              auto tr_s = dict.step(n, view.at(rr, c).letter());
-              if (!tr_s.valid) {
-                ok = false;
-                break;
-              }
-              acc = tr_s.accepts;
-              n = tr_s.next;
-            }
-            if (ok && acc) mask |= (1u << L);
-          }
-        }
-        cc.mask = mask;
-      }
-      out[idx(r, c)] = cc;
-    }
-  }
-  return out;
-}
 
 // Compute anchor squares for this view. An anchor is an empty square adjacent
 // (in any of the 4 directions) to a filled square. Special case: if the board
@@ -210,44 +128,6 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
   m.score = main_letter_sum * word_mult + cross_total;
   if (n_placed == RACK_SIZE) m.score += 50;  // bingo
   return m;
-}
-
-// Anchors for the GADDAG (Gordon) generator. Unlike the DAWG generator's
-// anchors, these are direction-specific (computed in view coordinates, where
-// generation runs along increasing column) and include occupied squares. This
-// matches Macondo's `updateAnchors` and is required for correctness: it ensures
-// every generated word is anchored at its rightmost square, so the rightward
-// boundary (a possible trailing existing tile) is never silently ignored.
-//   - An occupied square is an anchor iff it has no tile immediately to its
-//     right (it is the rightmost square of an existing run).
-//   - An empty square is an anchor iff both its left and right neighbors are
-//     empty and it has a tile directly above or below (a pure cross-hook).
-// The empty board is special-cased to a single anchor at the center.
-Anchors compute_gaddag_anchors(const View& view) {
-  Anchors anchor{};
-  bool any_tile = false;
-  for (int r = 0; r < BOARD_SIZE && !any_tile; ++r)
-    for (int c = 0; c < BOARD_SIZE && !any_tile; ++c)
-      if (!view.at(r, c).is_empty()) any_tile = true;
-  if (!any_tile) {
-    anchor[idx(CENTER, CENTER)] = true;
-    return anchor;
-  }
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const bool here = !view.at(r, c).is_empty();
-      const bool tile_left = c > 0 && !view.at(r, c - 1).is_empty();
-      const bool tile_right = c < BOARD_SIZE - 1 && !view.at(r, c + 1).is_empty();
-      const bool tile_above = r > 0 && !view.at(r - 1, c).is_empty();
-      const bool tile_below = r < BOARD_SIZE - 1 && !view.at(r + 1, c).is_empty();
-      if (here) {
-        if (!tile_right) anchor[idx(r, c)] = true;
-      } else if (!tile_left && !tile_right && (tile_above || tile_below)) {
-        anchor[idx(r, c)] = true;
-      }
-    }
-  }
-  return anchor;
 }
 
 struct GenState {
@@ -549,14 +429,15 @@ MoveGenerator::MoveGenerator(const Board& board, const Dictionary& dict)
     : board_(board), dict_(dict) {}
 
 std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
+  board_.ensure_movegen_caches(dict_);
   std::vector<Move> out;
   for (int orient = 0; orient < 2; ++orient) {
     bool transposed = (orient == 1);
     View view{board_, transposed};
-    auto cross = compute_cross_checks(view, dict_);
+    const CrossChecks& cross = board_.cross_checks(transposed);
     const auto before = out.size();
     if (algo == GenAlgo::GADDAG) {
-      auto anchors = compute_gaddag_anchors(view);
+      const Anchors& anchors = board_.gaddag_anchors(transposed);
       GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
     } else {

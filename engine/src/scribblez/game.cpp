@@ -40,9 +40,13 @@ void Game::play() {
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
   constexpr int kMaxTurns = 400;          // safety net
 
+  // One generator for the whole game: its cross-checks and anchors live on the
+  // board and are maintained incrementally as moves are applied, so PASS/
+  // EXCHANGE turns cost nothing and PLAY turns only touch the affected squares.
+  MoveGenerator gen(board_, dict_);
+
   while ((int)log_.turns.size() < kMaxTurns) {
     // Generate legal plays for current player.
-    MoveGenerator gen(board_, dict_);
     std::vector<Move> legal = gen.generate(racks_[cur]);
 
     MoveRequest ctx{board_,           racks_[cur], racks_[1 - cur], scores_[cur],
