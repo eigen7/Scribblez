@@ -79,25 +79,21 @@ bool Board::empty_board() const {
 }
 
 void Board::apply(const Move& move) {
-  if (move.type != MoveType::PLAY) return;
+  if (move.type() != MoveType::PLAY) return;
   const bool had_caches = caches_valid_;
   const bool was_empty = empty_board();
-  const int dr = move.horizontal ? 0 : 1;
-  const int dc = move.horizontal ? 1 : 0;
-  int r = move.start_row, c = move.start_col;
-  const int n = move.num_glyphs();
+  const bool horizontal = move.horizontal();
+  const int start = move.start();
   std::array<std::pair<int, int>, RACK_SIZE> placed{};
   int np = 0;
-  for (int gi = 0; gi < n; ++gi) {
-    while (in_bounds(r, c) && !at(r, c).is_empty()) {
-      r += dr;
-      c += dc;
-    }
+  uint16_t mask = move.square_mask();
+  for (int along = 0; mask; ++along, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horizontal ? start : along;
+    const int c = horizontal ? along : start;
     if (!in_bounds(r, c)) break;
-    set(r, c, move.glyphs[gi]);  // clears caches_valid_
+    set(r, c, move.glyph(np));  // clears caches_valid_
     placed[np++] = {r, c};
-    r += dr;
-    c += dc;
   }
   if (np == 0 || !had_caches) return;  // nothing placed, or caches were stale anyway
 

@@ -20,17 +20,14 @@ TurnBlob to_blob(const TurnRecord& t) {
   TurnBlob b{};
   b.move = t.move;
   b.drawn = t.drawn;
-  b.num_drawn = t.num_drawn;
   return b;
 }
 
 // Pack a GameLog's initial racks into an InitialRacks blob.
 InitialRacks initial_racks_of(const GameLog& log) {
   InitialRacks ir{};
-  ir.p0 = log.initial_racks[0].tiles();
-  ir.p1 = log.initial_racks[1].tiles();
-  ir.n0 = static_cast<uint8_t>(log.initial_racks[0].size());
-  ir.n1 = static_cast<uint8_t>(log.initial_racks[1].size());
+  ir.p0 = log.initial_racks[0];
+  ir.p1 = log.initial_racks[1];
   return ir;
 }
 

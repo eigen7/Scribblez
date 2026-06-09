@@ -57,7 +57,10 @@ static_assert(sizeof(Rack) == 8, "Rack should pack into 8 bytes");
 
 template <>
 struct std::hash<scribblez::Rack> {
+  // A Rack's bits() is its 8-byte sorted representation. std::hash<uint64_t>
+  // is the identity on the standard libraries, so returning bits() directly is
+  // equivalent and avoids the wrapper.
   size_t operator()(const scribblez::Rack& r) const noexcept {
-    return std::hash<uint64_t>()(r.bits());
+    return static_cast<size_t>(r.bits());
   }
 };

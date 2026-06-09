@@ -71,20 +71,38 @@ static Rack rack_from(const std::string& s) {
 
 // Build a PLAY Move from a starting square, direction, and ordered new glyphs.
 // Assumes every glyph is newly placed (sufficient for the tests' empty-board
-// setups); set square_mask accordingly.
+// setups); the square mask is absolute over the play's lane.
 static Move make_play(int row, int col, bool horizontal, std::initializer_list<Glyph> gs) {
-  Move m;
-  m.type = MoveType::PLAY;
-  m.horizontal = horizontal;
-  m.start_row = static_cast<int8_t>(row);
-  m.start_col = static_cast<int8_t>(col);
-  int i = 0;
+  std::array<Glyph, RACK_SIZE> played{};
+  int n = 0;
   for (Glyph g : gs) {
-    if (i >= RACK_SIZE) break;
-    m.glyphs[i++] = g;
+    if (n >= RACK_SIZE) break;
+    played[n++] = g;
   }
-  m.square_mask = static_cast<uint16_t>((1u << i) - 1u);
-  return m;
+  const int start = horizontal ? row : col;
+  const int lane0 = horizontal ? col : row;
+  uint16_t mask = 0;
+  for (int i = 0; i < n; ++i) mask |= static_cast<uint16_t>(1u << (lane0 + i));
+  return MoveFactory::play(horizontal, start, mask, /*score=*/0, played.data(), n, TileCounts{});
+}
+
+// Build a PLAY Move with an explicit per-tile layout. `rel_mask` is the play's
+// mask relative to its first lane cell (bit 0 == the start cell); it is shifted
+// into the absolute lane mask the Move stores. `gs` are the newly placed glyphs
+// in word order (their count must equal popcount(rel_mask)).
+static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
+                           std::initializer_list<Glyph> gs,
+                           const TileCounts& leave = TileCounts{}) {
+  std::array<Glyph, RACK_SIZE> played{};
+  int n = 0;
+  for (Glyph g : gs) {
+    if (n >= RACK_SIZE) break;
+    played[n++] = g;
+  }
+  const int start = horizontal ? row : col;
+  const int lane0 = horizontal ? col : row;
+  uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
+  return MoveFactory::play(horizontal, start, mask, score, played.data(), n, leave);
 }
 
 static void test_movegen_opening() {
@@ -98,12 +116,15 @@ static void test_movegen_opening() {
   // Every opening move must cover the center square (CENTER, CENTER).
   // The board is empty, so placements are at consecutive squares from start.
   for (const auto& m : moves) {
-    CHECK(m.type == MoveType::PLAY);
-    const int dr = m.horizontal ? 0 : 1;
-    const int dc = m.horizontal ? 1 : 0;
+    CHECK(m.type() == MoveType::PLAY);
+    const bool horiz = m.horizontal();
+    uint16_t mask = m.square_mask();
     bool covers = false;
-    for (int i = 0; i < m.num_glyphs(); ++i) {
-      if (m.start_row + i * dr == CENTER && m.start_col + i * dc == CENTER) {
+    for (int pos = 0; mask; ++pos, mask >>= 1) {
+      if ((mask & 1u) == 0) continue;
+      int r = horiz ? m.start() : pos;
+      int c = horiz ? pos : m.start();
+      if (r == CENTER && c == CENTER) {
         covers = true;
         break;
       }
@@ -114,8 +135,8 @@ static void test_movegen_opening() {
   int best = 0;
   const Move* best_move = nullptr;
   for (const auto& m : moves) {
-    if (m.score > best) {
-      best = m.score;
+    if (m.score() > best) {
+      best = m.score();
       best_move = &m;
     }
   }
@@ -175,25 +196,21 @@ static void test_bingo_bonus() {
 // `main_word` of a single-tile cross play is orientation-dependent and is not
 // part of the key).
 static std::string move_key(const Board& board, const Move& m) {
+  (void)board;
   struct Placement {
     int r, c;
     Glyph g;
   };
   std::vector<Placement> tiles;
-  if (m.type == MoveType::PLAY) {
-    const int dr = m.horizontal ? 0 : 1;
-    const int dc = m.horizontal ? 1 : 0;
-    int r = m.start_row, c = m.start_col;
-    const int n = m.num_glyphs();
-    for (int gi = 0; gi < n; ++gi) {
-      while (board.in_bounds(r, c) && !board.at(r, c).is_empty()) {
-        r += dr;
-        c += dc;
-      }
-      if (!board.in_bounds(r, c)) break;
-      tiles.push_back({r, c, m.glyphs[gi]});
-      r += dr;
-      c += dc;
+  if (m.type() == MoveType::PLAY) {
+    const bool horiz = m.horizontal();
+    uint16_t mask = m.square_mask();
+    int gi = 0;
+    for (int pos = 0; mask; ++pos, mask >>= 1) {
+      if ((mask & 1u) == 0) continue;
+      int r = horiz ? m.start() : pos;
+      int c = horiz ? pos : m.start();
+      tiles.push_back({r, c, m.glyph(gi++)});
     }
   }
   std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
@@ -206,7 +223,7 @@ static std::string move_key(const Board& board, const Move& m) {
     std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, (int)t.g.code());
     k += buf;
   }
-  std::snprintf(buf, sizeof(buf), "|%d", m.score);
+  std::snprintf(buf, sizeof(buf), "|%d", m.score());
   k += buf;
   return k;
 }
@@ -394,23 +411,11 @@ static void test_encoder_basic_layout() {
   // = the D play, scores=[50,30], and a board with C@(7,7) and D@(3,3).
   // (Board::apply doesn't enforce legality, so the disconnected placements
   // are fine for an encoder-layout test.)
-  Move p0_play;
-  p0_play.type = MoveType::PLAY;
-  p0_play.horizontal = true;
-  p0_play.start_row = 7;
-  p0_play.start_col = 7;
-  p0_play.glyphs[0] = Glyph::of(Tile::from_char('C'));
-  p0_play.square_mask = 0b1;
-  p0_play.score = 50;
+  Move p0_play =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 50, {Glyph::of(Tile::from_char('C'))});
 
-  Move p1_play;
-  p1_play.type = MoveType::PLAY;
-  p1_play.horizontal = true;
-  p1_play.start_row = 3;
-  p1_play.start_col = 3;
-  p1_play.glyphs[0] = Glyph::played(Tile::from_char('D'), /*is_blank=*/true);
-  p1_play.square_mask = 0b1;
-  p1_play.score = 30;
+  Move p1_play = make_play_full(3, 3, /*horizontal=*/true, 0b1, 30,
+                                {Glyph::played(Tile::from_char('D'), /*is_blank=*/true)});
 
   GameStateEncoder enc;
   enc.apply_move(p0_play);
@@ -507,24 +512,12 @@ static void test_encoder_last_opp_plane_mask() {
   // p0 plays a single 'A' at (7,7), then p1 plays "CAT" horizontally
   // starting at (7,6), interleaving the existing A at (7,7): cells (7,6)
   // and (7,8) were newly placed -> square_mask = 0b101.
-  Move p0_play;
-  p0_play.type = MoveType::PLAY;
-  p0_play.horizontal = true;
-  p0_play.start_row = 7;
-  p0_play.start_col = 7;
-  p0_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
-  p0_play.square_mask = 0b1;
-  p0_play.score = 1;
+  Move p0_play =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 1, {Glyph::of(Tile::from_char('A'))});
 
-  Move opp_play;
-  opp_play.type = MoveType::PLAY;
-  opp_play.horizontal = true;
-  opp_play.start_row = 7;
-  opp_play.start_col = 6;
-  opp_play.glyphs[0] = Glyph::of(Tile::from_char('C'));
-  opp_play.glyphs[1] = Glyph::of(Tile::from_char('T'));
-  opp_play.square_mask = 0b101;  // bit 0 (cell 7,6) + bit 2 (cell 7,8)
-  opp_play.score = 5;
+  Move opp_play =
+    make_play_full(7, 6, /*horizontal=*/true, 0b101, 5,
+                   {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('T'))});
 
   GameStateEncoder enc;
   enc.apply_move(p0_play);
@@ -550,24 +543,12 @@ static void test_encoder_flip_symmetry() {
   using namespace scribblez::binlog;
 
   // p0 single 'B' at (3,5); p1 vertical "AX" at (0,4) (mask=0b11).
-  Move p0_play;
-  p0_play.type = MoveType::PLAY;
-  p0_play.horizontal = true;
-  p0_play.start_row = 3;
-  p0_play.start_col = 5;
-  p0_play.glyphs[0] = Glyph::of(Tile::from_char('B'));
-  p0_play.square_mask = 0b1;
-  p0_play.score = 30;
+  Move p0_play =
+    make_play_full(3, 5, /*horizontal=*/true, 0b1, 30, {Glyph::of(Tile::from_char('B'))});
 
-  Move opp_play;
-  opp_play.type = MoveType::PLAY;
-  opp_play.horizontal = false;
-  opp_play.start_row = 0;
-  opp_play.start_col = 4;
-  opp_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
-  opp_play.glyphs[1] = Glyph::of(Tile::from_char('X'));
-  opp_play.square_mask = 0b11;
-  opp_play.score = 12;
+  Move opp_play =
+    make_play_full(0, 4, /*horizontal=*/false, 0b11, 12,
+                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))});
 
   GameStateEncoder enc;
   enc.apply_move(p0_play);
@@ -612,16 +593,14 @@ class TestAgent : public scribblez::Agent {
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
     if (!req.legal_plays.empty()) {
       int best = -1;
-      for (const auto& m : req.legal_plays) best = std::max(best, int(m.score));
+      for (const auto& m : req.legal_plays) best = std::max(best, int(m.score()));
       std::vector<const scribblez::Move*> top;
       for (const auto& m : req.legal_plays)
-        if (int(m.score) == best) top.push_back(&m);
+        if (int(m.score()) == best) top.push_back(&m);
       std::uniform_int_distribution<size_t> d(0, top.size() - 1);
       return *top[d(rng_)];
     }
-    scribblez::Move m;
-    m.type = scribblez::MoveType::PASS;
-    return m;
+    return scribblez::MoveFactory::pass();
   }
 
  private:
@@ -681,26 +660,29 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLog& lo
     pre.kind = PositionKind::kPreMove;
     out.push_back(pre);
 
-    if (turn.move.type == MoveType::PLAY) {
+    if (turn.move.type() == MoveType::PLAY) {
       LiveSnapshot post = pre;
       post.board.apply(turn.move);
       const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) post.rack_active.remove(turn.move.glyphs[g].rack_tile());
+      for (int g = 0; g < n; ++g) post.rack_active.remove(turn.move.glyph(g).rack_tile());
       post.score_active = prev_active + turn.score_delta;
       post.kind = PositionKind::kPostMove;
       out.push_back(post);
     }
 
     // Advance live state.
-    if (turn.move.type == MoveType::PLAY) {
+    if (turn.move.type() == MoveType::PLAY) {
       const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyphs[g].rack_tile());
+      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
       board.apply(turn.move);
-    } else if (turn.move.type == MoveType::EXCHANGE) {
+    } else if (turn.move.type() == MoveType::EXCHANGE) {
       const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyphs[g].rack_tile());
+      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
     }
-    for (uint8_t di = 0; di < turn.num_drawn; ++di) racks[active].add(turn.drawn[di]);
+    for (Tile t : turn.drawn.tiles()) {
+      if (t.is_empty()) break;
+      racks[active].add(t);
+    }
     last_by[active] = turn.move;
   }
   return out;
@@ -725,14 +707,15 @@ bool racks_equal(const scribblez::Rack& a, const scribblez::Rack& b) {
 }
 
 bool moves_equal_for_replay(const scribblez::Move& a, const scribblez::Move& b) {
-  if (a.type != b.type) return false;
-  if (a.type != scribblez::MoveType::PLAY) return true;  // PASS/EXCHANGE: type alone suffices here
-  if (a.horizontal != b.horizontal) return false;
-  if (a.start_row != b.start_row || a.start_col != b.start_col) return false;
-  if (a.square_mask != b.square_mask) return false;
-  if (a.score != b.score) return false;
+  if (a.type() != b.type()) return false;
+  if (a.type() != scribblez::MoveType::PLAY)
+    return true;  // PASS/EXCHANGE: type alone suffices here
+  if (a.horizontal() != b.horizontal()) return false;
+  if (a.start() != b.start()) return false;
+  if (a.square_mask() != b.square_mask()) return false;
+  if (a.score() != b.score()) return false;
   for (int i = 0; i < scribblez::RACK_SIZE; ++i) {
-    if (a.glyphs[i].code() != b.glyphs[i].code()) return false;
+    if (a.glyph(i).code() != b.glyph(i).code()) return false;
   }
   return true;
 }
@@ -810,7 +793,7 @@ static void test_extract_positions_movegen_roundtrip() {
       ++positions_compared;
 
       // ---- post-move snapshot (PLAY only) ----
-      if (turn.move.type == scribblez::MoveType::PLAY) {
+      if (turn.move.type() == scribblez::MoveType::PLAY) {
         CHECK(snap_idx < live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
         CHECK(post.kind == scribblez::binlog::PositionKind::kPostMove);
@@ -821,8 +804,8 @@ static void test_extract_positions_movegen_roundtrip() {
         post_board.apply(turn.move);
         scribblez::Rack post_rack = racks[active];
         const int n = turn.move.num_glyphs();
-        for (int g = 0; g < n; ++g) post_rack.remove(turn.move.glyphs[g].rack_tile());
-        const int post_score = enc.score(active) + turn.move.score;
+        for (int g = 0; g < n; ++g) post_rack.remove(turn.move.glyph(g).rack_tile());
+        const int post_score = enc.score(active) + turn.move.score();
         CHECK(boards_equal(post_board, post.board));
         CHECK(racks_equal(post_rack, post.rack_active));
         CHECK(post_score == post.score_active);
@@ -830,12 +813,15 @@ static void test_extract_positions_movegen_roundtrip() {
       }
 
       // Advance both encoder and parallel rack tracking.
-      if (turn.move.type == scribblez::MoveType::PLAY ||
-          turn.move.type == scribblez::MoveType::EXCHANGE) {
+      if (turn.move.type() == scribblez::MoveType::PLAY ||
+          turn.move.type() == scribblez::MoveType::EXCHANGE) {
         const int n = turn.move.num_glyphs();
-        for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyphs[g].rack_tile());
+        for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
       }
-      for (uint8_t d = 0; d < turn.num_drawn; ++d) racks[active].add(turn.drawn[d]);
+      for (Tile d : turn.drawn.tiles()) {
+        if (d.is_empty()) break;
+        racks[active].add(d);
+      }
       enc.apply_move(turn.move);
     }
     CHECK(snap_idx == live_snaps.size());
@@ -996,9 +982,8 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
       raw.data() + gm.start_offset + sizeof(scribblez::binlog::InitialRacks));
 
     // Reconstruct the initial racks from the on-disk bytes and replay.
-    Rack r0_init, r1_init;
-    for (uint8_t k = 0; k < ir->n0; ++k) r0_init.add(ir->p0[k]);
-    for (uint8_t k = 0; k < ir->n1; ++k) r1_init.add(ir->p1[k]);
+    const Rack& r0_init = ir->p0;
+    const Rack& r1_init = ir->p1;
     CHECK(racks_equal(r0_init, logs[gi].initial_racks[0]));
     CHECK(racks_equal(r1_init, logs[gi].initial_racks[1]));
 
@@ -1017,7 +1002,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
                           "file-roundtrip");
       ++compared;
 
-      if (turns[k].move.type == scribblez::MoveType::PLAY) {
+      if (turns[k].move.type() == scribblez::MoveType::PLAY) {
         CHECK(snap_idx < live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
         scribblez::Board post_board = enc.board();
@@ -1026,12 +1011,15 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
         ++compared;
       }
 
-      if (turns[k].move.type == scribblez::MoveType::PLAY ||
-          turns[k].move.type == scribblez::MoveType::EXCHANGE) {
+      if (turns[k].move.type() == scribblez::MoveType::PLAY ||
+          turns[k].move.type() == scribblez::MoveType::EXCHANGE) {
         const int n = turns[k].move.num_glyphs();
-        for (int g = 0; g < n; ++g) racks[active].remove(turns[k].move.glyphs[g].rack_tile());
+        for (int g = 0; g < n; ++g) racks[active].remove(turns[k].move.glyph(g).rack_tile());
       }
-      for (uint8_t d = 0; d < turns[k].num_drawn; ++d) racks[active].add(turns[k].drawn[d]);
+      for (Tile d : turns[k].drawn.tiles()) {
+        if (d.is_empty()) break;
+        racks[active].add(d);
+      }
       enc.apply_move(turns[k].move);
     }
     CHECK(snap_idx == live_snaps.size());
@@ -1218,14 +1206,8 @@ static void test_board_apply_interleaves_cross_tiles() {
   // Build a move equivalent to playing CAT horizontally starting at (7,7)
   // where the middle 'A' is already on the board: placements at (7,7) and
   // (7,9). main_word is "CAT", glyphs = {C, T}, square_mask = 0b101.
-  Move m;
-  m.type = MoveType::PLAY;
-  m.horizontal = true;
-  m.start_row = 7;
-  m.start_col = 7;
-  m.glyphs[0] = Glyph::of(Tile::from_char('C'));
-  m.glyphs[1] = Glyph::of(Tile::from_char('T'));
-  m.square_mask = 0b101;
+  Move m = make_play_full(7, 7, /*horizontal=*/true, 0b101, 0,
+                          {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('T'))});
 
   b.apply(m);
 
@@ -1256,45 +1238,30 @@ static void test_move_main_word_through_cross() {
 
   // 1. Hook: play S at (7,10) to make CATS. Single placement, but main_word
   //    must include all four letters by walking the existing tiles.
-  Move hook;
-  hook.type = MoveType::PLAY;
-  hook.horizontal = true;
-  hook.start_row = 7;
-  hook.start_col = 7;
-  hook.glyphs[0] = Glyph::of(Tile::from_char('S'));
-  // Note: Move::main_word does not depend on start_col being the placement;
-  // it walks from start_col through existing letters until it runs out of
-  // placements AND hits an empty cell. start_col = 7 -> walks C,A,T then
-  // places S then runs out -> "CATS".
+  Move hook = make_play_full(7, 10, /*horizontal=*/true, 0b1, 0, {Glyph::of(Tile::from_char('S'))});
+  // Move::main_word walks back from the placed S through the existing C,A,T
+  // to recover the word origin, then renders "CATS".
   CHECK(hook.main_word(b) == "CATS");
 
   // 2. Through-word: place B at (7,6) and S at (7,10) for "BCATS"? Not a
   //    real word -- but main_word doesn't care about legality. We just
   //    verify that interleaving works.
-  Move through;
-  through.type = MoveType::PLAY;
-  through.horizontal = true;
-  through.start_row = 7;
-  through.start_col = 6;
-  through.glyphs[0] = Glyph::of(Tile::from_char('B'));  // placed at (7,6)
-  through.glyphs[1] = Glyph::of(Tile::from_char('S'));  // placed at (7,10)
+  Move through = make_play_full(7, 6, /*horizontal=*/true, 0b10001, 0,
+                                {Glyph::of(Tile::from_char('B')),    // placed at (7,6)
+                                 Glyph::of(Tile::from_char('S'))});  // placed at (7,10)
   CHECK(through.main_word(b) == "BCATS");
 
   // 3. Blank renders as its designated letter (uppercase), like a regular tile.
-  Move with_blank;
-  with_blank.type = MoveType::PLAY;
-  with_blank.horizontal = true;
-  with_blank.start_row = 7;
-  with_blank.start_col = 7;
-  with_blank.glyphs[0] = Glyph::played(Tile::from_char('S'), /*is_blank=*/true);
+  Move with_blank = make_play_full(7, 10, /*horizontal=*/true, 0b1, 0,
+                                   {Glyph::played(Tile::from_char('S'), /*is_blank=*/true)});
   CHECK(with_blank.main_word(b) == "CATS");
 
   // 4. PASS / EXCHANGE produce empty strings.
   Move pass;
   CHECK(pass.main_word(b).empty());
-  Move xch;
-  xch.type = MoveType::EXCHANGE;
-  xch.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  TileCounts xch_tiles;
+  xch_tiles.add(Tile::from_char('A'));
+  Move xch = MoveFactory::exchange(xch_tiles);
   CHECK(xch.main_word(b).empty());
 }
 
@@ -1323,7 +1290,7 @@ static void test_movegen_blank_scores_zero() {
   int score_real = 0;
   for (const auto& m : moves_real) {
     if (m.main_word(b) == "CAT") {
-      score_real = m.score;
+      score_real = m.score();
       break;
     }
   }
@@ -1336,8 +1303,8 @@ static void test_movegen_blank_scores_zero() {
     if (m.main_word(b) == "CAT") {
       // Verify the C placement is a blank.
       CHECK(m.num_glyphs() == 1);
-      CHECK(m.glyphs[0].is_blank());
-      score_blank = m.score;
+      CHECK(m.glyph(0).is_blank());
+      score_blank = m.score();
       break;
     }
   }
@@ -1362,9 +1329,7 @@ class AlwaysPassAgent : public scribblez::Agent {
  public:
   AlwaysPassAgent(int tid, std::string name) : scribblez::Agent(tid, std::move(name)) {}
   scribblez::Move make_move(const scribblez::MoveRequest&) override {
-    scribblez::Move m;
-    m.type = scribblez::MoveType::PASS;
-    return m;
+    return scribblez::MoveFactory::pass();
   }
 };
 
@@ -1419,7 +1384,7 @@ static void test_game_end_stalemate_penalty() {
 
   CHECK(log.end_reason == "stalemate");
   CHECK(log.turns.size() == 6);  // 6 zero turns (3 per player)
-  for (const auto& t : log.turns) CHECK(t.move.type == MoveType::PASS);
+  for (const auto& t : log.turns) CHECK(t.move.type() == MoveType::PASS);
   for (int p = 0; p < 2; ++p) {
     CHECK(log.final_scores[p] == -log.final_racks[p].point_value());
   }
@@ -1522,12 +1487,9 @@ static void test_encode_labels() {
   // opp-next-placement head should light up exactly those three cells in
   // canonical orientation, and exactly their transposed cells when
   // apply_flip=true.
-  Move next_play{};
-  next_play.type = MoveType::PLAY;
-  next_play.horizontal = 1;
-  next_play.start_row = 4;
-  next_play.start_col = 2;
-  next_play.square_mask = 0b0000000000000111;  // bits 0,1,2
+  Move next_play = make_play_full(4, 2, /*horizontal=*/true, 0b111, 0,
+                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
+                                   Glyph::of(Tile::from_char('C'))});
 
   GameLogView v_with_next{};
   v_with_next.next_move = next_play;
@@ -1561,7 +1523,9 @@ static void test_encode_labels() {
   CHECK(plane[4 * 15 + 4] == 1.0f);
 
   // EXCHANGE / PASS next move -> all zeros.
-  v_with_next.next_move.type = MoveType::EXCHANGE;
+  TileCounts xch_tiles;
+  xch_tiles.add(Tile::from_char('A'));
+  v_with_next.next_move = MoveFactory::exchange(xch_tiles);
   v_with_next.apply_flip = false;
   encode_labels_flat(v_with_next, flat);
   for (int i = 0; i < kOppNextPlacementFloats; ++i) CHECK(plane[i] == 0.0f);
@@ -1607,30 +1571,19 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
 
   // Synthetic 1-tile PLAY: place 'Q' at (3,5). Score is arbitrary; we'll
   // record it in the move and recompute it in the reference.
-  Move q_play{};
-  q_play.type = MoveType::PLAY;
-  q_play.horizontal = true;
-  q_play.start_row = 3;
-  q_play.start_col = 5;
-  q_play.glyphs[0] = Glyph::of(Tile::from_char('Q'));
-  q_play.square_mask = 0b1;
-  q_play.score = 42;
+  Move q_play =
+    make_play_full(3, 5, /*horizontal=*/true, 0b1, 42, {Glyph::of(Tile::from_char('Q'))});
 
-  Move p1_pass{};
-  p1_pass.type = MoveType::PASS;
+  Move p1_pass = MoveFactory::pass();
 
   InitialRacks ir{};
-  ir.p0 = p0_init.tiles();
-  ir.p1 = p1_init.tiles();
-  ir.n0 = static_cast<uint8_t>(p0_init.size());
-  ir.n1 = static_cast<uint8_t>(p1_init.size());
+  ir.p0 = p0_init;
+  ir.p1 = p1_init;
 
   TurnBlob t0{};
   t0.move = q_play;
-  t0.num_drawn = 0;
   TurnBlob t1{};
   t1.move = p1_pass;
-  t1.num_drawn = 0;
 
   FileHeader hdr{};
   hdr.magic = kMagic;
@@ -2262,13 +2215,11 @@ static void test_hasty_equity_components() {
   Rack opp;
 
   // --- leave equity: PLAY move that uses all 7 tiles (empty leave) mid-game
-  Move all_out{};
-  all_out.type = MoveType::PLAY;
-  all_out.horizontal = true;
-  all_out.start_row = 7;
-  all_out.start_col = 4;
-  all_out.score = 50;
-  for (int i = 0; i < 7; ++i) all_out.glyphs[i] = Glyph::of(Tile::from_char('A'));
+  Move all_out = make_play_full(7, 4, /*horizontal=*/true, 0b1111111, 50,
+                                {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('A'))});
 
   Rack rack_7a;
   for (int i = 0; i < 7; ++i) rack_7a.add(Tile::from_char('A'));
@@ -2276,37 +2227,28 @@ static void test_hasty_equity_components() {
   // With bag_size > 0, leave is empty → leave_equity = 0.
   // Opening adjustment: tile A at columns 4..10; columns 6 and 8 are in
   // penalty set, both have vowel A → 2 * -0.7 = -1.4.
-  double e_mid = eq.equity(all_out, board, 86, rack_7a, opp);
+  double e_mid = eq.equity(all_out, board, 86, opp);
   CHECK(std::abs(e_mid - (50.0 - 1.4)) < 1e-3);
 
   // --- leave equity with non-empty leave (uses synthetic KLV: A=1.5, B=-2.5)
   // Play a single A, leaving AAAAAA (6 A's). Our synthetic KLV only has
   // single-tile leaves so the 6-tile leave returns 0.
-  Move one_a{};
-  one_a.type = MoveType::PLAY;
-  one_a.horizontal = true;
-  one_a.start_row = 7;
-  one_a.start_col = 7;  // center column
-  one_a.score = 2;
-  one_a.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  Move one_a = make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))});
 
   // rack = single A; leave = empty after playing it.
   Rack rack_1a;
   rack_1a.add(Tile::from_char('A'));
-  double e_one = eq.equity(one_a, board, 86, rack_1a, opp);
+  double e_one = eq.equity(one_a, board, 86, opp);
   // score=2, leave=empty(0), opening: center col=7 not in {2,6,8,12} → 0
   CHECK(std::abs(e_one - 2.0) < 1e-3);
 
   // --- endgame adjustment (bag_size = 0, non-out play)
   // Leave a single B on the rack (leave value from KLV = -2.5 but ignored
   // for endgame penalty which uses tile point values).
-  Move play_a_endgame{};
-  play_a_endgame.type = MoveType::PLAY;
-  play_a_endgame.horizontal = true;
-  play_a_endgame.start_row = 7;
-  play_a_endgame.start_col = 7;
-  play_a_endgame.score = 2;
-  play_a_endgame.glyphs[0] = Glyph::of(Tile::from_char('A'));
+  TileCounts leave_b;
+  leave_b.add(Tile::from_char('B'));
+  Move play_a_endgame =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))}, leave_b);
 
   // Rack = AB, play A, leave = B (value 3). bag_size = 0.
   // endgame_adjustment = -2 * 3 - 10 = -16.
@@ -2315,26 +2257,21 @@ static void test_hasty_equity_components() {
   rack_ab.add(Tile::from_char('B'));
   Board board_with_tiles;                                       // non-empty so opening adj = 0
   board_with_tiles.set(0, 0, Glyph::of(Tile::from_char('Q')));  // make non-empty
-  double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, rack_ab, opp);
+  double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, opp);
   // score=2, leave_equity=0 (bag=0), opening=0, peg=0, endgame=-16
   CHECK(std::abs(e_eg - (2.0 - 16.0)) < 1e-3);
 
   // --- endgame out-play (leave empty, bag = 0)
   // Play both tiles A and B (2 tiles used, both in glyphs).
-  Move out_play{};
-  out_play.type = MoveType::PLAY;
-  out_play.horizontal = true;
-  out_play.start_row = 7;
-  out_play.start_col = 7;
-  out_play.score = 5;
-  out_play.glyphs[0] = Glyph::of(Tile::from_char('A'));
-  out_play.glyphs[1] = Glyph::of(Tile::from_char('B'));
+  Move out_play =
+    make_play_full(7, 7, /*horizontal=*/true, 0b11, 5,
+                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B'))});
 
   // Opponent has a Q (value=10) on their rack.
   Rack opp_q;
   opp_q.add(Tile::from_char('Q'));
   // endgame bonus = 2 * 10 = 20.
-  double e_out = eq.equity(out_play, board_with_tiles, 0, rack_ab, opp_q);
+  double e_out = eq.equity(out_play, board_with_tiles, 0, opp_q);
   CHECK(std::abs(e_out - (5.0 + 20.0)) < 1e-3);
 
   fs::remove_all(tmp);

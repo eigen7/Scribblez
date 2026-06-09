@@ -209,11 +209,11 @@ void free_port(int port) {
 // --------------------------- move notation -------------------------------
 
 std::string move_to_notation(const Board& board, const Move& move) {
-  const int sr = move.start_row, sc = move.start_col;
+  auto [sr, sc] = move.word_origin(board);
   std::string pos;
   char col_letter = static_cast<char>('A' + sc);
   std::string row_num = std::to_string(sr + 1);
-  if (move.horizontal) {
+  if (move.horizontal()) {
     pos = row_num + col_letter;  // e.g. "8H"
   } else {
     pos = col_letter + row_num;  // e.g. "H8"
@@ -221,7 +221,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
 
   // Render the main word, lowercasing blank tiles (new or already on board).
   std::string word;
-  const int dr = move.horizontal ? 0 : 1, dc = move.horizontal ? 1 : 0;
+  const int dr = move.horizontal() ? 0 : 1, dc = move.horizontal() ? 1 : 0;
   const int n = move.num_glyphs();
   int r = sr, c = sc, gi = 0;
   while (board.in_bounds(r, c)) {
@@ -230,7 +230,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
     if (!cell.is_empty()) {
       g = cell;  // existing tile
     } else if (gi < n) {
-      g = move.glyphs[gi++];  // newly placed tile
+      g = move.glyph(gi++);  // newly placed tile
     } else {
       break;
     }
@@ -240,12 +240,13 @@ std::string move_to_notation(const Board& board, const Move& move) {
     c += dc;
   }
 
-  return pos + " " + word + " " + std::to_string(move.score);
+  return pos + " " + word + " " + std::to_string(move.score());
 }
 
 // --------------------------- state serialization -------------------------
 
-StateView::StateView(const MoveRequest& req, const std::string& my_name, const std::string& opp_name,
+StateView::StateView(const MoveRequest& req, const std::string& my_name,
+                     const std::string& opp_name,
                      const std::vector<std::optional<double>>* equities)
     : board(req.board),
       my_rack(req.my_rack),
@@ -260,8 +261,8 @@ StateView::StateView(const MoveRequest& req, const std::string& my_name, const s
       your_turn(true),
       game_over(false) {}
 
-StateView::StateView(const Game& game, int my_seat, const std::string& my_name, const std::string& opp_name,
-                     bool your_turn, bool game_over)
+StateView::StateView(const Game& game, int my_seat, const std::string& my_name,
+                     const std::string& opp_name, bool your_turn, bool game_over)
     : board(game.board()),
       my_rack(game.rack(my_seat)),
       my_score(game.score(my_seat)),
@@ -349,7 +350,7 @@ std::string game_state_json(const StateView& v) {
       const Move& m = (*v.legal_plays)[i];
       json::object mo{{"index", static_cast<int>(i)},
                       {"text", move_to_notation(v.board, m)},
-                      {"score", m.score}};
+                      {"score", m.score()}};
       // equity: null when we have no Macondo evaluation (or no value for
       // this particular play). The front-end renders the null cells blank.
       if (v.legal_play_equities && i < v.legal_play_equities->size() &&

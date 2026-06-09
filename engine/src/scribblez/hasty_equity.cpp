@@ -42,18 +42,16 @@ bool is_penalised_position(int pos) { return pos == 2 || pos == 6 || pos == 8 ||
 // an empty-board opening play.  Matches Maven / Macondo's heuristic.
 double opening_adjustment(const Move& move, const Board& board) {
   if (!board.empty_board()) return 0.0;
-  if (move.type != MoveType::PLAY) return 0.0;
+  if (move.type() != MoveType::PLAY) return 0.0;
 
   static constexpr double kVowelPenalty = -0.7;
   double penalty = 0.0;
-  int start = move.horizontal ? move.start_col : move.start_row;
+  uint16_t mask = move.square_mask();
   int gi = 0;
-  for (const Glyph& g : move.glyphs) {
-    if (g.is_empty()) break;
-    if (is_penalised_position(start + gi) && g.is_vowel()) {
-      penalty += kVowelPenalty;
-    }
-    ++gi;
+  for (int pos = 0; mask; ++pos, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    Glyph g = move.glyph(gi++);
+    if (is_penalised_position(pos) && g.is_vowel()) penalty += kVowelPenalty;
   }
   return penalty;
 }
@@ -123,16 +121,15 @@ std::string HastyEquity::default_peg_path() {
   return std::string(kStrategyRoot) + "/default/preendgame.json";
 }
 
-double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& my_rack,
+double HastyEquity::equity(const Move& move, const Board& board, int bag_size,
                            const Rack& opp_rack) const {
   std::vector<Move> one{move};
-  auto vals = equities(one, board, bag_size, my_rack, opp_rack);
+  auto vals = equities(one, board, bag_size, opp_rack);
   return vals.empty() ? 0.0 : vals[0];
 }
 
 std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
-                                          int bag_size, const Rack& my_rack,
-                                          const Rack& opp_rack) const {
+                                          int bag_size, const Rack& opp_rack) const {
   if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
 
   std::vector<double> out(moves.size(), 0.0);
@@ -141,7 +138,7 @@ std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const 
   std::vector<LeaveRunEntry> entries;
   entries.reserve(moves.size());
   for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
-    entries.push_back(LeaveRunEntry{moves[i].leave(my_rack), i});
+    entries.push_back(LeaveRunEntry{moves[i].leave(), i});
   }
 
   std::sort(entries.begin(), entries.end(), LeaveRunEntryLess());
@@ -159,7 +156,7 @@ std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const 
 
     for (size_t k = run_start; k < run_end; ++k) {
       int idx = entries[k].move_index;
-      out[idx] = static_cast<double>(moves[idx].score) + lv +
+      out[idx] = static_cast<double>(moves[idx].score()) + lv +
                  opening_adjustment(moves[idx], board) +
                  peg_adjustment(moves[idx], bag_size, peg_table_) + eg;
     }

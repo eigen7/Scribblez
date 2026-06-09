@@ -18,16 +18,9 @@ namespace {
 void remove_played_or_exchanged(Rack& rack, const Move& m) {
   const int n = m.num_glyphs();
   for (int i = 0; i < n; ++i) {
-    [[maybe_unused]] bool ok = rack.remove(m.glyphs[i].rack_tile());
+    [[maybe_unused]] bool ok = rack.remove(m.glyph(i).rack_tile());
     assert(ok);
   }
-}
-
-// Reconstruct a Rack from the on-disk InitialRacks slot for one player.
-Rack rack_from_initial(const std::array<Tile, RACK_SIZE>& tiles, uint8_t n) {
-  Rack r;
-  for (uint8_t k = 0; k < n; ++k) r.add(tiles[k]);
-  return r;
 }
 
 }  // namespace
@@ -63,26 +56,29 @@ void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip
     reinterpret_cast<const TurnBlob*>(buf + gm.start_offset + sizeof(InitialRacks));
 
   enc_ = GameStateEncoder{};
-  racks_[0] = rack_from_initial(ir->p0, ir->n0);
-  racks_[1] = rack_from_initial(ir->p1, ir->n1);
+  racks_[0] = ir->p0;
+  racks_[1] = ir->p1;
 
   // Replay turns [0, sampled_turn) silently (apply move + remove played
   // tiles + add drawn tiles). The mover of turn k alternates from active=0.
   const uint32_t target = gm.sampled_turn;
   for (uint32_t k = 0; k < target; ++k) {
     const int mover = enc_.active_player();
-    if (turns[k].move.type == MoveType::PLAY || turns[k].move.type == MoveType::EXCHANGE) {
+    if (turns[k].move.type() == MoveType::PLAY || turns[k].move.type() == MoveType::EXCHANGE) {
       remove_played_or_exchanged(racks_[mover], turns[k].move);
     }
     enc_.apply_move(turns[k].move);
-    for (uint8_t i = 0; i < turns[k].num_drawn; ++i) racks_[mover].add(turns[k].drawn[i]);
+    for (Tile t : turns[k].drawn.tiles()) {
+      if (t.is_empty()) break;
+      racks_[mover].add(t);
+    }
   }
 
   // At this point enc_ holds the pre-move state for turn `target`.
   const int mover = enc_.active_player();
   if (post_move) {
-    if (turns[target].move.type == MoveType::PLAY ||
-        turns[target].move.type == MoveType::EXCHANGE) {
+    if (turns[target].move.type() == MoveType::PLAY ||
+        turns[target].move.type() == MoveType::EXCHANGE) {
       remove_played_or_exchanged(racks_[mover], turns[target].move);
     }
     enc_.apply_move(turns[target].move);

@@ -1,56 +1,53 @@
 #include "scribblez/move.h"
 
-#include <algorithm>
-#include <array>
-#include <cassert>
-
 namespace scribblez {
 
 namespace {
 struct Step {
   int dr, dc;
 };
-Step step_of(const Move& m) { return m.horizontal ? Step{0, 1} : Step{1, 0}; }
+Step step_of(const Move& m) { return m.horizontal() ? Step{0, 1} : Step{1, 0}; }
 }  // namespace
 
-Rack Move::leave(const Rack& rack) const {
-  // Collect and sort this move's tiles, then two-pointer merge against the
-  // (already sorted) rack: survivors are appended in order, so each Rack::add
-  // is an O(1) tail insert.
-  std::array<Tile, RACK_SIZE> removed;
-  int n = 0;
-  for (const Glyph& g : glyphs) {
-    if (g.is_empty()) break;
-    removed[n++] = g.rack_tile();
+Rack Move::leave() const {
+  // The leave was laid into the glyph tail in sorted order during move
+  // generation, so each Rack::add is an O(1) tail insert.
+  Rack r;
+  for (int i = num_played_; i < RACK_SIZE; ++i) {
+    if (glyphs_[i].is_empty()) break;
+    r.add(glyphs_[i].rack_tile());
   }
-  std::sort(removed.begin(), removed.begin() + n);
+  return r;
+}
 
-  Rack leave;
-  int j = 0;
-  for (Tile t : rack.tiles()) {
-    if (t.is_empty()) break;
-    if (j < n && t == removed[j]) {
-      ++j;  // tile consumed by the move
-    } else {
-      leave.add(t);
-    }
+std::pair<int, int> Move::word_origin(const Board& board) const {
+  // The lowest set bit of the absolute mask is the first newly placed lane
+  // cell; the word may extend left of it through pre-existing tiles.
+  int along = 0;
+  for (uint16_t m = square_mask_; (m & 1u) == 0; m >>= 1) ++along;
+  Step s = step_of(*this);
+  int r = horizontal_ ? start_ : along;
+  int c = horizontal_ ? along : start_;
+  while (board.in_bounds(r - s.dr, c - s.dc) && !board.at(r - s.dr, c - s.dc).is_empty()) {
+    r -= s.dr;
+    c -= s.dc;
   }
-  assert(j == n);  // every played tile was present on the rack
-  return leave;
+  return {r, c};
 }
 
 std::string Move::main_word(const Board& board) const {
   std::string word;
-  if (type != MoveType::PLAY) return word;
+  if (type_ != MoveType::PLAY) return word;
   Step s = step_of(*this);
-  int r = start_row, c = start_col, gi = 0;
-  const int n = num_glyphs();
+  auto [r, c] = word_origin(board);
+  int gi = 0;
+  const int n = num_played_;
   while (board.in_bounds(r, c)) {
     Glyph cell = board.at(r, c);
     if (!cell.is_empty()) {
       word.push_back(cell.letter().to_char());  // existing tile
     } else if (gi < n) {
-      word.push_back(glyphs[gi++].letter().to_char());  // newly placed tile
+      word.push_back(glyphs_[gi++].letter().to_char());  // newly placed tile
     } else {
       break;  // empty square, no tiles left to place: word ends here
     }
@@ -58,6 +55,40 @@ std::string Move::main_word(const Board& board) const {
     c += s.dc;
   }
   return word;
+}
+
+// ---------------------------------------------------------------------------
+
+namespace {
+// Lay a multiset of rack tiles into `glyphs` starting at `j`, sorted ascending
+// (A..Z then blanks) -- the same order a Rack keeps. Returns the next index.
+int append_sorted(std::array<Glyph, RACK_SIZE>& glyphs, int j, const TileCounts& tiles) {
+  for (Tile t = Tile::of(0); t <= BLANK; ++t) {
+    for (int k = 0; k < tiles.count(t); ++k) glyphs[j++] = Glyph::exchanging(t);
+  }
+  return j;
+}
+}  // namespace
+
+Move MoveFactory::play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
+                       const Glyph* played, int num_played, const TileCounts& leave) {
+  Move m;
+  m.type_ = MoveType::PLAY;
+  m.horizontal_ = horizontal;
+  m.start_ = static_cast<int8_t>(start);
+  m.num_played_ = static_cast<uint8_t>(num_played);
+  m.square_mask_ = square_mask;
+  m.score_ = score;
+  for (int i = 0; i < num_played; ++i) m.glyphs_[i] = played[i];
+  append_sorted(m.glyphs_, num_played, leave);
+  return m;
+}
+
+Move MoveFactory::exchange(const TileCounts& tiles) {
+  Move m;
+  m.type_ = MoveType::EXCHANGE;
+  m.num_played_ = static_cast<uint8_t>(append_sorted(m.glyphs_, 0, tiles));
+  return m;
 }
 
 }  // namespace scribblez

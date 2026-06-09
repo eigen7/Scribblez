@@ -24,9 +24,8 @@
 // TurnBlob array starts at (start_offset + sizeof(InitialRacks)).
 
 #include "scribblez/move.h"
-#include "scribblez/tile.h"
+#include "scribblez/rack.h"
 
-#include <array>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -40,7 +39,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 5;
+inline constexpr uint16_t kVersion = 7;
 
 #pragma pack(push, 1)
 
@@ -69,24 +68,20 @@ struct GameMetadata {
 static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 
 // Per-game initial state: the tiles dealt to each player before play starts.
-// In standard rules `n0 == n1 == RACK_SIZE`, but we store the counts
-// explicitly so a starved bag is representable.
+// Trailing entries of each rack slot are empty Tiles when the bag was starved
+// and a player received fewer than RACK_SIZE tiles.
 struct InitialRacks {
-  std::array<Tile, RACK_SIZE> p0;  // 7 B
-  std::array<Tile, RACK_SIZE> p1;  // 7 B
-  uint8_t n0;                      // 1 B
-  uint8_t n1;                      // 1 B
+  Rack p0;  // 7 B
+  Rack p1;  // 7 B
 };
 static_assert(sizeof(InitialRacks) == 16, "InitialRacks must be 16 bytes");
 
 // One on-disk turn: the move that was played, plus the tiles drawn from the
 // bag immediately after the move resolved (and rack mutations applied).
-// `num_drawn` is 0..RACK_SIZE; the first `num_drawn` entries of `drawn`
-// are valid and the rest are empty Tiles.
+// Trailing entries of `drawn` are empty Tiles.
 struct TurnBlob {
-  Move move;                          // 16 B (alignof=2; sizeof statically asserted)
-  std::array<Tile, RACK_SIZE> drawn;  // 7 B
-  uint8_t num_drawn;                  // 1 B
+  Move move;   // 16 B (alignof=2; sizeof statically asserted)
+  Rack drawn;  // 8 B
 };
 static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 

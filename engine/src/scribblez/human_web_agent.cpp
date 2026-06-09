@@ -2,6 +2,7 @@
 
 #include "scribblez/game.h"
 #include "scribblez/hasty_equity.h"
+#include "scribblez/lexicon.h"
 #include "scribblez/tile.h"
 #include "scribblez/web_server.h"
 
@@ -66,7 +67,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
   try {
     const HastyEquity& eq = HastyEquity::instance();
     const std::vector<double> vals =
-      eq.equities(req.legal_plays, req.board, req.bag_size, req.my_rack, req.opp_rack);
+      eq.equities(req.legal_plays, req.board, req.bag_size, req.opp_rack);
     equities.resize(vals.size());
     for (size_t i = 0; i < vals.size(); ++i) equities[i] = vals[i];
   } catch (const std::exception&) {
@@ -78,9 +79,7 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
 
   for (;;) {
     if (!session_->connected() && !session_->wait_for_client()) {
-      Move m;
-      m.type = MoveType::PASS;
-      return m;
+      return MoveFactory::pass();
     }
     session_->send_text(msg);
     for (;;) {
@@ -106,19 +105,15 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
           }
         }
       } else if (type == "pass") {
-        Move m;
-        m.type = MoveType::PASS;
-        return m;
+        return MoveFactory::pass();
       } else if (type == "exchange") {
         // Optional: front-end may send {"type":"exchange","letters":"AB?"}.
-        Move m;
-        m.type = MoveType::EXCHANGE;
-        int gi = 0;
+        TileCounts tiles;
         for (char c : str_field(obj, "letters")) {
           Tile L = (c == '?' || (c >= 'a' && c <= 'z')) ? BLANK : Tile::from_char(c);
-          if (req.my_rack.count(L) > 0 && gi < RACK_SIZE) m.glyphs[gi++] = Glyph::exchanging(L);
+          if (req.my_rack.count(L) > 0) tiles.add(L);
         }
-        if (gi > 0) return m;
+        if (!tiles.empty()) return MoveFactory::exchange(tiles);
       }
       // Unknown / invalid: keep waiting for a usable message.
     }
@@ -178,6 +173,18 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=human options: ") + e.what());
   }
+
+  // Lazily load the default equity tables so the cheat-mode equity column is
+  // populated even when the opponent is not a HastyBot (which would otherwise
+  // be the only thing that initializes them). A play_game --leaves-file has
+  // already initialized them, in which case this is a no-op. Equity is purely
+  // an optional annotation for a human, so a missing default leaves file is
+  // non-fatal -- the column simply stays blank.
+  try {
+    HastyEquity::ensure_initialized(Lexicon::instance().name());
+  } catch (const std::exception&) {
+  }
+
   return std::make_unique<HumanWebAgent>(thread_id, params, name, opp_name);
 }
 

@@ -2,7 +2,6 @@
 
 #include "scribblez/rack.h"
 
-#include <cstdint>
 #include <string>
 #include <unordered_map>
 

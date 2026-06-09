@@ -39,10 +39,8 @@ class HastyEquity {
 
   // Static HastyBot equity for `move` in the given position.
   //   bag_size : tiles remaining in the bag *before* the move
-  //   my_rack  : on-move player's rack (used to compute the leave)
   //   opp_rack : opponent's rack (used only for the endgame adjustment)
-  double equity(const Move& move, const Board& board, int bag_size, const Rack& my_rack,
-                const Rack& opp_rack) const;
+  double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack) const;
 
   // Batched static-equity evaluation for a full legal-play list.
   //
@@ -51,7 +49,7 @@ class HastyEquity {
   // all moves with that leave.  Intended for both HastyBot and human UI
   // annotations to share one optimized implementation.
   std::vector<double> equities(const std::vector<Move>& moves, const Board& board, int bag_size,
-                               const Rack& my_rack, const Rack& opp_rack) const;
+                               const Rack& opp_rack) const;
 
  private:
   HastyEquity() = default;

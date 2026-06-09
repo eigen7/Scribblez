@@ -15,22 +15,19 @@ Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }
 
-void Game::refill_rack(int p, Tile* drawn_out, uint8_t* num_drawn_out) {
-  uint8_t n = 0;
+void Game::refill_rack(int p, Rack* drawn_out) {
   while (racks_[p].size() < RACK_SIZE) {
     auto t = bag_.draw();
     if (!t) break;
     racks_[p].add(*t);
-    if (drawn_out) drawn_out[n] = *t;
-    ++n;
+    if (drawn_out) drawn_out->add(*t);
   }
-  if (num_drawn_out) *num_drawn_out = n;
 }
 
 void Game::play() {
   // Initial draws.
   for (int p = 0; p < 2; ++p) {
-    refill_rack(p, /*drawn_out=*/nullptr, /*num_drawn_out=*/nullptr);
+    refill_rack(p, /*drawn_out=*/nullptr);
   }
   log_.initial_racks[0] = racks_[0];
   log_.initial_racks[1] = racks_[1];
@@ -61,23 +58,23 @@ void Game::play() {
 
     bool rack_emptied = false;
     const int n_glyphs = m.num_glyphs();
-    if (m.type == MoveType::PLAY) {
+    if (m.type() == MoveType::PLAY) {
       // Remove placed tiles from rack, apply to board.
-      racks_[cur] = m.leave(racks_[cur]);
+      racks_[cur] = m.leave();
       board_.apply(m);
-      scores_[cur] += m.score;
-      rec.score_delta = m.score;
+      scores_[cur] += m.score();
+      rec.score_delta = m.score();
       consecutive_zero_turns = 0;
       // Draw replacement tiles.
-      refill_rack(cur, rec.drawn.data(), &rec.num_drawn);
+      refill_rack(cur, &rec.drawn);
       if (racks_[cur].empty() && bag_.size() == 0) {
         rack_emptied = true;
       }
-    } else if (m.type == MoveType::EXCHANGE) {
+    } else if (m.type() == MoveType::EXCHANGE) {
       // Remove tiles from rack, draw new ones, then put exchanged tiles back.
-      racks_[cur] = m.leave(racks_[cur]);
-      refill_rack(cur, rec.drawn.data(), &rec.num_drawn);
-      for (int i = 0; i < n_glyphs; ++i) bag_.put_back(m.glyphs[i].rack_tile());
+      for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
+      refill_rack(cur, &rec.drawn);
+      for (int i = 0; i < n_glyphs; ++i) bag_.put_back(m.glyph(i).rack_tile());
       ++consecutive_zero_turns;
     } else {
       // PASS

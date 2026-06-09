@@ -70,24 +70,20 @@ Anchors compute_anchors(const View& view) {
   return anchor;
 }
 
-// Build a PLAY Move (placed tiles, main word, score) for the run that occupies
-// view columns [start_col, end_col_excl) on `row`. Squares already filled on the
-// board contribute their existing letters; empty squares in the span are newly
-// placed and their (letter, is_blank) come from `placed_letter`/`placed_blank`.
-// Scoring (premiums, cross-words, bingo) is shared by both generators so the
-// two algorithms produce byte-identical moves.
+// Build a PLAY Move (placed tiles, main word, score, leave) for the run that
+// occupies view columns [start_col, end_col_excl) on `row`. Squares already
+// filled on the board contribute their existing letters; empty squares in the
+// span are newly placed and their (letter, is_blank) come from
+// `placed_letter`/`placed_blank`. `leave` is the generator's available-tile
+// scratch, which at emit time holds exactly the tiles not played -- the move's
+// leave. Scoring (premiums, cross-words, bingo) is shared by both generators so
+// the two algorithms produce byte-identical moves.
 Move build_play(const View& view, const CrossChecks& cross, int row, int start_col,
                 int end_col_excl, const std::array<Tile, BOARD_SIZE>& placed_letter,
-                const std::array<bool, BOARD_SIZE>& placed_blank) {
-  Move m;
-  m.type = MoveType::PLAY;
-  m.horizontal = !view.transposed;
-  auto start_bc = view.to_board(row, start_col);
-  m.start_row = start_bc.first;
-  m.start_col = start_bc.second;
-  m.square_mask = 0;
-
+                const std::array<bool, BOARD_SIZE>& placed_blank, const TileCounts& leave) {
+  std::array<Glyph, RACK_SIZE> played{};
   int n_placed = 0;
+  uint16_t square_mask = 0;
   int main_letter_sum = 0;
   int word_mult = 1;
   int cross_total = 0;
@@ -105,8 +101,8 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
       L = placed_letter[c];
       is_blank = placed_blank[c];
       newly_placed = true;
-      m.glyphs[n_placed++] = Glyph::played(L, is_blank);  // in word order
-      m.square_mask |= static_cast<uint16_t>(1u << (c - start_col));
+      played[n_placed++] = Glyph::played(L, is_blank);  // in word order
+      square_mask |= static_cast<uint16_t>(1u << c);    // absolute lane index
     }
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
@@ -125,9 +121,10 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
     main_letter_sum += letter_value;
   }
 
-  m.score = main_letter_sum * word_mult + cross_total;
-  if (n_placed == RACK_SIZE) m.score += 50;  // bingo
-  return m;
+  int score = main_letter_sum * word_mult + cross_total;
+  if (n_placed == RACK_SIZE) score += 50;  // bingo
+  return MoveFactory::play(!view.transposed, row, square_mask, static_cast<uint16_t>(score),
+                           played.data(), n_placed, leave);
 }
 
 struct GenState {
@@ -179,8 +176,8 @@ void GenState::emit_move(int start_col, int end_col_excl) {
       ++ri;
     }
   }
-  out.push_back(
-    build_play(view, cross, current_row, start_col, end_col_excl, placed_letter, placed_blank));
+  out.push_back(build_play(view, cross, current_row, start_col, end_col_excl, placed_letter,
+                           placed_blank, rack));
 }
 
 void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
@@ -188,7 +185,10 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
   bool stop_here = off_board || view.at(current_row, col).is_empty();
   if (stop_here) {
     int total_placed = (int)left_letters.size() + (int)right_placed.size();
-    if (accepts_here && col > current_anchor_col && total_placed > 0) {
+    // Single-tile plays are produced by both orientations; treat horizontal as
+    // canonical and never emit them from the transposed (vertical) pass.
+    bool suppress = view.transposed && total_placed == 1;
+    if (accepts_here && col > current_anchor_col && total_placed > 0 && !suppress) {
       int start_col;
       if (case_b_start_col >= 0) {
         start_col = case_b_start_col;
@@ -327,8 +327,11 @@ struct GaddagGen {
   std::array<Glyph, BOARD_SIZE> row_cells{};
 
   void record(int leftstrip, int rightstrip) {
-    out.push_back(
-      build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
+    // Single-tile plays are produced by both orientations; treat horizontal as
+    // canonical and never emit them from the transposed (vertical) pass.
+    if (view.transposed && tiles_played == 1) return;
+    out.push_back(build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter,
+                             strip_blank, rack));
   }
 
   // Gordon's GoOn: we have just transitioned to `new_node` by placing/using
@@ -435,7 +438,6 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
     bool transposed = (orient == 1);
     View view{board_, transposed};
     const CrossChecks& cross = board_.cross_checks(transposed);
-    const auto before = out.size();
     if (algo == GenAlgo::GADDAG) {
       const Anchors& anchors = board_.gaddag_anchors(transposed);
       GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
@@ -444,13 +446,6 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
       auto anchors = compute_anchors(view);
       GenState st{view, dict_, cross, anchors, rack.counts(), out};
       for (int r = 0; r < BOARD_SIZE; ++r) st.generate_for_row(r);
-    }
-    // Single-tile plays are produced by both orientations; treat horizontal as
-    // canonical and suppress them from the transposed (vertical) pass.
-    if (transposed) {
-      out.erase(std::remove_if(out.begin() + before, out.end(),
-                               [](const Move& m) { return m.num_glyphs() == 1; }),
-                out.end());
     }
   }
   return out;

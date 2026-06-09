@@ -25,16 +25,14 @@ class HastyAgent : public Agent {
   Move make_move(const MoveRequest& req) override {
     if (!req.legal_plays.empty()) {
       int best = -1;
-      for (const auto& m : req.legal_plays) best = std::max(best, int(m.score));
+      for (const auto& m : req.legal_plays) best = std::max(best, int(m.score()));
       std::vector<const Move*> top;
       for (const auto& m : req.legal_plays)
-        if (int(m.score) == best) top.push_back(&m);
+        if (int(m.score()) == best) top.push_back(&m);
       std::uniform_int_distribution<size_t> d(0, top.size() - 1);
       return *top[d(rng_)];
     }
-    Move m;
-    m.type = MoveType::PASS;
-    return m;
+    return MoveFactory::pass();
   }
 
  private:

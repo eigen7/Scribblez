@@ -52,24 +52,20 @@ void encode_board_planes(const Board& board, bool flip, float* planes_out) {
 }
 
 // Placement plane: mark squares `m` placed tiles on. Uses Move::square_mask
-// -- bit i is set iff the i-th cell along the move direction was a newly
-// placed tile. No-op for EXCHANGE / PASS / game-start (leaving the plane
+// -- an absolute bitmask over the play's lane (bit k set iff lane cell k was a
+// newly placed tile). No-op for EXCHANGE / PASS / game-start (leaving the plane
 // all-zero).
 void encode_placement_plane(const Move& m, bool flip, int plane, float* planes_out) {
-  if (m.type != MoveType::PLAY) return;
-  const int dr = m.horizontal ? 0 : 1;
-  const int dc = m.horizontal ? 1 : 0;
-  int r = m.start_row, c = m.start_col;
-  uint16_t mask = m.square_mask;
-  for (int i = 0; i < kBoardSide; ++i) {
+  if (m.type() != MoveType::PLAY) return;
+  const bool horizontal = m.horizontal();
+  const int start = m.start();
+  uint16_t mask = m.square_mask();
+  for (int along = 0; mask; ++along, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horizontal ? start : along;
+    const int c = horizontal ? along : start;
     if (r < 0 || r >= kBoardSide || c < 0 || c >= kBoardSide) break;
-    if (mask == 0) break;
-    if (mask & 1u) {
-      planes_out[plane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
-    }
-    mask = static_cast<uint16_t>(mask >> 1);
-    r += dr;
-    c += dc;
+    planes_out[plane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
   }
 }
 
@@ -129,7 +125,7 @@ void encode_score_diff_thermometer(int score_diff, float* out) {
 // One move's metadata (kMoveMetaFloatsPerMove floats): move-type one-hot
 // (indexed by MoveType) followed by num_glyphs.
 void encode_move_meta(const Move& m, float* out) {
-  out[static_cast<int>(m.type)] = 1.0f;
+  out[static_cast<int>(m.type())] = 1.0f;
   out[kMoveMetaTypeFloats] = static_cast<float>(m.num_glyphs());
 }
 
@@ -162,9 +158,9 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
 }  // namespace
 
 void GameStateEncoder::apply_move(const Move& move) {
-  if (move.type == MoveType::PLAY) {
+  if (move.type() == MoveType::PLAY) {
     board_.apply(move);
-    scores_[active_] += move.score;
+    scores_[active_] += move.score();
   }
   // EXCHANGE / PASS: board and score are unchanged.
   last_move_by_[active_] = move;

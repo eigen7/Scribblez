@@ -22,25 +22,28 @@ std::string nickify(const std::string& name) {
 }
 
 // Coordinate of the main word's first square: "8D" for a horizontal play (row
-// number first), "D8" for a vertical one (column letter first).
-std::string position(const Move& m) {
-  std::string col(1, static_cast<char>('A' + m.start_col));
-  std::string row = std::to_string(m.start_row + 1);
-  return m.horizontal ? row + col : col + row;
+// number first), "D8" for a vertical one (column letter first). The origin is
+// recovered from the board as it stood before the move.
+std::string position(const Board& board_before, const Move& m) {
+  auto [r, c] = m.word_origin(board_before);
+  std::string col(1, static_cast<char>('A' + c));
+  std::string row = std::to_string(r + 1);
+  return m.horizontal() ? row + col : col + row;
 }
 
 // The played word in GCG form: a '.' for every square already occupied before
 // this move (played through), and a lowercase letter for a designated blank.
 std::string played_word(const Board& board_before, const Move& m) {
   std::string out;
-  const int dr = m.horizontal ? 0 : 1, dc = m.horizontal ? 1 : 0;
+  const int dr = m.horizontal() ? 0 : 1, dc = m.horizontal() ? 1 : 0;
   const int n = m.num_glyphs();
-  int r = m.start_row, c = m.start_col, gi = 0;
+  auto [r, c] = m.word_origin(board_before);
+  int gi = 0;
   while (board_before.in_bounds(r, c)) {
     if (!board_before.at(r, c).is_empty()) {
       out.push_back('.');  // played through an existing tile
     } else if (gi < n) {
-      Glyph g = m.glyphs[gi++];
+      Glyph g = m.glyph(gi++);
       char ch = g.letter().to_char();
       out.push_back(g.is_blank() ? static_cast<char>(ch - 'A' + 'a') : ch);
     } else {
@@ -54,10 +57,8 @@ std::string played_word(const Board& board_before, const Move& m) {
 
 std::string exchanged_tiles(const Move& m) {
   std::string s;
-  for (Glyph g : m.glyphs) {
-    if (g.is_empty()) break;
-    s.push_back(g.rack_tile().to_char());
-  }
+  const int n = m.num_glyphs();
+  for (int i = 0; i < n; ++i) s.push_back(m.glyph(i).rack_tile().to_char());
   return s;
 }
 
@@ -87,10 +88,10 @@ std::string game_log_to_gcg(const GameLog& log) {
     last_cumulative[t.player] = cumulative;
 
     o << ">" << nick[t.player] << ": ";
-    switch (m.type) {
+    switch (m.type()) {
       case MoveType::PLAY:
-        o << rack << " " << position(m) << " " << played_word(board, m) << " +" << m.score << " "
-          << cumulative << "\n";
+        o << rack << " " << position(board, m) << " " << played_word(board, m) << " +" << m.score()
+          << " " << cumulative << "\n";
         board.apply(m);
         break;
       case MoveType::EXCHANGE:

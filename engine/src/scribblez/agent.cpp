@@ -17,27 +17,19 @@ GreedyAgent::GreedyAgent(int thread_id, const std::string& name, uint64_t seed)
 
 Move GreedyAgent::make_move(const MoveRequest& req) {
   if (!req.legal_plays.empty()) {
-    int best = req.legal_plays.front().score;
-    for (const auto& m : req.legal_plays) best = std::max(best, static_cast<int>(m.score));
+    int best = req.legal_plays.front().score();
+    for (const auto& m : req.legal_plays) best = std::max(best, static_cast<int>(m.score()));
     std::vector<const Move*> top;
     for (const auto& m : req.legal_plays)
-      if (m.score == best) top.push_back(&m);
+      if (m.score() == best) top.push_back(&m);
     std::uniform_int_distribution<size_t> d(0, top.size() - 1);
     return *top[d(rng_)];
   }
   // No legal plays.
   if (req.bag_size >= RACK_SIZE) {
-    Move m;
-    m.type = MoveType::EXCHANGE;
-    int gi = 0;
-    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
-      for (int i = 0; i < req.my_rack.count(L); ++i) m.glyphs[gi++] = Glyph::exchanging(L);
-    }
-    return m;
+    return MoveFactory::exchange(req.my_rack.counts());
   }
-  Move m;
-  m.type = MoveType::PASS;
-  return m;
+  return MoveFactory::pass();
 }
 
 std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::string>& tokens,

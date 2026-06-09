@@ -37,19 +37,16 @@ void OppNextPlacementTarget::encode(const GameLogView& v, float* out) {
   std::fill_n(out, kSide * kSide, 0.0f);
   if (!v.has_next_move) return;
   const Move& m = v.next_move;
-  if (m.type != MoveType::PLAY) return;
-  const int dr = m.horizontal ? 0 : 1;
-  const int dc = m.horizontal ? 1 : 0;
-  int r = m.start_row;
-  int c = m.start_col;
-  uint16_t mask = m.square_mask;
-  for (int i = 0; i < kSide; ++i) {
+  if (m.type() != MoveType::PLAY) return;
+  const bool horizontal = m.horizontal();
+  const int start = m.start();
+  uint16_t mask = m.square_mask();
+  for (int along = 0; mask; ++along, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horizontal ? start : along;
+    const int c = horizontal ? along : start;
     if (r < 0 || r >= kSide || c < 0 || c >= kSide) break;
-    if (mask == 0) break;
-    if (mask & 1u) out[plane_idx(r, c, v.apply_flip)] = 1.0f;
-    mask = static_cast<uint16_t>(mask >> 1);
-    r += dr;
-    c += dc;
+    out[plane_idx(r, c, v.apply_flip)] = 1.0f;
   }
 }
 
