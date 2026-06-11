@@ -48,7 +48,7 @@ class ScribblezSetupWizard(SetupWizardTool):
             return []
         return sorted(p.stem for p in lex_dir.glob("*.kwg"))
 
-    def setup_lexica(self) -> None:
+    def setup_lexica(self):
         """List installed lexica, prompt for additional ones, fetch them.
 
         Only populates <mount>/lexica/. The Macondo checkout's own
@@ -104,7 +104,7 @@ def get_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     assert not in_docker_container(), \
         "setup_wizard.py is intended to be run on the host, not inside the container."
     get_args()  # for --help

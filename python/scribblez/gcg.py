@@ -49,7 +49,7 @@ def parse_gcg(path) -> Dict[str, Any]:
     turns: List[Dict[str, Any]] = []
 
     def record(player: int, rack: str, move: Dict[str, Any], score_delta: int,
-               bag_before: int) -> None:
+               bag_before: int):
         turns.append({
             "player": player,
             "rack_before": rack,

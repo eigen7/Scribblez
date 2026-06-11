@@ -5,7 +5,7 @@ from setup_common import make_config
 from subtrees.devenv_utils import docker_build
 
 
-def main() -> None:
+def main():
     docker_build(make_config())
 
 

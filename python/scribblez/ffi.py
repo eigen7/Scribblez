@@ -56,7 +56,7 @@ class ShapeInfo:
 # ---------------------------------------------------------------------------
 
 
-def _setup_lib(lib: ctypes.CDLL) -> None:
+def _setup_lib(lib: ctypes.CDLL):
     """Declare argtypes/restypes for every FFI entry point."""
     lib.scribblez_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
     lib.scribblez_input_shapes.argtypes = []
@@ -195,7 +195,7 @@ class NativeDataLoader:
             self._lib.scribblez_dl_delete(self._handle)
             self._handle = None
 
-    def add_file(self, path: str | Path, num_positions: int, file_size: int) -> None:
+    def add_file(self, path: str | Path, num_positions: int, file_size: int):
         self._lib.scribblez_dl_add_file(
             self._handle, str(path).encode("utf-8"), num_positions, file_size
         )
