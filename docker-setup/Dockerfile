@@ -58,7 +58,7 @@ RUN pip3 install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu129 \
       torch torchvision torchaudio
 RUN pip3 install --no-cache-dir \
-      numpy scipy pandas matplotlib tqdm pytest natsort
+      numpy scipy pandas matplotlib tqdm pytest natsort ipython
 
 # 5) Make python/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
