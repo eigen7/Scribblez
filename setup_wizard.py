@@ -128,6 +128,8 @@ def main():
         tool.rule()
         tool.build_docker_image()
         tool.rule()
+        tool.setup_cdi()
+        tool.rule()
         tool.validate_nvidia_installation()
         tool.rule()
         print_green("Setup complete.")
