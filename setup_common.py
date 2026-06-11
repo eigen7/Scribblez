@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
 # `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "0.1.0"
+MINIMUM_REQUIRED_IMAGE_VERSION = "0.2.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [
