@@ -23,8 +23,16 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # and will error if the existing checkout is at a different tag (unless
 # --skip-macondo-tag-check is passed).
 MACONDO_TAG = "v0.13.1"
-MACONDO_DIR = "/workspace/mount/macondo"
+MOUNT_DIR = "/workspace/mount"
+MACONDO_DIR = os.path.join(MOUNT_DIR, "macondo")
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
+
+# Lexicon .kwg files are downloaded into <mount>/lexica/ by setup_wizard.py.
+# Macondo expects to find them under <macondo>/data/lexica/gaddag/, keyed by
+# lexicon name; we symlink them there after cloning so the macondo subprocess
+# can resolve them.
+LEXICA_DIR = os.path.join(MOUNT_DIR, "lexica")
+MACONDO_GADDAG_DIR = os.path.join(MACONDO_DIR, "data", "lexica", "gaddag")
 
 
 def run(cmd, cwd=None):
@@ -32,6 +40,31 @@ def run(cmd, cwd=None):
     result = subprocess.run(cmd, shell=True, cwd=cwd or ROOT)
     if result.returncode:
         sys.exit(result.returncode)
+
+
+def link_lexica_into_macondo():
+    """Symlink <mount>/lexica/*.kwg into Macondo's data/lexica/gaddag/ dir.
+
+    Macondo looks up its kwg by lexicon name from there. Uses relative symlinks
+    so they survive the mount dir being moved. Safe to run repeatedly.
+    """
+    if not os.path.isdir(LEXICA_DIR):
+        print(f"\nNo lexica dir at {LEXICA_DIR}; skipping macondo lexica links.\n"
+              "Run ./setup_wizard.py to install lexica.")
+        return
+    kwgs = sorted(f for f in os.listdir(LEXICA_DIR) if f.endswith(".kwg"))
+    if not kwgs:
+        print(f"\nNo .kwg files in {LEXICA_DIR}; skipping macondo lexica links.")
+        return
+    os.makedirs(MACONDO_GADDAG_DIR, exist_ok=True)
+    for name in kwgs:
+        link = os.path.join(MACONDO_GADDAG_DIR, name)
+        target = os.path.join(LEXICA_DIR, name)
+        if os.path.islink(link) or os.path.exists(link):
+            os.unlink(link)
+        os.symlink(os.path.relpath(target, MACONDO_GADDAG_DIR), link)
+    print(f"\nLinked {len(kwgs)} lexica into {MACONDO_GADDAG_DIR}: "
+          f"{', '.join(os.path.splitext(k)[0] for k in kwgs)}")
 
 
 def main():
@@ -106,6 +139,9 @@ def main():
                     sys.exit(1)
             os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
             run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
+
+            # Make the installed lexica resolvable by the macondo subprocess.
+            link_lexica_into_macondo()
 
     print("\nBuild complete. Play a human-vs-AI game with:")
     print('    ./build/engine/play_game --player "--type=human" --player "--type=greedy"')

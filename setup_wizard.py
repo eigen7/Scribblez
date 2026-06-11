@@ -27,7 +27,6 @@ VS Code attach config, or rebuild the image.
 import argparse
 import os
 import sys
-from pathlib import Path
 
 from setup_common import DEFAULT_LEXICA, LIWORDS_KWG_URL_TEMPLATE, make_config
 from subtrees.devenv_utils import (
@@ -52,13 +51,12 @@ class ScribblezSetupWizard(SetupWizardTool):
     def setup_lexica(self) -> None:
         """List installed lexica, prompt for additional ones, fetch them.
 
-        Also keeps Macondo's expected data/lexica/gaddag/ dir in sync via
-        symlinks (Macondo looks up its kwg by lexicon name from there).
+        Only populates <mount>/lexica/. The Macondo checkout's own
+        data/lexica/gaddag/ symlinks are created by build.py *after* it clones
+        Macondo -- pre-creating <mount>/macondo/ here would break that clone.
         """
         lex_dir = self.mount_dir / "lexica"
-        macondo_lex_dir = self.mount_dir / "macondo" / "data" / "lexica" / "gaddag"
         lex_dir.mkdir(parents=True, exist_ok=True)
-        macondo_lex_dir.mkdir(parents=True, exist_ok=True)
 
         have = self.installed_lexica()
         if have:
@@ -85,31 +83,18 @@ class ScribblezSetupWizard(SetupWizardTool):
         for name in requested:
             if name in self.installed_lexica():
                 print(f"  {name}: already installed; skipping.")
-            else:
-                url = LIWORDS_KWG_URL_TEMPLATE.format(name=name)
-                print(f"Fetching {name} ...")
-                if not download(url, lex_dir / f"{name}.kwg"):
-                    print_red(f"  Failed to download {name}.")
-                    failed.append(name)
-                    continue
-            self._link_macondo_lexicon(name, lex_dir, macondo_lex_dir)
+                continue
+            url = LIWORDS_KWG_URL_TEMPLATE.format(name=name)
+            print(f"Fetching {name} ...")
+            if not download(url, lex_dir / f"{name}.kwg"):
+                print_red(f"  Failed to download {name}.")
+                failed.append(name)
 
         print()
         have = self.installed_lexica()
         print_green(f"Installed lexica ({len(have)}): {', '.join(have) or '(none)'}")
         if failed:
             print_red(f"Failed: {', '.join(failed)}")
-
-    @staticmethod
-    def _link_macondo_lexicon(name: str, lex_dir: Path, macondo_lex_dir: Path) -> None:
-        """Keep macondo's data/lexica/gaddag/<name>.kwg in sync with our copy."""
-        link = macondo_lex_dir / f"{name}.kwg"
-        target = lex_dir / f"{name}.kwg"
-        if link.is_symlink() or link.exists():
-            link.unlink()
-        # Use a relative symlink so the link stays valid even if the user
-        # eventually moves the mount dir.
-        link.symlink_to(os.path.relpath(target, link.parent))
 
 
 def get_args() -> argparse.Namespace:
