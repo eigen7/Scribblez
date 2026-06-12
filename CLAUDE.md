@@ -2,6 +2,14 @@
 
 Please reference docs/Scribblez.pdf to understand the overall goal of this project.
 
+# Comments and documentation
+
+Write every comment and doc as a standalone description of the code as it currently is, for a reader
+with no prior context. Do not reference past versions of the code or the change that produced it
+("we replaced", "previously", "the old X", "now uses", "formerly"), and do not reference anything
+that only makes sense from the current conversation or task. State what the code does and why, not
+what it used to do or how it got here — that history belongs in commit messages, not the code.
+
 # C++ Code
 
 ## Building
