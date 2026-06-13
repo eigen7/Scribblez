@@ -1,0 +1,7 @@
+[
+  {
+    "prefix": "subtrees/devenv_utils",
+    "url": "https://github.com/eigen7/devenv_utils.git",
+    "branch": "main"
+  }
+]
