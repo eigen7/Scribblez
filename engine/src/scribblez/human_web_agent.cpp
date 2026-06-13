@@ -78,7 +78,7 @@ HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::str
   std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
   if (!vite_->wait_until_ready()) {
     throw std::runtime_error("the Vite dev server did not start. See " + params.web_dir +
-                             "/.vite-dev.log for details. Did you run ./build.py to install "
+                             "/.vite-dev.log for details. Did you run py/build.py to install "
                              "the web dependencies?");
   }
   std::cerr << "\n  Human-vs-AI game ready.\n"

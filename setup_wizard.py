@@ -18,7 +18,7 @@ Run this *outside* the Docker container. It:
 The generic steps live in `subtrees/devenv_utils`; this script only adds the
 Scribblez-specific lexica step and wires the steps together.
 
-The Macondo checkout and binary are managed by build.py, not this wizard.
+The Macondo checkout and binary are managed by py/build.py, not this wizard.
 
 Re-run the wizard any time you want to install additional lexica, refresh the
 VS Code attach config, or rebuild the image.
@@ -52,7 +52,7 @@ class ScribblezSetupWizard(SetupWizardTool):
         """List installed lexica, prompt for additional ones, fetch them.
 
         Only populates <mount>/lexica/. The Macondo checkout's own
-        data/lexica/gaddag/ symlinks are created by build.py *after* it clones
+        data/lexica/gaddag/ symlinks are created by py/build.py *after* it clones
         Macondo -- pre-creating <mount>/macondo/ here would break that clone.
         """
         lex_dir = self.mount_dir / "lexica"

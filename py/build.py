@@ -6,7 +6,7 @@ front-end's npm packages, and the engine (play_game) launches the Vite dev
 server itself at play time -- so you never invoke npm by hand.
 
 Usage:
-    ./build.py [--debug] [--clean] [-j N]
+    py/build.py [--debug] [--clean] [-j N]
 
 Then play a human-vs-AI game with:
     ./build/engine/play_game --player "--type=human" --player "--type=greedy"
@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
 # and will error if the existing checkout is at a different tag (unless
@@ -133,7 +133,7 @@ def main():
                     print(
                         f"\nError: macondo at {MACONDO_DIR} is at '{display}', "
                         f"but this project expects '{MACONDO_TAG}'.\n"
-                        "Update MACONDO_TAG in build.py, re-clone the directory, "
+                        "Update MACONDO_TAG in py/build.py, re-clone the directory, "
                         "or pass --skip-macondo-tag-check to build anyway."
                     )
                     sys.exit(1)

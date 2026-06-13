@@ -2,11 +2,11 @@
 """Run the full Scribblez test suite: C++ engine tests + Python tests + web UI tests.
 
 Usage:
-    ./run_tests.py [--cpp-only] [--python-only] [--web-only] [--verbose]
+    py/run_tests.py [--cpp-only] [--python-only] [--web-only] [--verbose]
 
 The C++ tests are run via CTest against the existing build/ directory (use
-./build.py first if you haven't built yet). The Python tests are run via
-pytest against python/tests/. The web tests are run via `npm run test:run`
+py/build.py first if you haven't built yet). The Python tests are run via
+pytest against py/tests/. The web tests are run via `npm run test:run`
 (vitest) in web/.
 """
 import argparse
@@ -15,10 +15,10 @@ import shutil
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(ROOT, "build")
 WEB_DIR = os.path.join(ROOT, "web")
-PYTHON_DIR = os.path.join(ROOT, "python")
+PYTHON_DIR = os.path.join(ROOT, "py")
 
 
 def run(cmd, cwd=None):
@@ -30,7 +30,7 @@ def run(cmd, cwd=None):
 def run_cpp_tests(verbose: bool) -> int:
     if not os.path.isdir(BUILD_DIR):
         print(f"ERROR: build directory not found at {BUILD_DIR}.\n"
-              "Run ./build.py first.", file=sys.stderr)
+              "Run py/build.py first.", file=sys.stderr)
         return 1
     if shutil.which("ctest") is None:
         print("ERROR: ctest not found on PATH.", file=sys.stderr)
@@ -48,7 +48,7 @@ def run_web_tests(verbose: bool) -> int:
         return 1
     if not os.path.isdir(os.path.join(WEB_DIR, "node_modules")):
         print(f"ERROR: web/node_modules not found.\n"
-              "Run ./build.py (or `npm install` in web/) first.",
+              "Run py/build.py (or `npm install` in web/) first.",
               file=sys.stderr)
         return 1
     cmd = "npm run test:run"

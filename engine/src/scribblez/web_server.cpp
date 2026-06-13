@@ -406,7 +406,8 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
 
   boost::filesystem::path npm = bp::search_path("npm");
   if (npm.empty()) {
-    throw std::runtime_error("npm not found on PATH (needed to launch the web UI); run ./build.py");
+    throw std::runtime_error(
+      "npm not found on PATH (needed to launch the web UI); run py/build.py");
   }
 
   // A process group lets us terminate the whole tree on exit: `npm run dev`

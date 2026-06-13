@@ -14,7 +14,7 @@ what it used to do or how it got here — that history belongs in commit message
 
 ## Building
 
-Build by running build.py
+Build by running py/build.py
 
 ## Macondo repo
 

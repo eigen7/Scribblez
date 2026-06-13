@@ -6,7 +6,7 @@ config, NVIDIA validation, the setup-wizard scaffold) lives in the
 pieces: a `DevenvConfig` factory and the lexica/Macondo constants used by the
 custom wizard steps.
 
-It lives at the repo root (not under python/) so the host-side scripts can
+It lives at the repo root (not under py/) so the host-side scripts can
 import it without depending on PYTHONPATH or any in-container Python paths.
 """
 
@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
 # `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "0.2.0"
+MINIMUM_REQUIRED_IMAGE_VERSION = "0.3.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [

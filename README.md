@@ -11,7 +11,7 @@ that consumes the logs.
 ## Layout
 
 ```
-build.py        one-shot build: compile the engine + install web deps
+py/build.py     one-shot build: compile the engine + install web deps
 engine/         C++ core (CMake)
   include/scribblez/    public headers
   src/                  implementation (incl. web_server.cpp: WebSocket server +
@@ -19,8 +19,8 @@ engine/         C++ core (CMake)
   apps/play_game.cpp    CLI to play one game (greedy/human in any combination)
   tests/                hand-rolled unit tests
 web/            React + TypeScript front-end for human play (Vite)
-python/scribblez/       torch Dataset + DataLoader over GCG logs
-python/scripts/         small utilities
+py/scribblez/           torch Dataset + DataLoader over GCG logs
+py/scripts/             small utilities
 docs/                   design document
 ```
 
@@ -43,7 +43,7 @@ wizard checks the rest):
 ```bash
 ./run_docker.py          # drop into a shell at /workspace/repo
 # (inside the container)
-./build.py               # cmake + npm install
+py/build.py               # cmake + npm install
 ctest --test-dir build   # engine unit tests
 ```
 
@@ -110,7 +110,7 @@ Flags:
 ## Play against the AI (web UI)
 
 A `human` player is driven through a small React web app. You don't run any npm
-commands yourself: after `./build.py` has installed the web dependencies,
+commands yourself: after `py/build.py` has installed the web dependencies,
 `play_game` launches the front-end's Vite dev server itself, speaks WebSocket to
 it, and opens your browser:
 
@@ -163,8 +163,8 @@ Each event is `>nick: rack ...`:
 ## Python: consume logs
 
 ```bash
-pip install -r python/requirements.txt
-PYTHONPATH=python python -m scripts.inspect_log /tmp/game.gcg
+pip install -r py/requirements.txt
+PYTHONPATH=py python -m scripts.inspect_log /tmp/game.gcg
 ```
 
 `scribblez.GameLogDataset` replays each game forward and yields one

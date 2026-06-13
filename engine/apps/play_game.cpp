@@ -14,7 +14,7 @@
 //
 // For human play the engine launches the front-end's Vite dev server itself
 // (npm run dev) and opens the browser at it -- you never run npm by hand. Run
-// ./build.py once first to install the web dependencies.
+// py/build.py once first to install the web dependencies.
 
 #include "scribblez/cli.h"
 #include "scribblez/exception.h"
