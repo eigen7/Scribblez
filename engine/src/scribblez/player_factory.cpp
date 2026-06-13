@@ -44,8 +44,7 @@ PlayerSpec parse_player_spec(const std::string& spec) {
     po::variables_map vm;
     po::store(parsed, vm);
     po::notify(vm);
-    out.remaining_tokens =
-      po::collect_unrecognized(parsed.options, po::include_positional);
+    out.remaining_tokens = po::collect_unrecognized(parsed.options, po::include_positional);
   } catch (const std::exception& e) {
     throw std::runtime_error("bad --player spec \"" + spec + "\": " + e.what());
   }
@@ -88,10 +87,9 @@ bool PlayerSpec::is_human() const { return type == "human"; }
 
 void PlayerFactory::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
-  desc.add_options()(
-      "player", po::value<std::vector<std::string>>(&specs)->composing(),
-      "add a seat, e.g. --player \"--type=human\" --player \"--type=greedy\" "
-      "(repeat once per seat; default: two greedy)");
+  desc.add_options()("player", po::value<std::vector<std::string>>(&specs)->composing(),
+                     "add a seat, e.g. --player \"--type=human\" --player \"--type=greedy\" "
+                     "(repeat once per seat; default: two greedy)");
 }
 
 PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thread_id) {

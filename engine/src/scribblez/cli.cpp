@@ -8,8 +8,7 @@
 
 namespace scribblez {
 
-void parse_command_line(int argc, char** argv,
-                        boost::program_options::options_description& desc,
+void parse_command_line(int argc, char** argv, boost::program_options::options_description& desc,
                         const std::string& help_epilog) {
   namespace po = boost::program_options;
   po::variables_map vm;

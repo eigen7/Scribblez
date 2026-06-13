@@ -6,7 +6,9 @@
 #include <mutex>
 #include <string>
 
-namespace boost::program_options { class options_description; }
+namespace boost::program_options {
+class options_description;
+}
 
 namespace scribblez {
 

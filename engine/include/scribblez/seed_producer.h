@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <random>
 
-namespace boost::program_options { class options_description; }
+namespace boost::program_options {
+class options_description;
+}
 
 namespace scribblez {
 

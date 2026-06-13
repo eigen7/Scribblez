@@ -19,8 +19,6 @@ constexpr Tile Tile::from_char(char c) {
   return of(c - 'A');
 }
 
-inline int Tile::value() const {
-  return (is_blank() || is_empty()) ? 0 : TILE_VALUES[code_];
-}
+inline int Tile::value() const { return (is_blank() || is_empty()) ? 0 : TILE_VALUES[code_]; }
 
 }  // namespace scribblez

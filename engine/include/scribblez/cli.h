@@ -2,7 +2,9 @@
 
 #include <string>
 
-namespace boost::program_options { class options_description; }
+namespace boost::program_options {
+class options_description;
+}
 
 namespace scribblez {
 
@@ -17,8 +19,7 @@ namespace scribblez {
 // On success: returns normally. The variables_map is fully `notify()`d, so
 // every option's bound variable / notifier has already fired -- callers
 // just read their populated Params structs and proceed.
-void parse_command_line(int argc, char** argv,
-                        boost::program_options::options_description& desc,
+void parse_command_line(int argc, char** argv, boost::program_options::options_description& desc,
                         const std::string& help_epilog = "");
 
 }  // namespace scribblez

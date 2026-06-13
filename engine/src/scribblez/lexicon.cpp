@@ -13,12 +13,12 @@ Lexicon& Lexicon::instance() {
 
 void Lexicon::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
-  desc.add_options()                                                                //
-      ("lexicon", po::value<std::string>(&params_.name)->default_value(params_.name),
-       "lexicon name; loaded from <lexica-dir>/<lexicon>.kwg. Run "
-       "setup_wizard.py outside the Docker container to install lexica.")           //
-      ("lexica-dir", po::value<std::string>(&params_.dir)->default_value(params_.dir),
-       "directory holding .kwg files (rarely overridden)");
+  desc.add_options()  //
+    ("lexicon", po::value<std::string>(&params_.name)->default_value(params_.name),
+     "lexicon name; loaded from <lexica-dir>/<lexicon>.kwg. Run "
+     "setup_wizard.py outside the Docker container to install lexica.")  //
+    ("lexica-dir", po::value<std::string>(&params_.dir)->default_value(params_.dir),
+     "directory holding .kwg files (rarely overridden)");
 }
 
 void Lexicon::set_params(const Params& params) {

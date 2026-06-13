@@ -9,7 +9,9 @@
 
 // Forward-declared so Params::add_options() can register --player without
 // pulling boost::program_options into every consumer of this header.
-namespace boost::program_options { class options_description; }
+namespace boost::program_options {
+class options_description;
+}
 
 namespace scribblez {
 
@@ -17,8 +19,8 @@ namespace scribblez {
 // Internal to PlayerFactory; exposed only because a few callers want the
 // display name before agents are constructed.
 struct PlayerSpec {
-  std::string type;                          // e.g. "greedy", "human", "hastybot" (lowercased)
-  std::string name;                          // explicit --name, or empty
+  std::string type;                           // e.g. "greedy", "human", "hastybot" (lowercased)
+  std::string name;                           // explicit --name, or empty
   std::vector<std::string> remaining_tokens;  // agent-specific tokens
 
   // Display name to show for this player (the explicit --name, else a default

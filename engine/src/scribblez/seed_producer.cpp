@@ -16,9 +16,8 @@ SeedProducer& SeedProducer::instance() {
 
 void SeedProducer::Params::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
-  desc.add_options()(
-      "seed", po::value<uint64_t>(&seed)->default_value(seed),
-      "PRNG seed (0 -- the default -- means pick one from std::random_device)");
+  desc.add_options()("seed", po::value<uint64_t>(&seed)->default_value(seed),
+                     "PRNG seed (0 -- the default -- means pick one from std::random_device)");
 }
 
 uint64_t SeedProducer::seed(const Params& params) {
