@@ -6,6 +6,7 @@ project's thin py/tools wrappers. All paths are interpreted relative to the
 configured repo root, and all subprocesses run with that directory as cwd.
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -33,6 +34,25 @@ class DevTool:
         return self._config.repo_root
 
     # -- clang-format -------------------------------------------------------
+
+    def clang_format_cli(self, cpp_dirs: list[str]) -> None:
+        """Parse argv and run clang_format_all_cpp_files over *cpp_dirs*.
+
+        Thin command-line front-end: ``--check`` selects check-only mode,
+        otherwise files are reformatted in place.
+        """
+        parser = argparse.ArgumentParser(
+            description="Run clang-format over the project's C++ sources. With "
+                        "--check, report files that would change and exit "
+                        "non-zero if any do; otherwise reformat in place.",
+        )
+        parser.add_argument(
+            "--check",
+            action="store_true",
+            help="check formatting without modifying files (exit 1 if any differ)",
+        )
+        args = parser.parse_args()
+        self.clang_format_all_cpp_files(cpp_dirs, check=args.check)
 
     def clang_format_all_cpp_files(self, cpp_dirs: list[str], *, check: bool = False) -> None:
         """Run clang-format over every C++ file under each of *cpp_dirs*.
@@ -85,15 +105,37 @@ class DevTool:
 
     # -- git subtrees -------------------------------------------------------
 
+    def pull_git_subtrees_cli(self, subtrees_root: str) -> None:
+        """Parse argv (``-y``/``--yes``) and pull every subtree."""
+        assume_yes = _parse_subtree_yes(
+            "Pull each git subtree under the subtrees root to its upstream tip. "
+            "Refuses to run if anything under that root has uncommitted changes, "
+            "since `git subtree pull` merges into the subtree prefix.",
+            "pull",
+        )
+        self.pull_git_subtrees(subtrees_root, assume_yes=assume_yes)
+
+    def push_git_subtrees_cli(self, subtrees_root: str) -> None:
+        """Parse argv (``-y``/``--yes``) and push every subtree."""
+        assume_yes = _parse_subtree_yes(
+            "Push each git subtree under the subtrees root to its upstream "
+            "branch. Unlike pulling, this does not require a clean working tree.",
+            "push",
+        )
+        self.push_git_subtrees(subtrees_root, assume_yes=assume_yes)
+
     def pull_git_subtrees(self, subtrees_root: str, *, assume_yes: bool = False) -> None:
         """Pull each declared subtree under *subtrees_root* to its upstream tip.
 
-        `git subtree pull` merges, so this refuses to run with a dirty working
-        tree. Prompts before each subtree unless assume_yes is set.
+        `git subtree pull` merges into the subtree prefix, so it only needs that
+        prefix to be clean; uncommitted changes elsewhere in the working tree
+        are left untouched. Refuses to run if anything under *subtrees_root* has
+        staged or unstaged changes. Prompts before each subtree unless
+        assume_yes is set.
         """
-        if not self._repo_is_clean():
-            _abort("working tree has uncommitted changes. Commit or stash them "
-                   "before pulling subtrees.")
+        if not self._path_is_clean(subtrees_root):
+            _abort(f"{subtrees_root}/ has uncommitted changes. Commit or stash "
+                   "them before pulling subtrees.")
         self._for_each_subtree(subtrees_root, "Pull", assume_yes, self._pull_one)
 
     def push_git_subtrees(self, subtrees_root: str, *, assume_yes: bool = False) -> None:
@@ -163,10 +205,14 @@ class DevTool:
         print(f"\n$ {' '.join(cmd)}")
         return subprocess.run(cmd, cwd=self.repo_root).returncode == 0
 
-    def _repo_is_clean(self) -> bool:
-        """Return True if the working tree has no staged or unstaged changes."""
+    def _path_is_clean(self, rel_path: str) -> bool:
+        """Return True if *rel_path* has no staged or unstaged changes.
+
+        Scoped to the given path so changes elsewhere in the working tree do
+        not block subtree operations.
+        """
         result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--", rel_path],
             capture_output=True, text=True, cwd=self.repo_root,
         )
         return result.returncode == 0 and result.stdout.strip() == ""
@@ -183,6 +229,17 @@ def _clang_format_clean(path: str) -> bool:
     return subprocess.run(
         ["clang-format", "--dry-run", "--Werror", path], capture_output=True
     ).returncode == 0
+
+
+def _parse_subtree_yes(description: str, verb: str) -> bool:
+    """Parse the shared ``-y``/``--yes`` flag for a subtree CLI; return its value."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help=f"skip confirmation prompts and {verb} all subtrees",
+    )
+    return parser.parse_args().yes
 
 
 def _confirm(question: str) -> bool:
