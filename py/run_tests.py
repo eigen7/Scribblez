@@ -4,7 +4,7 @@
 Usage:
     py/run_tests.py [--cpp-only] [--python-only] [--web-only] [--verbose]
 
-The C++ tests are run via CTest against the existing build/ directory (use
+The C++ tests are run via CTest against the existing target/ directory (use
 py/build.py first if you haven't built yet). The Python tests are run via
 pytest against py/tests/. The web tests are run via `npm run test:run`
 (vitest) in web/.
@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD_DIR = os.path.join(ROOT, "build")
+BUILD_DIR = os.path.join(ROOT, "target")
 WEB_DIR = os.path.join(ROOT, "web")
 PYTHON_DIR = os.path.join(ROOT, "py")
 

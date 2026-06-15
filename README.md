@@ -44,18 +44,18 @@ wizard checks the rest):
 ./run_docker.py          # drop into a shell at /workspace/repo
 # (inside the container)
 py/build.py               # cmake + npm install
-ctest --test-dir build   # engine unit tests
+ctest --test-dir target   # engine unit tests
 ```
 
 `./run_docker.py` bind-mounts the repo and your mount dir, so build artifacts
-in `build/` and downloaded data both persist on the host between container
+in `target/` and downloaded data both persist on the host between container
 runs. Re-running it while a container is already up just `exec`s into the
 running one.
 
 This produces:
 
-* `build/engine/play_game` -- run a single game.
-* `build/engine/scribblez_tests` -- unit tests.
+* `target/engine/play_game` -- run a single game.
+* `target/engine/scribblez_tests` -- unit tests.
 
 Release builds use link-time optimization (LTO) where the toolchain supports it.
 
@@ -79,7 +79,7 @@ DAWG+GADDAG and is used by the unit tests.
 ## Run a game
 
 ```bash
-./build/engine/play_game \
+./target/engine/play_game \
     --seed 42 \
     --out /tmp/game.gcg \
     --verbose
@@ -115,7 +115,7 @@ commands yourself: after `py/build.py` has installed the web dependencies,
 it, and opens your browser:
 
 ```bash
-./build/engine/play_game --player "--type=human" --player "--type=greedy"
+./target/engine/play_game --player "--type=human" --player "--type=greedy"
 # -> starts Vite, then: Open http://localhost:5173 in your browser to play.
 ```
 

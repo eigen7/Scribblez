@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-PLAY_GAME = '/workspace/repo/build/engine/play_game'
+PLAY_GAME = '/workspace/repo/target/engine/play_game'
 
 
 def main() -> int:

@@ -3,7 +3,7 @@
 
 Mounts:
   <repo>       -> /workspace/repo   (your live source tree; build artifacts in
-                                     build/ persist on the host)
+                                     target/ persist on the host)
   <mount-dir>  -> /workspace/mount  (Macondo checkout, lexica, future data)
 
 Forwards the ports the engine's web UI uses (Vite + WebSocket).

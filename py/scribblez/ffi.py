@@ -13,7 +13,7 @@ import numpy as np
 # Library discovery
 # ---------------------------------------------------------------------------
 
-_FFI_LIB_PATH = '/workspace/repo/build/engine/libscribblez_ffi.so'
+_FFI_LIB_PATH = '/workspace/repo/target/engine/libscribblez_ffi.so'
 _LIB: Optional[ctypes.CDLL] = None
 
 

@@ -9,7 +9,7 @@ Usage:
     py/build.py [--debug] [--clean] [-j N]
 
 Then play a human-vs-AI game with:
-    ./build/engine/play_game --player "--type=human" --player "--type=greedy"
+    ./target/engine/play_game --player "--type=human" --player "--type=greedy"
 """
 import argparse
 import os
@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--debug", action="store_true",
                         help="debug build (default: Release)")
     parser.add_argument("--clean", action="store_true",
-                        help="remove the build/ directory before configuring")
+                        help="remove the target/ directory before configuring")
     parser.add_argument("-j", "--jobs", type=int, default=0,
                         help="parallel build jobs (default: all CPUs)")
     parser.add_argument("--skip-web", action="store_true",
@@ -88,15 +88,15 @@ def main():
                              "fiddling with the macondo source")
     args = parser.parse_args()
 
-    build_dir = os.path.join(ROOT, "build")
-    if args.clean and os.path.isdir(build_dir):
-        shutil.rmtree(build_dir)
+    target_dir = os.path.join(ROOT, "target")
+    if args.clean and os.path.isdir(target_dir):
+        shutil.rmtree(target_dir)
 
     # 1. Configure + compile the C++ engine.
     build_type = "Debug" if args.debug else "Release"
-    run(f"cmake -S . -B build -DCMAKE_BUILD_TYPE={build_type}")
+    run(f"cmake -S . -B target -DCMAKE_BUILD_TYPE={build_type}")
     jobs = args.jobs or (os.cpu_count() or 1)
-    run(f"cmake --build build -j{jobs}")
+    run(f"cmake --build target -j{jobs}")
 
     # 2. Install the front-end's npm dependencies so the engine can launch the
     #    Vite dev server (`npm run dev`) for human-vs-AI play.
@@ -144,7 +144,7 @@ def main():
             link_lexica_into_macondo()
 
     print("\nBuild complete. Play a human-vs-AI game with:")
-    print('    ./build/engine/play_game --player "--type=human" --player "--type=greedy"')
+    print('    ./target/engine/play_game --player "--type=human" --player "--type=greedy"')
 
 
 if __name__ == "__main__":

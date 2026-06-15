@@ -29,7 +29,7 @@ from scribblez.ffi import NativeDataLoader, read_file_header, row_size_floats
 
 def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int = 4) -> list[Path]:
     """Generate .slog files for testing using the test_slog_writer binary."""
-    binary = Path("/workspace/repo/build/engine/test_slog_writer")
+    binary = Path("/workspace/repo/target/engine/test_slog_writer")
     if not binary.is_file():
         pytest.skip("test_slog_writer not built -- run 'make test_slog_writer' first")
 
