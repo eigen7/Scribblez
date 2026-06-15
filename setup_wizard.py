@@ -28,7 +28,12 @@ import argparse
 import os
 import sys
 
-from setup_common import DEFAULT_LEXICA, LIWORDS_KWG_URL_TEMPLATE, make_config
+from setup_common import (
+    DEFAULT_LEXICA,
+    LIWORDS_KWG_URL_TEMPLATE,
+    ensure_git_hooks,
+    make_config,
+)
 from subtrees.devenv_utils import (
     SetupException,
     SetupWizardTool,
@@ -119,6 +124,9 @@ def main():
 
     try:
         tool.rm_target_on_major_bump()
+        tool.rule()
+        ensure_git_hooks()
+        print_green("Activated git hooks (.githooks): commit-purity guard for subtrees/.")
         tool.rule()
         tool.setup_mount_dir()
         tool.rule()

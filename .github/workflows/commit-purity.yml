@@ -1,0 +1,33 @@
+name: commit-purity
+
+# Reject any pushed/PR'd commit that mixes changes across units (a single
+# vendored subtree, or the parent repo). This is the server-side counterpart to
+# the local .githooks/pre-commit guard -- unbypassable, and active for every
+# developer regardless of their local git config.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  purity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit purity
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          # New branch / unknown base: fall back to the first commit reachable.
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 "$head" | tail -1)"
+          fi
+          python3 subtrees/devenv_utils/commit_purity.py "$base" "$head"

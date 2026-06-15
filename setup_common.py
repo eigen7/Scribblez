@@ -10,6 +10,7 @@ It lives at the repo root (not under py/) so the host-side scripts can
 import it without depending on PYTHONPATH or any in-container Python paths.
 """
 
+import subprocess
 from pathlib import Path
 
 from subtrees.devenv_utils import (
@@ -68,6 +69,20 @@ def check_setup_version():
 def dev_tool() -> DevTool:
     """Return the project's dev-workflow helper (clang-format, git subtrees)."""
     return DevTool(make_config())
+
+
+def ensure_git_hooks():
+    """Activate the shared git hooks vendored in devenv_utils for this checkout.
+
+    Points core.hooksPath at the subtree's hooks dir, so the commit-purity guard
+    is shared across every repo that vendors devenv_utils. Because .git is bind-
+    mounted into the dev container, this single setting makes the hooks apply to
+    git run both on the host and inside the container. Idempotent; a no-op
+    outside a git checkout.
+    """
+    if (REPO_ROOT / ".git").exists():
+        subprocess.run(["git", "config", "core.hooksPath",
+                        "subtrees/devenv_utils/hooks"], cwd=REPO_ROOT, check=False)
 
 
 def make_config() -> DevenvConfig:
