@@ -332,11 +332,11 @@ static void check_caches_match_full(const Dictionary& d, const Board& incrementa
       if (!cross_ok || ai[i] != af[i]) {
         std::cerr << "CACHE MISMATCH [" << label << "] game " << game << " step " << step
                   << " transposed=" << transposed << " square (" << (i / BOARD_SIZE) << ","
-                  << (i % BOARD_SIZE) << "): "
-                  << "cross inc{mask=" << ci[i].mask << ",score=" << ci[i].score
-                  << ",nbr=" << ci[i].has_neighbor << "} full{mask=" << cf[i].mask
-                  << ",score=" << cf[i].score << ",nbr=" << cf[i].has_neighbor
-                  << "} anchor inc=" << ai[i] << " full=" << af[i] << "\n";
+                  << (i % BOARD_SIZE) << "): " << "cross inc{mask=" << ci[i].mask
+                  << ",score=" << ci[i].score << ",nbr=" << ci[i].has_neighbor
+                  << "} full{mask=" << cf[i].mask << ",score=" << cf[i].score
+                  << ",nbr=" << cf[i].has_neighbor << "} anchor inc=" << ai[i] << " full=" << af[i]
+                  << "\n";
         std::exit(1);
       }
     }
