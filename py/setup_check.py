@@ -1,28 +1,27 @@
-"""Setup-version gate for the in-container entrypoints under py/.
+"""Importer for the repo-root `setup_common` module from the py/ entrypoints.
 
-The version number and the actual check live in the repo-root `setup_common`
-module. The scripts here run with `py/` (not the repo root) on `sys.path`, so
-they cannot import `setup_common` directly. This thin wrapper bridges that gap
-without a module-level path hack: the one line that puts the repo root on
-`sys.path` lives inside the function, scoped to the moment it is needed.
+Inside the dev container, the scripts under py/ run with py/ -- not the repo
+root -- on PYTHONPATH, so a plain `import setup_common` does not resolve. Use
+`import_setup_common()` instead: it puts the repo root on `sys.path` and returns
+the imported module. It also works when run from outside the container.
 """
 
 
-def check_setup_version() -> None:
-    """Abort unless .env.json records a current setup (see setup_common)."""
+def import_setup_common():
+    """Import and return the repo-root `setup_common` module.
+
+    When running inside the dev container, use this rather than
+    `import setup_common`: the py/ entrypoints run with py/ -- not the repo
+    root -- on PYTHONPATH, so a direct import would not resolve. For
+    convenience it works from outside the container too. Typical use:
+
+        setup_common = import_setup_common()
+    """
     import sys
     from pathlib import Path
 
     repo_root = str(Path(__file__).resolve().parent.parent)
-    added = repo_root not in sys.path
-    if added:
+    if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
-    try:
-        from setup_common import check_setup_version as _check_setup_version
-    finally:
-        # Leave sys.path as we found it; the import is cached in sys.modules,
-        # so the repo root no longer needs to be on the path after this.
-        if added:
-            sys.path.remove(repo_root)
-
-    _check_setup_version()
+    import setup_common
+    return setup_common

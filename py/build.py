@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-from setup_check import check_setup_version
+from setup_check import import_setup_common
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    check_setup_version()
+    import_setup_common().check_setup_version()
 
     target_dir = os.path.join(ROOT, "target")
     if args.clean and os.path.isdir(target_dir):
