@@ -19,11 +19,30 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace scribblez {
+
+namespace {
+
+// Choose a head-start handicap for one game: pick a player at random and gift
+// them P points, P uniform in [0, max]. Returns per-player starting scores.
+// Seeded from the game seed so the choice is reproducible; max <= 0 yields
+// {0, 0}.
+std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
+  if (max <= 0) return {0, 0};
+  std::mt19937_64 rng(game_seed);
+  const int player = static_cast<int>(rng() & 1ULL);
+  const int points = std::uniform_int_distribution<int>(0, max)(rng);
+  std::array<int, 2> scores = {0, 0};
+  scores[player] = points;
+  return scores;
+}
+
+}  // namespace
 
 // --------------------------- Results -------------------------------------
 
@@ -94,8 +113,12 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "games per .slog file (only used with --binary-log-dir)")                          //
     ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
      "number of parallel game threads (>1 requires all players to support "
-     "parallelism, i.e. no human players)")   //
-    ("verbose,v", po::bool_switch(&verbose),  //
+     "parallelism, i.e. no human players)")  //
+    ("random-handicap-max",
+     po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
+     "if > 0, each game gifts a randomly chosen player a head-start of P "
+     "points, with P drawn uniformly from [0, this value]")  //
+    ("verbose,v", po::bool_switch(&verbose),                 //
      "print final score and turn count to stderr");
 }
 
@@ -171,7 +194,9 @@ std::pair<EndGameAction, EndGameAction> GameRunner::play_one_game(int thread_idx
                                                                   uint64_t game_idx) {
   Agent& seat0 = *agents_[thread_idx][seats[0]];
   Agent& seat1 = *agents_[thread_idx][seats[1]];
-  Game game(seat0, seat1, Lexicon::instance().dict(), seed_ + game_idx);
+  const uint64_t game_seed = seed_ + game_idx;
+  Game game(seat0, seat1, Lexicon::instance().dict(), game_seed);
+  game.set_initial_scores(pick_handicap(game_seed, params_.random_handicap_max));
   game.play();
   const GameLog& log = game.log();
 

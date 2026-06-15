@@ -51,6 +51,7 @@ def main() -> int:
         "--games-per-file", str(args.games_per_file),
         "--games", str(args.num_games),
         "--threads", str(args.threads),
+        "--random-handicap-max", "100",
     ]
 
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)

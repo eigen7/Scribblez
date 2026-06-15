@@ -22,6 +22,11 @@
 //
 // Each GameMetadata's start_offset points at that game's InitialRacks; the
 // TurnBlob array starts at (start_offset + sizeof(InitialRacks)).
+//
+// GameMetadata carries both the final scores and the per-player starting
+// scores. The starting scores are normally {0, 0} but can be a head-start
+// handicap; the replay decoder seeds its score accumulator from them so the
+// score-differential input feature reflects the handicap at every position.
 
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
@@ -39,7 +44,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 7;
+inline constexpr uint16_t kVersion = 8;
 
 #pragma pack(push, 1)
 
@@ -62,8 +67,10 @@ struct GameMetadata {
                           // turn's move is applied, before draw). Chosen
                           // uniformly at write-time among turns where the
                           // bag has > 0 tiles when the turn begins.
-  int32_t final_score_p0;
-  int32_t final_score_p1;
+  int16_t final_score_p0;
+  int16_t final_score_p1;
+  int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
+  int16_t initial_score_p1;
 };
 static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 

@@ -26,8 +26,10 @@
 //
 // Replay canonicalization: a default-constructed encoder is in the
 // game-start state (empty board, scores 0, both last-moves are PASS,
-// active player 0, turn index 0). apply_move() flips active_player and
-// increments turn_index in lock-step with normal play.
+// active player 0, turn index 0). A head-start handicap can be supplied via
+// the initial-scores constructor, which seeds the score accumulator so the
+// score-differential feature reflects the handicap from turn 0. apply_move()
+// flips active_player and increments turn_index in lock-step with normal play.
 
 #include "scribblez/board.h"
 #include "scribblez/move.h"
@@ -51,6 +53,9 @@ enum class PositionKind : uint8_t {
 class GameStateEncoder {
  public:
   GameStateEncoder() = default;
+
+  // Seed the score accumulator with a per-player starting handicap.
+  explicit GameStateEncoder(std::array<int, 2> initial_scores) : scores_(initial_scores) {}
 
   // Advance one turn: the *current* active player made `move`. PLAY also
   // updates the board and the active player's cumulative score. The active

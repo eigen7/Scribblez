@@ -55,7 +55,7 @@ void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip
   const TurnBlob* turns =
     reinterpret_cast<const TurnBlob*>(buf + gm.start_offset + sizeof(InitialRacks));
 
-  enc_ = GameStateEncoder{};
+  enc_ = GameStateEncoder{std::array<int, 2>{gm.initial_score_p0, gm.initial_score_p1}};
   racks_[0] = ir->p0;
   racks_[1] = ir->p1;
 

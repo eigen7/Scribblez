@@ -3,6 +3,7 @@
 #include "scribblez/agent.h"
 #include "scribblez/bag.h"
 #include "scribblez/binary_log.h"
+#include "scribblez/block_decoder.h"
 #include "scribblez/board.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/dictionary.h"
@@ -1557,6 +1558,65 @@ struct SymFixture {
   int active_player;
 };
 
+// Decode a one-game .slog whose only non-trivial content is a head-start
+// handicap of `initial_score_p0` points for p0, and return the score
+// differential recovered from the sampled position's input encoding. The two
+// turns are PASSes, so the board stays empty and the handicap is the sole
+// contributor to the score-diff feature.
+static int decode_handicap_score_diff(int initial_score_p0) {
+  using namespace scribblez::binlog;
+  using namespace scribblez;
+
+  FileHeader hdr{};
+  hdr.magic = kMagic;
+  hdr.version = kVersion;
+  hdr.num_games = 1;
+
+  GameMetadata gm{};
+  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
+  gm.num_turns = 2;
+  gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
+  gm.initial_score_p0 = static_cast<int16_t>(initial_score_p0);
+
+  InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
+  TurnBlob t0{};
+  t0.move = Move::pass();
+  TurnBlob t1{};
+  t1.move = Move::pass();
+
+  std::vector<char> buf;
+  auto append_bytes = [&buf](const void* p, size_t n) {
+    const char* c = reinterpret_cast<const char*>(p);
+    buf.insert(buf.end(), c, c + n);
+  };
+  append_bytes(&hdr, sizeof(hdr));
+  append_bytes(&gm, sizeof(gm));
+  append_bytes(&ir, sizeof(ir));
+  append_bytes(&t0, sizeof(t0));
+  append_bytes(&t1, sizeof(t1));
+
+  std::vector<float> output(kRowFloats, 0.0f);
+  uint8_t flip = 0;
+  BlockDecoder dec;
+  dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
+             /*post_move=*/false, /*output_row_start=*/0, output.data());
+
+  // Thermometer invariant: the number of set slots equals
+  // (clipped_diff + kScoreDiffClip + 1).
+  const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
+  int ones = 0;
+  for (int i = 0; i < kScoreDiffBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
+  return ones - kScoreDiffClip - 1;
+}
+
+// A head-start handicap stored in GameMetadata must reach the replayed
+// position's score-differential input (the decoder seeds its score
+// accumulator from the metadata's initial scores).
+static void test_handicap_shifts_score_diff_input() {
+  CHECK(decode_handicap_score_diff(0) == 0);
+  CHECK(decode_handicap_score_diff(80) == 80);
+}
+
 static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   using namespace scribblez::binlog;
   using namespace scribblez;
@@ -2355,6 +2415,7 @@ int main() {
   test_game_end_stalemate_penalty();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
+  test_handicap_shifts_score_diff_input();
   test_epoch_determinism();
   test_epoch_coverage();
   test_epoch_memory_budget_stress();

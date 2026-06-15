@@ -29,12 +29,14 @@ class BinaryLogWriter;
 class GameRunner {
  public:
   struct Params {
-    int games = 1;               // minimum number of games to play
-    std::string log_dir;         // if non-empty, write one <id>.gcg per game here
-    std::string binary_log_dir;  // if non-empty, write batched .slog files here
-    int games_per_file = 100;    // games per .slog file (only used with binary_log_dir)
-    int threads = 1;             // number of parallel game threads
-    bool verbose = false;        // per-game + batch summaries to stderr
+    int games = 1;                // minimum number of games to play
+    std::string log_dir;          // if non-empty, write one <id>.gcg per game here
+    std::string binary_log_dir;   // if non-empty, write batched .slog files here
+    int games_per_file = 100;     // games per .slog file (only used with binary_log_dir)
+    int threads = 1;              // number of parallel game threads
+    int random_handicap_max = 0;  // if > 0, gift a random player a head-start of
+                                  // P points, P uniform in [0, this], each game
+    bool verbose = false;         // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
   };
