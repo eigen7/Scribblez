@@ -72,17 +72,17 @@ def dev_tool() -> DevTool:
 
 
 def ensure_git_hooks():
-    """Activate the shared git hooks vendored in devenv_utils for this checkout.
+    """Activate this repo's tracked git hooks (.githooks) for this checkout.
 
-    Points core.hooksPath at the subtree's hooks dir, so the commit-purity guard
-    is shared across every repo that vendors devenv_utils. Because .git is bind-
-    mounted into the dev container, this single setting makes the hooks apply to
-    git run both on the host and inside the container. Idempotent; a no-op
-    outside a git checkout.
+    Points core.hooksPath at .githooks, whose pre-commit guard keeps the vendored
+    subtrees under subtrees/<dir>/ read-only. Because .git is bind-mounted into
+    the dev container, this single setting makes the hooks apply to git run both
+    on the host and inside the container. Idempotent; a no-op outside a git
+    checkout.
     """
     if (REPO_ROOT / ".git").exists():
-        subprocess.run(["git", "config", "core.hooksPath",
-                        "subtrees/devenv_utils/hooks"], cwd=REPO_ROOT, check=False)
+        subprocess.run(["git", "config", "core.hooksPath", ".githooks"],
+                       cwd=REPO_ROOT, check=False)
 
 
 def make_config() -> DevenvConfig:

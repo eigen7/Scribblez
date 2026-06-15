@@ -2,52 +2,44 @@ This directory contains git subtrees.
 
 Each subtree's remote URL and tracked branch are declared in the `SUBTREES`
 list in the repo-root `setup_common.py` (git records neither anywhere
-committed). The pull/push tools read that declaration.
+committed). The pull tool reads that declaration.
 
-## Workflow: one unit per commit
+## Read-only vendored mirrors
 
-A `subtrees/<dir>/` is a real git subtree, and you *may* edit it. The one rule
-is that **a single commit must touch exactly one "unit"** — either a single
-subtree (`subtrees/<dir>/...`) or the parent repo (everything else). It may not
-mix the parent with a subtree, nor two different subtrees. That keeps each
-commit pushable to a single destination:
+Each `subtrees/<dir>/` is a **read-only** vendored copy of an upstream repo. The
+files are committed in-tree, so a plain `git clone` gets everything — no
+submodule init step. You do not edit them here, and you do not push from this
+checkout.
 
-* Changes under `subtrees/<dir>/` are pushed to that subtree's own upstream:
-
-  ```
-  ./py/tools/push_git_subtrees.py
-  ```
-
-* Changes elsewhere are pushed to this repo with a normal `git push`.
-
-* To sync the local snapshot up to the subtree's latest upstream:
+* **Update** a subtree to its upstream tip:
 
   ```
   ./py/tools/pull_git_subtrees.py
   ```
 
+  This is a `git subtree pull` (a merge), and it's the only thing that changes a
+  subtree. Because the prefix is never edited locally and never pushed, the pull
+  is always a clean fast-forward — no conflicts.
+
+* **Change** a subtree's contents: edit its own upstream repo, push there, then
+  run the pull tool here. There is deliberately no push from this checkout.
+
 ## Enforcement
 
-Two layers share one implementation, `subtrees/devenv_utils/commit_purity.py`
-(vendored, so any repo using devenv_utils gets the same rule):
+Direct edits to a subtree are blocked at two layers, as early as git allows:
 
-* **Locally**, the hook `subtrees/devenv_utils/hooks/pre-commit` calls it with
-  `--staged`. `setup_wizard.py` activates it by setting `core.hooksPath` to that
-  hooks dir — and because `.git` is bind-mounted into the dev container, that one
-  setting covers git run both on the host and inside the container. It's a
-  guardrail: `git commit --no-verify` skips it, and it only applies once
-  `setup_wizard.py` has run.
+* **Locally**, `.githooks/pre-commit` rejects any commit that stages changes
+  under `subtrees/<dir>/`. `setup_wizard.py` activates it via `core.hooksPath`;
+  because `.git` is bind-mounted into the dev container, that one setting covers
+  git on both the host and inside the container.
 
-* **Server-side**, the `commit-purity` GitHub Actions workflow
-  (`.github/workflows/commit-purity.yml`) runs the same script over a commit
-  range on every push and PR. This is the unbypassable backstop, active for
-  every developer regardless of local config. (The workflow YAML must live at
-  the repo root — GitHub won't run it from the subtree — but it's a thin stub
-  around the shared script.)
+* **Server-side**, the `subtree-readonly` GitHub Actions workflow runs
+  `py/tools/check_subtree_readonly.py` over each push/PR. This is the
+  unbypassable backstop (a local hook can be skipped with `--no-verify`).
 
-A `git subtree pull` is exempt from both: it records a *merge* commit, and both
-the hook (git skips `pre-commit` on merges) and the CI check (`--no-merges`)
-ignore merges.
+A `git subtree pull` is exempt from both: it records a merge commit, and git
+does not run `pre-commit` on merges; the CI check walks first-parent history,
+which skips the merge and its squash commit.
 
 ## `devenv_utils`
 

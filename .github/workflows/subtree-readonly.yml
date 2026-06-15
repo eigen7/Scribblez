@@ -1,9 +1,9 @@
-name: commit-purity
+name: subtree-readonly
 
-# Reject any pushed/PR'd commit that mixes changes across units (a single
-# vendored subtree, or the parent repo). This is the server-side counterpart to
-# the local .githooks/pre-commit guard -- unbypassable, and active for every
-# developer regardless of their local git config.
+# Reject any pushed/PR'd commit that edits a vendored subtree (subtrees/<dir>/).
+# Server-side counterpart to .githooks/pre-commit -- unbypassable, and active for
+# every developer regardless of their local git config. Subtrees may change only
+# via `git subtree pull` (a merge commit), which this check ignores.
 
 on:
   pull_request:
@@ -11,13 +11,13 @@ on:
     branches: [main]
 
 jobs:
-  purity:
+  readonly:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check commit purity
+      - name: Check subtrees are read-only
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
@@ -30,4 +30,4 @@ jobs:
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             base="$(git rev-list --max-parents=0 "$head" | tail -1)"
           fi
-          python3 subtrees/devenv_utils/commit_purity.py "$base" "$head"
+          python3 py/tools/check_subtree_readonly.py "$base" "$head"
