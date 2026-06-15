@@ -15,6 +15,9 @@ import shutil
 import subprocess
 import sys
 
+from setup_check import check_setup_version
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(ROOT, "target")
 WEB_DIR = os.path.join(ROOT, "web")
@@ -74,7 +77,7 @@ def run_python_tests(verbose: bool) -> int:
     return subprocess.run(cmd, shell=True, cwd=ROOT, env=env).returncode
 
 
-def main():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -89,6 +92,12 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="enable verbose test output")
     args = parser.parse_args()
+    return args
+
+
+def main():
+    args = parse_args()
+    check_setup_version()
 
     run_cpp = not args.web_only and not args.python_only
     run_py = not args.cpp_only and not args.web_only

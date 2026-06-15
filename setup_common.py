@@ -12,9 +12,18 @@ import it without depending on PYTHONPATH or any in-container Python paths.
 
 from pathlib import Path
 
-from subtrees.devenv_utils import DevenvConfig
+from subtrees.devenv_utils import (
+    DevenvConfig,
+    check_setup_version as _check_setup_version,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+# Bump SETUP_VERSION manually to force all users to rerun the setup wizard.
+#
+# Increasing the major version (the first number) causes the setup wizard to
+# rm -rf the target/ directory - use this to invalidate existing builds.
+SETUP_VERSION = "1.0.0"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
@@ -42,6 +51,10 @@ DEFAULT_LEXICA = ["NWL23", "NWL20", "CSW24", "NSWL23"]
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
 
 
+def check_setup_version():
+    _check_setup_version(make_config())
+
+
 def make_config() -> DevenvConfig:
     """Build the Scribblez DevenvConfig consumed by every host-side script."""
     return DevenvConfig(
@@ -49,4 +62,5 @@ def make_config() -> DevenvConfig:
         repo_root=REPO_ROOT,
         required_ports=REQUIRED_PORTS,
         min_image_version=MINIMUM_REQUIRED_IMAGE_VERSION,
+        setup_version=SETUP_VERSION,
     )

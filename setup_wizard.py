@@ -118,6 +118,8 @@ def main():
     print("*" * 78)
 
     try:
+        tool.rm_target_on_major_bump()
+        tool.rule()
         tool.setup_mount_dir()
         tool.rule()
         tool.validate_docker_permissions()
@@ -132,6 +134,7 @@ def main():
         tool.rule()
         tool.validate_nvidia_installation()
         tool.rule()
+        tool.commit()
         print_green("Setup complete.")
         print("Next: ./run_docker.py")
     except KeyboardInterrupt:

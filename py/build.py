@@ -17,6 +17,9 @@ import shutil
 import subprocess
 import sys
 
+from setup_check import check_setup_version
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
@@ -67,7 +70,8 @@ def link_lexica_into_macondo():
           f"{', '.join(os.path.splitext(k)[0] for k in kwgs)}")
 
 
-def main():
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -87,6 +91,12 @@ def main():
                              f"the expected tag ({MACONDO_TAG}); useful when "
                              "fiddling with the macondo source")
     args = parser.parse_args()
+    return args
+
+
+def main():
+    args = parse_args()
+    check_setup_version()
 
     target_dir = os.path.join(ROOT, "target")
     if args.clean and os.path.isdir(target_dir):
