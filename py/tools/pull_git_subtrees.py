@@ -11,6 +11,12 @@ Refuses to run if the working tree has uncommitted changes (staged or
 unstaged), since ``git subtree pull`` requires a clean tree.
 """
 import argparse
+import sys
+from pathlib import Path
+
+# Put py/ on sys.path so `setup_check` resolves when this script is run
+# directly from outside the dev container (inside, scribblez.pth handles it).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from setup_check import import_setup_common
 
