@@ -3,10 +3,10 @@
 namespace scribblez {
 
 constexpr char Premium::display_char() const {
-  if (kind_ == kDLS) return 'd';
-  if (kind_ == kTLS) return 't';
-  if (kind_ == kDWS) return 'D';
-  if (kind_ == kTWS) return 'T';
+  if (kind_ == kDLS) return '-';
+  if (kind_ == kTLS) return '+';
+  if (kind_ == kDWS) return '*';
+  if (kind_ == kTWS) return '$';
   return '.';
 }
 
