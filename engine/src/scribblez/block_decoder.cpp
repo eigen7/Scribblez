@@ -23,18 +23,42 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
   }
 }
 
-// One-line human description of a move. PLAY words are reconstructed from
-// `board`, which must hold the move's tiles (the post-replay board does).
-std::string describe_move(const Move& m, const Board& board) {
-  switch (m.type()) {
-    case MoveType::PLAY:
-      return "PLAY " + m.main_word(board) + " (" + std::to_string(m.num_glyphs()) + " tiles)";
-    case MoveType::EXCHANGE:
-      return "EXCHANGE " + std::to_string(m.num_glyphs());
-    case MoveType::PASS:
-      return "PASS";
+// Column-letter + 1-based-row coordinate, e.g. (r=7, c=7) -> "H8".
+std::string square_name(int r, int c) {
+  std::string s;
+  s.push_back(static_cast<char>('A' + c));
+  s += std::to_string(r + 1);
+  return s;
+}
+
+// Board-independent one-line description of a move, built from the move's own
+// stored data. The PLAY string lists only the tiles this move PLACED (blanks
+// lowercased), with the anchor square and orientation; connecting tiles already
+// on the board are not part of it -- the board diagram shows the full word.
+// (Reconstructing the full word via Move::main_word needs the pre-placement
+// board, which a position dump does not have.)
+std::string describe_move(const Move& m) {
+  if (m.type() == MoveType::PASS) return "PASS";
+
+  std::string tiles;
+  for (int i = 0; i < m.num_glyphs(); ++i) {
+    char ch = m.glyph(i).to_char();
+    if (m.glyph(i).is_blank()) ch = static_cast<char>(ch - 'A' + 'a');
+    tiles.push_back(ch);
   }
-  return "?";
+  if (m.type() == MoveType::EXCHANGE) return "EXCHANGE " + tiles;
+
+  // PLAY: locate the first placed square from the lane mask (bit k = lane cell k).
+  uint16_t mask = m.square_mask();
+  int along = 0;
+  while (mask && (mask & 1u) == 0) {
+    mask >>= 1;
+    ++along;
+  }
+  const bool horizontal = m.horizontal();
+  const int r = horizontal ? m.start() : along;
+  const int c = horizontal ? along : m.start();
+  return "PLAY " + tiles + " @ " + square_name(r, c) + (horizontal ? " across" : " down");
 }
 
 }  // namespace
@@ -123,8 +147,8 @@ std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool
   s += "POV player=" + std::to_string(mover) + "  score: active=" + std::to_string(active) +
        " opp=" + std::to_string(other) + " diff=" + std::to_string(active - other) + "\n";
   s += "POV rack (leave): " + racks_[mover].to_string() + "\n";
-  s += "last self move: " + describe_move(enc_.last_move_by(mover), board) + "\n";
-  s += "last opp move:  " + describe_move(enc_.last_move_by(opp), board) + "\n";
+  s += "last self move: " + describe_move(enc_.last_move_by(mover)) + "\n";
+  s += "last opp move:  " + describe_move(enc_.last_move_by(opp)) + "\n";
   s += board.to_string();
   return s;
 }
