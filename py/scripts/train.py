@@ -11,8 +11,6 @@ emitting tags/<tag>/monotonicity-probe-analysis/gen-XXXX.png and appending
 metrics to tags/<tag>/metrics.jsonl.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys

@@ -7,15 +7,12 @@ toolchain isn't available, this warns and returns False rather than failing the
 caller -- the .slog and ASCII dumps are produced regardless.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-from ..ffi import dump_position_json, read_file_header
+from scribblez.ffi import dump_position_json, read_file_header
 
 # py/scribblez/eval/web_render.py -> repo root is four parents up.
 REPO_ROOT = Path(__file__).resolve().parents[3]

@@ -10,8 +10,6 @@ sampled positions) plus pos-NN.txt ASCII dumps. The structural probes read this
 (re)create or resize it on demand.
 """
 
-from __future__ import annotations
-
 import argparse
 import sys
 

@@ -10,8 +10,6 @@ so successive generations can be scrolled to watch the curves become sigmoidal
 as training progresses.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 

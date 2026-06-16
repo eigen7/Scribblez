@@ -7,8 +7,6 @@ generation this re-encodes them via the FFI score-diff sweep and runs the
 current model -- the model is the only thing that changes across generations.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 

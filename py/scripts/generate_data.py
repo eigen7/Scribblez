@@ -13,8 +13,6 @@ calibration and the monotonicity probe bank; it must never be trained on.
 Requires Macondo to be built.
 """
 
-from __future__ import annotations
-
 import argparse
 import subprocess
 import sys

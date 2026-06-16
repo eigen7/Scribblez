@@ -6,8 +6,6 @@ The exported graph takes the same two inputs as the PyTorch model
 so the same file serves single-position and batched inference.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import torch

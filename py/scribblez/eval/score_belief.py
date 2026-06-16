@@ -9,8 +9,6 @@ position: x is the current score advantage, y is the believed final score
 advantage, and the shaded bands show the spread of that belief.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import numpy as np

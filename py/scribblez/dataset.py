@@ -1,7 +1,5 @@
 """Training dataset backed by .slog files via the native C++ DataLoader."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import numpy as np

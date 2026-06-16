@@ -10,8 +10,6 @@ Architecture:
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 """
 
-from __future__ import annotations
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

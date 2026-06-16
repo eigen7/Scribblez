@@ -17,8 +17,6 @@ This module is the single source of truth for that layout: scripts derive
 every path from a `TagPaths` rather than reassembling subdirectories.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 DEFAULT_MOUNT_ROOT = Path("/workspace/mount")

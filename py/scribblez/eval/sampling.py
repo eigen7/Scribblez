@@ -7,8 +7,6 @@ tooling as training data. This replaces a specialized in-memory bank: the
 probes read the resulting .slog directly each generation.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import numpy as np

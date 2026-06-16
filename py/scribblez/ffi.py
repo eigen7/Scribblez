@@ -1,7 +1,5 @@
 """ctypes wrapper around libscribblez_ffi.so."""
 
-from __future__ import annotations
-
 import ctypes
 from dataclasses import dataclass
 from pathlib import Path

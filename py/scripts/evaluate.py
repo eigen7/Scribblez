@@ -10,14 +10,11 @@ report image plus a JSON summary. This is the Phase 3.4 harness entry point
 that the agent-eval (3.2) and calibration (3.3) suites will extend.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity

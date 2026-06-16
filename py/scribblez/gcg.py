@@ -16,8 +16,6 @@ replaying the board forward, so the rest of the pipeline can stay format-blind.
     }
 """
 
-from __future__ import annotations
-
 import re
 from typing import Any, Dict, List
 

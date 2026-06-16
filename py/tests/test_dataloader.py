@@ -8,8 +8,6 @@ then exercise:
   4. Streaming dataset iteration via SlogDataset.iter_batches()
 """
 
-from __future__ import annotations
-
 import subprocess
 from pathlib import Path
 
