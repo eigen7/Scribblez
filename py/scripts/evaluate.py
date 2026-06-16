@@ -20,9 +20,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Importable both as a module (python -m scripts.evaluate) and directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
 from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
 from scribblez.eval.sampling import build_test_subset
@@ -60,7 +57,6 @@ def main() -> int:
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("--epoch", type=int, default=None, help="Checkpoint epoch (default: latest).")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
-    parser.add_argument("--mount-root", type=str, default="/workspace/mount", help="tags/ root.")
     parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
@@ -72,7 +68,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = TagPaths(args.tag, args.mount_root)
+    paths = TagPaths(args.tag)
     device = torch.device(args.device)
 
     ckpt_path = paths.checkpoint_path(args.epoch) if args.epoch else latest_checkpoint(paths)

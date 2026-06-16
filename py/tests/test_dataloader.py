@@ -11,14 +11,10 @@ then exercise:
 from __future__ import annotations
 
 import subprocess
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scribblez.ffi import NativeDataLoader, read_file_header, row_size_floats
 

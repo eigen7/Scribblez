@@ -21,9 +21,6 @@ from pathlib import Path
 
 import torch
 
-# Importable both as a module (python -m scripts.train) and directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from scribblez.dataset import SlogDataset
 from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
 from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
@@ -102,9 +99,6 @@ def main() -> int:
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
-    parser.add_argument(
-        "--mount-root", type=str, default="/workspace/mount", help="Root under which tags/ lives."
-    )
     parser.add_argument("--num-blocks", type=int, default=8, help="Residual blocks.")
     parser.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
     parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
@@ -123,7 +117,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = TagPaths(args.tag, args.mount_root)
+    paths = TagPaths(args.tag)
     device = torch.device(args.device)
     print(f"Device: {device}")
 

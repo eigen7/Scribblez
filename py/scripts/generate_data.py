@@ -21,9 +21,6 @@ import sys
 import time
 from pathlib import Path
 
-# Importable both as a module (python -m scripts.generate_data) and directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from scribblez.paths import TagPaths
 
 PLAY_GAME = '/workspace/repo/target/engine/play_game'
@@ -80,19 +77,13 @@ def main() -> int:
         default=0.1,
         help="Fraction of games routed to the held-out test split.",
     )
-    parser.add_argument(
-        "--mount-root",
-        type=str,
-        default="/workspace/mount",
-        help="Root under which tags/<tag>/ lives.",
-    )
     args = parser.parse_args()
 
     if not 0.0 <= args.test_ratio < 1.0:
         print("--test-ratio must be in [0, 1).", file=sys.stderr)
         return 2
 
-    paths = TagPaths(args.tag, args.mount_root)
+    paths = TagPaths(args.tag)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games
 
