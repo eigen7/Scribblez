@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WEB_DIR = REPO_ROOT / "web"
 
 
-def render_position_images(slog_path: str | Path, out_dir: str | Path, post_move: bool = True) -> bool:
+def render_position_images(slog_path: str | Path, out_dir: str | Path, post_move: bool = True):
     """Render each position of `slog_path` to <out_dir>/pos-NN.png. Returns success."""
     slog_path = Path(slog_path)
     out_dir = Path(out_dir)
@@ -43,14 +43,6 @@ def render_position_images(slog_path: str | Path, out_dir: str | Path, post_move
             cwd=WEB_DIR,
             check=True,
         )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
-        print(
-            f"WARNING: web image render failed ({e}); pos-NN.png not produced. "
-            "Ensure web deps (`npm ci` in web/) and Playwright's Chromium are installed.",
-            file=sys.stderr,
-        )
-        return False
     finally:
         if tmp:
             Path(tmp).unlink(missing_ok=True)
