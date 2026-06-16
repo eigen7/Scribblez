@@ -25,30 +25,54 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scribblez.dataset import SlogDataset
-from scribblez.eval.monotonicity import render_report, run_probe
-from scribblez.eval.probe_bank import ProbeBank, build_probe_bank
+from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
+from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
+from scribblez.eval.sampling import build_test_subset
+from scribblez.eval.score_belief import render_score_belief
 from scribblez.model import ScribblezModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 
 
-def load_or_build_probe_bank(paths: TagPaths, num_positions: int) -> ProbeBank | None:
-    """Load the cached probe bank, or build it from the held-out test split."""
-    if paths.probe_bank_path.exists():
-        print(f"Loading probe bank from {paths.probe_bank_path}")
-        return ProbeBank.load(paths.probe_bank_path)
-    if not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
+def ensure_test_subset(paths: TagPaths, num_positions: int) -> bool:
+    """Build the frozen evaluation subset .slog if missing. Returns availability."""
+    if paths.test_subset_slog.exists():
+        print(f"Using evaluation subset {paths.test_subset_slog}")
+    elif not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
         print(
-            f"WARNING: no test split at {paths.test_dir}; skipping monotonicity probe. "
-            "Regenerate data with a non-zero --test-ratio to enable it.",
+            f"WARNING: no test split at {paths.test_dir}; skipping structural probes. "
+            "Regenerate data with a non-zero --test-ratio to enable them.",
             file=sys.stderr,
         )
-        return None
-    print(f"Building probe bank ({num_positions} positions) from {paths.test_dir} ...")
-    bank = build_probe_bank(paths.test_dir, num_positions=num_positions)
-    bank.save(paths.probe_bank_path)
-    print(f"  Saved probe bank to {paths.probe_bank_path}")
-    return bank
+        return False
+    else:
+        print(f"Sampling {num_positions} positions from {paths.test_dir} ...")
+        n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=num_positions)
+        print(f"  Wrote {n} positions to {paths.test_subset_slog}")
+    write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
+    return True
+
+
+def run_probes(
+    model, paths: TagPaths, device, epoch: int, tag: str, diff_lo: int, diff_hi: int
+) -> dict:
+    """Run both structural probes, render their images, and return metrics."""
+    outs = evaluate_subset(model, paths.test_subset_slog, device, diff_lo=diff_lo, diff_hi=diff_hi)
+    mreport = score_monotonicity(outs.score_diffs, outs.win_rate)
+    mono_img = paths.probe_image_path(epoch)
+    render_monotonicity(outs.score_diffs, outs.win_rate, mreport, mono_img, title=f"{tag} gen-{epoch:04d}")
+    belief_img = paths.score_belief_image_path(epoch)
+    render_score_belief(outs.score_diffs, outs.score_pdf, belief_img, title=f"{tag} gen-{epoch:04d}")
+    print(
+        f"  probe: mean struct={mreport.mean_structural_score:.3f} "
+        f"mean R²={mreport.mean_sigmoid_r2:.3f} viol={mreport.total_violations} "
+        f"-> {mono_img}, {belief_img}"
+    )
+    return {
+        "probe_mean_structural_score": mreport.mean_structural_score,
+        "probe_mean_sigmoid_r2": mreport.mean_sigmoid_r2,
+        "probe_total_violations": mreport.total_violations,
+    }
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args, path: Path):
@@ -89,10 +113,13 @@ def main() -> int:
         "--checkpoint-every", type=int, default=10, help="Epochs between .pt/.onnx saves."
     )
     parser.add_argument(
-        "--num-probe-positions", type=int, default=12, help="Positions in the monotonicity bank."
+        "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
     parser.add_argument(
-        "--no-probe", action="store_true", help="Disable the per-epoch monotonicity probe."
+        "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
+    )
+    parser.add_argument(
+        "--no-probe", action="store_true", help="Disable the per-epoch structural probes."
     )
     args = parser.parse_args()
 
@@ -118,8 +145,11 @@ def main() -> int:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model: {n_params:,} parameters")
 
-    # Monotonicity probe bank (frozen, drawn from the held-out test split).
-    probe_bank = None if args.no_probe else load_or_build_probe_bank(paths, args.num_probe_positions)
+    # Frozen evaluation subset (sampled from the held-out test split into a
+    # standalone .slog). Its per-position ASCII state dumps are written
+    # alongside so the analysis panels (#0, #1, ...) can be cross-referenced
+    # with pos-00.txt, pos-01.txt, ...
+    probe_enabled = not args.no_probe and ensure_test_subset(paths, args.num_probe_positions)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
@@ -191,20 +221,13 @@ def main() -> int:
             "elapsed_s": elapsed,
         }
 
-        # Structural monotonicity probe (every epoch, for a smooth scroll-through).
-        if probe_bank is not None:
-            report = run_probe(model, probe_bank, device)
-            img_path = paths.probe_image_path(epoch)
-            render_report(probe_bank, report, img_path, title=f"{args.tag} gen-{epoch:04d}")
+        # Structural probes (every epoch, for a smooth scroll-through).
+        if probe_enabled:
             record.update(
-                probe_mean_structural_score=report.mean_structural_score,
-                probe_mean_sigmoid_r2=report.mean_sigmoid_r2,
-                probe_total_violations=report.total_violations,
-            )
-            print(
-                f"  probe: mean struct={report.mean_structural_score:.3f} "
-                f"mean R²={report.mean_sigmoid_r2:.3f} viol={report.total_violations} "
-                f"-> {img_path}"
+                run_probes(
+                    model, paths, device, epoch, args.tag,
+                    diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
+                )
             )
 
         with paths.metrics_path.open("a") as fh:

@@ -23,6 +23,20 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
   }
 }
 
+// One-line human description of a move. PLAY words are reconstructed from
+// `board`, which must hold the move's tiles (the post-replay board does).
+std::string describe_move(const Move& m, const Board& board) {
+  switch (m.type()) {
+    case MoveType::PLAY:
+      return "PLAY " + m.main_word(board) + " (" + std::to_string(m.num_glyphs()) + " tiles)";
+    case MoveType::EXCHANGE:
+      return "EXCHANGE " + std::to_string(m.num_glyphs());
+    case MoveType::PASS:
+      return "PASS";
+  }
+  return "?";
+}
+
 }  // namespace
 
 void BlockDecoder::decode(const char* buf, const std::string& path, int64_t local_start,
@@ -86,14 +100,33 @@ int BlockDecoder::replay_to_sampled(const char* buf, uint32_t game_idx, bool pos
   return mover;
 }
 
-void BlockDecoder::probe_encode_sweep(const char* buf, uint32_t game_idx, bool post_move,
-                                      const float* score_diffs, int num_diffs, float* out) {
+void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,
+                                           int diff_lo, int diff_hi, float* out) {
   const int mover = replay_to_sampled(buf, game_idx, post_move);
-  for (int i = 0; i < num_diffs; ++i) {
-    enc_.encode_input_with_score_diff(mover, racks_[mover], static_cast<int>(score_diffs[i]),
-                                      /*apply_flip=*/false,
-                                      out + static_cast<int64_t>(i) * kInputFloats);
+  int64_t i = 0;
+  for (int d = diff_lo; d <= diff_hi; ++d, ++i) {
+    enc_.encode_input_with_score_diff(mover, racks_[mover], d, /*apply_flip=*/false,
+                                      out + i * kInputFloats);
   }
+}
+
+std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool post_move) {
+  const int mover = replay_to_sampled(buf, game_idx, post_move);
+  const int opp = 1 - mover;
+  const Board& board = enc_.board();
+  const int active = enc_.score(mover);
+  const int other = enc_.score(opp);
+
+  std::string s;
+  s += "game_idx=" + std::to_string(game_idx) + " kind=" + (post_move ? "post_move" : "pre_move") +
+       "\n";
+  s += "POV player=" + std::to_string(mover) + "  score: active=" + std::to_string(active) +
+       " opp=" + std::to_string(other) + " diff=" + std::to_string(active - other) + "\n";
+  s += "POV rack (leave): " + racks_[mover].to_string() + "\n";
+  s += "last self move: " + describe_move(enc_.last_move_by(mover), board) + "\n";
+  s += "last opp move:  " + describe_move(enc_.last_move_by(opp), board) + "\n";
+  s += board.to_string();
+  return s;
 }
 
 void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,

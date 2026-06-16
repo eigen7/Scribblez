@@ -13,6 +13,7 @@ add_library(scribblez_core STATIC
   src/scribblez/game_state_encoder.cpp
   src/scribblez/training_targets.cpp
   src/scribblez/block_decoder.cpp
+  src/scribblez/slog_subset.cpp
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
 )

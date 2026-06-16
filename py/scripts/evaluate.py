@@ -23,8 +23,10 @@ import torch
 # Importable both as a module (python -m scripts.evaluate) and directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scribblez.eval.monotonicity import render_report, run_probe
-from scribblez.eval.probe_bank import ProbeBank, build_probe_bank
+from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
+from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
+from scribblez.eval.sampling import build_test_subset
+from scribblez.eval.score_belief import render_score_belief
 from scribblez.ffi import get_input_shapes
 from scribblez.model import ScribblezModel
 from scribblez.paths import TagPaths
@@ -60,10 +62,13 @@ def main() -> int:
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     parser.add_argument("--mount-root", type=str, default="/workspace/mount", help="tags/ root.")
     parser.add_argument(
-        "--num-probe-positions", type=int, default=12, help="Positions in the monotonicity bank."
+        "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
     parser.add_argument(
-        "--rebuild-bank", action="store_true", help="Rebuild the probe bank from the test split."
+        "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
+    )
+    parser.add_argument(
+        "--rebuild-subset", action="store_true", help="Resample the evaluation subset .slog."
     )
     args = parser.parse_args()
 
@@ -76,16 +81,18 @@ def main() -> int:
     epoch = ckpt.get("epoch", 0)
     model = build_model_from_checkpoint(ckpt, device)
 
-    if args.rebuild_bank or not paths.probe_bank_path.exists():
-        print(f"Building probe bank from {paths.test_dir} ...")
-        bank = build_probe_bank(paths.test_dir, num_positions=args.num_probe_positions)
-        bank.save(paths.probe_bank_path)
-    else:
-        bank = ProbeBank.load(paths.probe_bank_path)
+    if args.rebuild_subset or not paths.test_subset_slog.exists():
+        print(f"Sampling evaluation subset from {paths.test_dir} ...")
+        build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_probe_positions)
+    write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
 
-    report = run_probe(model, bank, device)
-    img_path = paths.probe_image_path(epoch)
-    render_report(bank, report, img_path, title=f"{args.tag} gen-{epoch:04d} (eval)")
+    lo, hi = -args.probe_diff_range, args.probe_diff_range
+    outs = evaluate_subset(model, paths.test_subset_slog, device, diff_lo=lo, diff_hi=hi)
+    report = score_monotonicity(outs.score_diffs, outs.win_rate)
+    mono_img = paths.probe_image_path(epoch)
+    render_monotonicity(outs.score_diffs, outs.win_rate, report, mono_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
+    belief_img = paths.score_belief_image_path(epoch)
+    render_score_belief(outs.score_diffs, outs.score_pdf, belief_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
 
     summary = {
         "checkpoint": str(ckpt_path),
@@ -93,7 +100,8 @@ def main() -> int:
         "probe_mean_structural_score": report.mean_structural_score,
         "probe_mean_sigmoid_r2": report.mean_sigmoid_r2,
         "probe_total_violations": report.total_violations,
-        "probe_image": str(img_path),
+        "monotonicity_image": str(mono_img),
+        "score_belief_image": str(belief_img),
         "per_position": [
             {
                 "structural_score": s.structural_score,
@@ -105,7 +113,7 @@ def main() -> int:
         ],
     }
     print(json.dumps({k: v for k, v in summary.items() if k != "per_position"}, indent=2))
-    print(f"Wrote probe image: {img_path}")
+    print(f"Wrote {mono_img} and {belief_img}")
     return 0
 
 

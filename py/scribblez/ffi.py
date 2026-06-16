@@ -70,14 +70,31 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_input_floats.restype = ctypes.c_int
     lib.scribblez_input_floats.argtypes = []
 
-    lib.scribblez_probe_encode_sweep.restype = ctypes.c_int
-    lib.scribblez_probe_encode_sweep.argtypes = [
+    lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
+    lib.scribblez_encode_score_diff_sweep.argtypes = [
         ctypes.c_char_p,
         ctypes.c_int64,
         ctypes.c_int,
-        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_int,
         ctypes.c_int,
         ctypes.POINTER(ctypes.c_float),
+    ]
+
+    lib.scribblez_dump_position.restype = ctypes.c_int
+    lib.scribblez_dump_position.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_int64,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+
+    lib.scribblez_sample_slog.restype = ctypes.c_int
+    lib.scribblez_sample_slog.argtypes = [
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_char_p),
+        ctypes.POINTER(ctypes.c_int64),
+        ctypes.c_int,
     ]
 
     lib.scribblez_read_file_header.restype = ctypes.c_int
@@ -169,34 +186,65 @@ def input_floats() -> int:
     return _lib().scribblez_input_floats()
 
 
-def probe_encode_sweep(
+def encode_score_diff_sweep(
     path: str | Path,
     game_idx: int,
-    score_diffs: np.ndarray,
+    diff_lo: int,
+    diff_hi: int,
     post_move: bool = True,
 ) -> np.ndarray:
-    """Encode one game's sampled position swept across score differentials.
+    """Encode sampled positions swept across a score-differential range.
 
-    Replays game `game_idx` of the .slog file at `path` to its sampled
-    position, then re-encodes it once per entry of `score_diffs`, varying only
-    the active player's score advantage. Returns a (len(score_diffs),
-    input_floats()) float32 array of input tensors.
+    Replays positions of the .slog file at `path` and re-encodes each once per
+    integer score differential in [diff_lo, diff_hi], varying only the active
+    player's score advantage. With `game_idx >= 0` only that game is encoded
+    (R rows); with `game_idx < 0` every game is encoded (num_games * R rows,
+    position-major). Returns a (rows, input_floats()) float32 array, where
+    R = diff_hi - diff_lo + 1.
     """
-    diffs = np.ascontiguousarray(score_diffs, dtype=np.float32)
-    n = diffs.shape[0]
+    r = diff_hi - diff_lo + 1
+    if r <= 0:
+        raise ValueError(f"empty score-diff range [{diff_lo}, {diff_hi}]")
+    num_games = read_file_header(path)[0] if game_idx < 0 else 1
     width = input_floats()
-    out = np.empty((n, width), dtype=np.float32)
-    rc = _lib().scribblez_probe_encode_sweep(
+    out = np.empty((num_games * r, width), dtype=np.float32)
+    rc = _lib().scribblez_encode_score_diff_sweep(
         str(path).encode("utf-8"),
         int(game_idx),
         int(post_move),
-        diffs.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-        n,
+        int(diff_lo),
+        int(diff_hi),
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     if rc != 0:
-        raise IOError(f"probe_encode_sweep failed (rc={rc}) for {path} game {game_idx}")
+        raise IOError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
     return out
+
+
+def dump_position(path: str | Path, game_idx: int, post_move: bool = True) -> str:
+    """Return an ASCII description of a game's sampled position."""
+    lib = _lib()
+    encoded = str(path).encode("utf-8")
+    cap = 4096
+    out = ctypes.create_string_buffer(cap)
+    n = lib.scribblez_dump_position(encoded, int(game_idx), int(post_move), out, cap)
+    if n < 0:
+        raise IOError(f"dump_position failed for {path} game {game_idx}")
+    if n >= cap:  # buffer was too small; retry once with the exact size
+        cap = n + 1
+        out = ctypes.create_string_buffer(cap)
+        n = lib.scribblez_dump_position(encoded, int(game_idx), int(post_move), out, cap)
+    return out.value.decode("utf-8", errors="replace")
+
+
+def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]) -> None:
+    """Write a new .slog at `dst_path` from selected (source path, game index) picks."""
+    n = len(picks)
+    src_arr = (ctypes.c_char_p * n)(*[str(p).encode("utf-8") for p, _ in picks])
+    idx_arr = (ctypes.c_int64 * n)(*[int(g) for _, g in picks])
+    rc = _lib().scribblez_sample_slog(str(dst_path).encode("utf-8"), src_arr, idx_arr, n)
+    if rc != 0:
+        raise IOError(f"sample_slog failed (rc={rc}) writing {dst_path}")
 
 
 # ---------------------------------------------------------------------------

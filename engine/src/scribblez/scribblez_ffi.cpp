@@ -4,12 +4,15 @@
 #include "scribblez/block_decoder.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/slog_subset.h"
 #include "scribblez/training_targets.h"
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string>
 #include <vector>
 
 using scribblez::binlog::DataLoader;
@@ -67,23 +70,76 @@ int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 
 int scribblez_input_floats(void) { return scribblez::binlog::kInputFloats; }
 
-int scribblez_probe_encode_sweep(const char* path, int64_t game_idx, int post_move,
-                                 const float* score_diffs, int num_diffs, float* out_inputs) {
-  if (!path || !score_diffs || !out_inputs || num_diffs < 0) return -1;
+namespace {
 
+// Read an entire .slog file into `buf`, validate its header, and report the
+// game count. When `game_idx >= 0`, also bounds-check it. Returns 0 on
+// success, -1 on any failure.
+int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32_t* num_games) {
+  if (!path) return -1;
   std::ifstream f(path, std::ios::binary);
   if (!f) return -1;
-  std::vector<char> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  buf.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   if (buf.size() < sizeof(FileHeader)) return -1;
-
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   if (hdr->magic != kMagic || hdr->version != kVersion) return -1;
-  if (game_idx < 0 || game_idx >= static_cast<int64_t>(hdr->num_games)) return -1;
-
-  scribblez::binlog::BlockDecoder decoder;
-  decoder.probe_encode_sweep(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0,
-                             score_diffs, num_diffs, out_inputs);
+  if (game_idx >= static_cast<int64_t>(hdr->num_games)) return -1;
+  if (num_games) *num_games = hdr->num_games;
   return 0;
+}
+
+}  // namespace
+
+int scribblez_encode_score_diff_sweep(const char* path, int64_t game_idx, int post_move,
+                                      int diff_lo, int diff_hi, float* out_inputs) {
+  if (!out_inputs || diff_hi < diff_lo) return -1;
+  uint32_t num_games = 0;
+  std::vector<char> buf;
+  if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
+
+  const int64_t sweep =
+    static_cast<int64_t>(diff_hi - diff_lo + 1) * scribblez::binlog::kInputFloats;
+  scribblez::binlog::BlockDecoder decoder;
+  if (game_idx >= 0) {
+    // A single position.
+    decoder.encode_score_diff_sweep(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0,
+                                    diff_lo, diff_hi, out_inputs);
+  } else {
+    // Every position in the file, position-major (game g at row g * R).
+    for (uint32_t g = 0; g < num_games; ++g) {
+      decoder.encode_score_diff_sweep(buf.data(), g, post_move != 0, diff_lo, diff_hi,
+                                      out_inputs + static_cast<int64_t>(g) * sweep);
+    }
+  }
+  return 0;
+}
+
+int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, char* out,
+                            int out_cap) {
+  std::vector<char> buf;
+  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
+  scribblez::binlog::BlockDecoder decoder;
+  const std::string dump =
+    decoder.dump_position(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0);
+  const int len = static_cast<int>(dump.size());
+  if (out && out_cap > 0) {
+    const int n = len < out_cap - 1 ? len : out_cap - 1;
+    std::memcpy(out, dump.data(), static_cast<size_t>(n));
+    out[n] = '\0';
+  }
+  return len;  // full length, which may exceed out_cap - 1 (caller should retry)
+}
+
+int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
+                          const int64_t* game_indices, int num_picks) {
+  if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;
+  std::vector<scribblez::binlog::SlogPick> picks;
+  picks.reserve(static_cast<size_t>(num_picks));
+  for (int i = 0; i < num_picks; ++i) {
+    if (!src_paths[i]) return -1;
+    picks.push_back({src_paths[i], game_indices[i]});
+  }
+  return scribblez::binlog::write_slog_subset(dst_path, picks) ? 0 : -1;
 }
 
 int scribblez_read_file_header(const char* path, int64_t* out_num_positions,

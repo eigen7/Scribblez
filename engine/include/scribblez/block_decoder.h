@@ -33,13 +33,18 @@ class BlockDecoder {
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* flips, bool post_move, int64_t output_row_start, float* output);
 
-  // Structural monotonicity probe: replay game `game_idx` to its sampled
-  // position, then encode that fixed position once per entry of
-  // `score_diffs`, sweeping only the active player's score advantage. Writes
-  // `num_diffs` input tensors (kInputFloats each, no targets, no symmetry
-  // flip) contiguously to `out`.
-  void probe_encode_sweep(const char* buf, uint32_t game_idx, bool post_move,
-                          const float* score_diffs, int num_diffs, float* out);
+  // Replay game `game_idx` to its sampled position, then encode that fixed
+  // position once per integer score differential in [diff_lo, diff_hi],
+  // sweeping only the active player's score advantage. Writes
+  // (diff_hi - diff_lo + 1) input tensors (kInputFloats each, no targets, no
+  // symmetry flip) contiguously to `out`.
+  void encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move, int diff_lo,
+                               int diff_hi, float* out);
+
+  // Replay game `game_idx` to its sampled position and render a human-readable
+  // ASCII description of that position (POV, scores, leave, last moves, board).
+  // Used to annotate probe-analysis panels with the underlying game state.
+  std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
 
  private:
   // Replay one game forward from its initial state up to and (optionally)

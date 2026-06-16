@@ -9,7 +9,8 @@ Every artifact tied to a tag lives under a single per-tag root,
       checkpoints/                model_epoch_XXXX.pt
       models/                     model_epoch_XXXX.onnx
       monotonicity-probe-analysis/  gen-XXXX.png
-      probe-bank.npz              frozen probe positions
+      score-belief-probe-analysis/  gen-XXXX.png
+      test-subset/                positions.slog + pos-XX.txt  (frozen eval set)
       metrics.jsonl               per-epoch training + eval metrics
 
 This module is the single source of truth for that layout: scripts derive
@@ -59,8 +60,17 @@ class TagPaths:
         return self.root / "monotonicity-probe-analysis"
 
     @property
-    def probe_bank_path(self) -> Path:
-        return self.root / "probe-bank.npz"
+    def score_belief_dir(self) -> Path:
+        return self.root / "score-belief-probe-analysis"
+
+    @property
+    def test_subset_dir(self) -> Path:
+        """Frozen evaluation positions sampled from the test split (standard .slog)."""
+        return self.root / "test-subset"
+
+    @property
+    def test_subset_slog(self) -> Path:
+        return self.test_subset_dir / "positions.slog"
 
     @property
     def metrics_path(self) -> Path:
@@ -74,3 +84,9 @@ class TagPaths:
 
     def probe_image_path(self, generation: int) -> Path:
         return self.probe_analysis_dir / f"gen-{generation:04d}.png"
+
+    def score_belief_image_path(self, generation: int) -> Path:
+        return self.score_belief_dir / f"gen-{generation:04d}.png"
+
+    def position_dump_path(self, index: int) -> Path:
+        return self.test_subset_dir / f"pos-{index:02d}.txt"

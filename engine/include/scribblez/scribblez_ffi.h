@@ -42,25 +42,43 @@ const ScribblezShape* scribblez_target_shapes(void);
 // to size the output buffer without iterating the shape arrays in Python.
 int scribblez_row_size_floats(void);
 
-// Structural monotonicity probe: replay one game of a .slog file to its
-// sampled position, then re-encode that fixed position once per supplied
-// score differential, sweeping ONLY the active player's score advantage
-// while board, racks, and move history stay constant.
+// Score-differential sweep encoder -- a sister to the DataLoader that reads a
+// .slog and materializes input tensors with NO sampling or shuffling. It
+// replays a sampled position and re-encodes it once per integer score
+// differential in [diff_lo, diff_hi], sweeping ONLY the active player's score
+// advantage while board, racks, and move history stay constant. Let
+// R = diff_hi - diff_lo + 1.
 //
-// `path`        : .slog file to read.
-// `game_idx`    : which game in the file (0 .. num_games-1).
-// `post_move`   : encode the post-move snapshot (1) or pre-move (0).
-// `score_diffs` : `num_diffs` differentials to sweep (active - opponent).
-// `out_inputs`  : receives num_diffs input tensors, each
-//                 scribblez_input_floats() floats long, contiguous.
+// `path`       : .slog file to read.
+// `game_idx`   : a single game (0 .. num_games-1) -> R tensors, OR < 0 for
+//                EVERY game in the file -> num_games * R tensors, position-
+//                major (game g occupies rows [g*R, (g+1)*R)).
+// `post_move`  : encode the post-move snapshot (1) or pre-move (0).
+// `out_inputs` : receives the input tensors, each scribblez_input_floats()
+//                floats long, contiguous.
 //
 // Returns 0 on success, -1 on I/O error / bad header / out-of-range index.
-int scribblez_probe_encode_sweep(const char* path, int64_t game_idx, int post_move,
-                                 const float* score_diffs, int num_diffs, float* out_inputs);
+int scribblez_encode_score_diff_sweep(const char* path, int64_t game_idx, int post_move,
+                                      int diff_lo, int diff_hi, float* out_inputs);
 
 // Floats in a single input tensor (spatial + scalar), i.e. the per-position
-// stride of scribblez_probe_encode_sweep's output.
+// stride of scribblez_encode_score_diff_sweep's output.
 int scribblez_input_floats(void);
+
+// Render an ASCII description of a sampled position (POV, scores, leave, last
+// moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
+// the full string length on success (which may exceed out_cap - 1, signaling
+// the caller to retry with a larger buffer), or -1 on I/O / header error.
+int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, char* out,
+                            int out_cap);
+
+// Write a new .slog at `dst_path` containing the `num_picks` selected games,
+// in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
+// game (a source .slog path and the game index within it). Games are copied
+// verbatim; only the header and start offsets are recomputed. Returns 0 on
+// success, -1 on any I/O / header / out-of-range error.
+int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
+                          const int64_t* game_indices, int num_picks);
 
 // Peek at the FileHeader of a .slog file. Returns 0 on success and fills
 // *out_num_positions / *out_file_size. Returns -1 on I/O failure or magic
