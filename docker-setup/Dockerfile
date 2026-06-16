@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libboost-program-options-dev libboost-filesystem-dev libboost-json-dev \
       libboost-system-dev \
       python3 python3-pip python3-dev python-is-python3 \
-      golang-go && \
+      golang-go libonnx-dev && \
     rm -rf /var/lib/apt/lists/* && \
     update-alternatives --install /usr/bin/clang        clang        /usr/bin/clang-19        100 && \
     update-alternatives --install /usr/bin/clang++      clang++      /usr/bin/clang++-19      100 && \
@@ -58,7 +58,7 @@ RUN pip3 install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu129 \
       torch torchvision torchaudio
 RUN pip3 install --no-cache-dir \
-      numpy scipy pandas matplotlib tqdm pytest natsort ipython
+      numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime
 
 # 5) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
@@ -77,7 +77,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="0.3.0"
+ARG VERSION="0.4.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 

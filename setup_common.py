@@ -30,7 +30,7 @@ SETUP_VERSION = "1.0.0"
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
 # `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "0.3.0"
+MINIMUM_REQUIRED_IMAGE_VERSION = "0.4.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [
