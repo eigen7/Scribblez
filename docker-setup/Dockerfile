@@ -60,12 +60,22 @@ RUN pip3 install --no-cache-dir \
 RUN pip3 install --no-cache-dir \
       numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime
 
-# 5) Make py/ importable for any python in the container, without going
+# 5) Playwright's Chromium (+ its system libraries) for headless rendering of
+#    board positions into web-styled PNGs (py/scripts/sample_test_subset.py).
+#    The browser is installed to a world-readable shared path and the version
+#    is pinned to the web/package.json `playwright` devDependency so the
+#    runtime-installed package finds this exact build.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx --yes playwright@1.61.0 install --with-deps chromium && \
+    chmod -R a+rx /opt/ms-playwright && \
+    rm -rf /var/lib/apt/lists/*
+
+# 6) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
     open(site.getsitepackages()[0]+'/scribblez.pth','w').write('/workspace/repo/py\n')"
 
-# 6) Macondo's own data-path env var, so its child process finds the kwg/leaves
+# 7) Macondo's own data-path env var, so its child process finds the kwg/leaves
 #    under <mount>/macondo/data when the engine launches it as a subprocess.
 #    The engine itself defaults to /workspace/mount/lexica and
 #    /workspace/mount/macondo/bin/shell directly (overridable via --lexica-dir
@@ -77,7 +87,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="0.4.0"
+ARG VERSION="1.0.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 
