@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scribblez.eval.probe_eval import write_position_dumps
 from scribblez.eval.sampling import build_test_subset
+from scribblez.eval.web_render import render_position_images
 from scribblez.paths import TagPaths
 
 
@@ -32,6 +33,7 @@ def main() -> int:
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("-n", "--num-positions", type=int, default=12, help="Positions to sample.")
     parser.add_argument("--mount-root", type=str, default="/workspace/mount", help="tags/ root.")
+    parser.add_argument("--no-images", action="store_true", help="Skip web-styled PNG rendering.")
     args = parser.parse_args()
 
     paths = TagPaths(args.tag, args.mount_root)
@@ -41,7 +43,10 @@ def main() -> int:
 
     n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_positions)
     write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
-    print(f"Wrote {n} positions to {paths.test_subset_slog} (+ pos-NN.txt dumps)")
+    extras = "pos-NN.txt dumps"
+    if not args.no_images and render_position_images(paths.test_subset_slog, paths.test_subset_dir):
+        extras += " + pos-NN.png images"
+    print(f"Wrote {n} positions to {paths.test_subset_slog} (+ {extras})")
     return 0
 
 

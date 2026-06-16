@@ -89,6 +89,15 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,
     ]
 
+    lib.scribblez_dump_position_json.restype = ctypes.c_int
+    lib.scribblez_dump_position_json.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_int64,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+
     lib.scribblez_sample_slog.restype = ctypes.c_int
     lib.scribblez_sample_slog.argtypes = [
         ctypes.c_char_p,
@@ -221,20 +230,33 @@ def encode_score_diff_sweep(
     return out
 
 
-def dump_position(path: str | Path, game_idx: int, post_move: bool = True) -> str:
-    """Return an ASCII description of a game's sampled position."""
-    lib = _lib()
+def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what: str) -> str:
+    """Call a (path, game_idx, post_move, out, cap)->len FFI, growing the buffer once."""
     encoded = str(path).encode("utf-8")
     cap = 4096
     out = ctypes.create_string_buffer(cap)
-    n = lib.scribblez_dump_position(encoded, int(game_idx), int(post_move), out, cap)
+    n = fn(encoded, int(game_idx), int(post_move), out, cap)
     if n < 0:
-        raise IOError(f"dump_position failed for {path} game {game_idx}")
+        raise IOError(f"{what} failed for {path} game {game_idx}")
     if n >= cap:  # buffer was too small; retry once with the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
-        n = lib.scribblez_dump_position(encoded, int(game_idx), int(post_move), out, cap)
+        n = fn(encoded, int(game_idx), int(post_move), out, cap)
     return out.value.decode("utf-8", errors="replace")
+
+
+def dump_position(path: str | Path, game_idx: int, post_move: bool = True) -> str:
+    """Return an ASCII description of a game's sampled position."""
+    return _read_string_ffi(
+        _lib().scribblez_dump_position, path, game_idx, post_move, "dump_position"
+    )
+
+
+def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) -> str:
+    """Return the web UI's GameState JSON for a game's sampled position."""
+    return _read_string_ffi(
+        _lib().scribblez_dump_position_json, path, game_idx, post_move, "dump_position_json"
+    )
 
 
 def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]) -> None:

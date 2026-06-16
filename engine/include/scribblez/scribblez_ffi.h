@@ -72,6 +72,12 @@ int scribblez_input_floats(void);
 int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, char* out,
                             int out_cap);
 
+// Like scribblez_dump_position, but emits the web UI's GameState JSON (board,
+// bonuses, rack, scores, tile_scores, ...) for the sampled position, suitable
+// for driving the web-style image renderer. Same return/truncation contract.
+int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_move, char* out,
+                                 int out_cap);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied

@@ -1,6 +1,7 @@
 #include "scribblez/web_server.h"
 
 #include "scribblez/game.h"
+#include "scribblez/position_json.h"
 #include "scribblez/tile.h"
 
 #include <arpa/inet.h>
@@ -292,68 +293,12 @@ std::string game_state_json(const StateView& v) {
   namespace json = boost::json;
   const bool game_over = v.game_over;
 
-  json::object o;
-  o["type"] = game_over ? "game_over" : "state";
-
-  // board: 15x15, uppercase letters, lowercase for blanks, null for empty.
-  json::array board;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      Glyph sq = v.board.at(r, c);
-      if (sq.is_empty()) {
-        row.emplace_back(nullptr);
-      } else {
-        char ch = sq.letter().to_char();
-        if (sq.is_blank()) ch = ch - 'A' + 'a';
-        row.emplace_back(std::string(1, ch));
-      }
-    }
-    board.emplace_back(std::move(row));
-  }
-  o["board"] = std::move(board);
-
-  // bonuses: DL/TL/DW/TW or null.
-  json::array bonuses;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const char* code = v.board.premium_at(r, c).code();
-      if (code)
-        row.emplace_back(code);
-      else
-        row.emplace_back(nullptr);
-    }
-    bonuses.emplace_back(std::move(row));
-  }
-  o["bonuses"] = std::move(bonuses);
-
-  // rack: letters then blanks ('?'), with per-tile score.
-  json::array rack;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    for (int i = 0; i < v.my_rack.count(L); ++i) {
-      rack.emplace_back(
-        json::object{{"letter", std::string(1, L.to_char())}, {"score", TILE_VALUES[L]}});
-    }
-  }
-  for (int i = 0; i < v.my_rack.blanks(); ++i) {
-    rack.emplace_back(json::object{{"letter", "?"}, {"score", 0}});
-  }
-  o["rack"] = std::move(rack);
-
-  o["scores"] = {v.my_score, v.opp_score};
-  o["player_names"] = {v.my_name, v.opp_name};
-  o["bag_count"] = v.bag_size;
-  o["opponent_rack_count"] = v.opp_rack_size;
-  o["your_turn"] = v.your_turn;
-  o["game_over"] = game_over;
-
-  // tile_scores map: { "A": 1, "B": 3, ... }.
-  json::object tile_scores;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    tile_scores[std::string(1, L.to_char())] = TILE_VALUES[L];
-  }
-  o["tile_scores"] = std::move(tile_scores);
+  // Common GameState fields (board, bonuses, rack, scores, counts, tile_scores)
+  // come from the shared serializer; this view appends the live move list and
+  // game-over result.
+  json::object o =
+    position_state_object(v.board, v.my_rack, v.my_score, v.opp_score, v.bag_size, v.opp_rack_size,
+                          v.my_name, v.opp_name, v.your_turn, game_over);
 
   // moves: only on the human's live turn.
   if (v.legal_plays && v.your_turn && !game_over) {

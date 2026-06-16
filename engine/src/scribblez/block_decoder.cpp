@@ -3,6 +3,7 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/position_json.h"
 #include "scribblez/training_targets.h"
 
 #include <cassert>
@@ -151,6 +152,13 @@ std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool
   s += "last opp move:  " + describe_move(enc_.last_move_by(opp)) + "\n";
   s += board.to_string();
   return s;
+}
+
+std::string BlockDecoder::dump_position_json(const char* buf, uint32_t game_idx, bool post_move) {
+  const int mover = replay_to_sampled(buf, game_idx, post_move);
+  const int opp = 1 - mover;
+  return position_state_json(enc_.board(), racks_[mover], enc_.score(mover), enc_.score(opp), "You",
+                             "Opponent");
 }
 
 void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,

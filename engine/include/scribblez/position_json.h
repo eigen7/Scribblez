@@ -1,0 +1,34 @@
+#pragma once
+
+// JSON serialization of a board position into the web UI's GameState shape
+// (see web/src/types.ts). This is the single source of truth for that schema:
+// both the live web server (game_state_json) and the offline position-dump FFI
+// build their JSON from position_state_object(), so the two never drift.
+
+#include "scribblez/board.h"
+#include "scribblez/rack.h"
+
+#include <boost/json.hpp>
+
+#include <string>
+
+namespace scribblez {
+
+// Build the GameState object common to every view: type, board, bonuses, rack,
+// scores, player_names, bag/opponent-rack counts, your_turn, game_over, and the
+// per-letter tile_scores map. Keys are inserted in the order the web client and
+// existing serializer expect; callers may append further keys (e.g. moves).
+boost::json::object position_state_object(const Board& board, const Rack& my_rack, int my_score,
+                                          int opp_score, int bag_size, int opp_rack_size,
+                                          const std::string& my_name, const std::string& opp_name,
+                                          bool your_turn, bool game_over);
+
+// Serialize a static (off-turn) position from the POV player's information set.
+// The bag and opponent-rack counts are inferred from the standard refill-to-7
+// partition (unseen = total - board - my_rack). your_turn is true, game_over is
+// false, and no move list is attached.
+std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
+                                int opp_score, const std::string& my_name,
+                                const std::string& opp_name);
+
+}  // namespace scribblez

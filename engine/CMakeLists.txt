@@ -14,6 +14,7 @@ add_library(scribblez_core STATIC
   src/scribblez/training_targets.cpp
   src/scribblez/block_decoder.cpp
   src/scribblez/slog_subset.cpp
+  src/scribblez/position_json.cpp
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
 )
@@ -26,6 +27,9 @@ target_include_directories(scribblez_core PUBLIC
   # out-of-class inline definitions kept out of the public header.
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
+# position_json serializes the GameState schema with Boost.Json; expose it to
+# every consumer of the core library (FFI, web server, tests).
+target_link_libraries(scribblez_core PUBLIC Boost::json)
 
 # Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
 # so the resulting libscribblez_ffi.so is a single self-contained artifact
@@ -33,9 +37,9 @@ target_include_directories(scribblez_core PUBLIC
 add_library(scribblez_ffi SHARED src/scribblez/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE scribblez_core Threads::Threads)
 
-# Concrete Agent implementations live in play_game (not scribblez_core) because
-# they pull in Boost (program_options for from_spec(), boost::json/process for
-# the web human agent and macondo bot). scribblez_core only sees the Agent ABC.
+# Concrete Agent implementations live in play_game, not scribblez_core, so the
+# core library stays free of the agents' heavier dependencies (Boost.Process,
+# the lexicon/macondo plumbing). scribblez_core only sees the Agent ABC.
 add_executable(play_game
   apps/play_game.cpp
   src/scribblez/agent.cpp

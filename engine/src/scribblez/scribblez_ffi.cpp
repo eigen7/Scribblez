@@ -114,20 +114,40 @@ int scribblez_encode_score_diff_sweep(const char* path, int64_t game_idx, int po
   return 0;
 }
 
+namespace {
+
+// Copy `s` into the caller's NUL-terminated buffer (truncating to out_cap) and
+// return the full length, which may exceed out_cap - 1 (caller should retry).
+int emit_string(const std::string& s, char* out, int out_cap) {
+  const int len = static_cast<int>(s.size());
+  if (out && out_cap > 0) {
+    const int n = len < out_cap - 1 ? len : out_cap - 1;
+    std::memcpy(out, s.data(), static_cast<size_t>(n));
+    out[n] = '\0';
+  }
+  return len;
+}
+
+}  // namespace
+
 int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, char* out,
                             int out_cap) {
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder;
-  const std::string dump =
-    decoder.dump_position(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0);
-  const int len = static_cast<int>(dump.size());
-  if (out && out_cap > 0) {
-    const int n = len < out_cap - 1 ? len : out_cap - 1;
-    std::memcpy(out, dump.data(), static_cast<size_t>(n));
-    out[n] = '\0';
-  }
-  return len;  // full length, which may exceed out_cap - 1 (caller should retry)
+  return emit_string(
+    decoder.dump_position(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0), out,
+    out_cap);
+}
+
+int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_move, char* out,
+                                 int out_cap) {
+  std::vector<char> buf;
+  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
+  scribblez::binlog::BlockDecoder decoder;
+  return emit_string(
+    decoder.dump_position_json(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0), out,
+    out_cap);
 }
 
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,

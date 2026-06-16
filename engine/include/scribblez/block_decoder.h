@@ -46,6 +46,11 @@ class BlockDecoder {
   // Used to annotate probe-analysis panels with the underlying game state.
   std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
 
+  // Replay game `game_idx` to its sampled position and serialize it as the web
+  // UI's GameState JSON (board, bonuses, rack, scores, ...) from the POV
+  // player's information set. Feeds the web-style image renderer.
+  std::string dump_position_json(const char* buf, uint32_t game_idx, bool post_move);
+
  private:
   // Replay one game forward from its initial state up to and (optionally)
   // including its sampled_turn. Leaves enc_/racks_ in the sampled-position
