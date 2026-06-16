@@ -12,6 +12,8 @@ interface BoardProps {
   interactive: boolean;
   onCellClick: (row: number, col: number) => void;
   onCellDrop: (row: number, col: number, letter: string, isBlank: boolean) => void;
+  // Board squares ("row,col") of the most recent move, highlighted when set.
+  lastMoveCells?: Set<string>;
 }
 
 const BONUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -30,7 +32,7 @@ const BONUS_LABELS: Record<string, string> = {
 
 const Board: React.FC<BoardProps> = ({
   board, bonuses, candidateTiles, tileScores, cursorRow, cursorCol, cursorDir,
-  interactive, onCellClick, onCellDrop,
+  interactive, onCellClick, onCellDrop, lastMoveCells,
 }) => {
   const dim = 15;
 
@@ -85,6 +87,8 @@ const Board: React.FC<BoardProps> = ({
               if (tile) cellClass += ' has-tile';
               else if (candidate) cellClass += ' has-candidate';
               else if (isCenter && !tile) cellClass += ' center';
+
+              if (tile && lastMoveCells?.has(key)) cellClass += ' last-move';
 
               if (isCursor) cellClass += ' cursor-cell';
               else if (isInDir && !tile && !candidate) cellClass += ' in-direction';

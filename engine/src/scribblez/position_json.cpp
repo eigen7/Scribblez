@@ -100,18 +100,24 @@ json::object position_state_object(const Board& board, const Rack& my_rack, int 
   return o;
 }
 
-std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
-                                int opp_score, const std::string& my_name,
-                                const std::string& opp_name) {
+json::object position_state_object_pov(const Board& board, const Rack& my_rack, int my_score,
+                                       int opp_score, const std::string& my_name,
+                                       const std::string& opp_name) {
   // The active player cannot tell the bag from the opponent's rack; the
   // refill-to-7 rule pins the partition of the unseen pool.
   const int total = std::accumulate(TILE_COUNTS.begin(), TILE_COUNTS.end(), 0);
   const int unseen = total - tiles_on_board(board) - my_rack.size();
   const int opp_rack_size = std::min(unseen, RACK_SIZE);
   const int bag_size = unseen - opp_rack_size;
-  return json::serialize(position_state_object(board, my_rack, my_score, opp_score, bag_size,
-                                               opp_rack_size, my_name, opp_name,
-                                               /*your_turn=*/true, /*game_over=*/false));
+  return position_state_object(board, my_rack, my_score, opp_score, bag_size, opp_rack_size,
+                               my_name, opp_name, /*your_turn=*/true, /*game_over=*/false);
+}
+
+std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
+                                int opp_score, const std::string& my_name,
+                                const std::string& opp_name) {
+  return json::serialize(
+    position_state_object_pov(board, my_rack, my_score, opp_score, my_name, opp_name));
 }
 
 }  // namespace scribblez

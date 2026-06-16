@@ -62,6 +62,23 @@ std::string describe_move(const Move& m) {
   return "PLAY " + tiles + " @ " + square_name(r, c) + (horizontal ? " across" : " down");
 }
 
+// The [row, col] board squares a PLAY placed tiles on (empty for EXCHANGE/PASS),
+// derived from the move's lane mask -- mirrors encode_placement_plane.
+boost::json::array move_squares(const Move& m) {
+  boost::json::array squares;
+  if (m.type() != MoveType::PLAY) return squares;
+  const bool horizontal = m.horizontal();
+  const int start = m.start();
+  uint16_t mask = m.square_mask();
+  for (int along = 0; mask; ++along, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horizontal ? start : along;
+    const int c = horizontal ? along : start;
+    squares.emplace_back(boost::json::array{r, c});
+  }
+  return squares;
+}
+
 }  // namespace
 
 void BlockDecoder::decode(const char* buf, const std::string& path, int64_t local_start,
@@ -157,8 +174,13 @@ std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool
 std::string BlockDecoder::dump_position_json(const char* buf, uint32_t game_idx, bool post_move) {
   const int mover = replay_to_sampled(buf, game_idx, post_move);
   const int opp = 1 - mover;
-  return position_state_json(enc_.board(), racks_[mover], enc_.score(mover), enc_.score(opp), "You",
-                             "Opponent");
+  boost::json::object o = position_state_object_pov(enc_.board(), racks_[mover], enc_.score(mover),
+                                                    enc_.score(opp), "You", "Opponent");
+  // The squares of the move that produced this (post-move) position, for the
+  // renderer to highlight. For a pre-move snapshot this is the POV player's
+  // previous play, still the most recent move they made.
+  o["last_move"] = move_squares(enc_.last_move_by(mover));
+  return boost::json::serialize(o);
 }
 
 void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,

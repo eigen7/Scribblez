@@ -23,10 +23,16 @@ boost::json::object position_state_object(const Board& board, const Rack& my_rac
                                           const std::string& my_name, const std::string& opp_name,
                                           bool your_turn, bool game_over);
 
-// Serialize a static (off-turn) position from the POV player's information set.
-// The bag and opponent-rack counts are inferred from the standard refill-to-7
-// partition (unseen = total - board - my_rack). your_turn is true, game_over is
-// false, and no move list is attached.
+// Build the GameState object for a static (off-turn) position from the POV
+// player's information set, inferring the bag and opponent-rack counts from the
+// standard refill-to-7 partition (unseen = total - board - my_rack). your_turn
+// is true and game_over is false. Callers may append further keys (e.g.
+// last_move) before serializing.
+boost::json::object position_state_object_pov(const Board& board, const Rack& my_rack, int my_score,
+                                              int opp_score, const std::string& my_name,
+                                              const std::string& opp_name);
+
+// position_state_object_pov(...) serialized to a string.
 std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
                                 int opp_score, const std::string& my_name,
                                 const std::string& opp_name);

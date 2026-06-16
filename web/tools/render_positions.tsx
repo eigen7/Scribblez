@@ -19,6 +19,7 @@ import { chromium } from 'playwright';
 import Board from '../src/components/Board';
 import Rack from '../src/components/Rack';
 import ScoreBoard from '../src/components/ScoreBoard';
+import UnseenTiles from '../src/components/UnseenTiles';
 import { GameState } from '../src/types';
 
 interface Position {
@@ -39,6 +40,7 @@ const positions: Position[] = JSON.parse(readFileSync(inputPath, 'utf-8'));
 const noop = () => {};
 
 function layout(state: GameState): React.ReactElement {
+  const lastMoveCells = new Set((state.last_move ?? []).map(([r, c]) => `${r},${c}`));
   return (
     <div className="game-layout">
       <div className="board-section">
@@ -53,6 +55,7 @@ function layout(state: GameState): React.ReactElement {
           interactive={false}
           onCellClick={noop}
           onCellDrop={noop}
+          lastMoveCells={lastMoveCells}
         />
         <Rack tiles={state.rack} usedIndices={new Set()} label="Leave (POV rack)" interactive={false} />
       </div>
@@ -65,6 +68,7 @@ function layout(state: GameState): React.ReactElement {
           yourTurn={state.your_turn}
           gameOver={false}
         />
+        <UnseenTiles state={state} />
       </div>
     </div>
   );

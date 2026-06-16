@@ -28,6 +28,9 @@ export interface GameState {
   winner?: number;
   final_scores?: [number, number];
   tile_scores?: Record<string, number>; // e.g. { A: 1, B: 3, ... Z: 10 }
+  // [row, col] board squares of the move that produced this position. Present
+  // in offline position dumps (for highlighting); absent in live play.
+  last_move?: [number, number][];
 }
 
 // A tile placed on the board by the user (candidate, not yet submitted).
