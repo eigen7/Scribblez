@@ -67,6 +67,19 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_row_size_floats.restype = ctypes.c_int
     lib.scribblez_row_size_floats.argtypes = []
 
+    lib.scribblez_input_floats.restype = ctypes.c_int
+    lib.scribblez_input_floats.argtypes = []
+
+    lib.scribblez_probe_encode_sweep.restype = ctypes.c_int
+    lib.scribblez_probe_encode_sweep.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_int64,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float),
+    ]
+
     lib.scribblez_read_file_header.restype = ctypes.c_int
     lib.scribblez_read_file_header.argtypes = [
         ctypes.c_char_p,
@@ -149,6 +162,41 @@ def get_target_shapes() -> list[ShapeInfo]:
 
 def row_size_floats() -> int:
     return _lib().scribblez_row_size_floats()
+
+
+def input_floats() -> int:
+    """Floats in a single input tensor (spatial + scalar)."""
+    return _lib().scribblez_input_floats()
+
+
+def probe_encode_sweep(
+    path: str | Path,
+    game_idx: int,
+    score_diffs: np.ndarray,
+    post_move: bool = True,
+) -> np.ndarray:
+    """Encode one game's sampled position swept across score differentials.
+
+    Replays game `game_idx` of the .slog file at `path` to its sampled
+    position, then re-encodes it once per entry of `score_diffs`, varying only
+    the active player's score advantage. Returns a (len(score_diffs),
+    input_floats()) float32 array of input tensors.
+    """
+    diffs = np.ascontiguousarray(score_diffs, dtype=np.float32)
+    n = diffs.shape[0]
+    width = input_floats()
+    out = np.empty((n, width), dtype=np.float32)
+    rc = _lib().scribblez_probe_encode_sweep(
+        str(path).encode("utf-8"),
+        int(game_idx),
+        int(post_move),
+        diffs.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        n,
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+    )
+    if rc != 0:
+        raise IOError(f"probe_encode_sweep failed (rc={rc}) for {path} game {game_idx}")
+    return out
 
 
 # ---------------------------------------------------------------------------

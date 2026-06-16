@@ -1,12 +1,16 @@
 #include "scribblez/scribblez_ffi.h"
 
 #include "scribblez/binary_log.h"
+#include "scribblez/block_decoder.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/training_targets.h"
 
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <vector>
 
 using scribblez::binlog::DataLoader;
 using scribblez::binlog::FileHeader;
@@ -60,6 +64,27 @@ const ScribblezShape* scribblez_input_shapes(void) { return kInputShapes; }
 const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.data(); }
 
 int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
+
+int scribblez_input_floats(void) { return scribblez::binlog::kInputFloats; }
+
+int scribblez_probe_encode_sweep(const char* path, int64_t game_idx, int post_move,
+                                 const float* score_diffs, int num_diffs, float* out_inputs) {
+  if (!path || !score_diffs || !out_inputs || num_diffs < 0) return -1;
+
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return -1;
+  std::vector<char> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  if (buf.size() < sizeof(FileHeader)) return -1;
+
+  const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
+  if (hdr->magic != kMagic || hdr->version != kVersion) return -1;
+  if (game_idx < 0 || game_idx >= static_cast<int64_t>(hdr->num_games)) return -1;
+
+  scribblez::binlog::BlockDecoder decoder;
+  decoder.probe_encode_sweep(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0,
+                             score_diffs, num_diffs, out_inputs);
+  return 0;
+}
 
 int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
                                int64_t* out_file_size) {

@@ -89,6 +89,14 @@ class GameStateEncoder {
   // and last_opp_move both attach correctly to that player).
   void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
 
+  // Encode as encode_input(), but force the score differential
+  // (score(player) - score(opp)) to `score_diff`, leaving every other
+  // feature identical. The score feature depends only on this differential,
+  // so this isolates it for structural monotonicity probes that sweep the
+  // active player's score advantage across an otherwise-fixed position.
+  void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
+                                    bool apply_flip, float* out) const;
+
  private:
   Board board_{};
   std::array<int, 2> scores_{0, 0};

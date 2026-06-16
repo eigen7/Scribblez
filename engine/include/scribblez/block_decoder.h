@@ -33,7 +33,20 @@ class BlockDecoder {
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* flips, bool post_move, int64_t output_row_start, float* output);
 
+  // Structural monotonicity probe: replay game `game_idx` to its sampled
+  // position, then encode that fixed position once per entry of
+  // `score_diffs`, sweeping only the active player's score advantage. Writes
+  // `num_diffs` input tensors (kInputFloats each, no targets, no symmetry
+  // flip) contiguously to `out`.
+  void probe_encode_sweep(const char* buf, uint32_t game_idx, bool post_move,
+                          const float* score_diffs, int num_diffs, float* out);
+
  private:
+  // Replay one game forward from its initial state up to and (optionally)
+  // including its sampled_turn. Leaves enc_/racks_ in the sampled-position
+  // state and returns the POV player (the mover at the sampled turn).
+  int replay_to_sampled(const char* buf, uint32_t game_idx, bool post_move);
+
   // Replay one game forward from its initial state up to and (optionally)
   // including its sampled_turn, and emit the resulting row.
   void replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,

@@ -130,29 +130,28 @@ void encode_move_meta(const Move& m, float* out) {
 }
 
 // All kScalarFloats scalar features. `self_move` / `opp_move` are the POV
-// player's and opponent's most-recent moves, respectively.
+// player's and opponent's most-recent moves, respectively. `score_diff` is
+// the POV player's score advantage (score_active - score_opp).
 void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Move& self_move,
-                    const Move& opp_move, int score_active, int score_opp, float* out) {
+                    const Move& opp_move, int score_diff, float* out) {
   encode_rack_counts(my_rack, out + kRackCountOffset);
   encode_unseen_pool_thermometer(unseen_pool, out + kUnseenPoolOffset);
-  encode_score_diff_thermometer(score_active - score_opp, out + kScoreDiffOffset);
+  encode_score_diff_thermometer(score_diff, out + kScoreDiffOffset);
   encode_move_meta(self_move, out + kMoveMetaOffset);
   encode_move_meta(opp_move, out + kMoveMetaOffset + kMoveMetaFloatsPerMove);
 }
 
 // Shared back-end for both pre-move and post-PLAY encoding. Takes only
-// POV-visible inputs.
+// POV-visible inputs; `score_diff` is the active player's score advantage.
 void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
-                const Move& opp_move, int score_active, int score_opp, bool apply_flip,
-                float* out) {
+                const Move& opp_move, int score_diff, bool apply_flip, float* out) {
   std::memset(out, 0, sizeof(float) * static_cast<size_t>(kInputFloats));
   encode_board_planes(board, apply_flip, out);
   encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
   encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  encode_scalars(my_rack, unseen, self_move, opp_move, score_active, score_opp,
-                 out + kSpatialFloats);
+  encode_scalars(my_rack, unseen, self_move, opp_move, score_diff, out + kSpatialFloats);
 }
 
 }  // namespace
@@ -172,8 +171,16 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_
                                     float* out) const {
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
-  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp], scores_[player],
-             scores_[opp], apply_flip, out);
+  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp],
+             scores_[player] - scores_[opp], apply_flip, out);
+}
+
+void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
+                                                    bool apply_flip, float* out) const {
+  assert(player == 0 || player == 1);
+  const int opp = 1 - player;
+  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff, apply_flip,
+             out);
 }
 
 }  // namespace binlog

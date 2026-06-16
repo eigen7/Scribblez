@@ -46,8 +46,7 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
   }
 }
 
-void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,
-                                   int64_t out_row, float* output) {
+int BlockDecoder::replay_to_sampled(const char* buf, uint32_t game_idx, bool post_move) {
   const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
   const GameMetadata& gm = metas[game_idx];
 
@@ -84,9 +83,32 @@ void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip
     enc_.apply_move(turns[target].move);
     // racks_[mover] is now the pre-draw rack; do NOT add turns[target].drawn.
   }
+  return mover;
+}
+
+void BlockDecoder::probe_encode_sweep(const char* buf, uint32_t game_idx, bool post_move,
+                                      const float* score_diffs, int num_diffs, float* out) {
+  const int mover = replay_to_sampled(buf, game_idx, post_move);
+  for (int i = 0; i < num_diffs; ++i) {
+    enc_.encode_input_with_score_diff(mover, racks_[mover], static_cast<int>(score_diffs[i]),
+                                      /*apply_flip=*/false,
+                                      out + static_cast<int64_t>(i) * kInputFloats);
+  }
+}
+
+void BlockDecoder::replay_and_emit(const char* buf, uint32_t game_idx, bool flip, bool post_move,
+                                   int64_t out_row, float* output) {
+  const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
+  const GameMetadata& gm = metas[game_idx];
+  const TurnBlob* turns =
+    reinterpret_cast<const TurnBlob*>(buf + gm.start_offset + sizeof(InitialRacks));
+
+  const int mover = replay_to_sampled(buf, game_idx, post_move);
 
   float* row = output + out_row * kRowFloats;
   enc_.encode_input(mover, racks_[mover], flip, row);
+
+  const uint32_t target = gm.sampled_turn;
 
   // The "opponent next move" -- whichever upcoming turn was played by
   // (1 - mover). Pre-move: that's turn target+1. Post-move: enc_ has

@@ -42,6 +42,26 @@ const ScribblezShape* scribblez_target_shapes(void);
 // to size the output buffer without iterating the shape arrays in Python.
 int scribblez_row_size_floats(void);
 
+// Structural monotonicity probe: replay one game of a .slog file to its
+// sampled position, then re-encode that fixed position once per supplied
+// score differential, sweeping ONLY the active player's score advantage
+// while board, racks, and move history stay constant.
+//
+// `path`        : .slog file to read.
+// `game_idx`    : which game in the file (0 .. num_games-1).
+// `post_move`   : encode the post-move snapshot (1) or pre-move (0).
+// `score_diffs` : `num_diffs` differentials to sweep (active - opponent).
+// `out_inputs`  : receives num_diffs input tensors, each
+//                 scribblez_input_floats() floats long, contiguous.
+//
+// Returns 0 on success, -1 on I/O error / bad header / out-of-range index.
+int scribblez_probe_encode_sweep(const char* path, int64_t game_idx, int post_move,
+                                 const float* score_diffs, int num_diffs, float* out_inputs);
+
+// Floats in a single input tensor (spatial + scalar), i.e. the per-position
+// stride of scribblez_probe_encode_sweep's output.
+int scribblez_input_floats(void);
+
 // Peek at the FileHeader of a .slog file. Returns 0 on success and fills
 // *out_num_positions / *out_file_size. Returns -1 on I/O failure or magic
 // / version mismatch.
