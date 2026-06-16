@@ -350,9 +350,8 @@ board texture (which hooks exist for future play).
 ### Footprint grouping
 
 Group moves by **(rack-subset-used, board-squares-occupied)**. Within each
-group, moves differ only in which letters the blanks designate. A position
-with 10,000 legal moves might have only 2,000–3,000 distinct footprint
-groups, because the blank explosion is precisely what gets collapsed.
+group, moves differ only in the tile ordering and in which letters the blanks
+designate.
 
 Within each group, keep only the highest-scoring move as the representative.
 If a physical footprint is strategically interesting — right location, good
@@ -385,8 +384,7 @@ reduces the candidate set at each stage:
    word placement, exchange, and pass.
 
 2. **Footprint grouping.** Group by (rack-subset, board-squares); keep only
-   the max-scoring representative per group. This collapses ~10,000 moves to
-   ~2,000–3,000 groups. Exchange/pass moves are routed to the exchange head
+   the max-scoring representative per group. Exchange/pass moves are routed to the exchange head
    and removed from the main pipeline.
 
 3. **Lightweight scoring.** Score all group representatives using a cheap
@@ -398,7 +396,7 @@ reduces the candidate set at each stage:
 
 5. **Expand surviving groups.** Each surviving group is expanded back to its
    full set of within-group moves (all blank designations collapsed in step
-   2). This might yield a few hundred total moves.
+   2).
 
 6. **Full M_pre with cross-attention** on the expanded set. This is the
    expensive, high-quality evaluation that can distinguish board textures
