@@ -14,10 +14,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
-# Importable both as a module (python -m scripts.sample_test_subset) and directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scribblez.eval.sampling import build_test_subset
 from scribblez.eval.web_render import render_position_images
@@ -31,17 +27,16 @@ def main() -> int:
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("-n", "--num-positions", type=int, default=12, help="Positions to sample.")
-    parser.add_argument("--mount-root", type=str, default="/workspace/mount", help="tags/ root.")
     args = parser.parse_args()
 
-    paths = TagPaths(args.tag, args.mount_root)
+    paths = TagPaths(args.tag)
     if not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
         print(f"No test split at {paths.test_dir}.", file=sys.stderr)
         return 1
 
     n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_positions)
     render_position_images(paths.test_subset_slog, paths.test_subset_dir)
-    print(f"Wrote {n} positions to {paths.test_subset_slog} (+ pos-NN.png images)")
+    print(f"Wrote {n} positions to {paths.test_subset_slog}")
     return 0
 
 
