@@ -19,7 +19,6 @@ from pathlib import Path
 # Importable both as a module (python -m scripts.sample_test_subset) and directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scribblez.eval.probe_eval import write_position_dumps
 from scribblez.eval.sampling import build_test_subset
 from scribblez.eval.web_render import render_position_images
 from scribblez.paths import TagPaths
@@ -42,7 +41,6 @@ def main() -> int:
         return 1
 
     n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_positions)
-    write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
     extras = "pos-NN.txt dumps"
     if not args.no_images and render_position_images(paths.test_subset_slog, paths.test_subset_dir):
         extras += " + pos-NN.png images"
