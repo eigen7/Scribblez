@@ -28,13 +28,14 @@ checkout.
 
 Direct edits to a subtree are blocked at two layers, as early as git allows:
 
-* **Locally**, `.githooks/pre-commit` rejects any commit that stages changes
-  under `subtrees/<dir>/`. `setup_wizard.py` activates it via `core.hooksPath`;
-  because `.git` is bind-mounted into the dev container, that one setting covers
-  git on both the host and inside the container.
+* **Locally**, `subtrees/devenv_utils/hooks/pre-commit` rejects any commit that
+  stages changes under `subtrees/<dir>/`. `setup_wizard.py` activates it via
+  `DevTool.ensure_git_hooks()` (which sets `core.hooksPath`); because `.git` is
+  bind-mounted into the dev container, that one setting covers git on both the
+  host and inside the container.
 
 * **Server-side**, the `subtree-readonly` GitHub Actions workflow runs
-  `py/tools/check_subtree_readonly.py` over each push/PR. This is the
+  `subtrees/devenv_utils/subtree_guard.py` over each push/PR. This is the
   unbypassable backstop (a local hook can be skipped with `--no-verify`).
 
 A `git subtree pull` is exempt from both: it records a merge commit, and git

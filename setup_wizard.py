@@ -31,7 +31,7 @@ import sys
 from setup_common import (
     DEFAULT_LEXICA,
     LIWORDS_KWG_URL_TEMPLATE,
-    ensure_git_hooks,
+    dev_tool,
     make_config,
 )
 from subtrees.devenv_utils import (
@@ -125,8 +125,8 @@ def main():
     try:
         tool.rm_target_on_major_bump()
         tool.rule()
-        ensure_git_hooks()
-        print_green("Activated git hooks (.githooks): commit-purity guard for subtrees/.")
+        dev_tool().ensure_git_hooks()
+        print_green("Activated git hooks: read-only-subtree guard.")
         tool.rule()
         tool.setup_mount_dir()
         tool.rule()

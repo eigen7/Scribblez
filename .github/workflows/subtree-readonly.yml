@@ -30,4 +30,4 @@ jobs:
           if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             base="$(git rev-list --max-parents=0 "$head" | tail -1)"
           fi
-          python3 py/tools/check_subtree_readonly.py "$base" "$head"
+          python3 subtrees/devenv_utils/subtree_guard.py "$base" "$head"
