@@ -1,3 +1,9 @@
+# Environment
+
+You can assume unless otherwise told that you are inside of a Docker container launched by
+`run_docker.py`, and that the one-time setup `setup_wizard.py` was run beforehand. You can always
+assume that the machine has GPU/NVIDIA/CUDA availability.
+
 # Doc
 
 Please reference docs/Scribblez.pdf to understand the overall goal of this project.
@@ -15,17 +21,27 @@ with no prior context. Do not reference past versions of the code or the change 
 that only makes sense from the current conversation or task. State what the code does and why, not
 what it used to do or how it got here — that history belongs in commit messages, not the code.
 
+# Macondo repo
+
+It is checked out at /workspace/mount/macondo/
+
+If you are asked questions regarding Macondo, please look there.
+
+# Git subtrees
+
+`subtrees/<dir>/` holds vendored git subtrees. A post-commit hook blocks any changes to those
+directories.
+
+The repos under the `subtrees/` directory are within our completely control, and we regularly
+modify the code to meet needs of this project. Do not treat that code as unmodifiable. If you need
+a change there, tell the user what you need. The user can then commit it to that repo and then
+run `py/tools/pull_git_subtrees.py` to pull the subtree to the latest.
+
 # C++ Code
 
 ## Building
 
 Build by running py/build.py
-
-## Macondo repo
-
-It is checked out at /workspace/mount/macondo/
-
-If you are asked questions regarding Macondo, please look there.
 
 ## Inline methods
 
@@ -55,7 +71,8 @@ If you are asked questions regarding Macondo, please look there.
 
 ## Clang-format
 
-After editing any file, make sure to sanitize it with clang-format
+After editing any file, make sure to sanitize it with clang-format. Alternatively, you can run
+`py/tools/clang_format_all_cpp_files.py`.
 
 ## Backwards compatibility
 
