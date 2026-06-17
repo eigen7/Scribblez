@@ -2,6 +2,11 @@
 
 Please reference docs/Scribblez.pdf to understand the overall goal of this project.
 
+For how training data flows from self-play to encoded tensors — the component
+chain, the `.slog` format, and the replay-reconstruction invariant (inputs are
+recomputed by replaying moves; targets come from stored final scores) — see
+docs/architecture.md. docs/roadmap.md covers the model roadmap and rationale.
+
 # Comments and documentation
 
 Write every comment and doc as a standalone description of the code as it currently is, for a reader
