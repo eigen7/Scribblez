@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..ffi import dump_position, encode_score_diff_sweep, get_input_shapes, read_file_header
+from ..ffi import encode_score_diff_sweep, get_input_shapes, read_file_header
 
 
 @dataclass
@@ -75,15 +75,3 @@ def evaluate_subset(
         model.train()
 
     return ProbeOutputs(score_diffs=diffs, win_rate=win_rate, score_pdf=np.stack(pdf_rows))
-
-
-def write_position_dumps(slog_path: str | Path, directory: str | Path, post_move: bool = True) -> None:
-    """Write each subset position's ASCII description to pos-NN.txt in `directory`.
-
-    File pos-NN.txt corresponds to panel #NN in the probe analysis images.
-    """
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    num_pos, _ = read_file_header(slog_path)
-    for k in range(num_pos):
-        (directory / f"pos-{k:02d}.txt").write_text(dump_position(slog_path, k, post_move=post_move))

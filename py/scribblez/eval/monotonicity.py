@@ -5,13 +5,12 @@ For each fixed position in the evaluation subset, the model's win rate
 A structurally coherent value model produces a curve that is monotonically
 increasing in the active player's score advantage and sigmoid-shaped
 (saturating near 0 when far behind and near 1 when far ahead). Each curve is
-scored on three properties and rendered as one panel of a stacked grid image,
-so successive generations can be scrolled to watch the curves become sigmoidal
-as training progresses.
+scored on three properties (monotonicity violations, logistic-fit quality, and
+smoothness); the dashboard renders the curves from the stored data so successive
+generations can be scrolled to watch them become sigmoidal as training progresses.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
@@ -86,45 +85,3 @@ def score_monotonicity(score_diffs: np.ndarray, win_rate: np.ndarray) -> Monoton
         mean_sigmoid_r2=float(np.mean([s.sigmoid_r2 for s in scores])),
         total_violations=int(np.sum([s.monotonicity_violations for s in scores])),
     )
-
-
-def render_monotonicity(
-    score_diffs: np.ndarray, win_rate: np.ndarray, report: MonotonicityReport, path, title: str
-) -> None:
-    """Render the per-position win-rate curves as a stacked grid image."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    n = win_rate.shape[0]
-    cols = int(np.ceil(np.sqrt(n)))
-    rows = int(np.ceil(n / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.0 * cols, 2.4 * rows), squeeze=False)
-    diffs = score_diffs
-
-    for i in range(rows * cols):
-        ax = axes[i // cols][i % cols]
-        if i >= n:
-            ax.axis("off")
-            continue
-        sc = report.scores[i]
-        ax.plot(diffs, win_rate[i], color="#1f77b4", lw=1.5)
-        ax.axhline(0.5, color="0.8", lw=0.8, ls="--")
-        ax.axvline(0.0, color="0.8", lw=0.8, ls="--")
-        ax.set_ylim(-0.02, 1.02)
-        ax.set_xlim(diffs[0], diffs[-1])
-        ax.set_title(f"#{i} R²={sc.sigmoid_r2:.2f} viol={sc.monotonicity_violations}", fontsize=8)
-        ax.tick_params(labelsize=6)
-
-    fig.suptitle(
-        f"{title}  |  mean struct={report.mean_structural_score:.3f} "
-        f"mean R²={report.mean_sigmoid_r2:.3f} viol={report.total_violations}",
-        fontsize=11,
-    )
-    fig.supxlabel("score differential (active − opponent)", fontsize=9)
-    fig.supylabel("win rate  (Pr[win] + ½·Pr[draw])", fontsize=9)
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=110)
-    plt.close(fig)

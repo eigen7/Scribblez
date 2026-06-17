@@ -17,7 +17,6 @@ Two heads are scored:
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -166,56 +165,3 @@ def evaluate_calibration(
         sd_bin_actual=sd_actual,
         sd_bin_count=sd_count,
     )
-
-
-def render_calibration(report: CalibrationReport, path, title: str) -> None:
-    """Render the WLD reliability diagram and score-diff calibration to `path`."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Panel 1: WLD reliability (predicted win rate vs empirical).
-    m = report.rel_bin_count > 0
-    ax0.plot([0, 1], [0, 1], color="0.7", lw=0.9, ls="--")  # perfect calibration
-    ax0.plot(report.rel_bin_pred[m], report.rel_bin_actual[m], "-o", color="#1f77b4", lw=1.5)
-    cax = ax0.twinx()
-    centers = 0.5 * (report.rel_bin_edges[:-1] + report.rel_bin_edges[1:])
-    cax.bar(centers, report.rel_bin_count, width=0.9 / NUM_WLD_BINS, color="0.85", zorder=0)
-    cax.set_ylabel("count", fontsize=8)
-    cax.tick_params(labelsize=6)
-    ax0.set_zorder(cax.get_zorder() + 1)
-    ax0.patch.set_visible(False)
-    ax0.set_xlim(0, 1)
-    ax0.set_ylim(0, 1)
-    ax0.set_xlabel("predicted win rate")
-    ax0.set_ylabel("empirical win rate")
-    ax0.set_title(
-        f"WLD  Brier={report.brier:.4f}  logloss={report.log_loss:.4f}  ECE={report.ece:.4f}",
-        fontsize=10,
-    )
-
-    # Panel 2: score-diff calibration (predicted mean bucket vs actual mean).
-    m2 = report.sd_bin_count > 0
-    lim = SD_BIN_RANGE
-    ax1.plot([-lim, lim], [-lim, lim], color="0.7", lw=0.9, ls="--")  # identity
-    ax1.axhline(0, color="0.9", lw=0.8)
-    ax1.axvline(0, color="0.9", lw=0.8)
-    ax1.plot(report.sd_bin_pred[m2], report.sd_bin_actual[m2], "-o", color="#08306b", lw=1.5)
-    ax1.set_xlim(-lim, lim)
-    ax1.set_ylim(-lim, lim)
-    ax1.set_xlabel("predicted mean score diff")
-    ax1.set_ylabel("actual mean score diff")
-    ax1.set_title(
-        f"ScoreDiff  MAE={report.scorediff_mae:.1f}  bias={report.scorediff_bias:+.1f}  "
-        f"H={report.scorediff_sharpness:.2f}",
-        fontsize=10,
-    )
-
-    fig.suptitle(f"{title}  |  N={report.num_positions}", fontsize=11)
-    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=110)
-    plt.close(fig)

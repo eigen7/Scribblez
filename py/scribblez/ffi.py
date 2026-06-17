@@ -243,13 +243,6 @@ def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what:
     return out.value.decode("utf-8", errors="replace")
 
 
-def dump_position(path: str | Path, game_idx: int, post_move: bool = True) -> str:
-    """Return an ASCII description of a game's sampled position."""
-    return _read_string_ffi(
-        _lib().scribblez_dump_position, path, game_idx, post_move, "dump_position"
-    )
-
-
 def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) -> str:
     """Return the web UI's GameState JSON for a game's sampled position."""
     return _read_string_ffi(

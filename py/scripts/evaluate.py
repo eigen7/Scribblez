@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Run the evaluation suite over a trained checkpoint.
+"""Run the evaluation suite over a trained checkpoint and store it in the dashboard DB.
 
 Usage:
     python -m scripts.evaluate -t mytag                # latest checkpoint
     python -m scripts.evaluate -t mytag --epoch 30
 
-Currently runs the structural monotonicity probe (roadmap 3.1) and writes a
-report image plus a JSON summary. This is the Phase 3.4 harness entry point
-that the agent-eval (3.2) and calibration (3.3) suites will extend.
+Runs the structural probes (3.1) and full-test-set calibration (3.3) for one
+checkpoint, writing all results to tags/<tag>/dashboard.db keyed by that epoch.
+The Bokeh dashboard renders the plots; this prints the scalar summary.
 """
 
 import argparse
@@ -17,12 +17,10 @@ from pathlib import Path
 
 import torch
 
+from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
-from scribblez.eval.calibration import evaluate_calibration, render_calibration
-from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
-from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
+from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
-from scribblez.eval.score_belief import render_score_belief
 from scribblez.ffi import get_input_shapes
 from scribblez.model import ScribblezModel
 from scribblez.paths import TagPaths
@@ -82,55 +80,23 @@ def main() -> int:
     if args.rebuild_subset or not paths.test_subset_slog.exists():
         print(f"Sampling evaluation subset from {paths.test_dir} ...")
         build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_probe_positions)
-    write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
+
+    conn = db.connect(paths.dashboard_db)
+    if not paths.position_dump_path(0).with_suffix(".png").exists():
+        render_boards(paths.test_subset_slog, paths.test_subset_dir)
 
     lo, hi = -args.probe_diff_range, args.probe_diff_range
-    outs = evaluate_subset(model, paths.test_subset_slog, device, diff_lo=lo, diff_hi=hi)
-    report = score_monotonicity(outs.score_diffs, outs.win_rate)
-    mono_img = paths.probe_image_path(epoch)
-    render_monotonicity(outs.score_diffs, outs.win_rate, report, mono_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
-    belief_img = paths.score_belief_image_path(epoch)
-    render_score_belief(outs.score_diffs, outs.score_pdf, belief_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
+    record = {"epoch": epoch}
+    record.update(run_probes(model, paths.test_subset_slog, device, conn, epoch, lo, hi))
 
-    # Calibration over the full held-out test set.
-    calib = {}
     has_test = paths.test_dir.exists() and any(paths.test_dir.glob("*.slog"))
     if not args.no_calibration and has_test:
         test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
-        creport = evaluate_calibration(model, test_ds, device)
-        calib_img = paths.calibration_image_path(epoch)
-        render_calibration(creport, calib_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
-        calib = {
-            "calib_brier": creport.brier,
-            "calib_log_loss": creport.log_loss,
-            "calib_ece": creport.ece,
-            "calib_scorediff_mae": creport.scorediff_mae,
-            "calib_scorediff_bias": creport.scorediff_bias,
-            "calib_scorediff_sharpness": creport.scorediff_sharpness,
-            "calibration_image": str(calib_img),
-        }
+        record.update(run_calibration(model, test_ds, device, conn, epoch))
 
-    summary = {
-        "checkpoint": str(ckpt_path),
-        "epoch": epoch,
-        "probe_mean_structural_score": report.mean_structural_score,
-        "probe_mean_sigmoid_r2": report.mean_sigmoid_r2,
-        "probe_total_violations": report.total_violations,
-        "monotonicity_image": str(mono_img),
-        "score_belief_image": str(belief_img),
-        **calib,
-        "per_position": [
-            {
-                "structural_score": s.structural_score,
-                "sigmoid_r2": s.sigmoid_r2,
-                "monotonicity_violations": s.monotonicity_violations,
-                "total_variation": s.total_variation,
-            }
-            for s in report.scores
-        ],
-    }
-    print(json.dumps({k: v for k, v in summary.items() if k != "per_position"}, indent=2))
-    print(f"Wrote {mono_img} and {belief_img}")
+    db.write_metrics(conn, epoch, record)
+    print(json.dumps(record, indent=2))
+    print(f"Wrote results for epoch {epoch} to {paths.dashboard_db}")
     return 0
 
 

@@ -6,32 +6,32 @@ Usage:
 
 Reads the tag's training split (tags/<tag>/data/train), writes .pt checkpoints
 and .onnx exports under tags/<tag>/, and after every epoch runs the structural
-monotonicity probe over a frozen bank drawn from the held-out test split,
-emitting tags/<tag>/monotonicity-probe-analysis/gen-XXXX.png and appending
-metrics to tags/<tag>/metrics.jsonl.
+probes (over a frozen test subset) and full-test-set calibration. All metrics
+and eval data are written to tags/<tag>/dashboard.db; the Bokeh dashboard renders
+every plot on the fly. Training resumes from the latest checkpoint by default; a
+dashboard server is launched alongside unless disabled.
 """
 
 import argparse
-import json
+import atexit
+import shutil
 import sys
 import time
 from pathlib import Path
 
 import torch
 
+from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset
-from scribblez.eval.calibration import evaluate_calibration, render_calibration
-from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
-from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
+from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
-from scribblez.eval.score_belief import render_score_belief
 from scribblez.model import ScribblezModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 
 
 def ensure_test_subset(paths: TagPaths, num_positions: int) -> bool:
-    """Build the frozen evaluation subset .slog if missing. Returns availability."""
+    """Build the frozen evaluation subset + board images if missing. Returns availability."""
     if paths.test_subset_slog.exists():
         print(f"Using evaluation subset {paths.test_subset_slog}")
     elif not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
@@ -45,49 +45,10 @@ def ensure_test_subset(paths: TagPaths, num_positions: int) -> bool:
         print(f"Sampling {num_positions} positions from {paths.test_dir} ...")
         n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=num_positions)
         print(f"  Wrote {n} positions to {paths.test_subset_slog}")
-    write_position_dumps(paths.test_subset_slog, paths.test_subset_dir)
+    # Board images are static; render once (when the first one is missing).
+    if not paths.position_dump_path(0).with_suffix(".png").exists():
+        render_boards(paths.test_subset_slog, paths.test_subset_dir)
     return True
-
-
-def run_probes(
-    model, paths: TagPaths, device, epoch: int, tag: str, diff_lo: int, diff_hi: int
-) -> dict:
-    """Run both structural probes, render their images, and return metrics."""
-    outs = evaluate_subset(model, paths.test_subset_slog, device, diff_lo=diff_lo, diff_hi=diff_hi)
-    mreport = score_monotonicity(outs.score_diffs, outs.win_rate)
-    mono_img = paths.probe_image_path(epoch)
-    render_monotonicity(outs.score_diffs, outs.win_rate, mreport, mono_img, title=f"{tag} gen-{epoch:04d}")
-    belief_img = paths.score_belief_image_path(epoch)
-    render_score_belief(outs.score_diffs, outs.score_pdf, belief_img, title=f"{tag} gen-{epoch:04d}")
-    print(
-        f"  probe: mean struct={mreport.mean_structural_score:.3f} "
-        f"mean R²={mreport.mean_sigmoid_r2:.3f} viol={mreport.total_violations} "
-        f"-> {mono_img}, {belief_img}"
-    )
-    return {
-        "probe_mean_structural_score": mreport.mean_structural_score,
-        "probe_mean_sigmoid_r2": mreport.mean_sigmoid_r2,
-        "probe_total_violations": mreport.total_violations,
-    }
-
-
-def run_calibration(model, test_ds, device, paths: TagPaths, epoch: int, tag: str, batch_size: int) -> dict:
-    """Score calibration over the full test set, render its image, return metrics."""
-    report = evaluate_calibration(model, test_ds, device, batch_size=batch_size)
-    img = paths.calibration_image_path(epoch)
-    render_calibration(report, img, title=f"{tag} gen-{epoch:04d}")
-    print(
-        f"  calib: brier={report.brier:.4f} logloss={report.log_loss:.4f} ece={report.ece:.4f} "
-        f"sd_mae={report.scorediff_mae:.1f} sd_bias={report.scorediff_bias:+.1f} -> {img}"
-    )
-    return {
-        "calib_brier": report.brier,
-        "calib_log_loss": report.log_loss,
-        "calib_ece": report.ece,
-        "calib_scorediff_mae": report.scorediff_mae,
-        "calib_scorediff_bias": report.scorediff_bias,
-        "calib_scorediff_sharpness": report.scorediff_sharpness,
-    }
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args, path: Path):
@@ -106,7 +67,30 @@ def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args,
     )
 
 
-def main() -> int:
+def reset_tag(paths: TagPaths) -> None:
+    """Wipe a tag's prior run artifacts (checkpoints, onnx, dashboard DB) for a fresh start."""
+    print(f"--restart: clearing prior run artifacts under {paths.root}", file=sys.stderr)
+    shutil.rmtree(paths.checkpoints_dir, ignore_errors=True)
+    shutil.rmtree(paths.onnx_dir, ignore_errors=True)
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(paths.dashboard_db) + suffix).unlink(missing_ok=True)
+
+
+def maybe_resume(paths: TagPaths, model, optimizer, scheduler, device) -> int:
+    """Load the latest checkpoint (model/optimizer/scheduler) and return the next epoch."""
+    ckpts = sorted(paths.checkpoints_dir.glob("model_epoch_*.pt"))
+    if not ckpts:
+        return 1
+    ckpt = torch.load(ckpts[-1], map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+    start = int(ckpt["epoch"]) + 1
+    print(f"Resuming from {ckpts[-1].name}: next epoch {start} (use --restart for a fresh run)")
+    return start
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train Scribblez value model.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -127,22 +111,32 @@ def main() -> int:
     parser.add_argument(
         "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
     )
+    parser.add_argument("--no-probe", action="store_true", help="Disable the structural probes.")
     parser.add_argument(
-        "--no-probe", action="store_true", help="Disable the per-epoch structural probes."
+        "--no-calibration", action="store_true", help="Disable the full-test-set calibration eval."
     )
     parser.add_argument(
-        "--no-calibration",
-        action="store_true",
-        help="Disable the per-epoch full-test-set calibration eval.",
+        "--calibration-batch-size", type=int, default=512, help="Batch size for calibration."
     )
     parser.add_argument(
-        "--calibration-batch-size", type=int, default=512, help="Batch size for the calibration pass."
+        "--restart", action="store_true", help="Ignore existing checkpoints and start fresh."
     )
-    args = parser.parse_args()
+    parser.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
+    parser.add_argument(
+        "--dashboard-port", type=int, default=server.DEFAULT_PORT, help="Dashboard server port."
+    )
+    return parser
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
 
     paths = TagPaths(args.tag)
     device = torch.device(args.device)
     print(f"Device: {device}")
+
+    if args.restart:
+        reset_tag(paths)
 
     # Set up dataset from the training split.
     print(f"Loading data from {paths.train_dir} ...")
@@ -162,10 +156,16 @@ def main() -> int:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model: {n_params:,} parameters")
 
-    # Frozen evaluation subset (sampled from the held-out test split into a
-    # standalone .slog). Its per-position ASCII state dumps are written
-    # alongside so the analysis panels (#0, #1, ...) can be cross-referenced
-    # with pos-00.txt, pos-01.txt, ...
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    start_epoch = maybe_resume(paths, model, optimizer, scheduler, device)
+
+    # Dashboard DB + record-keeping.
+    conn = db.connect(paths.dashboard_db)
+    db.write_meta(conn, args.tag, vars(args), n_params)
+
+    # Frozen evaluation subset for the structural probes (built once; positions
+    # stored in the DB so the dashboard can render the boards).
     probe_enabled = not args.no_probe and ensure_test_subset(paths, args.num_probe_positions)
 
     # Full held-out test set for per-epoch calibration scoring (loaded once).
@@ -176,19 +176,19 @@ def main() -> int:
         test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
         print(f"  {test_ds.num_samples} test positions")
     elif not args.no_calibration:
-        print(
-            f"WARNING: no test split at {paths.test_dir}; skipping calibration eval.",
-            file=sys.stderr,
-        )
+        print(f"WARNING: no test split at {paths.test_dir}; skipping calibration.", file=sys.stderr)
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    # Launch the dashboard alongside training (torn down on exit).
+    if not args.no_dashboard:
+        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root))
+        if proc is not None:
+            atexit.register(proc.terminate)
 
-    paths.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    if start_epoch > args.epochs:
+        print(f"Already trained through epoch {args.epochs}; nothing to do.")
+        return 0
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         t0 = time.time()
         losses_accum = {"total": 0.0, "wld": 0.0, "score_diff": 0.0, "opp_next_placement": 0.0}
@@ -239,7 +239,7 @@ def main() -> int:
             f"wld_acc={wld_acc:.3f} | lr={lr_now:.2e} | {elapsed:.1f}s"
         )
 
-        # Per-epoch metrics record.
+        # Per-epoch scalar metrics (written to the DB's metrics table).
         record = {
             "epoch": epoch,
             "loss": avg["total"],
@@ -255,7 +255,7 @@ def main() -> int:
         if probe_enabled:
             record.update(
                 run_probes(
-                    model, paths, device, epoch, args.tag,
+                    model, paths.test_subset_slog, device, conn, epoch,
                     diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
                 )
             )
@@ -263,15 +263,12 @@ def main() -> int:
         # Calibration over the full held-out test set (every epoch).
         if test_ds is not None:
             record.update(
-                run_calibration(
-                    model, test_ds, device, paths, epoch, args.tag, args.calibration_batch_size
-                )
+                run_calibration(model, test_ds, device, conn, epoch, args.calibration_batch_size)
             )
 
-        with paths.metrics_path.open("a") as fh:
-            fh.write(json.dumps(record) + "\n")
+        db.write_metrics(conn, epoch, record)
 
-        # Checkpoint (.pt + .onnx)
+        # Checkpoint (.pt + .onnx).
         ckpt_path = paths.checkpoint_path(epoch)
         save_checkpoint(model, optimizer, scheduler, epoch, avg["total"], wld_acc, args, ckpt_path)
         onnx_path = paths.onnx_path(epoch)

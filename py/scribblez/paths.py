@@ -8,14 +8,14 @@ Every artifact tied to a tag lives under a single per-tag root,
       data/test/                  *.slog  -- frozen held-out games
       checkpoints/                model_epoch_XXXX.pt
       models/                     model_epoch_XXXX.onnx
-      monotonicity-probe-analysis/  gen-XXXX.png
-      score-belief-probe-analysis/  gen-XXXX.png
-      calibration-analysis/       gen-XXXX.png
       test-subset/                positions.slog + pos-XX.txt  (frozen eval set)
-      metrics.jsonl               per-epoch training + eval metrics
+      dashboard.db                metrics + eval data (rendered by the dashboard)
 
 This module is the single source of truth for that layout: scripts derive
 every path from a `TagPaths` rather than reassembling subdirectories.
+
+All training/eval results are written to dashboard.db (a SQLite store); the
+Bokeh dashboard renders every plot on the fly from it -- no PNG artifacts.
 """
 
 from pathlib import Path
@@ -55,18 +55,6 @@ class TagPaths:
         return self.root / "models"
 
     @property
-    def probe_analysis_dir(self) -> Path:
-        return self.root / "monotonicity-probe-analysis"
-
-    @property
-    def score_belief_dir(self) -> Path:
-        return self.root / "score-belief-probe-analysis"
-
-    @property
-    def calibration_analysis_dir(self) -> Path:
-        return self.root / "calibration-analysis"
-
-    @property
     def test_subset_dir(self) -> Path:
         """Frozen evaluation positions sampled from the test split (standard .slog)."""
         return self.root / "test-subset"
@@ -76,23 +64,15 @@ class TagPaths:
         return self.test_subset_dir / "positions.slog"
 
     @property
-    def metrics_path(self) -> Path:
-        return self.root / "metrics.jsonl"
+    def dashboard_db(self) -> Path:
+        """SQLite store of all metrics + eval data, read by the dashboard."""
+        return self.root / "dashboard.db"
 
     def checkpoint_path(self, epoch: int) -> Path:
         return self.checkpoints_dir / f"model_epoch_{epoch:04d}.pt"
 
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"model_epoch_{epoch:04d}.onnx"
-
-    def probe_image_path(self, generation: int) -> Path:
-        return self.probe_analysis_dir / f"gen-{generation:04d}.png"
-
-    def score_belief_image_path(self, generation: int) -> Path:
-        return self.score_belief_dir / f"gen-{generation:04d}.png"
-
-    def calibration_image_path(self, generation: int) -> Path:
-        return self.calibration_analysis_dir / f"gen-{generation:04d}.png"
 
     def position_dump_path(self, index: int) -> Path:
         return self.test_subset_dir / f"pos-{index:02d}.txt"
