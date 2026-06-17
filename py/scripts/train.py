@@ -102,9 +102,6 @@ def main() -> int:
     parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     parser.add_argument(
-        "--checkpoint-every", type=int, default=10, help="Epochs between .pt/.onnx saves."
-    )
-    parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
     parser.add_argument(
@@ -225,13 +222,12 @@ def main() -> int:
         with paths.metrics_path.open("a") as fh:
             fh.write(json.dumps(record) + "\n")
 
-        # Checkpoint (.pt + .onnx) on the configured cadence and the final epoch.
-        if epoch % args.checkpoint_every == 0 or epoch == args.epochs:
-            ckpt_path = paths.checkpoint_path(epoch)
-            save_checkpoint(model, optimizer, scheduler, epoch, avg["total"], wld_acc, args, ckpt_path)
-            onnx_path = paths.onnx_path(epoch)
-            export_onnx(model, onnx_path, spatial_planes, scalar_size)
-            print(f"  -> Saved {ckpt_path} and {onnx_path}")
+        # Checkpoint (.pt + .onnx)
+        ckpt_path = paths.checkpoint_path(epoch)
+        save_checkpoint(model, optimizer, scheduler, epoch, avg["total"], wld_acc, args, ckpt_path)
+        onnx_path = paths.onnx_path(epoch)
+        export_onnx(model, onnx_path, spatial_planes, scalar_size)
+        print(f"  -> Saved {ckpt_path} and {onnx_path}")
 
     print("Training complete.")
     return 0
