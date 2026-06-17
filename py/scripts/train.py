@@ -2,7 +2,7 @@
 """Train a post-move value model from .slog training data.
 
 Usage:
-    python -m scripts.train -t mytag --epochs 50 --batch-size 256
+    python -m scripts.train -t mytag --epochs 20 --batch-size 256
 
 Reads the tag's training split (tags/<tag>/data/train), writes .pt checkpoints
 and .onnx exports under tags/<tag>/, and after every epoch runs the structural
@@ -96,7 +96,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
-    parser.add_argument("--epochs", type=int, default=50, help="Training epochs.")
+    parser.add_argument("--epochs", type=int, default=20, help="Training epochs.")
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
