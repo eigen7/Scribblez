@@ -80,8 +80,8 @@ static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 // Trailing entries of each rack slot are empty Tiles when the bag was starved
 // and a player received fewer than RACK_SIZE tiles.
 struct InitialRacks {
-  Rack p0;  // 7 B
-  Rack p1;  // 7 B
+  Rack p0;  // 8 B
+  Rack p1;  // 8 B
 };
 static_assert(sizeof(InitialRacks) == 16, "InitialRacks must be 16 bytes");
 
