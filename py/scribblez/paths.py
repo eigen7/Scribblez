@@ -10,6 +10,7 @@ Every artifact tied to a tag lives under a single per-tag root,
       models/                     model_epoch_XXXX.onnx
       monotonicity-probe-analysis/  gen-XXXX.png
       score-belief-probe-analysis/  gen-XXXX.png
+      calibration-analysis/       gen-XXXX.png
       test-subset/                positions.slog + pos-XX.txt  (frozen eval set)
       metrics.jsonl               per-epoch training + eval metrics
 
@@ -62,6 +63,10 @@ class TagPaths:
         return self.root / "score-belief-probe-analysis"
 
     @property
+    def calibration_analysis_dir(self) -> Path:
+        return self.root / "calibration-analysis"
+
+    @property
     def test_subset_dir(self) -> Path:
         """Frozen evaluation positions sampled from the test split (standard .slog)."""
         return self.root / "test-subset"
@@ -85,6 +90,9 @@ class TagPaths:
 
     def score_belief_image_path(self, generation: int) -> Path:
         return self.score_belief_dir / f"gen-{generation:04d}.png"
+
+    def calibration_image_path(self, generation: int) -> Path:
+        return self.calibration_analysis_dir / f"gen-{generation:04d}.png"
 
     def position_dump_path(self, index: int) -> Path:
         return self.test_subset_dir / f"pos-{index:02d}.txt"

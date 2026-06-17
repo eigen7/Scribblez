@@ -17,6 +17,8 @@ from pathlib import Path
 
 import torch
 
+from scribblez.dataset import SlogDataset
+from scribblez.eval.calibration import evaluate_calibration, render_calibration
 from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
 from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
 from scribblez.eval.sampling import build_test_subset
@@ -63,6 +65,9 @@ def main() -> int:
     parser.add_argument(
         "--rebuild-subset", action="store_true", help="Resample the evaluation subset .slog."
     )
+    parser.add_argument(
+        "--no-calibration", action="store_true", help="Skip the full-test-set calibration eval."
+    )
     args = parser.parse_args()
 
     paths = TagPaths(args.tag)
@@ -87,6 +92,24 @@ def main() -> int:
     belief_img = paths.score_belief_image_path(epoch)
     render_score_belief(outs.score_diffs, outs.score_pdf, belief_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
 
+    # Calibration over the full held-out test set.
+    calib = {}
+    has_test = paths.test_dir.exists() and any(paths.test_dir.glob("*.slog"))
+    if not args.no_calibration and has_test:
+        test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
+        creport = evaluate_calibration(model, test_ds, device)
+        calib_img = paths.calibration_image_path(epoch)
+        render_calibration(creport, calib_img, title=f"{args.tag} gen-{epoch:04d} (eval)")
+        calib = {
+            "calib_brier": creport.brier,
+            "calib_log_loss": creport.log_loss,
+            "calib_ece": creport.ece,
+            "calib_scorediff_mae": creport.scorediff_mae,
+            "calib_scorediff_bias": creport.scorediff_bias,
+            "calib_scorediff_sharpness": creport.scorediff_sharpness,
+            "calibration_image": str(calib_img),
+        }
+
     summary = {
         "checkpoint": str(ckpt_path),
         "epoch": epoch,
@@ -95,6 +118,7 @@ def main() -> int:
         "probe_total_violations": report.total_violations,
         "monotonicity_image": str(mono_img),
         "score_belief_image": str(belief_img),
+        **calib,
         "per_position": [
             {
                 "structural_score": s.structural_score,

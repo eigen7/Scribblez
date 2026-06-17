@@ -20,6 +20,7 @@ from pathlib import Path
 import torch
 
 from scribblez.dataset import SlogDataset
+from scribblez.eval.calibration import evaluate_calibration, render_calibration
 from scribblez.eval.monotonicity import render_monotonicity, score_monotonicity
 from scribblez.eval.probe_eval import evaluate_subset, write_position_dumps
 from scribblez.eval.sampling import build_test_subset
@@ -70,6 +71,25 @@ def run_probes(
     }
 
 
+def run_calibration(model, test_ds, device, paths: TagPaths, epoch: int, tag: str, batch_size: int) -> dict:
+    """Score calibration over the full test set, render its image, return metrics."""
+    report = evaluate_calibration(model, test_ds, device, batch_size=batch_size)
+    img = paths.calibration_image_path(epoch)
+    render_calibration(report, img, title=f"{tag} gen-{epoch:04d}")
+    print(
+        f"  calib: brier={report.brier:.4f} logloss={report.log_loss:.4f} ece={report.ece:.4f} "
+        f"sd_mae={report.scorediff_mae:.1f} sd_bias={report.scorediff_bias:+.1f} -> {img}"
+    )
+    return {
+        "calib_brier": report.brier,
+        "calib_log_loss": report.log_loss,
+        "calib_ece": report.ece,
+        "calib_scorediff_mae": report.scorediff_mae,
+        "calib_scorediff_bias": report.scorediff_bias,
+        "calib_scorediff_sharpness": report.scorediff_sharpness,
+    }
+
+
 def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -110,6 +130,14 @@ def main() -> int:
     parser.add_argument(
         "--no-probe", action="store_true", help="Disable the per-epoch structural probes."
     )
+    parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help="Disable the per-epoch full-test-set calibration eval.",
+    )
+    parser.add_argument(
+        "--calibration-batch-size", type=int, default=512, help="Batch size for the calibration pass."
+    )
     args = parser.parse_args()
 
     paths = TagPaths(args.tag)
@@ -139,6 +167,19 @@ def main() -> int:
     # alongside so the analysis panels (#0, #1, ...) can be cross-referenced
     # with pos-00.txt, pos-01.txt, ...
     probe_enabled = not args.no_probe and ensure_test_subset(paths, args.num_probe_positions)
+
+    # Full held-out test set for per-epoch calibration scoring (loaded once).
+    test_ds = None
+    has_test = paths.test_dir.exists() and any(paths.test_dir.glob("*.slog"))
+    if not args.no_calibration and has_test:
+        print(f"Loading calibration test set from {paths.test_dir} ...")
+        test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
+        print(f"  {test_ds.num_samples} test positions")
+    elif not args.no_calibration:
+        print(
+            f"WARNING: no test split at {paths.test_dir}; skipping calibration eval.",
+            file=sys.stderr,
+        )
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
@@ -216,6 +257,14 @@ def main() -> int:
                 run_probes(
                     model, paths, device, epoch, args.tag,
                     diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
+                )
+            )
+
+        # Calibration over the full held-out test set (every epoch).
+        if test_ds is not None:
+            record.update(
+                run_calibration(
+                    model, test_ds, device, paths, epoch, args.tag, args.calibration_batch_size
                 )
             )
 
