@@ -28,7 +28,7 @@ from bokeh.plotting import figure
 
 from . import db
 
-SERIES_SIZE = 400  # square-ish learning-curve figures
+SERIES_SIZE = 800  # square-ish learning-curve figures
 
 
 @dataclass
@@ -69,7 +69,7 @@ def _series_figure(conn, title: str, names: list[str]):
     return fig
 
 
-def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 2):
+def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
     """A grid of square learning-curve figures for the given (title, metric-names) groups."""
     figs = [f for title, names in groups if (f := _series_figure(conn, title, names))]
     if not figs:
@@ -83,15 +83,26 @@ def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 2):
 # ---------------------------------------------------------------------------
 
 
-def _gen_controls(num_gens: int, epochs: list[int], init_gen: int, follow: bool):
-    """A generation slider + 'latest' checkbox; the checkbox locks/follows client-side."""
-    gen = Slider(start=0, end=max(num_gens - 1, 1), value=init_gen, step=1,
-                 title="generation", disabled=(follow or num_gens < 2), width=420)
+def _label(text: str) -> Div:
+    """A small inline control label."""
+    return Div(text=f"<b style='font-size:13px;color:#445'>{text}</b>")
+
+
+def _gen_controls(num_gens: int, init_gen: int, follow: bool):
+    """A generation slider + 'latest' checkbox.
+
+    The checkbox tracks "is the slider at the rightmost (newest) generation": sliding
+    away unchecks it, sliding back rechecks it, and (re)checking it jumps to the newest.
+    The slider is never disabled. ``latest.active`` (synced to the server) drives the
+    server-side follow-on-new-epoch behavior.
+    """
+    end = max(num_gens - 1, 1)
+    gen = Slider(start=0, end=end, value=(end if follow else init_gen), step=1, title="", width=560)
     latest = Checkbox(label="latest", active=follow)
-    latest.js_on_change("active", CustomJS(args=dict(gen=gen), code="""
-        gen.disabled = this.active;
-        if (this.active) { gen.value = gen.end; }
-    """))
+    gen.js_on_change("value", CustomJS(args=dict(latest=latest),
+                                       code="latest.active = (cb_obj.value >= cb_obj.end);"))
+    latest.js_on_change("active", CustomJS(args=dict(gen=gen),
+                                           code="if (cb_obj.active) { gen.value = gen.end; }"))
     return gen, latest
 
 
@@ -120,33 +131,38 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
     gi = (g - 1) if init_gen is None else max(0, min(init_gen, g - 1))
     k0 = max(0, min(init_pos, n - 1))
 
-    board = Div(text="", width=450)
-    info = Div(styles={"font-size": "12px", "color": "#445", "font-weight": "600"})
+    board = Div(text="", width=560)
+    info = Div(styles={"font-size": "13px", "color": "#445", "font-weight": "600"})
 
     mono_src = ColumnDataSource(dict(x=list(diffs), y=list(win_rate[gi, k0])))
-    mono = figure(width=430, height=430, title="", x_range=Range1d(diffs[0], diffs[-1]),
-                  y_range=Range1d(-0.02, 1.02), x_axis_label="score differential",
-                  y_axis_label="win rate", tools="pan,box_zoom,wheel_zoom,reset,save")
+    mono = figure(width=620, height=580, title="", x_range=Range1d(diffs[0], diffs[-1]),
+                  y_range=Range1d(-0.02, 1.02), x_axis_label="input score differential",
+                  y_axis_label="predicted win rate", tools="pan,box_zoom,wheel_zoom,reset,save")
     mono.line([diffs[0], diffs[-1]], [0.5, 0.5], color="#cccccc", line_dash="dashed")
     mono.line([0, 0], [0, 1], color="#cccccc", line_dash="dashed")
     mono.line("x", "y", source=mono_src, color="#1f77b4", line_width=2)
 
     b0 = bands[gi, k0]
+    c0 = float(np.mean(b0[:, q // 2] - diffs))  # best fit y = x + C to the median
     outer = ColumnDataSource(dict(x=list(diffs), y1=list(b0[:, 0]), y2=list(b0[:, q - 1])))
     inner = ColumnDataSource(dict(x=list(diffs), y1=list(b0[:, 1]), y2=list(b0[:, q - 2])))
     med = ColumnDataSource(dict(x=list(diffs), y=list(b0[:, q // 2])))
+    fit = ColumnDataSource(dict(x=list(diffs), y=list(diffs + c0)))
     belief_yr = Range1d(float(b0.min()), float(b0.max()))
-    belief = figure(width=430, height=430, title="", x_range=Range1d(diffs[0], diffs[-1]),
+    belief = figure(width=620, height=580, title="", x_range=Range1d(diffs[0], diffs[-1]),
                     y_range=belief_yr, x_axis_label="input score differential",
                     y_axis_label="predicted final score differential",
                     tools="pan,box_zoom,wheel_zoom,reset,save")
     belief.varea("x", "y1", "y2", source=outer, fill_color="#1f77b4", fill_alpha=0.18)
     belief.varea("x", "y1", "y2", source=inner, fill_color="#1f77b4", fill_alpha=0.36)
-    belief.line("x", "y", source=med, color="#08306b", line_width=1.5)
-    belief.line(diffs, diffs, color="#bbbbbb", line_dash="dashed")
+    belief.line("x", "y", source=med, color="#08306b", line_width=1.5, legend_label="median")
+    belief.line("x", "y", source=fit, color="#e74c3c", line_width=1.5, line_dash="dashed",
+                legend_label="best fit y = x + C")
+    belief.legend.location = "top_left"
+    belief.legend.label_text_font_size = "9pt"
 
-    gen, latest = _gen_controls(g, epochs, gi, follow)
-    pos = Select(title="position", options=[str(k) for k in range(n)], value=str(k0), width=110)
+    gen, latest = _gen_controls(g, gi, follow)
+    pos = Select(title="", options=[str(k) for k in range(n)], value=str(k0), width=80)
 
     update = CustomJS(
         args=dict(
@@ -154,7 +170,7 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
             winrate=win_rate.astype(np.float32).ravel(),
             cscores=curve_scores.astype(np.float32).ravel(),
             bands=bands.astype(np.float32).ravel(),
-            mono_src=mono_src, outer=outer, inner=inner, med=med,
+            mono_src=mono_src, outer=outer, inner=inner, med=med, fit=fit,
             mono=mono, belief=belief, belief_yr=belief_yr, board=board, info=info,
         ),
         code="""
@@ -168,18 +184,19 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
 
         const bb = (gj*N + k)*R*Q;
         const lo=[], hi=[], i1=[], i3=[], me=[];
-        let ymin=1e18, ymax=-1e18;
+        let ymin=1e18, ymax=-1e18, csum=0;
         for (let s=0;s<R;s++){
             const o = bb + s*Q;
             const a=bands[o], b=bands[o+Q-1], m=bands[o+(Q>>1)], c=bands[o+1], d=bands[o+Q-2];
-            lo.push(a); hi.push(b); i1.push(c); i3.push(d); me.push(m);
+            lo.push(a); hi.push(b); i1.push(c); i3.push(d); me.push(m); csum += (m - xs[s]);
             if (a<ymin) ymin=a; if (b>ymax) ymax=b;
         }
         outer.data={x:xs, y1:lo, y2:hi}; outer.change.emit();
         inner.data={x:xs, y1:i1, y2:i3}; inner.change.emit();
         med.data={x:xs, y:me}; med.change.emit();
+        const C = csum / R; fit.data={x:xs, y: xs.map(v => v + C)}; fit.change.emit();
         const pad=(ymax-ymin)*0.05+1; belief_yr.start=ymin-pad; belief_yr.end=ymax+pad;
-        belief.title.text = "Score belief (5/25/50/75/95 percentiles)";
+        belief.title.text = `Score belief (5/25/50/75/95 percentiles)   best fit C=${C.toFixed(1)}`;
 
         board.text = imgs[k] ? `<img src="${imgs[k]}" style="width:100%;height:auto;border-radius:6px;">`
                              : "<i>no board image</i>";
@@ -190,11 +207,9 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
     gen.js_on_change("value", update)
 
     # Prev/next arrows that step the position (client-side).
-    arrow_css = InlineStyleSheet(css="""
-        .bk-btn { font-size: 28px; font-weight: 700; color: #2c7be5; }
-    """)
-    prev_btn = Button(label="❮", width=46, height=120, button_type="light", stylesheets=[arrow_css])
-    next_btn = Button(label="❯", width=46, height=120, button_type="light", stylesheets=[arrow_css])
+    arrow_css = InlineStyleSheet(css=".bk-btn { font-size: 34px; font-weight: 700; color: #2c7be5; }")
+    prev_btn = Button(label="❮", width=52, height=160, button_type="light", stylesheets=[arrow_css])
+    next_btn = Button(label="❯", width=52, height=160, button_type="light", stylesheets=[arrow_css])
     prev_btn.js_on_click(CustomJS(args=dict(pos=pos), code=
         "pos.value = String(Math.max(0, (parseInt(pos.value)|0) - 1));"))
     next_btn.js_on_click(CustomJS(args=dict(pos=pos, N=n), code=
@@ -202,14 +217,15 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
 
     # Initial render (CustomJS only fires on change).
     mono.title.text = f"Monotonicity — R²={curve_scores[gi,k0,1]:.2f}  viol={int(curve_scores[gi,k0,2])}"
-    belief.title.text = "Score belief (5/25/50/75/95 percentiles)"
+    belief.title.text = f"Score belief (5/25/50/75/95 percentiles)   best fit C={c0:.1f}"
     board.text = (f'<img src="{imgs[k0]}" style="width:100%;height:auto;border-radius:6px;">'
                   if imgs[k0] else "<i>no board image</i>")
     info.text = f"position #{k0} &nbsp;•&nbsp; generation epoch {epochs[gi]}"
 
-    center_css = InlineStyleSheet(css=":host { align-items: center; gap: 8px; }")
+    center_css = InlineStyleSheet(css=":host { align-items: center; gap: 10px; }")
     main = row(prev_btn, mono, belief, column(info, board), next_btn, stylesheets=[center_css])
-    controls = row(pos, gen, latest, stylesheets=[center_css])
+    controls = row(_label("position"), pos, _label("generation"), gen, latest,
+                   stylesheets=[center_css])
     return View(layout=column(main, controls), gen=gen, latest=latest, pos=pos)
 
 
@@ -244,7 +260,7 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
     wx, wy = masked(cal["rel_pred"][gi], cal["rel_actual"][gi], cal["rel_count"][gi])
     wld_src = ColumnDataSource(dict(x=wx, y=wy))
     count_src = ColumnDataSource(dict(x=list(rel_centers), top=list(cal["rel_count"][gi])))
-    wld = figure(width=500, height=440, x_range=Range1d(0, 1), y_range=Range1d(0, 1),
+    wld = figure(width=720, height=620, x_range=Range1d(0, 1), y_range=Range1d(0, 1),
                  x_axis_label="predicted win rate", y_axis_label="empirical win rate",
                  tools="pan,box_zoom,wheel_zoom,reset,save", title="")
     wld.extra_y_ranges = {"count": Range1d(start=0, end=count_max)}
@@ -268,7 +284,7 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
     ece = _aligned_series(conn, "calib_ece", epochs)
     mae = _aligned_series(conn, "calib_scorediff_mae", epochs)
 
-    gen, latest = _gen_controls(g, epochs, gi, follow)
+    gen, latest = _gen_controls(g, gi, follow)
     update = CustomJS(
         args=dict(
             gen=gen, K=K, M=M, centers=list(rel_centers), epochs=epochs,

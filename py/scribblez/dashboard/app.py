@@ -4,7 +4,7 @@ Served via ``bokeh serve app.py --args --mount-root <dir>``. A left sidebar hold
 the tag selector and the tab navigation; the main area shows one tab at a time:
 
   * Loss          -- loss learning curves
-  * Probes        -- board + monotonicity + score-belief for one position/gen,
+  * Positions     -- board + monotonicity + score-belief for one position/gen,
                      plus the structural-probe learning curves
   * Calibration   -- reliability diagrams for one gen, plus the WLD/calibration
                      learning curves
@@ -30,7 +30,7 @@ from scribblez.paths import TagPaths
 
 POLL_MS = 3000
 
-TABS = ["Loss", "Probes", "Calibration", "Training"]
+TABS = ["Loss", "Positions", "Calibration", "Training"]
 LOSS = [("Loss", ["loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement"])]
 TRAINING = [("Learning rate", ["lr"]), ("Epoch time (s)", ["elapsed_s"])]
 PROBE_CURVES = [
