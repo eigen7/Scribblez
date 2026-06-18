@@ -17,42 +17,27 @@ const Premium Premium::DWS = Premium(Premium::kDWS);
 const Premium Premium::TWS = Premium(Premium::kTWS);
 namespace {
 
-// Encoded as: '.' NONE, 'd' DLS, 't' TLS, 'D' DWS, 'T' TWS.
+// Encoded as: '.' NONE, '-' DLS, '+' TLS, '*' DWS, '$' TWS.
 // Center (7,7) is treated as DWS for first-move scoring.
 // clang-format off
 constexpr const char* kPremiumLayout[BOARD_SIZE] = {
-    "T..d...T...d..T",
-    ".D...t...t...D.",
-    "..D...d.d...D..",
-    "d..D...d...D..d",
-    "....D.....D....",
-    ".t...t...t...t.",
-    "..d...d.d...d..",
-    "T..d...D...d..T",
-    "..d...d.d...d..",
-    ".t...t...t...t.",
-    "....D.....D....",
-    "d..D...d...D..d",
-    "..D...d.d...D..",
-    ".D...t...t...D.",
-    "T..d...T...d..T",
+    "$..-...$...-..$",
+    ".*...+...+...*.",
+    "..*...-.-...*..",
+    "-..*...-...*..-",
+    "....*.....*....",
+    ".+...+...+...+.",
+    "..-...-.-...-..",
+    "$..-...*...-..$",
+    "..-...-.-...-..",
+    ".+...+...+...+.",
+    "....*.....*....",
+    "-..*...-...*..-",
+    "..*...-.-...*..",
+    ".*...+...+...*.",
+    "$..-...$...-..$",
 };
 // clang-format on
-
-Premium decode(char c) {
-  switch (c) {
-    case 'd':
-      return Premium::DLS;
-    case 't':
-      return Premium::TLS;
-    case 'D':
-      return Premium::DWS;
-    case 'T':
-      return Premium::TWS;
-    default:
-      return Premium::NONE;
-  }
-}
 
 std::array<Premium, BOARD_SIZE * BOARD_SIZE> build_premium() {
   std::array<Premium, BOARD_SIZE * BOARD_SIZE> out{};

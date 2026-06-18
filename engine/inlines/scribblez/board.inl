@@ -10,6 +10,21 @@ constexpr char Premium::display_char() const {
   return '.';
 }
 
+inline Premium decode(char c) {
+  switch (c) {
+    case '-':
+      return Premium::DLS;
+    case '+':
+      return Premium::TLS;
+    case '*':
+      return Premium::DWS;
+    case '$':
+      return Premium::TWS;
+    default:
+      return Premium::NONE;
+  }
+}
+
 constexpr const char* Premium::code() const {
   if (kind_ == kDLS) return "DL";
   if (kind_ == kTLS) return "TL";
