@@ -45,6 +45,47 @@ def run(cmd, cwd=None):
         sys.exit(result.returncode)
 
 
+# Build artifacts we never want to list as runnable binaries.
+_NON_BINARY_EXTS = {".so", ".a", ".o", ".cmake", ".json", ".txt", ".ninja",
+                    ".make", ".marks", ".stamp", ".onnx", ".engine", ".py"}
+
+
+def list_built_binaries(target_dir: str) -> list[str]:
+    """Return the executable files produced by the build (sorted, absolute).
+
+    Walks `target_dir` for regular, executable files, skipping CMake's own
+    bookkeeping (CMakeFiles/) and non-runnable artifacts (shared/static libs,
+    object files, generated scripts). These are the things you can copy and run
+    directly, e.g. ./target/engine/play_game.
+    """
+    binaries = []
+    for dirpath, dirnames, filenames in os.walk(target_dir):
+        if "CMakeFiles" in dirpath.split(os.sep):
+            dirnames[:] = []  # don't descend into CMake's scratch tree
+            continue
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            if os.path.splitext(name)[1] in _NON_BINARY_EXTS:
+                continue
+            if os.access(path, os.X_OK):
+                binaries.append(path)
+    return sorted(binaries)
+
+
+def print_built_binaries(target_dir: str) -> None:
+    binaries = list_built_binaries(target_dir)
+    if not binaries:
+        print("\nNo runnable binaries found under target/.")
+        return
+    print(f"\nBuilt {len(binaries)} binaries under target/:")
+    for path in binaries:
+        rel = os.path.relpath(path, ROOT)
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        print(f"    {rel}  ({size_mb:.1f} MB)")
+
+
 def link_lexica_into_macondo():
     """Point Macondo's data/lexica/gaddag dir at <mount>/lexica.
 
@@ -168,6 +209,8 @@ def main():
 
             # Make the installed lexica resolvable by the macondo subprocess.
             link_lexica_into_macondo()
+
+    print_built_binaries(target_dir)
 
     print("\nBuild complete. Play a human-vs-AI game with:")
     print('    ./target/engine/play_game --player "--type=human" --player "--type=greedy"')

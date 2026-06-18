@@ -4,6 +4,7 @@
 #include "scribblez/exception.h"
 #include "scribblez/human_web_agent.h"
 #include "scribblez/macondo_bot.h"
+#include "scribblez/neural_top_k_agent.h"
 
 #include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
@@ -59,9 +60,10 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   }
 
   out.type = boost::to_lower_copy(type_str);
-  if (out.type != "greedy" && out.type != "human" && out.type != "hastybot") {
+  if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
+      out.type != "neural") {
     throw std::runtime_error("bad --player spec \"" + spec + "\": unknown type '" + type_str +
-                             "' (expected greedy, human, or hastybot)");
+                             "' (expected greedy, human, hastybot, or neural)");
   }
   return out;
 }
@@ -76,6 +78,9 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
   if (spec.type == "hastybot") {
     return HastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
+  if (spec.type == "neural") {
+    return NeuralTopKAgent::from_spec(spec.remaining_tokens, thread_id, name);
+  }
   if (spec.type == "human") {
     return HumanWebAgent::from_spec(spec.remaining_tokens, thread_id, name, opp_name);
   }
@@ -89,6 +94,7 @@ std::string PlayerSpec::display_name() const {
   if (type == "human") return "You";
   if (type == "hastybot") return "HastyBot";
   if (type == "greedy") return "Greedy";
+  if (type == "neural") return "Neural";
   return type;  // unknown types: fall back to the literal type string
 }
 
@@ -131,6 +137,7 @@ std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
   o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
+  o << "--player \"--type=neural [options]\"\n" << NeuralTopKAgent::options_help() << "\n";
   o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
   std::string type_str, name;  // scratch binding targets; never read here
   o << "Universal --player options (parsed by the factory before dispatch):\n"

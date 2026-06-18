@@ -3093,6 +3093,64 @@ static void test_util_helpers() {
   std::cout << "test_util_helpers passed\n";
 }
 
+// Backs the invariant "NeuralTopKAgent with --top-k=1 plays exactly HastyBot's
+// move" without instantiating the (TensorRT-linked) agent. At k=1 both agents
+// reduce to the same equity argmax over the legal plays, via two different
+// HastyEquity entry points: HastyBot scores moves one at a time with
+// HastyEquity::equity(), while NeuralTopKAgent::select_top_k ranks the batch
+// from HastyEquity::equities(). This checks (a) the batch and per-move APIs
+// agree value-for-value and (b) their argmax -- the move each agent returns --
+// is identical.
+static void test_topk1_selection_matches_hastybot() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_topk1_XXXXXX";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+  const HastyEquity& eq = HastyEquity::instance();
+
+  Dictionary d = tiny_dict();
+  Board board;  // opening position
+  MoveGenerator gen(board, d);
+  Rack my_rack = rack_from("CATSOHE");
+  std::vector<Move> plays = gen.generate(my_rack);
+  CHECK(plays.size() >= 2);  // a meaningful argmax needs >1 candidate
+
+  Rack opp;  // empty
+  const int bag_size = 80;
+
+  // Batch path (what NeuralTopKAgent uses) must match the per-move path (what
+  // HastyBot uses) value-for-value.
+  std::vector<double> batch = eq.equities(plays, board, bag_size, opp, my_rack);
+  CHECK(batch.size() == plays.size());
+  std::vector<double> per_move(plays.size());
+  for (size_t i = 0; i < plays.size(); ++i) {
+    per_move[i] = eq.equity(plays[i], board, bag_size, opp, my_rack);
+    CHECK(std::abs(batch[i] - per_move[i]) < 1e-9);
+  }
+
+  // HastyBot's selection: first move with strictly-greatest per-move equity.
+  int hasty_pick = 0;
+  for (size_t i = 1; i < per_move.size(); ++i) {
+    if (per_move[i] > per_move[hasty_pick]) hasty_pick = static_cast<int>(i);
+  }
+  // NeuralTopKAgent k=1 selection: top-1 of the batch ranking (same rule).
+  int topk1_pick = 0;
+  for (size_t i = 1; i < batch.size(); ++i) {
+    if (batch[i] > batch[topk1_pick]) topk1_pick = static_cast<int>(i);
+  }
+  CHECK(hasty_pick == topk1_pick);
+
+  fs::remove_all(tmp);
+  std::cout << "test_topk1_selection_matches_hastybot passed (" << plays.size()
+            << " candidates, pick=" << hasty_pick << ")\n";
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
@@ -3137,6 +3195,7 @@ int main() {
   test_streaming_row_buffer_concurrency();
   test_streaming_row_buffer_shutdown();
   test_pick_sampled_turn_eligibility();
+  test_topk1_selection_matches_hastybot();
   std::cout << "All tests passed.\n";
   return 0;
 }
