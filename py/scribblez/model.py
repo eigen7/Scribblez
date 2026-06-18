@@ -1,7 +1,7 @@
 """Post-move value model for Scrabble position evaluation.
 
 Architecture:
-  - Spatial trunk: (33, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
+    - Spatial trunk: (85, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
   - Scalar injection: (936,) -> FC -> 128 -> broadcast-add to spatial features
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
@@ -95,7 +95,7 @@ class ScribblezModel(nn.Module):
         """Forward pass.
 
         Args:
-            input_spatial: (B, 33, 15, 15)
+            input_spatial: (B, 85, 15, 15)
             input_scalar:  (B, 936)
 
         Returns:

@@ -9,8 +9,8 @@
 //
 // Layout (in order, contiguous floats):
 //
-//   Spatial features -- 33 planes, channel-major, each 15x15. Shape-compatible
-//   with PyTorch (C=33, H=15, W=15) via a zero-copy reshape on the Python
+//   Spatial features -- 85 planes, channel-major, each 15x15. Shape-compatible
+//   with PyTorch (C=85, H=15, W=15) via a zero-copy reshape on the Python
 //   side.
 //
 //     planes  [0..25]   letter A..Z presence on the board (1.0 where that
@@ -37,6 +37,14 @@
 //                       the opponent's leave, and to interpret a candidate move
 //                       whose leave is the POV rack). A placement plane is
 //                       all-zero for an EXCHANGE / PASS / game-start move.
+//     planes  [33..58]  horizontal anchor letters A..Z: plane L marks empty
+//                       squares where placing letter L would fuse with an
+//                       existing left and/or right neighbor and satisfy the
+//                       horizontal-pass cross-check mask.
+//     planes  [59..84]  vertical anchor letters A..Z: plane L marks empty
+//                       squares where placing letter L would fuse with an
+//                       existing above and/or below neighbor and satisfy the
+//                       vertical-pass cross-check mask.
 //
 //   Scalar features -- 936 floats. All values reflect ONLY information the
 //   active player would have at the table -- in particular, the opponent's
@@ -91,15 +99,21 @@ inline constexpr int kLetterPlanes = 26;
 inline constexpr int kBlankMarkerPlanes = 1;
 inline constexpr int kPremiumPlanes = 4;
 inline constexpr int kPlacementPlanes = 2;  // self + opponent most-recent placements
-inline constexpr int kSpatialPlanes =
-  kLetterPlanes + kBlankMarkerPlanes + kPremiumPlanes + kPlacementPlanes;  // 33
-inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;        // 7425
+inline constexpr int kHorizontalAnchorPlanes = 26;
+inline constexpr int kVerticalAnchorPlanes = 26;
+inline constexpr int kSpatialPlanes = kLetterPlanes + kBlankMarkerPlanes + kPremiumPlanes +
+                                      kPlacementPlanes + kHorizontalAnchorPlanes +
+                                      kVerticalAnchorPlanes;         // 85
+inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;  // 19125
 
 // Plane offsets within the spatial block (single source of truth).
 inline constexpr int kBlankMarkerPlane = kLetterPlanes;                        // 26
 inline constexpr int kPremiumPlane0 = kBlankMarkerPlane + kBlankMarkerPlanes;  // 27
 inline constexpr int kSelfPlacementPlane = kPremiumPlane0 + kPremiumPlanes;    // 31
 inline constexpr int kOppPlacementPlane = kSelfPlacementPlane + 1;             // 32
+inline constexpr int kHorizontalAnchorPlane0 = kOppPlacementPlane + 1;         // 33
+inline constexpr int kVerticalAnchorPlane0 =
+  kHorizontalAnchorPlane0 + kHorizontalAnchorPlanes;  // 59
 
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
@@ -117,7 +131,7 @@ inline constexpr int kUnseenPoolOffset = kRackCountOffset + kRackCountFloats;   
 inline constexpr int kScoreDiffOffset = kUnseenPoolOffset + kUnseenPoolThermoFloats;  // 127
 inline constexpr int kMoveMetaOffset = kScoreDiffOffset + kScoreDiffThermoFloats;     // 928
 
-inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 8361
+inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 20061
 
 }  // namespace binlog
 }  // namespace scribblez

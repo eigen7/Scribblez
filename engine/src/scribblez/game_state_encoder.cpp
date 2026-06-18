@@ -69,6 +69,55 @@ void encode_placement_plane(const Move& m, bool flip, int plane, float* planes_o
   }
 }
 
+// Per-letter directional anchor planes.
+//
+// Horizontal anchor plane L marks empty squares where placing letter L would
+// fuse with an existing left/right neighbor and pass horizontal-play
+// cross-check constraints. Vertical anchor planes are defined analogously using
+// above/below neighbors and the transposed cross-check table.
+void encode_anchor_planes(const Board& board, bool flip, float* planes_out) {
+  const auto& hcross = board.cross_checks(/*transposed=*/false);
+  const auto& vcross = board.cross_checks(/*transposed=*/true);
+
+  for (int r = 0; r < kBoardSide; ++r) {
+    for (int c = 0; c < kBoardSide; ++c) {
+      if (!board.at(r, c).is_empty()) continue;
+
+      const bool fuse_horizontal = (c > 0 && !board.at(r, c - 1).is_empty()) ||
+                                   (c + 1 < kBoardSide && !board.at(r, c + 1).is_empty());
+      const bool fuse_vertical = (r > 0 && !board.at(r - 1, c).is_empty()) ||
+                                 (r + 1 < kBoardSide && !board.at(r + 1, c).is_empty());
+
+      const int out_ix = plane_idx(r, c, flip);
+      if (fuse_horizontal) {
+        // Horizontal play at (r,c):
+        //   - perpendicular (vertical) legality comes from the non-transposed cache;
+        //   - fused main-word (left/right) legality comes from the transposed cache.
+        const uint32_t perp_mask = hcross[r * kBoardSide + c].mask;
+        const uint32_t main_mask = vcross[c * kBoardSide + r].mask;
+        const uint32_t mask = perp_mask & main_mask;
+        for (int l = 0; l < 26; ++l) {
+          if ((mask & (1u << l)) == 0) continue;
+          planes_out[(kHorizontalAnchorPlane0 + l) * kBoardCells + out_ix] = 1.0f;
+        }
+      }
+
+      if (fuse_vertical) {
+        // Vertical play at (r,c):
+        //   - fused main-word (above/below) legality comes from the non-transposed cache;
+        //   - perpendicular (horizontal) legality comes from the transposed cache.
+        const uint32_t main_mask = hcross[r * kBoardSide + c].mask;
+        const uint32_t perp_mask = vcross[c * kBoardSide + r].mask;
+        const uint32_t mask = main_mask & perp_mask;
+        for (int l = 0; l < 26; ++l) {
+          if ((mask & (1u << l)) == 0) continue;
+          planes_out[(kVerticalAnchorPlane0 + l) * kBoardCells + out_ix] = 1.0f;
+        }
+      }
+    }
+  }
+}
+
 // Fill `out` with the active player's "unseen pool" composition:
 //   unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack)
 // Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the
@@ -149,6 +198,7 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
   encode_board_planes(board, apply_flip, out);
   encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
   encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
+  encode_anchor_planes(board, apply_flip, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
   encode_scalars(my_rack, unseen, self_move, opp_move, score_diff, out + kSpatialFloats);

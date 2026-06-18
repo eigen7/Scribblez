@@ -287,18 +287,19 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
 // more of the generator than the tiny dict does.
 static Dictionary medium_dict() {
   return Dictionary::build_from_words(
-    {"AA",     "AB",      "AD",     "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
-     "AR",     "AS",      "AT",     "AW",     "AX",      "AY",      "BA",      "BE",      "BI",
-     "BO",     "BY",      "CAB",    "CAR",    "CARS",    "CART",    "CARTS",   "CAT",     "CATS",
-     "CARE",   "CARES",   "CARET",  "CARETS", "CASTE",   "CASTER",  "CASTERS", "DOG",     "DOGS",
-     "DOT",    "DOTS",    "EAR",    "EARS",   "EAT",     "EATS",    "RAT",     "RATE",    "RATES",
-     "RATS",   "STARE",   "STARED", "TARE",   "TARES",   "TEAR",    "TEARS",   "REACT",   "REACTS",
-     "TRACE",  "TRACES",  "CRATE",  "CRATES", "CATER",   "CATERS",  "RECAST",  "RECASTS", "TASTE",
-     "TASTER", "TASTERS", "SET",    "SET",    "TASTERS", "PARTIED", "AERIES",  "OX",      "OXEN",
-     "QI",     "ZA",      "JO",     "GO",     "NO",      "ON",      "TO",      "IT",      "IS",
-     "HE",     "OH",      "OW",     "WO",     "WORD",    "WORDS",   "WORDIER", "TIE",     "TIES",
-     "TIED",   "DIET",    "DIETS",  "EDIT",   "EDITS",   "TIDE",    "TIDES",   "SITE",    "SITED",
-     "STIED"});
+    {"AA",     "AB",      "AD",      "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
+     "AR",     "AS",      "AT",      "AW",     "AX",      "AY",      "BA",      "BE",      "BI",
+     "BO",     "BY",      "CAB",     "CAR",    "CARS",    "CART",    "CARTS",   "CAT",     "CATS",
+     "CARE",   "CARES",   "CARET",   "CARETS", "CASTE",   "CASTER",  "CASTERS", "DOG",     "DOGS",
+     "DOT",    "DOTS",    "EAR",     "EARS",   "EAT",     "EATS",    "RAT",     "RATE",    "RATES",
+     "RATS",   "STARE",   "STARED",  "TARE",   "TARES",   "TEAR",    "TEARS",   "REACT",   "REACTS",
+     "TRACE",  "TRACES",  "CRATE",   "CRATES", "CATER",   "CATERS",  "RECAST",  "RECASTS", "TASTE",
+     "TASTER", "TASTERS", "SET",     "SET",    "TASTERS", "PARTIED", "AERIES",  "OX",      "OXEN",
+     "QI",     "QIS",     "ZA",      "JO",     "GO",      "NO",      "ON",      "TO",      "IT",
+     "IS",     "HE",      "OH",      "OW",     "WO",      "GI",      "HI",      "KI",      "LI",
+     "MI",     "OI",      "PI",      "SI",     "TI",      "XI",      "ID",      "IF",      "IN",
+     "WORD",   "WORDS",   "WORDIER", "TIE",    "TIES",    "TIED",    "DIET",    "DIETS",   "EDIT",
+     "EDITS",  "TIDE",    "TIDES",   "SITE",   "SITED",   "STIED"});
 }
 
 static void test_gaddag_vs_dawg_inmemory() {
@@ -574,6 +575,159 @@ static void test_encoder_flip_symmetry() {
         CHECK(flipped[p * 225 + r * 15 + c] == normal[p * 225 + c * 15 + r]);
       }
     }
+  }
+}
+
+static void test_encoder_anchor_planes_qi() {
+  using namespace scribblez::binlog;
+
+  Dictionary d = medium_dict();
+
+  // p0 opens with horizontal "QI" at (7,7)..(7,8). We then encode from p1's
+  // POV (active after one move) and verify directional per-letter anchor
+  // planes around that word.
+  Move qi_play = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
+                                {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
+
+  GameStateEncoder enc;
+  enc.apply_move(qi_play);
+  enc.board().ensure_movegen_caches(d);
+
+  Rack active_rack;  // p1 rack is irrelevant for spatial-anchor checks
+  std::vector<float> out(kInputFloats, 0.0f);
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+
+  auto plane_value = [&out](int plane, int r, int c) { return out[plane * 225 + r * 15 + c]; };
+  auto h_anchor = [&plane_value](Tile letter, int r, int c) {
+    return plane_value(kHorizontalAnchorPlane0 + letter.index(), r, c);
+  };
+  auto v_anchor = [&plane_value](Tile letter, int r, int c) {
+    return plane_value(kVerticalAnchorPlane0 + letter.index(), r, c);
+  };
+  auto has = [](const std::initializer_list<char>& letters, char ch) {
+    for (char x : letters)
+      if (x == ch) return true;
+    return false;
+  };
+
+  const auto assert_horizontal_set = [&](int r, int c, const std::initializer_list<char>& letters) {
+    for (int l = 0; l < 26; ++l) {
+      const char ch = static_cast<char>('A' + l);
+      const float expected = has(letters, ch) ? 1.0f : 0.0f;
+      CHECK(h_anchor(Tile::of(l), r, c) == expected);
+    }
+  };
+
+  const auto assert_vertical_set = [&](int r, int c, const std::initializer_list<char>& letters) {
+    for (int l = 0; l < 26; ++l) {
+      const char ch = static_cast<char>('A' + l);
+      const float expected = has(letters, ch) ? 1.0f : 0.0f;
+      CHECK(v_anchor(Tile::of(l), r, c) == expected);
+    }
+  };
+
+  // Horizontal hooks after QI:
+  //   - right of I: QIS -> only 'S'
+  //   - left of Q: none in this fixture dictionary
+  assert_horizontal_set(7, 9, {'S'});
+  assert_horizontal_set(7, 6, {});
+
+  // Vertical hooks after QI:
+  //   - below Q: QI -> only 'I'
+  //   - above I: AI BI GI HI KI LI MI OI PI QI SI TI XI
+  //   - below I: ID IF IN IS IT
+  assert_vertical_set(8, 7, {'I'});
+  assert_vertical_set(6, 7, {});
+  assert_vertical_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
+  assert_vertical_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
+
+  // Occupied squares are never anchors.
+  assert_horizontal_set(7, 7, {});
+  assert_horizontal_set(7, 8, {});
+  assert_vertical_set(7, 7, {});
+  assert_vertical_set(7, 8, {});
+
+  // Spot-check that non-anchor spatial cells stay zero in both families.
+  const Tile a = Tile::from_char('A');
+  const Tile z = Tile::from_char('Z');
+  CHECK(h_anchor(a, 0, 0) == 0.0f);
+  CHECK(h_anchor(z, 14, 14) == 0.0f);
+  CHECK(v_anchor(a, 0, 0) == 0.0f);
+  CHECK(v_anchor(z, 14, 14) == 0.0f);
+}
+
+static void test_encoder_forced_score_diff_isolation() {
+  using namespace scribblez::binlog;
+
+  Move p0_play =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 17, {Glyph::of(Tile::from_char('A'))});
+  Move p1_play =
+    make_play_full(7, 8, /*horizontal=*/true, 0b1, 9, {Glyph::of(Tile::from_char('T'))});
+
+  GameStateEncoder enc;
+  enc.apply_move(p0_play);
+  enc.apply_move(p1_play);
+
+  Rack active_rack;
+  active_rack.add(Tile::from_char('E'));
+  active_rack.add(Tile::from_char('R'));
+
+  std::vector<float> normal(kInputFloats, 0.0f);
+  std::vector<float> forced(kInputFloats, 0.0f);
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input_with_score_diff(enc.active_player(), active_rack,
+                                   /*score_diff=*/123, /*apply_flip=*/false, forced.data());
+
+  const int score_lo = kSpatialFloats + kScoreDiffOffset;
+  const int score_hi = score_lo + kScoreDiffThermoFloats;
+
+  // Only the score-diff thermometer block should differ.
+  for (int i = 0; i < kInputFloats; ++i) {
+    if (i >= score_lo && i < score_hi) continue;
+    CHECK(normal[i] == forced[i]);
+  }
+
+  // Forced block must represent score_diff=123 as a thermometer.
+  const float* sd = forced.data() + score_lo;
+  CHECK(sd[kScoreDiffClip + 123] == 1.0f);
+  CHECK(sd[kScoreDiffClip + 124] == 0.0f);
+}
+
+static void test_encoder_nonplay_last_move_metadata() {
+  using namespace scribblez::binlog;
+
+  // p0 PASS, p1 EXCHANGE(1 tile). After two plies active is p0 again.
+  Move p0_pass = Move::pass();
+  TileCounts ex_tiles;
+  ex_tiles.add(Tile::from_char('A'));
+  Move p1_exchange = Move::exchange(ex_tiles);
+
+  GameStateEncoder enc;
+  enc.apply_move(p0_pass);
+  enc.apply_move(p1_exchange);
+
+  Rack active_rack;
+  std::vector<float> out(kInputFloats, 0.0f);
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+
+  const float* scalars = out.data() + kSpatialFloats;
+  const float* self_meta = scalars + kMoveMetaOffset;
+  const float* opp_meta = self_meta + kMoveMetaFloatsPerMove;
+
+  CHECK(self_meta[static_cast<int>(MoveType::PLAY)] == 0.0f);
+  CHECK(self_meta[static_cast<int>(MoveType::EXCHANGE)] == 0.0f);
+  CHECK(self_meta[static_cast<int>(MoveType::PASS)] == 1.0f);
+  CHECK(self_meta[kMoveMetaTypeFloats] == 0.0f);
+
+  CHECK(opp_meta[static_cast<int>(MoveType::PLAY)] == 0.0f);
+  CHECK(opp_meta[static_cast<int>(MoveType::EXCHANGE)] == 1.0f);
+  CHECK(opp_meta[static_cast<int>(MoveType::PASS)] == 0.0f);
+  CHECK(opp_meta[kMoveMetaTypeFloats] == 1.0f);
+
+  // Both last-placement planes must be all zero because neither last move is PLAY.
+  for (int i = 0; i < 225; ++i) {
+    CHECK(out[kSelfPlacementPlane * 225 + i] == 0.0f);
+    CHECK(out[kOppPlacementPlane * 225 + i] == 0.0f);
   }
 }
 
@@ -2403,6 +2557,9 @@ int main() {
   test_encoder_basic_layout();
   test_encoder_last_opp_plane_mask();
   test_encoder_flip_symmetry();
+  test_encoder_anchor_planes_qi();
+  test_encoder_forced_score_diff_isolation();
+  test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
   test_binary_log_file_and_data_loader_roundtrip();
   test_tile_glyph_basics();
