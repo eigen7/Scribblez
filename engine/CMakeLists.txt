@@ -172,7 +172,6 @@ add_test(NAME scribblez_tests COMMAND scribblez_tests)
 # but the tests use the injecting constructor and never touch the GPU.
 add_executable(test_neural_topk_agent
   tests/test_neural_topk_agent.cpp
-  tests/test_support.cpp
   src/scribblez/neural_top_k_agent.cpp
   src/scribblez/hasty_equity.cpp
   src/scribblez/leave_values.cpp)

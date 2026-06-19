@@ -34,8 +34,6 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 using scribblez::binlog::kInputFloats;
 using scribblez::nn::Eval;
 
@@ -49,7 +47,7 @@ constexpr int kFieldsPerRow = 5;  // win_prob, p_win, p_draw, p_loss, score_diff
 constexpr float kProbTol = 1e-3f;  // bounds the four probability fields
 constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean (points)
 
-std::vector<float> read_floats(const std::string& path) {
+static std::vector<float> read_floats(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
   if (!f) {
     std::cerr << "cannot open " << path << "\n";
@@ -63,7 +61,7 @@ std::vector<float> read_floats(const std::string& path) {
 }
 
 // Pack an Eval into the same 5-field order as expected.bin.
-void pack(const Eval& e, float* dst) {
+static void pack(const Eval& e, float* dst) {
   dst[0] = e.win_prob;
   dst[1] = e.p_win;
   dst[2] = e.p_draw;
@@ -74,9 +72,9 @@ void pack(const Eval& e, float* dst) {
 // Evaluate every row under `precision` and report the worst per-field deviation
 // from the PyTorch reference. Returns false (and prints) if any deviation
 // exceeds kProbTol (probability fields) or kScoreDiffTol (score-diff mean).
-bool check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
-                     const char* label, const std::vector<float>& inputs,
-                     const std::vector<float>& expected, int n) {
+static bool check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
+                            const char* label, const std::vector<float>& inputs,
+                            const std::vector<float>& expected, int n) {
   scribblez::nn::NeuralNetParams params;
   params.max_batch_size = n;
   params.precision = precision;
@@ -104,7 +102,7 @@ bool check_precision(const std::string& onnx_path, scribblez::nn::Precision prec
 
 #ifdef SCRIBBLEZ_PY_DIR
 // Create a unique scratch directory for a self-generated fixture.
-std::filesystem::path make_scratch_dir() {
+static std::filesystem::path make_scratch_dir() {
   std::filesystem::path base =
     std::filesystem::temp_directory_path() /
     ("scribblez_nnparity_" + std::to_string(::time(nullptr)) + "_" +
@@ -116,7 +114,7 @@ std::filesystem::path make_scratch_dir() {
 // Invoke the Python fixture generator (at build-time SCRIBBLEZ_PY_DIR) to write
 // model.onnx / inputs.bin / expected.bin into `out_dir`. Returns false if the
 // generator is unavailable or fails (e.g. torch/onnx not installed).
-bool generate_fixture(const std::string& out_dir) {
+static bool generate_fixture(const std::string& out_dir) {
   const std::string py_dir = SCRIBBLEZ_PY_DIR;
   const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
                           "\" python3 -m scripts.gen_nn_parity_fixture --out-dir \"" + out_dir +
@@ -124,8 +122,6 @@ bool generate_fixture(const std::string& out_dir) {
   return std::system(cmd.c_str()) == 0;
 }
 #endif
-
-}  // namespace
 
 int main(int argc, char** argv) {
   // Use a caller-provided fixture if given; otherwise self-generate one into a
