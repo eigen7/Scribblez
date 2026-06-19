@@ -7,9 +7,18 @@
 //  * Suite 2.3: encode_candidate() produces exactly the row an independent
 //    GameStateEncoder replay of the same moves produces -- so the agent feeds
 //    the model the position (POV, leave, post-move state) it was trained on.
+//  * Suite 2.4: encode_candidate() is byte-identical to the row the *training*
+//    pipeline produces. This serializes a game to a .slog buffer and decodes
+//    the post-move sampled row through the real BlockDecoder, then asserts the
+//    agent's live inference row matches it -- the genuine "inference input ==
+//    training input" invariant that 2.3 cannot reach (2.3 checks the agent
+//    against a hand-built encoder, never against the decoder/serialization).
 
 #include "scribblez/agent.h"
+#include "scribblez/binary_log.h"
+#include "scribblez/block_decoder.h"
 #include "scribblez/board.h"
+#include "scribblez/data_loader.h"
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
@@ -90,6 +99,7 @@ static std::filesystem::path init_equity() {
   write_f32(1.5f);
   write_f32(-2.5f);
   CHECK(f);
+  f.close();  // flush to disk before HastyEquity::init reopens the file to read
 
   fs::path peg = tmp / "peg.json";
   std::ofstream(peg) << "[]";
@@ -217,9 +227,107 @@ static void test_encode_candidate_matches_replay() {
   std::cout << "test_encode_candidate_matches_replay passed (" << kInputFloats << " floats)\n";
 }
 
+// Append the raw bytes of a trivially-copyable value to a byte buffer.
+template <class T>
+static void append_pod(std::vector<char>& buf, const T& v) {
+  const char* p = reinterpret_cast<const char*>(&v);
+  buf.insert(buf.end(), p, p + sizeof(T));
+}
+
+// Serialize a single game into an in-memory .slog buffer the real BlockDecoder
+// can read: FileHeader, one GameMetadata (with a caller-chosen sampled_turn),
+// then the game's InitialRacks and TurnBlob[]. Scores are left at zero because
+// this fixture only compares the input row, not the score-derived targets.
+static std::vector<char> build_slog(const binlog::InitialRacks& ir,
+                                    const std::vector<binlog::TurnBlob>& turns,
+                                    uint32_t sampled_turn) {
+  binlog::FileHeader hdr{};
+  hdr.magic = binlog::kMagic;
+  hdr.version = binlog::kVersion;
+  hdr.num_games = 1;
+
+  binlog::GameMetadata gm{};
+  gm.start_offset = sizeof(binlog::FileHeader) + sizeof(binlog::GameMetadata);
+  gm.num_turns = static_cast<uint32_t>(turns.size());
+  gm.sampled_turn = sampled_turn;
+
+  std::vector<char> buf;
+  append_pod(buf, hdr);
+  append_pod(buf, gm);
+  append_pod(buf, ir);
+  for (const binlog::TurnBlob& t : turns) append_pod(buf, t);
+  return buf;
+}
+
+static void test_encode_candidate_matches_training_decoder() {
+  using binlog::kInputFloats;
+  using binlog::kRowFloats;
+
+  // A three-turn game. The sampled turn (2, post-move) is player 0's, so the
+  // decoded POV is player 0 and both players already have a prior move, which
+  // exercises the last-self / last-opp placement-plane features.
+  Move move0 = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
+                              {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                               Glyph::of(Tile::from_char('T'))});
+  Move move1 =
+    make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
+  Move move2 = make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
+                              {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
+  const uint32_t sampled_turn = 2;
+  const int mover = static_cast<int>(sampled_turn % 2);  // turn k is played by k % 2
+
+  // Initial racks and post-turn draws chosen so the decoder reconstructs
+  // player 0's pre-move rack at turn 2 as DONERST: starting CATERST, play CAT
+  // (leave ERST), draw DON. Player 1 holds an S to play on turn 1; its rack
+  // never reaches player 0's POV encoding, so its later draws are irrelevant.
+  binlog::InitialRacks ir{};
+  ir.p0 = rack_from("CATERST");
+  ir.p1 = rack_from("SAINTED");
+
+  binlog::TurnBlob t0{};
+  t0.move = move0;
+  t0.drawn = rack_from("DON");
+  binlog::TurnBlob t1{};
+  t1.move = move1;
+  binlog::TurnBlob t2{};
+  t2.move = move2;
+
+  std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn);
+
+  // Training path: decode the post-move sampled row (no symmetry flip).
+  binlog::BlockDecoder dec;
+  const uint8_t flips[1] = {0};
+  std::vector<float> dec_row(kRowFloats, 0.0f);
+  dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,
+             /*output_row_start=*/0, dec_row.data());
+
+  // Inference path: the agent observes turns 0..1, then encodes the move played
+  // at the sampled turn from the rack it holds there (CATERST -> ... -> DONERST).
+  NeuralTopKAgent agent(/*thread_id=*/0, "stub", std::make_unique<StubEvalService>(), /*top_k=*/4,
+                        NeuralTopKAgent::Objective::kScoreDiff);
+  agent.begin_game({0, 0});
+  agent.observe_move(move0);
+  agent.observe_move(move1);
+
+  std::vector<float> agent_row(kInputFloats, 0.0f);
+  agent.encode_candidate(move2, rack_from("DONERST"), mover, agent_row.data());
+
+  // The input portion of the decoded row (first kInputFloats; the rest are
+  // targets) must equal the agent's row exactly.
+  bool any_nonzero = false;
+  for (int i = 0; i < kInputFloats; ++i) {
+    CHECK(agent_row[i] == dec_row[i]);
+    any_nonzero = any_nonzero || agent_row[i] != 0.0f;
+  }
+  CHECK(any_nonzero);  // guard against a vacuous all-zero match
+  std::cout << "test_encode_candidate_matches_training_decoder passed (" << kInputFloats
+            << " floats)\n";
+}
+
 int main() {
   test_topk_selection_uses_objective();
   test_encode_candidate_matches_replay();
+  test_encode_candidate_matches_training_decoder();
   std::cout << "All neural-topk-agent tests passed.\n";
   return 0;
 }
