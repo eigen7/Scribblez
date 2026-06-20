@@ -5,7 +5,9 @@
 #include "scribblez/nn/eval_service.h"
 #include "scribblez/nn/neural_net.h"
 
+#include <cstdint>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -16,8 +18,11 @@ namespace scribblez {
 //   1. Ranks the legal plays by HastyBot static equity and keeps the top K.
 //   2. Applies each candidate to a copy of its tracked GameStateEncoder and
 //      encodes the resulting post-move position from its own POV.
-//   3. Batch-evaluates the K positions with the model and plays the move whose
-//      post-move state has the highest predicted win probability.
+//   3. Batch-evaluates the K positions and selects among them by the configured
+//      objective: greedily (the highest-rated post-move state) by default, or by
+//      sampling softmax(objective / temperature) when a positive temperature is
+//      set. Temperature > 0 is used to add exploration when generating self-play
+//      training data; play and evaluation leave it at 0 (pure argmax).
 //
 // The agent maintains a GameStateEncoder that mirrors the real game via the
 // begin_game() / observe_move() hooks (the encoder's placement-plane features
@@ -32,14 +37,18 @@ class NeuralTopKAgent : public Agent {
   enum class Objective { kScoreDiff, kWinProb };
 
   // Production constructor: builds an NNEvaluationService from `net_params` and
-  // loads `onnx_path` into it.
+  // loads `onnx_path` into it. `temperature` controls move selection (0 ==
+  // greedy argmax; > 0 == softmax sampling) and `seed` seeds that sampler.
   NeuralTopKAgent(int thread_id, const std::string& name, const std::string& onnx_path, int top_k,
-                  Objective objective, const nn::NeuralNetParams& net_params);
+                  Objective objective, const nn::NeuralNetParams& net_params, double temperature,
+                  uint64_t seed);
 
   // Test/injection constructor: takes an already-constructed evaluator (real or
-  // a scripted stub). Performs no model loading and touches no GPU.
+  // a scripted stub). Performs no model loading and touches no GPU. Defaults to
+  // greedy, deterministic selection so selection tests stay reproducible.
   NeuralTopKAgent(int thread_id, const std::string& name,
-                  std::unique_ptr<nn::EvalService> service, int top_k, Objective objective);
+                  std::unique_ptr<nn::EvalService> service, int top_k, Objective objective,
+                  double temperature = 0.0, uint64_t seed = 0);
 
   Move make_move(const MoveRequest& req) override;
   void begin_game(std::array<int, 2> initial_scores) override;
@@ -48,7 +57,9 @@ class NeuralTopKAgent : public Agent {
 
   // Build from `--player "--type=neural [options]"` tokens (after the factory
   // strips --type and --name). Requires --model=<path.onnx>; optional
-  // --top-k=K, --batch-size=N, --precision={FP16,FP32}, --cuda-device=D.
+  // --top-k=K, --batch-size=N, --precision={FP16,FP32}, --cuda-device=D,
+  // --temperature=T (0 = greedy; > 0 = softmax sampling), --seed=N (sampler
+  // seed; defaults to the SeedProducer).
   // Throws std::runtime_error on bad input. `name` is the resolved display name.
   static std::unique_ptr<NeuralTopKAgent> from_spec(const std::vector<std::string>& tokens,
                                                     int thread_id, const std::string& name);
@@ -74,15 +85,22 @@ class NeuralTopKAgent : public Agent {
   // The selection score for an eval under the configured objective.
   float objective_value(const nn::Eval& e) const;
 
+  // Index into the first `k` candidates to play: argmax of the objective when
+  // temperature_ is 0, otherwise a softmax(objective / temperature_) sample.
+  int select_index(int k);
+
   int top_k_;
   Objective objective_;
+  double temperature_;
   std::unique_ptr<nn::EvalService> service_;
   binlog::GameStateEncoder encoder_;
+  std::mt19937_64 rng_;  // drives softmax sampling when temperature_ > 0
 
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<int> top_idx_;
   std::vector<float> input_buf_;       // top_k_ rows x kInputFloats
   std::vector<nn::Eval> eval_buf_;     // top_k_ evals
+  std::vector<double> weights_;        // top_k_ softmax weights
 };
 
 }  // namespace scribblez

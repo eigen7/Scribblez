@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Generate training data by running HastyBot-vs-HastyBot games.
+"""Generate training data by running self-play games.
 
 Usage:
+    # HastyBot self-play (iteration 0):
     python -m scripts.generate_data -t mytag -g 100000 --test-ratio 0.1
+
+    # Policy-iteration self-play with the top-K value agent (temperature adds
+    # the exploration that pure argmax self-play lacks):
+    python -m scripts.generate_data -t mytag_iter1 -g 100000 \
+        --model /path/to/model.onnx --top-k 10 --temperature 3.0
 
 This shells out to the C++ `play_game` binary with --binary-log-dir pointed at
 the tag's train/ and test/ data directories. The split is partitioned at the
@@ -24,18 +30,34 @@ from scribblez.paths import TagPaths
 PLAY_GAME = '/workspace/repo/target/engine/play_game'
 
 
-def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int) -> int:
-    """Run `num_games` HastyBot self-play games, logging .slog files to out_dir."""
+def build_player_spec(model: str, top_k: int, temperature: float, precision: str) -> str:
+    """The `--player` value for both seats: HastyBot when `model` is empty, else
+    the neural top-K agent (for policy-iteration self-play)."""
+    if not model:
+        return "--type=hastybot"
+    return (
+        f"--type=neural --model={model} --top-k={top_k} "
+        f"--temperature={temperature} --precision={precision}"
+    )
+
+
+def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
+              player_spec: str, handicap_max: int) -> int:
+    """Run `num_games` self-play games, logging .slog files to out_dir.
+
+    Both seats use `player_spec` (the value of a `--player` flag); each seat is a
+    fresh agent, so two neural seats draw independent sampling seeds.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         PLAY_GAME,
-        "--player", "--type=hastybot",
-        "--player", "--type=hastybot",
+        "--player", player_spec,
+        "--player", player_spec,
         "--binary-log-dir", str(out_dir),
         "--games-per-file", str(games_per_file),
         "--games", str(num_games),
         "--threads", str(threads),
-        "--random-handicap-max", "100",
+        "--random-handicap-max", str(handicap_max),
     ]
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
@@ -75,6 +97,20 @@ def main() -> int:
         default=0.1,
         help="Fraction of games routed to the held-out test split.",
     )
+    parser.add_argument(
+        "--model", default="",
+        help="ONNX model for neural top-K self-play; empty = HastyBot self-play.",
+    )
+    parser.add_argument("--top-k", type=int, default=10, help="Neural agent candidate count.")
+    parser.add_argument(
+        "--temperature", type=float, default=3.0,
+        help="Neural agent softmax sampling temperature (only used with --model).",
+    )
+    parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
+    parser.add_argument(
+        "--random-handicap-max", type=int, default=100,
+        help="Max per-game starting-score handicap (0 disables; lowers outcome variance).",
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.test_ratio < 1.0:
@@ -82,6 +118,7 @@ def main() -> int:
         return 2
 
     paths = TagPaths(args.tag)
+    player_spec = build_player_spec(args.model, args.top_k, args.temperature, args.precision)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games
 
@@ -91,7 +128,8 @@ def main() -> int:
         if n <= 0:
             continue
         print(f"\n=== Generating {n} {name} games ===")
-        rc = run_games(out_dir, n, args.games_per_file, args.threads)
+        rc = run_games(out_dir, n, args.games_per_file, args.threads, player_spec,
+                       args.random_handicap_max)
         if rc != 0:
             print(f"play_game exited with code {rc} for {name} split", file=sys.stderr)
             return rc

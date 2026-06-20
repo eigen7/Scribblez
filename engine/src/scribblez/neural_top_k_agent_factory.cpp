@@ -10,10 +10,12 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/nn/neural_net.h"
 #include "scribblez/nn/trt_util.h"
+#include "scribblez/seed_producer.h"
 
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 
 namespace scribblez {
@@ -28,6 +30,9 @@ std::unique_ptr<NeuralTopKAgent> NeuralTopKAgent::from_spec(const std::vector<st
   int cuda_device = 0;
   std::string precision = "FP16";
   std::string objective = "scorediff";
+  double temperature = 0.0;
+  uint64_t seed = 0;
+  bool have_seed = false;
 
   po::options_description desc("neural options");
   desc.add_options()                                                                          //
@@ -36,6 +41,9 @@ std::unique_ptr<NeuralTopKAgent> NeuralTopKAgent::from_spec(const std::vector<st
     ("batch-size", po::value<int>(&batch_size)->default_value(batch_size), "max GPU batch")     //
     ("cuda-device", po::value<int>(&cuda_device)->default_value(cuda_device), "GPU index")      //
     ("precision", po::value<std::string>(&precision)->default_value(precision), "FP16|FP32")    //
+    ("temperature", po::value<double>(&temperature)->default_value(temperature),
+     "softmax sampling temperature (0 = greedy argmax)")                                        //
+    ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)")          //
     ("objective", po::value<std::string>(&objective)->default_value(objective),
      "selection objective: scorediff|winprob");
 
@@ -43,6 +51,7 @@ std::unique_ptr<NeuralTopKAgent> NeuralTopKAgent::from_spec(const std::vector<st
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
     po::notify(vm);
+    have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=neural options: ") + e.what());
   }
@@ -65,7 +74,9 @@ std::unique_ptr<NeuralTopKAgent> NeuralTopKAgent::from_spec(const std::vector<st
   params.precision = nn::parse_precision(precision);
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
-  return std::make_unique<NeuralTopKAgent>(thread_id, name, model, top_k, obj, params);
+  const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
+  return std::make_unique<NeuralTopKAgent>(thread_id, name, model, top_k, obj, params, temperature,
+                                           resolved_seed);
 }
 
 std::string NeuralTopKAgent::options_help() {
@@ -79,7 +90,9 @@ std::string NeuralTopKAgent::options_help() {
          "                             highest expected final score differential)\n"
          "    --batch-size=N           max GPU batch (default 256)\n"
          "    --cuda-device=D          GPU index (default 0)\n"
-         "    --precision=FP16|FP32    TensorRT precision (default FP16)\n";
+         "    --precision=FP16|FP32    TensorRT precision (default FP16)\n"
+         "    --temperature=T          softmax move sampling (default 0 = greedy)\n"
+         "    --seed=N                 sampling PRNG seed (default: SeedProducer)\n";
 }
 
 }  // namespace scribblez

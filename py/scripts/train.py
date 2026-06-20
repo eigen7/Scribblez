@@ -90,6 +90,30 @@ def maybe_resume(paths: TagPaths, model, optimizer, scheduler, device) -> int:
     return start
 
 
+def load_init_weights(path: Path, model, device) -> None:
+    """Warm-start: copy ONLY the model weights from another run's checkpoint into
+    `model`, for policy iteration (seed iter N+1 from iter N's model).
+
+    The optimizer and LR schedule are left fresh -- only the network parameters
+    are seeded. The source checkpoint is opened read-only and never written, so
+    the init-from model is left completely untouched; this run's checkpoints go
+    to its own (different) tag directory.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"--init-from checkpoint not found: {path}")
+    if path.suffix != ".pt":
+        raise ValueError(
+            f"--init-from expects a PyTorch .pt checkpoint (under tags/<tag>/checkpoints/), "
+            f"not '{path.name}'. The models/ dir holds .onnx exports, which cannot seed training."
+        )
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    state = ckpt
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        state = ckpt["model_state_dict"]
+    model.load_state_dict(state)
+    print(f"Warm-started model weights from {path} (optimizer + LR schedule fresh)")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train Scribblez value model.",
@@ -120,6 +144,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--restart", action="store_true", help="Ignore existing checkpoints and start fresh."
+    )
+    parser.add_argument(
+        "--init-from", type=str, default="",
+        help="Warm-start: load model weights (only) from this .pt checkpoint before "
+             "training (policy iteration: seed iter N+1 from iter N's model). The source "
+             "file is read-only and a fresh optimizer/LR schedule is used; ignored when "
+             "resuming this tag's own checkpoints.",
     )
     parser.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     parser.add_argument(
@@ -159,6 +190,10 @@ def main() -> int:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     start_epoch = maybe_resume(paths, model, optimizer, scheduler, device)
+    # Warm-start only on a genuinely fresh run for this tag; an in-progress resume
+    # (start_epoch > 1) already carries this tag's own weights and takes priority.
+    if args.init_from and start_epoch == 1:
+        load_init_weights(Path(args.init_from), model, device)
 
     # Dashboard DB + record-keeping.
     conn = db.connect(paths.dashboard_db)

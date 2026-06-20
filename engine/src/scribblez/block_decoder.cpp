@@ -1,6 +1,8 @@
 #include "scribblez/block_decoder.h"
 
+#include "scribblez/bag.h"
 #include "scribblez/binary_log.h"
+#include "scribblez/board.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/position_json.h"
 
@@ -10,6 +12,22 @@ namespace scribblez {
 namespace binlog {
 
 namespace {
+
+// Total tiles in a full bag (every tile is in the bag, on the board, or on a
+// rack), used to recover the pre-move bag size from the replayed position.
+int total_tiles() {
+  static const int kTotal = Bag(0).size();
+  return kTotal;
+}
+
+// Count the tiles currently placed on the board.
+int board_tile_count(const Board& board) {
+  int n = 0;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c)
+      if (!board.at(r, c).is_empty()) ++n;
+  return n;
+}
 
 // Column-letter + 1-based-row coordinate, e.g. (r=7, c=7) -> "H8".
 std::string square_name(int r, int c) {
@@ -154,6 +172,33 @@ std::string BlockDecoder::dump_position_json(const char* buf, uint32_t game_idx,
   // previous play, still the most recent move they made.
   o["last_move"] = move_squares(enc.last_move_by(mover));
   return boost::json::serialize(o);
+}
+
+ValueProbe BlockDecoder::value_probe(const char* buf, uint32_t game_idx, float* post_move_input) {
+  uint32_t sampled = 0;
+  const GameLog g = game_view(buf, game_idx, &sampled);
+
+  // Pre-move snapshot: board / racks / margin / bag for HastyBot equity.
+  const int mover = pos_.replay_to_sampled(g, static_cast<int>(sampled), /*post_move=*/false);
+  const int opp = 1 - mover;
+  const GameStateEncoder& enc = pos_.enc();
+
+  ValueProbe p;
+  p.pov = mover;
+  p.played_move = g.records[sampled].move;
+  p.board = enc.board();
+  p.mover_rack = pos_.rack(mover);
+  p.opp_rack = pos_.rack(opp);
+  p.pre_move_diff = enc.score(mover) - enc.score(opp);
+  p.bag_size =
+    total_tiles() - board_tile_count(enc.board()) - pos_.rack(0).size() - pos_.rack(1).size();
+  p.final_diff = mover == 0 ? g.final_scores[0] - g.final_scores[1]
+                            : g.final_scores[1] - g.final_scores[0];
+
+  // Post-move snapshot: the exact input NeuralTopKAgent feeds the value model.
+  pos_.replay_to_sampled(g, static_cast<int>(sampled), /*post_move=*/true);
+  pos_.enc().encode_input(mover, pos_.rack(mover), /*apply_flip=*/false, post_move_input);
+  return p;
 }
 
 }  // namespace binlog

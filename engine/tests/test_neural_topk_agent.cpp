@@ -13,6 +13,9 @@
 //    agent's live inference row matches it -- the genuine "inference input ==
 //    training input" invariant that 2.3 cannot reach (2.3 checks the agent
 //    against a hand-built encoder, never against the decoder/serialization).
+//  * Suite 2.5: temperature controls selection -- temperature 0 is the greedy
+//    argmax, while a high temperature samples across the top-K (used to add
+//    exploration when generating self-play data).
 
 #include "scribblez/agent.h"
 #include "scribblez/binary_log.h"
@@ -324,10 +327,58 @@ static void test_encode_candidate_matches_training_decoder() {
             << " floats)\n";
 }
 
+static void test_temperature_sampling_spreads() {
+  std::filesystem::path tmp = init_equity();
+
+  // Two single-tile plays; equity = score, so the top-2 are slot 0 (row 7,
+  // score 30) and slot 1 (row 5, score 5). The stub then rates slot 0 higher.
+  Board board;
+  Rack my_rack = rack_from("TR");
+  Rack opp;
+  std::vector<Move> plays = {
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 30, {Glyph::of(Tile::from_char('T'))}),
+    make_play_full(5, 5, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('R'))})};
+  MoveRequest req{board, my_rack, opp, /*my_score=*/0, /*opp_score=*/0, /*bag_size=*/50, plays};
+  const uint16_t high_start = 7, low_start = 5;
+
+  // Temperature 0 -> always the model-preferred candidate (slot 0).
+  auto greedy_stub = std::make_unique<StubEvalService>();
+  StubEvalService* gp = greedy_stub.get();
+  NeuralTopKAgent greedy(/*thread_id=*/0, "greedy", std::move(greedy_stub), /*top_k=*/2,
+                         NeuralTopKAgent::Objective::kScoreDiff, /*temperature=*/0.0);
+  greedy.begin_game({0, 0});
+  gp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
+  for (int i = 0; i < 50; ++i) CHECK(greedy.make_move(req).start() == high_start);
+
+  // High temperature -> both candidates are sampled, but the higher-rated one
+  // (slot 0) still dominates. Seeded for reproducibility.
+  auto sampler_stub = std::make_unique<StubEvalService>();
+  StubEvalService* sp = sampler_stub.get();
+  NeuralTopKAgent sampler(/*thread_id=*/0, "sampler", std::move(sampler_stub), /*top_k=*/2,
+                          NeuralTopKAgent::Objective::kScoreDiff, /*temperature=*/5.0,
+                          /*seed=*/12345);
+  sampler.begin_game({0, 0});
+  sp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
+  int high = 0, low = 0;
+  for (int i = 0; i < 400; ++i) {
+    const uint16_t s = sampler.make_move(req).start();
+    if (s == high_start)
+      ++high;
+    else if (s == low_start)
+      ++low;
+  }
+  CHECK(high > 0 && low > 0);  // both arms explored
+  CHECK(high > low);           // higher-valued arm dominates
+
+  std::filesystem::remove_all(tmp);
+  std::cout << "test_temperature_sampling_spreads passed (high=" << high << " low=" << low << ")\n";
+}
+
 int main() {
   test_topk_selection_uses_objective();
   test_encode_candidate_matches_replay();
   test_encode_candidate_matches_training_decoder();
+  test_temperature_sampling_spreads();
   std::cout << "All neural-topk-agent tests passed.\n";
   return 0;
 }

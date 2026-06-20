@@ -19,6 +19,24 @@
 namespace scribblez {
 namespace binlog {
 
+// Everything needed to score the move played at a game's sampled turn two
+// independent ways -- HastyBot static equity and the value model -- so the two
+// estimators of the eventual score differential can be compared off-line. All
+// fields are taken from the POV of the mover (the player on turn at the sampled
+// position). Produced by BlockDecoder::value_probe(); the post-move model input
+// is written separately into a caller-provided buffer.
+struct ValueProbe {
+  int pov = 0;             // mover (player on turn at the sampled position)
+  int pre_move_diff = 0;   // mover's score minus opponent's, BEFORE the move
+  int final_diff = 0;      // realized final mover-minus-opponent differential
+  int bag_size = 0;        // tiles in the bag BEFORE the move (always > 0 here)
+  Move played_move;        // the move played at the sampled turn
+  Board board;             // board BEFORE the move (for equity scoring)
+  Rack mover_rack;         // mover's rack BEFORE the move (yields the leave)
+  Rack opp_rack;           // opponent's rack (equity's endgame arg; unused when
+                           // bag_size > 0, which always holds at sampled turns)
+};
+
 class BlockDecoder {
  public:
   BlockDecoder() = default;
@@ -49,6 +67,13 @@ class BlockDecoder {
   // UI's GameState JSON (board, bonuses, rack, scores, ...) from the POV
   // player's information set. Feeds the web-style image renderer.
   std::string dump_position_json(const char* buf, uint32_t game_idx, bool post_move);
+
+  // Replay game `game_idx` to its sampled turn and return the data needed to
+  // score the played move both ways (see ValueProbe). The pre-move board / racks
+  // / margin feed HastyBot equity; the post-move model input (kInputFloats,
+  // no symmetry flip -- exactly what NeuralTopKAgent feeds the model) is written
+  // to `post_move_input`.
+  ValueProbe value_probe(const char* buf, uint32_t game_idx, float* post_move_input);
 
  private:
   // Build a non-owning GameLog view over game `game_idx` of `buf`, filling

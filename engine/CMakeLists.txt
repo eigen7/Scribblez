@@ -205,3 +205,14 @@ target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 # any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
+
+# Off-line value-vs-equity probe: for each sampled position in a .slog dataset,
+# emit HastyBot equity, the model's score_diff_mean, and the realized final
+# differential as CSV (analyzed by py/scripts/value_vs_equity.py). Pulls in the
+# HastyEquity sources directly, like the agent tests, since they are not part of
+# scribblez_core.
+add_executable(value_vs_equity
+  apps/value_vs_equity.cpp
+  src/scribblez/hasty_equity.cpp
+  src/scribblez/leave_values.cpp)
+target_link_libraries(value_vs_equity PRIVATE scribblez_nn scribblez_core Boost::json Threads::Threads)
