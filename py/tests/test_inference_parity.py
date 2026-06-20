@@ -1,6 +1,6 @@
 """Inference-parity tests for the ONNX export path (hop A: PyTorch <-> ONNXRuntime).
 
-The agent (NeuralTopKAgent) and the dashboard probes run the *same weights*
+The agent (NeuralAgent) and the dashboard probes run the *same weights*
 through *different* inference stacks: the dashboard calls the in-memory PyTorch
 ScribblezModel (FP32), while the agent uses onnx_export -> TensorRT. This test
 pins the first hop of that chain -- that exporting to ONNX and running it under
@@ -44,7 +44,7 @@ def _random_model(seed: int = 0) -> ScribblezModel:
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,  # tiny: this test checks numerics, not capacity
-        num_blocks=2,
+        num_blocks=3,  # 3 -> includes one global-pooling block (covers its ops)
         board_size=BOARD_SIZE,
     )
     model.eval()

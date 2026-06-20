@@ -4,9 +4,15 @@
 Each generation used to be generated and trained by hand (one tag per iteration,
 manually wiring --init-from from the previous tag). This drives the full loop:
 
-  gen 0 : HastyBot self-play          -> train gen-0 (from scratch)
-  gen i : self-play with the gen-(i-1) model (top-K + temperature)
-                                      -> train gen-i, warm-started from gen-(i-1)
+  gen 0 : HastyBot self-play (optionally temperature-sampled for exploration)
+                                      -> train gen-0 (from scratch)
+  gen i : self-play with the gen-(i-1) model (the value agent: all legal moves by
+          default, or top-K by equity via --top-k) -> train gen-i, warm-started
+          from gen-(i-1)
+
+Each generation trains on a recency-weighted blend of all prior generations'
+data (the current gen in full, older gens geometrically down-sampled), so the
+model never forgets old positions while emphasizing recent self-play.
 
 Everything for a run lives under one tag directory:
 
@@ -32,6 +38,7 @@ Usage:
 import argparse
 import csv
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -76,10 +83,21 @@ class RunPaths:
         return self.root / "pi_log.csv"
 
 
-def neural_spec(model: Path, top_k: int, temperature: float, precision: str) -> str:
-    """A `--player` value for the neural top-K agent (mirrors generate_data)."""
-    return (f"--type=neural --model={model} --top-k={top_k} "
-            f"--temperature={temperature} --precision={precision}")
+def hasty_spec(args) -> str:
+    """The gen-0 `--player` value: greedy HastyBot, or temperature-sampled
+    HastyBot when --hasty-temperature > 0 (adds exploration to gen-0 data)."""
+    if args.hasty_temperature > 0:
+        return (f"--type=hastybot --temperature={args.hasty_temperature} "
+                f"--top-k={args.hasty_top_k}")
+    return "--type=hastybot"
+
+
+def neural_spec(model: Path, args, temperature: float) -> str:
+    """A `--player` value for the neural value agent at the given sampling
+    temperature. --top-k selects the candidate set: 0 = every legal play (most
+    diverse, slowest), K > 0 = the top-K by HastyBot equity (faster)."""
+    return (f"--type=neural --model={model} --top-k={args.top_k} "
+            f"--temperature={temperature} --precision={args.precision}")
 
 
 def run(cmd, capture: bool = False) -> subprocess.CompletedProcess:
@@ -94,6 +112,25 @@ def run(cmd, capture: bool = False) -> subprocess.CompletedProcess:
             sys.stderr.write((r.stdout or "") + (r.stderr or ""))
         raise SystemExit(f"command failed (exit {r.returncode}): {cmd[0]}")
     return r
+
+
+def run_streaming(cmd) -> tuple[int, str]:
+    """Run a subprocess, echoing its combined output to our stderr live while
+    also capturing it. Lets play_game's periodic progress lines show in real
+    time and still leaves the full output for the caller to parse (e.g. the
+    benchmark's W/L/D summary). Returns (returncode, combined_output)."""
+    print("  $", " ".join(str(c) for c in cmd), flush=True)
+    pythonpath = os.pathsep.join([str(PY_ROOT), os.environ.get("PYTHONPATH", "")])
+    env = {**os.environ, "PYTHONPATH": pythonpath}
+    proc = subprocess.Popen(cmd, env=env, text=True, bufsize=1,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    chunks = []
+    for line in proc.stdout:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+        chunks.append(line)
+    proc.wait()
+    return proc.returncode, "".join(chunks)
 
 
 def generate_split(player_spec: str, num_games: int, threads: int, handicap_max: int,
@@ -126,14 +163,16 @@ def generate_gen(rp: RunPaths, gen: int, args) -> None:
         print(f"[gen {gen}] data already present -- skipping generation")
         return
     if gen == 0:
-        spec = "--type=hastybot"
-        source = "HastyBot"
+        spec = hasty_spec(args)
+        source = "HastyBot" + (f" (T={args.hasty_temperature}, top-{args.hasty_top_k})"
+                               if args.hasty_temperature > 0 else "")
     else:
         prev = rp.onnx(gen - 1)
         if not prev.exists():
             raise SystemExit(f"[gen {gen}] missing previous model {prev}")
-        spec = neural_spec(prev, args.top_k, args.temperature, args.precision)
-        source = f"gen-{gen - 1} (top-{args.top_k}, T={args.temperature})"
+        spec = neural_spec(prev, args, args.temperature)
+        agent = "all-moves" if args.top_k == 0 else f"top-{args.top_k}"
+        source = f"gen-{gen - 1} ({agent}, T={args.temperature})"
     n_games = args.gen0_games if gen == 0 else args.num_games
     test_games = round(n_games * args.test_ratio)
     train_games = n_games - test_games
@@ -158,19 +197,57 @@ def last_epoch_file(d: Path, pattern: str) -> Path:
     return files[-1]  # epoch is zero-padded, so lexicographic == numeric order
 
 
+def gens_in_window(gen: int, window: int) -> range:
+    """The generations whose data feeds training at `gen`. window <= 0 means all
+    of 0..gen; window > 0 caps the lookback to the most-recent `window` gens."""
+    lo = 0 if window <= 0 else max(0, gen - window + 1)
+    return range(lo, gen + 1)
+
+
+def build_recency_weighted_train(rp: RunPaths, gen: int, args, dst_dir: Path) -> int:
+    """Write one combined training .slog into `dst_dir`, blending every in-window
+    generation with an exponential recency weight: generation g contributes a
+    fraction decay^(gen-g) of its games (the current gen in full, older gens
+    geometrically down-sampled). Every generation stays represented while recent
+    self-play dominates the sample. Returns the total games written.
+
+    Sampling is at the game level (one training position per game in a .slog), so
+    this reuses the same sample_slog path that consolidates chunked generations.
+    Deterministic per generation for resumable, reproducible runs."""
+    rng = random.Random(0x5C12B1E2 ^ gen)
+    picks: list[tuple[str, int]] = []
+    summary: list[str] = []
+    for g in gens_in_window(gen, args.train_window):
+        src = rp.train_file(g)
+        num_games, _ = read_file_header(src)
+        weight = args.recency_decay ** (gen - g)
+        keep = num_games if g == gen else max(0, min(round(weight * num_games), num_games))
+        if keep <= 0:
+            continue
+        chosen = range(num_games) if keep >= num_games else rng.sample(range(num_games), keep)
+        picks += [(str(src), i) for i in chosen]
+        summary.append(f"gen-{g}:{keep}/{num_games}(w={weight:.3f})")
+    if not picks:
+        raise RuntimeError(f"[gen {gen}] recency window produced no training games")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    sample_slog(dst_dir / f"gen-{gen}-train.slog", picks)
+    print(f"[gen {gen}] recency-weighted train set: {len(picks)} games  [{', '.join(summary)}]")
+    return len(picks)
+
+
 def train_gen(rp: RunPaths, gen: int, args) -> None:
     if rp.onnx(gen).exists() and rp.ckpt(gen).exists():
         print(f"[gen {gen}] model already present -- skipping training")
         return
 
-    # A transient training tag whose data dirs symlink this generation's file(s)
-    # (the current gen, plus earlier ones when --train-window > 1). train.py reads
-    # a whole directory, so this isolates exactly which generations it trains on.
+    # A transient training tag. Its train dir holds one combined .slog blending
+    # the in-window generations with recency weights; its test dir symlinks only
+    # this generation's held-out file. train.py reads whole directories, so this
+    # isolates exactly which data it trains and validates on.
     staging = f"{args.tag}/_staging/gen{gen}"
     sp = TagPaths(staging)
     shutil.rmtree(sp.root, ignore_errors=True)
-    for g in range(max(0, gen - args.train_window + 1), gen + 1):
-        link_into(sp.train_dir, rp.train_file(g))
+    build_recency_weighted_train(rp, gen, args, sp.train_dir)
     if rp.test_file(gen).exists():
         link_into(sp.test_dir, rp.test_file(gen))
 
@@ -181,8 +258,9 @@ def train_gen(rp: RunPaths, gen: int, args) -> None:
     if gen > 0:
         cmd += ["--init-from", str(rp.ckpt(gen - 1))]
     warm = f"warm-start from gen-{gen - 1}" if gen > 0 else "from scratch"
+    window = "all" if args.train_window <= 0 else args.train_window
     print(f"[gen {gen}] training: epochs={args.epochs}, lr={lr}, {warm}, "
-          f"window={args.train_window}")
+          f"window={window}, recency-decay={args.recency_decay}")
     run(cmd)
 
     # Keep only the final epoch's artifacts, under the canonical per-gen names.
@@ -210,12 +288,12 @@ def append_log(rp: RunPaths, row: dict) -> None:
 def play_match(spec_a: str, spec_b: str, games: int, threads: int):
     """Play `games` between two --player specs; return (wins, losses, draws) from
     the FIRST player's perspective, or None if the summary line can't be parsed."""
-    r = run([PLAY_GAME, "--player", spec_a, "--player", spec_b,
-             "--games", str(games), "--threads", str(threads)], capture=True)
-    out = (r.stdout or "") + (r.stderr or "")
+    rc, out = run_streaming([PLAY_GAME, "--player", spec_a, "--player", spec_b,
+                             "--games", str(games), "--threads", str(threads)])
+    if rc != 0:
+        raise SystemExit(f"command failed (exit {rc}): {PLAY_GAME}")
     m = WLD_RE.search(out)
     if not m:
-        sys.stderr.write(out)
         print("WARNING: could not parse W/L/D from play_game output", file=sys.stderr)
         return None
     return tuple(int(x) for x in m.groups())
@@ -231,7 +309,9 @@ def benchmark_gen(rp: RunPaths, gen: int, args) -> None:
     if args.benchmark_games <= 0:
         return
     # Greedy (temperature 0) for evaluation -- the strength metric, not training.
-    cur = neural_spec(rp.onnx(gen), args.top_k, 0.0, args.precision)
+    # Uses the same agent family as self-play so the benchmark reflects how the
+    # trained policy actually plays.
+    cur = neural_spec(rp.onnx(gen), args, 0.0)
     row = {"gen": gen}
 
     print(f"[gen {gen}] benchmark vs HastyBot ({args.benchmark_games} games)")
@@ -243,7 +323,7 @@ def benchmark_gen(rp: RunPaths, gen: int, args) -> None:
 
     # New model vs the previous generation -- direct measure of per-step gain.
     if gen > 0:
-        prev = neural_spec(rp.onnx(gen - 1), args.top_k, 0.0, args.precision)
+        prev = neural_spec(rp.onnx(gen - 1), args, 0.0)
         print(f"[gen {gen}] benchmark vs gen-{gen - 1} ({args.benchmark_games} games)")
         p = play_match(cur, prev, args.benchmark_games, args.threads)
         if p:
@@ -271,17 +351,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--epochs", type=int, default=10, help="Training epochs per gen.")
     p.add_argument("--lr", type=float, default=2e-4, help="LR for warm-started gens (gen >= 1).")
     p.add_argument("--lr0", type=float, default=1e-3, help="LR for gen 0 (trained from scratch).")
-    p.add_argument("--top-k", type=int, default=10, help="Neural agent candidate count.")
+    p.add_argument(
+        "--top-k", type=int, default=0,
+        help="Neural self-play candidate set for gen >= 1: 0 = every legal play "
+             "(most diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
+    )
     p.add_argument("--temperature", type=float, default=3.0, help="Self-play sampling temperature.")
+    p.add_argument("--hasty-temperature", type=float, default=0.0,
+                   help="Gen-0 HastyBot softmax temperature (0 = greedy; >0 explores).")
+    p.add_argument("--hasty-top-k", type=int, default=10,
+                   help="Gen-0 HastyBot candidate count when --hasty-temperature > 0.")
     p.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     p.add_argument("--random-handicap-max", type=int, default=100, help="Per-game handicap max.")
     p.add_argument(
-        "--train-window", type=int, default=1,
-        help="Generations of data to train each model on (1 = current gen only; "
-             ">1 = sliding window of the most recent gens).",
+        "--train-window", type=int, default=0,
+        help="Max generations of past data to blend into each training set "
+             "(0 = all generations; N = only the most-recent N).",
     )
     p.add_argument(
-        "--benchmark-games", type=int, default=2000,
+        "--recency-decay", type=float, default=0.5,
+        help="Per-generation recency weight: generation g contributes a fraction "
+             "decay^(gen-g) of its games (1.0 = uniform; smaller = favor recent).",
+    )
+    p.add_argument(
+        "--benchmark-games", type=int, default=1000,
         help="Games vs HastyBot after each gen, logged to pi_log.csv (0 disables).",
     )
     return p
@@ -292,8 +385,14 @@ def main() -> int:
     if not 0.0 <= args.test_ratio < 1.0:
         print("--test-ratio must be in [0, 1).", file=sys.stderr)
         return 2
-    if args.train_window < 1:
-        print("--train-window must be >= 1.", file=sys.stderr)
+    if args.train_window < 0:
+        print("--train-window must be >= 0 (0 = all generations).", file=sys.stderr)
+        return 2
+    if not 0.0 < args.recency_decay <= 1.0:
+        print("--recency-decay must be in (0, 1].", file=sys.stderr)
+        return 2
+    if args.top_k < 0:
+        print("--top-k must be >= 0 (0 = all legal plays).", file=sys.stderr)
         return 2
 
     rp = RunPaths(args.tag)

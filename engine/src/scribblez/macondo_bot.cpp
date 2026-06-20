@@ -5,18 +5,31 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/move.h"
 #include "scribblez/movegen.h"
+#include "scribblez/sampling.h"
+#include "scribblez/seed_producer.h"
 #include "scribblez/word_map.h"
 
 #include <boost/program_options.hpp>
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace scribblez {
+
+HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
+    : HastyBotAgent(thread_id, name, /*top_k=*/1, /*temperature=*/0.0, /*seed=*/0) {}
+
+HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name, int top_k, double temperature,
+                             uint64_t seed)
+    : Agent(thread_id, name), top_k_(top_k), temperature_(temperature), rng_(seed) {
+  if (top_k_ < 1) throw std::runtime_error("hastybot: --top-k must be >= 1");
+  if (temperature_ < 0.0) throw std::runtime_error("hastybot: --temperature must be >= 0");
+}
 
 namespace {
 
@@ -58,8 +71,6 @@ Move hasty_best_move_reference(const MoveRequest& req) {
   }
   return have ? best : Move::pass();
 }
-
-HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name) : Agent(thread_id, name) {}
 
 namespace {
 
@@ -331,9 +342,49 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   return bm.have ? bm.move : Move::pass();
 }
 
+// The HastyBot --player options, binding the softmax-sampler controls to the
+// given storage. from_spec() builds this to parse a spec; options_help() builds
+// it against scratch defaults to document the same flags, so the parsed options
+// and the documented options share one source of truth.
+boost::program_options::options_description hastybot_options(int& top_k, double& temperature,
+                                                             uint64_t& seed) {
+  namespace po = boost::program_options;
+  po::options_description desc("hastybot options");
+  desc.add_options()                                                              //
+    ("top-k", po::value<int>(&top_k)->default_value(top_k),                       //
+     "candidate moves to sample among when temperature > 0")                      //
+    ("temperature", po::value<double>(&temperature)->default_value(temperature),  //
+     "softmax sampling temperature over equity (0 = greedy argmax)")              //
+    ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)");
+  return desc;
+}
+
 }  // namespace
 
-Move HastyBotAgent::make_move(const MoveRequest& req) { return hasty_best_move_gaddag(req); }
+Move HastyBotAgent::make_move(const MoveRequest& req) {
+  // Greedy (temperature 0): the fast pruned shadow-play search.
+  if (temperature_ <= 0.0) return hasty_best_move_gaddag(req);
+
+  // Exploratory (temperature > 0): generate every legal play, rank by equity,
+  // keep the top-K, and softmax-sample among them to inject exploration into
+  // self-play data generation that pure argmax play lacks.
+  const std::vector<Move> plays = generate_legal_plays(req);
+  const int n = static_cast<int>(plays.size());
+  if (n == 0) return Move::pass();
+  const HastyEquity& eq = HastyEquity::instance();
+  const std::vector<double> vals =
+    eq.equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+
+  const int k = std::min(top_k_, n);
+  std::vector<int> idx(static_cast<size_t>(n));
+  std::iota(idx.begin(), idx.end(), 0);
+  std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
+                    [&](int a, int b) { return vals[a] > vals[b]; });
+  std::vector<double> top_vals(static_cast<size_t>(k));
+  for (int j = 0; j < k; ++j) top_vals[j] = vals[idx[j]];
+  const int chosen = softmax_sample(top_vals, k, temperature_, rng_, weights_);
+  return plays[static_cast<size_t>(idx[chosen])];
+}
 
 Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm) {
   return hasty_best_move_wmp_impl(req, wm);
@@ -343,29 +394,39 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
                                                         int thread_id, const std::string& name) {
   namespace po = boost::program_options;
 
-  // No agent-specific options at present. The equity tables (leaves +
-  // pre-endgame) are process-wide: a play_game --leaves-file overrides them,
-  // but otherwise we lazily load Macondo's defaults for the active lexicon, so
-  // running a HastyBot never requires extra command-line flags.
-  po::options_description desc;
+  // The equity tables (leaves + pre-endgame) are process-wide: a play_game
+  // --leaves-file overrides them, but otherwise we lazily load Macondo's
+  // defaults for the active lexicon. The only per-agent options control the
+  // optional softmax-over-equity sampler used for exploratory self-play.
+  int top_k = 10;
+  double temperature = 0.0;
+  uint64_t seed = 0;
+  bool have_seed = false;
+
+  po::options_description desc = hastybot_options(top_k, temperature, seed);
+
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
     po::notify(vm);
+    have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
   }
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
-  return std::make_unique<HastyBotAgent>(thread_id, name);
+  const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
+  return std::make_unique<HastyBotAgent>(thread_id, name, top_k, temperature, resolved_seed);
 }
 
 std::string HastyBotAgent::options_help() {
-  // HastyBot has no command-line options, so the helper renders "Options: (none)".
+  int top_k = 10;
+  double temperature = 0.0;
+  uint64_t seed = 0;  // scratch binding targets; never read here
   return agent_options_help(
-    "  In-process HastyBot: enumerates all legal plays and picks the one\n"
-    "  with highest static equity (score + leave value + adjustments).\n",
-    boost::program_options::options_description());
+    "  In-process HastyBot: enumerates all legal plays and ranks them by\n"
+    "  static equity (score + leave value + adjustments).\n",
+    hastybot_options(top_k, temperature, seed));
 }
 
 }  // namespace scribblez

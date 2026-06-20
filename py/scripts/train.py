@@ -125,8 +125,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
-    parser.add_argument("--num-blocks", type=int, default=8, help="Residual blocks.")
-    parser.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
+    parser.add_argument("--num-blocks", type=int, default=10, help="Residual blocks.")
+    parser.add_argument("--trunk-channels", type=int, default=192, help="Trunk width.")
     parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     parser.add_argument(

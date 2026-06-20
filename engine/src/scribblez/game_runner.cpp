@@ -17,13 +17,52 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <random>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace scribblez {
+
+namespace {
+
+// Choose a head-start handicap for one game: pick a player at random and gift
+// them P points, P uniform in [0, max]. Returns per-player starting scores.
+// Seeded from the game seed so the choice is reproducible; max <= 0 yields
+// {0, 0}.
+std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
+  if (max <= 0) return {0, 0};
+  std::mt19937_64 rng(game_seed);
+  const int player = static_cast<int>(rng() & 1ULL);
+  const int points = std::uniform_int_distribution<int>(0, max)(rng);
+  std::array<int, 2> scores = {0, 0};
+  scores[player] = points;
+  return scores;
+}
+
+// Compact human-readable duration: "6h32m", "45m12s", or "30s".
+std::string fmt_dur(double secs) {
+  long s = static_cast<long>(secs + 0.5);
+  const long h = s / 3600;
+  s %= 3600;
+  const long m = s / 60;
+  s %= 60;
+  std::ostringstream o;
+  if (h > 0)
+    o << h << "h" << m << "m";
+  else if (m > 0)
+    o << m << "m" << s << "s";
+  else
+    o << s << "s";
+  return o.str();
+}
+
+}  // namespace
 
 const Dictionary& GameRunner::load_dictionary_or_throw() {
   try {
@@ -71,6 +110,22 @@ class GameRunner::Results {
     return games_played_;
   }
 
+  // Live progress line: games done out of `total`, throughput, and ETA.
+  // Thread-safe; called periodically by the monitor thread during the batch.
+  void print_progress(std::ostream& os, double elapsed_secs, uint64_t total) const {
+    int done;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      done = games_played_;
+    }
+    const double rate = elapsed_secs > 0 ? done / elapsed_secs : 0.0;
+    const double pct = total > 0 ? 100.0 * done / static_cast<double>(total) : 0.0;
+    const double eta = rate > 0 ? (static_cast<double>(total) - done) / rate : 0.0;
+    os << "[progress] " << done << "/" << total << " games (" << std::fixed << std::setprecision(1)
+       << pct << "%) | " << std::setprecision(2) << rate << " games/s | elapsed "
+       << fmt_dur(elapsed_secs) << " | ETA " << fmt_dur(eta) << "\n";
+  }
+
   void print_batch_summary(std::ostream& os, double elapsed_secs) const {
     os << games_played_ << " games in " << elapsed_secs << "s -> " << (games_played_ / elapsed_secs)
        << " games/s, " << total_turns_ << " turns -> " << (total_turns_ / elapsed_secs)
@@ -111,6 +166,9 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
      "if > 0, each game gifts a randomly chosen player a head-start of P "
      "points, with P drawn uniformly from [0, this value]")  //
+    ("progress-secs", po::value<int>(&progress_secs)->default_value(progress_secs),
+     "print a games-done/rate/ETA progress line to stderr every this many "
+     "seconds during the parallel batch loop (0 disables)")  //
     ("verbose,v", po::bool_switch(&verbose),                 //
      "print final score and turn count to stderr");
 }
@@ -209,6 +267,27 @@ void GameRunner::run() {
     // is preserved across any interleaving of threads.
     std::atomic<uint64_t> next_game{0};
     const uint64_t total = static_cast<uint64_t>(params_.games);
+
+    // Optional monitor thread: prints a games-done/rate/ETA line every
+    // progress_secs seconds. Useful for long self-play batches (e.g. the
+    // all-moves neural agent), where no .slog file flushes until a full
+    // --games-per-file chunk completes, so this is the only sign of life.
+    std::atomic<bool> done{false};
+    std::thread monitor;
+    if (params_.progress_secs > 0) {
+      monitor = std::thread([&]() {
+        const int ticks = params_.progress_secs * 10;  // poll the stop flag at 10 Hz
+        while (!done.load(std::memory_order_acquire)) {
+          for (int i = 0; i < ticks && !done.load(std::memory_order_acquire); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          if (done.load(std::memory_order_acquire)) break;
+          const double secs =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+          results_->print_progress(std::cerr, secs, total);
+        }
+      });
+    }
+
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(engine_.num_threads()));
     for (int t = 0; t < engine_.num_threads(); ++t) {
@@ -223,6 +302,9 @@ void GameRunner::run() {
       });
     }
     for (auto& w : workers) w.join();
+
+    done.store(true, std::memory_order_release);
+    if (monitor.joinable()) monitor.join();
   }
 
   double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

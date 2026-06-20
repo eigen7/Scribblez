@@ -8,11 +8,22 @@ Architecture:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
     * ScoreDiff (aux): FC -> 801 logits (one-hot score-diff bins)
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
+
+The two model inputs (33 spatial planes, 936 scalars) and the three head output
+shapes are fixed by the training pipeline and the C++ inference contract; the
+trunk between them is free to change.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def _mean_max_pool(x: torch.Tensor) -> torch.Tensor:
+    """Concatenate the channel-wise mean and max over the spatial dims:
+    (B, C, H, W) -> (B, 2C). Mean captures average board texture; max captures
+    the strongest local activation (e.g. a high-value square or threat)."""
+    return torch.cat([x.mean(dim=(2, 3)), x.amax(dim=(2, 3))], dim=1)
 
 
 class ResBlock(nn.Module):
@@ -32,6 +43,49 @@ class ResBlock(nn.Module):
         return out + residual
 
 
+class GlobalPoolingResBlock(nn.Module):
+    """Residual block that injects board-global context (KataGo-style).
+
+    The first conv's output is split into a spatial branch and a pooling branch.
+    The pooling branch is mean+max pooled over the whole board and projected to a
+    per-channel bias that is broadcast-added to the spatial branch before the
+    second conv. This lets the block re-read global state (score differential,
+    tiles remaining, overall board openness) instead of relying on it surviving
+    unchanged from the stem injection through every preceding conv.
+    """
+
+    def __init__(self, channels: int, pool_channels: int | None = None):
+        super().__init__()
+        if pool_channels is None:
+            pool_channels = channels // 2
+        self.pool_channels = pool_channels
+        self.spatial_channels = channels - pool_channels
+
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        # mean + max over the pooling branch -> per-(spatial-channel) bias.
+        self.pool_fc = nn.Linear(2 * pool_channels, self.spatial_channels)
+        self.bn2 = nn.BatchNorm2d(self.spatial_channels)
+        self.conv2 = nn.Conv2d(self.spatial_channels, channels, 3, padding=1, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        out = self.conv1(F.relu(self.bn1(x)))
+        spatial = out[:, : self.spatial_channels]
+        pool = out[:, self.spatial_channels :]
+        bias = self.pool_fc(_mean_max_pool(pool))  # (B, spatial_channels)
+        spatial = spatial + bias[:, :, None, None]
+        out = self.conv2(F.relu(self.bn2(spatial)))
+        return out + residual
+
+
+def _make_block(channels: int, index: int) -> nn.Module:
+    """Every third block is a global-pooling block; the rest are plain residual
+    blocks. Interleaving keeps the cost modest while periodically re-broadcasting
+    global context through the tower."""
+    return GlobalPoolingResBlock(channels) if index % 3 == 2 else ResBlock(channels)
+
+
 class ScribblezModel(nn.Module):
     """Post-move value network with 3 heads."""
 
@@ -39,8 +93,8 @@ class ScribblezModel(nn.Module):
         self,
         spatial_planes: int,
         scalar_size: int,
-        trunk_channels: int = 128,
-        num_blocks: int = 8,
+        trunk_channels: int = 192,
+        num_blocks: int = 10,
         score_diff_bins: int = 801,
         board_size: int = 15,
     ):
@@ -54,29 +108,35 @@ class ScribblezModel(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # Scalar injection: project scalars to trunk_channels, broadcast-add.
+        # Scalar injection: project scalars to trunk_channels, broadcast-add. The
+        # same projection is also fed to the value heads (see forward()).
         self.scalar_proj = nn.Sequential(
             nn.Linear(scalar_size, trunk_channels),
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, trunk_channels),
         )
 
-        # Residual tower.
-        self.blocks = nn.Sequential(*[ResBlock(trunk_channels) for _ in range(num_blocks)])
+        # Residual tower (some blocks re-inject global context).
+        self.blocks = nn.Sequential(
+            *[_make_block(trunk_channels, i) for i in range(num_blocks)]
+        )
         self.trunk_bn = nn.BatchNorm2d(trunk_channels)
 
         # --- Heads ---
+        # The value heads read a 3C summary: mean+max board pooling (2C) plus the
+        # scalar projection (C), so the score-diff scalar reaches them directly.
+        value_in = 3 * trunk_channels
 
-        # WLD head (inference head): global pool -> FC -> 3.
+        # WLD head (inference head): FC -> 3.
         self.wld_fc = nn.Sequential(
-            nn.Linear(trunk_channels, 64),
+            nn.Linear(value_in, 64),
             nn.ReLU(inplace=True),
             nn.Linear(64, 3),
         )
 
-        # Score-diff head (aux): global pool -> FC -> 801.
+        # Score-diff head (aux): FC -> 801.
         self.sd_fc = nn.Sequential(
-            nn.Linear(trunk_channels, 256),
+            nn.Linear(value_in, 256),
             nn.ReLU(inplace=True),
             nn.Linear(256, score_diff_bins),
         )
@@ -105,7 +165,7 @@ class ScribblezModel(nn.Module):
         # Spatial stem.
         x = self.stem(input_spatial)
 
-        # Scalar injection.
+        # Scalar injection (s is reused by the value heads below).
         s = self.scalar_proj(input_scalar)  # (B, C)
         x = x + s[:, :, None, None]  # broadcast add over spatial dims
 
@@ -113,11 +173,12 @@ class ScribblezModel(nn.Module):
         x = self.blocks(x)
         x = F.relu(self.trunk_bn(x))
 
-        # Global pool for value heads.
-        pooled = x.mean(dim=(2, 3))  # (B, C)
+        # Value summary: mean+max board pooling concatenated with the scalar
+        # projection, so the heads see global board context and the raw scalars.
+        value_in = torch.cat([_mean_max_pool(x), s], dim=1)  # (B, 3C)
 
-        wld = self.wld_fc(pooled)
-        sd = self.sd_fc(pooled)
+        wld = self.wld_fc(value_in)
+        sd = self.sd_fc(value_in)
         opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
 
         return {"wld": wld, "score_diff": sd, "opp_next_placement": opp}

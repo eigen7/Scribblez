@@ -4,7 +4,7 @@
 #include "scribblez/exception.h"
 #include "scribblez/human_web_agent.h"
 #include "scribblez/macondo_bot.h"
-#include "scribblez/neural_top_k_agent.h"
+#include "scribblez/neural_agent.h"
 
 #include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
@@ -79,7 +79,7 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
     return HastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "neural") {
-    return NeuralTopKAgent::from_spec(spec.remaining_tokens, thread_id, name);
+    return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "human") {
     return HumanWebAgent::from_spec(spec.remaining_tokens, thread_id, name, opp_name);
@@ -137,7 +137,7 @@ std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
   o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
-  o << "--player \"--type=neural [options]\"\n" << NeuralTopKAgent::options_help() << "\n";
+  o << "--player \"--type=neural [options]\"\n" << NeuralAgent::options_help() << "\n";
   o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
   std::string type_str, name;  // scratch binding targets; never read here
   o << "Universal --player options (parsed by the factory before dispatch):\n"

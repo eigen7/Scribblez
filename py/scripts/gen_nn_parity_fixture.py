@@ -46,7 +46,7 @@ def build_model(seed: int) -> ScribblezModel:
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,
-        num_blocks=2,
+        num_blocks=3,  # 3 -> includes one global-pooling block (parity-covers it)
         score_diff_bins=SCORE_DIFF_BINS,
         board_size=BOARD_SIZE,
     )

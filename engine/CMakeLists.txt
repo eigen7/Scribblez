@@ -121,8 +121,8 @@ add_executable(play_game
   src/scribblez/leave_values.cpp
   src/scribblez/lexicon.cpp
   src/scribblez/macondo_bot.cpp
-  src/scribblez/neural_top_k_agent.cpp
-  src/scribblez/neural_top_k_agent_factory.cpp
+  src/scribblez/neural_agent.cpp
+  src/scribblez/neural_agent_factory.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp)
@@ -165,19 +165,20 @@ target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="${CMAKE_SOURCE_DIR}/data/lexica/NWL23.kwg")
 add_test(NAME scribblez_tests COMMAND scribblez_tests)
 
-# Agent unit tests: NeuralTopKAgent selection (with a scripted EvalService stub)
-# and encode_candidate parity. Compiles the agent's selection TU (not the
-# factory) directly so it links no Lexicon/Boost.program_options; scribblez_nn
-# supplies the NNEvaluationService symbol the production constructor references,
-# but the tests use the injecting constructor and never touch the GPU.
-add_executable(test_neural_topk_agent
-  tests/test_neural_topk_agent.cpp
-  src/scribblez/neural_top_k_agent.cpp
+# Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
+# (with a scripted EvalService stub), chunked evaluation, and encode_candidate
+# parity. Compiles the agent's selection TU (not the factory) directly so it
+# links no Lexicon/Boost.program_options; scribblez_nn supplies the
+# NNEvaluationService symbol the production constructor references, but the tests
+# use the injecting constructor and never touch the GPU.
+add_executable(test_neural_agent
+  tests/test_neural_agent.cpp
+  src/scribblez/neural_agent.cpp
   src/scribblez/hasty_equity.cpp
   src/scribblez/leave_values.cpp)
-target_link_libraries(test_neural_topk_agent PRIVATE
+target_link_libraries(test_neural_agent PRIVATE
   scribblez_core scribblez_nn Boost::json Threads::Threads)
-add_test(NAME test_neural_topk_agent COMMAND test_neural_topk_agent)
+add_test(NAME test_neural_agent COMMAND test_neural_agent)
 
 # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
 # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR

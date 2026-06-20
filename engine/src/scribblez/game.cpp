@@ -103,7 +103,7 @@ void Game::play() {
     rec.move = std::move(m);
 
     // Notify both seats of the applied move, in turn order, so stateful agents
-    // (e.g. NeuralTopKAgent) can mirror the full game even on the opponent's
+    // (e.g. NeuralAgent) can mirror the full game even on the opponent's
     // turns. The board/score are already updated above for a PLAY.
     players_[0]->observe_move(rec.move);
     players_[1]->observe_move(rec.move);

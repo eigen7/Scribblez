@@ -71,7 +71,7 @@ class BlockDecoder {
   // Replay game `game_idx` to its sampled turn and return the data needed to
   // score the played move both ways (see ValueProbe). The pre-move board / racks
   // / margin feed HastyBot equity; the post-move model input (kInputFloats,
-  // no symmetry flip -- exactly what NeuralTopKAgent feeds the model) is written
+  // no symmetry flip -- exactly what NeuralAgent feeds the model) is written
   // to `post_move_input`.
   ValueProbe value_probe(const char* buf, uint32_t game_idx, float* post_move_input);
 

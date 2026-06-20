@@ -3093,12 +3093,12 @@ static void test_util_helpers() {
   std::cout << "test_util_helpers passed\n";
 }
 
-// Backs the invariant "NeuralTopKAgent with --top-k=1 plays exactly HastyBot's
+// Backs the invariant "NeuralAgent with --top-k=1 plays exactly HastyBot's
 // move" without instantiating the (TensorRT-linked) agent. At k=1 both agents
 // reduce to the same equity argmax over the legal plays, via two different
 // HastyEquity entry points: HastyBot scores moves one at a time with
-// HastyEquity::equity(), while NeuralTopKAgent::select_top_k ranks the batch
-// from HastyEquity::equities(). This checks (a) the batch and per-move APIs
+// HastyEquity::equity(), while NeuralAgent ranks the batch from
+// HastyEquity::equities(). This checks (a) the batch and per-move APIs
 // agree value-for-value and (b) their argmax -- the move each agent returns --
 // is identical.
 static void test_topk1_selection_matches_hastybot() {
@@ -3124,7 +3124,7 @@ static void test_topk1_selection_matches_hastybot() {
   Rack opp;  // empty
   const int bag_size = 80;
 
-  // Batch path (what NeuralTopKAgent uses) must match the per-move path (what
+  // Batch path (what NeuralAgent uses) must match the per-move path (what
   // HastyBot uses) value-for-value.
   std::vector<double> batch = eq.equities(plays, board, bag_size, opp, my_rack);
   CHECK(batch.size() == plays.size());
@@ -3139,7 +3139,7 @@ static void test_topk1_selection_matches_hastybot() {
   for (size_t i = 1; i < per_move.size(); ++i) {
     if (per_move[i] > per_move[hasty_pick]) hasty_pick = static_cast<int>(i);
   }
-  // NeuralTopKAgent k=1 selection: top-1 of the batch ranking (same rule).
+  // NeuralAgent k=1 selection: top-1 of the batch ranking (same rule).
   int topk1_pick = 0;
   for (size_t i = 1; i < batch.size(); ++i) {
     if (batch[i] > batch[topk1_pick]) topk1_pick = static_cast<int>(i);

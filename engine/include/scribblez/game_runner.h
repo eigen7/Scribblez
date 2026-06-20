@@ -42,6 +42,9 @@ class GameRunner : public GameSink {
     int threads = 1;              // number of parallel game threads
     int random_handicap_max = 0;  // if > 0, gift a random player a head-start of
                                   // P points, P uniform in [0, this], each game
+    int progress_secs = 10;       // print a games-done/rate/ETA line to stderr
+                                  // every this many seconds (0 disables); only
+                                  // active in the parallel batch loop
     bool verbose = false;         // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);

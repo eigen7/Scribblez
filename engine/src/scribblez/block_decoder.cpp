@@ -195,7 +195,7 @@ ValueProbe BlockDecoder::value_probe(const char* buf, uint32_t game_idx, float* 
   p.final_diff = mover == 0 ? g.final_scores[0] - g.final_scores[1]
                             : g.final_scores[1] - g.final_scores[0];
 
-  // Post-move snapshot: the exact input NeuralTopKAgent feeds the value model.
+  // Post-move snapshot: the exact input NeuralAgent feeds the value model.
   pos_.replay_to_sampled(g, static_cast<int>(sampled), /*post_move=*/true);
   pos_.enc().encode_input(mover, pos_.rack(mover), /*apply_flip=*/false, post_move_input);
   return p;

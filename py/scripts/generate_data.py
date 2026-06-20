@@ -5,8 +5,9 @@ Usage:
     # HastyBot self-play (iteration 0):
     python -m scripts.generate_data -t mytag -g 100000 --test-ratio 0.1
 
-    # Policy-iteration self-play with the top-K value agent (temperature adds
-    # the exploration that pure argmax self-play lacks):
+    # Policy-iteration self-play with the neural value agent (temperature adds
+    # the exploration that pure argmax self-play lacks). --top-k 0 evaluates
+    # every legal play (most diverse); K > 0 keeps the top-K by HastyBot equity:
     python -m scripts.generate_data -t mytag_iter1 -g 100000 \
         --model /path/to/model.onnx --top-k 10 --temperature 3.0
 
@@ -30,14 +31,19 @@ from scribblez.paths import TagPaths
 PLAY_GAME = '/workspace/repo/target/engine/play_game'
 
 
-def build_player_spec(model: str, top_k: int, temperature: float, precision: str) -> str:
-    """The `--player` value for both seats: HastyBot when `model` is empty, else
-    the neural top-K agent (for policy-iteration self-play)."""
-    if not model:
+def build_player_spec(args) -> str:
+    """The `--player` value for both seats. With no --model: HastyBot, optionally
+    temperature-sampled over equity (--hasty-temperature > 0) for exploration.
+    With a --model: the neural value agent -- --top-k=0 evaluates every legal
+    play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster)."""
+    if not args.model:
+        if args.hasty_temperature > 0:
+            return (f"--type=hastybot --temperature={args.hasty_temperature} "
+                    f"--top-k={args.hasty_top_k}")
         return "--type=hastybot"
     return (
-        f"--type=neural --model={model} --top-k={top_k} "
-        f"--temperature={temperature} --precision={precision}"
+        f"--type=neural --model={args.model} --top-k={args.top_k} "
+        f"--temperature={args.temperature} --precision={args.precision}"
     )
 
 
@@ -99,13 +105,23 @@ def main() -> int:
     )
     parser.add_argument(
         "--model", default="",
-        help="ONNX model for neural top-K self-play; empty = HastyBot self-play.",
+        help="ONNX model for neural self-play; empty = HastyBot self-play.",
     )
-    parser.add_argument("--top-k", type=int, default=10, help="Neural agent candidate count.")
+    parser.add_argument(
+        "--top-k", type=int, default=0,
+        help="Neural candidate set (with --model): 0 = every legal play (most "
+             "diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
+    )
     parser.add_argument(
         "--temperature", type=float, default=3.0,
         help="Neural agent softmax sampling temperature (only used with --model).",
     )
+    parser.add_argument(
+        "--hasty-temperature", type=float, default=0.0,
+        help="HastyBot softmax temperature for model-free self-play (0 = greedy).",
+    )
+    parser.add_argument("--hasty-top-k", type=int, default=10,
+                        help="HastyBot candidate count when --hasty-temperature > 0.")
     parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     parser.add_argument(
         "--random-handicap-max", type=int, default=100,
@@ -118,7 +134,7 @@ def main() -> int:
         return 2
 
     paths = TagPaths(args.tag)
-    player_spec = build_player_spec(args.model, args.top_k, args.temperature, args.precision)
+    player_spec = build_player_spec(args)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games
 
