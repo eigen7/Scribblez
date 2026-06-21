@@ -1109,19 +1109,8 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     const int w = static_cast<int>(row[label_off + 0]);
     const int dd = static_cast<int>(row[label_off + 1]);
     const int l = static_cast<int>(row[label_off + 2]);
-    // Score-diff head is now a one-hot over clipped integer bins.
-    const float* sd_bins = row + label_off + scribblez::binlog::kWldFloats;
-    int sd_argmax = -1;
-    float sd_sum = 0.0f;
-    for (int b = 0; b < scribblez::binlog::kScoreDiffBins; ++b) {
-      sd_sum += sd_bins[b];
-      if (sd_bins[b] == 1.0f) {
-        CHECK(sd_argmax == -1);  // exactly one hot bin
-        sd_argmax = b;
-      }
-    }
-    CHECK(sd_sum == 1.0f);
-    const int sd = sd_argmax - scribblez::binlog::kScoreDiffClip;
+    // Score-diff target is a single scalar: the clipped final differential.
+    const int sd = static_cast<int>(row[label_off + scribblez::binlog::kWldFloats]);
     CHECK(w + dd + l == 1);  // exactly one of W/D/L
     CHECK(valid_labels.count({w, dd, l, sd}) == 1);
   }
@@ -1574,7 +1563,7 @@ scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int 
 }
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
-// size kLabelFloats laid out as [wld(3), score_diff(801), opp_next(225)].
+// size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
 void encode_labels_flat(const scribblez::binlog::TargetInputs& view, float* flat) {
   scribblez::binlog::AllTargets::encode_all(view, flat);
 }
@@ -1585,19 +1574,11 @@ static void test_encode_labels() {
   using namespace scribblez::binlog;
   float flat[kLabelFloats];
 
-  auto sd_argmax = [&](int diff_signed) {
-    // Score-diff head starts at offset kWldFloats; bin i corresponds to a
-    // signed differential of (i - kScoreDiffClip).
-    const float* sd = flat + kWldFloats;
-    float total = 0.0f;
-    int hot = -1;
-    for (int b = 0; b < kScoreDiffBins; ++b) {
-      total += sd[b];
-      if (sd[b] == 1.0f) hot = b;
-    }
-    CHECK(total == 1.0f);
+  auto check_score_diff = [&](int diff_signed) {
+    // Score-diff target is a single scalar at offset kWldFloats: the final
+    // differential clamped to +/- kScoreDiffClip.
     const int expected_clipped = std::clamp(diff_signed, -kScoreDiffClip, kScoreDiffClip);
-    CHECK(hot == expected_clipped + kScoreDiffClip);
+    CHECK(flat[kWldFloats] == static_cast<float>(expected_clipped));
   };
 
   // Win.
@@ -1606,7 +1587,7 @@ static void test_encode_labels() {
   CHECK(flat[0] == 1.0f);
   CHECK(flat[1] == 0.0f);
   CHECK(flat[2] == 0.0f);
-  sd_argmax(20);
+  check_score_diff(20);
 
   // Draw.
   auto v_draw = make_scores_view(75, 75, 1);
@@ -1614,7 +1595,7 @@ static void test_encode_labels() {
   CHECK(flat[0] == 0.0f);
   CHECK(flat[1] == 1.0f);
   CHECK(flat[2] == 0.0f);
-  sd_argmax(0);
+  check_score_diff(0);
 
   // Loss with negative score_diff.
   auto v_loss = make_scores_view(80, 95, 0);
@@ -1622,15 +1603,15 @@ static void test_encode_labels() {
   CHECK(flat[0] == 0.0f);
   CHECK(flat[1] == 0.0f);
   CHECK(flat[2] == 1.0f);
-  sd_argmax(-15);
+  check_score_diff(-15);
 
   // Differentials beyond +/- kScoreDiffClip are clipped (not rejected).
   auto v_huge_win = make_scores_view(/*fs_active=*/kScoreDiffClip + 50, /*fs_opp=*/0, 0);
   encode_labels_flat(v_huge_win, flat);
-  sd_argmax(kScoreDiffClip + 50);  // helper expects pre-clip; argmax matches clipped bin
+  check_score_diff(kScoreDiffClip + 50);  // helper clamps; stored value is the clipped diff
   auto v_huge_loss = make_scores_view(0, kScoreDiffClip + 50, 0);
   encode_labels_flat(v_huge_loss, flat);
-  sd_argmax(-(kScoreDiffClip + 50));
+  check_score_diff(-(kScoreDiffClip + 50));
 
   // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
@@ -1768,7 +1749,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   // (clipped_diff + kScoreDiffClip + 1).
   const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
   int ones = 0;
-  for (int i = 0; i < kScoreDiffBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
+  for (int i = 0; i < kScoreDiffThermoBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
   return ones - kScoreDiffClip - 1;
 }
 

@@ -12,10 +12,12 @@ struct Eval {
   float p_draw = 0.0f;
   float p_loss = 0.0f;
 
-  // Expected final score differential (mover's score minus opponent's), the
-  // mean of the ScoreDiff head's distribution. This is the points-oriented
-  // objective, closest in spirit to HastyBot's static equity.
+  // Final score-differential Gaussian (mover's score minus opponent's) predicted
+  // by the ScoreDiff head: its mean and standard deviation. The mean is the
+  // points-oriented selection objective, closest in spirit to HastyBot's static
+  // equity; the std is the model's predicted uncertainty about that mean.
   float score_diff_mean = 0.0f;
+  float score_diff_std = 0.0f;
 };
 
 // Abstract evaluator over encoder rows: maps a contiguous block of `count` rows

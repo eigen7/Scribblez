@@ -8,8 +8,8 @@
 
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
 // Scribblez post-move value model: two inputs ("input_spatial" (N,33,15,15),
-// "input_scalar" (N,936)) and three outputs ("wld" (N,3), "score_diff" (N,801),
-// "opp_next_placement" (N,15,15)).
+// "input_scalar" (N,936)) and three outputs ("wld" (N,3), "score_diff" (N,2 =
+// [mean, std]), "opp_next_placement" (N,15,15)).
 //
 // load() builds a TensorRT engine from an ONNX file (or deserializes a cached
 // plan keyed by the model's content hash + precision + batch size + GPU
@@ -56,9 +56,10 @@ class NeuralNet {
   void predict(int num_rows);
 
   // Host output buffers, valid after predict() returns. Row-major; only the
-  // first num_rows rows are meaningful. wld / score_diff are raw logits.
+  // first num_rows rows are meaningful. wld is raw logits; score_diff is the
+  // [mean, std] of the final-differential Gaussian (std already positive).
   const float* wld_host() const;                 // num_rows x kWldFloats
-  const float* score_diff_host() const;          // num_rows x kScoreDiffFloats
+  const float* score_diff_host() const;          // num_rows x kScoreDiffOutputFloats ([mean, std])
   const float* opp_next_placement_host() const;  // num_rows x kOppNextPlacementFloats
 
  private:

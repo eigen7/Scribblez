@@ -6,7 +6,8 @@ Architecture:
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
-    * ScoreDiff (aux): FC -> 801 logits (one-hot score-diff bins)
+    * ScoreDiff (aux): FC -> 2 = [mean, std] of the final score-differential
+      Gaussian (std via softplus), trained by Gaussian NLL
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 
 The two model inputs (33 spatial planes, 936 scalars) and the three head output
@@ -95,7 +96,6 @@ class ScribblezModel(nn.Module):
         scalar_size: int,
         trunk_channels: int = 192,
         num_blocks: int = 10,
-        score_diff_bins: int = 801,
         board_size: int = 15,
     ):
         super().__init__()
@@ -134,11 +134,13 @@ class ScribblezModel(nn.Module):
             nn.Linear(64, 3),
         )
 
-        # Score-diff head (aux): FC -> 801.
+        # Score-diff head (aux): FC -> 2 = [mean, raw_std] of the final
+        # score-differential Gaussian. forward() maps raw_std through softplus to
+        # a positive std, so the exported output is [mean, std].
         self.sd_fc = nn.Sequential(
             nn.Linear(value_in, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, score_diff_bins),
+            nn.Linear(256, 2),
         )
 
         # Opp-next-placement head (aux): 1x1 conv -> (1, 15, 15).
@@ -159,8 +161,8 @@ class ScribblezModel(nn.Module):
             input_scalar:  (B, 936)
 
         Returns:
-            Dict with keys: "wld" (B,3), "score_diff" (B,801),
-            "opp_next_placement" (B,15,15).
+            Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),
+            "opp_next_placement" (B,15,15 logits).
         """
         # Spatial stem.
         x = self.stem(input_spatial)
@@ -178,8 +180,14 @@ class ScribblezModel(nn.Module):
         value_in = torch.cat([_mean_max_pool(x), s], dim=1)  # (B, 3C)
 
         wld = self.wld_fc(value_in)
-        sd = self.sd_fc(value_in)
         opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
+
+        # Score-diff Gaussian: [mean, std]. softplus + floor keeps std positive
+        # and away from 0 so the Gaussian NLL stays finite.
+        sd_raw = self.sd_fc(value_in)  # (B, 2): [mean, raw_std]
+        sd_mean = sd_raw[:, 0:1]
+        sd_std = F.softplus(sd_raw[:, 1:2]) + 1e-3
+        sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
         return {"wld": wld, "score_diff": sd, "opp_next_placement": opp}
 
@@ -193,9 +201,10 @@ def compute_loss(
     """Compute combined loss for all heads.
 
     Args:
-        outputs: model forward() result (logits).
-        targets: dict with "wld" (B,3) one-hot, "score_diff" (B,801) one-hot,
-                 "opp_next_placement" (B,15,15) binary mask.
+        outputs: model forward() result. "wld" (B,3 logits), "score_diff"
+                 (B,2 = [mean, std]), "opp_next_placement" (B,15,15 logits).
+        targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
+                 final differential, "opp_next_placement" (B,15,15) binary mask.
 
     Returns:
         Dict with "total", "wld", "score_diff", "opp_next_placement" losses.
@@ -204,9 +213,12 @@ def compute_loss(
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
 
-    # Score-diff: cross-entropy against one-hot target.
-    sd_target_idx = targets["score_diff"].argmax(dim=1)
-    loss_sd = F.cross_entropy(outputs["score_diff"], sd_target_idx)
+    # Score-diff: Gaussian negative log-likelihood of the observed differential
+    # under the head's predicted (mean, std).
+    sd_mean = outputs["score_diff"][:, 0]
+    sd_var = outputs["score_diff"][:, 1] ** 2
+    sd_target = targets["score_diff"].squeeze(1)
+    loss_sd = F.gaussian_nll_loss(sd_mean, sd_target, sd_var)
 
     # Opp-next-placement: binary cross-entropy per cell.
     loss_opp = F.binary_cross_entropy_with_logits(

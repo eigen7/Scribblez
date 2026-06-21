@@ -160,8 +160,8 @@ void encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   assert(offset == kUnseenPoolThermoFloats);
 }
 
-// Score differential as a thermometer (kScoreDiffBins floats): slot i is 1.0
-// iff the clipped diff >= (i - kScoreDiffClip).
+// Score differential as a thermometer (kScoreDiffThermoFloats floats): slot i is
+// 1.0 iff the clipped diff >= (i - kScoreDiffClip).
 void encode_score_diff_thermometer(int score_diff, float* out) {
   int clipped = score_diff;
   if (clipped < -kScoreDiffClip) clipped = -kScoreDiffClip;

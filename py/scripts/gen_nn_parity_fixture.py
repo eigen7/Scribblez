@@ -4,7 +4,7 @@
 The agent runs the value model through onnx_export -> TensorRT (FP16), while the
 dashboard runs the in-memory PyTorch model (FP32). This script captures the
 PyTorch side as ground truth so the C++ test can confirm the TensorRT path (and
-the C++ Eval decode -- softmax, win_prob, score-diff mean) reproduces it.
+the C++ Eval decode -- softmax, win_prob, score-diff mean/std) reproduces it.
 
 It writes three files into --out-dir:
   * model.onnx   -- a randomly-initialized ScribblezModel exported to ONNX.
@@ -12,8 +12,9 @@ It writes three files into --out-dir:
                     GameStateEncoder::encode_input writes them (spatial floats
                     then scalar floats), row-major. N is recovered C++-side from
                     the file size.
-  * expected.bin -- N x 5 float32: [win_prob, p_win, p_draw, p_loss,
-                    score_diff_mean], the PyTorch reference decode of each row.
+  * expected.bin -- N x 6 float32: [win_prob, p_win, p_draw, p_loss,
+                    score_diff_mean, score_diff_std], the PyTorch reference
+                    decode of each row.
 
 Random weights are deliberate: this checks numerical fidelity of the inference
 stack, not the quality of any trained model, and keeps the fixture hermetic.
@@ -30,14 +31,13 @@ from scribblez.model import ScribblezModel
 from scribblez.onnx_export import export_onnx
 
 # Input contract: 33 spatial planes on a 15x15 board + 936 scalars
-# (engine/include/scribblez/input_encoder.h). Score-diff head: 801 symmetric
-# bins, so bin i carries the differential value (i - 400).
+# (engine/include/scribblez/input_encoder.h). Score-diff head: 2 outputs,
+# [mean, std] of the final-differential Gaussian.
 SPATIAL_PLANES = 33
 BOARD_SIZE = 15
 SCALAR_SIZE = 936
 SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 INPUT_FLOATS = SPATIAL_FLOATS + SCALAR_SIZE
-SCORE_DIFF_BINS = 801
 
 
 def build_model(seed: int) -> ScribblezModel:
@@ -47,7 +47,6 @@ def build_model(seed: int) -> ScribblezModel:
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,
         num_blocks=3,  # 3 -> includes one global-pooling block (parity-covers it)
-        score_diff_bins=SCORE_DIFF_BINS,
         board_size=BOARD_SIZE,
     )
     model.eval()
@@ -56,7 +55,8 @@ def build_model(seed: int) -> ScribblezModel:
 
 @torch.no_grad()
 def reference_evals(model: ScribblezModel, rows: np.ndarray) -> np.ndarray:
-    """PyTorch decode of each row into [win_prob, p_win, p_draw, p_loss, sd_mean]."""
+    """PyTorch decode of each row into
+    [win_prob, p_win, p_draw, p_loss, sd_mean, sd_std]."""
     spatial = torch.from_numpy(
         rows[:, :SPATIAL_FLOATS].reshape(-1, SPATIAL_PLANES, BOARD_SIZE, BOARD_SIZE)
     )
@@ -67,11 +67,13 @@ def reference_evals(model: ScribblezModel, rows: np.ndarray) -> np.ndarray:
     p_win, p_draw, p_loss = wld[:, 0], wld[:, 1], wld[:, 2]
     win_prob = p_win + 0.5 * p_draw
 
-    sd_pdf = torch.softmax(out["score_diff"], dim=1).numpy()
-    bin_values = np.arange(SCORE_DIFF_BINS, dtype=np.float32) - (SCORE_DIFF_BINS - 1) // 2
-    sd_mean = sd_pdf @ bin_values
+    # The score-diff head already emits [mean, std] (std softplus-positive).
+    sd = out["score_diff"].numpy()
+    sd_mean, sd_std = sd[:, 0], sd[:, 1]
 
-    return np.stack([win_prob, p_win, p_draw, p_loss, sd_mean], axis=1).astype(np.float32)
+    return np.stack(
+        [win_prob, p_win, p_draw, p_loss, sd_mean, sd_std], axis=1
+    ).astype(np.float32)
 
 
 def main() -> int:
@@ -97,8 +99,9 @@ def main() -> int:
     print(f"Wrote fixture to {args.out_dir}:")
     print(f"  model.onnx   ({onnx_path.stat().st_size} bytes)")
     print(f"  inputs.bin   ({args.num_rows} rows x {INPUT_FLOATS} floats)")
-    print(f"  expected.bin ({args.num_rows} rows x 5 floats)")
+    print(f"  expected.bin ({args.num_rows} rows x 6 floats)")
     print(f"  score_diff_mean range: [{expected[:, 4].min():.2f}, {expected[:, 4].max():.2f}]")
+    print(f"  score_diff_std  range: [{expected[:, 5].min():.2f}, {expected[:, 5].max():.2f}]")
     return 0
 
 

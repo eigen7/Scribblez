@@ -103,7 +103,7 @@ def test_dynamic_batch_axis(tmp_path):
             OUTPUT_NAMES, {"input_spatial": spatial, "input_scalar": scalar}
         )
         assert wld.shape == (batch, 3)
-        assert score_diff.shape == (batch, 801)
+        assert score_diff.shape == (batch, 2)  # [mean, std]
         assert opp.shape == (batch, BOARD_SIZE, BOARD_SIZE)
 
 

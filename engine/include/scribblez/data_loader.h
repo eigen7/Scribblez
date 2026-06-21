@@ -24,7 +24,7 @@
 // ----------------------------------------------------
 //   [ input_floats:    kInputFloats              ]
 //   [ wld onehot:      kWldFloats              3   ]  // [win, draw, loss] (POV)
-//   [ score_diff pdf:  kScoreDiffFloats        801 ]  // one-hot over clipped bins
+//   [ score_diff:      kScoreDiffFloats        1   ]  // observed final diff (clipped)
 //   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
 //
 // (Label layout is owned by training_targets.h; the constants are

@@ -34,7 +34,7 @@ const ScribblezShape* scribblez_input_shapes(void);
 
 // Static description of the target tensor(s) in row order:
 //   target_index=0  "wld"                (3,)
-//   target_index=1  "score_diff"         (801,)
+//   target_index=1  "score_diff"         (1,)
 //   target_index=2  "opp_next_placement" (15, 15)
 const ScribblezShape* scribblez_target_shapes(void);
 

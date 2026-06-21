@@ -23,12 +23,14 @@ class ProbeOutputs:
     Attributes:
         score_diffs: (R,) the swept input differentials (active - opponent).
         win_rate:    (N, R) Pr[win] + 0.5 * Pr[draw] from the WLD head.
-        score_pdf:   (N, R, B) softmax distribution from the score-diff head.
+        score_mean:  (N, R) predicted final-differential mean from the score-diff head.
+        score_std:   (N, R) predicted final-differential std from the score-diff head.
     """
 
     score_diffs: np.ndarray
     win_rate: np.ndarray
-    score_pdf: np.ndarray
+    score_mean: np.ndarray
+    score_std: np.ndarray
 
     @property
     def num_positions(self) -> int:
@@ -63,15 +65,20 @@ def evaluate_subset(
     was_training = model.training
     model.eval()
     win_rate = np.empty((num_pos, r), dtype=np.float32)
-    pdf_rows = []
+    score_mean = np.empty((num_pos, r), dtype=np.float32)
+    score_std = np.empty((num_pos, r), dtype=np.float32)
     for k in range(num_pos):
         spatial = torch.from_numpy(rows[k, :, :spatial_floats].reshape(r, *spatial_shape)).to(device)
         scalar = torch.from_numpy(rows[k, :, spatial_floats:]).to(device)
         out = model(spatial, scalar)
         wld = torch.softmax(out["wld"], dim=1)  # [win, draw, loss]
         win_rate[k] = (wld[:, 0] + 0.5 * wld[:, 1]).cpu().numpy()
-        pdf_rows.append(torch.softmax(out["score_diff"], dim=1).cpu().numpy())
+        sd = out["score_diff"]  # (r, 2): [mean, std]
+        score_mean[k] = sd[:, 0].cpu().numpy()
+        score_std[k] = sd[:, 1].cpu().numpy()
     if was_training:
         model.train()
 
-    return ProbeOutputs(score_diffs=diffs, win_rate=win_rate, score_pdf=np.stack(pdf_rows))
+    return ProbeOutputs(
+        score_diffs=diffs, win_rate=win_rate, score_mean=score_mean, score_std=score_std
+    )

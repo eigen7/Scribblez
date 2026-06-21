@@ -2,8 +2,8 @@
 // reproduces the PyTorch reference the dashboard runs on.
 //
 // The fixture is a directory holding model.onnx, inputs.bin (N x kInputFloats
-// float32), and expected.bin (N x 5 float32: win_prob, p_win, p_draw, p_loss,
-// score_diff_mean, the PyTorch decode), produced by
+// float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
+// score_diff_mean, score_diff_std, the PyTorch decode), produced by
 // py/scripts/gen_nn_parity_fixture.py. This test loads the model through
 // NNEvaluationService, evaluates the rows at FP32 and FP16 (both held to the
 // same tight tolerance against the PyTorch reference -- this validates the
@@ -37,7 +37,8 @@
 using scribblez::binlog::kInputFloats;
 using scribblez::nn::Eval;
 
-constexpr int kFieldsPerRow = 5;  // win_prob, p_win, p_draw, p_loss, score_diff_mean
+// win_prob, p_win, p_draw, p_loss, score_diff_mean, score_diff_std
+constexpr int kFieldsPerRow = 6;
 
 // FP32 and FP16 are both compared against the PyTorch FP32 reference at the same
 // tight tolerance: the tiny fixture model and the points-scale outputs leave
@@ -45,7 +46,7 @@ constexpr int kFieldsPerRow = 5;  // win_prob, p_win, p_draw, p_loss, score_diff
 // a decode bug) shows up well outside these bounds. The test prints the actual
 // max deviations, so tune here if a future model legitimately needs more slack.
 constexpr float kProbTol = 1e-3f;  // bounds the four probability fields
-constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean (points)
+constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
 
 static std::vector<float> read_floats(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -60,13 +61,14 @@ static std::vector<float> read_floats(const std::string& path) {
   return out;
 }
 
-// Pack an Eval into the same 5-field order as expected.bin.
+// Pack an Eval into the same 6-field order as expected.bin.
 static void pack(const Eval& e, float* dst) {
   dst[0] = e.win_prob;
   dst[1] = e.p_win;
   dst[2] = e.p_draw;
   dst[3] = e.p_loss;
   dst[4] = e.score_diff_mean;
+  dst[5] = e.score_diff_std;
 }
 
 // Evaluate every row under `precision` and report the worst per-field deviation
@@ -90,7 +92,8 @@ static bool check_precision(const std::string& onnx_path, scribblez::nn::Precisi
     pack(evals[i], got);
     const float* exp = expected.data() + static_cast<size_t>(i) * kFieldsPerRow;
     for (int k = 0; k < 4; ++k) max_prob_err = std::max(max_prob_err, std::abs(got[k] - exp[k]));
-    max_sd_err = std::max(max_sd_err, std::abs(got[4] - exp[4]));
+    max_sd_err = std::max(max_sd_err, std::abs(got[4] - exp[4]));  // mean
+    max_sd_err = std::max(max_sd_err, std::abs(got[5] - exp[5]));  // std
   }
 
   const bool ok = max_prob_err <= kProbTol && max_sd_err <= kScoreDiffTol;

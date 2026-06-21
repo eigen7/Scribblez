@@ -12,8 +12,7 @@ namespace nn {
 
 using binlog::kInputFloats;
 using binlog::kScalarFloats;
-using binlog::kScoreDiffClip;
-using binlog::kScoreDiffFloats;
+using binlog::kScoreDiffOutputFloats;
 using binlog::kSpatialFloats;
 using binlog::kWldFloats;
 
@@ -31,22 +30,6 @@ void fill_wld(const float* logits, Eval& e) {
   e.p_draw = ed / z;
   e.p_loss = el / z;
   e.win_prob = e.p_win + 0.5f * e.p_draw;
-}
-
-// Expected value of the ScoreDiff head: softmax the kScoreDiffFloats logits into
-// a distribution over differentials (bin i == differential i - kScoreDiffClip)
-// and return its mean. Uses the standard max-shift for numerical stability.
-float score_diff_mean(const float* logits) {
-  float m = logits[0];
-  for (int i = 1; i < kScoreDiffFloats; ++i) m = std::max(m, logits[i]);
-  double z = 0.0;
-  double weighted = 0.0;
-  for (int i = 0; i < kScoreDiffFloats; ++i) {
-    double p = std::exp(static_cast<double>(logits[i] - m));
-    z += p;
-    weighted += p * (i - kScoreDiffClip);
-  }
-  return static_cast<float>(weighted / z);
 }
 
 }  // namespace
@@ -84,7 +67,11 @@ void NNEvaluationService::evaluate_chunk(const float* inputs, int chunk, Eval* o
   for (int r = 0; r < chunk; ++r) {
     Eval e;
     fill_wld(wld + static_cast<size_t>(r) * kWldFloats, e);
-    e.score_diff_mean = score_diff_mean(sd + static_cast<size_t>(r) * kScoreDiffFloats);
+    // The score-diff head emits a Gaussian: [mean, std] of the final
+    // differential. std is already positive (softplus is applied in-graph).
+    const float* row = sd + static_cast<size_t>(r) * kScoreDiffOutputFloats;
+    e.score_diff_mean = row[0];
+    e.score_diff_std = row[1];
     out[r] = e;
   }
 }

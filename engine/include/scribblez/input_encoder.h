@@ -69,12 +69,12 @@
 //                  emitted as a separate scalar. Unary (vs raw counts) lets the
 //                  model key sharply on the presence of scarce critical tiles
 //                  (blanks, S, J/Q/X/Z).
-//     [127..927]   score_active - score_opp, UNARY (thermometer) over the same
-//                  clipped [-kScoreDiffClip, +kScoreDiffClip] / kScoreDiffBins
-//                  binning as the score-diff target head: slot i is 1.0 iff the
-//                  clipped diff >= (i - kScoreDiffClip). Thermometer (not
-//                  one-hot) preserves ordinality; unary (not a raw int) bounds
-//                  the feature to [0,1] and lets the model fit the sharply
+//     [127..927]   score_active - score_opp, UNARY (thermometer) over the
+//                  clipped range [-kScoreDiffClip, +kScoreDiffClip]
+//                  (kScoreDiffThermoBins slots): slot i is 1.0 iff the clipped
+//                  diff >= (i - kScoreDiffClip). Thermometer (not one-hot)
+//                  preserves ordinality; unary (not a raw int) bounds the
+//                  feature to [0,1] and lets the model fit the sharply
 //                  nonlinear win-prob / score-diff relationship.
 //     [928..935]   last-2-move metadata, self-move first then opponent-move,
 //                  4 floats each: a 3-way move-type one-hot
@@ -87,7 +87,7 @@
 // `apply_flip`, each spatial plane (including both placement planes) is
 // transposed. All scalar features are flip-invariant under this layout.
 
-#include "scribblez/training_targets.h"  // kScoreDiffBins / kScoreDiffClip
+#include "scribblez/training_targets.h"  // kScoreDiffClip
 
 namespace scribblez {
 namespace binlog {
@@ -117,7 +117,12 @@ inline constexpr int kVerticalCrossCheckPlane0 =
 
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
-inline constexpr int kScoreDiffThermoFloats = kScoreDiffBins;  // shares the head's binning (801)
+// The input score-diff thermometer spans the same clipped differential range as
+// the regression target (kScoreDiffClip), one unary slot per integer
+// differential. Owned here: the value head predicts a Gaussian (mean/std), not
+// bins, so the input feature no longer borrows the head's binning.
+inline constexpr int kScoreDiffThermoBins = 2 * kScoreDiffClip + 1;     // 801
+inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;     // 801
 inline constexpr int kMoveMetaTypeFloats = 3;                  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8

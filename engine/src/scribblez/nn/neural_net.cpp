@@ -24,7 +24,7 @@ using binlog::kSpatialFloats;
 using binlog::kSpatialPlanes;
 using binlog::kBoardSide;
 using binlog::kOppNextPlacementFloats;
-using binlog::kScoreDiffFloats;
+using binlog::kScoreDiffOutputFloats;
 using binlog::kWldFloats;
 
 // Names of the engine's I/O tensors. These match the input_names / output_names
@@ -189,13 +189,13 @@ void NeuralNet::Impl::allocate_buffers() {
   d_input_spatial = dev(b * kSpatialFloats);
   d_input_scalar = dev(b * kScalarFloats);
   d_wld = dev(b * kWldFloats);
-  d_score_diff = dev(b * kScoreDiffFloats);
+  d_score_diff = dev(b * kScoreDiffOutputFloats);
   d_opp = dev(b * kOppNextPlacementFloats);
 
   h_input_spatial = host(b * kSpatialFloats);
   h_input_scalar = host(b * kScalarFloats);
   h_wld = host(b * kWldFloats);
-  h_score_diff = host(b * kScoreDiffFloats);
+  h_score_diff = host(b * kScoreDiffOutputFloats);
   h_opp = host(b * kOppNextPlacementFloats);
 
   context->setTensorAddress(kInputSpatial, d_input_spatial);
@@ -261,7 +261,7 @@ void NeuralNet::predict(int num_rows) {
 
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
-                       sizeof(float) * num_rows * kScoreDiffFloats);
+                       sizeof(float) * num_rows * kScoreDiffOutputFloats);
   device_to_host_async(m.stream, m.h_opp, m.d_opp,
                        sizeof(float) * num_rows * kOppNextPlacementFloats);
 
