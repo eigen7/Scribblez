@@ -67,8 +67,10 @@ struct GameMetadata {
                           // (pre-move snapshot encodes state AT this turn;
                           // post-move snapshot encodes state AFTER this
                           // turn's move is applied, before draw). Chosen
-                          // uniformly at write-time among turns where the
-                          // bag has > 0 tiles when the turn begins.
+                          // uniformly at write-time among eligible turns:
+                          // turns where the bag has > 0 tiles when the turn
+                          // begins, plus -- when the writer's sample_endgames
+                          // flag is set -- endgame turns (bag already empty).
   int16_t final_score_p0;
   int16_t final_score_p1;
   int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
@@ -96,12 +98,15 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
 
-// Pick a turn index for `log` uniformly at random among turns whose
-// bag_size_before > 0 (i.e. pre-endgame positions, where one position is
-// sampled per game). Returns -1 iff no eligible turn exists (a degenerate
-// game), in which case the game must be excluded from any output. Operates on a
-// GameLog view, so it serves both the disk writer and the streaming producer.
-int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
+// Pick a turn index for `log` uniformly at random among eligible turns. When
+// `include_endgame` is false (the default), only turns whose bag_size_before > 0
+// are eligible (pre-endgame positions). When true, every turn is eligible, so
+// endgame positions -- those played after the bag empties, where the unseen pool
+// is exactly the opponent's rack -- are sampled too. Returns -1 iff no eligible
+// turn exists (a degenerate game), in which case the game must be excluded from
+// any output. Operates on a GameLog view, so it serves both the disk writer and
+// the streaming producer.
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng, bool include_endgame = false);
 
 // Thread-safe writer that accumulates GameLog objects from one or more
 // GameRunner threads and flushes them to .slog files as fixed-size batches.
@@ -110,7 +115,10 @@ int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
 // off the critical path so other threads aren't blocked by I/O.
 class BinaryLogWriter {
  public:
-  BinaryLogWriter(const std::string& dir, int games_per_file);
+  // `sample_endgames` controls which turns are eligible for the one sampled
+  // position per game: false samples only pre-endgame turns (bag still has
+  // tiles), true also samples endgame turns played after the bag empties.
+  BinaryLogWriter(const std::string& dir, int games_per_file, bool sample_endgames = false);
   ~BinaryLogWriter();  // flushes any pending games
 
   BinaryLogWriter(const BinaryLogWriter&) = delete;
@@ -129,6 +137,7 @@ class BinaryLogWriter {
 
   std::string dir_;
   int games_per_file_;
+  bool sample_endgames_;
   std::mutex mutex_;
   std::vector<GameLogStorage> pending_;
 };

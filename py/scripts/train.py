@@ -261,12 +261,17 @@ def main() -> int:
             target_idx = targets["wld"].argmax(dim=1)
             correct_wld += (pred == target_idx).sum().item()
 
+        # Read the LR that was actually in effect for the epoch just finished
+        # *before* advancing the schedule. Stepping first and reading after would
+        # report the next epoch's LR -- and with a single-epoch cosine schedule
+        # (T_max == 1) that next value is 0, which looks like no training happened
+        # even though this epoch ran at the full base LR.
+        lr_now = scheduler.get_last_lr()[0]
         scheduler.step()
         elapsed = time.time() - t0
 
         avg = {k: v / max(n_batches, 1) for k, v in losses_accum.items()}
         wld_acc = correct_wld / max(total_samples, 1)
-        lr_now = scheduler.get_last_lr()[0]
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
             f"loss={avg['total']:.4f} (wld={avg['wld']:.4f} sd={avg['score_diff']:.4f} "

@@ -39,6 +39,8 @@ class GameRunner : public GameSink {
     std::string log_dir;          // if non-empty, write one <id>.gcg per game here
     std::string binary_log_dir;   // if non-empty, write batched .slog files here
     int games_per_file = 100;     // games per .slog file (only used with binary_log_dir)
+    bool sample_endgames = false;  // if true, the .slog writer also samples endgame
+                                   // positions (bag empty); otherwise only pre-endgame
     int threads = 1;              // number of parallel game threads
     int random_handicap_max = 0;  // if > 0, gift a random player a head-start of
                                   // P points, P uniform in [0, this], each game

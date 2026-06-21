@@ -134,20 +134,26 @@ def run_streaming(cmd) -> tuple[int, str]:
 
 
 def generate_split(player_spec: str, num_games: int, threads: int, handicap_max: int,
-                   dst_file: Path) -> None:
+                   dst_file: Path, sample_endgames: bool = False) -> None:
     """Run `num_games` self-play games and consolidate them into one .slog at
     `dst_file`. play_game writes GEN_CHUNK-sized files (bounding its in-memory
     buffer); the chunks are then merged on disk via the FFI, so the result is a
-    single file per generation even for very large (e.g. 10^6-game) runs."""
+    single file per generation even for very large (e.g. 10^6-game) runs.
+
+    When `sample_endgames` is set, play_game also draws training positions from
+    endgame turns (bag empty); otherwise only pre-endgame turns are eligible."""
     dst_file.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=str(dst_file.parent)) as tmp:
-        run([PLAY_GAME,
-             "--player", player_spec, "--player", player_spec,
-             "--binary-log-dir", tmp,
-             "--games-per-file", str(min(num_games, GEN_CHUNK)),
-             "--games", str(num_games),
-             "--threads", str(threads),
-             "--random-handicap-max", str(handicap_max)])
+        cmd = [PLAY_GAME,
+               "--player", player_spec, "--player", player_spec,
+               "--binary-log-dir", tmp,
+               "--games-per-file", str(min(num_games, GEN_CHUNK)),
+               "--games", str(num_games),
+               "--threads", str(threads),
+               "--random-handicap-max", str(handicap_max)]
+        if sample_endgames:
+            cmd.append("--sample-endgames")
+        run(cmd)
         files = sorted(Path(tmp).glob("*.slog"))
         if not files:
             raise RuntimeError(f"play_game produced no .slog in {tmp}")
@@ -177,9 +183,11 @@ def generate_gen(rp: RunPaths, gen: int, args) -> None:
     test_games = round(n_games * args.test_ratio)
     train_games = n_games - test_games
     print(f"[gen {gen}] generating {train_games} train / {test_games} test games via {source}")
-    generate_split(spec, train_games, args.threads, args.random_handicap_max, rp.train_file(gen))
+    generate_split(spec, train_games, args.threads, args.random_handicap_max,
+                   rp.train_file(gen), args.sample_endgames)
     if test_games > 0:
-        generate_split(spec, test_games, args.threads, args.random_handicap_max, rp.test_file(gen))
+        generate_split(spec, test_games, args.threads, args.random_handicap_max,
+                       rp.test_file(gen), args.sample_endgames)
 
 
 def link_into(dst_dir: Path, src_file: Path) -> None:
@@ -361,6 +369,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Gen-0 HastyBot softmax temperature (0 = greedy; >0 explores).")
     p.add_argument("--hasty-top-k", type=int, default=10,
                    help="Gen-0 HastyBot candidate count when --hasty-temperature > 0.")
+    p.add_argument("--sample-endgames", action="store_true",
+                   help="Also draw training positions from endgame turns (bag empty); "
+                        "by default only pre-endgame positions are sampled.")
     p.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     p.add_argument("--random-handicap-max", type=int, default=100, help="Per-game handicap max.")
     p.add_argument(
