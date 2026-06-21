@@ -64,6 +64,16 @@ float NeuralAgent::objective_value(const nn::Eval& e) const {
   return objective_ == Objective::kScoreDiff ? e.score_diff_mean : e.win_prob;
 }
 
+std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req) const {
+  return HastyEquity::instance().equities(req.legal_plays, req.board, req.bag_size, req.opp_rack,
+                                          req.my_rack);
+}
+
+int NeuralAgent::greedy_equity_index(const MoveRequest& req) const {
+  const std::vector<double> equities = candidate_equities(req);
+  return static_cast<int>(std::max_element(equities.begin(), equities.end()) - equities.begin());
+}
+
 int NeuralAgent::select_candidates(const MoveRequest& req) {
   const int n = static_cast<int>(req.legal_plays.size());
   cand_idx_.resize(static_cast<size_t>(n));
@@ -74,9 +84,7 @@ int NeuralAgent::select_candidates(const MoveRequest& req) {
   if (top_k_ == 0 || n <= top_k_) return n;
 
   // Otherwise keep the top_k_ plays by HastyBot static equity.
-  const HastyEquity& eq = HastyEquity::instance();
-  const std::vector<double> equities =
-    eq.equities(req.legal_plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+  const std::vector<double> equities = candidate_equities(req);
   std::partial_sort(cand_idx_.begin(), cand_idx_.begin() + top_k_, cand_idx_.end(),
                     [&](int a, int b) { return equities[a] > equities[b]; });
   cand_idx_.resize(static_cast<size_t>(top_k_));
@@ -128,6 +136,14 @@ int NeuralAgent::select_index(int k) {
 
 Move NeuralAgent::make_move(const MoveRequest& req) {
   if (req.legal_plays.empty()) return Move::pass();
+
+  // Endgame (empty bag): the value model is out of its training regime and
+  // ranks these positions worse than static equity, so play the greedy HastyBot
+  // equity move instead of consulting the model.
+  if (req.bag_size == 0) {
+    return req.legal_plays[static_cast<size_t>(greedy_equity_index(req))];
+  }
+
   const int k = select_candidates(req);
   evaluate_candidates(req, k);
   return req.legal_plays[static_cast<size_t>(cand_idx_[select_index(k)])];

@@ -33,6 +33,11 @@ namespace scribblez {
 // when temperature is 0, or a softmax(objective / temperature) sample when
 // positive (used to add exploration when generating self-play training data).
 //
+// In the endgame (the bag is empty), the agent bypasses the model entirely and
+// plays the greedy HastyBot static-equity move. The value model never trains on
+// bag-empty positions and evaluates them poorly, whereas static equity is the
+// strong heuristic for these perfect-information endgames.
+//
 // The agent maintains a GameStateEncoder that mirrors the real game via the
 // begin_game() / observe_move() hooks (the encoder's placement-plane features
 // depend on both players' most-recent moves, which make_move() alone cannot
@@ -92,6 +97,14 @@ class NeuralAgent : public Agent {
 
   // Validate parameters and size the input scratch buffer. Shared by both ctors.
   void init();
+
+  // HastyBot static equity for every legal play in `req`, indexed parallel to
+  // req.legal_plays. Shared by candidate selection and the endgame fallback.
+  std::vector<double> candidate_equities(const MoveRequest& req) const;
+
+  // Index into req.legal_plays of the highest static-equity play. Used in the
+  // endgame (empty bag) to fall back to greedy HastyBot equity.
+  int greedy_equity_index(const MoveRequest& req) const;
 
   // Fill cand_idx_ with the candidate legal-play indices for this turn and
   // return the count: all plays when top_k_ == 0 or fewer plays than top_k_,
