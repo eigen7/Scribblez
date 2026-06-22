@@ -3,6 +3,15 @@ export interface TileInfo {
   score: number;
 }
 
+export interface DragTilePayload {
+  letter: string;
+  score?: number;
+  isBlank: boolean;
+  rackIndex?: number;
+  fromBag?: boolean;
+  player?: number;
+}
+
 export interface MoveOption {
   index: number;
   text: string;

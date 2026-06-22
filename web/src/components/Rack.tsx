@@ -1,5 +1,5 @@
 import React from 'react';
-import { TileInfo } from '../types';
+import { DragTilePayload, TileInfo } from '../types';
 
 interface RackProps {
   tiles: TileInfo[];
@@ -12,6 +12,13 @@ interface RackProps {
   exchangeMode?: boolean;
   exchangeSelected?: Set<number>;
   onTileClick?: (index: number) => void;
+  allowSlotDrop?: boolean;
+  onTileDrop?: (index: number, payload: DragTilePayload) => void;
+  showQuestionForBlank?: boolean;
+  hideScoreForQuestion?: boolean;
+  draggableIndices?: Set<number>;
+  tileClickEnabled?: boolean;
+  selectedTileIndex?: number | null;
 }
 
 const Rack: React.FC<RackProps> = ({
@@ -22,6 +29,13 @@ const Rack: React.FC<RackProps> = ({
   exchangeMode = false,
   exchangeSelected,
   onTileClick,
+  allowSlotDrop = false,
+  onTileDrop,
+  showQuestionForBlank = false,
+  hideScoreForQuestion = false,
+  draggableIndices,
+  tileClickEnabled = false,
+  selectedTileIndex = null,
 }) => {
   const handleDragStart = (e: React.DragEvent, tile: TileInfo, index: number) => {
     if (!interactive || usedIndices.has(index) || exchangeMode) {
@@ -37,6 +51,17 @@ const Rack: React.FC<RackProps> = ({
     e.dataTransfer.effectAllowed = 'move';
   };
 
+  const handleSlotDrop = (e: React.DragEvent, index: number) => {
+    if (!allowSlotDrop) return;
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    try {
+      const payload: DragTilePayload = JSON.parse(data);
+      onTileDrop?.(index, payload);
+    } catch {
+    }
+  };
+
   return (
     <div className="rack">
       <div className="rack-label">{label}</div>
@@ -44,17 +69,22 @@ const Rack: React.FC<RackProps> = ({
         {tiles.map((t, i) => {
           const used = usedIndices.has(i);
           const selectedForExchange = exchangeMode && (exchangeSelected?.has(i) ?? false);
-          const clickable = interactive && exchangeMode && !used;
-          const draggable = interactive && !exchangeMode && !used;
+          const exchangeClickable = interactive && exchangeMode && !used;
+          const directClickable = tileClickEnabled && !used;
+          const clickable = exchangeClickable || directClickable;
+          const dragAllowed = draggableIndices ? draggableIndices.has(i) : true;
+          const draggable = interactive && !exchangeMode && !used && dragAllowed;
           const classes = [
             'rack-tile',
             used ? 'used' : '',
             draggable ? 'draggable-tile' : '',
             clickable ? 'clickable-tile' : '',
             selectedForExchange ? 'selected-for-exchange' : '',
+            selectedTileIndex === i ? 'selected-rack-slot' : '',
           ]
             .filter(Boolean)
             .join(' ');
+          const showScore = !(hideScoreForQuestion && t.letter === '?');
           return (
             <div
               key={i}
@@ -62,9 +92,13 @@ const Rack: React.FC<RackProps> = ({
               draggable={draggable}
               onDragStart={(e) => handleDragStart(e, t, i)}
               onClick={clickable ? () => onTileClick?.(i) : undefined}
+              onDragOver={allowSlotDrop ? (e) => e.preventDefault() : undefined}
+              onDrop={allowSlotDrop ? (e) => handleSlotDrop(e, i) : undefined}
             >
-              <span className="rack-tile-letter">{t.letter === '?' ? '' : t.letter}</span>
-              <span className="rack-tile-score">{t.score}</span>
+              <span className="rack-tile-letter">
+                {t.letter === '?' ? (showQuestionForBlank ? '?' : '') : t.letter}
+              </span>
+              {showScore && <span className="rack-tile-score">{t.score}</span>}
             </div>
           );
         })}

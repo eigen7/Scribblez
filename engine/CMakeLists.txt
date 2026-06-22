@@ -17,6 +17,17 @@ add_library(scribblez_core STATIC
   src/scribblez/position_json.cpp
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
+  src/scribblez/agent.cpp
+  src/scribblez/cli.cpp
+  src/scribblez/game_runner.cpp
+  src/scribblez/hasty_equity.cpp
+  src/scribblez/human_web_agent.cpp
+  src/scribblez/leave_values.cpp
+  src/scribblez/lexicon.cpp
+  src/scribblez/macondo_bot.cpp
+  src/scribblez/player_factory.cpp
+  src/scribblez/seed_producer.cpp
+  src/scribblez/web_server.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
 # in the core engine on Linux.
@@ -37,23 +48,17 @@ target_link_libraries(scribblez_core PUBLIC Boost::json)
 add_library(scribblez_ffi SHARED src/scribblez/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE scribblez_core Threads::Threads)
 
-# Concrete Agent implementations live in play_game, not scribblez_core, so the
-# core library stays free of the agents' heavier dependencies (Boost.Process,
-# the lexicon/macondo plumbing). scribblez_core only sees the Agent ABC.
-add_executable(play_game
-  apps/play_game.cpp
-  src/scribblez/agent.cpp
-  src/scribblez/cli.cpp
-  src/scribblez/game_runner.cpp
-  src/scribblez/hasty_equity.cpp
-  src/scribblez/human_web_agent.cpp
-  src/scribblez/leave_values.cpp
-  src/scribblez/lexicon.cpp
-  src/scribblez/macondo_bot.cpp
-  src/scribblez/player_factory.cpp
-  src/scribblez/seed_producer.cpp
-  src/scribblez/web_server.cpp)
+add_executable(play_game apps/play_game.cpp)
 target_link_libraries(play_game PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
+add_executable(manual_gcg_tool apps/manual_gcg_tool.cpp)
+target_link_libraries(manual_gcg_tool PRIVATE
   scribblez_core
   Boost::program_options
   Boost::json

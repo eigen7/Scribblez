@@ -20,6 +20,8 @@ namespace binlog {
 class BinaryLogWriter;
 }
 
+class Dictionary;
+
 // Owns the agents, the win/loss tally, and the game loop. Plays a series of
 // games on a fixed dictionary, alternating seats each game and honoring each
 // agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT) the series
@@ -57,6 +59,10 @@ class GameRunner {
   // agents; for threads>1 it plays exactly params.games games in parallel.
   // Returns normally on a clean end.
   void run();
+
+  // Load and return the active lexicon dictionary, printing a user-facing
+  // setup hint and throwing Exception on failure.
+  static const Dictionary& load_dictionary_or_throw();
 
  private:
   // Per-game-and-batch tally, indexed by *player identity* rather than seat

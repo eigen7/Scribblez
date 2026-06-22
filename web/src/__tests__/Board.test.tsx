@@ -26,7 +26,7 @@ interface RenderOptions {
   cursorDir?: 'horizontal' | 'vertical' | null;
   interactive?: boolean;
   onCellClick?: (row: number, col: number) => void;
-  onCellDrop?: (row: number, col: number, letter: string, isBlank: boolean) => void;
+  onCellDrop?: (row: number, col: number, payload: { letter: string; isBlank: boolean }) => void;
 }
 
 function renderBoard(opts: RenderOptions = {}) {

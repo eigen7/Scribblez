@@ -1,5 +1,5 @@
 import React from 'react';
-import { PlacedTile } from '../types';
+import { DragTilePayload, PlacedTile } from '../types';
 
 interface BoardProps {
   board: (string | null)[][];
@@ -11,7 +11,7 @@ interface BoardProps {
   cursorDir: 'horizontal' | 'vertical' | null;
   interactive: boolean;
   onCellClick: (row: number, col: number) => void;
-  onCellDrop: (row: number, col: number, letter: string, isBlank: boolean) => void;
+  onCellDrop: (row: number, col: number, payload: DragTilePayload) => void;
   // Board squares ("row,col") of the most recent move, highlighted when set.
   lastMoveCells?: Set<string>;
 }
@@ -51,8 +51,8 @@ const Board: React.FC<BoardProps> = ({
     e.preventDefault();
     const data = e.dataTransfer.getData('text/plain');
     try {
-      const { letter, isBlank } = JSON.parse(data);
-      onCellDrop(row, col, letter, isBlank);
+      const payload: DragTilePayload = JSON.parse(data);
+      onCellDrop(row, col, payload);
     } catch {}
   };
 

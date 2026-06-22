@@ -44,6 +44,18 @@ std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
 
 }  // namespace
 
+const Dictionary& GameRunner::load_dictionary_or_throw() {
+  try {
+    return Lexicon::instance().dict();
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n"
+              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
+              << Lexicon::instance().kwg_path() << ".\n"
+              << "Run setup_wizard.py outside the Docker container to install it.\n";
+    throw Exception(e.what());
+  }
+}
+
 // --------------------------- Results -------------------------------------
 
 class GameRunner::Results {
@@ -147,16 +159,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
   // Force the lexicon load now so any I/O error surfaces at construction
   // time (rather than mid-game), and so the verbose summary below has the
   // node count to report.
-  const Dictionary* dict = nullptr;
-  try {
-    dict = &Lexicon::instance().dict();
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n"
-              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
-              << Lexicon::instance().kwg_path() << ".\n"
-              << "Run setup_wizard.py outside the Docker container to install it.\n";
-    throw Exception(e.what());
-  }
+  const Dictionary& dict = load_dictionary_or_throw();
   if (!params_.log_dir.empty()) {
     std::error_code ec;
     if (!std::filesystem::is_directory(params_.log_dir, ec)) {
@@ -179,7 +182,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
       std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, params_.games_per_file);
   }
   if (params_.verbose) {
-    std::cerr << "Loaded KWG (" << dict->num_nodes() << " nodes) from "
+    std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from "
               << Lexicon::instance().kwg_path() << "\n"
               << "Seed: " << seed_ << "\n";
   }

@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 #
 # Increasing the major version (the first number) causes the setup wizard to
 # rm -rf the target/ directory - use this to invalidate existing builds.
-SETUP_VERSION = "2.1.0"
+SETUP_VERSION = "2.1.1"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
@@ -35,6 +35,7 @@ MINIMUM_REQUIRED_IMAGE_VERSION = "2.0.0"
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [
     5173,  # Vite dev server (browser UI)
+    5174,  # Vite dev server (browser UI)
     8080,  # engine WebSocket (default human_web_agent --port)
     5006,  # Bokeh training-metrics dashboard
 ]

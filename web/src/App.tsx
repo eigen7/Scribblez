@@ -4,7 +4,7 @@ import Rack from './components/Rack';
 import MoveList from './components/MoveList';
 import ScoreBoard from './components/ScoreBoard';
 import UnseenTiles from './components/UnseenTiles';
-import { GameState, PlacedTile, EntryDirection } from './types';
+import { DragTilePayload, GameState, PlacedTile, EntryDirection } from './types';
 import {
   findRackTile,
   findMatchingMove,
@@ -305,10 +305,13 @@ function App() {
 
   // --- Drag and drop ---
 
-  const handleCellDrop = (row: number, col: number, letter: string, isBlank: boolean) => {
+  const handleCellDrop = (row: number, col: number, payload: DragTilePayload) => {
     if (!state?.your_turn || state.game_over) return;
     if (state.board[row]?.[col]) return;
     if (candidateTiles.find((t) => t.row === row && t.col === col)) return;
+
+    const letter = payload.letter;
+    const isBlank = payload.isBlank;
 
     if (isBlank) {
       // Get the rack index from the drag data — find first unused blank.

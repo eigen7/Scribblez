@@ -62,9 +62,36 @@ std::string exchanged_tiles(const Move& m) {
   return s;
 }
 
+bool include_rack_field(const GcgWriteOptions& options, size_t turn_idx) {
+  if (!options.rack_before_fields.empty()) {
+    return turn_idx < options.rack_before_fields.size() &&
+           options.rack_before_fields[turn_idx].has_value();
+  }
+  return options.include_rack_before.empty() ||
+         (turn_idx < options.include_rack_before.size() && options.include_rack_before[turn_idx]);
+}
+
+std::string rack_field(const GameLog& log, const GcgWriteOptions& options, size_t turn_idx) {
+  if (!options.rack_before_fields.empty() && turn_idx < options.rack_before_fields.size() &&
+      options.rack_before_fields[turn_idx].has_value()) {
+    return *options.rack_before_fields[turn_idx];
+  }
+  return log.turns[turn_idx].rack_before.to_string();
+}
+
+void maybe_emit_post_event_racks(std::ostringstream& o, const GcgWriteOptions& options,
+                                 size_t turn_idx) {
+  if (turn_idx >= options.post_event_racks.size()) return;
+  const auto& racks = options.post_event_racks[turn_idx];
+  if (racks.rack1.has_value()) o << "#Rack1 " << *racks.rack1 << "\n";
+  if (racks.rack2.has_value()) o << "#Rack2 " << *racks.rack2 << "\n";
+}
+
 }  // namespace
 
-std::string game_log_to_gcg(const GameLog& log) {
+std::string game_log_to_gcg(const GameLog& log) { return game_log_to_gcg(log, GcgWriteOptions{}); }
+
+std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) {
   std::ostringstream o;
 
   std::array<std::string, 2> nick = {nickify(log.player_names[0]), nickify(log.player_names[1])};
@@ -74,31 +101,58 @@ std::string game_log_to_gcg(const GameLog& log) {
   }
 
   o << "#character-encoding UTF-8\n";
+  if (options.lexicon_name.has_value() && !options.lexicon_name->empty()) {
+    o << "#lexicon " << *options.lexicon_name << "\n";
+  }
   o << "#player1 " << nick[0] << " " << log.player_names[0] << "\n";
   o << "#player2 " << nick[1] << " " << log.player_names[1] << "\n";
+  if (options.initial_rack1.has_value()) o << "#Rack1 " << *options.initial_rack1 << "\n";
+  if (options.initial_rack2.has_value()) o << "#Rack2 " << *options.initial_rack2 << "\n";
+  for (const std::string& note : options.notes) {
+    if (!note.empty()) o << "#note " << note << "\n";
+  }
 
   // Replay the board so each play can be rendered relative to the tiles already
   // down, and track each player's last cumulative score for the end-game lines.
   Board board;
   std::array<int, 2> last_cumulative = {0, 0};
-  for (const TurnRecord& t : log.turns) {
+  for (size_t turn_idx = 0; turn_idx < log.turns.size(); ++turn_idx) {
+    const TurnRecord& t = log.turns[turn_idx];
     const Move& m = t.move;
-    const std::string rack = t.rack_before.to_string();
     const int cumulative = t.cumulative_scores[t.player];
     last_cumulative[t.player] = cumulative;
+    const bool include_rack = include_rack_field(options, turn_idx);
+    const std::string rack = include_rack ? rack_field(log, options, turn_idx) : std::string{};
 
     o << ">" << nick[t.player] << ": ";
     switch (m.type()) {
       case MoveType::PLAY:
-        o << rack << " " << position(board, m) << " " << played_word(board, m) << " +" << m.score()
-          << " " << cumulative << "\n";
+        if (include_rack) {
+          o << rack << " ";
+        }
+        o << position(board, m) << " " << played_word(board, m) << " +" << m.score() << " "
+          << cumulative << "\n";
         board.apply(m);
+        maybe_emit_post_event_racks(o, options, turn_idx);
         break;
       case MoveType::EXCHANGE:
-        o << rack << " -" << exchanged_tiles(m) << " +0 " << cumulative << "\n";
+        if (include_rack) {
+          o << rack << " ";
+        }
+        if (turn_idx < options.exchange_fields.size() &&
+            options.exchange_fields[turn_idx].has_value()) {
+          o << "-" << *options.exchange_fields[turn_idx] << " +0 " << cumulative << "\n";
+        } else {
+          o << "-" << exchanged_tiles(m) << " +0 " << cumulative << "\n";
+        }
+        maybe_emit_post_event_racks(o, options, turn_idx);
         break;
       case MoveType::PASS:
-        o << rack << " - +0 " << cumulative << "\n";
+        if (include_rack) {
+          o << rack << " ";
+        }
+        o << "- +0 " << cumulative << "\n";
+        maybe_emit_post_event_racks(o, options, turn_idx);
         break;
     }
   }
@@ -127,5 +181,9 @@ std::string game_log_to_gcg(const GameLog& log) {
 }
 
 void write_game_log_gcg(const GameLog& log, std::ostream& out) { out << game_log_to_gcg(log); }
+
+void write_game_log_gcg(const GameLog& log, std::ostream& out, const GcgWriteOptions& options) {
+  out << game_log_to_gcg(log, options);
+}
 
 }  // namespace scribblez
