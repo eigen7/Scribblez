@@ -4,27 +4,40 @@
 Unlike the disk pipeline (generate_data.py + train.py), this script generates
 HastyBot self-play games on C++ threads and feeds the sampled training rows
 straight into the GPU training loop through an in-process ring buffer -- no
-.slog files are written. Because game generation is fast and we sample one
-position per game (no shuffle needed), fresh games are produced continuously
+.slog training files are written. Because game generation is fast and we sample
+one position per game (no shuffle needed), fresh games are produced continuously
 rather than recycled across epochs.
+
+A held-out validation set IS written to disk once (so it is stable across
+restarts); the model is evaluated against it on a fixed positions-trained cadence
+("checkpoints"), and those metrics + the live throughput/backpressure series are
+written to the per-tag dashboard DB. A single rolling model.pt holds resume
+state; ONNX is exported per checkpoint.
 
 Usage:
     python -m scripts.train_post_move_model -t mytag --batch-size 256
-
-Phase A scope: prove end-to-end streaming throughput. Validation eval, rolling
-checkpoints, ONNX export, and the dashboard are added in a later pass.
 """
 
 import argparse
+import atexit
+import shutil
 import sys
 import time
+from pathlib import Path
 
 import torch
 
-from scribblez.dataset import row_layout, slice_row_batch
+from scribblez.dashboard import db, server
+from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
+from scribblez.eval.runner import render_boards, run_calibration, run_probes
+from scribblez.eval.sampling import build_test_subset
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.model import ScribblezModel, compute_loss
+from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
+
+# Imported lazily-friendly: shelling out to play_game for the one-time val set.
+from scripts.generate_data import run_games
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -49,55 +62,163 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--max-positions", type=int, default=0, help="Stop after this many positions (0=run forever)."
     )
     p.add_argument(
-        "--log-every", type=int, default=25600, help="Log throughput every this many positions."
+        "--checkpoint-every",
+        type=int,
+        default=204800,
+        help="Eval + checkpoint + ONNX export every this many positions trained.",
+    )
+    p.add_argument(
+        "--log-every", type=int, default=25600, help="Sample throughput every this many positions."
+    )
+    p.add_argument("--val-games", type=int, default=20000, help="Held-out validation games (first run).")
+    p.add_argument(
+        "--val-games-per-file", type=int, default=10000, help="Games per validation .slog file."
+    )
+    p.add_argument(
+        "--num-probe-positions", type=int, default=12, help="Positions in the probe subset."
+    )
+    p.add_argument(
+        "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
+    )
+    p.add_argument("--no-probe", action="store_true", help="Disable the structural probes.")
+    p.add_argument("--no-calibration", action="store_true", help="Disable full-val-set calibration.")
+    p.add_argument(
+        "--calibration-batch-size", type=int, default=512, help="Batch size for calibration."
+    )
+    p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/onnx/DB.")
+    p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
+    p.add_argument(
+        "--dashboard-port", type=int, default=server.DEFAULT_PORT, help="Dashboard server port."
     )
     return p
 
 
-def main() -> int:
-    args = build_arg_parser().parse_args()
+# ---------------------------------------------------------------------------
+# Setup helpers
+# ---------------------------------------------------------------------------
 
-    paths = TagPaths(args.tag)
-    paths.root.mkdir(parents=True, exist_ok=True)
-    device = torch.device(args.device)
-    print(f"Tag root: {paths.root}")
-    print(f"Device: {device}")
 
-    # Input widths come from the C++ row layout (single source of truth).
-    in_shapes = {s.name: s.dims for s in get_input_shapes()}
-    spatial_planes = in_shapes["input_spatial"][0]
-    scalar_size = in_shapes["input_scalar"][0]
+def reset_tag(paths: TagPaths):
+    """Wipe prior run artifacts (checkpoints, onnx, dashboard DB). Keeps the val set."""
+    print(f"--restart: clearing prior run artifacts under {paths.root}", file=sys.stderr)
+    shutil.rmtree(paths.checkpoints_dir, ignore_errors=True)
+    shutil.rmtree(paths.onnx_dir, ignore_errors=True)
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(paths.dashboard_db) + suffix).unlink(missing_ok=True)
 
-    model = ScribblezModel(
-        spatial_planes=spatial_planes,
-        scalar_size=scalar_size,
-        num_blocks=args.num_blocks,
-        trunk_channels=args.trunk_channels,
-    ).to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {n_params:,} parameters")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+def ensure_validation_set(paths: TagPaths, args) -> bool:
+    """Generate the held-out validation split once (if absent). Returns availability."""
+    if paths.test_dir.exists() and any(paths.test_dir.glob("*.slog")):
+        return True
+    print(f"Generating {args.val_games} validation games to {paths.test_dir} ...")
+    rc = run_games(paths.test_dir, args.val_games, args.val_games_per_file, args.gen_threads)
+    if rc != 0:
+        print(f"WARNING: validation-set generation failed (rc={rc}); eval disabled.", file=sys.stderr)
+        return False
+    return True
 
-    input_layout, targets = row_layout()
-    source = StreamingTrainSource(
-        batch_size=args.batch_size,
-        num_slots=args.num_slots,
-        num_threads=args.gen_threads,
-        post_move=True,
-        apply_symmetry=True,
-        seed=args.seed,
-        handicap_max=args.handicap_max,
+
+def ensure_probe_subset(paths: TagPaths, num_positions: int) -> bool:
+    """Build the frozen probe subset + board images if missing. Returns availability."""
+    if paths.test_subset_slog.exists():
+        print(f"Using probe subset {paths.test_subset_slog}")
+    elif not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
+        return False
+    else:
+        n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=num_positions)
+        print(f"  Wrote {n} probe positions to {paths.test_subset_slog}")
+    if not paths.position_dump_path(0).with_suffix(".png").exists():
+        render_boards(paths.test_subset_slog, paths.test_subset_dir)
+    return True
+
+
+def save_rolling_checkpoint(path: Path, model, optimizer, ckpt_idx: int, positions: int, args):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "ckpt_idx": ckpt_idx,
+            "positions": positions,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "args": vars(args),
+        },
+        path,
     )
+
+
+def maybe_resume(paths: TagPaths, model, optimizer, device) -> tuple[int, int]:
+    """Load the rolling checkpoint if present; return (ckpt_idx, positions_seen)."""
+    p = paths.rolling_checkpoint
+    if not p.exists():
+        return 0, 0
+    ckpt = torch.load(p, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    ci, pos = int(ckpt["ckpt_idx"]), int(ckpt["positions"])
+    print(f"Resuming from {p.name}: checkpoint {ci}, {pos} positions trained")
+    return ci, pos
+
+
+# ---------------------------------------------------------------------------
+# Training loop
+# ---------------------------------------------------------------------------
+
+
+class _IntervalLoss:
+    """Accumulates per-head losses + WLD accuracy over a checkpoint interval."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.sums = {"total": 0.0, "wld": 0.0, "score_diff": 0.0, "opp_next_placement": 0.0}
+        self.n_batches = 0
+        self.correct = 0
+        self.samples = 0
+
+    def update(self, losses, outputs, targets):
+        for k in self.sums:
+            self.sums[k] += losses[k].item()
+        self.n_batches += 1
+        pred = outputs["wld"].argmax(dim=1)
+        self.correct += (pred == targets["wld"].argmax(dim=1)).sum().item()
+        self.samples += outputs["wld"].shape[0]
+
+    def record(self) -> dict:
+        nb = max(self.n_batches, 1)
+        return {
+            "loss": self.sums["total"] / nb,
+            "loss_wld": self.sums["wld"] / nb,
+            "loss_score_diff": self.sums["score_diff"] / nb,
+            "loss_opp_next_placement": self.sums["opp_next_placement"] / nb,
+            "wld_acc": self.correct / max(self.samples, 1),
+        }
+
+
+def run_streaming_training(model, optimizer, source, conn, paths, device, args, *, probe_enabled,
+                           test_ds, start_ckpt, start_positions, spatial_planes, scalar_size) -> int:
+    """Consume streamed batches; checkpoint/eval and sample throughput on cadence.
+
+    `source` is any object with start/next_slot/release/stats/stop (the real
+    StreamingTrainSource, or a fake in tests). Returns the final positions count.
+    """
+    input_layout, targets = row_layout()
     source.start()
-    print(f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}")
 
     model.train()
-    positions = 0
-    next_log = args.log_every
+    positions = start_positions
+    ckpt_idx = start_ckpt
+    interval = _IntervalLoss()
+
+    next_log = positions + args.log_every
+    next_ckpt = positions + args.checkpoint_every
     t0 = time.time()
     last_t = t0
-    last_positions = 0
+    last_positions = positions
+    last_prod_ns = 0
+    last_cons_ns = 0
+
     try:
         while args.max_positions == 0 or positions < args.max_positions:
             res = source.next_slot()
@@ -105,7 +226,7 @@ def main() -> int:
                 break
             slot_idx, cpu_tensor = res
             # Copy rows out of the slot (slice_row_batch copies), then release so
-            # the producers can refill it while we run forward/backward.
+            # producers can refill it while we run forward/backward on the GPU.
             batch = slice_row_batch(cpu_tensor.numpy(), input_layout, targets)
             input_spatial = batch["input_spatial"].to(device, non_blocking=True)
             input_scalar = batch["input_scalar"].to(device, non_blocking=True)
@@ -123,29 +244,148 @@ def main() -> int:
             optimizer.step()
 
             positions += input_spatial.shape[0]
+            interval.update(losses, outputs, tgt)
+
             if positions >= next_log:
                 now = time.time()
                 st = source.stats()
-                dpos = positions - last_positions
+                d_prod = st["producer_blocked_ns"] - last_prod_ns
+                d_cons = st["consumer_blocked_ns"] - last_cons_ns
                 dt = max(now - last_t, 1e-9)
-                # Which side waited more since startup tells us the bottleneck.
-                bottleneck = "cpu(gen)" if st["consumer_blocked_ns"] > st["producer_blocked_ns"] else "gpu(train)"
-                print(
-                    f"pos={positions:>9} | {dpos / dt:8.0f} pos/s | "
-                    f"loss={losses['total'].item():.4f} | games={st['games_played']} "
-                    f"dropped={st['games_dropped']} | bottleneck={bottleneck} "
-                    f"(prod_blk={st['producer_blocked_ns'] / 1e9:.1f}s "
-                    f"cons_blk={st['consumer_blocked_ns'] / 1e9:.1f}s)"
+                bottleneck = "cpu" if d_cons > d_prod else "gpu"
+                db.write_throughput(
+                    conn,
+                    {
+                        "t": now,
+                        "positions": positions,
+                        "games": st["games_played"],
+                        "positions_per_s": (positions - last_positions) / dt,
+                        "games_per_s": st["games_played"] / max(now - t0, 1e-9),
+                        "producer_blocked_ns": st["producer_blocked_ns"],
+                        "consumer_blocked_ns": st["consumer_blocked_ns"],
+                        "bottleneck": bottleneck,
+                    },
                 )
-                last_t = now
-                last_positions = positions
+                print(
+                    f"pos={positions:>9} | {(positions - last_positions) / dt:8.0f} pos/s | "
+                    f"loss={losses['total'].item():.4f} | games={st['games_played']} "
+                    f"dropped={st['games_dropped']} | bottleneck={bottleneck}"
+                )
+                last_t, last_positions = now, positions
+                last_prod_ns, last_cons_ns = st["producer_blocked_ns"], st["consumer_blocked_ns"]
                 next_log += args.log_every
+
+            if positions >= next_ckpt:
+                ckpt_idx += 1
+                _checkpoint_and_eval(
+                    model, optimizer, conn, paths, device, args, ckpt_idx, positions, interval,
+                    probe_enabled=probe_enabled, test_ds=test_ds,
+                    spatial_planes=spatial_planes, scalar_size=scalar_size,
+                )
+                interval.reset()
+                model.train()
+                next_ckpt += args.checkpoint_every
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
     finally:
         source.stop()
 
     print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
+    return positions
+
+
+def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, positions, interval,
+                         *, probe_enabled, test_ds, spatial_planes, scalar_size):
+    """Run eval against the held-out val set, persist metrics, save .pt + .onnx.
+
+    The dashboard DB is keyed on an integer `epoch`; here it is the monotonic
+    checkpoint index (one per `--checkpoint-every` positions), so the entire
+    eval/dashboard stack is reused unchanged.
+    """
+    record = {"epoch": ckpt_idx, "positions": positions, **interval.record()}
+    print(
+        f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
+        f"wld_acc={record['wld_acc']:.3f}"
+    )
+    if probe_enabled:
+        record.update(
+            run_probes(
+                model, paths.test_subset_slog, device, conn, ckpt_idx,
+                diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
+            )
+        )
+    if test_ds is not None:
+        record.update(
+            run_calibration(model, test_ds, device, conn, ckpt_idx, args.calibration_batch_size)
+        )
+    db.write_metrics(conn, ckpt_idx, record)
+
+    save_rolling_checkpoint(paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, args)
+    onnx_path = paths.onnx_path(ckpt_idx)
+    export_onnx(model, onnx_path, spatial_planes, scalar_size)
+    print(f"  -> saved {paths.rolling_checkpoint.name} and {onnx_path.name}")
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
+
+    paths = TagPaths(args.tag)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    device = torch.device(args.device)
+    print(f"Tag root: {paths.root}\nDevice: {device}")
+
+    if args.restart:
+        reset_tag(paths)
+
+    in_shapes = {s.name: s.dims for s in get_input_shapes()}
+    spatial_planes = in_shapes["input_spatial"][0]
+    scalar_size = in_shapes["input_scalar"][0]
+    model = ScribblezModel(
+        spatial_planes=spatial_planes,
+        scalar_size=scalar_size,
+        num_blocks=args.num_blocks,
+        trunk_channels=args.trunk_channels,
+    ).to(device)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {n_params:,} parameters")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    conn = db.connect(paths.dashboard_db)
+    db.write_meta(conn, args.tag, vars(args), n_params)
+
+    # Held-out validation set (written once) drives the probes + calibration.
+    val_ok = ensure_validation_set(paths, args)
+    probe_enabled = not args.no_probe and val_ok and ensure_probe_subset(paths, args.num_probe_positions)
+    test_ds = None
+    if val_ok and not args.no_calibration:
+        print(f"Loading calibration val set from {paths.test_dir} ...")
+        test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
+        print(f"  {test_ds.num_samples} val positions")
+
+    if not args.no_dashboard:
+        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root))
+        if proc is not None:
+            atexit.register(proc.terminate)
+
+    start_ckpt, start_positions = maybe_resume(paths, model, optimizer, device)
+
+    source = StreamingTrainSource(
+        batch_size=args.batch_size,
+        num_slots=args.num_slots,
+        num_threads=args.gen_threads,
+        post_move=True,
+        apply_symmetry=True,
+        seed=args.seed,
+        handicap_max=args.handicap_max,
+    )
+    print(f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}")
+
+    run_streaming_training(
+        model, optimizer, source, conn, paths, device, args,
+        probe_enabled=probe_enabled, test_ds=test_ds,
+        start_ckpt=start_ckpt, start_positions=start_positions,
+        spatial_planes=spatial_planes, scalar_size=scalar_size,
+    )
     return 0
 
 

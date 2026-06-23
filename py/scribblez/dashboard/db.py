@@ -68,6 +68,16 @@ CREATE TABLE IF NOT EXISTS calibration (
   rel_edges BLOB, rel_pred BLOB, rel_actual BLOB, rel_count BLOB,
   sd_edges BLOB, sd_pred BLOB, sd_actual BLOB, sd_count BLOB
 );
+CREATE TABLE IF NOT EXISTS throughput (
+  t REAL,                       -- wall-clock sample time (epoch seconds)
+  positions INTEGER,            -- cumulative positions trained
+  games INTEGER,                -- cumulative games produced
+  positions_per_s REAL,         -- rate over the last interval
+  games_per_s REAL,
+  producer_blocked_ns INTEGER,  -- cumulative producer wait (GPU-bound when rising)
+  consumer_blocked_ns INTEGER,  -- cumulative consumer wait (CPU-bound when rising)
+  bottleneck TEXT               -- 'cpu' or 'gpu', from the interval's wait deltas
+);
 """
 
 
@@ -89,7 +99,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 # --------------------------------------------------------------------------
 
 
-def write_meta(conn: sqlite3.Connection, tag: str, args: dict, model_params: int) -> None:
+def write_meta(conn: sqlite3.Connection, tag: str, args: dict, model_params: int):
     now = time.time()
     conn.execute(
         "INSERT INTO meta (id, tag, args_json, model_params, created_at, updated_at) "
@@ -101,7 +111,7 @@ def write_meta(conn: sqlite3.Connection, tag: str, args: dict, model_params: int
     conn.commit()
 
 
-def write_metrics(conn: sqlite3.Connection, epoch: int, record: dict) -> None:
+def write_metrics(conn: sqlite3.Connection, epoch: int, record: dict):
     """Upsert every numeric value in `record` (besides 'epoch') as a scalar series point."""
     rows = [
         (epoch, name, float(value))
@@ -118,7 +128,7 @@ def write_metrics(conn: sqlite3.Connection, epoch: int, record: dict) -> None:
 
 def write_monotonicity(
     conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores
-) -> None:
+):
     """Store the win-rate curves and per-curve scores (N x 3: structural, r2, violations)."""
     conn.execute(
         "INSERT INTO monotonicity (epoch, score_diffs, win_rate, curve_scores) VALUES (?, ?, ?, ?) "
@@ -129,7 +139,7 @@ def write_monotonicity(
     conn.commit()
 
 
-def write_score_belief(conn: sqlite3.Connection, epoch: int, score_diffs, quantiles, bands) -> None:
+def write_score_belief(conn: sqlite3.Connection, epoch: int, score_diffs, quantiles, bands):
     conn.execute(
         "INSERT INTO score_belief (epoch, score_diffs, quantiles, bands) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(epoch) DO UPDATE SET score_diffs=excluded.score_diffs, "
@@ -139,7 +149,7 @@ def write_score_belief(conn: sqlite3.Connection, epoch: int, score_diffs, quanti
     conn.commit()
 
 
-def write_calibration(conn: sqlite3.Connection, epoch: int, report) -> None:
+def write_calibration(conn: sqlite3.Connection, epoch: int, report):
     """Store the calibration reliability binning (scalars go through write_metrics)."""
     conn.execute(
         "INSERT INTO calibration "
@@ -156,6 +166,29 @@ def write_calibration(conn: sqlite3.Connection, epoch: int, report) -> None:
             to_blob(report.sd_bin_edges), to_blob(report.sd_bin_pred),
             to_blob(report.sd_bin_actual), to_blob(report.sd_bin_count),
         ),
+    )
+    conn.commit()
+
+
+_THROUGHPUT_COLS = (
+    "t",
+    "positions",
+    "games",
+    "positions_per_s",
+    "games_per_s",
+    "producer_blocked_ns",
+    "consumer_blocked_ns",
+    "bottleneck",
+)
+
+
+def write_throughput(conn: sqlite3.Connection, sample: dict):
+    """Append one throughput/backpressure time-series sample."""
+    conn.execute(
+        "INSERT INTO throughput "
+        "(t, positions, games, positions_per_s, games_per_s, producer_blocked_ns, "
+        "consumer_blocked_ns, bottleneck) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        tuple(sample[c] for c in _THROUGHPUT_COLS),
     )
     conn.commit()
 
@@ -224,6 +257,15 @@ def read_all_score_belief(conn: sqlite3.Connection):
     quantiles = from_blob(rows[0]["quantiles"])
     bands = np.stack([from_blob(r["bands"]) for r in rows])
     return epochs, score_diffs, quantiles, bands
+
+
+def read_throughput(conn: sqlite3.Connection) -> list[dict]:
+    """All throughput samples in insertion order, each as a column->value dict."""
+    rows = conn.execute(
+        "SELECT t, positions, games, positions_per_s, games_per_s, producer_blocked_ns, "
+        "consumer_blocked_ns, bottleneck FROM throughput ORDER BY rowid"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def read_all_calibration(conn: sqlite3.Connection):

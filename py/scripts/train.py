@@ -67,7 +67,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args,
     )
 
 
-def reset_tag(paths: TagPaths) -> None:
+def reset_tag(paths: TagPaths):
     """Wipe a tag's prior run artifacts (checkpoints, onnx, dashboard DB) for a fresh start."""
     print(f"--restart: clearing prior run artifacts under {paths.root}", file=sys.stderr)
     shutil.rmtree(paths.checkpoints_dir, ignore_errors=True)

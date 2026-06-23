@@ -93,3 +93,109 @@ def test_streaming_source_anchor_planes_populated():
         assert (spatial[:, 33:85] != 0).any()  # horizontal+vertical anchor planes
     finally:
         src.stop()
+
+
+def test_db_throughput_roundtrip(tmp_path):
+    """write_throughput then read_throughput returns the samples in order."""
+    from scribblez.dashboard import db
+
+    conn = db.connect(tmp_path / "dash.db")
+    samples = [
+        {
+            "t": 1.0 + i,
+            "positions": 100 * (i + 1),
+            "games": 110 * (i + 1),
+            "positions_per_s": 1000.0 + i,
+            "games_per_s": 1100.0 + i,
+            "producer_blocked_ns": 5 * i,
+            "consumer_blocked_ns": 7 * i,
+            "bottleneck": "cpu" if i % 2 else "gpu",
+        }
+        for i in range(3)
+    ]
+    for s in samples:
+        db.write_throughput(conn, s)
+    got = db.read_throughput(conn)
+    assert len(got) == 3
+    assert [g["positions"] for g in got] == [100, 200, 300]
+    assert [g["bottleneck"] for g in got] == ["gpu", "cpu", "gpu"]
+    assert got[2]["consumer_blocked_ns"] == 14
+
+
+class _FakeSource:
+    """Stands in for StreamingTrainSource: yields a fixed random batch each call."""
+
+    def __init__(self, batch_size, row_floats):
+        import torch
+
+        self.bs = batch_size
+        self._tensor = torch.rand(batch_size, row_floats)
+        self._n = 0
+
+    def start(self):
+        pass
+
+    def next_slot(self):
+        self._n += 1
+        return 0, self._tensor
+
+    def release(self, slot_index):
+        pass
+
+    def stats(self):
+        return {
+            "games_played": self._n * self.bs,
+            "games_dropped": 0,
+            "rows_committed": self._n * self.bs,
+            "slots_published": self._n,
+            "producer_blocked_ns": 0,
+            "consumer_blocked_ns": self._n,
+        }
+
+    def stop(self):
+        pass
+
+
+def test_streaming_loop_one_step(tmp_path):
+    """The training loop writes a checkpoint, an ONNX export, and a throughput row."""
+    _require_engine()
+    import torch
+
+    from scribblez.dashboard import db
+    from scribblez.ffi import get_input_shapes, row_size_floats
+    from scribblez.model import ScribblezModel
+    from scribblez.paths import TagPaths
+    from scripts.train_post_move_model import build_arg_parser, run_streaming_training
+
+    in_shapes = {s.name: s.dims for s in get_input_shapes()}
+    sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]
+
+    args = build_arg_parser().parse_args(
+        [
+            "-t", "looptest", "--device", "cpu", "--batch-size", "8",
+            "--checkpoint-every", "8", "--log-every", "8", "--max-positions", "16",
+            "--num-blocks", "1", "--trunk-channels", "8",
+            "--no-dashboard", "--no-probe", "--no-calibration",
+        ]
+    )
+    paths = TagPaths("looptest", mount_root=tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    device = torch.device("cpu")
+    model = ScribblezModel(spatial_planes=sp, scalar_size=sc, num_blocks=1, trunk_channels=8)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    conn = db.connect(paths.dashboard_db)
+
+    source = _FakeSource(args.batch_size, row_size_floats())
+    final = run_streaming_training(
+        model, optimizer, source, conn, paths, device, args,
+        probe_enabled=False, test_ds=None, start_ckpt=0, start_positions=0,
+        spatial_planes=sp, scalar_size=sc,
+    )
+
+    assert final == 16
+    assert paths.rolling_checkpoint.exists()
+    assert paths.onnx_path(1).exists()  # first checkpoint exported
+    assert len(db.read_throughput(conn)) >= 1
+    # Resume state is recoverable.
+    ckpt = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
+    assert ckpt["positions"] == 16 and ckpt["ckpt_idx"] == 2

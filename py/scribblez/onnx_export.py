@@ -18,7 +18,7 @@ def export_onnx(
     scalar_size: int,
     board_size: int = 15,
     opset: int = 17,
-) -> None:
+):
     """Trace `model` and write an ONNX graph to `path` (eval mode, dynamic batch)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -18,7 +18,7 @@ from .score_belief import DEFAULT_QUANTILES, percentile_bands
 from .web_render import render_position_images
 
 
-def render_boards(slog_path: str | Path, image_dir: str | Path) -> None:
+def render_boards(slog_path: str | Path, image_dir: str | Path):
     """Render the test-subset board PNGs (best-effort) for the dashboard to display.
 
     The boards are static across generations, so this runs once. Failure (no

@@ -71,6 +71,11 @@ class TagPaths:
     def checkpoint_path(self, epoch: int) -> Path:
         return self.checkpoints_dir / f"model_epoch_{epoch:04d}.pt"
 
+    @property
+    def rolling_checkpoint(self) -> Path:
+        """Single .pt reused across the streaming run (full resume state)."""
+        return self.checkpoints_dir / "model.pt"
+
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"model_epoch_{epoch:04d}.onnx"
 

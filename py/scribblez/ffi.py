@@ -296,7 +296,7 @@ def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) 
     )
 
 
-def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]) -> None:
+def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
     """Write a new .slog at `dst_path` from selected (source path, game index) picks."""
     n = len(picks)
     src_arr = (ctypes.c_char_p * n)(*[str(p).encode("utf-8") for p, _ in picks])
@@ -457,7 +457,7 @@ class StreamingTrainSource:
             raise RuntimeError("scribblez_stream_new returned NULL (lexicon/agent setup failed)")
         self._started = False
 
-    def start(self) -> None:
+    def start(self):
         if not self._started:
             self._lib.scribblez_stream_start(self._handle)
             self._started = True
@@ -473,7 +473,7 @@ class StreamingTrainSource:
             return None
         return idx, self._slots[idx]
 
-    def release(self, slot_index: int) -> None:
+    def release(self, slot_index: int):
         self._lib.scribblez_stream_release_slot(self._handle, slot_index)
 
     def stats(self) -> dict:
@@ -488,7 +488,7 @@ class StreamingTrainSource:
             "consumer_blocked_ns": int(s.consumer_blocked_ns),
         }
 
-    def stop(self) -> None:
+    def stop(self):
         if getattr(self, "_handle", None):
             self._lib.scribblez_stream_stop(self._handle)
 
