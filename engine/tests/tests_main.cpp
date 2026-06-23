@@ -2633,11 +2633,17 @@ static void test_streaming_row_buffer_concurrency() {
   for (auto& b : bufs) slots.push_back(b.data());
   StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
 
-  const int K = 8;
+  // Bound production to exactly slots_to_consume full generations via a shared
+  // work counter, so consuming that many slots drains every produced row. (With
+  // unbounded production the first N slots of one lane can race ahead of the
+  // other, so "first M consumed slots" would not be generations 0..M-1.)
+  const uint64_t total_rows = static_cast<uint64_t>(slots_to_consume) * rows_per_slot;
+  std::atomic<uint64_t> work{0};
+  const int K = 8;  // many producers + tiny slots -> frequent slot-boundary crossings
   std::vector<std::thread> producers;
   for (int t = 0; t < K; ++t) {
     producers.emplace_back([&] {
-      while (true) {
+      while (work.fetch_add(1, std::memory_order_relaxed) < total_rows) {
         uint64_t r = ring.claim_row();
         if (r == StreamingRowBuffer::kNoRow) break;
         ring.row_dest(r)[0] = static_cast<float>(r);
@@ -2657,14 +2663,11 @@ static void test_streaming_row_buffer_concurrency() {
     }
     ring.release_slot(slot);
   }
-  ring.stop();
   for (auto& p : producers) p.join();
 
-  CHECK(!dup);
+  CHECK(!dup);  // each global row written and read exactly once
   CHECK(static_cast<int>(seen.size()) == slots_to_consume * rows_per_slot);
-  for (int v = 0; v < slots_to_consume * rows_per_slot; ++v) {
-    CHECK(seen.count(static_cast<uint64_t>(v)) == 1);
-  }
+  for (uint64_t v = 0; v < total_rows; ++v) CHECK(seen.count(v) == 1);  // exactly [0, total)
   std::cout << "  StreamingRowBuffer concurrency OK (" << seen.size() << " rows, K=" << K << ")\n";
 }
 
