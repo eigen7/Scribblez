@@ -9,6 +9,8 @@
 
 namespace scribblez {
 
+long g_wmp_lookups = 0, g_wmp_hits = 0, g_wmp_np_lookups = 0;  // temporary WMP profiling counters
+
 namespace {
 
 // A View presents the board with optional transpose, so the same generator can
@@ -558,6 +560,136 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
   }
 }
 
+// Enumerate every non-empty sub-multiset of a rack (real letters only, given as
+// (letter index, count) pairs) and bucket each one by its tile count into
+// `out[size]`. These are the candidate tile sets a WordMap play can place.
+void enum_subracks(const std::vector<std::pair<int, int>>& letters, size_t i, BitRack cur, int size,
+                   std::array<std::vector<BitRack>, kMaxPlayTiles + 1>& out) {
+  if (i == letters.size()) {
+    if (size >= 1) out[size].push_back(cur);
+    return;
+  }
+  const int li = letters[i].first;
+  const int cnt = letters[i].second;
+  for (int use = 0; use <= cnt; ++use) {
+    enum_subracks(letters, i + 1, cur, size + use, out);
+    cur.add_letter(li);  // `cur` now holds use+1 copies of this letter
+  }
+}
+
+// One row of a (possibly transposed) board prepared for WordMap generation: the
+// per-square occupancy/letter snapshot plus the view and cross-checks it indexes.
+struct WmpLane {
+  const View& view;
+  const CrossChecks& cross;
+  int row;
+  std::array<bool, BOARD_SIZE> filled{};
+  std::array<Tile, BOARD_SIZE> letter{};
+};
+
+WmpLane build_wmp_lane(const View& view, const CrossChecks& cross, int row) {
+  WmpLane lane{view, cross, row, {}, {}};
+  for (int c = 0; c < BOARD_SIZE; ++c) {
+    const Glyph g = view.at(row, c);
+    lane.filled[c] = !g.is_empty();
+    if (lane.filled[c]) lane.letter[c] = g.letter();
+  }
+  return lane;
+}
+
+// The letters the rack can place (blank-free) as a bitmask over A..Z.
+uint32_t wmp_rack_letter_mask(const WmpSubracks& subracks) {
+  uint32_t mask = 0;
+  for (const BitRack& s : subracks[1]) {
+    for (int l = 0; l < 26; ++l) {
+      if (s.get(l)) mask |= 1u << l;
+    }
+  }
+  return mask;
+}
+
+// Squares a tile could legally land on: filled (playthrough) squares, or empty
+// squares whose cross-check admits at least one rack letter. A span covering an
+// unplaceable empty is dead -- the pruning the GADDAG gets free by following arcs.
+std::array<bool, BOARD_SIZE> wmp_placeable_squares(const WmpLane& lane, uint32_t rack_mask) {
+  std::array<bool, BOARD_SIZE> placeable{};
+  for (int c = 0; c < BOARD_SIZE; ++c) {
+    placeable[c] = lane.filled[c] || (lane.cross[idx(lane.row, c)].mask & rack_mask) != 0;
+  }
+  return placeable;
+}
+
+// Verify candidate `word` (L tiles) against the lane's span starting at column
+// `wl`: playthrough letters must match the board, placed letters must satisfy
+// their cross-checks. On success build the play and append it to `out`.
+void wmp_try_word(const WmpLane& lane, int wl, int L, const Tile* word, std::vector<Move>& out) {
+  std::array<Tile, BOARD_SIZE> placed_letter{};
+  for (int i = 0; i < L; ++i) {
+    const int c = wl + i;
+    if (lane.filled[c]) {
+      if (word[i].index() != lane.letter[c].index()) return;
+    } else if (lane.cross[idx(lane.row, c)].mask & (1u << word[i].index())) {
+      placed_letter[c] = word[i];
+    } else {
+      return;
+    }
+  }
+  const std::array<bool, BOARD_SIZE> no_blanks{};  // blank-free
+  out.push_back(build_play(lane.view, lane.cross, lane.row, wl, wl + L, placed_letter, no_blanks));
+}
+
+// Look up every (playthrough + subrack) anagram set of length L and emit the
+// plays that fit the lane's span at column `wl`.
+void wmp_emit_span(const WmpLane& lane, const WordMap& wm, int wl, int L,
+                   const BitRack& playthrough, const std::vector<BitRack>& subracks_of_size,
+                   std::vector<Move>& out) {
+  const bool nonplaythrough = playthrough.empty();
+  for (const BitRack& sub : subracks_of_size) {
+    ++g_wmp_lookups;
+    if (nonplaythrough) ++g_wmp_np_lookups;
+    const WordMap::WordList words = wm.lookup(L, playthrough + sub);
+    if (words.count) ++g_wmp_hits;
+    for (int wi = 0; wi < words.count; ++wi) {
+      wmp_try_word(lane, wl, L, words.begin + wi * L, out);
+    }
+  }
+}
+
+// Append every play whose leftmost newly-placed square is `A` -- the dedup
+// partition for full-board WordMap generation. The word spans [wl, wr]: wl
+// extends left through filled squares from A, wr ends at an empty/edge.
+void wmp_emit_leftmost_anchor(const WmpLane& lane, const WordMap& wm, const WmpSubracks& subracks,
+                              int rack_tiles, int A, bool empty_board, std::vector<Move>& out) {
+  if (lane.filled[A]) return;
+  int wl = A;
+  while (wl - 1 >= 0 && lane.filled[wl - 1]) --wl;
+  BitRack playthrough{};
+  for (int c = wl; c < A; ++c) playthrough.add_letter(lane.letter[c].index());
+  int placed = 0;
+  bool any_playthrough = (wl < A);
+  bool any_cross = false;
+  for (int wr = A; wr < BOARD_SIZE; ++wr) {
+    if (lane.filled[wr]) {
+      playthrough.add_letter(lane.letter[wr].index());
+      any_playthrough = true;
+    } else {
+      ++placed;
+      if (lane.cross[idx(lane.row, wr)].has_neighbor) any_cross = true;
+    }
+    if (placed > rack_tiles) break;
+    if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
+    const int L = wr - wl + 1;
+    if (L < 2) continue;
+    // First move covers the center square; later moves must touch the board.
+    const bool connected = empty_board ? (lane.row == CENTER && A <= CENTER && wr >= CENTER)
+                                       : (any_playthrough || any_cross);
+    if (!connected) continue;
+    // Single-tile plays are canonical in the horizontal pass only.
+    if (lane.view.transposed && placed == 1) continue;
+    wmp_emit_span(lane, wm, wl, L, playthrough, subracks[placed], out);
+  }
+}
+
 }  // namespace
 
 MoveGenerator::MoveGenerator(const Board& board, const Dictionary& dict)
@@ -581,6 +713,88 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
     }
   }
   return out;
+}
+
+void wmp_rack_subracks(const Rack& rack, WmpSubracks& out, int& rack_tiles) {
+  const TileCounts& counts = rack.counts();
+  std::vector<std::pair<int, int>> letters;
+  rack_tiles = 0;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int n = counts.count(L);
+    if (n > 0) {
+      letters.emplace_back(L.index(), n);
+      rack_tiles += n;
+    }
+  }
+  for (auto& bucket : out) bucket.clear();
+  enum_subracks(letters, 0, BitRack{}, 0, out);
+}
+
+std::vector<Move> wmp_generate(const Board& board, const Dictionary& dict, const WordMap& wm,
+                               const Rack& rack) {
+  board.ensure_movegen_caches(dict);
+  WmpSubracks subracks;
+  int rack_tiles = 0;
+  wmp_rack_subracks(rack, subracks, rack_tiles);
+  const bool empty_board = board.empty_board();
+
+  std::vector<Move> out;
+  for (int orient = 0; orient < 2; ++orient) {
+    const View view{board, orient == 1};
+    const CrossChecks& cross = board.cross_checks(view.transposed);
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+      const WmpLane lane = build_wmp_lane(view, cross, r);
+      for (int A = 0; A < BOARD_SIZE; ++A) {
+        wmp_emit_leftmost_anchor(lane, wm, subracks, rack_tiles, A, empty_board, out);
+      }
+    }
+  }
+  return out;
+}
+
+void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
+                         int rack_tiles, const ShadowAnchor& a, std::vector<Move>& out) {
+  const View view{board, a.transposed};
+  const CrossChecks& cross = board.cross_checks(a.transposed);
+  const WmpLane lane = build_wmp_lane(view, cross, a.row);
+  const std::array<bool, BOARD_SIZE> placeable =
+    wmp_placeable_squares(lane, wmp_rack_letter_mask(subracks));
+  const int col = a.col;
+  const int left_limit = (a.last_anchor_col < 0) ? 0 : a.last_anchor_col + 1;
+
+  // The play's word covers the anchor col and starts at some wl in
+  // [left_limit, col] with wl-1 empty/edge (the GADDAG extends left only as far
+  // as the previous anchor). col itself may be occupied (the rightmost tile of a
+  // run) or empty, so it is scored like any other square in the span.
+  for (int wl = left_limit; wl <= col; ++wl) {
+    if (wl > 0 && lane.filled[wl - 1]) continue;  // not a maximal word start
+    BitRack playthrough{};
+    int placed = 0;
+    bool left_ok = true;
+    for (int c = wl; c < col; ++c) {
+      if (lane.filled[c]) {
+        playthrough.add_letter(lane.letter[c].index());
+      } else {
+        ++placed;
+        if (!placeable[c]) left_ok = false;
+      }
+    }
+    if (!left_ok) continue;  // an unplaceable empty in the left extent
+    for (int wr = col; wr < BOARD_SIZE; ++wr) {
+      if (lane.filled[wr]) {
+        playthrough.add_letter(lane.letter[wr].index());
+      } else {
+        ++placed;
+        if (!placeable[wr]) break;  // this and every longer span cover a dead square
+      }
+      if (placed > rack_tiles) break;
+      if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
+      const int L = wr - wl + 1;
+      if (L < 2 || placed < 1) continue;          // a play must place at least one tile
+      if (a.transposed && placed == 1) continue;  // single-tile: horizontal pass only
+      wmp_emit_span(lane, wm, wl, L, playthrough, subracks[placed], out);
+    }
+  }
 }
 
 ShadowMoveGen::ShadowMoveGen(const Board& board, const Dictionary& dict)

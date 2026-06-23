@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2824,9 +2825,213 @@ static void test_hasty_shadow_matches_reference() {
   std::cout << "  HastyBot shadow search matches reference (" << comparisons << " positions)\n";
 }
 
+// wmp_generate (WordMap anagram lookup) produces exactly the same set of legal
+// plays as the GADDAG move generator, for blank-free racks. Always runs against
+// the in-memory medium dictionary.
+static void test_wmp_generate_matches_full() {
+  using namespace scribblez;
+  Dictionary dict = medium_dict();
+  WordMap wm = WordMap::build(dict);
+  long positions = 0;
+  for (uint64_t seed : {7ULL, 99ULL, 12345ULL, 2024ULL, 55ULL, 13ULL, 808ULL, 4242ULL}) {
+    GameLogStorage log = play_test_game(dict, seed);
+    Board board;
+    for (const TurnRecord& t : log.turns) {
+      const Rack& rack = t.rack_before;
+      if (rack.counts().blanks() == 0) {
+        MoveGenerator gen(board, dict);
+        const std::vector<Move> full = gen.generate(rack);
+        const std::vector<Move> wmp = wmp_generate(board, dict, wm, rack);
+        CHECK(key_set(board, full) == key_set(board, wmp));
+
+        // Per-anchor WMP generation matches the GADDAG's generate_anchor exactly,
+        // so it can drive the shadow best-first loop.
+        ShadowMoveGen smg(board, dict);
+        WmpSubracks subracks;
+        int rack_tiles = 0;
+        wmp_rack_subracks(rack, subracks, rack_tiles);
+        for (const ShadowAnchor& a : smg.anchors(rack)) {
+          std::vector<Move> g, w;
+          smg.generate_anchor(a, rack, g);
+          wmp_generate_anchor(board, wm, subracks, rack_tiles, a, w);
+          CHECK(key_set(board, g) == key_set(board, w));
+        }
+        ++positions;
+      }
+      board.apply(t.move);
+    }
+  }
+  CHECK(positions > 0);
+  std::cout << "  wmp_generate matches full generate (" << positions << " blank-free positions)\n";
+}
+
+// Captures every blank-free (board, rack) a HastyBot faces during self-play, so
+// the benchmark can compare GADDAG vs WordMap generation on realistic positions.
+namespace {
+struct CapturedPos {
+  scribblez::Board board;
+  scribblez::Rack rack;
+  scribblez::Rack opp_rack;
+  int my_score;
+  int opp_score;
+  int bag_size;
+};
+class CapturingAgent : public scribblez::Agent {
+ public:
+  CapturingAgent(int tid, const std::string& name, std::vector<CapturedPos>& sink)
+      : scribblez::Agent(tid, name), bot_(tid, name), sink_(sink) {}
+  scribblez::Move make_move(const scribblez::MoveRequest& req) override {
+    if (req.my_rack.counts().blanks() == 0)
+      sink_.push_back(
+        {req.board, req.my_rack, req.opp_rack, req.my_score, req.opp_score, req.bag_size});
+    return bot_.make_move(req);
+  }
+
+ private:
+  scribblez::HastyBotAgent bot_;
+  std::vector<CapturedPos>& sink_;
+};
+}  // namespace
+
+namespace scribblez {
+extern long g_wmp_lookups, g_wmp_hits, g_wmp_np_lookups;  // temporary WMP profiling counters
+}
+
+// Head-to-head throughput: GADDAG traversal vs WordMap anagram lookup, over the
+// blank-free positions of real HastyBot self-play games. Verifies the two agree,
+// then times each. Requires the NWL23 KWG + leaves; skipped if absent.
+static void test_wmp_benchmark() {
+  namespace fs = std::filesystem;
+  using namespace scribblez;
+  std::string kwg;
+  for (const char* cand : {
+#ifdef SCRIBBLEZ_DEFAULT_KWG
+         SCRIBBLEZ_DEFAULT_KWG,
+#endif
+         "/workspace/mount/lexica/NWL23.kwg",
+         "/workspace/mount/macondo/data/lexica/gaddag/NWL23.kwg"}) {
+    std::error_code ec;
+    if (fs::exists(cand, ec)) {
+      kwg = cand;
+      break;
+    }
+  }
+  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
+  const std::string peg = HastyEquity::default_peg_path();
+  if (kwg.empty() || !fs::exists(leaves)) {
+    std::cout << "  (no NWL23 kwg/leaves; skipping WMP benchmark)\n";
+    return;
+  }
+  Dictionary dict = Dictionary::load_kwg(kwg);
+  HastyEquity::init(leaves, peg);
+
+  auto t_build0 = std::chrono::steady_clock::now();
+  WordMap wm = WordMap::build(dict);
+  auto t_build1 = std::chrono::steady_clock::now();
+  const double build_ms = std::chrono::duration<double, std::milli>(t_build1 - t_build0).count();
+
+  std::vector<CapturedPos> positions;
+  for (uint64_t seed = 1; seed <= 60; ++seed) {
+    CapturingAgent a0(0, "A", positions), a1(0, "B", positions);
+    Game g(a0, a1, dict, seed);
+    g.play();
+  }
+
+  // Warm caches once and confirm the two generators agree everywhere.
+  long total_moves = 0;
+  for (CapturedPos& p : positions) {
+    MoveGenerator gen(p.board, dict);
+    const std::vector<Move> full = gen.generate(p.rack);
+    const std::vector<Move> wmp = wmp_generate(p.board, dict, wm, p.rack);
+    CHECK(key_set(p.board, full) == key_set(p.board, wmp));
+    total_moves += static_cast<long>(full.size());
+  }
+
+  constexpr int kReps = 20;
+  auto tg0 = std::chrono::steady_clock::now();
+  long sink_g = 0;
+  for (int rep = 0; rep < kReps; ++rep) {
+    for (CapturedPos& p : positions) {
+      MoveGenerator gen(p.board, dict);
+      sink_g += static_cast<long>(gen.generate(p.rack).size());
+    }
+  }
+  auto tg1 = std::chrono::steady_clock::now();
+  long sink_w = 0;
+  for (int rep = 0; rep < kReps; ++rep) {
+    for (CapturedPos& p : positions) {
+      sink_w += static_cast<long>(wmp_generate(p.board, dict, wm, p.rack).size());
+    }
+  }
+  auto tw1 = std::chrono::steady_clock::now();
+  CHECK(sink_g == sink_w);  // same number of plays generated overall
+
+  const double gaddag_us =
+    std::chrono::duration<double, std::micro>(tg1 - tg0).count() / (kReps * positions.size());
+  const double wmp_us =
+    std::chrono::duration<double, std::micro>(tw1 - tg1).count() / (kReps * positions.size());
+  std::cout << "  WMP benchmark: " << positions.size() << " blank-free positions, "
+            << (total_moves / std::max<size_t>(1, positions.size())) << " moves/pos avg\n";
+  std::cout << "    WordMap build: " << build_ms << " ms\n";
+  std::cout << "    GADDAG generate: " << gaddag_us << " us/pos\n";
+  std::cout << "    WMP    generate: " << wmp_us << " us/pos  (" << (wmp_us / gaddag_us)
+            << "x GADDAG)\n";
+  std::cout << "    [full generation] WMP lookups/pos: "
+            << (scribblez::g_wmp_lookups / (kReps * (long)positions.size())) << ", hit-rate: "
+            << (100.0 * (double)scribblez::g_wmp_hits / std::max(1L, scribblez::g_wmp_lookups))
+            << "%\n";
+
+  // The regime HastyBot actually uses: shadow best-first with early-exit, so only
+  // a few anchors are ever generated. This is where WordMap lookup should beat
+  // GADDAG (as MAGPIE's static move-gen does), because the lookup count collapses.
+  HastyBotAgent bot(0, "bench");
+  for (const CapturedPos& p : positions) {
+    const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
+    const Move g = bot.make_move(req);
+    const Move w = hasty_best_move_wmp(req, wm);
+    CHECK(move_key(p.board, g) == move_key(p.board, w));  // identical choice
+  }
+
+  scribblez::g_wmp_lookups = 0;
+  scribblez::g_wmp_hits = 0;
+  scribblez::g_wmp_np_lookups = 0;
+  auto ts0 = std::chrono::steady_clock::now();
+  long sink_sg = 0;
+  for (int rep = 0; rep < kReps; ++rep) {
+    for (const CapturedPos& p : positions) {
+      const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
+      sink_sg += bot.make_move(req).score();
+    }
+  }
+  auto ts1 = std::chrono::steady_clock::now();
+  long sink_sw = 0;
+  for (int rep = 0; rep < kReps; ++rep) {
+    for (const CapturedPos& p : positions) {
+      const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
+      sink_sw += hasty_best_move_wmp(req, wm).score();
+    }
+  }
+  auto ts2 = std::chrono::steady_clock::now();
+  CHECK(sink_sg == sink_sw);
+  const double shadow_g_us =
+    std::chrono::duration<double, std::micro>(ts1 - ts0).count() / (kReps * positions.size());
+  const double shadow_w_us =
+    std::chrono::duration<double, std::micro>(ts2 - ts1).count() / (kReps * positions.size());
+  std::cout << "  HastyBot make_move (shadow best-first, early-exit):\n";
+  std::cout << "    shadow+GADDAG: " << shadow_g_us << " us/move\n";
+  std::cout << "    shadow+WMP:    " << shadow_w_us << " us/move  (" << (shadow_w_us / shadow_g_us)
+            << "x GADDAG)\n";
+  std::cout << "    shadow+WMP lookups/move: "
+            << (scribblez::g_wmp_lookups / (kReps * (long)positions.size())) << " (of which "
+            << (scribblez::g_wmp_np_lookups / (kReps * (long)positions.size()))
+            << " nonplaythrough)\n";
+}
+
 int main() {
   test_dict_basic();
   test_shadow_movegen_matches_full();
+  test_wmp_generate_matches_full();
+  test_wmp_benchmark();
   test_hasty_shadow_matches_reference();
   test_movegen_opening();
   test_movegen_cross_word();

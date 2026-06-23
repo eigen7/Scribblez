@@ -12,6 +12,7 @@ add_library(scribblez_core STATIC
   src/scribblez/binary_log.cpp
   src/scribblez/game_state_encoder.cpp
   src/scribblez/training_targets.cpp
+  src/scribblez/word_map.cpp
   src/scribblez/position_encoder.cpp
   src/scribblez/streaming_row_buffer.cpp
   src/scribblez/streaming_game_producer.cpp

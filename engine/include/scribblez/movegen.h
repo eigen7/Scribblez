@@ -4,6 +4,7 @@
 #include "scribblez/dictionary.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
+#include "scribblez/word_map.h"
 
 #include <array>
 #include <vector>
@@ -31,6 +32,14 @@ class MoveGenerator {
   const Board& board_;
   const Dictionary& dict_;
 };
+
+// MAGPIE-style move generation: instead of walking the GADDAG, look words up in
+// `wm` by (length, letter multiset). For a blank-free rack it produces the same
+// set of legal plays as MoveGenerator::generate (same build_play scoring). Plays
+// that place a blank are NOT generated, so callers must restrict it to racks with
+// no blanks. It exists to benchmark hash-anagram lookup against GADDAG traversal.
+std::vector<Move> wmp_generate(const Board& board, const Dictionary& dict, const WordMap& wm,
+                               const Rack& rack);
 
 // Largest rack a play can place tiles from (one move plays 1..RACK_SIZE tiles).
 inline constexpr int kMaxPlayTiles = 7;
@@ -70,5 +79,23 @@ class ShadowMoveGen {
   const Board& board_;
   const Dictionary& dict_;
 };
+
+// Sub-multisets of a rack bucketed by tile count: index k holds every distinct
+// size-k sub-multiset (blank-free), the candidate tile sets a WordMap play can
+// place. Computed once per rack and reused across anchors.
+using WmpSubracks = std::array<std::vector<BitRack>, kMaxPlayTiles + 1>;
+
+// Enumerate `rack`'s sub-multisets into `out`; `rack_tiles` receives the rack's
+// total real-letter count (blanks are not represented).
+void wmp_rack_subracks(const Rack& rack, WmpSubracks& out, int& rack_tiles);
+
+// Append every legal PLAY canonically anchored at `a` -- the same set as the
+// GADDAG's generate_one_anchor -- using WordMap anagram lookups instead of GADDAG
+// traversal. Blank-free: plays that place a blank are not generated, so callers
+// must restrict it to racks with no blanks. This is the per-anchor WMP generator
+// the shadow best-first loop drives; only the anchors that survive pruning are
+// ever generated, which is the regime where WordMap lookup beats GADDAG walking.
+void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
+                         int rack_tiles, const ShadowAnchor& a, std::vector<Move>& out);
 
 }  // namespace scribblez

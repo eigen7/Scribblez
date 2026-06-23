@@ -8,6 +8,8 @@
 
 namespace scribblez {
 
+class WordMap;
+
 // Total order on (equity, move) used to pick HastyBot's move: higher equity
 // wins; exact-equity ties are broken by a canonical move ordering so the choice
 // is deterministic and independent of move-generation order. Returns true iff
@@ -18,6 +20,13 @@ bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b);
 // hasty_move_better argmax. This is the specification the shadow-play search in
 // HastyBotAgent::make_move reproduces, used to verify the optimized path.
 Move hasty_best_move_reference(const MoveRequest& req);
+
+// Same shadow-play search as HastyBotAgent::make_move, but generates each
+// anchor's plays with WordMap anagram lookups (wmp_generate_anchor) instead of
+// GADDAG traversal. Picks the identical move. Blank-free: only valid on racks
+// with no blanks (the WordMap path does not place blanks yet). Exists to
+// benchmark shadow+WMP against shadow+GADDAG in HastyBot's real (pruned) regime.
+Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm);
 
 // An in-process HastyBot player: finds the play with the highest static equity
 // (score + leave value + opening/PEG/endgame adjustments) via a shadow-play
