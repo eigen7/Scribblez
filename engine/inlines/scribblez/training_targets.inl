@@ -6,7 +6,7 @@ namespace scribblez {
 namespace binlog {
 
 template <typename... Ts>
-void TargetList<Ts...>::encode_all(const GameLogView& v, float* out) {
+void TargetList<Ts...>::encode_all(const TargetInputs& v, float* out) {
   int off = 0;
   ((Ts::encode(v, out + off), off += detail::target_floats<Ts>()), ...);
 }

@@ -3,9 +3,9 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/exception.h"
+#include "scribblez/game.h"
 #include "scribblez/gcg_writer.h"
 #include "scribblez/lexicon.h"
-#include "scribblez/player_factory.h"
 #include "scribblez/seed_producer.h"
 #include "scribblez/unique_id.h"
 
@@ -19,30 +19,11 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <random>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace scribblez {
-
-namespace {
-
-// Choose a head-start handicap for one game: pick a player at random and gift
-// them P points, P uniform in [0, max]. Returns per-player starting scores.
-// Seeded from the game seed so the choice is reproducible; max <= 0 yields
-// {0, 0}.
-std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
-  if (max <= 0) return {0, 0};
-  std::mt19937_64 rng(game_seed);
-  const int player = static_cast<int>(rng() & 1ULL);
-  const int points = std::uniform_int_distribution<int>(0, max)(rng);
-  std::array<int, 2> scores = {0, 0};
-  scores[player] = points;
-  return scores;
-}
-
-}  // namespace
 
 const Dictionary& GameRunner::load_dictionary_or_throw() {
   try {
@@ -70,7 +51,7 @@ class GameRunner::Results {
       winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
 
     std::lock_guard<std::mutex> lock(mutex_);
-    total_turns_ += static_cast<long>(log.turns.size());
+    total_turns_ += static_cast<long>(log.num_records);
     ++games_played_;
     if (winning_seat < 0) {
       ++draws_;
@@ -80,7 +61,7 @@ class GameRunner::Results {
     if (verbose) {
       std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
                 << log.end_reason << ")\n"
-                << "Turns: " << log.turns.size() << "\n";
+                << "Turns: " << log.num_records << "\n";
     }
   }
 
@@ -137,24 +118,13 @@ void GameRunner::Params::add_options(boost::program_options::options_description
 // --------------------------- ctor / run ----------------------------------
 
 GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
-    : params_(params), seed_(SeedProducer::instance().next()) {
+    : params_(params),
+      seed_(SeedProducer::instance().next()),
+      engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max},
+              player_params) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";
     throw Exception("--games must be >= 1");
-  }
-  if (params_.threads < 1) {
-    std::cerr << "Error: --threads must be >= 1\n";
-    throw Exception("--threads must be >= 1");
-  }
-  // Build the first pair to check parallelism support before creating the rest.
-  agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/0));
-  bool parallel_ok = agents_[0][0]->supports_parallelism() && agents_[0][1]->supports_parallelism();
-  if (!parallel_ok && params_.threads > 1) {
-    std::cerr << "Warning: a player does not support parallelism; running single-threaded.\n";
-    params_.threads = 1;
-  }
-  for (int i = 1; i < params_.threads; ++i) {
-    agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/i));
   }
   // Force the lexicon load now so any I/O error surfaces at construction
   // time (rather than mid-game), and so the verbose summary below has the
@@ -186,22 +156,16 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
               << Lexicon::instance().kwg_path() << "\n"
               << "Seed: " << seed_ << "\n";
   }
-  results_ = std::make_unique<Results>(
-    std::array<std::string, 2>{agents_[0][0]->name(), agents_[0][1]->name()});
+  results_ = std::make_unique<Results>(engine_.player_names());
 }
 
 GameRunner::~GameRunner() = default;
 
-std::pair<EndGameAction, EndGameAction> GameRunner::play_one_game(int thread_idx,
-                                                                  const std::array<int, 2>& seats,
-                                                                  uint64_t game_idx) {
-  Agent& seat0 = *agents_[thread_idx][seats[0]];
-  Agent& seat1 = *agents_[thread_idx][seats[1]];
-  const uint64_t game_seed = seed_ + game_idx;
-  Game game(seat0, seat1, Lexicon::instance().dict(), game_seed);
-  game.set_initial_scores(pick_handicap(game_seed, params_.random_handicap_max));
-  game.play();
-  const GameLog& log = game.log();
+void GameRunner::on_game(GameLogStorage&& storage, const std::array<int, 2>& seats) {
+  // Read the finished game through a view for the gcg/tally consumers, then hand
+  // ownership to the binary writer (a move). Take the view BEFORE the move; do
+  // not touch it afterward (the move invalidates its pointers).
+  const GameLog log = storage.view();
 
   if (!params_.log_dir.empty()) {
     std::string path = params_.log_dir + "/" + std::to_string(get_unique_id()) + ".gcg";
@@ -213,21 +177,17 @@ std::pair<EndGameAction, EndGameAction> GameRunner::play_one_game(int thread_idx
     }
   }
 
-  if (binary_writer_) {
-    binary_writer_->append(log);
-  }
-
   results_->record(log, seats, params_.verbose);
 
-  auto r0 = seat0.end_game(game, 0);
-  auto r1 = seat1.end_game(game, 1);
-  return {r0.action, r1.action};
+  if (binary_writer_) {
+    binary_writer_->append(std::move(storage));
+  }
 }
 
 void GameRunner::run() {
   auto t0 = std::chrono::steady_clock::now();
 
-  if (agents_.size() == 1) {
+  if (engine_.num_threads() == 1) {
     // Serial mode: supports PLAY_AGAIN / QUIT signalling from agents.
     // Seats swap every game so the two players alternate who starts; who
     // starts game 1 is decided by the low bit of the seed.
@@ -235,7 +195,7 @@ void GameRunner::run() {
                                          static_cast<int>(1 - (seed_ & 1ULL))};
     uint64_t game_idx = 0;
     while (true) {
-      auto [a0, a1] = play_one_game(0, player_at_seat, game_idx);
+      auto [a0, a1] = engine_.play(0, player_at_seat, game_idx, *this);
       bool quit = a0 == EndGameAction::QUIT || a1 == EndGameAction::QUIT;
       bool play_again = a0 == EndGameAction::PLAY_AGAIN || a1 == EndGameAction::PLAY_AGAIN;
       if (quit) break;
@@ -250,15 +210,15 @@ void GameRunner::run() {
     std::atomic<uint64_t> next_game{0};
     const uint64_t total = static_cast<uint64_t>(params_.games);
     std::vector<std::thread> workers;
-    workers.reserve(agents_.size());
-    for (int t = 0; t < static_cast<int>(agents_.size()); ++t) {
+    workers.reserve(static_cast<size_t>(engine_.num_threads()));
+    for (int t = 0; t < engine_.num_threads(); ++t) {
       workers.emplace_back([&, t]() {
         while (true) {
           uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
           if (idx >= total) break;
           int seat0_player = static_cast<int>((seed_ + idx) & 1ULL);
           std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
-          play_one_game(t, seats, idx);
+          engine_.play(t, seats, idx, *this);
         }
       });
     }

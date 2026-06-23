@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
     HastyAgent a1(1, "A1", seed ^ 0x2222222222222222ULL);
     Game g(a0, a1, dict, seed);
     g.play();
-    writer.append(g.log());
+    writer.append(g.extract_log());
   }
 
   std::cout << "Wrote " << num_games << " games to " << out_dir << "\n";

@@ -33,12 +33,14 @@
 
 #include <cstdint>
 #include <mutex>
+#include <random>
 #include <string>
 #include <vector>
 
 namespace scribblez {
 
-struct GameLog;  // forward (defined in game.h)
+struct GameLog;         // forward (defined in game.h)
+struct GameLogStorage;  // forward (defined in game.h)
 
 namespace binlog {
 
@@ -94,6 +96,13 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
 
+// Pick a turn index for `log` uniformly at random among turns whose
+// bag_size_before > 0 (i.e. pre-endgame positions, where one position is
+// sampled per game). Returns -1 iff no eligible turn exists (a degenerate
+// game), in which case the game must be excluded from any output. Operates on a
+// GameLog view, so it serves both the disk writer and the streaming producer.
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
+
 // Thread-safe writer that accumulates GameLog objects from one or more
 // GameRunner threads and flushes them to .slog files as fixed-size batches.
 //
@@ -107,23 +116,21 @@ class BinaryLogWriter {
   BinaryLogWriter(const BinaryLogWriter&) = delete;
   BinaryLogWriter& operator=(const BinaryLogWriter&) = delete;
 
-  // Take ownership of one finished game; may trigger a file flush.
-  // (Accepts a const reference rather than a sink-by-value because every
-  // current caller has a non-moveable lvalue; the copy is made internally.)
-  // Thread-safe.
-  void append(const GameLog& log);
+  // Take ownership of one finished game by moving its log storage in (no copy);
+  // may trigger a file flush. Thread-safe.
+  void append(GameLogStorage&& log);
 
   // Force a write of any pending games (no-op if pending is empty).
   // Thread-safe.
   void flush();
 
  private:
-  void write_batch(std::vector<GameLog>&& games);
+  void write_batch(std::vector<GameLogStorage>&& games);
 
   std::string dir_;
   int games_per_file_;
   std::mutex mutex_;
-  std::vector<GameLog> pending_;
+  std::vector<GameLogStorage> pending_;
 };
 
 }  // namespace binlog

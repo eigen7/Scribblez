@@ -12,6 +12,9 @@ add_library(scribblez_core STATIC
   src/scribblez/binary_log.cpp
   src/scribblez/game_state_encoder.cpp
   src/scribblez/training_targets.cpp
+  src/scribblez/position_encoder.cpp
+  src/scribblez/streaming_row_buffer.cpp
+  src/scribblez/streaming_game_producer.cpp
   src/scribblez/block_decoder.cpp
   src/scribblez/slog_subset.cpp
   src/scribblez/position_json.cpp
@@ -19,6 +22,7 @@ add_library(scribblez_core STATIC
   src/scribblez/unique_id.cpp
   src/scribblez/agent.cpp
   src/scribblez/cli.cpp
+  src/scribblez/self_play_engine.cpp
   src/scribblez/game_runner.cpp
   src/scribblez/hasty_equity.cpp
   src/scribblez/human_web_agent.cpp
@@ -45,8 +49,15 @@ target_link_libraries(scribblez_core PUBLIC Boost::json)
 # Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
 # so the resulting libscribblez_ffi.so is a single self-contained artifact
 # that exposes only the symbols declared in scribblez/scribblez_ffi.h.
+# The streaming pipeline plays self-play games inside the library, so it pulls
+# in the agent/runner code that parses --player specs via Boost.ProgramOptions.
 add_library(scribblez_ffi SHARED src/scribblez/scribblez_ffi.cpp)
-target_link_libraries(scribblez_ffi PRIVATE scribblez_core Threads::Threads)
+target_link_libraries(scribblez_ffi PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
 
 add_executable(play_game apps/play_game.cpp)
 target_link_libraries(play_game PRIVATE

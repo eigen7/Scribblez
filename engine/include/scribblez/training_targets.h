@@ -10,7 +10,7 @@
 // Each target struct must expose:
 //   * static constexpr const char* kName  -- display / FFI name
 //   * static constexpr int kDims[]        -- tensor shape (any rank >= 1)
-//   * static void encode(const GameLogView&, float* out)
+//   * static void encode(const TargetInputs&, float* out)
 //                                         -- writes product(kDims) floats
 //
 // Targets are emitted into the row in declaration order; offsets are
@@ -27,7 +27,7 @@ namespace binlog {
 // A snapshot of the per-sample inputs needed to compute every target
 // head. The caller (BlockDecoder, or a test) populates this from the
 // replay state at the sampled position.
-struct GameLogView {
+struct TargetInputs {
   Move next_move{};  // the opponent's response to the sampled position;
                      // only consulted when has_next_move is true
   bool has_next_move = false;
@@ -45,7 +45,7 @@ struct GameLogView {
 struct WldTarget {
   static constexpr const char* kName = "wld";
   static constexpr int kDims[] = {3};  // [win, draw, loss]
-  static void encode(const GameLogView& v, float* out);
+  static void encode(const TargetInputs& v, float* out);
 };
 
 struct ScoreDiffTarget {
@@ -59,7 +59,7 @@ struct ScoreDiffTarget {
   static constexpr int kBins = 2 * kClip + 1;  // 801
   static constexpr const char* kName = "score_diff";
   static constexpr int kDims[] = {kBins};
-  static void encode(const GameLogView& v, float* out);
+  static void encode(const TargetInputs& v, float* out);
 };
 
 struct OppNextPlacementTarget {
@@ -71,7 +71,7 @@ struct OppNextPlacementTarget {
   static constexpr int kSide = 15;
   static constexpr const char* kName = "opp_next_placement";
   static constexpr int kDims[] = {kSide, kSide};
-  static void encode(const GameLogView& v, float* out);
+  static void encode(const TargetInputs& v, float* out);
 };
 
 // ---------- TargetList: derives everything else from the pack ----------
@@ -95,7 +95,7 @@ struct TargetList {
 
   // Writes total_floats floats starting at `out`, one target after the
   // next in declaration order.
-  static void encode_all(const GameLogView& v, float* out);
+  static void encode_all(const TargetInputs& v, float* out);
 };
 
 // ---------- The single source of truth ---------------------------------

@@ -7,6 +7,20 @@
 
 namespace scribblez {
 
+GameLog GameLogStorage::view() const {
+  GameLog v;
+  v.seed = seed;
+  v.player_names = {player_names[0].c_str(), player_names[1].c_str()};
+  v.initial_scores = initial_scores;
+  v.initial_racks = initial_racks;
+  v.records = turns.data();
+  v.num_records = static_cast<int>(turns.size());
+  v.final_scores = final_scores;
+  v.final_racks = final_racks;
+  v.end_reason = end_reason.c_str();
+  return v;
+}
+
 Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
     : dict_(dict), seed_(seed), bag_(seed) {
   players_[0] = &p0;

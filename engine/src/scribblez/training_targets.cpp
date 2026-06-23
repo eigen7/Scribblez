@@ -7,7 +7,7 @@ namespace binlog {
 
 // ---------- WldTarget ---------------------------------------------------
 
-void WldTarget::encode(const GameLogView& v, float* out) {
+void WldTarget::encode(const TargetInputs& v, float* out) {
   const int a = v.final_active();
   const int o = v.final_opp();
   out[0] = (a > o) ? 1.0f : 0.0f;
@@ -17,7 +17,7 @@ void WldTarget::encode(const GameLogView& v, float* out) {
 
 // ---------- ScoreDiffTarget --------------------------------------------
 
-void ScoreDiffTarget::encode(const GameLogView& v, float* out) {
+void ScoreDiffTarget::encode(const TargetInputs& v, float* out) {
   std::fill_n(out, kBins, 0.0f);
   const int diff = v.final_active() - v.final_opp();
   const int clipped = std::clamp(diff, -kClip, kClip);
@@ -33,7 +33,7 @@ inline int plane_idx(int r, int c, bool flip) {
 }
 }  // namespace
 
-void OppNextPlacementTarget::encode(const GameLogView& v, float* out) {
+void OppNextPlacementTarget::encode(const TargetInputs& v, float* out) {
   std::fill_n(out, kSide * kSide, 0.0f);
   if (!v.has_next_move) return;
   const Move& m = v.next_move;

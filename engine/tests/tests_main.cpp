@@ -14,11 +14,14 @@
 #include "scribblez/input_encoder.h"
 #include "scribblez/leave_values.h"
 #include "scribblez/movegen.h"
+#include "scribblez/position_encoder.h"
 #include "scribblez/rack.h"
+#include "scribblez/streaming_row_buffer.h"
 #include "scribblez/tile_counts.h"
 #include "scribblez/training_targets.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +32,7 @@
 #include <set>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <unistd.h>
 #include <vector>
@@ -775,7 +779,7 @@ struct LiveSnapshot {
   scribblez::binlog::PositionKind kind = scribblez::binlog::PositionKind::kPreMove;
 };
 
-std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLog& log) {
+std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStorage& log) {
   using namespace scribblez;
   using binlog::PositionKind;
 
@@ -874,13 +878,13 @@ bool moves_equal_for_replay(const scribblez::Move& a, const scribblez::Move& b) 
   return true;
 }
 
-// Play one game with two TestAgents and return the log.
-scribblez::GameLog play_test_game(const scribblez::Dictionary& dict, uint64_t seed) {
+// Play one game with two TestAgents and return its owning log storage.
+scribblez::GameLogStorage play_test_game(const scribblez::Dictionary& dict, uint64_t seed) {
   TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
   TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
   scribblez::Game g(a0, a1, dict, seed);
   g.play();
-  return g.log();
+  return g.extract_log();
 }
 
 // Compare the set of legal plays from movegen on a reconstructed state vs
@@ -916,7 +920,7 @@ static void test_extract_positions_movegen_roundtrip() {
   long positions_compared = 0;
 
   for (uint64_t seed : seeds) {
-    scribblez::GameLog log = play_test_game(dict, seed);
+    scribblez::GameLogStorage log = play_test_game(dict, seed);
     CHECK(!log.turns.empty());
 
     auto live_snaps = live_replay_all_snapshots(log);
@@ -1007,12 +1011,12 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
 
   // Write a small batch through the public writer (separate games -> one file).
   constexpr int kGames = 3;
-  std::vector<scribblez::GameLog> logs;
+  std::vector<scribblez::GameLogStorage> logs;
   {
     scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames);
     for (int i = 0; i < kGames; ++i) {
-      scribblez::GameLog log = play_test_game(dict, /*seed=*/100ULL + i);
-      writer.append(log);
+      scribblez::GameLogStorage log = play_test_game(dict, /*seed=*/100ULL + i);
+      writer.append(scribblez::GameLogStorage(log));  // append a copy; keep `log` for verification
       logs.push_back(std::move(log));
     }
     // Destructor flushes; explicit flush would be redundant.
@@ -1509,7 +1513,7 @@ static void test_game_end_rack_out_bonus() {
 
   bool found_out = false;
   for (uint64_t seed = 0; seed < 20 && !found_out; ++seed) {
-    scribblez::GameLog log = play_test_game(dict, seed);
+    scribblez::GameLogStorage log = play_test_game(dict, seed);
     if (log.end_reason != "out") continue;
     found_out = true;
 
@@ -1534,7 +1538,7 @@ static void test_game_end_stalemate_penalty() {
   AlwaysPassAgent a1(0, "P1");
   scribblez::Game g(a0, a1, dict, /*seed=*/424242ULL);
   g.play();
-  const auto& log = g.log();
+  const scribblez::GameLogStorage log = g.extract_log();
 
   CHECK(log.end_reason == "stalemate");
   CHECK(log.turns.size() == 6);  // 6 zero turns (3 per player)
@@ -1550,12 +1554,12 @@ static void test_game_end_stalemate_penalty() {
 
 namespace {
 
-// Helper: build a GameLogView with just the fields encode_labels reads for
+// Helper: build a TargetInputs with just the fields encode_labels reads for
 // heads 0 and 1 (no next move set -> head 2 emits all zeros).
-scribblez::binlog::GameLogView make_scores_view(int fs_active, int fs_opp, int active_player,
-                                                bool apply_flip = false) {
+scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
+                                                 bool apply_flip = false) {
   using namespace scribblez::binlog;
-  GameLogView v{};
+  TargetInputs v{};
   v.has_next_move = false;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
@@ -1566,7 +1570,7 @@ scribblez::binlog::GameLogView make_scores_view(int fs_active, int fs_opp, int a
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
 // size kLabelFloats laid out as [wld(3), score_diff(801), opp_next(225)].
-void encode_labels_flat(const scribblez::binlog::GameLogView& view, float* flat) {
+void encode_labels_flat(const scribblez::binlog::TargetInputs& view, float* flat) {
   scribblez::binlog::AllTargets::encode_all(view, flat);
 }
 
@@ -1645,7 +1649,7 @@ static void test_encode_labels() {
                                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                    Glyph::of(Tile::from_char('C'))});
 
-  GameLogView v_with_next{};
+  TargetInputs v_with_next{};
   v_with_next.next_move = next_play;
   v_with_next.has_next_move = true;
   v_with_next.active_player = 0;
@@ -1968,8 +1972,8 @@ static SlogFixture write_multi_file_slog(int games_per_file, int num_files) {
 
   scribblez::binlog::BinaryLogWriter writer(fix.dir.string(), games_per_file);
   for (int i = 0; i < fix.total_games; ++i) {
-    scribblez::GameLog log = play_test_game(dict, /*seed=*/2000ULL + i);
-    writer.append(log);
+    scribblez::GameLogStorage log = play_test_game(dict, /*seed=*/2000ULL + i);
+    writer.append(std::move(log));
   }
 
   for (const auto& ent : fs::directory_iterator(fix.dir)) {
@@ -2546,6 +2550,176 @@ static void test_hasty_equity_exchange_blank_leave() {
   std::cout << "test_hasty_equity_exchange_blank_leave passed\n";
 }
 
+// The keystone streaming guarantee: a row encoded directly from a live game's
+// GameLog view (the streaming path) is BIT-IDENTICAL to the row the disk
+// pipeline produces by writing that game to a .slog and decoding it back. Both
+// funnel through PositionEncoder, so any divergence would mean the view built
+// from the .slog buffer differs from the one built from self-play storage.
+static void test_streaming_disk_encode_equivalence() {
+  using namespace scribblez;
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  Dictionary dict = medium_dict();
+  fs::path dir = fs::temp_directory_path() / ("scribblez_eq_" + std::to_string(::getpid()) + "_" +
+                                              std::to_string(std::random_device{}()));
+  fs::create_directories(dir);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{dir};
+
+  const int row_floats = DataLoader::row_size_floats();
+  int compared = 0;
+  for (uint64_t seed : std::vector<uint64_t>{7, 99, 12345}) {
+    GameLogStorage storage = play_test_game(dict, seed);
+
+    // Write a COPY through the real disk writer (it picks the sampled turn).
+    {
+      BinaryLogWriter writer(dir.string(), /*games_per_file=*/1);
+      writer.append(GameLogStorage(storage));
+    }
+    fs::path slog;
+    for (const auto& ent : fs::directory_iterator(dir)) {
+      if (ent.path().extension() == ".slog") slog = ent.path();
+    }
+    CHECK(!slog.empty());
+
+    const int64_t fsize = static_cast<int64_t>(fs::file_size(slog));
+    std::vector<char> raw(fsize);
+    {
+      std::ifstream f(slog, std::ios::binary);
+      f.read(raw.data(), fsize);
+      CHECK(f);
+    }
+    const auto* metas = reinterpret_cast<const GameMetadata*>(raw.data() + sizeof(FileHeader));
+    const int sampled = static_cast<int>(metas[0].sampled_turn);
+
+    for (bool post_move : {false, true}) {
+      const uint8_t flip = 0;
+      std::vector<float> row_disk(row_floats, 0.0f);
+      BlockDecoder decoder;
+      decoder.decode(raw.data(), "eq", /*local_start=*/0, /*n_rows=*/1, &flip, post_move,
+                     /*output_row_start=*/0, row_disk.data());
+
+      std::vector<float> row_stream(row_floats, 0.0f);
+      PositionEncoder enc;
+      enc.encode_row(storage.view(), sampled, post_move, /*flip=*/false, row_stream.data());
+
+      for (int i = 0; i < row_floats; ++i) CHECK(row_disk[i] == row_stream[i]);
+      ++compared;
+    }
+
+    // Fresh dir per seed so directory_iterator finds exactly one file.
+    for (const auto& ent : fs::directory_iterator(dir)) fs::remove(ent.path());
+  }
+  CHECK(compared == 6);
+  std::cout << "  streaming/disk encode equivalence OK (" << compared << " rows)\n";
+}
+
+// StreamingRowBuffer: many producers, tiny slots (frequent boundary crossings).
+// Every global row must be written exactly once and read back in a contiguous
+// set, with no slot overwritten while the consumer holds it.
+static void test_streaming_row_buffer_concurrency() {
+  using namespace scribblez::binlog;
+  const int n_slots = 2, rows_per_slot = 4, row_floats = 1;
+  const int slots_to_consume = 64;
+  std::vector<std::vector<float>> bufs(n_slots,
+                                       std::vector<float>(rows_per_slot * row_floats, -1.0f));
+  std::vector<float*> slots;
+  for (auto& b : bufs) slots.push_back(b.data());
+  StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
+
+  const int K = 8;
+  std::vector<std::thread> producers;
+  for (int t = 0; t < K; ++t) {
+    producers.emplace_back([&] {
+      while (true) {
+        uint64_t r = ring.claim_row();
+        if (r == StreamingRowBuffer::kNoRow) break;
+        ring.row_dest(r)[0] = static_cast<float>(r);
+        ring.commit_row(r);
+      }
+    });
+  }
+
+  std::set<uint64_t> seen;
+  bool dup = false;
+  for (int i = 0; i < slots_to_consume; ++i) {
+    int slot = ring.wait_full_slot();
+    CHECK(slot >= 0);
+    for (int k = 0; k < rows_per_slot; ++k) {
+      uint64_t v = static_cast<uint64_t>(slots[slot][k]);
+      if (!seen.insert(v).second) dup = true;
+    }
+    ring.release_slot(slot);
+  }
+  ring.stop();
+  for (auto& p : producers) p.join();
+
+  CHECK(!dup);
+  CHECK(static_cast<int>(seen.size()) == slots_to_consume * rows_per_slot);
+  for (int v = 0; v < slots_to_consume * rows_per_slot; ++v) {
+    CHECK(seen.count(static_cast<uint64_t>(v)) == 1);
+  }
+  std::cout << "  StreamingRowBuffer concurrency OK (" << seen.size() << " rows, K=" << K << ")\n";
+}
+
+// StreamingRowBuffer shutdown: stop() must wake every blocked producer (and the
+// consumer) so nothing hangs, even with producers parked on backpressure.
+static void test_streaming_row_buffer_shutdown() {
+  using namespace scribblez::binlog;
+  const int n_slots = 2, rows_per_slot = 8, row_floats = 1;
+  std::vector<std::vector<float>> bufs(n_slots, std::vector<float>(rows_per_slot * row_floats));
+  std::vector<float*> slots;
+  for (auto& b : bufs) slots.push_back(b.data());
+  StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
+
+  std::atomic<int> exited{0};
+  const int K = 4;
+  std::vector<std::thread> producers;
+  for (int t = 0; t < K; ++t) {
+    producers.emplace_back([&] {
+      while (true) {
+        uint64_t r = ring.claim_row();
+        if (r == StreamingRowBuffer::kNoRow) break;
+        ring.row_dest(r)[0] = static_cast<float>(r);
+        ring.commit_row(r);
+      }
+      exited.fetch_add(1, std::memory_order_relaxed);
+    });
+  }
+
+  // No consumer: producers fill both slots, then park on backpressure. stop()
+  // must release them all.
+  ring.stop();
+  for (auto& p : producers) p.join();
+  CHECK(exited.load() == K);
+  CHECK(ring.wait_full_slot() == -1);
+  std::cout << "  StreamingRowBuffer shutdown OK\n";
+}
+
+// pick_sampled_turn only chooses turns with bag_size_before > 0, and returns -1
+// when none qualify.
+static void test_pick_sampled_turn_eligibility() {
+  using namespace scribblez;
+  using namespace scribblez::binlog;
+
+  GameLogStorage s;
+  s.turns.resize(3);  // value-initialized: bag_size_before == 0
+  s.turns[1].bag_size_before = 5;
+  std::mt19937_64 rng(123);
+  for (int i = 0; i < 20; ++i) CHECK(pick_sampled_turn(s.view(), rng) == 1);
+
+  GameLogStorage z;
+  z.turns.resize(2);  // all ineligible
+  CHECK(pick_sampled_turn(z.view(), rng) == -1);
+  std::cout << "  pick_sampled_turn eligibility OK\n";
+}
+
 int main() {
   test_dict_basic();
   test_movegen_opening();
@@ -2581,6 +2755,10 @@ int main() {
   test_leave_values_real_kwg_optional();
   test_hasty_equity_components();
   test_hasty_equity_exchange_blank_leave();
+  test_streaming_disk_encode_equivalence();
+  test_streaming_row_buffer_concurrency();
+  test_streaming_row_buffer_shutdown();
+  test_pick_sampled_turn_eligibility();
   std::cout << "All tests passed.\n";
   return 0;
 }

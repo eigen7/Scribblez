@@ -3,14 +3,21 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 #include "scribblez/data_loader.h"
+#include "scribblez/game_runner.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/player_factory.h"
+#include "scribblez/self_play_engine.h"
 #include "scribblez/slog_subset.h"
+#include "scribblez/streaming_game_producer.h"
+#include "scribblez/streaming_row_buffer.h"
 #include "scribblez/training_targets.h"
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -228,5 +235,83 @@ int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
   if (!h) return 0;
   return h->loader.resident_bytes();
 }
+
+// ---------------------------------------------------------------------------
+// Streaming self-play -> training pipeline
+// ---------------------------------------------------------------------------
+
+struct StreamHandle {
+  scribblez::binlog::StreamingRowBuffer ring;
+  scribblez::binlog::StreamingGameProducer producer;
+
+  StreamHandle(float* const* slots, int num_slots, int rows_per_slot, int row_floats,
+               const scribblez::SelfPlayEngine::Params& engine_params,
+               const scribblez::PlayerFactory::Params& player_params,
+               const scribblez::binlog::StreamingGameProducer::Params& stream_params)
+      : ring(slots, num_slots, rows_per_slot, row_floats),
+        producer(engine_params, player_params, stream_params, ring) {}
+};
+
+StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
+                                   int num_threads, int post_move, int apply_symmetry,
+                                   uint64_t seed, int handicap_max, const char* const* player_specs,
+                                   int num_specs) {
+  if (!slot_ptrs || num_slots < 1 || rows_per_slot < 1 || !player_specs || num_specs < 1) {
+    return nullptr;
+  }
+  scribblez::PlayerFactory::Params player_params;
+  for (int i = 0; i < num_specs; ++i) {
+    if (!player_specs[i]) return nullptr;
+    player_params.specs.emplace_back(player_specs[i]);
+  }
+  scribblez::SelfPlayEngine::Params engine_params;
+  engine_params.threads = num_threads;
+  engine_params.seed = seed;
+  engine_params.handicap_max = handicap_max;
+  scribblez::binlog::StreamingGameProducer::Params stream_params;
+  stream_params.post_move = post_move != 0;
+  stream_params.apply_symmetry = apply_symmetry != 0;
+  try {
+    // Surface a missing-lexicon error here (at construction) rather than mid-game.
+    scribblez::GameRunner::load_dictionary_or_throw();
+    return new StreamHandle(slot_ptrs, num_slots, rows_per_slot,
+                            scribblez::binlog::DataLoader::row_size_floats(), engine_params,
+                            player_params, stream_params);
+  } catch (const std::exception& e) {
+    std::cerr << "scribblez_stream_new: " << e.what() << "\n";
+    return nullptr;
+  }
+}
+
+void scribblez_stream_start(StreamHandle* h) {
+  if (h) h->producer.start();
+}
+
+int scribblez_stream_wait_full_slot(StreamHandle* h) {
+  if (!h) return -1;
+  return h->ring.wait_full_slot();
+}
+
+void scribblez_stream_release_slot(StreamHandle* h, int slot) {
+  if (h) h->ring.release_slot(slot);
+}
+
+void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out) {
+  if (!h || !out) return;
+  const scribblez::binlog::ProducerStats ps = h->producer.stats();
+  const scribblez::binlog::RingStats rs = h->ring.stats();
+  out->games_played = ps.games_played;
+  out->games_dropped = ps.games_dropped;
+  out->rows_committed = rs.rows_committed;
+  out->slots_published = rs.slots_published;
+  out->producer_blocked_ns = rs.producer_blocked_ns;
+  out->consumer_blocked_ns = rs.consumer_blocked_ns;
+}
+
+void scribblez_stream_stop(StreamHandle* h) {
+  if (h) h->producer.stop();
+}
+
+void scribblez_stream_delete(StreamHandle* h) { delete h; }
 
 }  // extern "C"

@@ -76,7 +76,7 @@ std::string rack_field(const GameLog& log, const GcgWriteOptions& options, size_
       options.rack_before_fields[turn_idx].has_value()) {
     return *options.rack_before_fields[turn_idx];
   }
-  return log.turns[turn_idx].rack_before.to_string();
+  return log.records[turn_idx].rack_before.to_string();
 }
 
 void maybe_emit_post_event_racks(std::ostringstream& o, const GcgWriteOptions& options,
@@ -116,8 +116,8 @@ std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) 
   // down, and track each player's last cumulative score for the end-game lines.
   Board board;
   std::array<int, 2> last_cumulative = {0, 0};
-  for (size_t turn_idx = 0; turn_idx < log.turns.size(); ++turn_idx) {
-    const TurnRecord& t = log.turns[turn_idx];
+  for (size_t turn_idx = 0; turn_idx < static_cast<size_t>(log.num_records); ++turn_idx) {
+    const TurnRecord& t = log.records[turn_idx];
     const Move& m = t.move;
     const int cumulative = t.cumulative_scores[t.player];
     last_cumulative[t.player] = cumulative;

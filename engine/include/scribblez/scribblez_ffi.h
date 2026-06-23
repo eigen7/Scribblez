@@ -122,6 +122,66 @@ int scribblez_dl_load_batch(DataLoaderHandle* h, float* output);
 // Query current resident memory in bytes (useful for testing eviction).
 int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h);
 
+// ===========================================================================
+// Streaming self-play -> training pipeline
+// ===========================================================================
+//
+// The Python trainer owns N row buffers ("slots"), each at least
+// rows_per_slot * scribblez_row_size_floats() floats, and passes their
+// addresses in. C++ producer threads play HastyBot self-play games and write
+// each game's sampled training row directly into the current slot. When a slot
+// fills, scribblez_stream_wait_full_slot returns its index; the trainer
+// consumes it (copying out / moving to GPU) and calls
+// scribblez_stream_release_slot to hand it back. With N=2 this double-buffers
+// CPU game generation against GPU training. No game data touches disk.
+
+// Throughput / backpressure snapshot. producer_blocked_ns growing means the
+// producers waited for a free slot (the consumer/GPU is the bottleneck);
+// consumer_blocked_ns growing means the consumer waited for a full slot (the
+// producers/CPU are the bottleneck).
+typedef struct ScribblezStreamStats {
+  int64_t games_played;     // games whose sampled row was committed
+  int64_t games_dropped;    // games with no eligible (bag-nonempty) turn
+  int64_t rows_committed;   // == positions produced
+  int64_t slots_published;  // full slots handed to the consumer
+  int64_t producer_blocked_ns;
+  int64_t consumer_blocked_ns;
+} ScribblezStreamStats;
+
+typedef struct StreamHandle StreamHandle;
+
+// Create the streamer over `num_slots` caller-owned float buffers (each at least
+// rows_per_slot * scribblez_row_size_floats() floats). `player_specs` is an
+// array of `num_specs` NUL-terminated `--player` spec strings (typically two
+// "--type=hastybot"). Does NOT start producing until scribblez_stream_start.
+// Returns NULL on bad config / lexicon load failure.
+StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
+                                   int num_threads, int post_move, int apply_symmetry,
+                                   uint64_t seed, int handicap_max, const char* const* player_specs,
+                                   int num_specs);
+
+// Spawn the producer threads. Idempotent.
+void scribblez_stream_start(StreamHandle* h);
+
+// Block until a full slot is ready; returns its index [0, num_slots), or -1 if
+// the stream has stopped and no more slots will come. Releases the Python GIL
+// (it is a plain C call invoked via ctypes), so the training thread runs while
+// producers fill slots.
+int scribblez_stream_wait_full_slot(StreamHandle* h);
+
+// Return a consumed slot to the producers.
+void scribblez_stream_release_slot(StreamHandle* h, int slot);
+
+// Snapshot the throughput / backpressure counters.
+void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out);
+
+// Signal shutdown: wakes the consumer and producers and joins the producer
+// threads. Idempotent.
+void scribblez_stream_stop(StreamHandle* h);
+
+// Destroy the streamer (stops + joins first if needed).
+void scribblez_stream_delete(StreamHandle* h);
+
 #ifdef __cplusplus
 }
 #endif

@@ -31,27 +31,23 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
-// Pick a turn index for `log` uniformly at random among turns whose
-// `bag_size_before > 0` (i.e., pre-endgame positions). Returns -1 iff no
-// eligible turn exists (degenerate game), in which case the game must be
-// excluded from the file.
-int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
-  std::vector<int> eligible;
-  eligible.reserve(log.turns.size());
-  for (size_t k = 0; k < log.turns.size(); ++k) {
-    if (log.turns[k].bag_size_before > 0) eligible.push_back(static_cast<int>(k));
-  }
-  if (eligible.empty()) return -1;
-  std::uniform_int_distribution<size_t> dist(0, eligible.size() - 1);
-  return eligible[dist(rng)];
-}
-
 std::mt19937_64& sampler_rng() {
   thread_local std::mt19937_64 rng(std::random_device{}());
   return rng;
 }
 
 }  // namespace
+
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
+  std::vector<int> eligible;
+  eligible.reserve(static_cast<size_t>(log.num_records));
+  for (int k = 0; k < log.num_records; ++k) {
+    if (log.records[k].bag_size_before > 0) eligible.push_back(k);
+  }
+  if (eligible.empty()) return -1;
+  std::uniform_int_distribution<size_t> dist(0, eligible.size() - 1);
+  return eligible[dist(rng)];
+}
 
 // ---------------------------------------------------------------------------
 // BinaryLogWriter
@@ -70,11 +66,11 @@ BinaryLogWriter::~BinaryLogWriter() {
   }
 }
 
-void BinaryLogWriter::append(const GameLog& log) {
-  std::vector<GameLog> batch;
+void BinaryLogWriter::append(GameLogStorage&& log) {
+  std::vector<GameLogStorage> batch;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    pending_.push_back(log);
+    pending_.push_back(std::move(log));
     if (static_cast<int>(pending_.size()) >= games_per_file_) {
       batch.swap(pending_);
     }
@@ -83,7 +79,7 @@ void BinaryLogWriter::append(const GameLog& log) {
 }
 
 void BinaryLogWriter::flush() {
-  std::vector<GameLog> batch;
+  std::vector<GameLogStorage> batch;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     batch.swap(pending_);
@@ -91,20 +87,21 @@ void BinaryLogWriter::flush() {
   if (!batch.empty()) write_batch(std::move(batch));
 }
 
-void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
+void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   // Pre-build per-game blobs so we can compute offsets up front. Games
   // with no eligible sampling turn (bag empty for every turn -- shouldn't
   // happen in practice but we guard anyway) are dropped here.
   std::vector<InitialRacks> per_game_initial;
   std::vector<std::vector<TurnBlob>> per_game_turns;
   std::vector<int> per_game_sampled_turn;
-  std::vector<const GameLog*> kept_games;
+  std::vector<GameLog> kept_games;  // non-owning views into `games`
   per_game_initial.reserve(games.size());
   per_game_turns.reserve(games.size());
   per_game_sampled_turn.reserve(games.size());
   kept_games.reserve(games.size());
   std::mt19937_64& rng = sampler_rng();
-  for (const GameLog& g : games) {
+  for (const GameLogStorage& gs : games) {
+    const GameLog g = gs.view();
     const int sampled = pick_sampled_turn(g, rng);
     if (sampled < 0) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
@@ -112,11 +109,11 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
     }
     per_game_initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
-    turns.reserve(g.turns.size());
-    for (const TurnRecord& t : g.turns) turns.push_back(to_blob(t));
+    turns.reserve(static_cast<size_t>(g.num_records));
+    for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
     per_game_turns.push_back(std::move(turns));
     per_game_sampled_turn.push_back(sampled);
-    kept_games.push_back(&g);
+    kept_games.push_back(g);
   }
   if (kept_games.empty()) return;
 
@@ -131,10 +128,10 @@ void BinaryLogWriter::write_batch(std::vector<GameLog>&& games) {
     gm.start_offset = cursor;
     gm.num_turns = static_cast<uint32_t>(per_game_turns[i].size());
     gm.sampled_turn = static_cast<uint32_t>(per_game_sampled_turn[i]);
-    gm.final_score_p0 = static_cast<int16_t>(kept_games[i]->final_scores[0]);
-    gm.final_score_p1 = static_cast<int16_t>(kept_games[i]->final_scores[1]);
-    gm.initial_score_p0 = static_cast<int16_t>(kept_games[i]->initial_scores[0]);
-    gm.initial_score_p1 = static_cast<int16_t>(kept_games[i]->initial_scores[1]);
+    gm.final_score_p0 = static_cast<int16_t>(kept_games[i].final_scores[0]);
+    gm.final_score_p1 = static_cast<int16_t>(kept_games[i].final_scores[1]);
+    gm.initial_score_p0 = static_cast<int16_t>(kept_games[i].initial_scores[0]);
+    gm.initial_score_p1 = static_cast<int16_t>(kept_games[i].initial_scores[1]);
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }

@@ -536,7 +536,7 @@ class ManualGame {
       std::filesystem::create_directories(p.parent_path(), ec);
     }
 
-    GameLog log;
+    GameLogStorage log;
     log.player_names = names_;
     log.final_scores = scores_;
     log.final_racks = {rack_known_tiles(0), rack_known_tiles(1)};
@@ -570,7 +570,7 @@ class ManualGame {
       status_ = "Failed to open export path: " + out_path;
       return false;
     }
-    write_game_log_gcg(log, out, opts);
+    write_game_log_gcg(log.view(), out, opts);
     status_ = "Exported " + out_path;
     return true;
   }

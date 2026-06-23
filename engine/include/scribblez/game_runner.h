@@ -1,12 +1,14 @@
 #pragma once
 
-#include "scribblez/agent.h"
+#include "scribblez/game.h"
+#include "scribblez/game_sink.h"
 #include "scribblez/player_factory.h"
+#include "scribblez/self_play_engine.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <vector>
 
 // Forward-declared so Params::add_options() can register options without
 // pulling boost::program_options into every consumer of this header.
@@ -22,13 +24,15 @@ class BinaryLogWriter;
 
 class Dictionary;
 
-// Owns the agents, the win/loss tally, and the game loop. Plays a series of
-// games on a fixed dictionary, alternating seats each game and honoring each
-// agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT) the series
-// past the requested `--games` count. Supports parallel execution via a
+// Drives a fixed series of self-play games to disk. Owns a SelfPlayEngine (the
+// agents + per-game primitive) and the win/loss tally, and is itself the
+// GameSink: each finished game is written as an optional .gcg, tallied, and
+// appended to the binary .slog writer. Alternates seats each game and honors
+// each agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT) the
+// series past the requested `--games` count. Supports parallel execution via a
 // thread pool (--threads / -t); human players disable parallelism because they
 // own an interactive browser session.
-class GameRunner {
+class GameRunner : public GameSink {
  public:
   struct Params {
     int games = 1;                // minimum number of games to play
@@ -64,20 +68,18 @@ class GameRunner {
   // setup hint and throwing Exception on failure.
   static const Dictionary& load_dictionary_or_throw();
 
+  // GameSink: write the finished game as an optional .gcg, tally it, and append
+  // it to the binary .slog writer. Called from every game thread; thread-safe.
+  void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) override;
+
  private:
   // Per-game-and-batch tally, indexed by *player identity* rather than seat
   // (seats alternate every game). Thread-safe via an internal mutex.
   class Results;
 
-  // Play one game using agents_[thread_idx]. Returns the EndGameActions from
-  // each seat's agent (only meaningful for the serial/single-thread path).
-  std::pair<EndGameAction, EndGameAction> play_one_game(int thread_idx,
-                                                        const std::array<int, 2>& seats,
-                                                        uint64_t game_idx);
-
   Params params_;
-  std::vector<PlayerFactory::Players> agents_;
   uint64_t seed_;
+  SelfPlayEngine engine_;
 
   std::unique_ptr<Results> results_;
   std::unique_ptr<binlog::BinaryLogWriter> binary_writer_;

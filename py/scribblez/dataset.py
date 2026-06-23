@@ -14,6 +14,47 @@ from .ffi import (
 )
 
 
+def row_layout() -> tuple[list, list[tuple[str, int, int, tuple[int, ...]]]]:
+    """Describe the contiguous training row.
+
+    Returns (input_shapes, targets): the list of input ShapeInfo (in row order)
+    and a list of (name, start, end, dims) slices for each target head, where
+    start/end are float offsets into the row. Single source of truth for how a
+    flat (B, row_floats) batch maps to named tensors, shared by the disk
+    DataLoader and the streaming source.
+    """
+    input_shapes = get_input_shapes()
+    target_shapes = get_target_shapes()
+    input_total = sum(_prod(s.dims) for s in input_shapes)
+    targets: list[tuple[str, int, int, tuple[int, ...]]] = []
+    offset = input_total
+    for ts in target_shapes:
+        size = _prod(ts.dims)
+        targets.append((ts.name, offset, offset + size, ts.dims))
+        offset += size
+    return input_shapes, targets
+
+
+def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, torch.Tensor]:
+    """Split a (B, row_floats) float array into named input/target tensors.
+
+    Each named region is reshaped to its (B, *dims) tensor; a copy is taken so
+    the result outlives the source buffer (important for the streaming source,
+    whose slot is overwritten once released).
+    """
+    result: dict[str, torch.Tensor] = {}
+    offset = 0
+    for s in input_shapes:
+        size = _prod(s.dims)
+        arr = batch_2d[:, offset : offset + size]
+        result[s.name] = torch.from_numpy(arr.reshape(-1, *s.dims).copy())
+        offset += size
+    for name, start, end, dims in targets:
+        arr = batch_2d[:, start:end]
+        result[name] = torch.from_numpy(arr.reshape(-1, *dims).copy())
+    return result
+
+
 class SlogDataset:
     """Streams training data from .slog files via the C++ epoch-based DataLoader.
 
@@ -49,22 +90,7 @@ class SlogDataset:
 
         self._total = total
         self._row_floats = row_size_floats()
-
-        # Compute tensor slicing offsets from the shape info.
-        input_shapes = get_input_shapes()
-        target_shapes = get_target_shapes()
-
-        # Input region: all floats before the first target.
-        input_total = sum(_prod(s.dims) for s in input_shapes)
-        self._input_end = input_total
-
-        # Target regions: consecutive after inputs.
-        self._targets: list[tuple[str, int, int, tuple[int, ...]]] = []
-        offset = input_total
-        for ts in target_shapes:
-            size = _prod(ts.dims)
-            self._targets.append((ts.name, offset, offset + size, ts.dims))
-            offset += size
+        self._input_layout, self._targets = row_layout()
 
     @property
     def num_samples(self) -> int:
@@ -97,18 +123,7 @@ class SlogDataset:
             yield self._slice_batch(batch_data)
 
     def _slice_batch(self, batch_data: np.ndarray) -> dict[str, torch.Tensor]:
-        result: dict[str, torch.Tensor] = {}
-        input_shapes = get_input_shapes()
-        offset = 0
-        for s in input_shapes:
-            size = _prod(s.dims)
-            arr = batch_data[:, offset : offset + size]
-            result[s.name] = torch.from_numpy(arr.reshape(-1, *s.dims).copy())
-            offset += size
-        for name, start, end, dims in self._targets:
-            arr = batch_data[:, start:end]
-            result[name] = torch.from_numpy(arr.reshape(-1, *dims).copy())
-        return result
+        return slice_row_batch(batch_data, self._input_layout, self._targets)
 
 
 def _prod(dims: tuple[int, ...]) -> int:
