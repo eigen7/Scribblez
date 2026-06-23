@@ -385,7 +385,7 @@ def main() -> int:
         print(f"  {test_ds.num_samples} val positions")
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root))
+        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag)
         if proc is not None:
             atexit.register(proc.terminate)
 

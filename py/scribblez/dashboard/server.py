@@ -30,13 +30,20 @@ def serve_command(port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount"
 
 
 def launch_dashboard(
-    port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount"
+    port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount", tag: str | None = None
 ) -> subprocess.Popen | None:
-    """Spawn the dashboard as a background process; None if it can't start."""
+    """Spawn the dashboard as a background process; None if it can't start.
+
+    When `tag` is given, the printed URL carries `?tag=<tag>` so the dashboard
+    opens with that tag's pane selected.
+    """
     try:
         proc = subprocess.Popen(serve_command(port, mount_root))
     except (FileNotFoundError, OSError) as e:  # bokeh missing / exec failure
         print(f"WARNING: could not launch dashboard ({e}); is bokeh installed?", file=sys.stderr)
         return None
-    print(f"Dashboard: http://localhost:{port}/app")
+    url = f"http://localhost:{port}/app"
+    if tag:
+        url += f"?tag={tag}"
+    print(f"Dashboard: {url}")
     return proc

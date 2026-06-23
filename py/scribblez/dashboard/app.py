@@ -24,7 +24,7 @@ from functools import partial
 
 from bokeh.io import curdoc
 from bokeh.layouts import column, row
-from bokeh.models import Button, Div, InlineStyleSheet, Select
+from bokeh.models import Button, CustomJS, Div, InlineStyleSheet, Select
 
 from scribblez.dashboard import db, plots
 from scribblez.paths import TagPaths
@@ -65,10 +65,28 @@ def _parse_mount_root() -> str:
     return args.mount_root
 
 
+def _tag_from_arguments(arguments) -> str | None:
+    """Pull `tag` from a Tornado-style query-arg dict ({"tag": [b"foo"]})."""
+    values = (arguments or {}).get("tag")
+    if not values:
+        return None
+    value = values[0]
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def _requested_tag() -> str | None:
+    """The `?tag=<tag>` URL query argument for this session, if any."""
+    try:
+        arguments = curdoc().session_context.request.arguments
+    except AttributeError:  # no session/request (e.g. standalone, tests)
+        return None
+    return _tag_from_arguments(arguments)
+
+
 class Dashboard:
     """Sidebar-navigated dashboard with live-following per-generation views."""
 
-    def __init__(self, mount_root: str):
+    def __init__(self, mount_root: str, initial_tag: str | None = None):
         self.mount_root = mount_root
         self.conn = None
         self.tag = None
@@ -80,9 +98,16 @@ class Dashboard:
         self.calib_view = None
 
         tags = db.list_tags(mount_root)
-        self.tag_select = Select(options=tags or ["(none)"], value=tags[0] if tags else "(none)",
-                                 width=120)
+        # Default the selector to ?tag=<tag> when it names a known tag.
+        default = initial_tag if initial_tag in tags else (tags[0] if tags else "(none)")
+        self.tag_select = Select(options=tags or ["(none)"], value=default, width=120)
         self.tag_select.on_change("value", lambda a, o, n: self.on_tag())
+        # Reflect the selected tag in the URL (?tag=<tag>) so it stays shareable.
+        self.tag_select.js_on_change("value", CustomJS(code="""
+            const url = new URL(window.location.href);
+            url.searchParams.set('tag', cb_obj.value);
+            window.history.replaceState({}, '', url);
+        """))
         self.nav = [Button(label=t, button_type="light", sizing_mode="stretch_width") for t in TABS]
         for i, b in enumerate(self.nav):
             b.on_click(partial(self.select_tab, i))
@@ -224,7 +249,7 @@ class Dashboard:
             self.rebuild_calibration()
 
 
-_dash = Dashboard(_parse_mount_root())
+_dash = Dashboard(_parse_mount_root(), _requested_tag())
 doc = curdoc()
 doc.title = "Scribblez training dashboard"
 doc.add_root(_dash.layout())

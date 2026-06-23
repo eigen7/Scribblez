@@ -96,6 +96,7 @@ def _throughput_figure(rows, title, series, y_label, scale=1.0):
         src = ColumnDataSource(dict(x=x, y=[r[key] * scale for r in rows]))
         color = palette[i % len(palette)]
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
+    fig.y_range.start = 0  # rates / cumulative waits are non-negative
     fig.legend.location = "top_left"
     fig.legend.label_text_font_size = "9pt"
     fig.legend.click_policy = "hide"
@@ -191,10 +192,6 @@ def _stacked_loss_figure(x, bands):
         fig.varea(x="x", y1="y1", y2="y2", source=src, fill_color=palette[i % len(palette)],
                   fill_alpha=0.85, legend_label=label)
         cum = hi
-    total = fig.line(xs, list(cum), color="#222", line_width=1.0, legend_label="total")
-    fig.add_tools(HoverTool(renderers=[total],
-                            tooltips=[("minibatch", "@x"), ("total loss", "@y{0.0000}")],
-                            mode="vline"))
     fig.y_range.start = 0
     fig.legend.location = "top_right"
     fig.legend.label_text_font_size = "8pt"
