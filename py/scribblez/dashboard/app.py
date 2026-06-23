@@ -9,6 +9,7 @@ the tag selector and the tab navigation; the main area shows one tab at a time:
   * Calibration   -- reliability diagrams for one gen, plus the WLD/calibration
                      learning curves
   * Training      -- learning-rate and epoch-time curves
+  * Streaming     -- live throughput + backpressure for the streaming pipeline
 
 Per-generation views preload every generation and scrub client-side. A "latest"
 checkbox on each locks to (and follows) the newest generation; a periodic callback
@@ -30,7 +31,7 @@ from scribblez.paths import TagPaths
 
 POLL_MS = 3000
 
-TABS = ["Loss", "Positions", "Calibration", "Training"]
+TABS = ["Loss", "Positions", "Calibration", "Training", "Streaming"]
 LOSS = [("Loss", ["loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement"])]
 TRAINING = [("Learning rate", ["lr"]), ("Epoch time (s)", ["elapsed_s"])]
 PROBE_CURVES = [
@@ -72,6 +73,7 @@ class Dashboard:
         self.conn = None
         self.tag = None
         self.last_max_epoch = -1
+        self.last_throughput_n = -1
         self.active = 0
         self.probes_view = None
         self.calib_view = None
@@ -91,11 +93,13 @@ class Dashboard:
         self.probes_curves = self._card()
         self.calib_card = self._card()
         self.calib_curves = self._card()
+        self.streaming_card = self._card()
         self.contents = [
             column(self.loss_card, sizing_mode="stretch_width"),
             column(self.probes_card, self.probes_curves, sizing_mode="stretch_width"),
             column(self.calib_card, self.calib_curves, sizing_mode="stretch_width"),
             column(self.training_card, sizing_mode="stretch_width"),
+            column(self.streaming_card, sizing_mode="stretch_width"),
         ]
         self.on_tag()
 
@@ -135,6 +139,14 @@ class Dashboard:
     def _epochs(self):
         return db.read_monotonicity_epochs(self.conn) if self.conn else []
 
+    def _throughput_count(self) -> int:
+        if not self.conn:
+            return 0
+        try:
+            return int(self.conn.execute("SELECT COUNT(*) AS c FROM throughput").fetchone()["c"])
+        except Exception:  # noqa: BLE001 -- table may not exist on an old DB
+            return 0
+
     def on_tag(self):
         tag = self.tag_select.value
         if tag == "(none)":
@@ -142,10 +154,12 @@ class Dashboard:
         self.tag = tag
         self.conn = db.connect(TagPaths(tag, self.mount_root).dashboard_db)
         self.refresh_curves()
+        self.refresh_streaming()
         self.rebuild_probes()
         self.rebuild_calibration()
         epochs = self._epochs()
         self.last_max_epoch = max(epochs) if epochs else -1
+        self.last_throughput_n = self._throughput_count()
         self.select_tab(self.active)
 
     def refresh_curves(self):
@@ -154,6 +168,10 @@ class Dashboard:
         self.training_card.children = [plots.series_grid(self.conn, TRAINING)]
         self.probes_curves.children = [plots.series_grid(self.conn, PROBE_CURVES)]
         self.calib_curves.children = [plots.series_grid(self.conn, CALIB_CURVES)]
+
+    def refresh_streaming(self):
+        """Rebuild the streaming throughput/backpressure card."""
+        self.streaming_card.children = [plots.throughput_grid(self.conn)]
 
     def rebuild_probes(self):
         """(Re)build the interactive probes view, following the latest generation."""
@@ -177,6 +195,11 @@ class Dashboard:
             self.tag_select.options = new_tags
         if not self.conn:
             return
+        # Throughput grows independently of (and faster than) checkpoints.
+        tn = self._throughput_count()
+        if tn != self.last_throughput_n:
+            self.last_throughput_n = tn
+            self.refresh_streaming()
         epochs = self._epochs()
         mx = max(epochs) if epochs else -1
         if mx == self.last_max_epoch:

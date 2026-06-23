@@ -95,6 +95,31 @@ def test_streaming_source_anchor_planes_populated():
         src.stop()
 
 
+def test_dashboard_throughput_grid(tmp_path):
+    """The Streaming dashboard panel builds a figure when data exists, else a notice."""
+    from scribblez.dashboard import db, plots
+
+    empty = db.connect(tmp_path / "empty.db")
+    assert type(plots.throughput_grid(empty)).__name__ == "Div"  # no-data notice
+
+    conn = db.connect(tmp_path / "dash.db")
+    for i in range(4):
+        db.write_throughput(
+            conn,
+            {
+                "t": float(i),
+                "positions": 1000 * (i + 1),
+                "games": 1010 * (i + 1),
+                "positions_per_s": 1100.0,
+                "games_per_s": 1110.0,
+                "producer_blocked_ns": 10**9 * i,
+                "consumer_blocked_ns": 2 * 10**9 * i,
+                "bottleneck": "cpu",
+            },
+        )
+    assert type(plots.throughput_grid(conn)).__name__ == "Column"  # rendered figures
+
+
 def test_db_throughput_roundtrip(tmp_path):
     """write_throughput then read_throughput returns the samples in order."""
     from scribblez.dashboard import db

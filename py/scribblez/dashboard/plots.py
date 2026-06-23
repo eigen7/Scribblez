@@ -79,6 +79,53 @@ def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
 
 
 # ---------------------------------------------------------------------------
+# Streaming throughput + backpressure (time series over positions trained)
+# ---------------------------------------------------------------------------
+
+
+def _throughput_figure(rows, title, series, y_label, scale=1.0):
+    """A line figure of the named throughput columns vs positions trained."""
+    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title,
+                 x_axis_label="positions trained", y_axis_label=y_label,
+                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0}")], mode="vline"))
+    palette = Category10[10]
+    x = [r["positions"] for r in rows]
+    for i, (key, label) in enumerate(series):
+        src = ColumnDataSource(dict(x=x, y=[r[key] * scale for r in rows]))
+        color = palette[i % len(palette)]
+        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
+    fig.legend.location = "top_left"
+    fig.legend.label_text_font_size = "9pt"
+    fig.legend.click_policy = "hide"
+    return fig
+
+
+def throughput_grid(conn):
+    """Throughput rate + cumulative backpressure figures for the streaming run.
+
+    The two backpressure curves are the C++/Python wait times: when the consumer
+    (training) curve climbs faster, game generation is the bottleneck (CPU-bound);
+    when the producer curve climbs faster, training is the bottleneck (GPU-bound).
+    """
+    rows = db.read_throughput(conn)
+    if not rows:
+        return Div(text="<i>No throughput data yet — start a streaming run.</i>")
+    rate = _throughput_figure(
+        rows, "Throughput",
+        [("positions_per_s", "positions/s"), ("games_per_s", "games/s")],
+        "rate (per second)",
+    )
+    backpressure = _throughput_figure(
+        rows, "Backpressure — cumulative wait (s)",
+        [("consumer_blocked_ns", "training waits (CPU-bound ↑)"),
+         ("producer_blocked_ns", "gen waits (GPU-bound ↑)")],
+        "blocked time (s)", scale=1e-9,
+    )
+    return column(row(rate, backpressure))
+
+
+# ---------------------------------------------------------------------------
 # Generation slider + "latest" follow checkbox
 # ---------------------------------------------------------------------------
 
