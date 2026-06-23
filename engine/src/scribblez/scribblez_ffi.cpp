@@ -216,13 +216,15 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h) {
 }
 
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
-                             uint64_t seed) {
+                             uint64_t seed, int turns_per_game, int epoch_index) {
   if (!h) return 0;
   DataLoader::EpochConfig cfg;
   cfg.batch_size = batch_size;
   cfg.post_move = post_move != 0;
   cfg.apply_symmetry = apply_symmetry != 0;
   cfg.seed = seed;
+  cfg.turns_per_game = turns_per_game;
+  cfg.epoch_index = epoch_index;
   return h->loader.epoch_start(cfg);
 }
 

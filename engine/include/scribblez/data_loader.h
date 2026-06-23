@@ -109,6 +109,18 @@ class DataLoader {
     bool post_move = true;
     bool apply_symmetry = true;
     uint64_t seed = 42;
+
+    // Per-game turn subsampling. 0 (the default) trains on every eligible turn
+    // of every game -- the full expanded epoch. k > 0 draws k turns per game per
+    // epoch (clamped to the game's eligible-turn count), yielding a smaller
+    // epoch of ~k rows per game; with k == 1 no two rows in the epoch share a
+    // game, so a batch is decorrelated. Each game has a fixed pseudo-random turn
+    // ordering (seeded by file path + game index, independent of `seed`);
+    // `epoch_index` selects the length-k window of that ordering, so successive
+    // epochs cover distinct turns until the ordering wraps. Over E epochs each
+    // game thus contributes min(E * k, eligible_turns) distinct positions.
+    int turns_per_game = 0;
+    int epoch_index = 0;
   };
 
   // Begin a new epoch. Returns the number of complete batches that will be
@@ -157,25 +169,28 @@ class DataLoader {
     const char* buffer() const;
 
     // Map a flat position index in [0, num_positions()) to the (game_idx,
-    // turn_idx) it expands to. `buf` must be this file's loaded buffer; the
-    // game->position index is built lazily from the metadata table on first
-    // use and cached. Thread-safe.
-    std::pair<uint32_t, uint32_t> sample_to_game_turn(const char* buf, int64_t sample_index) const;
+    // turn_idx) it expands to, using the per-game index read at construction.
+    std::pair<uint32_t, uint32_t> sample_to_game_turn(int64_t sample_index) const;
+
+    // Per-game index, read from the file header + metadata table at
+    // construction (no resident body required).
+    int64_t num_games() const { return num_games_; }
+    int eligible_turns(int64_t game) const {
+      return static_cast<int>(cum_eligible_[static_cast<size_t>(game) + 1] -
+                              cum_eligible_[static_cast<size_t>(game)]);
+    }
+    int64_t game_base(int64_t game) const { return cum_eligible_[static_cast<size_t>(game)]; }
 
    private:
-    // Build cum_eligible_ (the per-game prefix sums of eligible_turns) from the
-    // loaded buffer's metadata table. Idempotent via index_once_.
-    void build_index(const char* buf) const;
-
     std::string path_;
     int64_t num_positions_;
     int64_t file_size_;
     int64_t num_games_ = 0;
 
-    // Lazily-built per-game prefix sums of eligible_turns (size num_games_ + 1);
-    // cum_eligible_[g] is the first flat position index of game g.
-    mutable std::once_flag index_once_;
-    mutable std::vector<int64_t> cum_eligible_;
+    // Per-game prefix sums of eligible_turns (size num_games_ + 1), read from the
+    // file's metadata table at construction; cum_eligible_[g] is the first flat
+    // position index of game g and cum_eligible_.back() is num_positions_.
+    std::vector<int64_t> cum_eligible_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
@@ -346,6 +361,23 @@ class DataLoader {
       int file_idx;
       int64_t local_pos;
     };
+
+    // Build order_ for an all-turns epoch: every flat position of every file,
+    // shuffled within each file.
+    void build_full_order(const std::vector<DataFile*>& files, const EpochConfig& config);
+
+    // Build order_ for a subsampled epoch: config.turns_per_game turns drawn per
+    // game, shuffled within each file.
+    void build_sampled_order(const std::vector<DataFile*>& files, const EpochConfig& config);
+
+    // Append one game's sampled turns to order_. `n` is the game's eligible-turn
+    // count, `base` its first flat position; the turns are picked from a fixed
+    // per-game ordering seeded by `file_key` and `game`, windowed by epoch_index.
+    void append_game_turns(int file_idx, int64_t game, int n, int64_t base, uint64_t file_key,
+                           int turns_per_game, int epoch_index);
+
+    // Fill flips_ (size total_positions_) with per-row diagonal-flip bits.
+    void build_flips(const EpochConfig& config);
 
     std::vector<EpochPosition> order_;
     std::vector<uint8_t> flips_;

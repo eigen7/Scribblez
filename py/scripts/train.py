@@ -162,6 +162,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "train many model variants over one dataset without copying it.",
     )
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs.")
+    parser.add_argument(
+        "--turns-per-game", type=int, default=0,
+        help="Per-game turn subsampling per epoch. 0 = every eligible turn (the "
+             "full expanded epoch). 1 = one turn per game per epoch, so an epoch "
+             "is one decorrelated row per game (no two rows share a game) and is "
+             "~eligible_turns x smaller; K > 1 = K turns per game. A fresh turn "
+             "window is drawn each epoch, so over E epochs a game contributes "
+             "min(E*K, eligible_turns) distinct positions.",
+    )
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
@@ -278,8 +287,14 @@ def main() -> int:
         print(f"Already trained through epoch {args.epochs}; nothing to do.")
         return 0
 
-    # Batches per epoch, for the progress line / ETA (last batch may be partial).
-    num_batches_est = max(1, math.ceil(ds.num_samples / args.batch_size))
+    # Rows per epoch: the full expanded count, or (with --turns-per-game K) at
+    # most K rows per game, capped by the full count. Used to size the progress
+    # line / ETA (last batch may be partial).
+    if args.turns_per_game > 0:
+        epoch_samples = min(args.turns_per_game * ds.num_games, ds.num_samples)
+    else:
+        epoch_samples = ds.num_samples
+    num_batches_est = max(1, math.ceil(epoch_samples / args.batch_size))
 
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
@@ -290,9 +305,14 @@ def main() -> int:
         correct_wld = 0
         total_samples = 0
 
-        # Each epoch gets a unique deterministic seed.
+        # Each epoch gets a unique deterministic seed. epoch_index selects which
+        # per-game turns are drawn when --turns-per-game > 0, so successive epochs
+        # cover distinct turns.
         epoch_seed = epoch * 1000003
-        for batch in ds.iter_batches(args.batch_size, seed=epoch_seed):
+        for batch in ds.iter_batches(
+            args.batch_size, seed=epoch_seed,
+            turns_per_game=args.turns_per_game, epoch_index=epoch,
+        ):
             input_spatial = batch["input_spatial"].to(device)
             input_scalar = batch["input_scalar"].to(device)
             targets = {

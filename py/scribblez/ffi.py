@@ -146,6 +146,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_uint64,
+        ctypes.c_int,
+        ctypes.c_int,
     ]
 
     lib.scribblez_dl_load_batch.restype = ctypes.c_int
@@ -369,11 +371,19 @@ class NativeDataLoader:
         post_move: bool = True,
         apply_symmetry: bool = True,
         seed: int = 42,
+        turns_per_game: int = 0,
+        epoch_index: int = 0,
     ) -> int:
-        """Begin a new epoch. Returns number of complete batches."""
+        """Begin a new epoch. Returns number of complete batches.
+
+        turns_per_game: 0 = every eligible turn of every game; k > 0 = k turns
+        per game per epoch, with epoch_index selecting which turns so successive
+        epochs cover distinct turns.
+        """
         self._batch_size = batch_size
         return self._lib.scribblez_dl_epoch_start(
-            self._handle, batch_size, int(post_move), int(apply_symmetry), seed
+            self._handle, batch_size, int(post_move), int(apply_symmetry), seed,
+            turns_per_game, epoch_index,
         )
 
     def load_batch(self) -> np.ndarray | None:

@@ -91,9 +91,11 @@ class SlogDataset:
             raise FileNotFoundError(f"No .slog files in {dirs}")
 
         self._loader = NativeDataLoader(memory_budget, num_workers, num_prefetch)
+        self._num_games = 0
         for path in slog_files:
             num_games, file_size = read_file_header(path)
             self._loader.add_file(path, num_games, file_size)
+            self._num_games += num_games
 
         # num_samples is the loader's EXPANDED row count (one per eligible turn
         # across every game), not the game count -- read it back from the loader,
@@ -107,6 +109,12 @@ class SlogDataset:
         return self._total
 
     @property
+    def num_games(self) -> int:
+        """Total games across all files (the all-turns epoch expands each game
+        into eligible_turns rows; a turns_per_game=1 epoch is one row per game)."""
+        return self._num_games
+
+    @property
     def input_shapes(self) -> dict[str, tuple[int, ...]]:
         """Per-input tensor shapes (channel/feature dims), keyed by name."""
         return {s.name: s.dims for s in get_input_shapes()}
@@ -117,15 +125,22 @@ class SlogDataset:
         seed: int = 42,
         post_move: bool | None = None,
         apply_symmetry: bool | None = None,
+        turns_per_game: int = 0,
+        epoch_index: int = 0,
     ):
         """Yield batch dicts for one epoch, streaming from disk.
 
         All data is loaded on-demand with LRU eviction. Deterministic for
         a given seed.
+
+        turns_per_game: 0 (default) iterates every eligible turn of every game.
+        k > 0 draws k turns per game this epoch; pass a distinct epoch_index per
+        epoch so successive epochs cover distinct turns (k == 1 makes every row
+        in the epoch come from a different game).
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry
-        self._loader.epoch_start(batch_size, pm, sym, seed)
+        self._loader.epoch_start(batch_size, pm, sym, seed, turns_per_game, epoch_index)
         while True:
             batch_data = self._loader.load_batch()
             if batch_data is None:
