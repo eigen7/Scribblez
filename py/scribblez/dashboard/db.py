@@ -10,6 +10,8 @@ Tables:
   monotonicity    per-epoch win-rate curves: score_diffs, win_rate, per-curve scores
   score_belief    per-epoch score-diff percentile bands
   calibration     per-epoch reliability binning (WLD + score-diff)
+  throughput      streaming throughput/backpressure time series (one row per sample)
+  train_step      per-minibatch loss/accuracy time series (streaming pipeline)
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved). The
 frozen test-subset board images are NOT in the DB -- they are static PNGs
@@ -71,12 +73,17 @@ CREATE TABLE IF NOT EXISTS calibration (
 CREATE TABLE IF NOT EXISTS throughput (
   t REAL,                       -- wall-clock sample time (epoch seconds)
   positions INTEGER,            -- cumulative positions trained
-  games INTEGER,                -- cumulative games produced
-  positions_per_s REAL,         -- rate over the last interval
-  games_per_s REAL,
+  games INTEGER,                -- cumulative games produced (== positions; 1 sample/game)
+  positions_per_s REAL,         -- throughput over the last interval
   producer_blocked_ns INTEGER,  -- cumulative producer wait (GPU-bound when rising)
   consumer_blocked_ns INTEGER,  -- cumulative consumer wait (CPU-bound when rising)
   bottleneck TEXT               -- 'cpu' or 'gpu', from the interval's wait deltas
+);
+CREATE TABLE IF NOT EXISTS train_step (
+  step INTEGER,                 -- cumulative minibatch index (x-axis)
+  positions INTEGER,            -- cumulative positions trained
+  loss REAL, loss_wld REAL, loss_score_diff REAL, loss_opp_next_placement REAL,
+  wld_acc REAL                  -- this minibatch's WLD accuracy
 );
 """
 
@@ -175,7 +182,6 @@ _THROUGHPUT_COLS = (
     "positions",
     "games",
     "positions_per_s",
-    "games_per_s",
     "producer_blocked_ns",
     "consumer_blocked_ns",
     "bottleneck",
@@ -186,9 +192,33 @@ def write_throughput(conn: sqlite3.Connection, sample: dict):
     """Append one throughput/backpressure time-series sample."""
     conn.execute(
         "INSERT INTO throughput "
-        "(t, positions, games, positions_per_s, games_per_s, producer_blocked_ns, "
-        "consumer_blocked_ns, bottleneck) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(t, positions, games, positions_per_s, producer_blocked_ns, "
+        "consumer_blocked_ns, bottleneck) VALUES (?, ?, ?, ?, ?, ?, ?)",
         tuple(sample[c] for c in _THROUGHPUT_COLS),
+    )
+    conn.commit()
+
+
+_TRAIN_STEP_COLS = (
+    "step",
+    "positions",
+    "loss",
+    "loss_wld",
+    "loss_score_diff",
+    "loss_opp_next_placement",
+    "wld_acc",
+)
+
+
+def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
+    """Append per-minibatch training stats (batched insert; no-op if empty)."""
+    if not rows:
+        return
+    conn.executemany(
+        "INSERT INTO train_step "
+        "(step, positions, loss, loss_wld, loss_score_diff, loss_opp_next_placement, wld_acc) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [tuple(r[c] for c in _TRAIN_STEP_COLS) for r in rows],
     )
     conn.commit()
 
@@ -262,10 +292,19 @@ def read_all_score_belief(conn: sqlite3.Connection):
 def read_throughput(conn: sqlite3.Connection) -> list[dict]:
     """All throughput samples in insertion order, each as a column->value dict."""
     rows = conn.execute(
-        "SELECT t, positions, games, positions_per_s, games_per_s, producer_blocked_ns, "
+        "SELECT t, positions, games, positions_per_s, producer_blocked_ns, "
         "consumer_blocked_ns, bottleneck FROM throughput ORDER BY rowid"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def read_train_steps(conn: sqlite3.Connection) -> dict:
+    """All per-minibatch training stats as a dict of arrays (empty if none)."""
+    rows = conn.execute(
+        "SELECT step, positions, loss, loss_wld, loss_score_diff, loss_opp_next_placement, wld_acc "
+        "FROM train_step ORDER BY rowid"
+    ).fetchall()
+    return {c: np.array([r[c] for r in rows], dtype=np.float64) for c in _TRAIN_STEP_COLS}
 
 
 def read_all_calibration(conn: sqlite3.Connection):

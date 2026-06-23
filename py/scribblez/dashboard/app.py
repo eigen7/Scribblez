@@ -3,7 +3,7 @@
 Served via ``bokeh serve app.py --args --mount-root <dir>``. A left sidebar holds
 the tag selector and the tab navigation; the main area shows one tab at a time:
 
-  * Loss          -- loss learning curves
+  * Loss          -- per-minibatch loss/accuracy (streaming), else per-epoch curves
   * Positions     -- board + monotonicity + score-belief for one position/gen,
                      plus the structural-probe learning curves
   * Calibration   -- reliability diagrams for one gen, plus the WLD/calibration
@@ -74,6 +74,7 @@ class Dashboard:
         self.tag = None
         self.last_max_epoch = -1
         self.last_throughput_n = -1
+        self.last_train_step_n = -1
         self.active = 0
         self.probes_view = None
         self.calib_view = None
@@ -139,11 +140,11 @@ class Dashboard:
     def _epochs(self):
         return db.read_monotonicity_epochs(self.conn) if self.conn else []
 
-    def _throughput_count(self) -> int:
+    def _row_count(self, table: str) -> int:
         if not self.conn:
             return 0
         try:
-            return int(self.conn.execute("SELECT COUNT(*) AS c FROM throughput").fetchone()["c"])
+            return int(self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"])
         except Exception:  # noqa: BLE001 -- table may not exist on an old DB
             return 0
 
@@ -159,15 +160,21 @@ class Dashboard:
         self.rebuild_calibration()
         epochs = self._epochs()
         self.last_max_epoch = max(epochs) if epochs else -1
-        self.last_throughput_n = self._throughput_count()
+        self.last_throughput_n = self._row_count("throughput")
+        self.last_train_step_n = self._row_count("train_step")
         self.select_tab(self.active)
 
     def refresh_curves(self):
         """Rebuild the scalar learning-curve cards (cheap; grows each epoch)."""
-        self.loss_card.children = [plots.series_grid(self.conn, LOSS, ncols=1)]
+        self.refresh_loss()
         self.training_card.children = [plots.series_grid(self.conn, TRAINING)]
         self.probes_curves.children = [plots.series_grid(self.conn, PROBE_CURVES)]
         self.calib_curves.children = [plots.series_grid(self.conn, CALIB_CURVES)]
+
+    def refresh_loss(self):
+        """Per-minibatch loss/accuracy if the streaming pipeline recorded it; else per-epoch."""
+        grid = plots.train_step_grid(self.conn)
+        self.loss_card.children = [grid or plots.series_grid(self.conn, LOSS, ncols=1)]
 
     def refresh_streaming(self):
         """Rebuild the streaming throughput/backpressure card."""
@@ -195,11 +202,16 @@ class Dashboard:
             self.tag_select.options = new_tags
         if not self.conn:
             return
-        # Throughput grows independently of (and faster than) checkpoints.
-        tn = self._throughput_count()
+        # Throughput + per-minibatch loss grow independently of (and faster than)
+        # checkpoints, so refresh them whenever new rows land.
+        tn = self._row_count("throughput")
         if tn != self.last_throughput_n:
             self.last_throughput_n = tn
             self.refresh_streaming()
+        sn = self._row_count("train_step")
+        if sn != self.last_train_step_n:
+            self.last_train_step_n = sn
+            self.refresh_loss()
         epochs = self._epochs()
         mx = max(epochs) if epochs else -1
         if mx == self.last_max_epoch:

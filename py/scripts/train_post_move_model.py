@@ -133,12 +133,14 @@ def ensure_probe_subset(paths: TagPaths, num_positions: int) -> bool:
     return True
 
 
-def save_rolling_checkpoint(path: Path, model, optimizer, ckpt_idx: int, positions: int, args):
+def save_rolling_checkpoint(path: Path, model, optimizer, ckpt_idx: int, positions: int, step: int,
+                            args):
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "ckpt_idx": ckpt_idx,
             "positions": positions,
+            "step": step,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "args": vars(args),
@@ -147,17 +149,17 @@ def save_rolling_checkpoint(path: Path, model, optimizer, ckpt_idx: int, positio
     )
 
 
-def maybe_resume(paths: TagPaths, model, optimizer, device) -> tuple[int, int]:
-    """Load the rolling checkpoint if present; return (ckpt_idx, positions_seen)."""
+def maybe_resume(paths: TagPaths, model, optimizer, device) -> tuple[int, int, int]:
+    """Load the rolling checkpoint if present; return (ckpt_idx, positions, step)."""
     p = paths.rolling_checkpoint
     if not p.exists():
-        return 0, 0
+        return 0, 0, 0
     ckpt = torch.load(p, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    ci, pos = int(ckpt["ckpt_idx"]), int(ckpt["positions"])
+    ci, pos, step = int(ckpt["ckpt_idx"]), int(ckpt["positions"]), int(ckpt.get("step", 0))
     print(f"Resuming from {p.name}: checkpoint {ci}, {pos} positions trained")
-    return ci, pos
+    return ci, pos, step
 
 
 # ---------------------------------------------------------------------------
@@ -177,13 +179,12 @@ class _IntervalLoss:
         self.correct = 0
         self.samples = 0
 
-    def update(self, losses, outputs, targets):
+    def update(self, batch_losses: dict, batch_acc: float, n: int):
         for k in self.sums:
-            self.sums[k] += losses[k].item()
+            self.sums[k] += batch_losses[k]
         self.n_batches += 1
-        pred = outputs["wld"].argmax(dim=1)
-        self.correct += (pred == targets["wld"].argmax(dim=1)).sum().item()
-        self.samples += outputs["wld"].shape[0]
+        self.correct += batch_acc * n
+        self.samples += n
 
     def record(self) -> dict:
         nb = max(self.n_batches, 1)
@@ -197,8 +198,10 @@ class _IntervalLoss:
 
 
 def run_streaming_training(model, optimizer, source, conn, paths, device, args, *, probe_enabled,
-                           test_ds, start_ckpt, start_positions, spatial_planes, scalar_size) -> int:
-    """Consume streamed batches; checkpoint/eval and sample throughput on cadence.
+                           test_ds, start_ckpt, start_positions, start_step, spatial_planes,
+                           scalar_size) -> int:
+    """Consume streamed batches; record per-minibatch stats, checkpoint/eval, and
+    sample throughput on cadence.
 
     `source` is any object with start/next_slot/release/stats/stop (the real
     StreamingTrainSource, or a fake in tests). Returns the final positions count.
@@ -208,8 +211,10 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
 
     model.train()
     positions = start_positions
+    step = start_step
     ckpt_idx = start_ckpt
     interval = _IntervalLoss()
+    step_buffer: list[dict] = []  # per-minibatch rows, flushed in batches
 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every
@@ -243,8 +248,19 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             losses["total"].backward()
             optimizer.step()
 
-            positions += input_spatial.shape[0]
-            interval.update(losses, outputs, tgt)
+            n = input_spatial.shape[0]
+            positions += n
+            step += 1
+            batch_losses = {k: losses[k].item() for k in interval.sums}
+            batch_acc = (outputs["wld"].argmax(1) == tgt["wld"].argmax(1)).float().mean().item()
+            interval.update(batch_losses, batch_acc, n)
+            step_buffer.append({
+                "step": step, "positions": positions,
+                "loss": batch_losses["total"], "loss_wld": batch_losses["wld"],
+                "loss_score_diff": batch_losses["score_diff"],
+                "loss_opp_next_placement": batch_losses["opp_next_placement"],
+                "wld_acc": batch_acc,
+            })
 
             if positions >= next_log:
                 now = time.time()
@@ -253,22 +269,24 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
                 d_cons = st["consumer_blocked_ns"] - last_cons_ns
                 dt = max(now - last_t, 1e-9)
                 bottleneck = "cpu" if d_cons > d_prod else "gpu"
+                pos_per_s = (positions - last_positions) / dt
                 db.write_throughput(
                     conn,
                     {
                         "t": now,
                         "positions": positions,
                         "games": st["games_played"],
-                        "positions_per_s": (positions - last_positions) / dt,
-                        "games_per_s": st["games_played"] / max(now - t0, 1e-9),
+                        "positions_per_s": pos_per_s,
                         "producer_blocked_ns": st["producer_blocked_ns"],
                         "consumer_blocked_ns": st["consumer_blocked_ns"],
                         "bottleneck": bottleneck,
                     },
                 )
+                db.write_train_steps(conn, step_buffer)
+                step_buffer.clear()
                 print(
-                    f"pos={positions:>9} | {(positions - last_positions) / dt:8.0f} pos/s | "
-                    f"loss={losses['total'].item():.4f} | games={st['games_played']} "
+                    f"pos={positions:>9} | {pos_per_s:8.0f} pos/s | "
+                    f"loss={batch_losses['total']:.4f} | games={st['games_played']} "
                     f"dropped={st['games_dropped']} | bottleneck={bottleneck}"
                 )
                 last_t, last_positions = now, positions
@@ -277,8 +295,10 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
 
             if positions >= next_ckpt:
                 ckpt_idx += 1
+                db.write_train_steps(conn, step_buffer)
+                step_buffer.clear()
                 _checkpoint_and_eval(
-                    model, optimizer, conn, paths, device, args, ckpt_idx, positions, interval,
+                    model, optimizer, conn, paths, device, args, ckpt_idx, positions, step, interval,
                     probe_enabled=probe_enabled, test_ds=test_ds,
                     spatial_planes=spatial_planes, scalar_size=scalar_size,
                 )
@@ -288,14 +308,15 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
     finally:
+        db.write_train_steps(conn, step_buffer)
         source.stop()
 
     print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
     return positions
 
 
-def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, positions, interval,
-                         *, probe_enabled, test_ds, spatial_planes, scalar_size):
+def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, positions, step,
+                         interval, *, probe_enabled, test_ds, spatial_planes, scalar_size):
     """Run eval against the held-out val set, persist metrics, save .pt + .onnx.
 
     The dashboard DB is keyed on an integer `epoch`; here it is the monotonic
@@ -320,7 +341,8 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
         )
     db.write_metrics(conn, ckpt_idx, record)
 
-    save_rolling_checkpoint(paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, args)
+    save_rolling_checkpoint(paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step,
+                            args)
     onnx_path = paths.onnx_path(ckpt_idx)
     export_onnx(model, onnx_path, spatial_planes, scalar_size)
     print(f"  -> saved {paths.rolling_checkpoint.name} and {onnx_path.name}")
@@ -367,7 +389,7 @@ def main() -> int:
         if proc is not None:
             atexit.register(proc.terminate)
 
-    start_ckpt, start_positions = maybe_resume(paths, model, optimizer, device)
+    start_ckpt, start_positions, start_step = maybe_resume(paths, model, optimizer, device)
 
     source = StreamingTrainSource(
         batch_size=args.batch_size,
@@ -383,7 +405,7 @@ def main() -> int:
     run_streaming_training(
         model, optimizer, source, conn, paths, device, args,
         probe_enabled=probe_enabled, test_ds=test_ds,
-        start_ckpt=start_ckpt, start_positions=start_positions,
+        start_ckpt=start_ckpt, start_positions=start_positions, start_step=start_step,
         spatial_planes=spatial_planes, scalar_size=scalar_size,
     )
     return 0

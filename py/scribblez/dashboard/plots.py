@@ -111,10 +111,9 @@ def throughput_grid(conn):
     rows = db.read_throughput(conn)
     if not rows:
         return Div(text="<i>No throughput data yet — start a streaming run.</i>")
+    # positions/s == games/s (one position sampled per game), so a single curve.
     rate = _throughput_figure(
-        rows, "Throughput",
-        [("positions_per_s", "positions/s"), ("games_per_s", "games/s")],
-        "rate (per second)",
+        rows, "Throughput", [("positions_per_s", "positions/s")], "positions per second",
     )
     backpressure = _throughput_figure(
         rows, "Backpressure — cumulative wait (s)",
@@ -123,6 +122,56 @@ def throughput_grid(conn):
         "blocked time (s)", scale=1e-9,
     )
     return column(row(rate, backpressure))
+
+
+# ---------------------------------------------------------------------------
+# Per-minibatch loss / accuracy (streaming pipeline)
+# ---------------------------------------------------------------------------
+
+
+def _stride_idx(n: int, max_points: int):
+    """A slice/index that thins `n` points down to at most `max_points` (keeps plots light)."""
+    if n <= max_points:
+        return slice(None)
+    return np.arange(0, n, (n + max_points - 1) // max_points)
+
+
+def _step_figure(title: str, x, series, y_label: str):
+    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title, x_axis_label="minibatch",
+                 y_axis_label=y_label, tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig.add_tools(HoverTool(tooltips=[("minibatch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
+    palette = Category10[10]
+    xs = list(x)
+    for i, (y, label) in enumerate(series):
+        src = ColumnDataSource(dict(x=xs, y=list(y)))
+        fig.line("x", "y", source=src, color=palette[i % len(palette)], line_width=1.5,
+                 legend_label=label)
+    fig.legend.label_text_font_size = "8pt"
+    fig.legend.click_policy = "hide"
+    return fig
+
+
+def train_step_grid(conn):
+    """Per-minibatch loss + WLD-accuracy curves (x-axis = minibatch).
+
+    Returns None when no per-minibatch data exists, so the caller can fall back
+    to the per-checkpoint loss view (the disk pipeline records only the latter).
+    """
+    ts = db.read_train_steps(conn)
+    step = ts["step"]
+    if len(step) == 0:
+        return None
+    idx = _stride_idx(len(step), 4000)
+    x = step[idx]
+    loss = _step_figure(
+        "Loss (per minibatch)", x,
+        [(ts["loss"][idx], "loss"), (ts["loss_wld"][idx], "loss_wld"),
+         (ts["loss_score_diff"][idx], "loss_score_diff"),
+         (ts["loss_opp_next_placement"][idx], "loss_opp_next_placement")],
+        "loss",
+    )
+    acc = _step_figure("WLD accuracy (per minibatch)", x, [(ts["wld_acc"][idx], "wld_acc")], "accuracy")
+    return column(row(loss, acc))
 
 
 # ---------------------------------------------------------------------------

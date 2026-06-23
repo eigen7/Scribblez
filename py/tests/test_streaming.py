@@ -111,7 +111,6 @@ def test_dashboard_throughput_grid(tmp_path):
                 "positions": 1000 * (i + 1),
                 "games": 1010 * (i + 1),
                 "positions_per_s": 1100.0,
-                "games_per_s": 1110.0,
                 "producer_blocked_ns": 10**9 * i,
                 "consumer_blocked_ns": 2 * 10**9 * i,
                 "bottleneck": "cpu",
@@ -131,7 +130,6 @@ def test_db_throughput_roundtrip(tmp_path):
             "positions": 100 * (i + 1),
             "games": 110 * (i + 1),
             "positions_per_s": 1000.0 + i,
-            "games_per_s": 1100.0 + i,
             "producer_blocked_ns": 5 * i,
             "consumer_blocked_ns": 7 * i,
             "bottleneck": "cpu" if i % 2 else "gpu",
@@ -145,6 +143,34 @@ def test_db_throughput_roundtrip(tmp_path):
     assert [g["positions"] for g in got] == [100, 200, 300]
     assert [g["bottleneck"] for g in got] == ["gpu", "cpu", "gpu"]
     assert got[2]["consumer_blocked_ns"] == 14
+    assert "games_per_s" not in got[0]  # collapsed: positions/s == games/s
+
+
+def test_db_train_step_roundtrip(tmp_path):
+    """write_train_steps then read_train_steps returns per-minibatch arrays in order."""
+    from scribblez.dashboard import db, plots
+
+    conn = db.connect(tmp_path / "dash.db")
+    assert plots.train_step_grid(conn) is None  # no data -> caller falls back
+
+    rows = [
+        {
+            "step": i,
+            "positions": 8 * (i + 1),
+            "loss": 1.0 - 0.01 * i,
+            "loss_wld": 0.9,
+            "loss_score_diff": 0.5,
+            "loss_opp_next_placement": 0.3,
+            "wld_acc": 0.5 + 0.001 * i,
+        }
+        for i in range(10)
+    ]
+    db.write_train_steps(conn, rows)
+    db.write_train_steps(conn, [])  # empty flush is a no-op
+    ts = db.read_train_steps(conn)
+    assert list(ts["step"]) == list(range(10))
+    assert ts["loss"][0] == 1.0 and abs(ts["loss"][9] - 0.91) < 1e-9
+    assert type(plots.train_step_grid(conn)).__name__ == "Column"
 
 
 class _FakeSource:
@@ -213,7 +239,7 @@ def test_streaming_loop_one_step(tmp_path):
     source = _FakeSource(args.batch_size, row_size_floats())
     final = run_streaming_training(
         model, optimizer, source, conn, paths, device, args,
-        probe_enabled=False, test_ds=None, start_ckpt=0, start_positions=0,
+        probe_enabled=False, test_ds=None, start_ckpt=0, start_positions=0, start_step=0,
         spatial_planes=sp, scalar_size=sc,
     )
 
@@ -221,6 +247,9 @@ def test_streaming_loop_one_step(tmp_path):
     assert paths.rolling_checkpoint.exists()
     assert paths.onnx_path(1).exists()  # first checkpoint exported
     assert len(db.read_throughput(conn)) >= 1
-    # Resume state is recoverable.
+    # One train_step row per minibatch (16 positions / batch 8 == 2 steps).
+    ts = db.read_train_steps(conn)
+    assert list(ts["step"]) == [1, 2]
+    # Resume state is recoverable (including the minibatch step counter).
     ckpt = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
-    assert ckpt["positions"] == 16 and ckpt["ckpt_idx"] == 2
+    assert ckpt["positions"] == 16 and ckpt["ckpt_idx"] == 2 and ckpt["step"] == 2
