@@ -38,6 +38,7 @@ struct ManualTilePlacement {
   int row = -1;
   int col = -1;
   Tile tile = EMPTY_SQUARE;
+  char letter = '\0';
   bool is_blank = false;
   bool from_rack = false;
   int rack_slot = -1;
@@ -418,11 +419,13 @@ class ManualGame {
       p.row = int_field(o, "row");
       p.col = int_field(o, "col");
       p.is_blank = bool_field(o, "isBlank");
-      p.tile = tile_from_letter(str_field(o, "letter"), p.is_blank);
+      const std::string letter = str_field(o, "letter");
+      p.tile = tile_from_letter(letter, p.is_blank);
+      p.letter = letter.empty() ? '\0' : upper_ch(letter[0]);
       p.from_rack = str_field(o, "source") == "rack";
       p.rack_slot = int_field(o, "slot");
       if (p.row < 0 || p.col < 0 || p.row >= BOARD_SIZE || p.col >= BOARD_SIZE ||
-          p.tile.is_empty()) {
+          p.tile.is_empty() || p.letter < 'A' || p.letter > 'Z') {
         status_ = "Invalid tile placement";
         return;
       }
@@ -446,7 +449,7 @@ class ManualGame {
     Move chosen;
     bool found = false;
     for (const Move& m : legal) {
-      if (!matches_play(m, row, col, horizontal, word, spec)) continue;
+      if (!matches_play(m, spec)) continue;
       chosen = m;
       found = true;
       break;
@@ -600,46 +603,32 @@ class ManualGame {
     return true;
   }
 
-  bool matches_play(const Move& m, int row, int col, bool horizontal, const std::string& word,
-                    const std::vector<ManualTilePlacement>& spec) const {
-    if (m.type() != MoveType::PLAY || m.horizontal() != horizontal) return false;
-    const auto [wr, wc] = m.word_origin(board_);
-    if (wr != row || wc != col) return false;
+  bool matches_play(const Move& m, const std::vector<ManualTilePlacement>& spec) const {
+    if (m.type() != MoveType::PLAY) return false;
+    if (m.num_glyphs() != static_cast<int>(spec.size())) return false;
 
     std::map<std::pair<int, int>, const ManualTilePlacement*> placed;
-    for (const ManualTilePlacement& p : spec) placed[{p.row, p.col}] = &p;
+    for (const ManualTilePlacement& p : spec) {
+      const auto key = std::make_pair(p.row, p.col);
+      if (placed.count(key) > 0) return false;
+      placed[key] = &p;
+    }
 
-    const int dr = horizontal ? 0 : 1;
-    const int dc = horizontal ? 1 : 0;
-    int r = row;
-    int c = col;
     int gi = 0;
 
-    for (char ch_raw : word) {
-      if (!board_.in_bounds(r, c)) return false;
-      const char ch = upper_ch(ch_raw);
-      Glyph existing = board_.at(r, c);
-      if (!existing.is_empty()) {
-        if (existing.letter().to_char() != ch) return false;
-      } else {
-        auto it = placed.find({r, c});
-        if (it == placed.end()) return false;
-        const ManualTilePlacement* p = it->second;
-        if (p->tile.is_blank() != p->is_blank) return false;
-        if (p->tile.is_blank()) {
-          if (upper_ch(p->tile.to_char()) == '?') {
-            if (ch < 'A' || ch > 'Z') return false;
-          }
-        } else if (p->tile.to_char() != ch) {
-          return false;
-        }
-        if (gi >= m.num_glyphs()) return false;
-        Glyph g = m.glyph(gi++);
-        if (g.letter().to_char() != ch) return false;
-        if (g.is_blank() != p->is_blank) return false;
-      }
-      r += dr;
-      c += dc;
+    const uint16_t mask = m.square_mask();
+    for (int lane = 0; lane < BOARD_SIZE; ++lane) {
+      if ((mask & (static_cast<uint16_t>(1) << lane)) == 0) continue;
+      const int r = m.horizontal() ? m.start() : lane;
+      const int c = m.horizontal() ? lane : m.start();
+      auto it = placed.find({r, c});
+      if (it == placed.end()) return false;
+      if (gi >= m.num_glyphs()) return false;
+
+      const ManualTilePlacement* p = it->second;
+      Glyph g = m.glyph(gi++);
+      if (g.is_blank() != p->is_blank) return false;
+      if (g.letter().to_char() != p->letter) return false;
     }
 
     return gi == m.num_glyphs();
