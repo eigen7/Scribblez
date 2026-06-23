@@ -66,10 +66,17 @@ bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>&
                      src.data() + gm.start_offset + bsize);
   }
 
+  // The subset's training-row count is the sum of the picked games' eligible
+  // turns (eligible_turns is carried over per game above), so the DataLoader
+  // sizes an epoch over the subset correctly.
+  uint32_t num_sample_positions = 0;
+  for (const GameMetadata& gm : out_meta) num_sample_positions += gm.eligible_turns;
+
   FileHeader hdr{};
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = n;
+  hdr.num_sample_positions = num_sample_positions;
 
   std::ofstream out(dst_path, std::ios::binary | std::ios::trunc);
   if (!out) return false;

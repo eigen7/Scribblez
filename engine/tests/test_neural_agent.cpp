@@ -177,7 +177,7 @@ static void test_topk_selection_uses_objective() {
   StubEvalService* sp = stub.get();
   NeuralAgent agent(/*thread_id=*/0, "stub", std::move(stub), /*top_k=*/2,
                     NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game({0, 0});
+  agent.begin_game();
 
   // Value head prefers the LOW-equity play -> the agent overrides HastyBot.
   sp->scripted = {eval_with(/*sd=*/1.0f, /*wp=*/0.0f), eval_with(/*sd=*/9.0f, /*wp=*/0.0f)};
@@ -194,7 +194,7 @@ static void test_topk_selection_uses_objective() {
   StubEvalService* sp2 = stub2.get();
   NeuralAgent agent_wp(/*thread_id=*/0, "stub-wp", std::move(stub2), /*top_k=*/2,
                        NeuralAgent::Objective::kWinProb);
-  agent_wp.begin_game({0, 0});
+  agent_wp.begin_game();
   sp2->scripted = {eval_with(/*sd=*/9.0f, /*wp=*/0.1f), eval_with(/*sd=*/1.0f, /*wp=*/0.9f)};
   got = agent_wp.make_move(req);
   CHECK(got.start() == low_start);
@@ -221,7 +221,7 @@ static void test_topk_excludes_low_equity_play() {
   sp->scripted = {sd(1.0f), sd(5.0f)};
   NeuralAgent agent(/*thread_id=*/0, "topk", std::move(stub), /*top_k=*/2,
                     NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game({0, 0});
+  agent.begin_game();
 
   Move got = agent.make_move(req);
   CHECK(got.start() == 6);     // play1 (a survivor), not the excluded play2
@@ -248,7 +248,7 @@ static void test_all_moves_evaluated() {
   sp->scripted = {sd(1.0f), sd(2.0f), sd(9.0f)};  // play2 best
   NeuralAgent agent(/*thread_id=*/0, "full", std::move(stub), /*top_k=*/0,
                     NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game({0, 0});
+  agent.begin_game();
 
   Move got = agent.make_move(req);
   CHECK(got.start() == 5);     // played the model's pick, not HastyBot's
@@ -277,7 +277,7 @@ static void test_chunked_evaluation() {
   NeuralAgent agent(/*thread_id=*/0, "chunk", std::move(stub), /*top_k=*/0,
                     NeuralAgent::Objective::kScoreDiff, /*temperature=*/0.0, /*seed=*/0,
                     /*max_batch=*/2);
-  agent.begin_game({0, 0});
+  agent.begin_game();
 
   Move got = agent.make_move(req);
   CHECK(got.start() == 6);     // play3, the globally best-rated candidate
@@ -311,11 +311,11 @@ static void test_encode_candidate_matches_replay() {
   // encode_candidate uses only the tracked encoder, so no model/service is run.
   NeuralAgent agent(/*thread_id=*/0, "stub", std::make_unique<StubEvalService>(), /*top_k=*/4,
                     NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game({0, 0});
+  agent.begin_game();
   agent.observe_move(move_a);
   agent.observe_move(move_b);
 
-  GameStateEncoder ref({0, 0});
+  GameStateEncoder ref;
   ref.apply_move(move_a);
   ref.apply_move(move_b);
   const int my_seat = ref.active_player();
@@ -415,7 +415,7 @@ static void test_encode_candidate_matches_training_decoder() {
   // at the sampled turn from the rack it holds there (CATERST -> ... -> DONERST).
   NeuralAgent agent(/*thread_id=*/0, "stub", std::make_unique<StubEvalService>(), /*top_k=*/4,
                     NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game({0, 0});
+  agent.begin_game();
   agent.observe_move(move0);
   agent.observe_move(move1);
 
@@ -449,7 +449,7 @@ static void test_temperature_sampling_spreads() {
   StubEvalService* gp = greedy_stub.get();
   NeuralAgent greedy(/*thread_id=*/0, "greedy", std::move(greedy_stub), /*top_k=*/2,
                      NeuralAgent::Objective::kScoreDiff, /*temperature=*/0.0);
-  greedy.begin_game({0, 0});
+  greedy.begin_game();
   gp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
   for (int i = 0; i < 50; ++i) CHECK(greedy.make_move(req).start() == high_start);
 
@@ -459,7 +459,7 @@ static void test_temperature_sampling_spreads() {
   StubEvalService* sp = sampler_stub.get();
   NeuralAgent sampler(/*thread_id=*/0, "sampler", std::move(sampler_stub), /*top_k=*/2,
                       NeuralAgent::Objective::kScoreDiff, /*temperature=*/5.0, /*seed=*/12345);
-  sampler.begin_game({0, 0});
+  sampler.begin_game();
   sp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
   int high = 0, low = 0;
   for (int i = 0; i < 400; ++i) {

@@ -25,10 +25,16 @@ HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
     : HastyBotAgent(thread_id, name, /*top_k=*/1, /*temperature=*/0.0, /*seed=*/0) {}
 
 HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name, int top_k, double temperature,
-                             uint64_t seed)
-    : Agent(thread_id, name), top_k_(top_k), temperature_(temperature), rng_(seed) {
+                             uint64_t seed, int temperature_min_bag)
+    : Agent(thread_id, name),
+      top_k_(top_k),
+      temperature_(temperature),
+      temperature_min_bag_(temperature_min_bag),
+      rng_(seed) {
   if (top_k_ < 1) throw std::runtime_error("hastybot: --top-k must be >= 1");
   if (temperature_ < 0.0) throw std::runtime_error("hastybot: --temperature must be >= 0");
+  if (temperature_min_bag_ < 0)
+    throw std::runtime_error("hastybot: --temperature-min-bag must be >= 0");
 }
 
 namespace {
@@ -347,6 +353,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
 // it against scratch defaults to document the same flags, so the parsed options
 // and the documented options share one source of truth.
 boost::program_options::options_description hastybot_options(int& top_k, double& temperature,
+                                                             int& temperature_min_bag,
                                                              uint64_t& seed) {
   namespace po = boost::program_options;
   po::options_description desc("hastybot options");
@@ -355,6 +362,9 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
      "candidate moves to sample among when temperature > 0")                      //
     ("temperature", po::value<double>(&temperature)->default_value(temperature),  //
      "softmax sampling temperature over equity (0 = greedy argmax)")              //
+    ("temperature-min-bag",
+     po::value<int>(&temperature_min_bag)->default_value(temperature_min_bag),
+     "sample only while bag >= this many tiles (0 = sample all game)")  //
     ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)");
   return desc;
 }
@@ -362,12 +372,17 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 }  // namespace
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
-  // Greedy (temperature 0): the fast pruned shadow-play search.
-  if (temperature_ <= 0.0) return hasty_best_move_gaddag(req);
+  // Greedy: the fast pruned shadow-play search. Used when sampling is disabled
+  // (temperature 0) or confined to the opening and the bag has dropped below
+  // temperature_min_bag_ (so the rest of the game keeps HastyBot's exact
+  // strength).
+  if (temperature_ <= 0.0 || req.bag_size < temperature_min_bag_) {
+    return hasty_best_move_gaddag(req);
+  }
 
-  // Exploratory (temperature > 0): generate every legal play, rank by equity,
-  // keep the top-K, and softmax-sample among them to inject exploration into
-  // self-play data generation that pure argmax play lacks.
+  // Exploratory: generate every legal play, rank by equity, keep the top-K, and
+  // softmax-sample among them to inject exploration into self-play data
+  // generation that pure argmax play lacks.
   const std::vector<Move> plays = generate_legal_plays(req);
   const int n = static_cast<int>(plays.size());
   if (n == 0) return Move::pass();
@@ -400,10 +415,12 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
   // optional softmax-over-equity sampler used for exploratory self-play.
   int top_k = 10;
   double temperature = 0.0;
+  int temperature_min_bag = 0;
   uint64_t seed = 0;
   bool have_seed = false;
 
-  po::options_description desc = hastybot_options(top_k, temperature, seed);
+  po::options_description desc =
+    hastybot_options(top_k, temperature, temperature_min_bag, seed);
 
   try {
     po::variables_map vm;
@@ -416,17 +433,19 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
-  return std::make_unique<HastyBotAgent>(thread_id, name, top_k, temperature, resolved_seed);
+  return std::make_unique<HastyBotAgent>(thread_id, name, top_k, temperature, resolved_seed,
+                                         temperature_min_bag);
 }
 
 std::string HastyBotAgent::options_help() {
   int top_k = 10;
   double temperature = 0.0;
+  int temperature_min_bag = 0;
   uint64_t seed = 0;  // scratch binding targets; never read here
   return agent_options_help(
     "  In-process HastyBot: enumerates all legal plays and ranks them by\n"
     "  static equity (score + leave value + adjustments).\n",
-    hastybot_options(top_k, temperature, seed));
+    hastybot_options(top_k, temperature, temperature_min_bag, seed));
 }
 
 }  // namespace scribblez

@@ -65,12 +65,11 @@ class Agent {
 
   virtual Move make_move(const MoveRequest& req) = 0;
 
-  // Called once at the start of each game, before any make_move() on it, with
-  // the per-seat head-start handicap (both zero when there is none, indexed by
-  // seat). Lets a stateful agent reset to a clean starting position. The same
-  // Agent instance is reused across a series of games (seats alternate), so
-  // this is the reset point. Default: no-op.
-  virtual void begin_game(std::array<int, 2> initial_scores) {}
+  // Called once at the start of each game, before any make_move() on it. Lets a
+  // stateful agent reset to a clean starting position. The same Agent instance
+  // is reused across a series of games (seats alternate), so this is the reset
+  // point. Default: no-op.
+  virtual void begin_game() {}
 
   // Called after every applied move in the game -- the agent's own moves and
   // the opponent's -- in turn order. Lets a stateful agent mirror the full game

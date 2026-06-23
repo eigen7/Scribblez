@@ -31,6 +31,22 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
+// Count the training-eligible turns of `log`. When `include_endgame` is false,
+// only pre-endgame turns (bag had tiles when the turn began) are eligible; when
+// true, every turn is. Because the bag is non-increasing across turns, the
+// eligible turns form a leading prefix [0, count), so a single count fully
+// describes the eligible set (recorded as GameMetadata::eligible_turns and
+// expanded into one training row per eligible turn at load time).
+int eligible_turn_count(const GameLog& log, bool include_endgame) {
+  if (include_endgame) return log.num_records;
+  int count = 0;
+  for (int k = 0; k < log.num_records; ++k) {
+    if (log.records[k].bag_size_before <= 0) break;  // prefix ends at the first endgame turn
+    ++count;
+  }
+  return count;
+}
+
 std::mt19937_64& sampler_rng() {
   thread_local std::mt19937_64 rng(std::random_device{}());
   return rng;
@@ -95,34 +111,40 @@ namespace {
 struct PreparedBatch {
   std::vector<InitialRacks> initial;
   std::vector<std::vector<TurnBlob>> turns;
-  std::vector<int> sampled_turn;
+  std::vector<int> sampled_turn;  // eval-only representative position per game
+  std::vector<int> eligible;      // training-eligible turn count per game (prefix)
   std::vector<GameLog> games;
 };
 
-// Pre-build per-game blobs. `include_endgame` is forwarded to pick_sampled_turn
-// to control whether post-bag-empty positions are eligible. Games with no
-// eligible sampling turn (bag empty for every turn with endgame sampling off --
-// shouldn't happen in practice but we guard anyway) are dropped.
+// Pre-build per-game blobs. `include_endgame` controls whether post-bag-empty
+// positions are eligible. Each kept game records its eligible-turn count (the
+// prefix [0, eligible) training expands over) and one eval-only sampled turn
+// drawn uniformly from that prefix. Games with no eligible turn (bag empty for
+// every turn with endgame sampling off -- shouldn't happen in practice but we
+// guard anyway) are dropped.
 PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games, bool include_endgame) {
   PreparedBatch p;
   p.initial.reserve(games.size());
   p.turns.reserve(games.size());
   p.sampled_turn.reserve(games.size());
+  p.eligible.reserve(games.size());
   p.games.reserve(games.size());
   std::mt19937_64& rng = sampler_rng();
   for (const GameLogStorage& gs : games) {
     const GameLog g = gs.view();
-    const int sampled = pick_sampled_turn(g, rng, include_endgame);
-    if (sampled < 0) {
+    const int eligible = eligible_turn_count(g, include_endgame);
+    if (eligible <= 0) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
       continue;
     }
+    const int sampled = pick_sampled_turn(g, rng, include_endgame);
     p.initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
     turns.reserve(static_cast<size_t>(g.num_records));
     for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
     p.turns.push_back(std::move(turns));
     p.sampled_turn.push_back(sampled);
+    p.eligible.push_back(eligible);
     p.games.push_back(g);
   }
   return p;
@@ -141,8 +163,7 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
     gm.sampled_turn = static_cast<uint32_t>(p.sampled_turn[i]);
     gm.final_score_p0 = static_cast<int16_t>(p.games[i].final_scores[0]);
     gm.final_score_p1 = static_cast<int16_t>(p.games[i].final_scores[1]);
-    gm.initial_score_p0 = static_cast<int16_t>(p.games[i].initial_scores[0]);
-    gm.initial_score_p1 = static_cast<int16_t>(p.games[i].initial_scores[1]);
+    gm.eligible_turns = static_cast<uint16_t>(p.eligible[i]);
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }
@@ -163,7 +184,9 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
   hdr.version = kVersion;
   hdr.reserved = 0;
   hdr.num_games = static_cast<uint32_t>(p.games.size());
-  hdr.reserved2 = 0;
+  uint32_t num_sample_positions = 0;
+  for (int e : p.eligible) num_sample_positions += static_cast<uint32_t>(e);
+  hdr.num_sample_positions = num_sample_positions;
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),
           static_cast<std::streamsize>(meta.size() * sizeof(GameMetadata)));

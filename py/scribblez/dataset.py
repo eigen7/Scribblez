@@ -1,5 +1,6 @@
 """Training dataset backed by .slog files via the native C++ DataLoader."""
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -65,30 +66,39 @@ class SlogDataset:
 
     def __init__(
         self,
-        data_dir: str | Path,
+        data_dir: str | Path | Iterable[str | Path],
         post_move: bool = True,
         apply_symmetry: bool = True,
         memory_budget: int = 512 * 1024 * 1024,
         num_workers: int = 4,
         num_prefetch: int = 2,
     ):
-        self.data_dir = Path(data_dir)
+        # Accept a single directory or several; a multi-directory dataset is the
+        # union of every directory's .slog files (e.g. data accumulated across
+        # separate generation runs). A lone str/Path is one directory, not an
+        # iterable of characters.
+        if isinstance(data_dir, (str, Path)):
+            self.data_dirs = [Path(data_dir)]
+        else:
+            self.data_dirs = [Path(d) for d in data_dir]
         self.post_move = post_move
         self.apply_symmetry = apply_symmetry
 
-        # Discover and register .slog files.
-        slog_files = sorted(self.data_dir.glob("*.slog"))
+        # Discover and register .slog files across every directory.
+        slog_files = sorted(f for d in self.data_dirs for f in d.glob("*.slog"))
         if not slog_files:
-            raise FileNotFoundError(f"No .slog files in {self.data_dir}")
+            dirs = ", ".join(str(d) for d in self.data_dirs)
+            raise FileNotFoundError(f"No .slog files in {dirs}")
 
         self._loader = NativeDataLoader(memory_budget, num_workers, num_prefetch)
-        total = 0
         for path in slog_files:
-            num_pos, file_size = read_file_header(path)
-            self._loader.add_file(path, num_pos, file_size)
-            total += num_pos
+            num_games, file_size = read_file_header(path)
+            self._loader.add_file(path, num_games, file_size)
 
-        self._total = total
+        # num_samples is the loader's EXPANDED row count (one per eligible turn
+        # across every game), not the game count -- read it back from the loader,
+        # which derives it from each file's header.
+        self._total = self._loader.num_positions
         self._row_floats = row_size_floats()
         self._input_layout, self._targets = row_layout()
 

@@ -14,6 +14,7 @@ dashboard server is launched alongside unless disabled.
 
 import argparse
 import atexit
+import math
 import shutil
 import sys
 import time
@@ -30,20 +31,52 @@ from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 
 
-def ensure_test_subset(paths: TagPaths, num_positions: int) -> bool:
-    """Build the frozen evaluation subset + board images if missing. Returns availability."""
+def _fmt_dur(secs: float) -> str:
+    """Compact duration: "1h05m", "5m12s", or "42s"."""
+    s = int(secs + 0.5)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def print_epoch_progress(epoch, total_epochs, done_batches, total_batches, samples, t0, final=False):
+    """Render an in-place per-epoch progress line: batches done out of the epoch
+    total, throughput, and a within-epoch ETA. `final` ends the line with a
+    newline so the epoch summary that follows prints cleanly."""
+    elapsed = time.time() - t0
+    rate = samples / elapsed if elapsed > 0 else 0.0
+    pct = 100.0 * done_batches / total_batches if total_batches else 0.0
+    remaining = max(total_batches - done_batches, 0)
+    eta = elapsed * remaining / done_batches if done_batches else 0.0
+    sys.stdout.write(
+        f"\rEpoch {epoch:3d}/{total_epochs} | batch {done_batches}/{total_batches} "
+        f"({pct:5.1f}%) | {rate / 1000:.1f}k samples/s | ETA {_fmt_dur(eta)}    "
+    )
+    sys.stdout.write("\n" if final else "")
+    sys.stdout.flush()
+
+
+def ensure_test_subset(paths: TagPaths, source_test_dir: Path, num_positions: int) -> bool:
+    """Build the frozen evaluation subset + board images if missing. The subset is
+    sampled from `source_test_dir` (which may belong to a different tag when data
+    is decoupled from the output tag) and written under the output tag's `paths`.
+    Returns availability."""
     if paths.test_subset_slog.exists():
         print(f"Using evaluation subset {paths.test_subset_slog}")
-    elif not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
+    elif not source_test_dir.exists() or not any(source_test_dir.glob("*.slog")):
         print(
-            f"WARNING: no test split at {paths.test_dir}; skipping structural probes. "
+            f"WARNING: no test split at {source_test_dir}; skipping structural probes. "
             "Regenerate data with a non-zero --test-ratio to enable them.",
             file=sys.stderr,
         )
         return False
     else:
-        print(f"Sampling {num_positions} positions from {paths.test_dir} ...")
-        n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=num_positions)
+        print(f"Sampling {num_positions} positions from {source_test_dir} ...")
+        n = build_test_subset(source_test_dir, paths.test_subset_slog, num_positions=num_positions)
         print(f"  Wrote {n} positions to {paths.test_subset_slog}")
     # Board images are static; render once (when the first one is missing).
     if not paths.position_dump_path(0).with_suffix(".png").exists():
@@ -119,7 +152,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Train Scribblez value model.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
+    parser.add_argument("-t", "--tag", required=True,
+                        help="Output tag: checkpoints, .onnx, and the dashboard DB go here.")
+    parser.add_argument(
+        "--data-tag", action="append", default=None, metavar="TAG",
+        help="Tag whose data/{train,test} splits supply the training data. Repeatable "
+             "to train on the union of several datasets. Defaults to --tag, i.e. data "
+             "and model share a tag (the original behavior). Use a separate data tag to "
+             "train many model variants over one dataset without copying it.",
+    )
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs.")
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
@@ -169,9 +210,17 @@ def main() -> int:
     if args.restart:
         reset_tag(paths)
 
-    # Set up dataset from the training split.
-    print(f"Loading data from {paths.train_dir} ...")
-    ds = SlogDataset(paths.train_dir, post_move=True, apply_symmetry=True)
+    # Data source(s): the --data-tag list (union), or the output tag itself.
+    data_tags = args.data_tag or [args.tag]
+    data_paths = [TagPaths(t) for t in data_tags]
+    train_dirs = [p.train_dir for p in data_paths]
+    test_dirs = [p.test_dir for p in data_paths]
+    if data_tags != [args.tag]:
+        print(f"Data tags: {', '.join(data_tags)}  ->  model tag: {args.tag}")
+
+    # Set up dataset from the training split(s).
+    print(f"Loading data from {', '.join(str(d) for d in train_dirs)} ...")
+    ds = SlogDataset(train_dirs, post_move=True, apply_symmetry=True)
     print(f"  {ds.num_samples} samples")
 
     # Build model. Input widths come from the C++ layout (single source of
@@ -200,18 +249,24 @@ def main() -> int:
     db.write_meta(conn, args.tag, vars(args), n_params)
 
     # Frozen evaluation subset for the structural probes (built once; positions
-    # stored in the DB so the dashboard can render the boards).
-    probe_enabled = not args.no_probe and ensure_test_subset(paths, args.num_probe_positions)
+    # stored in the DB so the dashboard can render the boards). The probe bank is
+    # sampled from the first data tag's test split.
+    probe_enabled = not args.no_probe and ensure_test_subset(
+        paths, test_dirs[0], args.num_probe_positions
+    )
 
-    # Full held-out test set for per-epoch calibration scoring (loaded once).
+    # Full held-out test set for per-epoch calibration scoring (loaded once),
+    # over the union of every data tag's test split.
     test_ds = None
-    has_test = paths.test_dir.exists() and any(paths.test_dir.glob("*.slog"))
+    has_test = any(d.exists() and any(d.glob("*.slog")) for d in test_dirs)
     if not args.no_calibration and has_test:
-        print(f"Loading calibration test set from {paths.test_dir} ...")
-        test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
+        print(f"Loading calibration test set from {', '.join(str(d) for d in test_dirs)} ...")
+        present = [d for d in test_dirs if d.exists() and any(d.glob("*.slog"))]
+        test_ds = SlogDataset(present, post_move=True, apply_symmetry=False)
         print(f"  {test_ds.num_samples} test positions")
     elif not args.no_calibration:
-        print(f"WARNING: no test split at {paths.test_dir}; skipping calibration.", file=sys.stderr)
+        dirs = ", ".join(str(d) for d in test_dirs)
+        print(f"WARNING: no test split at {dirs}; skipping calibration.", file=sys.stderr)
 
     # Launch the dashboard alongside training (torn down on exit).
     if not args.no_dashboard:
@@ -223,9 +278,13 @@ def main() -> int:
         print(f"Already trained through epoch {args.epochs}; nothing to do.")
         return 0
 
+    # Batches per epoch, for the progress line / ETA (last batch may be partial).
+    num_batches_est = max(1, math.ceil(ds.num_samples / args.batch_size))
+
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         t0 = time.time()
+        last_progress = 0.0
         losses_accum = {"total": 0.0, "wld": 0.0, "score_diff": 0.0, "opp_next_placement": 0.0}
         n_batches = 0
         correct_wld = 0
@@ -257,9 +316,20 @@ def main() -> int:
             for k in losses_accum:
                 losses_accum[k] += losses[k].item()
 
+            # Throttled in-place progress line (~1 Hz) so long epochs show life.
+            if time.time() - last_progress > 1.0:
+                print_epoch_progress(epoch, args.epochs, n_batches, num_batches_est,
+                                     total_samples, t0)
+                last_progress = time.time()
+
             pred = outputs["wld"].argmax(dim=1)
             target_idx = targets["wld"].argmax(dim=1)
             correct_wld += (pred == target_idx).sum().item()
+
+        # Finalize the in-place progress line (true batch count) before the
+        # epoch summary so they don't collide on the same terminal line.
+        print_epoch_progress(epoch, args.epochs, n_batches, n_batches, total_samples, t0,
+                             final=True)
 
         # Read the LR that was actually in effect for the epoch just finished
         # *before* advancing the schedule. Stepping first and reading after would

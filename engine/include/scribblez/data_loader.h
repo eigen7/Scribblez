@@ -60,6 +60,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -131,6 +132,11 @@ class DataLoader {
   // =========================================================================
 
   // One registered .slog file. Owns the in-memory buffer once loaded.
+  //
+  // A file's "positions" are its expanded training rows: one per eligible turn
+  // across all games (the sum of every GameMetadata::eligible_turns, read from
+  // the file header at construction). sample_to_game_turn() maps a flat
+  // position index back to the (game, turn) pair it stands for.
   class DataFile {
    public:
     DataFile(const std::string& path, int64_t num_positions, int64_t file_size);
@@ -150,10 +156,26 @@ class DataLoader {
     // Blocks until the file is loaded, then returns a pointer to the buffer.
     const char* buffer() const;
 
+    // Map a flat position index in [0, num_positions()) to the (game_idx,
+    // turn_idx) it expands to. `buf` must be this file's loaded buffer; the
+    // game->position index is built lazily from the metadata table on first
+    // use and cached. Thread-safe.
+    std::pair<uint32_t, uint32_t> sample_to_game_turn(const char* buf, int64_t sample_index) const;
+
    private:
+    // Build cum_eligible_ (the per-game prefix sums of eligible_turns) from the
+    // loaded buffer's metadata table. Idempotent via index_once_.
+    void build_index(const char* buf) const;
+
     std::string path_;
     int64_t num_positions_;
     int64_t file_size_;
+    int64_t num_games_ = 0;
+
+    // Lazily-built per-game prefix sums of eligible_turns (size num_games_ + 1);
+    // cum_eligible_[g] is the first flat position index of game g.
+    mutable std::once_flag index_once_;
+    mutable std::vector<int64_t> cum_eligible_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;

@@ -131,6 +131,23 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
   }
 }
 
+void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t game_idx,
+                              uint32_t turn_idx, bool flip, bool post_move, int64_t output_row,
+                              float* output) {
+  const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
+  if (hdr->magic != kMagic) {
+    std::cerr << "BlockDecoder: bad magic in " << path << "\n";
+    return;
+  }
+  if (hdr->version != kVersion) {
+    std::cerr << "BlockDecoder: version mismatch in " << path << " (file=" << hdr->version
+              << " code=" << kVersion << ")\n";
+    return;
+  }
+  const GameLog g = game_view(buf, game_idx, nullptr);
+  pos_.encode_row(g, static_cast<int>(turn_idx), post_move, flip, output + output_row * kRowFloats);
+}
+
 void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,
                                            int diff_lo, int diff_hi, float* out) {
   uint32_t sampled = 0;

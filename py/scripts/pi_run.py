@@ -39,7 +39,6 @@ import argparse
 import csv
 import os
 import random
-import re
 import shutil
 import subprocess
 import sys
@@ -47,16 +46,14 @@ import tempfile
 from pathlib import Path
 
 from scribblez.ffi import read_file_header, sample_slog
+from scribblez.match import PLAY_GAME, play_match, win_pct
 from scribblez.paths import TagPaths
 
-PLAY_GAME = "/workspace/repo/target/engine/play_game"
 TRAIN_SCRIPT = Path(__file__).resolve().parent / "train.py"
 PY_ROOT = Path(__file__).resolve().parent.parent  # the `py/` dir (for child PYTHONPATH)
 # play_game buffers this many games before flushing a file; chunking bounds peak
 # memory on large generations, after which the chunks are merged into one file.
 GEN_CHUNK = 50000
-# play_game's end-of-run summary line: "... W/L/D vs <Opponent>: W / L / D".
-WLD_RE = re.compile(r"vs \w+:\s*(\d+)\s*/\s*(\d+)\s*/\s*(\d+)")
 
 
 class RunPaths:
@@ -88,16 +85,20 @@ def hasty_spec(args) -> str:
     HastyBot when --hasty-temperature > 0 (adds exploration to gen-0 data)."""
     if args.hasty_temperature > 0:
         return (f"--type=hastybot --temperature={args.hasty_temperature} "
-                f"--top-k={args.hasty_top_k}")
+                f"--top-k={args.hasty_top_k} "
+                f"--temperature-min-bag={args.hasty_temp_min_bag}")
     return "--type=hastybot"
 
 
 def neural_spec(model: Path, args, temperature: float) -> str:
     """A `--player` value for the neural value agent at the given sampling
     temperature. --top-k selects the candidate set: 0 = every legal play (most
-    diverse, slowest), K > 0 = the top-K by HastyBot equity (faster)."""
+    diverse, slowest), K > 0 = the top-K by HastyBot equity (faster). --objective
+    picks the selection head: winprob (P(win)+0.5*P(draw), the win-rate metric the
+    bot is benchmarked on) or scorediff (highest expected final score margin)."""
     return (f"--type=neural --model={model} --top-k={args.top_k} "
-            f"--temperature={temperature} --precision={args.precision}")
+            f"--temperature={temperature} --precision={args.precision} "
+            f"--objective={args.objective}")
 
 
 def run(cmd, capture: bool = False) -> subprocess.CompletedProcess:
@@ -114,26 +115,7 @@ def run(cmd, capture: bool = False) -> subprocess.CompletedProcess:
     return r
 
 
-def run_streaming(cmd) -> tuple[int, str]:
-    """Run a subprocess, echoing its combined output to our stderr live while
-    also capturing it. Lets play_game's periodic progress lines show in real
-    time and still leaves the full output for the caller to parse (e.g. the
-    benchmark's W/L/D summary). Returns (returncode, combined_output)."""
-    print("  $", " ".join(str(c) for c in cmd), flush=True)
-    pythonpath = os.pathsep.join([str(PY_ROOT), os.environ.get("PYTHONPATH", "")])
-    env = {**os.environ, "PYTHONPATH": pythonpath}
-    proc = subprocess.Popen(cmd, env=env, text=True, bufsize=1,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    chunks = []
-    for line in proc.stdout:
-        sys.stderr.write(line)
-        sys.stderr.flush()
-        chunks.append(line)
-    proc.wait()
-    return proc.returncode, "".join(chunks)
-
-
-def generate_split(player_spec: str, num_games: int, threads: int, handicap_max: int,
+def generate_split(player_spec: str, num_games: int, threads: int,
                    dst_file: Path, sample_endgames: bool = False) -> None:
     """Run `num_games` self-play games and consolidate them into one .slog at
     `dst_file`. play_game writes GEN_CHUNK-sized files (bounding its in-memory
@@ -149,8 +131,7 @@ def generate_split(player_spec: str, num_games: int, threads: int, handicap_max:
                "--binary-log-dir", tmp,
                "--games-per-file", str(min(num_games, GEN_CHUNK)),
                "--games", str(num_games),
-               "--threads", str(threads),
-               "--random-handicap-max", str(handicap_max)]
+               "--threads", str(threads)]
         if sample_endgames:
             cmd.append("--sample-endgames")
         run(cmd)
@@ -183,10 +164,10 @@ def generate_gen(rp: RunPaths, gen: int, args) -> None:
     test_games = round(n_games * args.test_ratio)
     train_games = n_games - test_games
     print(f"[gen {gen}] generating {train_games} train / {test_games} test games via {source}")
-    generate_split(spec, train_games, args.threads, args.random_handicap_max,
+    generate_split(spec, train_games, args.threads,
                    rp.train_file(gen), args.sample_endgames)
     if test_games > 0:
-        generate_split(spec, test_games, args.threads, args.random_handicap_max,
+        generate_split(spec, test_games, args.threads,
                        rp.test_file(gen), args.sample_endgames)
 
 
@@ -293,26 +274,6 @@ def append_log(rp: RunPaths, row: dict) -> None:
         w.writerow(row)
 
 
-def play_match(spec_a: str, spec_b: str, games: int, threads: int):
-    """Play `games` between two --player specs; return (wins, losses, draws) from
-    the FIRST player's perspective, or None if the summary line can't be parsed."""
-    rc, out = run_streaming([PLAY_GAME, "--player", spec_a, "--player", spec_b,
-                             "--games", str(games), "--threads", str(threads)])
-    if rc != 0:
-        raise SystemExit(f"command failed (exit {rc}): {PLAY_GAME}")
-    m = WLD_RE.search(out)
-    if not m:
-        print("WARNING: could not parse W/L/D from play_game output", file=sys.stderr)
-        return None
-    return tuple(int(x) for x in m.groups())
-
-
-def win_pct(wld) -> float:
-    w, l, _ = wld
-    decisive = w + l
-    return 100.0 * w / decisive if decisive else float("nan")
-
-
 def benchmark_gen(rp: RunPaths, gen: int, args) -> None:
     if args.benchmark_games <= 0:
         return
@@ -365,15 +326,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "(most diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
     )
     p.add_argument("--temperature", type=float, default=3.0, help="Self-play sampling temperature.")
+    p.add_argument(
+        "--objective", choices=("winprob", "scorediff"), default="winprob",
+        help="Neural selection head for self-play and benchmark: winprob "
+             "(maximize P(win)+0.5*P(draw), aligned with the win-rate benchmark) "
+             "or scorediff (maximize expected final score margin).",
+    )
     p.add_argument("--hasty-temperature", type=float, default=0.0,
                    help="Gen-0 HastyBot softmax temperature (0 = greedy; >0 explores).")
     p.add_argument("--hasty-top-k", type=int, default=10,
                    help="Gen-0 HastyBot candidate count when --hasty-temperature > 0.")
+    p.add_argument("--hasty-temp-min-bag", type=int, default=0,
+                   help="Confine gen-0 HastyBot softmax sampling to bag >= this many tiles "
+                        "(0 = all game; ~60 = opening-only exploration).")
     p.add_argument("--sample-endgames", action="store_true",
                    help="Also draw training positions from endgame turns (bag empty); "
                         "by default only pre-endgame positions are sampled.")
     p.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
-    p.add_argument("--random-handicap-max", type=int, default=100, help="Per-game handicap max.")
     p.add_argument(
         "--train-window", type=int, default=0,
         help="Max generations of past data to blend into each training set "

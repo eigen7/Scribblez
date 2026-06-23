@@ -1,5 +1,6 @@
 #include "scribblez/data_loader.h"
 
+#include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 
 #include <algorithm>
@@ -42,9 +43,42 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
 // ===========================================================================
 
 DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size)
-    : path_(path), num_positions_(num_positions), file_size_(file_size) {}
+    : path_(path), num_positions_(num_positions), file_size_(file_size) {
+  // Learn the expanded training-row count (sum of every game's eligible turns)
+  // and the game count from the 16-byte header, so an epoch can be sized without
+  // resident file bodies. Falls back to the caller-passed count on read failure.
+  std::ifstream f(path_, std::ios::binary);
+  FileHeader hdr{};
+  if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
+    num_positions_ = static_cast<int64_t>(hdr.num_sample_positions);
+    num_games_ = static_cast<int64_t>(hdr.num_games);
+  } else {
+    std::cerr << "DataLoader: could not read header of " << path_ << "; using caller count\n";
+    num_games_ = num_positions;
+  }
+}
 
 DataLoader::DataFile::~DataFile() { unload(); }
+
+void DataLoader::DataFile::build_index(const char* buf) const {
+  const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
+  cum_eligible_.resize(static_cast<size_t>(num_games_) + 1);
+  cum_eligible_[0] = 0;
+  for (int64_t g = 0; g < num_games_; ++g) {
+    cum_eligible_[g + 1] = cum_eligible_[g] + static_cast<int64_t>(metas[g].eligible_turns);
+  }
+}
+
+std::pair<uint32_t, uint32_t> DataLoader::DataFile::sample_to_game_turn(const char* buf,
+                                                                       int64_t sample_index) const {
+  std::call_once(index_once_, [&] { build_index(buf); });
+  // Find the game whose flat-index range contains sample_index: the last g with
+  // cum_eligible_[g] <= sample_index.
+  auto it = std::upper_bound(cum_eligible_.begin(), cum_eligible_.end(), sample_index);
+  const int64_t g = (it - cum_eligible_.begin()) - 1;
+  const int64_t turn = sample_index - cum_eligible_[static_cast<size_t>(g)];
+  return {static_cast<uint32_t>(g), static_cast<uint32_t>(turn)};
+}
 
 bool DataLoader::DataFile::is_loaded() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -179,9 +213,11 @@ DataLoader::FileManager::~FileManager() {
 
 void DataLoader::FileManager::append(const std::string& path, int64_t num_positions,
                                      int64_t file_size) {
+  // DataFile derives its true (expanded) position count from the file header;
+  // tally that, not the caller-passed value (which is the game count).
   auto* f = new DataFile(path, num_positions, file_size);
   std::lock_guard<std::mutex> lock(mutex_);
-  num_positions_ += num_positions;
+  num_positions_ += f->num_positions();
   all_files_.push_back(f);
 }
 
@@ -370,9 +406,10 @@ void DataLoader::WorkerThread::do_work() {
   const char* buf = file->buffer();  // blocks until loaded
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
-    uint8_t flip = unit_.flips[i];
-    decoder_.decode(buf, file->path(), unit_.local_positions[i], /*n_rows=*/1, &flip,
-                    config_.post_move, /*output_row_start=*/unit_.output_indices[i], output_);
+    // Each local position is a flat (game, turn) sample index within the file.
+    auto [game_idx, turn_idx] = file->sample_to_game_turn(buf, unit_.local_positions[i]);
+    decoder_.decode_one(buf, file->path(), game_idx, turn_idx, unit_.flips[i] != 0,
+                        config_.post_move, /*output_row=*/unit_.output_indices[i], output_);
   }
 }
 

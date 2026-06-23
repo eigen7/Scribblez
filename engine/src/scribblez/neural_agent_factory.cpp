@@ -29,7 +29,7 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
   int batch_size = 256;
   int cuda_device = 0;
   std::string precision = "FP16";
-  std::string objective = "scorediff";
+  std::string objective = "winprob";
   double temperature = 0.0;
   uint64_t seed = 0;
   bool have_seed = false;
@@ -92,8 +92,9 @@ std::string NeuralAgent::options_help() {
          "    --top-k=K                candidate plays to evaluate: K>0 = top-K by\n"
          "                             static equity; 0 = ALL legal plays (most\n"
          "                             diverse, but slowest -- every play hits the GPU)\n"
-         "    --objective=scorediff|winprob  selection head (default scorediff:\n"
-         "                             highest expected final score differential)\n"
+         "    --objective=scorediff|winprob  selection head (default winprob:\n"
+         "                             highest P(win)+0.5*P(draw); scorediff picks\n"
+         "                             the highest expected final score differential)\n"
          "    --batch-size=N           max GPU batch (default 256)\n"
          "    --cuda-device=D          GPU index (default 0)\n"
          "    --precision=FP16|FP32    TensorRT precision (default FP16)\n"

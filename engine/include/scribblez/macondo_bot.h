@@ -48,6 +48,13 @@ Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm);
 //                      generation, which pure argmax play lacks (equity units
 //                      are points, so a temperature of a few points spreads
 //                      probability across near-best plays).
+//
+// Softmax sampling can be confined to the opening via `temperature_min_bag`:
+// when set, the bot samples only while the bag holds at least that many tiles
+// and plays argmax (the shadow-play search) once it falls below. This
+// diversifies opening play (where near-equal plays differ in long-term value)
+// while keeping HastyBot's exact strength through the rest of the game, where
+// unconstrained sampling hurts.
 class HastyBotAgent : public Agent {
  public:
   // Greedy HastyBot (temperature 0): the historical argmax behavior.
@@ -55,9 +62,11 @@ class HastyBotAgent : public Agent {
 
   // Exploratory HastyBot: when `temperature > 0`, sample among the top `top_k`
   // moves by equity; `seed` seeds the sampler. `temperature == 0` ignores
-  // top_k/seed and plays argmax.
+  // top_k/seed and plays argmax. When `temperature_min_bag > 0`, sampling is
+  // applied only while `bag_size >= temperature_min_bag` (greedy below it);
+  // 0 (the default) samples for the whole game.
   HastyBotAgent(int thread_id, const std::string& name, int top_k, double temperature,
-                uint64_t seed);
+                uint64_t seed, int temperature_min_bag = 0);
 
   Move make_move(const MoveRequest& req) override;
   bool supports_parallelism() const override { return true; }
@@ -65,7 +74,8 @@ class HastyBotAgent : public Agent {
   // Build a HastyBotAgent from `--player "--type=hastybot [options]"` tokens
   // (after the factory has stripped --type and --name). Optional --temperature=T
   // (0 = greedy argmax; > 0 = softmax sampling over the top-K), --top-k=K
-  // (default 10), --seed=N (default: SeedProducer). Throws on bad input.
+  // (default 10), --temperature-min-bag=B (0 = sample all game; > 0 = sample
+  // only while bag >= B), --seed=N (default: SeedProducer). Throws on bad input.
   static std::unique_ptr<HastyBotAgent> from_spec(const std::vector<std::string>& tokens,
                                                   int thread_id, const std::string& name);
 
@@ -75,6 +85,7 @@ class HastyBotAgent : public Agent {
  private:
   int top_k_;
   double temperature_;
+  int temperature_min_bag_;      // sample only while bag_size >= this (0 = all game)
   std::mt19937_64 rng_;          // drives softmax sampling when temperature_ > 0
   std::vector<double> weights_;  // scratch softmax weights, reused across turns
 };

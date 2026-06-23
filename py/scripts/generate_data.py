@@ -39,7 +39,8 @@ def build_player_spec(args) -> str:
     if not args.model:
         if args.hasty_temperature > 0:
             return (f"--type=hastybot --temperature={args.hasty_temperature} "
-                    f"--top-k={args.hasty_top_k}")
+                    f"--top-k={args.hasty_top_k} "
+                    f"--temperature-min-bag={args.hasty_temp_min_bag}")
         return "--type=hastybot"
     return (
         f"--type=neural --model={args.model} --top-k={args.top_k} "
@@ -48,7 +49,7 @@ def build_player_spec(args) -> str:
 
 
 def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
-              player_spec: str, handicap_max: int) -> int:
+              player_spec: str) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
     Both seats use `player_spec` (the value of a `--player` flag); each seat is a
@@ -63,7 +64,6 @@ def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
         "--games-per-file", str(games_per_file),
         "--games", str(num_games),
         "--threads", str(threads),
-        "--random-handicap-max", str(handicap_max),
     ]
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
@@ -122,11 +122,13 @@ def main() -> int:
     )
     parser.add_argument("--hasty-top-k", type=int, default=10,
                         help="HastyBot candidate count when --hasty-temperature > 0.")
-    parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     parser.add_argument(
-        "--random-handicap-max", type=int, default=100,
-        help="Max per-game starting-score handicap (0 disables; lowers outcome variance).",
+        "--hasty-temp-min-bag", type=int, default=0,
+        help="Confine HastyBot softmax sampling to turns where the bag has >= this "
+             "many tiles (greedy below it). 0 = sample the whole game; ~60 reproduces "
+             "an opening-only exploratory bot.",
     )
+    parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     args = parser.parse_args()
 
     if not 0.0 <= args.test_ratio < 1.0:
@@ -144,8 +146,7 @@ def main() -> int:
         if n <= 0:
             continue
         print(f"\n=== Generating {n} {name} games ===")
-        rc = run_games(out_dir, n, args.games_per_file, args.threads, player_spec,
-                       args.random_handicap_max)
+        rc = run_games(out_dir, n, args.games_per_file, args.threads, player_spec)
         if rc != 0:
             print(f"play_game exited with code {rc} for {name} split", file=sys.stderr)
             return rc

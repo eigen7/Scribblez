@@ -15,18 +15,23 @@
 // File layout
 // -----------
 //   [FileHeader              16 B]
-//   [GameMetadata  num_games 24 B]
+//   [GameMetadata  num_games 22 B]
 //   For each game g in [0, num_games):
 //     [InitialRacks                       16 B]
 //     [TurnBlob       num_turns(g)        24 B each]
 //
 // Each GameMetadata's start_offset points at that game's InitialRacks; the
-// TurnBlob array starts at (start_offset + sizeof(InitialRacks)).
+// TurnBlob array starts at (start_offset + sizeof(InitialRacks)). Games always
+// start from a 0-0 score, so the replay decoder seeds its score accumulator at
+// zero and the score-differential input feature is derived purely from replay.
 //
-// GameMetadata carries both the final scores and the per-player starting
-// scores. The starting scores are normally {0, 0} but can be a head-start
-// handicap; the replay decoder seeds its score accumulator from them so the
-// score-differential input feature reflects the handicap at every position.
+// Training sampling: each game contributes ONE training row per *eligible* turn
+// (GameMetadata::eligible_turns of them -- the turns the writer deemed
+// trainable, a prefix [0, eligible_turns) of the move sequence). The DataLoader
+// expands the file into eligible_turns rows per game; FileHeader's
+// num_sample_positions is their sum across the file (so the loader knows the
+// epoch size without scanning the body). The single sampled_turn is a separate,
+// eval-only convenience (probes / position dumps pick one position per game).
 
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
@@ -46,7 +51,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 8;
+inline constexpr uint16_t kVersion = 10;
 
 #pragma pack(push, 1)
 
@@ -54,29 +59,32 @@ struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
   uint16_t reserved;
-  uint32_t num_games;  // games in this file == sample positions in this
-                       // file (one sample per game, chosen at write-time)
-  uint32_t reserved2;
+  uint32_t num_games;            // games in this file
+  uint32_t num_sample_positions;  // total training rows == sum of every game's
+                                  // GameMetadata::eligible_turns; the DataLoader
+                                  // reads this to size an epoch without scanning
+                                  // the body.
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
   uint64_t start_offset;  // file offset of this game's InitialRacks blob
   uint32_t num_turns;     // length of the TurnBlob array
-  uint32_t sampled_turn;  // 0-based turn index chosen for this game's sample
-                          // (pre-move snapshot encodes state AT this turn;
-                          // post-move snapshot encodes state AFTER this
-                          // turn's move is applied, before draw). Chosen
-                          // uniformly at write-time among eligible turns:
-                          // turns where the bag has > 0 tiles when the turn
-                          // begins, plus -- when the writer's sample_endgames
-                          // flag is set -- endgame turns (bag already empty).
+  uint32_t sampled_turn;  // 0-based turn index, eval-only: one representative
+                          // position per game for probes / position dumps. NOT
+                          // used by training, which expands over eligible_turns.
   int16_t final_score_p0;
   int16_t final_score_p1;
-  int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
-  int16_t initial_score_p1;
+  uint16_t eligible_turns;  // number of training-eligible turns: a prefix
+                            // [0, eligible_turns) of the move sequence. Training
+                            // emits one row per eligible turn. Eligibility is
+                            // fixed at write time -- pre-endgame turns (bag had
+                            // tiles when the turn began), plus endgame turns
+                            // when the writer's sample_endgames flag was set.
+                            // Because the bag is non-increasing, eligible turns
+                            // are always a leading prefix.
 };
-static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
+static_assert(sizeof(GameMetadata) == 22, "GameMetadata must be 22 bytes");
 
 // Per-game initial state: the tiles dealt to each player before play starts.
 // Trailing entries of each rack slot are empty Tiles when the bag was starved

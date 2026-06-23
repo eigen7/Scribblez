@@ -54,9 +54,7 @@ std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetPa
   return svc;
 }
 
-void NeuralAgent::begin_game(std::array<int, 2> initial_scores) {
-  encoder_ = binlog::GameStateEncoder(initial_scores);
-}
+void NeuralAgent::begin_game() { encoder_ = binlog::GameStateEncoder(); }
 
 void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
 

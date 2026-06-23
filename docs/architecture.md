@@ -32,7 +32,7 @@ generate_data.py ─▶ play_game ─▶ GameRunner ─▶ Game ─▶ GameLog
 | One game | [Game](../engine/src/scribblez/game.cpp) | Plays a single game and accumulates a [GameLog](../engine/include/scribblez/game.h) (initial racks, every move + draw, final scores). |
 | Serialize | [BinaryLogWriter](../engine/src/scribblez/binary_log.cpp) | Batches finished games and flushes them to one `.slog` file per `--games-per-file`. |
 | On-disk format | [binary_log.h](../engine/include/scribblez/binary_log.h) | **Authoritative** layout (see below). |
-| Load + replay | [BlockDecoder](../engine/src/scribblez/block_decoder.cpp) | Replays a game forward to its sampled turn and emits one populated tensor row. |
+| Load + replay | [BlockDecoder](../engine/src/scribblez/block_decoder.cpp) | Replays a game forward to a given turn and emits one populated tensor row (the loader emits one per eligible turn). |
 | State tracking + encoding | [GameStateEncoder](../engine/src/scribblez/game_state_encoder.cpp) | Maintains board/scores/last-moves during replay and writes the model input. |
 | Input layout | [input_encoder.h](../engine/include/scribblez/input_encoder.h) | Plane/scalar offsets and counts (85 spatial planes + 936 scalars = 20061 floats). |
 | Label layout | [training_targets.h](../engine/include/scribblez/training_targets.h) | The `AllTargets` registry — single source of truth for the label heads. |
@@ -53,12 +53,18 @@ fail loudly rather than misparse. Treat that header as the spec — this doc doe
 not duplicate the struct fields, so they cannot drift.
 
 - **Write** — [`BinaryLogWriter::write_batch`](../engine/src/scribblez/binary_log.cpp)
-  picks **one** sampled turn per game (uniformly among turns where the bag is
-  non-empty) and records it in that game's `GameMetadata`. Per file: one
-  `FileHeader`, a `GameMetadata` for every game, then each game's blobs.
-- **Read** — [`BlockDecoder::replay_and_emit`](../engine/src/scribblez/block_decoder.cpp)
-  reconstructs a row: it replays the move sequence up to the sampled turn
-  through a `GameStateEncoder`, then encodes the input and the labels. The
+  records, per game, how many turns are training-**eligible** (`eligible_turns`:
+  the leading prefix of turns whose bag was non-empty, or every turn when
+  `--sample-endgames` is set), and tallies their sum into the `FileHeader`'s
+  `num_sample_positions`. Per file: one `FileHeader`, a `GameMetadata` for every
+  game, then each game's blobs. (`sampled_turn` is also recorded but is eval-only
+  — a single representative position per game for probes / dumps.)
+- **Read** — the [`DataLoader`](../engine/src/scribblez/data_loader.cpp) expands
+  each game into **one training row per eligible turn** (so an epoch sees every
+  position, not one per game), and
+  [`BlockDecoder::decode_one`](../engine/src/scribblez/block_decoder.cpp)
+  reconstructs each row: it replays the move sequence up to that turn through a
+  `GameStateEncoder`, then encodes the input and the labels. The
   `post_move` flag selects the pre-move snapshot (active player about to play)
   vs. the post-move snapshot (just played, before drawing). Diagonal symmetry
   (`(r,c) → (c,r)`) is applied stochastically per row.
@@ -81,11 +87,12 @@ the pipeline, and it dictates where every value originates:
   fills in — independent of the replay's running tally.
 
 A practical consequence: any per-game state that must reach the input encoding
-has to be seedable into the replay. For example, a starting-score handicap is
-stored in `GameMetadata` and used to seed the `GameStateEncoder` at the top of
-`replay_and_emit`, so the score-diff *input* reflects it at every position;
-because the handicap is also baked into the game's final scores, the *targets*
-stay consistent automatically.
+has to be seedable into the replay. Today every game starts from 0-0, so the
+`GameStateEncoder` is default-constructed at the top of `replay_and_emit` and
+the score-diff *input* is derived entirely from replaying moves; the *targets*
+come from the stored final scores. Any future per-game seed state (e.g. a
+starting-score offset) would need to be both stored in `GameMetadata` for the
+replay and reflected in the final scores so input and targets stay consistent.
 
 ## Determinism and seeding
 
@@ -93,8 +100,8 @@ stay consistent automatically.
   source; `GameRunner` pulls one base seed and gives game *g* the seed
   `base + g`, which seeds that game's [Bag](../engine/src/scribblez/bag.cpp).
 - Seeds are **not** required to map to fixed bags — nothing in the system relies
-  on reproducing a specific bag from a seed, so auxiliary per-game randomness
-  (e.g. handicap selection) may draw from the game seed freely.
+  on reproducing a specific bag from a seed, so any auxiliary per-game randomness
+  may draw from the game seed freely.
 - The sampled-turn choice and the DataLoader's epoch shuffle are independently
   seeded; see [data_loader.h](../engine/include/scribblez/data_loader.h) for the
   epoch API (`epoch_start` then repeated batch fills).
