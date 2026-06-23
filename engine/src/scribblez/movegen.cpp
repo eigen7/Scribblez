@@ -1,7 +1,9 @@
 #include "scribblez/movegen.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -421,7 +423,140 @@ struct GaddagGen {
       last_anchor_col = col;
     }
   }
+
+  // Generate exactly the plays canonically anchored at (row, col). `last_anchor`
+  // is the nearest anchor to the left in this row (100 if none), matching the
+  // left-extension bound generate_for_row applies, so this produces the same
+  // moves with the same dedup regardless of processing order.
+  void generate_one_anchor(int row, int col, int last_anchor) {
+    current_row = row;
+    for (int c = 0; c < BOARD_SIZE; ++c) row_cells[c] = view.at(row, c);
+    last_anchor_col = last_anchor;
+    current_anchor_col = col;
+    tiles_played = 0;
+    recursive_gen(col, dict.gaddag_root(), col, col);
+  }
 };
+
+// The player's tile values (blanks count as 0) sorted descending -- the input
+// to the shadow score bound's "best tiles in best multipliers" estimate.
+std::vector<int> rack_values_desc(const TileCounts& rack) {
+  std::vector<int> v;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    for (int i = 0; i < rack.count(L); ++i) v.push_back(TILE_VALUES[L]);
+  }
+  for (int i = 0; i < rack.blanks(); ++i) v.push_back(0);
+  std::sort(v.begin(), v.end(), std::greater<int>());
+  return v;
+}
+
+// Per-lane (one view row) scratch for the shadow score bound, computed once and
+// reused across the row's anchors. For empty squares it records the premium
+// multipliers, cross-word score/neighbor, whether any rack tile can be played
+// there, and the highest-value rack tile the cross-check permits.
+struct LaneInfo {
+  std::array<bool, BOARD_SIZE> filled{}, placeable{};
+  std::array<int, BOARD_SIZE> tval{}, lmul{}, wmul{}, cscore{}, maxval{};
+  std::array<bool, BOARD_SIZE> cneigh{};
+  std::array<int, BOARD_SIZE + 1> pref{};  // prefix sum of filled tile values
+};
+
+void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t rack_letter_mask,
+                bool has_blank, LaneInfo& lane) {
+  lane = LaneInfo{};
+  for (int c = 0; c < BOARD_SIZE; ++c) {
+    const Glyph g = view.at(row, c);
+    if (!g.is_empty()) {
+      lane.filled[c] = true;
+      lane.tval[c] = g.is_blank() ? 0 : TILE_VALUES[g.letter()];
+      continue;
+    }
+    const Premium p = view.premium_at(row, c);
+    lane.lmul[c] = p.letter_mult();
+    lane.wmul[c] = p.word_mult();
+    const CrossCheck& cc = cross[idx(row, c)];
+    lane.cscore[c] = cc.score;
+    lane.cneigh[c] = cc.has_neighbor;
+    // Highest-value rack tile this square's cross-check permits (a blank can
+    // satisfy any non-empty mask, scoring 0). A square no rack tile can fill
+    // makes any covering window infeasible.
+    const uint32_t allowed = cc.mask & rack_letter_mask;
+    if (allowed != 0) {
+      lane.placeable[c] = true;
+      int mv = 0;
+      for (Tile L = Tile::of(0); L < 26; ++L) {
+        if ((allowed & (1u << L)) && TILE_VALUES[L] > mv) mv = TILE_VALUES[L];
+      }
+      lane.maxval[c] = mv;
+    } else if (has_blank && cc.mask != 0) {
+      lane.placeable[c] = true;
+      lane.maxval[c] = 0;
+    }
+  }
+  for (int c = 0; c < BOARD_SIZE; ++c) lane.pref[c + 1] = lane.pref[c] + lane.tval[c];
+}
+
+// Fill `out[e]` with an admissible upper bound on the raw score of a play that
+// places exactly e tiles canonically anchored at `col` (or -1 if none). It
+// enumerates every contiguous window [a, b] covering the anchor (a no further
+// left than the previous anchor), and for each window placing 1..rack_size tiles
+// bounds the score by the smaller of two over-estimates of the placed
+// contribution -- greedily pairing the top rack tiles with the window's best
+// letter multipliers (count-tight), and summing each square's max permitted tile
+// (cross-check-tight) -- times the product of word multipliers, plus generous
+// cross-word and bingo terms. Every term over-estimates, so the bound never
+// underestimates a real play's score, which makes best-first pruning exact.
+void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
+                         const std::vector<int>& rack_vals_desc,
+                         std::array<int, kMaxPlayTiles + 1>& out) {
+  out.fill(-1);
+  const int rack_size = static_cast<int>(rack_vals_desc.size());
+  if (rack_size == 0) return;
+  const int a_min = std::max(0, last_anchor_col + 1);
+  const int e_cap = std::min(rack_size, kMaxPlayTiles);
+  for (int a = col; a >= a_min; --a) {
+    int e = 0, c2 = 0, c3 = 0, bad = 0, cross_sum = 0, psm = 0;
+    long wprod = 1;
+    auto add_square = [&](int c) {
+      if (lane.filled[c]) return;
+      ++e;
+      if (!lane.placeable[c]) {
+        ++bad;
+        return;
+      }
+      const int lm = lane.lmul[c];
+      if (lm >= 3)
+        ++c3;
+      else if (lm == 2)
+        ++c2;
+      wprod *= lane.wmul[c];
+      psm += lane.maxval[c] * lm;  // per-square max placed contribution
+      if (lane.cneigh[c]) cross_sum += (lane.cscore[c] + lane.maxval[c] * lm) * lane.wmul[c];
+    };
+    for (int c = a; c < col; ++c) add_square(c);
+    for (int b = col; b < BOARD_SIZE; ++b) {
+      add_square(b);
+      if (e == 0) continue;
+      if (e > e_cap) break;  // e only grows with b
+      if (bad > 0) break;    // window has an unfillable square (stays so as b grows)
+      int wl = a;
+      while (wl - 1 >= 0 && lane.filled[wl - 1]) --wl;
+      int wr = b;
+      while (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) ++wr;
+      const int existing = lane.pref[wr + 1] - lane.pref[wl];
+      // Count-tight estimate: top-e rack values paired with the window's highest
+      // letter multipliers (3s, then 2s, then 1s).
+      int greedy = 0, taken = 0;
+      for (int j = 0; j < c3 && taken < e; ++j) greedy += rack_vals_desc[taken++] * 3;
+      for (int j = 0; j < c2 && taken < e; ++j) greedy += rack_vals_desc[taken++] * 2;
+      while (taken < e) greedy += rack_vals_desc[taken++];
+      const int placed = std::min(greedy, psm);
+      const long main_word = static_cast<long>(placed + existing) * wprod;
+      const long sc = main_word + cross_sum + (e == RACK_SIZE ? 50 : 0);
+      if (sc > out[e]) out[e] = static_cast<int>(sc);
+    }
+  }
+}
 
 }  // namespace
 
@@ -446,6 +581,54 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
     }
   }
   return out;
+}
+
+ShadowMoveGen::ShadowMoveGen(const Board& board, const Dictionary& dict)
+    : board_(board), dict_(dict) {}
+
+std::vector<ShadowAnchor> ShadowMoveGen::anchors(const Rack& rack) const {
+  board_.ensure_movegen_caches(dict_);
+  const TileCounts& counts = rack.counts();
+  const std::vector<int> rack_vals = rack_values_desc(counts);
+  uint32_t rack_letter_mask = 0;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    if (counts.count(L) > 0) rack_letter_mask |= (1u << L);
+  }
+  const bool has_blank = counts.blanks() > 0;
+
+  std::vector<ShadowAnchor> out;
+  LaneInfo lane;
+  for (int orient = 0; orient < 2; ++orient) {
+    const bool transposed = (orient == 1);
+    View view{board_, transposed};
+    const CrossChecks& cross = board_.cross_checks(transposed);
+    const Anchors& anchors = board_.gaddag_anchors(transposed);
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+      // Lanes with no anchors contribute nothing; skip the lane build.
+      bool any = false;
+      for (int c = 0; c < BOARD_SIZE && !any; ++c) any = anchors[idx(r, c)];
+      if (!any) continue;
+      build_lane(view, cross, r, rack_letter_mask, has_blank, lane);
+      int prev = -1;  // nearest anchor to the left in this row
+      for (int c = 0; c < BOARD_SIZE; ++c) {
+        if (!anchors[idx(r, c)]) continue;
+        ShadowAnchor sa{transposed, r, c, prev, {}};
+        anchor_score_bounds(lane, c, prev, rack_vals, sa.score_bound_by_size);
+        out.push_back(sa);
+        prev = c;
+      }
+    }
+  }
+  return out;
+}
+
+void ShadowMoveGen::generate_anchor(const ShadowAnchor& a, const Rack& rack,
+                                    std::vector<Move>& out) const {
+  View view{board_, a.transposed};
+  const CrossChecks& cross = board_.cross_checks(a.transposed);
+  const Anchors& anchors = board_.gaddag_anchors(a.transposed);
+  GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
+  st.generate_one_anchor(a.row, a.col, a.last_anchor_col < 0 ? 100 : a.last_anchor_col);
 }
 
 }  // namespace scribblez

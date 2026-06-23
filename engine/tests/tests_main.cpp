@@ -13,6 +13,7 @@
 #include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/leave_values.h"
+#include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
 #include "scribblez/rack.h"
@@ -2724,8 +2725,109 @@ static void test_pick_sampled_turn_eligibility() {
   std::cout << "  pick_sampled_turn eligibility OK\n";
 }
 
+// ShadowMoveGen, summed over every anchor (no pruning), reproduces exactly the
+// move set of MoveGenerator::generate, and every anchor's score bound is
+// admissible (>= the score of each play canonically anchored there). The latter
+// is the invariant that makes best-first equity pruning exact.
+static void test_shadow_movegen_matches_full() {
+  using namespace scribblez;
+  Dictionary dict = medium_dict();
+  long positions = 0, total_moves = 0;
+  for (uint64_t seed : {7ULL, 99ULL, 12345ULL, 2024ULL, 55ULL}) {
+    GameLogStorage log = play_test_game(dict, seed);
+    Board board;
+    for (const TurnRecord& t : log.turns) {
+      const Rack& rack = t.rack_before;
+
+      MoveGenerator gen(board, dict);
+      const std::vector<Move> full = gen.generate(rack);
+
+      ShadowMoveGen smg(board, dict);
+      const std::vector<ShadowAnchor> anchors = smg.anchors(rack);
+      std::vector<Move> shadow;
+      for (const ShadowAnchor& a : anchors) {
+        std::vector<Move> am;
+        smg.generate_anchor(a, rack, am);
+        for (const Move& m : am) {
+          // The per-tile-count bound never underestimates a real play's score.
+          CHECK(static_cast<int>(m.score()) <= a.score_bound_by_size[m.num_glyphs()]);
+        }
+        for (Move& m : am) shadow.push_back(std::move(m));
+      }
+
+      CHECK(key_set(board, full) == key_set(board, shadow));
+
+      ++positions;
+      total_moves += static_cast<long>(full.size());
+      board.apply(t.move);
+    }
+  }
+  CHECK(positions > 0);
+  std::cout << "  ShadowMoveGen matches full generate + bound admissible (" << positions
+            << " positions, " << total_moves << " moves)\n";
+}
+
+// HastyBot's shadow-play search picks exactly the move the deterministic
+// reference (full generation + equity argmax) would, across real self-play
+// games. Requires the real NWL23 KWG + leaves; skipped if absent.
+namespace {
+class ShadowCheckAgent : public scribblez::Agent {
+ public:
+  ShadowCheckAgent(int tid, const std::string& name)
+      : scribblez::Agent(tid, name), bot_(tid, name) {}
+  scribblez::Move make_move(const scribblez::MoveRequest& req) override {
+    const scribblez::Move shadow = bot_.make_move(req);
+    const scribblez::Move ref = scribblez::hasty_best_move_reference(req);
+    CHECK(move_key(req.board, shadow) == move_key(req.board, ref));
+    ++comparisons;
+    return shadow;
+  }
+  long comparisons = 0;
+
+ private:
+  scribblez::HastyBotAgent bot_;
+};
+}  // namespace
+
+static void test_hasty_shadow_matches_reference() {
+  namespace fs = std::filesystem;
+  std::string kwg;
+  for (const char* cand : {
+#ifdef SCRIBBLEZ_DEFAULT_KWG
+         SCRIBBLEZ_DEFAULT_KWG,
+#endif
+         "/workspace/mount/lexica/NWL23.kwg",
+         "/workspace/mount/macondo/data/lexica/gaddag/NWL23.kwg"}) {
+    std::error_code ec;
+    if (fs::exists(cand, ec)) {
+      kwg = cand;
+      break;
+    }
+  }
+  const std::string leaves = scribblez::HastyEquity::default_leaves_path("NWL23");
+  const std::string peg = scribblez::HastyEquity::default_peg_path();
+  if (kwg.empty() || !fs::exists(leaves)) {
+    std::cout << "  (no NWL23 kwg/leaves; skipping HastyBot shadow-equivalence)\n";
+    return;
+  }
+  scribblez::Dictionary dict = scribblez::Dictionary::load_kwg(kwg);
+  scribblez::HastyEquity::init(leaves, peg);
+
+  long comparisons = 0;
+  for (uint64_t seed = 1; seed <= 40; ++seed) {
+    ShadowCheckAgent a0(0, "A"), a1(0, "B");
+    scribblez::Game g(a0, a1, dict, seed);
+    g.play();
+    comparisons += a0.comparisons + a1.comparisons;
+  }
+  CHECK(comparisons > 0);
+  std::cout << "  HastyBot shadow search matches reference (" << comparisons << " positions)\n";
+}
+
 int main() {
   test_dict_basic();
+  test_shadow_movegen_matches_full();
+  test_hasty_shadow_matches_reference();
   test_movegen_opening();
   test_movegen_cross_word();
   test_bingo_bonus();

@@ -5,10 +5,79 @@
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
+#include <array>
+#include <bit>
+#include <bitset>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace scribblez {
+
+// Per-turn leave cache for one mover's rack. Owns the sorted-rack bit layout
+// (bit i == the i-th sorted rack tile) and, for each candidate move, derives the
+// leave as a compact bitmask over that layout. Leave values are filled lazily
+// and cached, so each distinct leave is looked up at most once per turn. Build
+// one per turn (HastyEquity::turn_leaves) and reuse it across the turn's moves.
+class TurnLeaves {
+ public:
+  TurnLeaves(const Rack& rack, const LeaveValues& lv) : lv_(lv), size_(rack.size()) {
+    const auto& t = rack.tiles();
+    for (int i = 0; i < size_; ++i) tile_of_bit_[i] = t[i];
+    TileCounts counts = rack.counts();
+    int b = 0;
+    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
+      int c = counts.count(L);
+      indices_[L] = static_cast<uint8_t>(((1u << c) - 1u) << b);
+      b += c;
+    }
+    full_ = static_cast<uint8_t>((1u << size_) - 1);
+  }
+
+  // The move's leave as a bitmask: the full rack minus its played tiles. Each
+  // played tile claims its letter's lowest still-available bit.
+  uint8_t mask_for(const Move& move) const {
+    uint8_t mask = full_;
+    std::array<uint8_t, 27> indices = indices_;
+    for (int i = 0; i < move.num_glyphs(); ++i) {
+      uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
+      int bit = std::countr_zero(idx);
+      mask &= static_cast<uint8_t>(~(1u << bit));
+      idx &= static_cast<uint8_t>(idx - 1);
+    }
+    return mask;
+  }
+
+  double value(uint8_t mask) {
+    ensure(mask);
+    return static_cast<double>(value_[mask]);
+  }
+
+  int point_value(uint8_t mask) {
+    ensure(mask);
+    return pv_[mask];
+  }
+
+ private:
+  void ensure(uint8_t mask) {
+    if (computed_[mask]) return;
+    Rack leave;
+    for (int i = 0; i < size_; ++i)
+      if (mask & (1u << i)) leave.add(tile_of_bit_[i]);
+    value_[mask] = lv_.lookup(leave);
+    pv_[mask] = static_cast<int16_t>(leave.point_value());
+    computed_[mask] = true;
+  }
+
+  const LeaveValues& lv_;
+  int size_;
+  std::array<Tile, RACK_SIZE> tile_of_bit_{};
+  std::array<uint8_t, 27> indices_{};
+  uint8_t full_ = 0;
+  std::array<float, 128> value_{};
+  std::array<int16_t, 128> pv_{};
+  std::bitset<128> computed_{};
+};
 
 // Computes HastyBot's static equity for a move, matching Macondo's four-
 // calculator stack: leave value, opening adjustment, pre-endgame adjustment,
@@ -44,6 +113,15 @@ class HastyEquity {
   double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
                 const Rack& my_rack) const;
 
+  // A per-turn leave cache for `my_rack`.
+  TurnLeaves turn_leaves(const Rack& my_rack) const;
+
+  // Equity of `move` reusing a per-turn TurnLeaves (the leave lookup is O(1) /
+  // cached). Bit-identical to equity(); the leave is read from `leaves` instead
+  // of reconstructed per call.
+  double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
+                TurnLeaves& leaves) const;
+
   // Batched static-equity evaluation for a full legal-play list.
   //
   // Builds a per-turn leave table for `my_rack` once, then reads each move's
@@ -52,6 +130,17 @@ class HastyEquity {
   // annotations to share one optimized implementation.
   std::vector<double> equities(const std::vector<Move>& moves, const Board& board, int bag_size,
                                const Rack& opp_rack, const Rack& my_rack) const;
+
+  // Fill out[k] with the max leave value over every size-k sub-multiset of
+  // `my_rack`, for k in [0, my_rack.size()] (out[k] = -inf for k > rack size).
+  // A play that places e tiles leaves a size-(rack - e) rack, so pairing a
+  // per-tile-count score bound with out[rack - e] gives a tight equity bound for
+  // shadow-play pruning. Computed once per turn.
+  void best_leaves_by_size(const Rack& my_rack, std::array<double, RACK_SIZE + 1>& out) const;
+
+  // Max pre-endgame adjustment for a play that places `tiles_played` tiles with
+  // `bag_size` tiles in the bag (0 outside the pre-endgame table's range).
+  double peg_for_tiles(int tiles_played, int bag_size) const;
 
  private:
   HastyEquity() = default;

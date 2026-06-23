@@ -4,6 +4,7 @@
 
 #include <boost/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <bitset>
@@ -11,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -22,76 +24,6 @@ namespace {
 constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 
 // ---- leave computation --------------------------------------------------
-
-// Per-turn leave context for one mover's rack. Owns the sorted-rack bit
-// layout (bit i == the i-th sorted rack tile) and, for each candidate move,
-// derives the leave as a compact bitmask over that layout. Leave values are
-// then filled lazily and cached, so each distinct leave is looked up at most
-// once per turn. The mask is a private detail of this turn -- it lives here,
-// next to the rack it depends on, rather than on the Move.
-class TurnLeaves {
- public:
-  TurnLeaves(const Rack& rack, const LeaveValues& lv) : lv_(lv), size_(rack.size()) {
-    const auto& t = rack.tiles();
-    for (int i = 0; i < size_; ++i) tile_of_bit_[i] = t[i];
-    // indices_[L] holds the leave-mask bits owned by copies of letter L: a run
-    // of count(L) set bits starting at L's base position. Sorted order (A..Z
-    // then blanks) keeps this consistent with tile_of_bit_ and value().
-    TileCounts counts = rack.counts();
-    int b = 0;
-    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
-      int c = counts.count(L);
-      indices_[L] = static_cast<uint8_t>(((1u << c) - 1u) << b);
-      b += c;
-    }
-    full_ = static_cast<uint8_t>((1u << size_) - 1);
-  }
-
-  // The move's leave as a bitmask: the full rack minus its played tiles. Each
-  // played tile claims its letter's lowest still-available bit, so duplicate
-  // plays of a letter consume successive bits of that letter's run.
-  uint8_t mask_for(const Move& move) const {
-    uint8_t mask = full_;
-    std::array<uint8_t, 27> indices = indices_;  // pristine layout, mutated below
-    for (int i = 0; i < move.num_glyphs(); ++i) {
-      uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
-      int bit = std::countr_zero(idx);  // L's lowest still-available bit
-      mask &= static_cast<uint8_t>(~(1u << bit));
-      idx &= static_cast<uint8_t>(idx - 1);  // clear that lowest set bit
-    }
-    return mask;
-  }
-
-  double value(uint8_t mask) {
-    ensure(mask);
-    return static_cast<double>(value_[mask]);
-  }
-
-  int point_value(uint8_t mask) {
-    ensure(mask);
-    return pv_[mask];
-  }
-
- private:
-  void ensure(uint8_t mask) {
-    if (computed_[mask]) return;
-    Rack leave;
-    for (int i = 0; i < size_; ++i)
-      if (mask & (1u << i)) leave.add(tile_of_bit_[i]);
-    value_[mask] = lv_.lookup(leave);
-    pv_[mask] = static_cast<int16_t>(leave.point_value());
-    computed_[mask] = true;
-  }
-
-  const LeaveValues& lv_;
-  int size_;
-  std::array<Tile, RACK_SIZE> tile_of_bit_{};
-  std::array<uint8_t, 27> indices_{};
-  uint8_t full_ = 0;
-  std::array<float, 128> value_{};
-  std::array<int16_t, 128> pv_{};
-  std::bitset<128> computed_{};
-};
 
 // ---- opening adjustment -------------------------------------------------
 
@@ -198,6 +130,61 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
          peg_adjustment(move, bag_size, peg_table_) + eg;
 }
 
+TurnLeaves HastyEquity::turn_leaves(const Rack& my_rack) const {
+  return TurnLeaves(my_rack, leave_values_);
+}
+
+double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
+                           TurnLeaves& leaves) const {
+  const uint8_t mask = leaves.mask_for(move);
+  const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
+  const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
+  return static_cast<double>(move.score()) + lv + opening_adjustment(move, board) +
+         peg_adjustment(move, bag_size, peg_table_) + eg;
+}
+
+namespace {
+
+// Recurse over the rack's distinct tile types, choosing how many of each to KEEP
+// (the leave), tracking the max leave value by leave size in `best[size]`.
+void enum_sub_leaves(const std::vector<std::pair<Tile, int>>& types, size_t i, Rack& leave,
+                     int kept, const LeaveValues& lv, std::array<double, RACK_SIZE + 1>& best) {
+  if (i == types.size()) {
+    best[kept] = std::max(best[kept], static_cast<double>(lv.lookup(leave)));
+    return;
+  }
+  const Tile t = types[i].first;
+  const int cnt = types[i].second;
+  for (int k = 0; k <= cnt; ++k) {
+    enum_sub_leaves(types, i + 1, leave, kept + k, lv, best);
+    if (k < cnt) leave.add(t);
+  }
+  for (int k = 0; k < cnt; ++k) leave.remove(t);
+}
+
+}  // namespace
+
+void HastyEquity::best_leaves_by_size(const Rack& my_rack,
+                                      std::array<double, RACK_SIZE + 1>& out) const {
+  out.fill(-1e18);
+  std::vector<std::pair<Tile, int>> types;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int c = my_rack.count(L);
+    if (c > 0) types.emplace_back(L, c);
+  }
+  const int b = my_rack.blanks();
+  if (b > 0) types.emplace_back(BLANK, b);
+  Rack leave;
+  enum_sub_leaves(types, 0, leave, 0, leave_values_, out);
+}
+
+double HastyEquity::peg_for_tiles(int tiles_played, int bag_size) const {
+  if (bag_size <= 0) return 0.0;
+  const int bag_after = bag_size - tiles_played + 7;
+  if (bag_after < 0 || static_cast<size_t>(bag_after) >= peg_table_.size()) return 0.0;
+  return peg_table_[static_cast<size_t>(bag_after)];
+}
+
 std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
                                           int bag_size, const Rack& opp_rack,
                                           const Rack& my_rack) const {
@@ -206,14 +193,9 @@ std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const 
   std::vector<double> out(moves.size(), 0.0);
   if (moves.empty()) return out;
 
-  TurnLeaves leaves(my_rack, leave_values_);
+  TurnLeaves leaves = turn_leaves(my_rack);
   for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
-    const Move& m = moves[i];
-    const uint8_t mask = leaves.mask_for(m);
-    const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
-    const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
-    out[i] = static_cast<double>(m.score()) + lv + opening_adjustment(m, board) +
-             peg_adjustment(m, bag_size, peg_table_) + eg;
+    out[i] = equity(moves[i], board, bag_size, opp_rack, leaves);
   }
   return out;
 }
