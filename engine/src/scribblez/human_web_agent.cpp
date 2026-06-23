@@ -102,7 +102,8 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
   // word. Plays keep their original indices so a `{"type":"move","index":...}`
   // reply still selects the right play; exchanges sit past the end of the play
   // list and are submitted via the `{"type":"exchange","letters":...}` path.
-  std::vector<Move> display_moves = req.legal_plays;
+  const std::vector<Move> plays = generate_legal_plays(req);
+  std::vector<Move> display_moves = plays;
   if (req.bag_size >= RACK_SIZE) append_exchange_moves(display_moves, req.my_rack);
 
   // Annotate each displayed move with its HastyBot static equity for the
@@ -145,8 +146,8 @@ Move HumanWebAgent::make_move(const MoveRequest& req) {
         auto it = obj.find("index");
         if (it != obj.end() && it->value().is_int64()) {
           long idx = static_cast<long>(it->value().as_int64());
-          if (idx >= 0 && static_cast<size_t>(idx) < req.legal_plays.size()) {
-            return req.legal_plays[static_cast<size_t>(idx)];
+          if (idx >= 0 && static_cast<size_t>(idx) < plays.size()) {
+            return plays[static_cast<size_t>(idx)];
           }
         }
       } else if (type == "pass") {

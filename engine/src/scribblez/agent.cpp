@@ -1,5 +1,6 @@
 #include "scribblez/agent.h"
 
+#include "scribblez/movegen.h"
 #include "scribblez/seed_producer.h"
 
 #include <boost/program_options.hpp>
@@ -9,6 +10,10 @@
 
 namespace scribblez {
 
+std::vector<Move> generate_legal_plays(const MoveRequest& req) {
+  return MoveGenerator(req.board, req.dict).generate(req.my_rack);
+}
+
 GreedyAgent::GreedyAgent(int thread_id, const std::string& name)
     : Agent(thread_id, name), rng_(SeedProducer::instance().next()) {}
 
@@ -16,11 +21,12 @@ GreedyAgent::GreedyAgent(int thread_id, const std::string& name, uint64_t seed)
     : Agent(thread_id, name), rng_(seed) {}
 
 Move GreedyAgent::make_move(const MoveRequest& req) {
-  if (!req.legal_plays.empty()) {
-    int best = req.legal_plays.front().score();
-    for (const auto& m : req.legal_plays) best = std::max(best, static_cast<int>(m.score()));
+  const std::vector<Move> plays = generate_legal_plays(req);
+  if (!plays.empty()) {
+    int best = plays.front().score();
+    for (const auto& m : plays) best = std::max(best, static_cast<int>(m.score()));
     std::vector<const Move*> top;
-    for (const auto& m : req.legal_plays)
+    for (const auto& m : plays)
       if (m.score() == best) top.push_back(&m);
     std::uniform_int_distribution<size_t> d(0, top.size() - 1);
     return *top[d(rng_)];

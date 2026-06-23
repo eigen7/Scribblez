@@ -14,6 +14,7 @@ namespace scribblez {
 // Forward declaration so Agent::end_game() can take a Game& without pulling
 // game.h (which itself includes agent.h) into every translation unit.
 class Game;
+class Dictionary;
 
 // Outcome of Agent::end_game(). NONE means the agent has no opinion (the
 // default for bots); PLAY_AGAIN / QUIT are produced by the human agent in
@@ -24,17 +25,27 @@ struct EndGameResult {
 };
 
 // Everything an agent needs in order to choose a move on its turn. Constructed
-// by the game loop and passed to Agent::make_move().
+// by the game loop and passed to Agent::make_move(). The game loop no longer
+// pre-computes legal moves: each agent generates the moves it needs from
+// `board` + `dict` (most via generate_legal_plays(); HastyBot via its own
+// shadow-play search), so an agent only pays for the generation it actually
+// uses.
 struct MoveRequest {
   const Board& board;
+  const Dictionary& dict;
   const Rack& my_rack;
   const Rack& opp_rack;  // opponent's rack (hidden during mid-game; fully
                          // visible at endgame when bag is empty)
   int my_score;
   int opp_score;
   int bag_size;
-  std::vector<Move> legal_plays;  // PLAY moves only; agent may pass/exchange
 };
+
+// Generate every legal PLAY for the active player (the GADDAG move generator
+// over req.board with req.my_rack). PASS/EXCHANGE are the agent's concern. This
+// is the shared path for agents that want the full move list (Greedy, Human,
+// the test bots); HastyBot bypasses it with shadow-play.
+std::vector<Move> generate_legal_plays(const MoveRequest& req);
 
 class Agent {
  public:

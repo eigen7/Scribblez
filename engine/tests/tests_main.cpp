@@ -749,11 +749,12 @@ class TestAgent : public scribblez::Agent {
       : scribblez::Agent(tid, std::move(name)), rng_(seed) {}
 
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
-    if (!req.legal_plays.empty()) {
+    const std::vector<scribblez::Move> plays = scribblez::generate_legal_plays(req);
+    if (!plays.empty()) {
       int best = -1;
-      for (const auto& m : req.legal_plays) best = std::max(best, int(m.score()));
+      for (const auto& m : plays) best = std::max(best, int(m.score()));
       std::vector<const scribblez::Move*> top;
-      for (const auto& m : req.legal_plays)
+      for (const auto& m : plays)
         if (int(m.score()) == best) top.push_back(&m);
       std::uniform_int_distribution<size_t> d(0, top.size() - 1);
       return *top[d(rng_)];

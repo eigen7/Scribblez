@@ -1,7 +1,5 @@
 #include "scribblez/game.h"
 
-#include "scribblez/movegen.h"
-
 #include <cassert>
 #include <utility>
 
@@ -57,17 +55,13 @@ void Game::play() {
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
   constexpr int kMaxTurns = 400;          // safety net
 
-  // One generator for the whole game: its cross-checks and anchors live on the
-  // board and are maintained incrementally as moves are applied, so PASS/
-  // EXCHANGE turns cost nothing and PLAY turns only touch the affected squares.
-  MoveGenerator gen(board_, dict_);
-
   while ((int)log_.turns.size() < kMaxTurns) {
-    // Generate legal plays for current player.
-    std::vector<Move> legal = gen.generate(racks_[cur]);
-
-    MoveRequest ctx{board_,           racks_[cur], racks_[1 - cur], scores_[cur],
-                    scores_[1 - cur], bag_.size(), std::move(legal)};
+    // The game loop no longer generates moves; each agent generates the moves
+    // it needs from the board + dictionary on its own turn. The board's
+    // cross-check/anchor caches still live on board_ and are maintained
+    // incrementally as moves are applied.
+    MoveRequest ctx{board_,           dict_,      racks_[cur], racks_[1 - cur], scores_[cur],
+                    scores_[1 - cur], bag_.size()};
     Move m = players_[cur]->make_move(ctx);
 
     TurnRecord rec;
