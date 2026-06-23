@@ -37,6 +37,10 @@ modify the code to meet needs of this project. Do not treat that code as unmodif
 a change there, tell the user what you need. The user can then commit it to that repo and then
 run `py/tools/pull_git_subtrees.py` to pull the subtree to the latest.
 
+# Python code
+
+Note that the Docker image adds `/workspace/repo/py/` to `PYTHONPATH`.
+
 # C++ Code
 
 ## Building
