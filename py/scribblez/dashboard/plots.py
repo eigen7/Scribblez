@@ -14,6 +14,7 @@ app can preserve scrub state across live rebuilds.
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -151,11 +152,64 @@ def _step_figure(title: str, x, series, y_label: str):
     return fig
 
 
-def train_step_grid(conn):
-    """Per-minibatch loss + WLD-accuracy curves (x-axis = minibatch).
+# Per-head loss components for the stacked plot. The third element is the run
+# arg that scales each head into the combined (optimized) loss; wld has an
+# implicit weight of 1, so the weighted bands sum to the total loss.
+_STACK_HEADS = (
+    ("loss_wld", "wld", None),
+    ("loss_score_diff", "score_diff", "lambda_sd"),
+    ("loss_opp_next_placement", "opp_next_placement", "lambda_opp"),
+)
 
-    Returns None when no per-minibatch data exists, so the caller can fall back
-    to the per-checkpoint loss view (the disk pipeline records only the latter).
+
+def _loss_weights(conn) -> dict:
+    """Per-head loss weights read from the run's args (default 1.0 if absent)."""
+    meta = db.read_meta(conn)
+    args = {}
+    if meta and meta.get("args_json"):
+        try:
+            args = json.loads(meta["args_json"])
+        except (ValueError, TypeError):
+            args = {}
+    return {name: (1.0 if key is None else float(args.get(key, 1.0)))
+            for _, name, key in _STACK_HEADS}
+
+
+def _stacked_loss_figure(x, bands):
+    """Stacked area of weighted per-head losses; the top of the stack is the
+    combined loss being optimized. `bands` is a list of (label, weighted_y array),
+    drawn bottom-to-top."""
+    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title="Train loss (stacked, weighted)",
+                 x_axis_label="minibatch", y_axis_label="loss",
+                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    palette = Category10[10]
+    xs = list(x)
+    cum = np.zeros(len(xs), dtype=np.float64)
+    for i, (label, y) in enumerate(bands):
+        lo, hi = cum, cum + y
+        src = ColumnDataSource(dict(x=xs, y1=list(lo), y2=list(hi)))
+        fig.varea(x="x", y1="y1", y2="y2", source=src, fill_color=palette[i % len(palette)],
+                  fill_alpha=0.85, legend_label=label)
+        cum = hi
+    total = fig.line(xs, list(cum), color="#222", line_width=1.0, legend_label="total")
+    fig.add_tools(HoverTool(renderers=[total],
+                            tooltips=[("minibatch", "@x"), ("total loss", "@y{0.0000}")],
+                            mode="vline"))
+    fig.y_range.start = 0
+    fig.legend.location = "top_right"
+    fig.legend.label_text_font_size = "8pt"
+    fig.legend.click_policy = "hide"
+    return fig
+
+
+def train_step_grid(conn):
+    """Per-minibatch stacked loss + WLD-accuracy curves (x-axis = minibatch).
+
+    The loss panel stacks each head's *weighted* contribution, so the band
+    heights show where the optimized loss is concentrated and the top edge is
+    the total loss. Returns None when no per-minibatch data exists, so the caller
+    can fall back to the per-checkpoint loss view (the disk pipeline records only
+    the latter).
     """
     ts = db.read_train_steps(conn)
     step = ts["step"]
@@ -163,13 +217,13 @@ def train_step_grid(conn):
         return None
     idx = _stride_idx(len(step), 4000)
     x = step[idx]
-    loss = _step_figure(
-        "Loss (per minibatch)", x,
-        [(ts["loss"][idx], "loss"), (ts["loss_wld"][idx], "loss_wld"),
-         (ts["loss_score_diff"][idx], "loss_score_diff"),
-         (ts["loss_opp_next_placement"][idx], "loss_opp_next_placement")],
-        "loss",
-    )
+    weights = _loss_weights(conn)
+    bands = []
+    for col, name, _ in _STACK_HEADS:
+        w = weights[name]
+        label = name if w == 1 else f"{w:g} * {name}"
+        bands.append((label, ts[col][idx] * w))
+    loss = _stacked_loss_figure(x, bands)
     acc = _step_figure("WLD accuracy (per minibatch)", x, [(ts["wld_acc"][idx], "wld_acc")], "accuracy")
     return column(row(loss, acc))
 
