@@ -52,6 +52,9 @@ interface ManualState {
   bag_count: number;
   lexicon: string;
   turns: TurnSummary[];
+  view_ply: number;
+  tail_ply: number;
+  backtracking: boolean;
   status?: string;
   tile_scores: Record<string, number>;
 }
@@ -81,7 +84,10 @@ function AppManual() {
     col: number;
     source: CandidateSource;
   } | null>(null);
+  const loadInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const interactionLocked = !!state?.backtracking;
 
   const send = useCallback((payload: object) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -143,6 +149,7 @@ function AppManual() {
 
   const onCellDrop = (row: number, col: number, payload: DragTilePayload) => {
     if (!state) return;
+    if (interactionLocked) return;
     if (exchangeMode) return;
     if (state.board[row]?.[col]) return;
     if (candidateMap.has(`${row},${col}`)) return;
@@ -162,6 +169,7 @@ function AppManual() {
 
   const handleCellClick = (row: number, col: number) => {
     if (!state) return;
+    if (interactionLocked) return;
     if (exchangeMode) return;
     if (state.board[row]?.[col]) return;
     setRackSelection(null);
@@ -187,6 +195,7 @@ function AppManual() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!state) return;
+      if (interactionLocked) return;
       if (exchangeMode) return;
       if (blankPending) return;
 
@@ -246,6 +255,7 @@ function AppManual() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     state,
+    interactionLocked,
     exchangeMode,
     blankPending,
     rackSelection,
@@ -259,6 +269,7 @@ function AppManual() {
   ]);
 
   const handleBlankDesignation = (letter: string) => {
+    if (interactionLocked) return;
     if (!blankPending) return;
     setCandidateTiles((prev) => [
       ...prev,
@@ -274,11 +285,13 @@ function AppManual() {
   };
 
   const handleRackSlotDrop = (player: number, index: number, payload: DragTilePayload) => {
+    if (interactionLocked) return;
     if (!payload.fromBag) return;
     send({ type: 'set_rack_slot', player, slot: index, letter: payload.letter, isBlank: payload.isBlank });
   };
 
   const handleNameChange = (player: 0 | 1, name: string) => {
+    if (interactionLocked) return;
     send({ type: 'set_name', player, name: name.slice(0, MAX_NAME_LENGTH) });
   };
 
@@ -293,6 +306,7 @@ function AppManual() {
   };
 
   const handleRackTileClickForPlayer = (player: 0 | 1, index: number) => {
+    if (interactionLocked) return;
     if (exchangeMode) {
       if (player !== state?.current_player) return;
       handleRackTileClick(index);
@@ -347,6 +361,7 @@ function AppManual() {
 
   function submitMove() {
     if (!state) return;
+    if (interactionLocked) return;
     const built = buildPlay();
     if (!built) {
       setStatus('Candidate tiles must form one contiguous row or column.');
@@ -374,12 +389,14 @@ function AppManual() {
 
   const passTurn = () => {
     if (!state) return;
+    if (interactionLocked) return;
     send({ type: 'pass', player: state.current_player });
     clearEntry();
   };
 
   const submitExchange = () => {
     if (!state) return;
+    if (interactionLocked) return;
     if (exchangeSelected.size === 0) {
       setStatus('Choose at least one rack slot to exchange.');
       return;
@@ -389,6 +406,7 @@ function AppManual() {
   };
 
   const startExchangeMode = () => {
+    if (interactionLocked) return;
     if (candidateTiles.length > 0) {
       setStatus('Clear candidate tiles before passing or exchanging.');
       return;
@@ -405,9 +423,43 @@ function AppManual() {
   };
 
   const newGame = () => {
+    if (interactionLocked) return;
     send({ type: 'reset' });
     clearEntry();
   };
+
+  const jumpToPly = (ply: number) => {
+    send({ type: 'jump_to_ply', ply });
+    clearEntry();
+  };
+
+  const forkGame = () => {
+    send({ type: 'fork_game' });
+    clearEntry();
+  };
+
+  const triggerLoad = () => {
+    loadInputRef.current?.click();
+  };
+
+  const onLoadFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      send({ type: 'load_gcg_text', text, file_name: file.name });
+      clearEntry();
+    } catch {
+      setStatus(`Failed to read ${file.name}`);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  useEffect(() => {
+    if (!state?.backtracking) return;
+    clearEntry();
+  }, [state?.backtracking, clearEntry]);
 
   if (!connected) {
     return (
@@ -463,6 +515,10 @@ function AppManual() {
   const unseenCount = unseenSlots.reduce((n, s) => n + (s.present ? 1 : 0), 0);
 
   const bagDragStart = (e: React.DragEvent, tile: BagTile) => {
+    if (interactionLocked) {
+      e.preventDefault();
+      return;
+    }
     e.dataTransfer.setData(
       'text/plain',
       JSON.stringify({
@@ -485,13 +541,14 @@ function AppManual() {
               className="rack-name-input"
               value={state.player_names[1]}
               maxLength={MAX_NAME_LENGTH}
+              disabled={interactionLocked}
               onChange={(e) => handleNameChange(1, e.target.value)}
             />
             <Rack
               tiles={state.racks[1].map((t) => ({ letter: t.known ? t.letter : '?', score: t.known ? t.score : 0 }))}
               usedIndices={new Set()}
               label=""
-              interactive={state.current_player === 1}
+              interactive={!interactionLocked && state.current_player === 1}
               exchangeMode={exchangeMode && state.current_player === 1}
               exchangeSelected={exchangeSelected}
               onTileClick={(index) => handleRackTileClickForPlayer(1, index)}
@@ -500,7 +557,7 @@ function AppManual() {
               showQuestionForBlank
               hideScoreForQuestion
               draggableIndices={new Set(state.racks[1].map((t, i) => (t.known ? i : -1)).filter((i) => i >= 0))}
-              tileClickEnabled={!exchangeMode}
+              tileClickEnabled={!exchangeMode && !interactionLocked}
               selectedTileIndex={rackSelection?.player === 1 ? rackSelection.slot : null}
             />
           </div>
@@ -513,7 +570,7 @@ function AppManual() {
             cursorRow={cursorRow}
             cursorCol={cursorCol}
             cursorDir={cursorDir}
-            interactive
+            interactive={!interactionLocked}
             onCellClick={handleCellClick}
             onCellDrop={onCellDrop}
           />
@@ -523,13 +580,14 @@ function AppManual() {
               className="rack-name-input"
               value={state.player_names[0]}
               maxLength={MAX_NAME_LENGTH}
+              disabled={interactionLocked}
               onChange={(e) => handleNameChange(0, e.target.value)}
             />
             <Rack
               tiles={state.racks[0].map((t) => ({ letter: t.known ? t.letter : '?', score: t.known ? t.score : 0 }))}
               usedIndices={new Set()}
               label=""
-              interactive={state.current_player === 0}
+              interactive={!interactionLocked && state.current_player === 0}
               exchangeMode={exchangeMode && state.current_player === 0}
               exchangeSelected={exchangeSelected}
               onTileClick={(index) => handleRackTileClickForPlayer(0, index)}
@@ -538,13 +596,19 @@ function AppManual() {
               showQuestionForBlank
               hideScoreForQuestion
               draggableIndices={new Set(state.racks[0].map((t, i) => (t.known ? i : -1)).filter((i) => i >= 0))}
-              tileClickEnabled={!exchangeMode}
+              tileClickEnabled={!exchangeMode && !interactionLocked}
               selectedTileIndex={rackSelection?.player === 0 ? rackSelection.slot : null}
             />
           </div>
 
           <div className="action-bar">
-            {exchangeMode ? (
+            {interactionLocked ? (
+              <>
+                <button className="btn btn-clear" onClick={() => jumpToPly(state.tail_ply)}>
+                  Return to End
+                </button>
+              </>
+            ) : exchangeMode ? (
               <>
                 <button className="btn btn-submit" onClick={submitExchange}>
                   Exchange {exchangeSelected.size}
@@ -564,8 +628,19 @@ function AppManual() {
             )}
           </div>
           <div className="action-bar manual-secondary-actions">
-            <button className="btn btn-clear" onClick={newGame}>New Game</button>
+            <button className="btn btn-clear" onClick={newGame} disabled={interactionLocked}>New Game</button>
+            {interactionLocked && (
+              <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
+            )}
+            <button className="btn btn-pass" onClick={triggerLoad}>Load Game</button>
             <button className="btn btn-exchange" onClick={exportGcg}>Export GCG</button>
+            <input
+              ref={loadInputRef}
+              type="file"
+              accept=".gcg,text/plain"
+              style={{ display: 'none' }}
+              onChange={onLoadFileSelected}
+            />
           </div>
           {status && <div className="manual-status">{status}</div>}
           <div className="cursor-hint">
@@ -598,7 +673,7 @@ function AppManual() {
                   <div
                     key={i}
                     className="unseen-cell present manual-unseen-draggable"
-                    draggable
+                    draggable={!interactionLocked}
                     onDragStart={(e) => bagDragStart(e, { letter: slot.letter, count: 1, score: slot.letter === '?' ? 0 : (state.tile_scores[slot.letter] ?? 0) })}
                   >
                     <span>{slot.letter === '?' ? '' : slot.letter}</span>
@@ -617,13 +692,25 @@ function AppManual() {
             <div className="manual-history">
               {state.turns
                 .slice()
-                .reverse()
                 .map((t, idx) => (
-                  <div key={idx} className="manual-history-row">
+                  <button
+                    key={idx}
+                    type="button"
+                    className={`manual-history-row${state.view_ply === idx + 1 ? ' active' : ''}`}
+                    onClick={() => jumpToPly(idx + 1)}
+                  >
                     <span>{state.player_names[t.player]}: {t.text}</span>
                     <span>{t.cumulative[0]}-{t.cumulative[1]}</span>
-                  </div>
+                  </button>
                 ))}
+              <button
+                type="button"
+                className={`manual-history-row manual-history-start${state.view_ply === 0 ? ' active' : ''}`}
+                onClick={() => jumpToPly(0)}
+              >
+                <span>Start Position</span>
+                <span>0-0</span>
+              </button>
             </div>
           </div>
         </div>

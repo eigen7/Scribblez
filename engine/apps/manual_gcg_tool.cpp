@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -44,6 +45,8 @@ struct ManualTilePlacement {
   int rack_slot = -1;
 };
 
+enum class RackSlotState : uint8_t { UNKNOWN, KNOWN, EMPTY };
+
 struct ManualTurn {
   TurnRecord record;
   bool include_rack_before = false;
@@ -51,6 +54,14 @@ struct ManualTurn {
   RackSlots rack_before_slots;
   std::array<RackSlots, 2> racks_after_turn;
   std::optional<std::string> exchange_field;
+};
+
+struct ManualSnapshot {
+  Board board;
+  std::array<int, 2> scores = {0, 0};
+  std::array<RackSlots, 2> racks;
+  TileCounts bag;
+  int turn_player = 0;
 };
 
 char upper_ch(char c) {
@@ -75,6 +86,59 @@ std::string now_string() {
 std::string trim_name(const std::string& in) {
   if (in.empty()) return in;
   return in.substr(0, kMaxNameLen);
+}
+
+std::vector<std::string> split_ws(const std::string& s) {
+  std::istringstream iss(s);
+  std::vector<std::string> out;
+  std::string tok;
+  while (iss >> tok) out.push_back(tok);
+  return out;
+}
+
+std::optional<int> parse_signed_int(const std::string& tok) {
+  if (tok.empty()) return std::nullopt;
+  std::size_t i = 0;
+  if (tok[0] == '+') i = 1;
+  if (i >= tok.size()) return std::nullopt;
+  try {
+    return std::stoi(tok.substr(i));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int* col) {
+  if (pos.size() < 2) return false;
+  if (std::isdigit(static_cast<unsigned char>(pos[0]))) {
+    // Across: 8H
+    std::size_t i = 0;
+    while (i < pos.size() && std::isdigit(static_cast<unsigned char>(pos[i]))) ++i;
+    if (i == 0 || i >= pos.size()) return false;
+    const char c = upper_ch(pos[i]);
+    if (c < 'A' || c > 'O') return false;
+    const int r = std::stoi(pos.substr(0, i)) - 1;
+    if (r < 0 || r >= BOARD_SIZE || i + 1 != pos.size()) return false;
+    *horizontal = true;
+    *row = r;
+    *col = c - 'A';
+    return true;
+  }
+
+  // Down: H8
+  const char c = upper_ch(pos[0]);
+  if (c < 'A' || c > 'O') return false;
+  const std::string digits = pos.substr(1);
+  if (digits.empty()) return false;
+  for (char ch : digits) {
+    if (!std::isdigit(static_cast<unsigned char>(ch))) return false;
+  }
+  const int r = std::stoi(digits) - 1;
+  if (r < 0 || r >= BOARD_SIZE) return false;
+  *horizontal = false;
+  *row = r;
+  *col = c - 'A';
+  return true;
 }
 
 Tile tile_from_letter(const std::string& s, bool is_blank) {
@@ -183,28 +247,34 @@ class ManualGame {
   }
 
   boost::json::object state_json() const {
+    const ManualSnapshot& snap = snapshots_[view_ply_];
+    const std::array<RackSlots, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
+
     boost::json::object o;
     o["type"] = "manual_state";
-    o["board"] = board_grid(board_);
-    o["bonuses"] = bonus_grid(board_);
-    o["scores"] = {scores_[0], scores_[1]};
+    o["board"] = board_grid(snap.board);
+    o["bonuses"] = bonus_grid(snap.board);
+    o["scores"] = {snap.scores[0], snap.scores[1]};
     o["player_names"] = {names_[0], names_[1]};
-    o["current_player"] = turn_player_;
-    const int bag_count = std::max(0, 100 - board_tile_count(board_) - 14);
+    o["current_player"] = snap.turn_player;
+    const int bag_count = std::max(0, 100 - board_tile_count(snap.board) - 14);
     o["bag_count"] = bag_count;
-    o["rack_known_counts"] = {known_count(0), known_count(1)};
+    o["rack_known_counts"] = {known_count(display_racks[0]), known_count(display_racks[1])};
     o["lexicon"] = Lexicon::instance().name();
     o["max_name_len"] = kMaxNameLen;
     o["status"] = status_;
     o["default_export_path"] = "/workspace/repo/manual_game.gcg";
     o["tile_scores"] = tile_score_map();
+    o["view_ply"] = view_ply_;
+    o["tail_ply"] = static_cast<int>(turns_.size());
+    o["backtracking"] = is_backtracking();
 
     boost::json::array racks;
     for (int p = 0; p < 2; ++p) {
       boost::json::array r;
       for (int s = 0; s < kRackSlots; ++s) {
-        if (racks_[p][s].has_value()) {
-          const Tile t = racks_[p][s].value();
+        if (display_racks[p][s].has_value()) {
+          const Tile t = display_racks[p][s].value();
           r.emplace_back(boost::json::object{
             {"letter", std::string(1, t.to_char())}, {"score", t.value()}, {"known", true}});
         } else {
@@ -217,12 +287,12 @@ class ManualGame {
 
     boost::json::array bag_tiles;
     for (Tile L = Tile::of(0); L < 26; ++L) {
-      const int count = bag_.count(L);
+      const int count = snap.bag.count(L);
       if (count <= 0) continue;
       bag_tiles.emplace_back(boost::json::object{
         {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
     }
-    const int blanks = bag_.count(BLANK);
+    const int blanks = snap.bag.count(BLANK);
     if (blanks > 0) {
       bag_tiles.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
     }
@@ -257,9 +327,14 @@ class ManualGame {
       for (int i = 0; i < TILE_COUNTS[L]; ++i) bag_.add(L);
     }
     for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag_.add(BLANK);
+
+    snapshots_.clear();
+    snapshots_.push_back(snapshot_from_live());
+    view_ply_ = 0;
   }
 
   void set_name(int player, const std::string& name) {
+    if (!require_live_mode("edit names")) return;
     if (player < 0 || player > 1) {
       status_ = "Invalid player index";
       return;
@@ -274,6 +349,7 @@ class ManualGame {
   }
 
   void set_rack_slot(int player, int slot, const std::string& letter) {
+    if (!require_live_mode("edit racks")) return;
     if (player < 0 || player > 1 || slot < 0 || slot >= kRackSlots) {
       status_ = "Invalid rack slot";
       return;
@@ -305,6 +381,7 @@ class ManualGame {
   void clear_rack_slot(int player, int slot) { set_rack_slot(player, slot, ""); }
 
   void pass_turn(int player) {
+    if (!require_live_mode("play turns")) return;
     if (player != turn_player_) {
       status_ = "It is not that player's turn";
       return;
@@ -329,9 +406,12 @@ class ManualGame {
 
     turn_player_ = 1 - turn_player_;
     status_ = "";
+    snapshots_.push_back(snapshot_from_live());
+    view_ply_ = static_cast<int>(turns_.size());
   }
 
   void exchange_turn(int player, const std::vector<int>& slots) {
+    if (!require_live_mode("play turns")) return;
     if (player != turn_player_) {
       status_ = "It is not that player's turn";
       return;
@@ -390,10 +470,13 @@ class ManualGame {
 
     turn_player_ = 1 - turn_player_;
     status_ = "";
+    snapshots_.push_back(snapshot_from_live());
+    view_ply_ = static_cast<int>(turns_.size());
   }
 
   void play_turn(int player, int row, int col, const std::string& dir, const std::string& word,
                  const boost::json::array& placements) {
+    if (!require_live_mode("play turns")) return;
     if (player != turn_player_) {
       status_ = "It is not that player's turn";
       return;
@@ -524,6 +607,277 @@ class ManualGame {
 
     turn_player_ = 1 - turn_player_;
     status_ = "";
+    snapshots_.push_back(snapshot_from_live());
+    view_ply_ = static_cast<int>(turns_.size());
+  }
+
+  void jump_to_ply(int ply) {
+    if (ply < 0 || ply > static_cast<int>(turns_.size())) {
+      status_ = "Invalid history position";
+      return;
+    }
+    view_ply_ = ply;
+    if (is_backtracking()) {
+      status_ = "Viewing turn " + std::to_string(view_ply_) + " / " +
+                std::to_string(static_cast<int>(turns_.size()));
+    } else {
+      status_.clear();
+    }
+  }
+
+  void fork_game() {
+    if (!is_backtracking()) {
+      status_ = "Already at latest position";
+      return;
+    }
+    const std::array<RackSlots, 2> fork_racks =
+      display_racks_for_view(view_ply_, snapshots_[view_ply_].racks);
+    turns_.resize(view_ply_);
+    snapshots_.resize(static_cast<std::size_t>(view_ply_ + 1));
+    restore_live_from_snapshot(snapshots_.back());
+    racks_ = fork_racks;
+    snapshots_.back().racks = racks_;
+    view_ply_ = static_cast<int>(turns_.size());
+    status_ = "Forked game at turn " + std::to_string(view_ply_);
+  }
+
+  void load_gcg_text(const std::string& gcg_text, const std::string& source_name) {
+    reset();
+
+    std::map<std::string, int> nick_to_player;
+    std::array<int, 2> cumulative = {0, 0};
+    bool saw_turn = false;
+
+    auto parse_player_decl = [&](const std::string& line, int p) {
+      std::size_t a = line.find(' ');
+      if (a == std::string::npos) return;
+      std::size_t b = line.find(' ', a + 1);
+      std::string nick;
+      std::string name;
+      if (b == std::string::npos) {
+        nick = line.substr(a + 1);
+        name = nick;
+      } else {
+        nick = line.substr(a + 1, b - (a + 1));
+        name = line.substr(b + 1);
+      }
+      if (nick.empty()) return;
+      nick_to_player[nick] = p;
+      names_[p] = name.empty() ? nick : name;
+    };
+
+    auto clear_rack_slots = [&](int player) {
+      for (int i = 0; i < kRackSlots; ++i) racks_[player][i].reset();
+    };
+
+    auto set_rack_slots_from_token = [&](int player, const std::string& rack_tok) {
+      clear_rack_slots(player);
+      int slot = 0;
+      for (char ch : rack_tok) {
+        if (slot >= kRackSlots) break;
+        if (ch == '.') continue;
+        const char up = upper_ch(ch);
+        if (up == '_') {
+          ++slot;
+          continue;
+        }
+        if (up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z')) {
+          // Some GCG producers encode blank rack tiles as lowercase letters.
+          racks_[player][slot++] = BLANK;
+          continue;
+        }
+        if (up >= 'A' && up <= 'Z') {
+          racks_[player][slot++] = Tile::from_char(up);
+        }
+      }
+    };
+
+    auto bag_size_estimate = [&]() { return std::max(0, 100 - board_tile_count(board_) - 14); };
+
+    std::istringstream in(gcg_text);
+    std::string raw;
+    while (std::getline(in, raw)) {
+      if (raw.empty()) continue;
+      if (raw.rfind("#player1", 0) == 0) {
+        parse_player_decl(raw, 0);
+        continue;
+      }
+      if (raw.rfind("#player2", 0) == 0) {
+        parse_player_decl(raw, 1);
+        continue;
+      }
+      if (raw[0] != '>') continue;
+
+      const std::size_t colon = raw.find(':');
+      if (colon == std::string::npos || colon <= 1) continue;
+      const std::string nick = raw.substr(1, colon - 1);
+      auto pit = nick_to_player.find(nick);
+      if (pit == nick_to_player.end()) continue;
+      const int player = pit->second;
+
+      const std::string rhs = raw.substr(colon + 1);
+      std::vector<std::string> tok = split_ws(rhs);
+      if (tok.size() < 2) continue;
+
+      set_rack_slots_from_token(player, tok[0]);
+      const RackSlots before_slots = racks_[player];
+      const std::string arg = tok[1];
+
+      // End-of-game adjustments like "(AEI) +6 402" are score updates only.
+      if (!arg.empty() && arg[0] == '(') {
+        auto cum = parse_signed_int(tok.back());
+        if (cum.has_value()) cumulative[player] = *cum;
+        scores_ = cumulative;
+        continue;
+      }
+
+      TurnRecord rec;
+      rec.player = player;
+      rec.rack_before = rack_known_tiles_from_slots(before_slots);
+      rec.bag_size_before = bag_size_estimate();
+      rec.drawn = Rack();
+
+      ManualTurn t;
+      t.include_rack_before = rack_fully_known(before_slots);
+      t.rack_before_slots = before_slots;
+
+      if (arg == "-") {
+        auto cum = parse_signed_int(tok.back());
+        cumulative[player] = cum.value_or(cumulative[player]);
+        scores_ = cumulative;
+
+        rec.move = Move::pass();
+        rec.score_delta = 0;
+        rec.cumulative_scores = scores_;
+
+        t.record = rec;
+        t.notation = "pass";
+        t.racks_after_turn = {racks_[0], racks_[1]};
+
+        turns_.push_back(std::move(t));
+        turn_player_ = 1 - player;
+        snapshots_.push_back(snapshot_from_live());
+        view_ply_ = static_cast<int>(turns_.size());
+        saw_turn = true;
+        continue;
+      }
+
+      if (!arg.empty() && arg[0] == '-') {
+        auto cum = parse_signed_int(tok.back());
+        cumulative[player] = cum.value_or(cumulative[player]);
+        scores_ = cumulative;
+
+        TileCounts exchanged;
+        const std::string exch = arg.substr(1);
+        for (char ch : exch) {
+          const char up = upper_ch(ch);
+          if (up == '?') {
+            exchanged.add(BLANK);
+          } else if (up >= 'A' && up <= 'Z') {
+            exchanged.add(Tile::from_char(up));
+          }
+        }
+
+        rec.move = Move::exchange(exchanged);
+        rec.score_delta = 0;
+        rec.cumulative_scores = scores_;
+
+        clear_rack_slots(player);
+
+        t.record = rec;
+        t.notation = "exch " + exch;
+        t.exchange_field = exch;
+        t.racks_after_turn = {racks_[0], racks_[1]};
+
+        turns_.push_back(std::move(t));
+        turn_player_ = 1 - player;
+        snapshots_.push_back(snapshot_from_live());
+        view_ply_ = static_cast<int>(turns_.size());
+        saw_turn = true;
+        continue;
+      }
+
+      if (tok.size() < 5) continue;
+
+      const std::string pos = tok[1];
+      const std::string word = tok[2];
+      auto score = parse_signed_int(tok[3]);
+      auto cum = parse_signed_int(tok[4]);
+      if (!score.has_value() || !cum.has_value()) continue;
+
+      bool horizontal = true;
+      int row = -1;
+      int col = -1;
+      if (!parse_gcg_position(pos, &horizontal, &row, &col)) continue;
+
+      std::array<Glyph, RACK_SIZE> glyphs;
+      glyphs.fill(Glyph::empty());
+      int num_glyphs = 0;
+      uint16_t mask = 0;
+      int r = row;
+      int c = col;
+      bool malformed = false;
+      for (char ch : word) {
+        if (!board_.in_bounds(r, c)) {
+          malformed = true;
+          break;
+        }
+        if (ch == '.') {
+          if (board_.at(r, c).is_empty()) {
+            malformed = true;
+            break;
+          }
+        } else {
+          const char up = upper_ch(ch);
+          if (up < 'A' || up > 'Z' || num_glyphs >= RACK_SIZE) {
+            malformed = true;
+            break;
+          }
+          const bool is_blank = std::islower(static_cast<unsigned char>(ch)) != 0;
+          glyphs[num_glyphs++] = Glyph::played(Tile::from_char(up), is_blank);
+          const int lane = horizontal ? c : r;
+          mask |= static_cast<uint16_t>(1) << lane;
+        }
+        if (horizontal) {
+          ++c;
+        } else {
+          ++r;
+        }
+      }
+      if (malformed) continue;
+
+      const int start = horizontal ? row : col;
+      Move m = Move::play(horizontal, start, mask, static_cast<uint16_t>(*score), glyphs.data(),
+                          num_glyphs);
+
+      const Board before = board_;
+      board_.apply(m);
+      cumulative[player] = *cum;
+      scores_ = cumulative;
+
+      rec.move = m;
+      rec.score_delta = *score;
+      rec.cumulative_scores = scores_;
+
+      clear_rack_slots(player);
+
+      t.record = rec;
+      t.notation = move_to_notation(before, m);
+      t.racks_after_turn = {racks_[0], racks_[1]};
+
+      turns_.push_back(std::move(t));
+      turn_player_ = 1 - player;
+      snapshots_.push_back(snapshot_from_live());
+      view_ply_ = static_cast<int>(turns_.size());
+      saw_turn = true;
+    }
+
+    if (!saw_turn) {
+      status_ = "No playable turns found in " + source_name;
+      return;
+    }
+
+    status_ = "Loaded " + source_name;
   }
 
   bool export_gcg(const std::string& path) {
@@ -586,10 +940,12 @@ class ManualGame {
 
   Rack rack_known_tiles(int player) const { return rack_known_tiles_from_slots(racks_[player]); }
 
-  int known_count(int player) const {
+  int known_count(int player) const { return known_count(racks_[player]); }
+
+  int known_count(const RackSlots& slots) const {
     int n = 0;
     for (int i = 0; i < kRackSlots; ++i) {
-      if (racks_[player][i].has_value()) ++n;
+      if (slots[i].has_value()) ++n;
     }
     return n;
   }
@@ -601,6 +957,124 @@ class ManualGame {
       if (!slots[i].has_value()) return false;
     }
     return true;
+  }
+
+  RackSlots next_known_rack_before(int player, int from_ply, const RackSlots& fallback) const {
+    for (int i = from_ply; i < static_cast<int>(turns_.size()); ++i) {
+      const ManualTurn& t = turns_[i];
+      if (t.record.player != player) continue;
+      if (has_known_tiles(t.rack_before_slots)) return t.rack_before_slots;
+    }
+    return fallback;
+  }
+
+  RackSlots post_move_rack_from_turn(const ManualTurn& t) const {
+    std::array<RackSlotState, kRackSlots> state;
+    std::array<std::optional<Tile>, kRackSlots> letters;
+    for (int i = 0; i < kRackSlots; ++i) {
+      if (t.rack_before_slots[i].has_value()) {
+        state[i] = RackSlotState::KNOWN;
+        letters[i] = t.rack_before_slots[i].value();
+      } else {
+        state[i] = RackSlotState::UNKNOWN;
+        letters[i].reset();
+      }
+    }
+
+    auto consume_rack_tile = [&](Tile rack_tile) {
+      for (int i = 0; i < kRackSlots; ++i) {
+        if (state[i] == RackSlotState::KNOWN && letters[i].has_value() && letters[i].value() == rack_tile) {
+          state[i] = RackSlotState::EMPTY;
+          letters[i].reset();
+          return;
+        }
+      }
+      for (int i = 0; i < kRackSlots; ++i) {
+        if (state[i] == RackSlotState::UNKNOWN) {
+          state[i] = RackSlotState::EMPTY;
+          return;
+        }
+      }
+    };
+
+    int consumed = 0;
+    if (t.record.move.type() == MoveType::PLAY || t.record.move.type() == MoveType::EXCHANGE) {
+      consumed = t.record.move.num_glyphs();
+      for (int i = 0; i < t.record.move.num_glyphs(); ++i) {
+        consume_rack_tile(t.record.move.glyph(i).rack_tile());
+      }
+    }
+
+    int draws = 0;
+    if (t.record.move.type() == MoveType::PLAY) {
+      draws = std::min(consumed, t.record.bag_size_before);
+    } else if (t.record.move.type() == MoveType::EXCHANGE) {
+      draws = consumed;
+    }
+
+    for (int i = 0; i < kRackSlots && draws > 0; ++i) {
+      if (state[i] == RackSlotState::EMPTY) {
+        state[i] = RackSlotState::UNKNOWN;
+        --draws;
+      }
+    }
+
+    // Any remaining empty slots correspond to unknown draw outcomes (or
+    // partial rack information in source logs), so represent them as unknowns
+    // in the UI.
+    for (int i = 0; i < kRackSlots; ++i) {
+      if (state[i] == RackSlotState::EMPTY) state[i] = RackSlotState::UNKNOWN;
+    }
+
+    RackSlots out;
+    for (int i = 0; i < kRackSlots; ++i) {
+      if (state[i] == RackSlotState::KNOWN) {
+        out[i] = letters[i];
+      } else {
+        out[i].reset();
+      }
+    }
+    return out;
+  }
+
+  std::array<RackSlots, 2> display_racks_for_view(
+    int view_ply, const std::array<RackSlots, 2>& fallback) const {
+    std::array<RackSlots, 2> out = fallback;
+    if (view_ply <= 0 || view_ply > static_cast<int>(turns_.size())) return out;
+
+    const ManualTurn& viewed = turns_[view_ply - 1];
+    const int mover = viewed.record.player;
+    const int waiting = 1 - mover;
+
+    out[mover] = post_move_rack_from_turn(viewed);
+    out[waiting] = next_known_rack_before(waiting, view_ply, fallback[waiting]);
+    return out;
+  }
+
+  ManualSnapshot snapshot_from_live() const {
+    ManualSnapshot s;
+    s.board = board_;
+    s.scores = scores_;
+    s.racks = racks_;
+    s.bag = bag_;
+    s.turn_player = turn_player_;
+    return s;
+  }
+
+  void restore_live_from_snapshot(const ManualSnapshot& s) {
+    board_ = s.board;
+    scores_ = s.scores;
+    racks_ = s.racks;
+    bag_ = s.bag;
+    turn_player_ = s.turn_player;
+  }
+
+  bool is_backtracking() const { return view_ply_ != static_cast<int>(turns_.size()); }
+
+  bool require_live_mode(const std::string& action) {
+    if (!is_backtracking()) return true;
+    status_ = "Cannot " + action + " while viewing history. Return to the latest turn or fork.";
+    return false;
   }
 
   bool matches_play(const Move& m, const std::vector<ManualTilePlacement>& spec) const {
@@ -642,6 +1116,8 @@ class ManualGame {
   std::array<std::array<std::optional<Tile>, kRackSlots>, 2> racks_;
   TileCounts bag_;
   std::vector<ManualTurn> turns_;
+  std::vector<ManualSnapshot> snapshots_;
+  int view_ply_ = 0;
   int turn_player_ = 0;
   std::string status_;
 };
@@ -681,6 +1157,18 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
     if (it != obj.end() && it->value().is_array()) placements = it->value().as_array();
     game.play_turn(int_field(obj, "player"), int_field(obj, "row"), int_field(obj, "col"),
                    str_field(obj, "dir"), str_field(obj, "word"), placements);
+    return;
+  }
+  if (type == "jump_to_ply") {
+    game.jump_to_ply(int_field(obj, "ply"));
+    return;
+  }
+  if (type == "fork_game") {
+    game.fork_game();
+    return;
+  }
+  if (type == "load_gcg_text") {
+    game.load_gcg_text(str_field(obj, "text"), str_field(obj, "file_name"));
     return;
   }
   if (type == "export") {

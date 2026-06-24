@@ -762,6 +762,24 @@ h1 {
   padding: 6px 8px;
   border-radius: 4px;
   font-size: 12px;
+  color: #ecf0f1;
+  border: 1px solid transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.manual-history-row:hover {
+  background: #36506a;
+}
+
+.manual-history-row.active {
+  border-color: #aed581;
+  background: #3c5b78;
+}
+
+.manual-history-start {
+  margin-top: 4px;
 }
 
 @media (max-width: 1100px) {

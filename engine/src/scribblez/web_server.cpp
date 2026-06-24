@@ -156,8 +156,9 @@ std::string header_value(const std::string& req, const std::string& name) {
 
 // ----------------------------- port freeing ------------------------------
 
-// PIDs currently listening on / connected to `port`, via `lsof -t -i :port`.
-std::set<int> pids_on_port(int port) {
+// PIDs currently LISTENing on `port`, via lsof. We intentionally ignore
+// established client sockets so we never kill unrelated client processes.
+std::set<int> pids_listening_on_port(int port) {
   namespace bp = boost::process;
   std::set<int> pids;
   boost::filesystem::path lsof = bp::search_path("lsof");
@@ -165,7 +166,7 @@ std::set<int> pids_on_port(int port) {
 
   bp::ipstream out;
   std::error_code ec;
-  bp::child c(lsof, "-t", "-i", ":" + std::to_string(port), bp::std_out > out,
+  bp::child c(lsof, "-nP", "-t", "-iTCP:" + std::to_string(port), "-sTCP:LISTEN", bp::std_out > out,
               bp::std_err > bp::null, ec);
   if (ec) return pids;
   std::string line;
@@ -182,24 +183,53 @@ std::set<int> pids_on_port(int port) {
   return pids;
 }
 
-// Kill any process holding `port` and wait for the OS to release it, so we can
-// (re)bind / relaunch cleanly even after a previous run was killed abruptly and
-// orphaned its child processes. Best-effort: silently no-op if lsof is absent.
-void free_port(int port) {
-  std::set<int> pids = pids_on_port(port);
+bool http_responding_on_port(int port) {
+  int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return false;
+
+  timeval tv{};
+  tv.tv_sec = 0;
+  tv.tv_usec = 300000;  // 300ms
+  ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(static_cast<uint16_t>(port));
+
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    ::close(fd);
+    return false;
+  }
+
+  const char req[] = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+  if (!write_all(fd, req, sizeof(req) - 1)) {
+    ::close(fd);
+    return false;
+  }
+
+  char buf[16];
+  const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+  ::close(fd);
+  return n > 0;
+}
+
+void kill_listening_pids_on_port(int port) {
+  std::set<int> pids = pids_listening_on_port(port);
   pid_t self = ::getpid();
   bool killed_any = false;
   for (int pid : pids) {
     if (pid == self) continue;
-    std::cerr << "  Port " << port << " is in use by pid " << pid << "; freeing it.\n";
+    std::cerr << "  Port " << port << " is in use by pid " << pid << "; reclaiming it.\n";
     ::kill(pid, SIGKILL);
     killed_any = true;
   }
   if (!killed_any) return;
 
-  for (int i = 0; i < 10; ++i) {
+  for (int i = 0; i < 20; ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    std::set<int> still = pids_on_port(port);
+    std::set<int> still = pids_listening_on_port(port);
     still.erase(self);
     if (still.empty()) return;
   }
@@ -336,8 +366,17 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
     : dev_port_(dev_port), ws_port_(ws_port) {
   namespace bp = boost::process;
 
-  // Reclaim the dev-server port in case a previous run's Vite was orphaned.
-  free_port(dev_port_);
+  // If a dev server is already listening on this port, reuse it only when it
+  // actually responds to HTTP. If the listener is stale/stuck, reclaim it.
+  if (!pids_listening_on_port(dev_port_).empty()) {
+    if (http_responding_on_port(dev_port_)) {
+      std::cerr << "  Reusing existing dev server on port " << dev_port_ << ".\n";
+      return;
+    }
+    std::cerr << "  Existing listener on port " << dev_port_
+              << " is unresponsive; restarting dev server.\n";
+    kill_listening_pids_on_port(dev_port_);
+  }
 
   // Pass the ports through to vite.config.ts so the browser UI and the engine's
   // WebSocket server always agree on which ports to use / proxy.
@@ -369,6 +408,8 @@ ViteDevServer::~ViteDevServer() {
 }
 
 bool ViteDevServer::wait_until_ready(int timeout_ms) {
+  if (!child_) return http_responding_on_port(dev_port_);
+
   namespace asio = boost::asio;
   using tcp = asio::ip::tcp;
 
@@ -395,8 +436,9 @@ std::string ViteDevServer::url() const { return "http://localhost:" + std::to_st
 
 WebSession::WebSession(int port) : port_(port) {
   std::signal(SIGPIPE, SIG_IGN);
-  // Reclaim the port if a previous run left something holding it.
-  free_port(port_);
+  // Reclaim the WebSocket port so a new manual_gcg_tool launch can take over
+  // from an older instance without manual cleanup.
+  kill_listening_pids_on_port(port_);
   // SOCK_CLOEXEC so the Vite dev server we later fork/exec does not inherit (and
   // keep alive) this listening socket.
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
