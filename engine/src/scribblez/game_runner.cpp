@@ -144,10 +144,7 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "train-time sampling is done by the DataLoader)")                                  //
     ("games-per-file", po::value<int>(&games_per_file)->default_value(games_per_file),  //
      "games per .slog file (only used with --binary-log-dir)")                          //
-    ("sample-endgames", po::bool_switch(&sample_endgames),                              //
-     "also sample endgame positions (bag empty) into the .slog files; by "
-     "default only pre-endgame positions are eligible")              //
-    ("threads,t", po::value<int>(&threads)->default_value(threads),  //
+    ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
      "number of parallel game threads (>1 requires all players to support "
      "parallelism, i.e. no human players)")  //
     ("random-handicap-max",
@@ -194,8 +191,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
       std::cerr << "Error: --games-per-file must be >= 1\n";
       throw Exception("--games-per-file must be >= 1");
     }
-    binary_writer_ = std::make_unique<binlog::BinaryLogWriter>(
-      params_.binary_log_dir, params_.games_per_file, params_.sample_endgames);
+    binary_writer_ =
+      std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, params_.games_per_file);
   }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from "

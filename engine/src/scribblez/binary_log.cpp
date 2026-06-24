@@ -31,14 +31,12 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
-// Count the training-eligible turns of `log`. When `include_endgame` is false,
-// only pre-endgame turns (bag had tiles when the turn began) are eligible; when
-// true, every turn is. Because the bag is non-increasing across turns, the
-// eligible turns form a leading prefix [0, count), so a single count fully
+// Count the training-eligible turns of `log`: the pre-endgame turns (bag had
+// tiles when the turn began). Because the bag is non-increasing across turns,
+// the eligible turns form a leading prefix [0, count), so a single count fully
 // describes the eligible set (recorded as GameMetadata::eligible_turns and
 // expanded into one training row per eligible turn at load time).
-int eligible_turn_count(const GameLog& log, bool include_endgame) {
-  if (include_endgame) return log.num_records;
+int eligible_turn_count(const GameLog& log) {
   int count = 0;
   for (int k = 0; k < log.num_records; ++k) {
     if (log.records[k].bag_size_before <= 0) break;  // prefix ends at the first endgame turn
@@ -54,11 +52,11 @@ std::mt19937_64& sampler_rng() {
 
 }  // namespace
 
-int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng, bool include_endgame) {
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
   std::vector<int> eligible;
   eligible.reserve(static_cast<size_t>(log.num_records));
   for (int k = 0; k < log.num_records; ++k) {
-    if (include_endgame || log.records[k].bag_size_before > 0) eligible.push_back(k);
+    if (log.records[k].bag_size_before > 0) eligible.push_back(k);
   }
   if (eligible.empty()) return -1;
   std::uniform_int_distribution<size_t> dist(0, eligible.size() - 1);
@@ -69,8 +67,8 @@ int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng, bool include_end
 // BinaryLogWriter
 // ---------------------------------------------------------------------------
 
-BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file, bool sample_endgames)
-    : dir_(dir), games_per_file_(games_per_file), sample_endgames_(sample_endgames) {
+BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file)
+    : dir_(dir), games_per_file_(games_per_file) {
   if (games_per_file_ < 1) games_per_file_ = 1;
 }
 
@@ -116,13 +114,12 @@ struct PreparedBatch {
   std::vector<GameLog> games;
 };
 
-// Pre-build per-game blobs. `include_endgame` controls whether post-bag-empty
-// positions are eligible. Each kept game records its eligible-turn count (the
-// prefix [0, eligible) training expands over) and one eval-only sampled turn
-// drawn uniformly from that prefix. Games with no eligible turn (bag empty for
-// every turn with endgame sampling off -- shouldn't happen in practice but we
-// guard anyway) are dropped.
-PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games, bool include_endgame) {
+// Pre-build per-game blobs. Each kept game records its eligible-turn count (the
+// pre-endgame prefix [0, eligible) training expands over) and one eval-only
+// sampled turn drawn uniformly from that prefix. Games with no eligible turn
+// (bag empty for every turn -- shouldn't happen in practice but we guard
+// anyway) are dropped.
+PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   PreparedBatch p;
   p.initial.reserve(games.size());
   p.turns.reserve(games.size());
@@ -132,12 +129,12 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games, bool inclu
   std::mt19937_64& rng = sampler_rng();
   for (const GameLogStorage& gs : games) {
     const GameLog g = gs.view();
-    const int eligible = eligible_turn_count(g, include_endgame);
+    const int eligible = eligible_turn_count(g);
     if (eligible <= 0) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
       continue;
     }
-    const int sampled = pick_sampled_turn(g, rng, include_endgame);
+    const int sampled = pick_sampled_turn(g, rng);
     p.initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
     turns.reserve(static_cast<size_t>(g.num_records));
@@ -208,7 +205,7 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
 }  // namespace
 
 void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
-  const PreparedBatch prepared = prepare_batch(games, sample_endgames_);
+  const PreparedBatch prepared = prepare_batch(games);
   if (prepared.games.empty()) return;
 
   const std::vector<GameMetadata> meta = build_metadata_table(prepared);
