@@ -1741,8 +1741,8 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.sampled_turn = 0;     // eval-only; training uses eligible_turns
-  gm.eligible_turns = 1;   // expand to one row: turn 0
+  gm.sampled_turn = 0;    // eval-only; training uses eligible_turns
+  gm.eligible_turns = 1;  // expand to one row: turn 0
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
@@ -3069,6 +3069,66 @@ static void test_topk1_selection_matches_hastybot() {
             << " candidates, pick=" << hasty_pick << ")\n";
 }
 
+// Build a one-game .slog buffer whose two turns are both PASSes, with a starting
+// handicap of `initial_score_p0` points for p0, and return the score
+// differential recovered from the sampled position's input encoding. The two
+// turns are PASSes, so the board stays empty and the handicap is the sole
+// contributor to the score-diff feature.
+static int decode_handicap_score_diff(int initial_score_p0) {
+  using namespace scribblez::binlog;
+  using namespace scribblez;
+
+  FileHeader hdr{};
+  hdr.magic = kMagic;
+  hdr.version = kVersion;
+  hdr.num_games = 1;
+
+  GameMetadata gm{};
+  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
+  gm.num_turns = 2;
+  gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
+  gm.initial_score_p0 = static_cast<int16_t>(initial_score_p0);
+
+  InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
+  TurnBlob t0{};
+  t0.move = Move::pass();
+  TurnBlob t1{};
+  t1.move = Move::pass();
+
+  std::vector<char> buf;
+  auto append_bytes = [&buf](const void* p, size_t n) {
+    const char* c = reinterpret_cast<const char*>(p);
+    buf.insert(buf.end(), c, c + n);
+  };
+  append_bytes(&hdr, sizeof(hdr));
+  append_bytes(&gm, sizeof(gm));
+  append_bytes(&ir, sizeof(ir));
+  append_bytes(&t0, sizeof(t0));
+  append_bytes(&t1, sizeof(t1));
+
+  std::vector<float> output(kRowFloats, 0.0f);
+  uint8_t flip = 0;
+  BlockDecoder dec;
+  dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
+             /*post_move=*/false, /*output_row_start=*/0, output.data());
+
+  // Thermometer invariant: the number of set slots equals
+  // (clipped_diff + kScoreDiffClip + 1).
+  const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
+  int ones = 0;
+  for (int i = 0; i < kScoreDiffThermoBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
+  return ones - kScoreDiffClip - 1;
+}
+
+// A head-start handicap stored in GameMetadata must reach the replayed
+// position's score-differential input (the decoder seeds its score
+// accumulator from the metadata's initial scores).
+static void test_handicap_shifts_score_diff_input() {
+  CHECK(decode_handicap_score_diff(0) == 0);
+  CHECK(decode_handicap_score_diff(80) == 80);
+  std::cout << "test_handicap_shifts_score_diff_input passed\n";
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
@@ -3090,6 +3150,7 @@ int main() {
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
   test_binary_log_file_and_data_loader_roundtrip();
+  test_handicap_shifts_score_diff_input();
   test_tile_glyph_basics();
   test_rack_invariants();
   test_bag_basics();
