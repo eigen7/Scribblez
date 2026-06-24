@@ -164,8 +164,6 @@ Move hasty_best_move_gaddag(const MoveRequest& req) {
 Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   if (req.my_rack.counts().blanks() > 0) return hasty_best_move_gaddag(req);
   const HastyEquity& eq = HastyEquity::instance();
-  ShadowMoveGen smg(req.board, req.dict);
-  const std::vector<ShadowExtent> extents = smg.extents(req.my_rack);
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
   const BoundInputs in = make_bound_inputs(req, eq);
 
@@ -173,9 +171,60 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   int rack_tiles = 0;
   wmp_rack_subracks(req.my_rack, subracks, rack_tiles);
 
+  // One pass over the rack's subracks computes three things MAGPIE derives
+  // together in its move generator:
+  //   - sub_terms[size][j]: each subrack's equity contribution (leave value +
+  //     pre-endgame term), for the per-subrack generation cutoff.
+  //   - has_word[size]: whether any size-k subrack forms a k-letter word -- the
+  //     shadow's nonplaythrough existence prune (handed to extents()).
+  //   - np_best_leave_term[size]: the best leave term among WORD-FORMING subracks
+  //     of that size (MAGPIE's nonplaythrough_best_leave_values), a tighter leave
+  //     bound for nonplaythrough extents than the global best-leave-by-size.
+  // The word-existence lookups here are shadow-time checks, not generation probes.
+  std::array<std::vector<double>, kMaxPlayTiles + 1> sub_terms;
+  std::array<bool, kMaxPlayTiles + 1> has_word{};
+  std::array<double, kMaxPlayTiles + 1> np_best_leave_term;
+  np_best_leave_term.fill(-1e18);
+  const TileCounts& rack_counts = req.my_rack.counts();
+  for (int size = 1; size <= rack_tiles && size <= kMaxPlayTiles; ++size) {
+    sub_terms[size].reserve(subracks[size].size());
+    for (const BitRack& sub : subracks[size]) {
+      double term = in.endgame_term;
+      if (!in.endgame) {
+        Rack leave;
+        for (Tile L = Tile::of(0); L < 26; ++L) {
+          const int c = rack_counts.count(L) - sub.get(L.index());
+          for (int k = 0; k < c; ++k) leave.add(L);
+        }
+        term = eq.leave_value(leave) + eq.peg_for_tiles(size, in.bag_size);
+      }
+      sub_terms[size].push_back(term);
+      if (size >= 2 && wm.lookup(size, sub).count > 0) {
+        has_word[size] = true;
+        if (term > np_best_leave_term[size]) np_best_leave_term[size] = term;
+      }
+    }
+  }
+
+  ShadowMoveGen smg(req.board, req.dict);
+  const std::vector<ShadowExtent> extents = smg.extents(req.my_rack, &wm, &has_word);
+
   std::vector<double> bounds(extents.size());
   for (size_t i = 0; i < extents.size(); ++i) {
-    bounds[i] = equity_bound(eq, in, extents[i].placed, extents[i].score_bound);
+    const ShadowExtent& e = extents[i];
+    // A nonplaythrough extent (word == its placed tiles) is bounded by the best
+    // leave among the size-placed subracks that actually form a word; a playthrough
+    // extent keeps the looser global best-leave-by-size.
+    double leave_term;
+    if (e.length == e.placed && has_word[e.placed]) {
+      leave_term = np_best_leave_term[e.placed];
+    } else if (in.endgame) {
+      leave_term = in.endgame_term;
+    } else {
+      leave_term =
+        in.leave_by_size[in.rack_size - e.placed] + eq.peg_for_tiles(e.placed, in.bag_size);
+    }
+    bounds[i] = static_cast<double>(e.score_bound) + leave_term;
   }
 
   BestMove bm;
@@ -183,14 +232,9 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   for (const auto& [bound, i] : rank_by_bound(bounds)) {
     if (bm.have && bound < bm.eq) break;  // no remaining extent can beat the best move
     const ShadowExtent& e = extents[i];
-    // Full-rack existence prune (MAGPIE shadow_record): a bingo-through extent
-    // places the whole rack (one subrack), so a single probe settles it -- skip
-    // the dead ones (their high score bound otherwise keeps them above the cutoff).
-    if (e.placed == rack_tiles && wm.lookup(e.length, e.pt + subracks[rack_tiles][0]).count == 0) {
-      continue;
-    }
     moves.clear();
-    wmp_generate_extent(req.board, wm, subracks, e, moves);
+    wmp_generate_extent(req.board, wm, subracks, e, moves, bm.have ? bm.eq : -1e18,
+                        sub_terms[e.placed].data());
     consider_moves(eq, req, leaves, moves, bm);
   }
   return bm.have ? bm.move : Move::pass();

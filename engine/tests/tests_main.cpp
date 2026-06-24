@@ -2861,7 +2861,7 @@ static void test_wmp_generate_matches_full() {
         // extent's score bound never underestimates its plays (so the best-first
         // early-exit over extents is exact).
         std::vector<Move> extent_union;
-        for (const ShadowExtent& e : smg.extents(rack)) {
+        for (const ShadowExtent& e : smg.extents(rack, &wm)) {
           std::vector<Move> em;
           wmp_generate_extent(board, wm, subracks, e, em);
           for (const Move& m : em) {
@@ -3045,7 +3045,7 @@ static void test_wmp_benchmark() {
   for (int rep = 0; rep < kReps; ++rep) {
     for (const CapturedPos& p : positions) {
       ShadowMoveGen smg(p.board, dict);
-      sink_ext += static_cast<long>(smg.extents(p.rack).size());
+      sink_ext += static_cast<long>(smg.extents(p.rack, &wm).size());
     }
   }
   auto ts3 = std::chrono::steady_clock::now();

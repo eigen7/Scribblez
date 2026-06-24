@@ -58,22 +58,25 @@ struct ShadowAnchor {
   std::array<int, kMaxPlayTiles + 1> score_bound_by_size;
 };
 
-// A group of candidate plays sharing one (length, playthrough multiset) in a
-// lane: a word of `length` that lays down `placed` tiles over the playthrough
-// `pt`, anchored at any of the `starts` columns. Because every start has the same
-// playthrough multiset, one WordMap scan of (pt + subrack) serves them all -- the
-// found words just slide across the starts (MAGPIE's start-column range). This is
-// the unit the shadow prices and the best-first loop generates; `score_bound` is
-// an admissible upper bound on the raw score of any play in the group.
+// One MAGPIE shadow anchor, keyed by (playthrough_blocks, tiles_played): a word
+// of `length` that lays down `placed` tiles over a fixed number of playthrough
+// blocks, whose left edge (start column) ranges over [leftmost_start_col,
+// rightmost_start_col]. Every start in that range traverses the same playthrough
+// multiset `pt` (reconstructed from the rightmost start), so one WordMap scan of
+// (pt + subrack) serves them all -- the found words slide across the start range,
+// each verified against the board at its own start column. This is the unit the
+// shadow prices and the best-first loop generates; `score_bound` is an admissible
+// upper bound (MAGPIE's descending-tile x descending-effective-multiplier bound)
+// on the raw score of any play in the group.
 struct ShadowExtent {
   bool transposed;
   int row;     // view-row of the lane
   int length;  // word length (the span covering each start is [s, s+length))
   int placed;  // tiles laid down (length minus the playthrough tile count)
-  BitRack pt;  // playthrough multiset shared by every start
+  BitRack pt;  // playthrough multiset (from the rightmost start column)
   int score_bound;
-  std::array<int8_t, BOARD_SIZE> starts;  // word-start columns
-  int num_starts;
+  int8_t leftmost_start_col;
+  int8_t rightmost_start_col;
 };
 
 // Best-first move generator: instead of enumerating every legal play, it bounds
@@ -98,8 +101,15 @@ class ShadowMoveGen {
   // This is the finer-grained shadow the WordMap path drives: a caller ranks ALL
   // extents by equity bound and generates them best-first, so low-value extents
   // are never WordMap-scanned. The union of every extent's plays equals
-  // MoveGenerator::generate.
-  std::vector<ShadowExtent> extents(const Rack& rack) const;
+  // MoveGenerator::generate. When `wm` is non-null it is used for shadow-time
+  // word-existence pruning (fewer extents); passing nullptr leaves the move set
+  // unchanged, just less aggressively pruned. `nonplaythrough_has_word`, when
+  // supplied, is `has_word[k] == true iff some size-k subrack forms a k-letter
+  // word` -- a value the caller may already have computed; pass nullptr to have
+  // extents() compute it from `wm`.
+  std::vector<ShadowExtent> extents(
+    const Rack& rack, const WordMap* wm = nullptr,
+    const std::array<bool, kMaxPlayTiles + 1>* nonplaythrough_has_word = nullptr) const;
 
  private:
   const Board& board_;
@@ -128,7 +138,13 @@ void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubrack
 // (playthrough + subrack) per subrack, each found word verified and placed at
 // every start column in the group. A caller drives it best-first over extents so
 // only the high-value ones are ever scanned. Blank-free.
+//
+// `sub_terms` (when non-null) holds, parallel to the rack's size-`e.placed`
+// subracks, each subrack's equity contribution (leave value + pre-endgame term);
+// a subrack whose `e.score_bound + sub_terms[j]` cannot reach `best_equity` is
+// skipped before its lookup. Pass nullptr (the default) to scan every subrack.
 void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
-                         const ShadowExtent& e, std::vector<Move>& out);
+                         const ShadowExtent& e, std::vector<Move>& out, double best_equity = -1e18,
+                         const double* sub_terms = nullptr);
 
 }  // namespace scribblez

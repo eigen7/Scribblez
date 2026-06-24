@@ -142,6 +142,10 @@ class HastyEquity {
   // `bag_size` tiles in the bag (0 outside the pre-endgame table's range).
   double peg_for_tiles(int tiles_played, int bag_size) const;
 
+  // Raw leave equity for a specific leave (the tiles kept after a play). Used by
+  // the WordMap best-first loop to bound a single subrack's plays before probing.
+  double leave_value(const Rack& leave) const { return leave_values_.lookup(leave); }
+
  private:
   HastyEquity() = default;
 
