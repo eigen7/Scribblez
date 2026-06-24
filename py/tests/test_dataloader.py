@@ -82,11 +82,13 @@ class TestEpochCoverage:
         slogs = generate_test_slogs(tmp_path)
 
         loader = NativeDataLoader(memory_budget=256 * 1024 * 1024, num_workers=2, num_prefetch=1)
-        total = 0
         for p in slogs:
-            num_pos, fsize = read_file_header(p)
-            loader.add_file(p, num_pos, fsize)
-            total += num_pos
+            num_games, fsize = read_file_header(p)
+            loader.add_file(p, num_games, fsize)
+        # read_file_header reports games; the default (turns_per_game=0) epoch
+        # expands each game into all its eligible turns, so the per-epoch row
+        # count is the loader's total expanded position count.
+        total = loader.num_positions
 
         def drain_epoch(seed: int) -> np.ndarray:
             loader.epoch_start(batch_size=3, post_move=True, apply_symmetry=False, seed=seed)
@@ -122,18 +124,19 @@ class TestMemoryBudgetStress:
         max_fsize = 0
         file_info = []
         for p in slogs:
-            num_pos, fsize = read_file_header(p)
-            file_info.append((num_pos, fsize))
+            num_games, fsize = read_file_header(p)
+            file_info.append((num_games, fsize))
             max_fsize = max(max_fsize, fsize)
 
         # Budget: just one file. This forces eviction on every file switch.
         loader = NativeDataLoader(
             memory_budget=max_fsize + 1, num_workers=1, num_prefetch=1
         )
-        total = 0
         for i, p in enumerate(slogs):
             loader.add_file(p, file_info[i][0], file_info[i][1])
-            total += file_info[i][0]
+        # file_info holds per-file game counts; the epoch yields every eligible
+        # turn, so the expected row count is the loader's expanded position count.
+        total = loader.num_positions
 
         # Run epoch with small batches.
         loader.epoch_start(batch_size=2, post_move=True, apply_symmetry=True, seed=42)

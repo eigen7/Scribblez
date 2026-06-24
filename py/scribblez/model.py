@@ -10,7 +10,7 @@ Architecture:
       Gaussian (std via softplus), trained by Gaussian NLL
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 
-The two model inputs (33 spatial planes, 936 scalars) and the three head output
+The two model inputs (85 spatial planes, 936 scalars) and the three head output
 shapes are fixed by the training pipeline and the C++ inference contract; the
 trunk between them is free to change.
 """

@@ -21,15 +21,18 @@ import numpy as np
 import pytest
 import torch
 
+from scribblez.ffi import get_input_shapes
 from scribblez.model import ScribblezModel
 from scribblez.onnx_export import export_onnx
 
-# Input contract (single source of truth: engine/include/scribblez/input_encoder.h
-# -- 33 spatial planes on a 15x15 board + 936 scalars). The export is numerically
-# agnostic to these, but using the real shapes keeps the test representative.
-SPATIAL_PLANES = 33
-BOARD_SIZE = 15
-SCALAR_SIZE = 936
+# Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
+# surfaced through the FFI). The export is numerically agnostic to these, but
+# pulling the real shapes keeps the test representative and in lock-step with the
+# encoder, so a plane-count change can never silently mismatch this test.
+_input_shapes = {s.name: s.dims for s in get_input_shapes()}
+SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
+assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
+SCALAR_SIZE = _input_shapes["input_scalar"][0]
 
 # Exported graph output order (onnx_export.export_onnx output_names). A silent
 # reordering here would scramble which head the agent reads -- assert it.

@@ -27,15 +27,19 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from scribblez.ffi import get_input_shapes
 from scribblez.model import ScribblezModel
 from scribblez.onnx_export import export_onnx
 
-# Input contract: 33 spatial planes on a 15x15 board + 936 scalars
-# (engine/include/scribblez/input_encoder.h). Score-diff head: 2 outputs,
-# [mean, std] of the final-differential Gaussian.
-SPATIAL_PLANES = 33
-BOARD_SIZE = 15
-SCALAR_SIZE = 936
+# Input contract is owned by the C++ encoder
+# (engine/include/scribblez/input_encoder.h) and surfaced through the FFI, so the
+# fixture's per-row layout always matches the kInputFloats / kSpatialPlanes the
+# C++ parity test reads back. Score-diff head: 2 outputs, [mean, std] of the
+# final-differential Gaussian.
+_input_shapes = {s.name: s.dims for s in get_input_shapes()}
+SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
+assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
+SCALAR_SIZE = _input_shapes["input_scalar"][0]
 SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 INPUT_FLOATS = SPATIAL_FLOATS + SCALAR_SIZE
 
