@@ -42,6 +42,16 @@ void NeuralAgent::begin_game() { encoder_ = binlog::GameStateEncoder(); }
 
 void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
 
+// --- make_move()'s per-turn pipeline ---------------------------------------
+// make_move() (at the bottom of this file) drives three stages, each a method
+// below:
+//   select_candidates()   -- prune the legal plays to the set worth scoring
+//   evaluate_candidates() -- encode each candidate's post-move position from the
+//                            agent's POV and run the model on the batch
+//   select_index()        -- pick one candidate from the model's scores
+// The rest (objective_value, candidate_equities, greedy_equity_index,
+// encode_candidate) are shared helpers those stages call.
+
 float NeuralAgent::objective_value(const nn::Eval& e) const {
   return objective_ == Objective::kScoreDiff ? e.score_diff_mean : e.win_prob;
 }
