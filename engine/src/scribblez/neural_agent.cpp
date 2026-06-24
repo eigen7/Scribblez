@@ -62,18 +62,18 @@ float NeuralAgent::objective_value(const nn::Eval& e) const {
   return objective_ == Objective::kScoreDiff ? e.score_diff_mean : e.win_prob;
 }
 
-std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req) const {
-  return HastyEquity::instance().equities(req.legal_plays, req.board, req.bag_size, req.opp_rack,
-                                          req.my_rack);
+std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
+                                                    const std::vector<Move>& plays) const {
+  return HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
 }
 
-int NeuralAgent::greedy_equity_index(const MoveRequest& req) const {
-  const std::vector<double> equities = candidate_equities(req);
+int NeuralAgent::greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const {
+  const std::vector<double> equities = candidate_equities(req, plays);
   return static_cast<int>(std::max_element(equities.begin(), equities.end()) - equities.begin());
 }
 
-int NeuralAgent::select_candidates(const MoveRequest& req) {
-  const int n = static_cast<int>(req.legal_plays.size());
+int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Move>& plays) {
+  const int n = static_cast<int>(plays.size());
   cand_idx_.resize(static_cast<size_t>(n));
   std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
 
@@ -82,7 +82,7 @@ int NeuralAgent::select_candidates(const MoveRequest& req) {
   if (top_k_ == 0 || n <= top_k_) return n;
 
   // Otherwise keep the top_k_ plays by HastyBot static equity.
-  const std::vector<double> equities = candidate_equities(req);
+  const std::vector<double> equities = candidate_equities(req, plays);
   std::partial_sort(cand_idx_.begin(), cand_idx_.begin() + top_k_, cand_idx_.end(),
                     [&](int a, int b) { return equities[a] > equities[b]; });
   cand_idx_.resize(static_cast<size_t>(top_k_));
@@ -99,7 +99,8 @@ void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_s
   post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
 }
 
-void NeuralAgent::evaluate_candidates(const MoveRequest& req, int k) {
+void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays,
+                                      int k) {
   if (static_cast<int>(eval_buf_.size()) < k) eval_buf_.resize(static_cast<size_t>(k));
 
   // The encoder's active player is this agent's seat (it has observed every
@@ -110,7 +111,7 @@ void NeuralAgent::evaluate_candidates(const MoveRequest& req, int k) {
   while (done < k) {
     const int chunk = std::min(max_batch_, k - done);
     for (int j = 0; j < chunk; ++j) {
-      const Move& mv = req.legal_plays[static_cast<size_t>(cand_idx_[done + j])];
+      const Move& mv = plays[static_cast<size_t>(cand_idx_[done + j])];
       encode_candidate(mv, req.my_rack, my_seat,
                        input_buf_.data() + static_cast<size_t>(j) * kInputFloats);
     }
@@ -133,18 +134,19 @@ int NeuralAgent::select_index(int k) {
 }
 
 Move NeuralAgent::make_move(const MoveRequest& req) {
-  if (req.legal_plays.empty()) return Move::pass();
+  const std::vector<Move> plays = generate_legal_plays(req);
+  if (plays.empty()) return Move::pass();
 
   // Endgame (empty bag): the value model is out of its training regime and
   // ranks these positions worse than static equity, so play the greedy HastyBot
   // equity move instead of consulting the model.
   if (req.bag_size == 0) {
-    return req.legal_plays[static_cast<size_t>(greedy_equity_index(req))];
+    return plays[static_cast<size_t>(greedy_equity_index(req, plays))];
   }
 
-  const int k = select_candidates(req);
-  evaluate_candidates(req, k);
-  return req.legal_plays[static_cast<size_t>(cand_idx_[select_index(k)])];
+  const int k = select_candidates(req, plays);
+  evaluate_candidates(req, plays, k);
+  return plays[static_cast<size_t>(cand_idx_[select_index(k)])];
 }
 
 }  // namespace scribblez

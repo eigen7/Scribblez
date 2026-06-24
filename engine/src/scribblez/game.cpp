@@ -27,6 +27,12 @@ Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }
 
+void Game::set_initial_scores(std::array<int, 2> initial_scores) {
+  assert(log_.turns.empty());  // must be set before play() begins
+  scores_ = initial_scores;
+  log_.initial_scores = initial_scores;
+}
+
 void Game::refill_rack(int p, Rack* drawn_out) {
   while (racks_[p].size() < RACK_SIZE) {
     auto t = bag_.draw();

@@ -70,6 +70,10 @@ class Game {
   // background Macondo subprocess) over a series of games.
   Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed);
 
+  // Give the players a head-start handicap before play begins. Must be called
+  // before play(); asserts that no move has been made yet.
+  void set_initial_scores(std::array<int, 2> initial_scores);
+
   void play();
 
   // A non-owning view of this game's log. Valid for as long as the Game (and

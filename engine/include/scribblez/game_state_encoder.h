@@ -52,6 +52,9 @@ class GameStateEncoder {
  public:
   GameStateEncoder() = default;
 
+  // Seed the score accumulator with a per-player starting handicap.
+  explicit GameStateEncoder(std::array<int, 2> initial_scores) : scores_(initial_scores) {}
+
   // Advance one turn: the *current* active player made `move`. PLAY also
   // updates the board and the active player's cumulative score. The active
   // player then alternates and turn_index increments.

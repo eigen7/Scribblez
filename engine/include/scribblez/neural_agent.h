@@ -98,25 +98,26 @@ class NeuralAgent : public Agent {
   // Validate parameters and size the input scratch buffer. Shared by both ctors.
   void init();
 
-  // HastyBot static equity for every legal play in `req`, indexed parallel to
-  // req.legal_plays. Shared by candidate selection and the endgame fallback.
-  std::vector<double> candidate_equities(const MoveRequest& req) const;
+  // HastyBot static equity for every play in `plays`, indexed parallel to it.
+  // Shared by candidate selection and the endgame fallback.
+  std::vector<double> candidate_equities(const MoveRequest& req,
+                                         const std::vector<Move>& plays) const;
 
-  // Index into req.legal_plays of the highest static-equity play. Used in the
+  // Index into `plays` of the highest static-equity play. Used in the
   // endgame (empty bag) to fall back to greedy HastyBot equity.
-  int greedy_equity_index(const MoveRequest& req) const;
+  int greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const;
 
-  // Fill cand_idx_ with the candidate legal-play indices for this turn and
+  // Fill cand_idx_ with the candidate indices into `plays` for this turn and
   // return the count: all plays when top_k_ == 0 or fewer plays than top_k_,
   // else the top_k_ by HastyBot static equity.
-  int select_candidates(const MoveRequest& req);
+  int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
   // The selection score for an eval under the configured objective.
   float objective_value(const nn::Eval& e) const;
 
   // Encode and evaluate the first `k` candidates in cand_idx_, filling
   // eval_buf_[0..k). Evaluation is chunked to max_batch_ rows per call.
-  void evaluate_candidates(const MoveRequest& req, int k);
+  void evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays, int k);
 
   // Index into the first `k` candidates to play: argmax of the objective when
   // temperature_ is 0, otherwise a softmax(objective / temperature_) sample.

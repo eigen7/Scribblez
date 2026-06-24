@@ -75,6 +75,8 @@ struct GameMetadata {
                           // used by training, which expands over eligible_turns.
   int16_t final_score_p0;
   int16_t final_score_p1;
+  int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
+  int16_t initial_score_p1;
   uint16_t eligible_turns;  // number of training-eligible turns: a prefix
                             // [0, eligible_turns) of the move sequence. Training
                             // emits one row per eligible turn. Eligibility is
@@ -84,7 +86,7 @@ struct GameMetadata {
                             // Because the bag is non-increasing, eligible turns
                             // are always a leading prefix.
 };
-static_assert(sizeof(GameMetadata) == 22, "GameMetadata must be 22 bytes");
+static_assert(sizeof(GameMetadata) == 26, "GameMetadata must be 26 bytes");
 
 // Per-game initial state: the tiles dealt to each player before play starts.
 // Trailing entries of each rack slot are empty Tiles when the bag was starved

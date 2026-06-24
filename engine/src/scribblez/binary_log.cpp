@@ -163,6 +163,8 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
     gm.sampled_turn = static_cast<uint32_t>(p.sampled_turn[i]);
     gm.final_score_p0 = static_cast<int16_t>(p.games[i].final_scores[0]);
     gm.final_score_p1 = static_cast<int16_t>(p.games[i].final_scores[1]);
+    gm.initial_score_p0 = static_cast<int16_t>(p.games[i].initial_scores[0]);
+    gm.initial_score_p1 = static_cast<int16_t>(p.games[i].initial_scores[1]);
     gm.eligible_turns = static_cast<uint16_t>(p.eligible[i]);
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
