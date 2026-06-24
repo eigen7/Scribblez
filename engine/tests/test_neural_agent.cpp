@@ -20,6 +20,7 @@
 #include "scribblez/block_decoder.h"
 #include "scribblez/board.h"
 #include "scribblez/data_loader.h"
+#include "scribblez/dictionary.h"
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
@@ -38,6 +39,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -79,11 +81,72 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
-// A single-tile horizontal play at (row, col): start() == row, square at col.
-static Move single_tile_play(int row, int col, uint16_t score, char letter) {
-  return make_play_full(row, col, /*horizontal=*/true, 0b1, score,
-                        {Glyph::of(Tile::from_char(letter))});
+// A modest word list with enough overlapping racks to yield many opening plays
+// of differing scores -- the candidate sets the selection tests rank and prune.
+static Dictionary medium_dict() {
+  return Dictionary::build_from_words(
+    {"AA",     "AB",      "AD",      "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
+     "AR",     "AS",      "AT",      "AW",     "AX",      "AY",      "BA",      "BE",      "BI",
+     "BO",     "BY",      "CAB",     "CAR",    "CARS",    "CART",    "CARTS",   "CAT",     "CATS",
+     "CARE",   "CARES",   "CARET",   "CARETS", "CASTE",   "CASTER",  "CASTERS", "DOG",     "DOGS",
+     "DOT",    "DOTS",    "EAR",     "EARS",   "EAT",     "EATS",    "RAT",     "RATE",    "RATES",
+     "RATS",   "STARE",   "STARED",  "TARE",   "TARES",   "TEAR",    "TEARS",   "REACT",   "REACTS",
+     "TRACE",  "TRACES",  "CRATE",   "CRATES", "CATER",   "CATERS",  "RECAST",  "RECASTS", "TASTE",
+     "TASTER", "TASTERS", "SET",     "TEA",    "ATE",     "ETA",     "ACE",     "ACES",    "ACRE",
+     "ACRES",  "RACE",    "RACES",   "SCAR",   "SCARE",   "ARC",     "ARCS",    "ARE",     "ERA"});
 }
+
+// True iff two moves are the same play (type, orientation, anchor, placed
+// squares, and placed glyphs). Lets a test name an expected move by identity
+// rather than by an injected slot.
+static bool same_move(const Move& a, const Move& b) {
+  if (a.type() != b.type()) return false;
+  if (a.horizontal() != b.horizontal() || a.start() != b.start() ||
+      a.square_mask() != b.square_mask() || a.num_glyphs() != b.num_glyphs())
+    return false;
+  for (int i = 0; i < a.num_glyphs(); ++i)
+    if (a.glyph(i).code() != b.glyph(i).code()) return false;
+  return true;
+}
+
+// Mirror NeuralAgent::select_candidates exactly: the indices into `plays`, in
+// the order the agent evaluates them. top_k == 0 (or n <= top_k) keeps every
+// play in generation order; otherwise the top_k by descending HastyBot equity.
+// Replicating the agent's own partial_sort makes the expected order match the
+// agent's regardless of equity ties.
+static std::vector<int> expected_candidate_order(const std::vector<double>& equities, int top_k) {
+  const int n = static_cast<int>(equities.size());
+  std::vector<int> idx(static_cast<size_t>(n));
+  std::iota(idx.begin(), idx.end(), 0);
+  if (top_k == 0 || n <= top_k) return idx;
+  std::partial_sort(idx.begin(), idx.begin() + top_k, idx.end(),
+                    [&](int a, int b) { return equities[a] > equities[b]; });
+  idx.resize(static_cast<size_t>(top_k));
+  return idx;
+}
+
+// An opening position (empty board) for `rack`, plus the legal plays the agent
+// will generate and their HastyBot equities -- the exact inputs the agent's
+// candidate selection consumes, so tests script the model against them.
+struct OpeningPosition {
+  Board board;
+  Dictionary dict = medium_dict();
+  Rack my_rack;
+  Rack opp;
+  int bag_size = 50;
+  std::vector<Move> plays;
+  std::vector<double> equities;
+
+  explicit OpeningPosition(const std::string& rack) : my_rack(rack_from(rack)) {
+    const MoveRequest req = request();
+    plays = generate_legal_plays(req);
+    equities = HastyEquity::instance().equities(plays, board, bag_size, opp, my_rack);
+  }
+
+  MoveRequest request() const {
+    return MoveRequest{board, dict, my_rack, opp, /*my_score=*/0, /*opp_score=*/0, bag_size};
+  }
+};
 
 // Write a synthetic Macondo .klv2 leave file (blank=12.0, A=1.5, B=-2.5; every
 // other leave looks up as 0) and initialize the HastyEquity singleton from it,
@@ -162,42 +225,46 @@ static nn::Eval sd(float score_diff_mean) { return eval_with(score_diff_mean, 0.
 static void test_topk_selection_uses_objective() {
   std::filesystem::path tmp = init_equity();
 
-  // Two single-tile consonant plays with very different scores, so their static
-  // equities are just their scores: a high-equity play at row 7, a low-equity
-  // play at row 5. Slot 0 is the higher.
-  Board board;  // empty
-  Rack my_rack = rack_from("TR");
-  Rack opp;
-  std::vector<Move> plays = {single_tile_play(7, 7, 30, 'T'), single_tile_play(5, 5, 5, 'R')};
-  MoveRequest req{board, my_rack, opp, /*my_score=*/0, /*opp_score=*/0, /*bag_size=*/50, plays};
+  // Real opening plays for CARETS, ranked by HastyBot equity exactly as the
+  // agent ranks them. top_k=2 keeps the two highest-equity plays; the order
+  // below is [highest-equity, second].
+  OpeningPosition pos("CARETS");
+  CHECK(pos.plays.size() >= 3);  // > top_k, so the equity filter actually drops plays
+  const int top_k = 2;
+  const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
+  CHECK(static_cast<int>(order.size()) == top_k);
+  const MoveRequest req = pos.request();
 
-  const uint16_t high_start = 7, low_start = 5;
+  // Value head prefers the SECOND-ranked equity candidate -> the agent overrides
+  // HastyBot's equity argmax and plays it.
+  {
+    auto stub = std::make_unique<StubEvalService>();
+    StubEvalService* sp = stub.get();
+    NeuralAgent agent(0, "stub", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
+    agent.begin_game();
+    sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
+    CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
+  }
 
-  auto stub = std::make_unique<StubEvalService>();
-  StubEvalService* sp = stub.get();
-  NeuralAgent agent(/*thread_id=*/0, "stub", std::move(stub), /*top_k=*/2,
-                    NeuralAgent::Objective::kScoreDiff);
-  agent.begin_game();
-
-  // Value head prefers the LOW-equity play -> the agent overrides HastyBot.
-  sp->scripted = {eval_with(/*sd=*/1.0f, /*wp=*/0.0f), eval_with(/*sd=*/9.0f, /*wp=*/0.0f)};
-  Move got = agent.make_move(req);
-  CHECK(got.start() == low_start);
-
-  // Value head prefers the HIGH-equity play -> the agent agrees with HastyBot.
-  sp->scripted = {eval_with(9.0f, 0.0f), eval_with(1.0f, 0.0f)};
-  got = agent.make_move(req);
-  CHECK(got.start() == high_start);
+  // Value head prefers the top equity candidate -> the agent agrees with HastyBot.
+  {
+    auto stub = std::make_unique<StubEvalService>();
+    StubEvalService* sp = stub.get();
+    NeuralAgent agent(0, "stub", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
+    agent.begin_game();
+    sp->scripted = {sd(9.0f), sd(1.0f)};
+    CHECK(same_move(agent.make_move(req), pos.plays[order[0]]));
+  }
 
   // The win-prob objective reads win_prob, not score_diff_mean.
-  auto stub2 = std::make_unique<StubEvalService>();
-  StubEvalService* sp2 = stub2.get();
-  NeuralAgent agent_wp(/*thread_id=*/0, "stub-wp", std::move(stub2), /*top_k=*/2,
-                       NeuralAgent::Objective::kWinProb);
-  agent_wp.begin_game();
-  sp2->scripted = {eval_with(/*sd=*/9.0f, /*wp=*/0.1f), eval_with(/*sd=*/1.0f, /*wp=*/0.9f)};
-  got = agent_wp.make_move(req);
-  CHECK(got.start() == low_start);
+  {
+    auto stub = std::make_unique<StubEvalService>();
+    StubEvalService* sp = stub.get();
+    NeuralAgent agent(0, "stub-wp", std::move(stub), top_k, NeuralAgent::Objective::kWinProb);
+    agent.begin_game();
+    sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
+    CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
+  }
 
   std::filesystem::remove_all(tmp);
   std::cout << "test_topk_selection_uses_objective passed\n";
@@ -206,26 +273,24 @@ static void test_topk_selection_uses_objective() {
 static void test_topk_excludes_low_equity_play() {
   std::filesystem::path tmp = init_equity();
 
-  // Three plays; top_k=2 keeps the top-2 by equity (play0, play1) and drops the
-  // lowest (play2) before evaluation, even though the stub would rate it best.
-  Board board;
-  Rack my_rack = rack_from("TRN");
-  Rack opp;
-  std::vector<Move> plays = {single_tile_play(7, 7, 40, 'T'), single_tile_play(6, 6, 22, 'R'),
-                             single_tile_play(5, 5, 5, 'N')};
-  MoveRequest req{board, my_rack, opp, 0, 0, /*bag_size=*/50, plays};
+  // top_k=2 keeps the two highest-equity plays and drops the rest before any
+  // evaluation -- so even with more than two legal plays, only two reach the
+  // model, and the agent plays a survivor (never a dropped lower-equity play).
+  OpeningPosition pos("CARETS");
+  CHECK(pos.plays.size() >= 3);
+  const int top_k = 2;
+  const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
+  const MoveRequest req = pos.request();
 
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  // Candidate order (top-2 by equity): play0, play1. play2 is never scored.
-  sp->scripted = {sd(1.0f), sd(5.0f)};
-  NeuralAgent agent(/*thread_id=*/0, "topk", std::move(stub), /*top_k=*/2,
-                    NeuralAgent::Objective::kScoreDiff);
+  sp->scripted = {sd(1.0f), sd(5.0f)};  // among the two survivors, processing-pos 1 wins
+  NeuralAgent agent(0, "topk", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(got.start() == 6);     // play1 (a survivor), not the excluded play2
-  CHECK(sp->total_rows == 2);  // only the top-2 were evaluated
+  CHECK(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
+  CHECK(sp->total_rows == top_k);              // only the top-2 were evaluated, not every play
 
   std::filesystem::remove_all(tmp);
   std::cout << "test_topk_excludes_low_equity_play passed\n";
@@ -234,25 +299,31 @@ static void test_topk_excludes_low_equity_play() {
 static void test_all_moves_evaluated() {
   std::filesystem::path tmp = init_equity();
 
-  // top_k = 0: every legal play is evaluated. The stub prefers the LOWEST-equity
-  // play (play2) -- a move a top-K<3 agent would never even see.
-  Board board;
-  Rack my_rack = rack_from("TRN");
-  Rack opp;
-  std::vector<Move> plays = {single_tile_play(7, 7, 40, 'T'), single_tile_play(6, 6, 22, 'R'),
-                             single_tile_play(5, 5, 5, 'N')};
-  MoveRequest req{board, my_rack, opp, 0, 0, /*bag_size=*/50, plays};
+  // top_k = 0: every legal play is evaluated with no equity pre-filter, in
+  // generation order. The stub prefers the LOWEST-equity play -- a move a
+  // small-top-K agent would never even see -- so the agent plays it.
+  OpeningPosition pos("CARETS");
+  const int n = static_cast<int>(pos.plays.size());
+  CHECK(n >= 3);
+
+  int lo = 0, hi = 0;
+  for (int i = 1; i < n; ++i) {
+    if (pos.equities[i] < pos.equities[lo]) lo = i;
+    if (pos.equities[i] > pos.equities[hi]) hi = i;
+  }
+  CHECK(pos.equities[lo] < pos.equities[hi]);  // a meaningful override needs distinct equities
+  const MoveRequest req = pos.request();
 
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  sp->scripted = {sd(1.0f), sd(2.0f), sd(9.0f)};  // play2 best
-  NeuralAgent agent(/*thread_id=*/0, "full", std::move(stub), /*top_k=*/0,
-                    NeuralAgent::Objective::kScoreDiff);
+  sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
+  sp->scripted[static_cast<size_t>(lo)] = sd(9.0f);  // generation index == processing index
+  NeuralAgent agent(0, "full", std::move(stub), /*top_k=*/0, NeuralAgent::Objective::kScoreDiff);
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(got.start() == 5);     // played the model's pick, not HastyBot's
-  CHECK(sp->total_rows == 3);  // every legal play was evaluated
+  CHECK(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
+  CHECK(sp->total_rows == n);            // every legal play was evaluated
 
   std::filesystem::remove_all(tmp);
   std::cout << "test_all_moves_evaluated passed\n";
@@ -261,32 +332,31 @@ static void test_all_moves_evaluated() {
 static void test_chunked_evaluation() {
   std::filesystem::path tmp = init_equity();
 
-  // Five plays scored with a batch limit of 2 -> the agent scores them across
-  // multiple evaluate() calls, yet still picks the global best (play3).
-  Board board;
-  Rack my_rack = rack_from("TRNSL");
-  Rack opp;
-  std::vector<Move> plays = {single_tile_play(3, 3, 10, 'T'), single_tile_play(4, 4, 11, 'R'),
-                             single_tile_play(5, 5, 12, 'N'), single_tile_play(6, 6, 30, 'S'),
-                             single_tile_play(7, 7, 9, 'L')};
-  MoveRequest req{board, my_rack, opp, 0, 0, /*bag_size=*/50, plays};
+  // All plays scored with a batch limit of 2 -> the agent scores them across
+  // multiple evaluate() calls, yet still picks the single globally best-rated
+  // candidate.
+  OpeningPosition pos("CARETS");
+  const int n = static_cast<int>(pos.plays.size());
+  CHECK(n >= 3);  // needs at least two chunks at max_batch = 2
+  const int target = n - 1;  // a candidate in the final chunk
+  const MoveRequest req = pos.request();
 
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  sp->scripted = {sd(1.0f), sd(2.0f), sd(3.0f), sd(9.0f), sd(4.0f)};  // index 3 best
-  NeuralAgent agent(/*thread_id=*/0, "chunk", std::move(stub), /*top_k=*/0,
-                    NeuralAgent::Objective::kScoreDiff, /*temperature=*/0.0, /*seed=*/0,
-                    /*max_batch=*/2);
+  sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
+  sp->scripted[static_cast<size_t>(target)] = sd(9.0f);
+  NeuralAgent agent(0, "chunk", std::move(stub), /*top_k=*/0, NeuralAgent::Objective::kScoreDiff,
+                    /*temperature=*/0.0, /*seed=*/0, /*max_batch=*/2);
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(got.start() == 6);     // play3, the globally best-rated candidate
-  CHECK(sp->total_rows == 5);  // all five scored
-  CHECK(sp->max_chunk <= 2);   // never exceeded the batch limit
-  CHECK(sp->calls >= 3);       // ceil(5 / 2) == 3 chunks
+  CHECK(same_move(got, pos.plays[target]));  // the globally best-rated candidate
+  CHECK(sp->total_rows == n);                // every play scored
+  CHECK(sp->max_chunk <= 2);                 // never exceeded the batch limit
+  CHECK(sp->calls == (n + 1) / 2);           // ceil(n / 2) chunks
 
   std::filesystem::remove_all(tmp);
-  std::cout << "test_chunked_evaluation passed (calls=" << sp->calls << ")\n";
+  std::cout << "test_chunked_evaluation passed (n=" << n << ", calls=" << sp->calls << ")\n";
 }
 
 // Remove a play's tiles from a rack copy (the leave the encoder sees).
@@ -435,45 +505,49 @@ static void test_encode_candidate_matches_training_decoder() {
 static void test_temperature_sampling_spreads() {
   std::filesystem::path tmp = init_equity();
 
-  // Two single-tile plays; equity = score, so the top-2 are slot 0 (row 7,
-  // score 30) and slot 1 (row 5, score 5). The stub then rates slot 0 higher.
-  Board board;
-  Rack my_rack = rack_from("TR");
-  Rack opp;
-  std::vector<Move> plays = {single_tile_play(7, 7, 30, 'T'), single_tile_play(5, 5, 5, 'R')};
-  MoveRequest req{board, my_rack, opp, /*my_score=*/0, /*opp_score=*/0, /*bag_size=*/50, plays};
-  const uint16_t high_start = 7, low_start = 5;
+  // top_k=2 keeps the two highest-equity plays; the stub rates processing-pos 0
+  // above pos 1 (order[0] above order[1]).
+  OpeningPosition pos("CARETS");
+  CHECK(pos.plays.size() >= 3);
+  const int top_k = 2;
+  const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
+  const MoveRequest req = pos.request();
 
-  // Temperature 0 -> always the model-preferred candidate (slot 0).
-  auto greedy_stub = std::make_unique<StubEvalService>();
-  StubEvalService* gp = greedy_stub.get();
-  NeuralAgent greedy(/*thread_id=*/0, "greedy", std::move(greedy_stub), /*top_k=*/2,
-                     NeuralAgent::Objective::kScoreDiff, /*temperature=*/0.0);
-  greedy.begin_game();
-  gp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
-  for (int i = 0; i < 50; ++i) CHECK(greedy.make_move(req).start() == high_start);
+  // Temperature 0 -> always the model-preferred candidate (order[0]).
+  {
+    auto stub = std::make_unique<StubEvalService>();
+    StubEvalService* gp = stub.get();
+    NeuralAgent greedy(0, "greedy", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff,
+                       /*temperature=*/0.0);
+    greedy.begin_game();
+    gp->scripted = {sd(2.0f), sd(0.0f)};
+    for (int i = 0; i < 50; ++i) CHECK(same_move(greedy.make_move(req), pos.plays[order[0]]));
+  }
 
   // High temperature -> both candidates are sampled, but the higher-rated one
-  // (slot 0) still dominates. Seeded for reproducibility.
-  auto sampler_stub = std::make_unique<StubEvalService>();
-  StubEvalService* sp = sampler_stub.get();
-  NeuralAgent sampler(/*thread_id=*/0, "sampler", std::move(sampler_stub), /*top_k=*/2,
-                      NeuralAgent::Objective::kScoreDiff, /*temperature=*/5.0, /*seed=*/12345);
-  sampler.begin_game();
-  sp->scripted = {eval_with(/*sd=*/2.0f, 0.0f), eval_with(/*sd=*/0.0f, 0.0f)};
-  int high = 0, low = 0;
-  for (int i = 0; i < 400; ++i) {
-    const uint16_t s = sampler.make_move(req).start();
-    if (s == high_start)
-      ++high;
-    else if (s == low_start)
-      ++low;
+  // (order[0]) still dominates. Seeded for reproducibility.
+  {
+    auto stub = std::make_unique<StubEvalService>();
+    StubEvalService* sp = stub.get();
+    NeuralAgent sampler(0, "sampler", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff,
+                        /*temperature=*/5.0, /*seed=*/12345);
+    sampler.begin_game();
+    sp->scripted = {sd(2.0f), sd(0.0f)};
+    int high = 0, low = 0;
+    for (int i = 0; i < 400; ++i) {
+      const Move got = sampler.make_move(req);
+      if (same_move(got, pos.plays[order[0]]))
+        ++high;
+      else if (same_move(got, pos.plays[order[1]]))
+        ++low;
+    }
+    CHECK(high > 0 && low > 0);  // both arms explored
+    CHECK(high > low);           // higher-valued arm dominates
+    std::cout << "test_temperature_sampling_spreads passed (high=" << high << " low=" << low
+              << ")\n";
   }
-  CHECK(high > 0 && low > 0);  // both arms explored
-  CHECK(high > low);           // higher-valued arm dominates
 
   std::filesystem::remove_all(tmp);
-  std::cout << "test_temperature_sampling_spreads passed (high=" << high << " low=" << low << ")\n";
 }
 
 int main() {

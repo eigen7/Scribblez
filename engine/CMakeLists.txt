@@ -58,9 +58,15 @@ target_link_libraries(scribblez_core PUBLIC Boost::json)
 # that exposes only the symbols declared in scribblez/scribblez_ffi.h.
 # The streaming pipeline plays self-play games inside the library, so it pulls
 # in the agent/runner code that parses --player specs via Boost.ProgramOptions.
-add_library(scribblez_ffi SHARED src/scribblez/scribblez_ffi.cpp)
+# player_factory.cpp (in scribblez_core) dispatches to NeuralAgent::from_spec,
+# so the neural agent TUs and scribblez_nn must also be linked here.
+add_library(scribblez_ffi SHARED
+  src/scribblez/scribblez_ffi.cpp
+  src/scribblez/neural_agent.cpp
+  src/scribblez/neural_agent_factory.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
   scribblez_core
+  scribblez_nn
   Boost::program_options
   Boost::filesystem
   Boost::system
