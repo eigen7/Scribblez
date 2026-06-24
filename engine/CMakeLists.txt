@@ -28,6 +28,7 @@ add_library(scribblez_core STATIC
   src/scribblez/game_runner.cpp
   src/scribblez/hasty_equity.cpp
   src/scribblez/human_web_agent.cpp
+  src/scribblez/instance_ports.cpp
   src/scribblez/leave_values.cpp
   src/scribblez/lexicon.cpp
   src/scribblez/macondo_bot.cpp

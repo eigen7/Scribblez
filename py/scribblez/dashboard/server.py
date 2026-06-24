@@ -9,8 +9,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scribblez.instance_ports import port_offset
+
 APP_PATH = Path(__file__).with_name("app.py")
-DEFAULT_PORT = 5006
+# Base 5006, shifted by the dev-container instance offset so parallel instances
+# don't collide. Consumed as the argparse default by the dashboard/train CLIs.
+DEFAULT_PORT = 5006 + port_offset()
 
 
 def serve_command(port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount") -> list[str]:

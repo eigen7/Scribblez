@@ -237,8 +237,8 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
 std::string HumanWebAgent::options_help() {
   return "  A human player driven through the local browser UI.\n"
          "  Options:\n"
-         "    --port=N        engine WebSocket port (default 8080)\n"
-         "    --vite-port=N   browser UI (Vite) port (default 5173)\n"
+         "    --port=N        engine WebSocket port (default 8080 + instance offset)\n"
+         "    --vite-port=N   browser UI (Vite) port (default 5173 + instance offset)\n"
          "    --web-dir=DIR   front-end package dir (default \"web\")\n";
 }
 

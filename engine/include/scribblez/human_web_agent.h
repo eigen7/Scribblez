@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scribblez/agent.h"
+#include "scribblez/instance_ports.h"
 
 #include <memory>
 #include <string>
@@ -20,11 +21,13 @@ class WebSession;
 class HumanWebAgent : public Agent {
  public:
   // Per-instance configuration parsed from `--player "--type=human ..."`.
-  // Defaults match what the top-level CLI used to provide.
+  // The default ports include instance_port_offset() so parallel dev-container
+  // instances bind distinct, forwarded ports; an explicit --port/--vite-port
+  // overrides them verbatim.
   struct Params {
-    int port = 8080;              // engine WebSocket port
-    int vite_port = 5173;         // browser UI (Vite) port
-    std::string web_dir = "web";  // front-end package dir (cwd of `npm run dev`)
+    int port = 8080 + instance_port_offset();       // engine WebSocket port
+    int vite_port = 5173 + instance_port_offset();  // browser UI (Vite) port
+    std::string web_dir = "web";                    // front-end package dir (cwd of `npm run dev`)
   };
 
   // Constructs the engine-side WebSocket server, spawns `npm run dev` from

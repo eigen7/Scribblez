@@ -4,6 +4,7 @@
 #include "scribblez/game_runner.h"
 #include "scribblez/gcg_reader.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/instance_ports.h"
 #include "scribblez/lexicon.h"
 #include "scribblez/movegen.h"
 #include "scribblez/web_server.h"
@@ -955,8 +956,8 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
-    int ws_port = 8082;
-    int vite_port = 5174;
+    int ws_port = 8082 + scribblez::instance_port_offset();
+    int vite_port = 5174 + scribblez::instance_port_offset();
     std::string web_dir = "web";
 
     po::options_description desc("manual_gcg_tool options");
