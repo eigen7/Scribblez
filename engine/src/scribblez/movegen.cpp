@@ -9,7 +9,8 @@
 
 namespace scribblez {
 
-long g_wmp_lookups = 0, g_wmp_hits = 0, g_wmp_np_lookups = 0;  // temporary WMP profiling counters
+// temporary WMP profiling counters (g_wmp_lookups = actual WordMap probes)
+long g_wmp_lookups = 0, g_wmp_extents = 0, g_wmp_extents_prod = 0, g_wmp_dead_probes = 0;
 
 namespace {
 
@@ -459,6 +460,7 @@ std::vector<int> rack_values_desc(const TileCounts& rack) {
 struct LaneInfo {
   std::array<bool, BOARD_SIZE> filled{}, placeable{};
   std::array<int, BOARD_SIZE> tval{}, lmul{}, wmul{}, cscore{}, maxval{};
+  std::array<int8_t, BOARD_SIZE> letter_idx{};  // A..Z index at filled squares
   std::array<bool, BOARD_SIZE> cneigh{};
   std::array<int, BOARD_SIZE + 1> pref{};  // prefix sum of filled tile values
 };
@@ -471,6 +473,7 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
     if (!g.is_empty()) {
       lane.filled[c] = true;
       lane.tval[c] = g.is_blank() ? 0 : TILE_VALUES[g.letter()];
+      lane.letter_idx[c] = static_cast<int8_t>(g.letter().index());
       continue;
     }
     const Premium p = view.premium_at(row, c);
@@ -560,6 +563,86 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
   }
 }
 
+// Admissible upper bound on the raw score of a play that fills the word span
+// [wl, wr] placing `placed` tiles -- the same over-estimate anchor_score_bounds
+// uses (greedy top tiles x best multipliers, capped by per-square maxima, times
+// the word-multiplier product, plus generous cross-word and bingo terms), but
+// for one concrete extent rather than collapsed to a per-anchor maximum.
+int window_bound(const LaneInfo& lane, int wl, int wr, int placed,
+                 const std::vector<int>& rack_vals_desc) {
+  int c2 = 0, c3 = 0, psm = 0, cross_sum = 0;
+  long wprod = 1;
+  for (int c = wl; c <= wr; ++c) {
+    if (lane.filled[c]) continue;
+    const int lm = lane.lmul[c];
+    if (lm >= 3)
+      ++c3;
+    else if (lm == 2)
+      ++c2;
+    wprod *= lane.wmul[c];
+    psm += lane.maxval[c] * lm;
+    if (lane.cneigh[c]) cross_sum += (lane.cscore[c] + lane.maxval[c] * lm) * lane.wmul[c];
+  }
+  const int existing = lane.pref[wr + 1] - lane.pref[wl];
+  int greedy = 0, taken = 0;
+  for (int j = 0; j < c3 && taken < placed; ++j) greedy += rack_vals_desc[taken++] * 3;
+  for (int j = 0; j < c2 && taken < placed; ++j) greedy += rack_vals_desc[taken++] * 2;
+  while (taken < placed) greedy += rack_vals_desc[taken++];
+  const long sc = static_cast<long>(std::min(greedy, psm) + existing) * wprod + cross_sum +
+                  (placed == RACK_SIZE ? 50 : 0);
+  return static_cast<int>(sc);
+}
+
+// One word span before grouping: its start column, length, playthrough multiset,
+// and admissible score bound. extents() groups these by (length, playthrough) so
+// spans that share a playthrough are scanned once.
+struct RawExtent {
+  int wl;
+  int length;
+  int placed;
+  BitRack pt;
+  int score_bound;
+};
+
+// Append a RawExtent for every word span the WordMap path would generate for the
+// anchor at `col` -- the exact (wl, wr) walk wmp_generate_anchor performs (same
+// left limit, placeable pruning, single-tile suppression), so each span
+// corresponds one-to-one to a generated play family.
+void enumerate_extents(const LaneInfo& lane, int col, int last_anchor_col, int rack_tiles,
+                       bool transposed, const std::vector<int>& rack_vals,
+                       std::vector<RawExtent>& out) {
+  const int left_limit = (last_anchor_col < 0) ? 0 : last_anchor_col + 1;
+  for (int wl = left_limit; wl <= col; ++wl) {
+    if (wl > 0 && lane.filled[wl - 1]) continue;  // not a maximal word start
+    int placed = 0;
+    bool left_ok = true;
+    BitRack pt;
+    for (int c = wl; c < col; ++c) {
+      if (lane.filled[c]) {
+        pt.add_letter(lane.letter_idx[c]);
+      } else {
+        ++placed;
+        if (!lane.placeable[c]) left_ok = false;
+      }
+    }
+    if (!left_ok) continue;  // an unplaceable empty in the left extent
+    for (int wr = col; wr < BOARD_SIZE; ++wr) {
+      if (lane.filled[wr]) {
+        pt.add_letter(lane.letter_idx[wr]);
+      } else {
+        ++placed;
+        if (!lane.placeable[wr]) break;  // this and every longer span cover a dead square
+      }
+      if (placed > rack_tiles) break;
+      if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
+      const int L = wr - wl + 1;
+      if (L < 2 || placed < 1) continue;        // a play must place at least one tile
+      if (transposed && placed == 1) continue;  // single-tile: horizontal pass only
+      out.push_back(RawExtent{wl, L, placed, pt, window_bound(lane, wl, wr, placed, rack_vals)});
+    }
+  }
+}
+
 // Enumerate every non-empty sub-multiset of a rack (real letters only, given as
 // (letter index, count) pairs) and bucket each one by its tile count into
 // `out[size]`. These are the candidate tile sets a WordMap play can place.
@@ -643,12 +726,9 @@ void wmp_try_word(const WmpLane& lane, int wl, int L, const Tile* word, std::vec
 void wmp_emit_span(const WmpLane& lane, const WordMap& wm, int wl, int L,
                    const BitRack& playthrough, const std::vector<BitRack>& subracks_of_size,
                    std::vector<Move>& out) {
-  const bool nonplaythrough = playthrough.empty();
   for (const BitRack& sub : subracks_of_size) {
     ++g_wmp_lookups;
-    if (nonplaythrough) ++g_wmp_np_lookups;
     const WordMap::WordList words = wm.lookup(L, playthrough + sub);
-    if (words.count) ++g_wmp_hits;
     for (int wi = 0; wi < words.count; ++wi) {
       wmp_try_word(lane, wl, L, words.begin + wi * L, out);
     }
@@ -797,6 +877,29 @@ void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubrack
   }
 }
 
+void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
+                         const ShadowExtent& e, std::vector<Move>& out) {
+  const View view{board, e.transposed};
+  const CrossChecks& cross = board.cross_checks(e.transposed);
+  const WmpLane lane = build_wmp_lane(view, cross, e.row);
+  const size_t before = out.size();
+  ++g_wmp_extents;
+  // One scan of (playthrough + subrack) per subrack serves every start: each found
+  // word is verified and placed at each start column in turn.
+  for (const BitRack& sub : subracks[e.placed]) {
+    ++g_wmp_lookups;
+    const WordMap::WordList words = wm.lookup(e.length, e.pt + sub);
+    if (words.count == 0) ++g_wmp_dead_probes;
+    for (int wi = 0; wi < words.count; ++wi) {
+      const Tile* word = words.begin + wi * e.length;
+      for (int s = 0; s < e.num_starts; ++s) {
+        wmp_try_word(lane, e.starts[s], e.length, word, out);
+      }
+    }
+  }
+  if (out.size() > before) ++g_wmp_extents_prod;
+}
+
 ShadowMoveGen::ShadowMoveGen(const Board& board, const Dictionary& dict)
     : board_(board), dict_(dict) {}
 
@@ -843,6 +946,78 @@ void ShadowMoveGen::generate_anchor(const ShadowAnchor& a, const Rack& rack,
   const Anchors& anchors = board_.gaddag_anchors(a.transposed);
   GaddagGen st{view, dict_, cross, anchors, rack.counts(), out};
   st.generate_one_anchor(a.row, a.col, a.last_anchor_col < 0 ? 100 : a.last_anchor_col);
+}
+
+// Order raw spans so those sharing a (length, playthrough) are adjacent, by start
+// column within. Two adjacent-equal spans form one grouped extent.
+bool raw_group_less(const RawExtent& a, const RawExtent& b) {
+  if (a.length != b.length) return a.length < b.length;
+  if (a.pt.lo != b.pt.lo) return a.pt.lo < b.pt.lo;
+  if (a.pt.hi != b.pt.hi) return a.pt.hi < b.pt.hi;
+  return a.wl < b.wl;
+}
+bool raw_same_group(const RawExtent& a, const RawExtent& b) {
+  return a.length == b.length && a.pt.lo == b.pt.lo && a.pt.hi == b.pt.hi;
+}
+
+// Collapse a row's raw spans into grouped ShadowExtents: spans with the same
+// (length, playthrough) become one extent whose `starts` lists their start
+// columns and whose bound is the maximum over the group.
+void group_row_extents(bool transposed, int row, std::vector<RawExtent>& raw,
+                       std::vector<ShadowExtent>& out) {
+  std::sort(raw.begin(), raw.end(), raw_group_less);
+  for (size_t i = 0; i < raw.size();) {
+    ShadowExtent e{transposed, row, raw[i].length, raw[i].placed, raw[i].pt, raw[i].score_bound,
+                   {},         0};
+    size_t j = i;
+    for (; j < raw.size() && raw_same_group(raw[i], raw[j]); ++j) {
+      e.starts[e.num_starts++] = static_cast<int8_t>(raw[j].wl);
+      e.score_bound = std::max(e.score_bound, raw[j].score_bound);
+    }
+    out.push_back(e);
+    i = j;
+  }
+}
+
+std::vector<ShadowExtent> ShadowMoveGen::extents(const Rack& rack) const {
+  board_.ensure_movegen_caches(dict_);
+  const TileCounts& counts = rack.counts();
+  const std::vector<int> rack_vals = rack_values_desc(counts);
+  int rack_tiles = 0;
+  uint32_t rack_letter_mask = 0;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int n = counts.count(L);
+    if (n > 0) {
+      rack_letter_mask |= (1u << L);
+      rack_tiles += n;
+    }
+  }
+  const bool has_blank = counts.blanks() > 0;
+
+  std::vector<ShadowExtent> out;
+  LaneInfo lane;
+  std::vector<RawExtent> raw;
+  for (int orient = 0; orient < 2; ++orient) {
+    const bool transposed = (orient == 1);
+    View view{board_, transposed};
+    const CrossChecks& cross = board_.cross_checks(transposed);
+    const Anchors& anchors = board_.gaddag_anchors(transposed);
+    for (int r = 0; r < BOARD_SIZE; ++r) {
+      bool any = false;
+      for (int c = 0; c < BOARD_SIZE && !any; ++c) any = anchors[idx(r, c)];
+      if (!any) continue;
+      build_lane(view, cross, r, rack_letter_mask, has_blank, lane);
+      raw.clear();
+      int prev = -1;  // nearest anchor to the left in this row
+      for (int c = 0; c < BOARD_SIZE; ++c) {
+        if (!anchors[idx(r, c)]) continue;
+        enumerate_extents(lane, c, prev, rack_tiles, transposed, rack_vals, raw);
+        prev = c;
+      }
+      group_row_extents(transposed, r, raw, out);
+    }
+  }
+  return out;
 }
 
 }  // namespace scribblez

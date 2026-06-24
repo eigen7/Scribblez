@@ -58,6 +58,24 @@ struct ShadowAnchor {
   std::array<int, kMaxPlayTiles + 1> score_bound_by_size;
 };
 
+// A group of candidate plays sharing one (length, playthrough multiset) in a
+// lane: a word of `length` that lays down `placed` tiles over the playthrough
+// `pt`, anchored at any of the `starts` columns. Because every start has the same
+// playthrough multiset, one WordMap scan of (pt + subrack) serves them all -- the
+// found words just slide across the starts (MAGPIE's start-column range). This is
+// the unit the shadow prices and the best-first loop generates; `score_bound` is
+// an admissible upper bound on the raw score of any play in the group.
+struct ShadowExtent {
+  bool transposed;
+  int row;     // view-row of the lane
+  int length;  // word length (the span covering each start is [s, s+length))
+  int placed;  // tiles laid down (length minus the playthrough tile count)
+  BitRack pt;  // playthrough multiset shared by every start
+  int score_bound;
+  std::array<int8_t, BOARD_SIZE> starts;  // word-start columns
+  int num_starts;
+};
+
 // Best-first move generator: instead of enumerating every legal play, it bounds
 // each anchor's per-tile-count score (shadow play) so a caller can rank anchors
 // by an equity bound, generate real moves anchor-by-anchor in descending order,
@@ -74,6 +92,14 @@ class ShadowMoveGen {
 
   // Append every legal PLAY canonically anchored at `a` to `out`.
   void generate_anchor(const ShadowAnchor& a, const Rack& rack, std::vector<Move>& out) const;
+
+  // Every word extent (a specific [wl, wr] span covering an anchor) that could
+  // hold a play, each with an admissible upper bound on its plays' raw score.
+  // This is the finer-grained shadow the WordMap path drives: a caller ranks ALL
+  // extents by equity bound and generates them best-first, so low-value extents
+  // are never WordMap-scanned. The union of every extent's plays equals
+  // MoveGenerator::generate.
+  std::vector<ShadowExtent> extents(const Rack& rack) const;
 
  private:
   const Board& board_;
@@ -97,5 +123,12 @@ void wmp_rack_subracks(const Rack& rack, WmpSubracks& out, int& rack_tiles);
 // ever generated, which is the regime where WordMap lookup beats GADDAG walking.
 void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
                          int rack_tiles, const ShadowAnchor& a, std::vector<Move>& out);
+
+// Append the legal PLAYs of one extent `e` using WordMap lookups: one scan of
+// (playthrough + subrack) per subrack, each found word verified and placed at
+// every start column in the group. A caller drives it best-first over extents so
+// only the high-value ones are ever scanned. Blank-free.
+void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubracks& subracks,
+                         const ShadowExtent& e, std::vector<Move>& out);
 
 }  // namespace scribblez

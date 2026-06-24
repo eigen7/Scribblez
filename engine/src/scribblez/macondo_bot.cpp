@@ -62,8 +62,8 @@ HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name) : Agent(thr
 
 namespace {
 
-// The per-move inputs the anchor equity bound depends on.
-struct AnchorBoundInputs {
+// The per-move inputs the equity bounds depend on.
+struct BoundInputs {
   int rack_size;
   bool endgame;
   double endgame_term;
@@ -71,8 +71,8 @@ struct AnchorBoundInputs {
   std::array<double, RACK_SIZE + 1> leave_by_size;
 };
 
-AnchorBoundInputs make_bound_inputs(const MoveRequest& req, const HastyEquity& eq) {
-  AnchorBoundInputs in;
+BoundInputs make_bound_inputs(const MoveRequest& req, const HastyEquity& eq) {
+  BoundInputs in;
   in.rack_size = req.my_rack.size();
   in.endgame = req.bag_size <= 0;
   in.endgame_term = in.endgame ? 2.0 * static_cast<double>(req.opp_rack.point_value()) : 0.0;
@@ -81,84 +81,127 @@ AnchorBoundInputs make_bound_inputs(const MoveRequest& req, const HastyEquity& e
   return in;
 }
 
-// Tight admissible equity bound for an anchor: for a play of e tiles, equity =
-// score + leave(size rack-e) + opening(<=0) + peg(e), so pairing each e-tile
-// score bound with the best leave of the complementary size bounds the equity.
-double anchor_equity_bound(const HastyEquity& eq, const AnchorBoundInputs& in,
-                           const ShadowAnchor& a) {
-  double best = -1e18;
-  for (int e = 1; e <= in.rack_size && e <= kMaxPlayTiles; ++e) {
-    const int sb = a.score_bound_by_size[e];
-    if (sb < 0) continue;  // no play places e tiles here
-    const double leave_term =
-      in.endgame ? in.endgame_term
-                 : in.leave_by_size[in.rack_size - e] + eq.peg_for_tiles(e, in.bag_size);
-    best = std::max(best, static_cast<double>(sb) + leave_term);
-  }
-  return best;
+// Admissible equity bound for placing `placed` tiles whose raw score is at most
+// `score_bound`: equity = score + leave(rack - placed) + opening(<=0) + peg, so
+// adding the best leave of the complementary size (or the endgame term) bounds it.
+double equity_bound(const HastyEquity& eq, const BoundInputs& in, int placed, int score_bound) {
+  const double leave_term =
+    in.endgame ? in.endgame_term
+               : in.leave_by_size[in.rack_size - placed] + eq.peg_for_tiles(placed, in.bag_size);
+  return static_cast<double>(score_bound) + leave_term;
 }
 
-// Anchor indices paired with their equity bound, sorted best-first so the search
-// can stop as soon as a bound can no longer beat the best move found.
-std::vector<std::pair<double, int>> rank_anchors(const HastyEquity& eq, const AnchorBoundInputs& in,
-                                                 const std::vector<ShadowAnchor>& anchors) {
-  std::vector<std::pair<double, int>> order;
-  order.reserve(anchors.size());
-  for (int i = 0; i < static_cast<int>(anchors.size()); ++i) {
-    order.emplace_back(anchor_equity_bound(eq, in, anchors[i]), i);
+// Best move found so far, with hasty tie-break.
+struct BestMove {
+  bool have = false;
+  Move move;
+  double eq = 0.0;
+};
+
+// Fold each candidate play's equity into the running best.
+void consider_moves(const HastyEquity& eq, const MoveRequest& req, TurnLeaves& leaves,
+                    const std::vector<Move>& moves, BestMove& bm) {
+  for (const Move& m : moves) {
+    const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
+    if (!bm.have || hasty_move_better(e, m, bm.eq, bm.move)) {
+      bm.move = m;
+      bm.eq = e;
+      bm.have = true;
+    }
   }
+}
+
+// Indices into `units` paired with their equity bound, sorted best-first so the
+// search can stop as soon as a bound can no longer beat the best move found.
+std::vector<std::pair<double, int>> rank_by_bound(const std::vector<double>& bounds) {
+  std::vector<std::pair<double, int>> order;
+  order.reserve(bounds.size());
+  for (int i = 0; i < static_cast<int>(bounds.size()); ++i) order.emplace_back(bounds[i], i);
   std::sort(order.begin(), order.end(),
             [](const auto& x, const auto& y) { return x.first > y.first; });
   return order;
 }
 
-// Shadow best-first search shared by the GADDAG and WordMap HastyBot paths: rank
-// anchors by an equity upper bound, generate them best-first, and stop once no
-// remaining anchor can beat the best move found. With `wm` null each anchor's
-// plays come from the GADDAG; otherwise from WordMap lookups. Picks the same move
-// either way.
-Move hasty_shadow_best_move(const MoveRequest& req, const WordMap* wm) {
+// The GADDAG HastyBot path: bound each anchor by its best tile-count, then
+// generate anchors best-first with the GADDAG.
+Move hasty_best_move_gaddag(const MoveRequest& req) {
   const HastyEquity& eq = HastyEquity::instance();
   ShadowMoveGen smg(req.board, req.dict);
   const std::vector<ShadowAnchor> anchors = smg.anchors(req.my_rack);
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
+  const BoundInputs in = make_bound_inputs(req, eq);
+
+  std::vector<double> bounds(anchors.size());
+  for (size_t i = 0; i < anchors.size(); ++i) {
+    double best = -1e18;
+    for (int e = 1; e <= in.rack_size && e <= kMaxPlayTiles; ++e) {
+      if (anchors[i].score_bound_by_size[e] >= 0) {
+        best = std::max(best, equity_bound(eq, in, e, anchors[i].score_bound_by_size[e]));
+      }
+    }
+    bounds[i] = best;
+  }
+
+  BestMove bm;
+  std::vector<Move> moves;
+  for (const auto& [bound, i] : rank_by_bound(bounds)) {
+    if (bm.have && bound < bm.eq) break;  // no remaining anchor can beat the best move
+    moves.clear();
+    smg.generate_anchor(anchors[i], req.my_rack, moves);
+    consider_moves(eq, req, leaves, moves, bm);
+  }
+  return bm.have ? bm.move : Move::pass();
+}
+
+// The WordMap HastyBot path: bound each individual extent, then generate extents
+// best-first with WordMap lookups. The finer (per-extent) granularity lets the
+// early-exit prune whole extents, the regime where WordMap beats the GADDAG.
+//
+// Racks holding a blank fall back to the GADDAG path: the WordMap is blank-free,
+// and resolving blanks by enumerating their letters at query time is too slow
+// (MAGPIE uses precomputed blank tables instead). Blanks are a minority of racks,
+// so self-play still gets the WordMap speedup on the common (blank-free) case.
+Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
+  if (req.my_rack.counts().blanks() > 0) return hasty_best_move_gaddag(req);
+  const HastyEquity& eq = HastyEquity::instance();
+  ShadowMoveGen smg(req.board, req.dict);
+  const std::vector<ShadowExtent> extents = smg.extents(req.my_rack);
+  TurnLeaves leaves = eq.turn_leaves(req.my_rack);
+  const BoundInputs in = make_bound_inputs(req, eq);
 
   WmpSubracks subracks;
   int rack_tiles = 0;
-  if (wm) wmp_rack_subracks(req.my_rack, subracks, rack_tiles);
+  wmp_rack_subracks(req.my_rack, subracks, rack_tiles);
 
-  bool have = false;
-  Move best;
-  double best_eq = 0.0;
-  std::vector<Move> moves;
-  for (const auto& [bound, i] : rank_anchors(eq, make_bound_inputs(req, eq), anchors)) {
-    if (have && bound < best_eq) break;  // no remaining anchor can beat the best move
-    moves.clear();
-    if (wm) {
-      wmp_generate_anchor(req.board, *wm, subracks, rack_tiles, anchors[i], moves);
-    } else {
-      smg.generate_anchor(anchors[i], req.my_rack, moves);
-    }
-    for (const Move& m : moves) {
-      const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
-      if (!have || hasty_move_better(e, m, best_eq, best)) {
-        best = m;
-        best_eq = e;
-        have = true;
-      }
-    }
+  std::vector<double> bounds(extents.size());
+  for (size_t i = 0; i < extents.size(); ++i) {
+    bounds[i] = equity_bound(eq, in, extents[i].placed, extents[i].score_bound);
   }
-  return have ? best : Move::pass();
+
+  BestMove bm;
+  std::vector<Move> moves;
+  for (const auto& [bound, i] : rank_by_bound(bounds)) {
+    if (bm.have && bound < bm.eq) break;  // no remaining extent can beat the best move
+    const ShadowExtent& e = extents[i];
+    // Full-rack existence prune (MAGPIE shadow_record): a bingo-through extent
+    // places the whole rack (one subrack), so a single probe settles it -- skip
+    // the dead ones (their high score bound otherwise keeps them above the cutoff).
+    if (e.placed == rack_tiles && wm.lookup(e.length, e.pt + subracks[rack_tiles][0]).count == 0) {
+      continue;
+    }
+    moves.clear();
+    wmp_generate_extent(req.board, wm, subracks, e, moves);
+    consider_moves(eq, req, leaves, moves, bm);
+  }
+  return bm.have ? bm.move : Move::pass();
 }
 
 }  // namespace
 
-Move HastyBotAgent::make_move(const MoveRequest& req) {
-  return hasty_shadow_best_move(req, /*wm=*/nullptr);
-}
+Move HastyBotAgent::make_move(const MoveRequest& req) { return hasty_best_move_gaddag(req); }
 
 Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm) {
-  return hasty_shadow_best_move(req, &wm);
+  return hasty_best_move_wmp_impl(req, wm);
 }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
