@@ -15,15 +15,18 @@
 // File layout
 // -----------
 //   [FileHeader              16 B]
-//   [GameMetadata  num_games 22 B]
+//   [GameMetadata  num_games 26 B]
 //   For each game g in [0, num_games):
 //     [InitialRacks                       16 B]
 //     [TurnBlob       num_turns(g)        24 B each]
 //
 // Each GameMetadata's start_offset points at that game's InitialRacks; the
-// TurnBlob array starts at (start_offset + sizeof(InitialRacks)). Games always
-// start from a 0-0 score, so the replay decoder seeds its score accumulator at
-// zero and the score-differential input feature is derived purely from replay.
+// TurnBlob array starts at (start_offset + sizeof(InitialRacks)).
+//
+// GameMetadata carries both the final scores and the per-player starting
+// scores. The starting scores are normally {0, 0} but can be a head-start
+// handicap; the replay decoder seeds its score accumulator from them so the
+// score-differential input feature reflects the handicap at every position.
 //
 // Training sampling: each game contributes ONE training row per *eligible* turn
 // (GameMetadata::eligible_turns of them -- the turns the writer deemed
@@ -59,7 +62,7 @@ struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
   uint16_t reserved;
-  uint32_t num_games;            // games in this file
+  uint32_t num_games;             // games in this file
   uint32_t num_sample_positions;  // total training rows == sum of every game's
                                   // GameMetadata::eligible_turns; the DataLoader
                                   // reads this to size an epoch without scanning

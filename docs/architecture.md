@@ -87,12 +87,13 @@ the pipeline, and it dictates where every value originates:
   fills in — independent of the replay's running tally.
 
 A practical consequence: any per-game state that must reach the input encoding
-has to be seedable into the replay. Today every game starts from 0-0, so the
-`GameStateEncoder` is default-constructed at the top of `replay_and_emit` and
-the score-diff *input* is derived entirely from replaying moves; the *targets*
-come from the stored final scores. Any future per-game seed state (e.g. a
-starting-score offset) would need to be both stored in `GameMetadata` for the
-replay and reflected in the final scores so input and targets stay consistent.
+has to be seedable into the replay. A starting-score handicap is stored in
+`GameMetadata` (`initial_score_p0/p1`) and used to seed the `GameStateEncoder`
+at the top of `PositionEncoder::replay_to_sampled`, so the score-diff *input*
+reflects it at every position; because the handicap is also baked into the
+game's final scores, the *targets* stay consistent automatically. The default
+self-play run requests no handicap (`--random-handicap-max 0`), so every game
+starts 0-0 and the feature is dormant unless handicaps are requested.
 
 ## Determinism and seeding
 
@@ -100,8 +101,8 @@ replay and reflected in the final scores so input and targets stay consistent.
   source; `GameRunner` pulls one base seed and gives game *g* the seed
   `base + g`, which seeds that game's [Bag](../engine/src/scribblez/bag.cpp).
 - Seeds are **not** required to map to fixed bags — nothing in the system relies
-  on reproducing a specific bag from a seed, so any auxiliary per-game randomness
-  may draw from the game seed freely.
+  on reproducing a specific bag from a seed, so auxiliary per-game randomness
+  (e.g. handicap selection) may draw from the game seed freely.
 - The sampled-turn choice and the DataLoader's epoch shuffle are independently
   seeded; see [data_loader.h](../engine/include/scribblez/data_loader.h) for the
   epoch API (`epoch_start` then repeated batch fills).

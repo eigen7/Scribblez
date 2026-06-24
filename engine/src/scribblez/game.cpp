@@ -42,7 +42,7 @@ void Game::refill_rack(int p, Rack* drawn_out) {
   }
 }
 
-void Game::play() {     
+void Game::play() {
   // Initial draws.
   for (int p = 0; p < 2; ++p) {
     refill_rack(p, /*drawn_out=*/nullptr);

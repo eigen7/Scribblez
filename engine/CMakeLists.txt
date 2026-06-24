@@ -114,24 +114,15 @@ target_include_directories(scribblez_nn
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
 
-# Concrete Agent implementations live in play_game, not scribblez_core, so the
-# core library stays free of the agents' heavier dependencies (Boost.Process,
-# the lexicon/macondo plumbing). scribblez_core only sees the Agent ABC.
+# The NeuralAgent TUs are the only agent sources not already in scribblez_core;
+# they are kept out of the core library so it carries no CUDA/TensorRT
+# dependency. Compile them directly into play_game and link scribblez_nn, which
+# supplies the NNEvaluationService the agent drives. Every other agent
+# (HastyBot, human, greedy) and the runner come from scribblez_core.
 add_executable(play_game
   apps/play_game.cpp
-  src/scribblez/agent.cpp
-  src/scribblez/cli.cpp
-  src/scribblez/game_runner.cpp
-  src/scribblez/hasty_equity.cpp
-  src/scribblez/human_web_agent.cpp
-  src/scribblez/leave_values.cpp
-  src/scribblez/lexicon.cpp
-  src/scribblez/macondo_bot.cpp
   src/scribblez/neural_agent.cpp
-  src/scribblez/neural_agent_factory.cpp
-  src/scribblez/player_factory.cpp
-  src/scribblez/seed_producer.cpp
-  src/scribblez/web_server.cpp)
+  src/scribblez/neural_agent_factory.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core
   scribblez_nn

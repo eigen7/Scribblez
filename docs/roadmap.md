@@ -21,9 +21,9 @@ residual rack (post-play leave), the score differential, and recent move
 context, M_post predicts:
 
 - **Win/Draw/Loss probabilities** (WLD head) — the primary value signal.
-- **Score differential distribution** (ScoreDiff head) — a 801-bin
-  probability distribution over clipped final score differentials [-400, +400],
-  following KataGo's score-belief approach.
+- **Score differential** (ScoreDiff head) — a Gaussian (mean and standard
+  deviation) over the clipped final score differential [-400, +400], trained by
+  Gaussian negative log-likelihood against the observed differential.
 - **Opponent's next tile placement** (OppNextPlacement head) — a 15×15 binary
   mask predicting where the opponent will place tiles on their next turn.
 
