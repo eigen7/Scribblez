@@ -153,6 +153,76 @@ Move hasty_best_move_gaddag(const MoveRequest& req) {
   return bm.have ? bm.move : Move::pass();
 }
 
+// Enumerates every non-empty sub-multiset of a rack and, in the same depth-first
+// pass, prices each one's leave (the rack minus the subrack) by walking the leave
+// KWG one tile at a time. Each subrack's leave value is read off the cursor with
+// no hashing -- the whole turn costs a few hundred arc-follows instead of one
+// leave hash per subrack. `subracks[k]` and `leaves[k]` are filled in lockstep.
+struct SubrackLeaveDFS {
+  const LeaveValues& lv;
+  const std::array<std::pair<int, int>, 26>& letters;  // (letter index, count), ascending
+  int num_letters;
+  WmpSubracks& subracks;
+  std::array<std::vector<float>, kMaxPlayTiles + 1>& leaves;
+
+  // The cursor over the leave built so far (in ascending letter order, matching
+  // the KWG's tile order): `list` is the sibling list to match the next tile in,
+  // `index` is the accumulated word index, `val` is the leave value if it ended
+  // here, and `alive` is false once a tile went missing. `subrack`/`size` are the
+  // complementary placed tiles.
+  void recurse(int idx, uint32_t list, uint32_t index, float val, bool alive, BitRack subrack,
+               int size) const {
+    if (idx == num_letters) {
+      if (size >= 1) {
+        subracks[size].push_back(subrack);
+        leaves[size].push_back(alive ? val : 0.0f);
+      }
+      return;
+    }
+    const int letter = letters[idx].first;
+    const int cnt = letters[idx].second;
+    const uint8_t code = LeaveValues::klv_code(Tile::of(letter));
+    // Cursor state after putting 0..cnt copies of this letter into the leave.
+    std::array<uint32_t, RACK_SIZE + 1> sl{}, ix{};
+    std::array<float, RACK_SIZE + 1> vl{};
+    std::array<bool, RACK_SIZE + 1> al{};
+    sl[0] = list;
+    ix[0] = index;
+    vl[0] = val;
+    al[0] = alive;
+    for (int k = 1; k <= cnt; ++k) {
+      if (!al[k - 1]) {
+        al[k] = false;
+        sl[k] = 0;
+        ix[k] = ix[k - 1];
+        vl[k] = 0.0f;
+        continue;
+      }
+      uint32_t index_at = ix[k - 1];
+      const uint32_t a = lv.klv_step(sl[k - 1], code, &index_at);
+      if (a == 0) {
+        al[k] = false;
+        sl[k] = 0;
+        ix[k] = index_at;
+        vl[k] = 0.0f;
+      } else {
+        const bool acc = lv.klv_accepts(a);
+        al[k] = true;
+        vl[k] = acc ? lv.klv_value_at(index_at) : 0.0f;
+        ix[k] = index_at + (acc ? 1u : 0u);
+        sl[k] = lv.klv_next(a);
+      }
+    }
+    BitRack sr = subrack;
+    for (int placed = 0; placed <= cnt; ++placed) {
+      const int leave_count = cnt - placed;  // copies kept -> how far the leave cursor advanced
+      recurse(idx + 1, sl[leave_count], ix[leave_count], vl[leave_count], al[leave_count], sr,
+              size + placed);
+      sr.add_letter(letter);
+    }
+  }
+};
+
 // The WordMap HastyBot path: bound each individual extent, then generate extents
 // best-first with WordMap lookups. The finer (per-extent) granularity lets the
 // early-exit prune whole extents, the regime where WordMap beats the GADDAG.
@@ -165,15 +235,42 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   if (req.my_rack.counts().blanks() > 0) return hasty_best_move_gaddag(req);
   const HastyEquity& eq = HastyEquity::instance();
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
-  const BoundInputs in = make_bound_inputs(req, eq);
 
+  // Enumerate the rack's subracks and price every subrack's leave in one DFS over
+  // the leave KWG (no per-subrack hashing). subracks[k]/leaves[k] are aligned.
   WmpSubracks subracks;
-  int rack_tiles = 0;
-  wmp_rack_subracks(req.my_rack, subracks, rack_tiles);
+  std::array<std::vector<float>, kMaxPlayTiles + 1> sub_leaves;
+  std::array<std::pair<int, int>, 26> letters{};
+  int num_letters = 0, rack_tiles = 0;
+  const TileCounts& rack_counts = req.my_rack.counts();
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int c = rack_counts.count(L);
+    if (c > 0) {
+      letters[num_letters++] = {L.index(), c};
+      rack_tiles += c;
+    }
+  }
+  const LeaveValues& lv = eq.leave_table();
+  const SubrackLeaveDFS dfs{lv, letters, num_letters, subracks, sub_leaves};
+  dfs.recurse(0, lv.klv_root(), /*index=*/0, /*val=*/0.0f, /*alive=*/true, BitRack{}, 0);
 
-  // One pass over the rack's subracks computes three things MAGPIE derives
-  // together in its move generator:
-  //   - sub_terms[size][j]: each subrack's equity contribution (leave value +
+  // The shadow bounds need the best leave of each size, which is exactly the max
+  // priced leave per subrack size -- so derive it from the DFS instead of a second
+  // best-leave enumeration. A play placing `placed` tiles keeps size rack-placed.
+  BoundInputs in;
+  in.rack_size = rack_tiles;
+  in.endgame = req.bag_size <= 0;
+  in.endgame_term = in.endgame ? 2.0 * static_cast<double>(req.opp_rack.point_value()) : 0.0;
+  in.bag_size = req.bag_size;
+  in.leave_by_size.fill(-1e18);
+  for (int placed = 1; placed <= rack_tiles && placed <= kMaxPlayTiles; ++placed) {
+    double best = -1e18;
+    for (float v : sub_leaves[placed]) best = std::max(best, static_cast<double>(v));
+    in.leave_by_size[rack_tiles - placed] = best;
+  }
+
+  // Derive, per subrack size:
+  //   - sub_terms[size][j]: the subrack's equity contribution (leave value +
   //     pre-endgame term), for the per-subrack generation cutoff.
   //   - has_word[size]: whether any size-k subrack forms a k-letter word -- the
   //     shadow's nonplaythrough existence prune (handed to extents()).
@@ -185,21 +282,14 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
   std::array<bool, kMaxPlayTiles + 1> has_word{};
   std::array<double, kMaxPlayTiles + 1> np_best_leave_term;
   np_best_leave_term.fill(-1e18);
-  const TileCounts& rack_counts = req.my_rack.counts();
   for (int size = 1; size <= rack_tiles && size <= kMaxPlayTiles; ++size) {
-    sub_terms[size].reserve(subracks[size].size());
-    for (const BitRack& sub : subracks[size]) {
-      double term = in.endgame_term;
-      if (!in.endgame) {
-        Rack leave;
-        for (Tile L = Tile::of(0); L < 26; ++L) {
-          const int c = rack_counts.count(L) - sub.get(L.index());
-          for (int k = 0; k < c; ++k) leave.add(L);
-        }
-        term = eq.leave_value(leave) + eq.peg_for_tiles(size, in.bag_size);
-      }
-      sub_terms[size].push_back(term);
-      if (size >= 2 && wm.lookup(size, sub).count > 0) {
+    const std::vector<BitRack>& subs = subracks[size];
+    const double peg = in.endgame ? 0.0 : eq.peg_for_tiles(size, in.bag_size);
+    sub_terms[size].resize(subs.size());
+    for (size_t j = 0; j < subs.size(); ++j) {
+      const double term = in.endgame ? in.endgame_term : (sub_leaves[size][j] + peg);
+      sub_terms[size][j] = term;
+      if (size >= 2 && wm.lookup(size, subs[j]).count > 0) {
         has_word[size] = true;
         if (term > np_best_leave_term[size]) np_best_leave_term[size] = term;
       }

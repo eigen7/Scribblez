@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -73,6 +74,29 @@ void enumerate_leaves(const std::vector<uint32_t>& nodes, const std::vector<floa
   }
 }
 
+// Fill subtree_words[i] for every arc reachable from sibling list `list` with the
+// number of words (accepting nodes) in that arc's pre-order subtree. Memoized via
+// `done` so shared DAWG nodes are computed once.
+void compute_subtree_words(const std::vector<uint32_t>& nodes, uint32_t list,
+                           std::vector<uint32_t>& subtree_words, std::vector<bool>& done) {
+  for (uint32_t i = list;; ++i) {
+    if (!done[i]) {
+      const uint32_t entry = nodes[i];
+      const uint32_t child = entry & kArcMask;
+      if (child != 0) compute_subtree_words(nodes, child, subtree_words, done);
+      uint32_t sw = (entry & kAcceptsBit) ? 1u : 0u;
+      if (child != 0)
+        for (uint32_t c = child;; ++c) {
+          sw += subtree_words[c];
+          if (nodes[c] & kIsEndBit) break;
+        }
+      subtree_words[i] = sw;
+      done[i] = true;
+    }
+    if (nodes[i] & kIsEndBit) break;
+  }
+}
+
 }  // namespace
 
 // -------------------------------------------------------------------------
@@ -93,11 +117,20 @@ LeaveValues LeaveValues::load(const std::string& path) {
 
   LeaveValues lv;
   lv.values_by_leave_.reserve(num_leaves);
+  lv.root_arc_list_ = nodes.empty() ? 0u : (nodes[0] & kArcMask);
   // Enumerate every leave once, starting from the children of the root node.
   Rack acc;
   size_t counter = 0;
   if (!nodes.empty())
     enumerate_leaves(nodes, values, nodes[0] & kArcMask, acc, counter, lv.values_by_leave_);
+  // Per-arc subtree word counts power the incremental cursor's index accumulation.
+  lv.subtree_words_.assign(nodes.size(), 0u);
+  if (!nodes.empty()) {
+    std::vector<bool> done(nodes.size(), false);
+    compute_subtree_words(nodes, nodes[0] & kArcMask, lv.subtree_words_, done);
+  }
+  lv.nodes_ = std::move(nodes);
+  lv.values_ = std::move(values);
   return lv;
 }
 

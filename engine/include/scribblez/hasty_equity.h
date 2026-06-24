@@ -146,6 +146,10 @@ class HastyEquity {
   // the WordMap best-first loop to bound a single subrack's plays before probing.
   double leave_value(const Rack& leave) const { return leave_values_.lookup(leave); }
 
+  // The leave-value table, for callers that price many leaves at once via its
+  // incremental cursor (cheaper than one hash per leave).
+  const LeaveValues& leave_table() const { return leave_values_; }
+
  private:
   HastyEquity() = default;
 
