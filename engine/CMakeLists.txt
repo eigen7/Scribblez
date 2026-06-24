@@ -8,6 +8,7 @@ add_library(scribblez_core STATIC
   src/scribblez/dictionary.cpp
   src/scribblez/movegen.cpp
   src/scribblez/game.cpp
+  src/scribblez/gcg_reader.cpp
   src/scribblez/gcg_writer.cpp
   src/scribblez/binary_log.cpp
   src/scribblez/game_state_encoder.cpp

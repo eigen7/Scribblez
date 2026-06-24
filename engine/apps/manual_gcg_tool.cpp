@@ -2,10 +2,10 @@
 #include "scribblez/exception.h"
 #include "scribblez/game.h"
 #include "scribblez/game_runner.h"
+#include "scribblez/gcg_reader.h"
 #include "scribblez/gcg_writer.h"
 #include "scribblez/lexicon.h"
 #include "scribblez/movegen.h"
-#include "scribblez/position_json.h"
 #include "scribblez/web_server.h"
 
 #include <boost/json.hpp>
@@ -86,59 +86,6 @@ std::string now_string() {
 std::string trim_name(const std::string& in) {
   if (in.empty()) return in;
   return in.substr(0, kMaxNameLen);
-}
-
-std::vector<std::string> split_ws(const std::string& s) {
-  std::istringstream iss(s);
-  std::vector<std::string> out;
-  std::string tok;
-  while (iss >> tok) out.push_back(tok);
-  return out;
-}
-
-std::optional<int> parse_signed_int(const std::string& tok) {
-  if (tok.empty()) return std::nullopt;
-  std::size_t i = 0;
-  if (tok[0] == '+') i = 1;
-  if (i >= tok.size()) return std::nullopt;
-  try {
-    return std::stoi(tok.substr(i));
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-}
-
-bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int* col) {
-  if (pos.size() < 2) return false;
-  if (std::isdigit(static_cast<unsigned char>(pos[0]))) {
-    // Across: 8H
-    std::size_t i = 0;
-    while (i < pos.size() && std::isdigit(static_cast<unsigned char>(pos[i]))) ++i;
-    if (i == 0 || i >= pos.size()) return false;
-    const char c = upper_ch(pos[i]);
-    if (c < 'A' || c > 'O') return false;
-    const int r = std::stoi(pos.substr(0, i)) - 1;
-    if (r < 0 || r >= BOARD_SIZE || i + 1 != pos.size()) return false;
-    *horizontal = true;
-    *row = r;
-    *col = c - 'A';
-    return true;
-  }
-
-  // Down: H8
-  const char c = upper_ch(pos[0]);
-  if (c < 'A' || c > 'O') return false;
-  const std::string digits = pos.substr(1);
-  if (digits.empty()) return false;
-  for (char ch : digits) {
-    if (!std::isdigit(static_cast<unsigned char>(ch))) return false;
-  }
-  const int r = std::stoi(digits) - 1;
-  if (r < 0 || r >= BOARD_SIZE) return false;
-  *horizontal = false;
-  *row = r;
-  *col = c - 'A';
-  return true;
 }
 
 Tile tile_from_letter(const std::string& s, bool is_blank) {
@@ -644,239 +591,42 @@ class ManualGame {
   void load_gcg_text(const std::string& gcg_text, const std::string& source_name) {
     reset();
 
-    std::map<std::string, int> nick_to_player;
-    std::array<int, 2> cumulative = {0, 0};
-    bool saw_turn = false;
-
-    auto parse_player_decl = [&](const std::string& line, int p) {
-      std::size_t a = line.find(' ');
-      if (a == std::string::npos) return;
-      std::size_t b = line.find(' ', a + 1);
-      std::string nick;
-      std::string name;
-      if (b == std::string::npos) {
-        nick = line.substr(a + 1);
-        name = nick;
-      } else {
-        nick = line.substr(a + 1, b - (a + 1));
-        name = line.substr(b + 1);
-      }
-      if (nick.empty()) return;
-      nick_to_player[nick] = p;
-      names_[p] = name.empty() ? nick : name;
-    };
-
-    auto clear_rack_slots = [&](int player) {
-      for (int i = 0; i < kRackSlots; ++i) racks_[player][i].reset();
-    };
-
-    auto set_rack_slots_from_token = [&](int player, const std::string& rack_tok) {
-      clear_rack_slots(player);
-      int slot = 0;
-      for (char ch : rack_tok) {
-        if (slot >= kRackSlots) break;
-        if (ch == '.') continue;
-        const char up = upper_ch(ch);
-        if (up == '_') {
-          ++slot;
-          continue;
-        }
-        if (up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z')) {
-          // Some GCG producers encode blank rack tiles as lowercase letters.
-          racks_[player][slot++] = BLANK;
-          continue;
-        }
-        if (up >= 'A' && up <= 'Z') {
-          racks_[player][slot++] = Tile::from_char(up);
-        }
-      }
-    };
-
-    auto bag_size_estimate = [&]() { return std::max(0, 100 - board_tile_count(board_) - 14); };
-
-    std::istringstream in(gcg_text);
-    std::string raw;
-    while (std::getline(in, raw)) {
-      if (raw.empty()) continue;
-      if (raw.rfind("#player1", 0) == 0) {
-        parse_player_decl(raw, 0);
-        continue;
-      }
-      if (raw.rfind("#player2", 0) == 0) {
-        parse_player_decl(raw, 1);
-        continue;
-      }
-      if (raw[0] != '>') continue;
-
-      const std::size_t colon = raw.find(':');
-      if (colon == std::string::npos || colon <= 1) continue;
-      const std::string nick = raw.substr(1, colon - 1);
-      auto pit = nick_to_player.find(nick);
-      if (pit == nick_to_player.end()) continue;
-      const int player = pit->second;
-
-      const std::string rhs = raw.substr(colon + 1);
-      std::vector<std::string> tok = split_ws(rhs);
-      if (tok.size() < 2) continue;
-
-      set_rack_slots_from_token(player, tok[0]);
-      const RackSlots before_slots = racks_[player];
-      const std::string arg = tok[1];
-
-      // End-of-game adjustments like "(AEI) +6 402" are score updates only.
-      if (!arg.empty() && arg[0] == '(') {
-        auto cum = parse_signed_int(tok.back());
-        if (cum.has_value()) cumulative[player] = *cum;
-        scores_ = cumulative;
-        continue;
-      }
-
-      TurnRecord rec;
-      rec.player = player;
-      rec.rack_before = rack_known_tiles_from_slots(before_slots);
-      rec.bag_size_before = bag_size_estimate();
-      rec.drawn = Rack();
-
-      ManualTurn t;
-      t.include_rack_before = rack_fully_known(before_slots);
-      t.rack_before_slots = before_slots;
-
-      if (arg == "-") {
-        auto cum = parse_signed_int(tok.back());
-        cumulative[player] = cum.value_or(cumulative[player]);
-        scores_ = cumulative;
-
-        rec.move = Move::pass();
-        rec.score_delta = 0;
-        rec.cumulative_scores = scores_;
-
-        t.record = rec;
-        t.notation = "pass";
-        t.racks_after_turn = {racks_[0], racks_[1]};
-
-        turns_.push_back(std::move(t));
-        turn_player_ = 1 - player;
-        snapshots_.push_back(snapshot_from_live());
-        view_ply_ = static_cast<int>(turns_.size());
-        saw_turn = true;
-        continue;
-      }
-
-      if (!arg.empty() && arg[0] == '-') {
-        auto cum = parse_signed_int(tok.back());
-        cumulative[player] = cum.value_or(cumulative[player]);
-        scores_ = cumulative;
-
-        TileCounts exchanged;
-        const std::string exch = arg.substr(1);
-        for (char ch : exch) {
-          const char up = upper_ch(ch);
-          if (up == '?') {
-            exchanged.add(BLANK);
-          } else if (up >= 'A' && up <= 'Z') {
-            exchanged.add(Tile::from_char(up));
-          }
-        }
-
-        rec.move = Move::exchange(exchanged);
-        rec.score_delta = 0;
-        rec.cumulative_scores = scores_;
-
-        clear_rack_slots(player);
-
-        t.record = rec;
-        t.notation = "exch " + exch;
-        t.exchange_field = exch;
-        t.racks_after_turn = {racks_[0], racks_[1]};
-
-        turns_.push_back(std::move(t));
-        turn_player_ = 1 - player;
-        snapshots_.push_back(snapshot_from_live());
-        view_ply_ = static_cast<int>(turns_.size());
-        saw_turn = true;
-        continue;
-      }
-
-      if (tok.size() < 5) continue;
-
-      const std::string pos = tok[1];
-      const std::string word = tok[2];
-      auto score = parse_signed_int(tok[3]);
-      auto cum = parse_signed_int(tok[4]);
-      if (!score.has_value() || !cum.has_value()) continue;
-
-      bool horizontal = true;
-      int row = -1;
-      int col = -1;
-      if (!parse_gcg_position(pos, &horizontal, &row, &col)) continue;
-
-      std::array<Glyph, RACK_SIZE> glyphs;
-      glyphs.fill(Glyph::empty());
-      int num_glyphs = 0;
-      uint16_t mask = 0;
-      int r = row;
-      int c = col;
-      bool malformed = false;
-      for (char ch : word) {
-        if (!board_.in_bounds(r, c)) {
-          malformed = true;
-          break;
-        }
-        if (ch == '.') {
-          if (board_.at(r, c).is_empty()) {
-            malformed = true;
-            break;
-          }
-        } else {
-          const char up = upper_ch(ch);
-          if (up < 'A' || up > 'Z' || num_glyphs >= RACK_SIZE) {
-            malformed = true;
-            break;
-          }
-          const bool is_blank = std::islower(static_cast<unsigned char>(ch)) != 0;
-          glyphs[num_glyphs++] = Glyph::played(Tile::from_char(up), is_blank);
-          const int lane = horizontal ? c : r;
-          mask |= static_cast<uint16_t>(1) << lane;
-        }
-        if (horizontal) {
-          ++c;
-        } else {
-          ++r;
-        }
-      }
-      if (malformed) continue;
-
-      const int start = horizontal ? row : col;
-      Move m = Move::play(horizontal, start, mask, static_cast<uint16_t>(*score), glyphs.data(),
-                          num_glyphs);
-
-      const Board before = board_;
-      board_.apply(m);
-      cumulative[player] = *cum;
-      scores_ = cumulative;
-
-      rec.move = m;
-      rec.score_delta = *score;
-      rec.cumulative_scores = scores_;
-
-      clear_rack_slots(player);
-
-      t.record = rec;
-      t.notation = move_to_notation(before, m);
-      t.racks_after_turn = {racks_[0], racks_[1]};
-
-      turns_.push_back(std::move(t));
-      turn_player_ = 1 - player;
-      snapshots_.push_back(snapshot_from_live());
-      view_ply_ = static_cast<int>(turns_.size());
-      saw_turn = true;
-    }
-
-    if (!saw_turn) {
-      status_ = "No playable turns found in " + source_name;
+    ParsedGcgGame parsed;
+    std::string error;
+    if (!read_gcg_text(gcg_text, &parsed, &error)) {
+      status_ = error + " in " + source_name;
       return;
     }
 
+    names_ = parsed.player_names;
+    turns_.clear();
+    turns_.reserve(parsed.turns.size());
+    for (int i = 0; i < static_cast<int>(parsed.turns.size()); ++i) {
+      const ParsedGcgTurn& parsed_turn = parsed.turns[i];
+      ManualTurn turn;
+      turn.record = parsed.game_log.turns[i];
+      turn.include_rack_before = rack_fully_known(parsed_turn.rack_before_slots);
+      turn.notation = parsed_turn.notation;
+      turn.rack_before_slots = parsed_turn.rack_before_slots;
+      turn.racks_after_turn = parsed_turn.racks_after_turn;
+      turn.exchange_field = parsed_turn.exchange_field;
+      turns_.push_back(std::move(turn));
+    }
+
+    snapshots_.clear();
+    snapshots_.reserve(parsed.snapshots.size());
+    for (const ParsedGcgSnapshot& parsed_snapshot : parsed.snapshots) {
+      ManualSnapshot snapshot;
+      snapshot.board = parsed_snapshot.board;
+      snapshot.scores = parsed_snapshot.scores;
+      snapshot.racks = parsed_snapshot.racks;
+      snapshot.bag = parsed_snapshot.bag;
+      snapshot.turn_player = parsed_snapshot.turn_player;
+      snapshots_.push_back(std::move(snapshot));
+    }
+
+    restore_live_from_snapshot(snapshots_.back());
+    view_ply_ = static_cast<int>(turns_.size());
     status_ = "Loaded " + source_name;
   }
 
@@ -981,27 +731,11 @@ class ManualGame {
       }
     }
 
-    auto consume_rack_tile = [&](Tile rack_tile) {
-      for (int i = 0; i < kRackSlots; ++i) {
-        if (state[i] == RackSlotState::KNOWN && letters[i].has_value() && letters[i].value() == rack_tile) {
-          state[i] = RackSlotState::EMPTY;
-          letters[i].reset();
-          return;
-        }
-      }
-      for (int i = 0; i < kRackSlots; ++i) {
-        if (state[i] == RackSlotState::UNKNOWN) {
-          state[i] = RackSlotState::EMPTY;
-          return;
-        }
-      }
-    };
-
     int consumed = 0;
     if (t.record.move.type() == MoveType::PLAY || t.record.move.type() == MoveType::EXCHANGE) {
       consumed = t.record.move.num_glyphs();
       for (int i = 0; i < t.record.move.num_glyphs(); ++i) {
-        consume_rack_tile(t.record.move.glyph(i).rack_tile());
+        consume_rack_tile_for_post_move(&state, &letters, t.record.move.glyph(i).rack_tile());
       }
     }
 
@@ -1037,8 +771,27 @@ class ManualGame {
     return out;
   }
 
-  std::array<RackSlots, 2> display_racks_for_view(
-    int view_ply, const std::array<RackSlots, 2>& fallback) const {
+  void consume_rack_tile_for_post_move(std::array<RackSlotState, kRackSlots>* state,
+                                       std::array<std::optional<Tile>, kRackSlots>* letters,
+                                       Tile rack_tile) const {
+    for (int i = 0; i < kRackSlots; ++i) {
+      if ((*state)[i] == RackSlotState::KNOWN && (*letters)[i].has_value() &&
+          (*letters)[i].value() == rack_tile) {
+        (*state)[i] = RackSlotState::EMPTY;
+        (*letters)[i].reset();
+        return;
+      }
+    }
+    for (int i = 0; i < kRackSlots; ++i) {
+      if ((*state)[i] == RackSlotState::UNKNOWN) {
+        (*state)[i] = RackSlotState::EMPTY;
+        return;
+      }
+    }
+  }
+
+  std::array<RackSlots, 2> display_racks_for_view(int view_ply,
+                                                  const std::array<RackSlots, 2>& fallback) const {
     std::array<RackSlots, 2> out = fallback;
     if (view_ply <= 0 || view_ply > static_cast<int>(turns_.size())) return out;
 
