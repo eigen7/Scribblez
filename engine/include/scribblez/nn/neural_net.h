@@ -7,9 +7,11 @@
 #include <string>
 
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
-// Scribblez post-move value model: two inputs ("input_spatial" (N,33,15,15),
-// "input_scalar" (N,936)) and three outputs ("wld" (N,3), "score_diff" (N,2 =
-// [mean, std]), "opp_next_placement" (N,15,15)).
+// Scribblez post-move value model: two inputs ("input_spatial"
+// (N,kSpatialPlanes=85,15,15), "input_scalar" (N,kScalarFloats=936)) and three
+// outputs ("wld" (N,3), "score_diff" (N,2 = [mean, std]), "opp_next_placement"
+// (N,15,15)). The input shapes mirror the constants in input_encoder.h, which
+// is the single source of truth for the encoding layout.
 //
 // load() builds a TensorRT engine from an ONNX file (or deserializes a cached
 // plan keyed by the model's content hash + precision + batch size + GPU
