@@ -25,12 +25,12 @@ REPO_ROOT = Path(__file__).resolve().parent
 #
 # Increasing the major version (the first number) causes the setup wizard to
 # rm -rf the target/ directory - use this to invalidate existing builds.
-SETUP_VERSION = "2.1.1"
+SETUP_VERSION = "2.2.1"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
 # `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "2.0.0"
+MINIMUM_REQUIRED_IMAGE_VERSION = "3.0.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [

@@ -136,6 +136,8 @@ def main():
         tool.rule()
         tool.setup_vscode_attach_config()
         tool.rule()
+        tool.setup_claude_trust()
+        tool.rule()
         tool.build_docker_image()
         tool.rule()
         tool.setup_cdi()
