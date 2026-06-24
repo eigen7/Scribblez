@@ -10,9 +10,6 @@
 
 namespace scribblez {
 
-// temporary WMP profiling counters (g_wmp_lookups = actual WordMap probes)
-long g_wmp_lookups = 0, g_wmp_extents = 0, g_wmp_extents_prod = 0, g_wmp_dead_probes = 0;
-
 namespace {
 
 // A View presents the board with optional transpose, so the same generator can
@@ -707,7 +704,6 @@ void wmp_emit_span(const WmpLane& lane, const WordMap& wm, int wl, int L,
                    const BitRack& playthrough, const std::vector<BitRack>& subracks_of_size,
                    std::vector<Move>& out) {
   for (const BitRack& sub : subracks_of_size) {
-    ++g_wmp_lookups;
     const WordMap::WordList words = wm.lookup(L, playthrough + sub);
     for (int wi = 0; wi < words.count; ++wi) {
       wmp_try_word(lane, wl, L, words.begin + wi * L, out);
@@ -863,8 +859,6 @@ void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubrack
   const View view{board, e.transposed};
   const CrossChecks& cross = board.cross_checks(e.transposed);
   const WmpLane lane = build_wmp_lane(view, cross, e.row);
-  const size_t before = out.size();
-  ++g_wmp_extents;
   // One scan of (playthrough + subrack) per subrack serves every start column in
   // the anchor's range: each found word is verified against the board at every
   // start in [leftmost, rightmost] (MAGPIE's wordmap_gen sliding the word list
@@ -877,9 +871,7 @@ void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubrack
   for (size_t j = 0; j < subs.size(); ++j) {
     if (sub_terms != nullptr && static_cast<double>(e.score_bound) + sub_terms[j] < best_equity)
       continue;
-    ++g_wmp_lookups;
     const WordMap::WordList words = wm.lookup(e.length, e.pt + subs[j]);
-    if (words.count == 0) ++g_wmp_dead_probes;
     for (int wi = 0; wi < words.count; ++wi) {
       const Tile* word = words.begin + wi * e.length;
       for (int s = e.leftmost_start_col; s <= e.rightmost_start_col; ++s) {
@@ -887,7 +879,6 @@ void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubrack
       }
     }
   }
-  if (out.size() > before) ++g_wmp_extents_prod;
 }
 
 ShadowMoveGen::ShadowMoveGen(const Board& board, const Dictionary& dict)

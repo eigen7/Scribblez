@@ -2909,11 +2909,6 @@ class CapturingAgent : public scribblez::Agent {
 };
 }  // namespace
 
-namespace scribblez {
-// temporary WMP profiling counters
-extern long g_wmp_lookups, g_wmp_extents, g_wmp_extents_prod, g_wmp_dead_probes;
-}  // namespace scribblez
-
 // Head-to-head throughput: GADDAG traversal vs WordMap anagram lookup, over the
 // blank-free positions of real HastyBot self-play games. Verifies the two agree,
 // then times each. Requires the NWL23 KWG + leaves; skipped if absent.
@@ -3004,8 +2999,6 @@ static void test_wmp_benchmark() {
   std::cout << "    GADDAG generate: " << gaddag_us << " us/pos\n";
   std::cout << "    WMP    generate: " << wmp_us << " us/pos  (" << (wmp_us / gaddag_us)
             << "x GADDAG)\n";
-  std::cout << "    [full generation] WMP lookups/pos: "
-            << (scribblez::g_wmp_lookups / (kReps * (long)positions.size())) << "\n";
 
   // The regime HastyBot actually uses: shadow best-first with early-exit, so only
   // a few anchors are ever generated. This is where WordMap lookup should beat
@@ -3018,10 +3011,6 @@ static void test_wmp_benchmark() {
     CHECK(move_key(p.board, g) == move_key(p.board, w));  // identical choice
   }
 
-  scribblez::g_wmp_lookups = 0;
-  scribblez::g_wmp_dead_probes = 0;
-  scribblez::g_wmp_extents = 0;
-  scribblez::g_wmp_extents_prod = 0;
   auto ts0 = std::chrono::steady_clock::now();
   long sink_sg = 0;
   for (int rep = 0; rep < kReps; ++rep) {
@@ -3062,11 +3051,6 @@ static void test_wmp_benchmark() {
   std::cout << "    shadow+WMP:    " << shadow_w_us << " us/move  (" << (shadow_w_us / shadow_g_us)
             << "x GADDAG); of which extents()=" << extents_us
             << " us, generate+equity=" << (shadow_w_us - extents_us) << " us\n";
-  const long denom = kReps * (long)positions.size();
-  std::cout << "    shadow+WMP probes/move: " << (scribblez::g_wmp_lookups / denom) << " ("
-            << (scribblez::g_wmp_dead_probes / denom) << " dead)\n";
-  std::cout << "    shadow+WMP extents/move: " << (scribblez::g_wmp_extents / denom) << " ("
-            << (scribblez::g_wmp_extents_prod / denom) << " productive)\n";
 }
 
 int main() {
