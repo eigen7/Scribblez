@@ -465,8 +465,45 @@ struct LaneInfo {
   std::array<int, BOARD_SIZE + 1> pref{};  // prefix sum of filled tile values
 };
 
+// In-lane extension constraint per empty square: when an existing run sits
+// immediately to the right, the only letters that can be placed here are those
+// that can precede the run in some word (its left-extension). Walking the GADDAG
+// through the run reversed lands on the node whose non-separator arcs are exactly
+// those letters -- and the GADDAG accounts for arbitrary further context, so it is
+// a true necessary condition. (The mirror case, a run to the left, is left to the
+// WordMap lookup, which already rejects words that don't fit.) Intersecting this
+// into the placeable set prunes spans no word can fill, like MAGPIE's shadow does.
+void compute_inlane_ext(const View& view, const Dictionary& dict, int row,
+                        std::array<uint32_t, BOARD_SIZE>& ext) {
+  ext.fill(kAllLettersMask);
+  for (int c = 0; c < BOARD_SIZE; ++c) {
+    if (!view.at(row, c).is_empty()) continue;
+    if (c + 1 >= BOARD_SIZE || view.at(row, c + 1).is_empty()) continue;  // no run to the right
+    int e = c + 1;
+    while (e + 1 < BOARD_SIZE && !view.at(row, e + 1).is_empty()) ++e;
+    uint32_t node = dict.gaddag_root();
+    bool ok = true;
+    for (int k = e; k >= c + 1 && ok; --k) {  // walk the run reversed
+      const Dictionary::Step s = dict.step(node, view.at(row, k).letter());
+      ok = s.valid;
+      node = s.next;
+    }
+    uint32_t leftx = 0;
+    if (ok && node != 0) {
+      for (uint32_t i = node;; ++i) {
+        const uint32_t arc = dict.arc(i);
+        const uint8_t tv = Dictionary::arc_tile(arc);
+        if (tv >= 1 && tv <= 26) leftx |= (1u << (tv - 1));  // non-separator letters
+        if (arc & Dictionary::IS_END_BIT) break;
+      }
+    }
+    ext[c] &= leftx;
+  }
+}
+
 void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t rack_letter_mask,
-                bool has_blank, LaneInfo& lane) {
+                bool has_blank, const std::array<uint32_t, BOARD_SIZE>& inlane_ext,
+                LaneInfo& lane) {
   lane = LaneInfo{};
   for (int c = 0; c < BOARD_SIZE; ++c) {
     const Glyph g = view.at(row, c);
@@ -482,10 +519,11 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
     const CrossCheck& cc = cross[idx(row, c)];
     lane.cscore[c] = cc.score;
     lane.cneigh[c] = cc.has_neighbor;
-    // Highest-value rack tile this square's cross-check permits (a blank can
-    // satisfy any non-empty mask, scoring 0). A square no rack tile can fill
-    // makes any covering window infeasible.
-    const uint32_t allowed = cc.mask & rack_letter_mask;
+    // Highest-value rack tile this square permits: legal by the cross-check, on
+    // the rack, and able to extend any adjacent run in-lane. A square no rack tile
+    // can fill makes any covering window infeasible.
+    const uint32_t playable = cc.mask & inlane_ext[c];
+    const uint32_t allowed = playable & rack_letter_mask;
     if (allowed != 0) {
       lane.placeable[c] = true;
       int mv = 0;
@@ -493,7 +531,7 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
         if ((allowed & (1u << L)) && TILE_VALUES[L] > mv) mv = TILE_VALUES[L];
       }
       lane.maxval[c] = mv;
-    } else if (has_blank && cc.mask != 0) {
+    } else if (has_blank && playable != 0) {
       lane.placeable[c] = true;
       lane.maxval[c] = 0;
     }
@@ -913,6 +951,11 @@ std::vector<ShadowAnchor> ShadowMoveGen::anchors(const Rack& rack) const {
   }
   const bool has_blank = counts.blanks() > 0;
 
+  // The GADDAG path enforces in-lane validity during traversal, so its bounds
+  // need no extra extension constraint.
+  std::array<uint32_t, BOARD_SIZE> trivial_ext;
+  trivial_ext.fill(kAllLettersMask);
+
   std::vector<ShadowAnchor> out;
   LaneInfo lane;
   for (int orient = 0; orient < 2; ++orient) {
@@ -925,7 +968,7 @@ std::vector<ShadowAnchor> ShadowMoveGen::anchors(const Rack& rack) const {
       bool any = false;
       for (int c = 0; c < BOARD_SIZE && !any; ++c) any = anchors[idx(r, c)];
       if (!any) continue;
-      build_lane(view, cross, r, rack_letter_mask, has_blank, lane);
+      build_lane(view, cross, r, rack_letter_mask, has_blank, trivial_ext, lane);
       int prev = -1;  // nearest anchor to the left in this row
       for (int c = 0; c < BOARD_SIZE; ++c) {
         if (!anchors[idx(r, c)]) continue;
@@ -997,6 +1040,7 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(const Rack& rack) const {
   std::vector<ShadowExtent> out;
   LaneInfo lane;
   std::vector<RawExtent> raw;
+  std::array<uint32_t, BOARD_SIZE> ext;
   for (int orient = 0; orient < 2; ++orient) {
     const bool transposed = (orient == 1);
     View view{board_, transposed};
@@ -1006,7 +1050,8 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(const Rack& rack) const {
       bool any = false;
       for (int c = 0; c < BOARD_SIZE && !any; ++c) any = anchors[idx(r, c)];
       if (!any) continue;
-      build_lane(view, cross, r, rack_letter_mask, has_blank, lane);
+      compute_inlane_ext(view, dict_, r, ext);
+      build_lane(view, cross, r, rack_letter_mask, has_blank, ext, lane);
       raw.clear();
       int prev = -1;  // nearest anchor to the left in this row
       for (int c = 0; c < BOARD_SIZE; ++c) {

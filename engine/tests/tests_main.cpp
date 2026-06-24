@@ -3039,6 +3039,19 @@ static void test_wmp_benchmark() {
     }
   }
   auto ts2 = std::chrono::steady_clock::now();
+  // Time the shadow enumeration (extents()) alone, to split its cost from
+  // generation + equity.
+  long sink_ext = 0;
+  for (int rep = 0; rep < kReps; ++rep) {
+    for (const CapturedPos& p : positions) {
+      ShadowMoveGen smg(p.board, dict);
+      sink_ext += static_cast<long>(smg.extents(p.rack).size());
+    }
+  }
+  auto ts3 = std::chrono::steady_clock::now();
+  CHECK(sink_ext > 0);
+  const double extents_us =
+    std::chrono::duration<double, std::micro>(ts3 - ts2).count() / (kReps * positions.size());
   CHECK(sink_sg == sink_sw);
   const double shadow_g_us =
     std::chrono::duration<double, std::micro>(ts1 - ts0).count() / (kReps * positions.size());
@@ -3047,7 +3060,8 @@ static void test_wmp_benchmark() {
   std::cout << "  HastyBot make_move (shadow best-first, early-exit):\n";
   std::cout << "    shadow+GADDAG: " << shadow_g_us << " us/move\n";
   std::cout << "    shadow+WMP:    " << shadow_w_us << " us/move  (" << (shadow_w_us / shadow_g_us)
-            << "x GADDAG)\n";
+            << "x GADDAG); of which extents()=" << extents_us
+            << " us, generate+equity=" << (shadow_w_us - extents_us) << " us\n";
   const long denom = kReps * (long)positions.size();
   std::cout << "    shadow+WMP probes/move: " << (scribblez::g_wmp_lookups / denom) << " ("
             << (scribblez::g_wmp_dead_probes / denom) << " dead)\n";
