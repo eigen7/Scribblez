@@ -54,7 +54,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 10;
+inline constexpr uint16_t kVersion = 9;
 
 #pragma pack(push, 1)
 
