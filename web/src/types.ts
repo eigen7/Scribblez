@@ -1,6 +1,8 @@
 export interface TileInfo {
   letter: string;
   score: number;
+  isBlank?: boolean;
+  isUnknown?: boolean;
 }
 
 export interface DragTilePayload {

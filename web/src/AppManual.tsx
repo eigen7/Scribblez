@@ -32,6 +32,17 @@ interface UnseenSlot {
   present: boolean;
 }
 
+function rackSlotToTile(slot: ManualRackSlot): {
+  letter: string;
+  score: number;
+  isBlank?: boolean;
+  isUnknown?: boolean;
+} {
+  if (!slot.known) return { letter: '?', score: 0, isUnknown: true };
+  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true };
+  return { letter: slot.letter, score: slot.score };
+}
+
 const DISTRIBUTION: ReadonlyArray<readonly [string, number]> = [
   ['A', 9], ['B', 2], ['C', 2], ['D', 4], ['E', 12], ['F', 2], ['G', 3], ['H', 2],
   ['I', 9], ['J', 1], ['K', 1], ['L', 4], ['M', 2], ['N', 6], ['O', 8], ['P', 2],
@@ -545,7 +556,7 @@ function AppManual() {
               onChange={(e) => handleNameChange(1, e.target.value)}
             />
             <Rack
-              tiles={state.racks[1].map((t) => ({ letter: t.known ? t.letter : '?', score: t.known ? t.score : 0 }))}
+              tiles={state.racks[1].map(rackSlotToTile)}
               usedIndices={new Set()}
               label=""
               interactive={!interactionLocked && state.current_player === 1}
@@ -554,7 +565,7 @@ function AppManual() {
               onTileClick={(index) => handleRackTileClickForPlayer(1, index)}
               allowSlotDrop
               onTileDrop={(index, payload) => handleRackSlotDrop(1, index, payload)}
-              showQuestionForBlank
+              showQuestionForBlank={false}
               hideScoreForQuestion
               draggableIndices={new Set(state.racks[1].map((t, i) => (t.known ? i : -1)).filter((i) => i >= 0))}
               tileClickEnabled={!exchangeMode && !interactionLocked}
@@ -584,7 +595,7 @@ function AppManual() {
               onChange={(e) => handleNameChange(0, e.target.value)}
             />
             <Rack
-              tiles={state.racks[0].map((t) => ({ letter: t.known ? t.letter : '?', score: t.known ? t.score : 0 }))}
+              tiles={state.racks[0].map(rackSlotToTile)}
               usedIndices={new Set()}
               label=""
               interactive={!interactionLocked && state.current_player === 0}
@@ -593,7 +604,7 @@ function AppManual() {
               onTileClick={(index) => handleRackTileClickForPlayer(0, index)}
               allowSlotDrop
               onTileDrop={(index, payload) => handleRackSlotDrop(0, index, payload)}
-              showQuestionForBlank
+              showQuestionForBlank={false}
               hideScoreForQuestion
               draggableIndices={new Set(state.racks[0].map((t, i) => (t.known ? i : -1)).filter((i) => i >= 0))}
               tileClickEnabled={!exchangeMode && !interactionLocked}

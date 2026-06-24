@@ -42,7 +42,7 @@ const Rack: React.FC<RackProps> = ({
       e.preventDefault();
       return;
     }
-    const isBlank = tile.letter === '?';
+    const isBlank = tile.isBlank === true || (tile.letter === '?' && tile.isUnknown !== true);
     e.dataTransfer.setData('text/plain', JSON.stringify({
       letter: isBlank ? '?' : tile.letter,
       isBlank,
@@ -84,7 +84,8 @@ const Rack: React.FC<RackProps> = ({
           ]
             .filter(Boolean)
             .join(' ');
-          const showScore = !(hideScoreForQuestion && t.letter === '?');
+          const isBlank = t.isBlank === true || (t.letter === '?' && t.isUnknown !== true);
+          const showScore = !(hideScoreForQuestion && (t.letter === '?' || isBlank));
           return (
             <div
               key={i}
@@ -96,7 +97,7 @@ const Rack: React.FC<RackProps> = ({
               onDrop={allowSlotDrop ? (e) => handleSlotDrop(e, i) : undefined}
             >
               <span className="rack-tile-letter">
-                {t.letter === '?' ? (showQuestionForBlank ? '?' : '') : t.letter}
+                {isBlank ? (showQuestionForBlank ? '?' : '') : t.letter === '?' ? '?' : t.letter}
               </span>
               {showScore && <span className="rack-tile-score">{t.score}</span>}
             </div>
