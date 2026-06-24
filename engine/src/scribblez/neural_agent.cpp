@@ -3,29 +3,20 @@
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
-#include "scribblez/nn/nn_evaluation_service.h"
 #include "scribblez/sampling.h"
 
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
 
+// The production constructor and make_service() -- the only members that
+// reference the concrete nn::NNEvaluationService (and thus pull in CUDA /
+// TensorRT) -- live in neural_agent_factory.cpp, so this translation unit, and
+// the agent's unit tests that compile it, carry no GPU dependency.
+
 namespace scribblez {
 
 using binlog::kInputFloats;
-
-NeuralAgent::NeuralAgent(int thread_id, const std::string& name, const std::string& onnx_path,
-                         int top_k, Objective objective, const nn::NeuralNetParams& net_params,
-                         double temperature, uint64_t seed)
-    : Agent(thread_id, name),
-      top_k_(top_k),
-      objective_(objective),
-      temperature_(temperature),
-      max_batch_(net_params.max_batch_size),
-      service_(make_service(net_params, onnx_path)),
-      rng_(seed) {
-  init();
-}
 
 NeuralAgent::NeuralAgent(int thread_id, const std::string& name,
                          std::unique_ptr<nn::EvalService> service, int top_k, Objective objective,
@@ -47,13 +38,6 @@ void NeuralAgent::init() {
   input_buf_.resize(static_cast<size_t>(max_batch_) * kInputFloats);
 }
 
-std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetParams& net_params,
-                                                           const std::string& onnx_path) {
-  auto svc = std::make_unique<nn::NNEvaluationService>(net_params);
-  svc->load(onnx_path);
-  return svc;
-}
-
 void NeuralAgent::begin_game() { encoder_ = binlog::GameStateEncoder(); }
 
 void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
@@ -64,7 +48,8 @@ float NeuralAgent::objective_value(const nn::Eval& e) const {
 
 std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
                                                     const std::vector<Move>& plays) const {
-  return HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+  return HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack,
+                                          req.my_rack);
 }
 
 int NeuralAgent::greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const {

@@ -17,9 +17,11 @@
 // CUDA stream, and pinned host + device buffers sized to max_batch_size.
 //
 // predict() is blocking: it copies the host input rows to the GPU, runs the
-// engine, copies the outputs back, and synchronizes the stream before
-// returning. There is no batching across threads and no async pipeline -- one
-// NeuralNet drives one engine from one thread.
+// engine, copies the wld and score_diff outputs back, and synchronizes the
+// stream before returning. The third engine output, opp_next_placement, is
+// produced on the GPU (its device buffer must stay bound) but has no inference
+// consumer, so it is not copied back. There is no batching across threads and
+// no async pipeline -- one NeuralNet drives one engine from one thread.
 
 namespace scribblez {
 namespace nn {
@@ -57,10 +59,10 @@ class NeuralNet {
 
   // Host output buffers, valid after predict() returns. Row-major; only the
   // first num_rows rows are meaningful. wld is raw logits; score_diff is the
-  // [mean, std] of the final-differential Gaussian (std already positive).
-  const float* wld_host() const;                 // num_rows x kWldFloats
-  const float* score_diff_host() const;          // num_rows x kScoreDiffOutputFloats ([mean, std])
-  const float* opp_next_placement_host() const;  // num_rows x kOppNextPlacementFloats
+  // [mean, std] of the final-differential Gaussian (std already positive). The
+  // opp_next_placement output is not exposed here -- it is not copied back.
+  const float* wld_host() const;         // num_rows x kWldFloats
+  const float* score_diff_host() const;  // num_rows x kScoreDiffOutputFloats ([mean, std])
 
  private:
   struct Impl;

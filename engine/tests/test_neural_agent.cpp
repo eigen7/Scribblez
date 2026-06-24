@@ -85,15 +85,15 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
 // of differing scores -- the candidate sets the selection tests rank and prune.
 static Dictionary medium_dict() {
   return Dictionary::build_from_words(
-    {"AA",     "AB",      "AD",      "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
-     "AR",     "AS",      "AT",      "AW",     "AX",      "AY",      "BA",      "BE",      "BI",
-     "BO",     "BY",      "CAB",     "CAR",    "CARS",    "CART",    "CARTS",   "CAT",     "CATS",
-     "CARE",   "CARES",   "CARET",   "CARETS", "CASTE",   "CASTER",  "CASTERS", "DOG",     "DOGS",
-     "DOT",    "DOTS",    "EAR",     "EARS",   "EAT",     "EATS",    "RAT",     "RATE",    "RATES",
-     "RATS",   "STARE",   "STARED",  "TARE",   "TARES",   "TEAR",    "TEARS",   "REACT",   "REACTS",
-     "TRACE",  "TRACES",  "CRATE",   "CRATES", "CATER",   "CATERS",  "RECAST",  "RECASTS", "TASTE",
-     "TASTER", "TASTERS", "SET",     "TEA",    "ATE",     "ETA",     "ACE",     "ACES",    "ACRE",
-     "ACRES",  "RACE",    "RACES",   "SCAR",   "SCARE",   "ARC",     "ARCS",    "ARE",     "ERA"});
+    {"AA",     "AB",      "AD",     "AE",     "AG",    "AH",     "AI",      "AL",      "AN",
+     "AR",     "AS",      "AT",     "AW",     "AX",    "AY",     "BA",      "BE",      "BI",
+     "BO",     "BY",      "CAB",    "CAR",    "CARS",  "CART",   "CARTS",   "CAT",     "CATS",
+     "CARE",   "CARES",   "CARET",  "CARETS", "CASTE", "CASTER", "CASTERS", "DOG",     "DOGS",
+     "DOT",    "DOTS",    "EAR",    "EARS",   "EAT",   "EATS",   "RAT",     "RATE",    "RATES",
+     "RATS",   "STARE",   "STARED", "TARE",   "TARES", "TEAR",   "TEARS",   "REACT",   "REACTS",
+     "TRACE",  "TRACES",  "CRATE",  "CRATES", "CATER", "CATERS", "RECAST",  "RECASTS", "TASTE",
+     "TASTER", "TASTERS", "SET",    "TEA",    "ATE",   "ETA",    "ACE",     "ACES",    "ACRE",
+     "ACRES",  "RACE",    "RACES",  "SCAR",   "SCARE", "ARC",    "ARCS",    "ARE",     "ERA"});
 }
 
 // True iff two moves are the same play (type, orientation, anchor, placed
@@ -160,7 +160,7 @@ static std::filesystem::path init_equity() {
   std::ofstream f(klv, std::ios::binary | std::ios::trunc);
   auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
   auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-  write_u32(4);                                           // kwg_node_count
+  write_u32(4);                                          // kwg_node_count
   write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);  // root
   write_u32((0u << 24) | (0u << 22) | (1u << 23) | 0u);  // ? (blank)
   write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);  // A
@@ -337,7 +337,7 @@ static void test_chunked_evaluation() {
   // candidate.
   OpeningPosition pos("CARETS");
   const int n = static_cast<int>(pos.plays.size());
-  CHECK(n >= 3);  // needs at least two chunks at max_batch = 2
+  CHECK(n >= 3);             // needs at least two chunks at max_batch = 2
   const int target = n - 1;  // a candidate in the final chunk
   const MoveRequest req = pos.request();
 
@@ -450,8 +450,7 @@ static void test_encode_candidate_matches_training_decoder() {
   Move move0 = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                               {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                                Glyph::of(Tile::from_char('T'))});
-  Move move1 =
-    make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
+  Move move1 = make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
   Move move2 = make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
                               {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
   const uint32_t sampled_turn = 2;

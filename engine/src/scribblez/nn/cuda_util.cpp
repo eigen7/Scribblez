@@ -14,22 +14,25 @@ namespace {
 // top-level handler surface the message rather than exiting silently.
 void check(cudaError_t err, const char* what) {
   if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("CUDA error in ") + what + ": " +
-                             cudaGetErrorString(err));
+    throw std::runtime_error(std::string("CUDA error in ") + what + ": " + cudaGetErrorString(err));
   }
+}
+
+// "<major>.<minor>" compute capability of the current device.
+std::string query_sm_tag() {
+  int device = 0;
+  check(cudaGetDevice(&device), "cudaGetDevice");
+  cudaDeviceProp prop;
+  check(cudaGetDeviceProperties(&prop, device), "cudaGetDeviceProperties");
+  return std::to_string(prop.major) + "." + std::to_string(prop.minor);
 }
 
 }  // namespace
 
 const char* sm_tag() {
-  static std::string tag;
-  if (tag.empty()) {
-    int device = 0;
-    check(cudaGetDevice(&device), "cudaGetDevice");
-    cudaDeviceProp prop;
-    check(cudaGetDeviceProperties(&prop, device), "cudaGetDeviceProperties");
-    tag = std::to_string(prop.major) + "." + std::to_string(prop.minor);
-  }
+  // Function-local static: C++ guarantees the initializer runs exactly once,
+  // even under concurrent first calls.
+  static const std::string tag = query_sm_tag();
   return tag.c_str();
 }
 

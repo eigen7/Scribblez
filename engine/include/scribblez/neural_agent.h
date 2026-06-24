@@ -46,8 +46,9 @@ class NeuralAgent : public Agent {
  public:
   // Which model head drives move selection among the candidates.
   //   kScoreDiff -- highest expected final score differential (the ScoreDiff
-  //                 head's mean on the post-move position). The default.
-  //   kWinProb   -- highest P(win) + 0.5*P(draw) from the WLD head.
+  //                 head's mean on the post-move position).
+  //   kWinProb   -- highest P(win) + 0.5*P(draw) from the WLD head. The default
+  //                 chosen by from_spec().
   enum class Objective { kScoreDiff, kWinProb };
 
   // Production constructor: builds an NNEvaluationService from `net_params` and

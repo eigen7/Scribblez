@@ -48,9 +48,8 @@ std::vector<int64_t> read_cum_eligible(const std::string& path, int64_t& num_gam
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
     num_games = static_cast<int64_t>(hdr.num_games);
     std::vector<GameMetadata> metas(static_cast<size_t>(num_games));
-    if (num_games == 0 ||
-        f.read(reinterpret_cast<char*>(metas.data()),
-               static_cast<std::streamsize>(num_games) * sizeof(GameMetadata))) {
+    if (num_games == 0 || f.read(reinterpret_cast<char*>(metas.data()),
+                                 static_cast<std::streamsize>(num_games) * sizeof(GameMetadata))) {
       std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
       cum[0] = 0;
       for (int64_t g = 0; g < num_games; ++g) {
@@ -87,7 +86,7 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
 DataLoader::DataFile::~DataFile() { unload(); }
 
 std::pair<uint32_t, uint32_t> DataLoader::DataFile::sample_to_game_turn(
-    int64_t sample_index) const {
+  int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
   // cum_eligible_[g] <= sample_index.
   auto it = std::upper_bound(cum_eligible_.begin(), cum_eligible_.end(), sample_index);

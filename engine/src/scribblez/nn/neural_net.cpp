@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <stdexcept>
+#include <unistd.h>
 #include <vector>
 
 namespace scribblez {
@@ -19,12 +21,12 @@ namespace nn {
 
 namespace {
 
-using binlog::kScalarFloats;
-using binlog::kSpatialFloats;
-using binlog::kSpatialPlanes;
 using binlog::kBoardSide;
 using binlog::kOppNextPlacementFloats;
+using binlog::kScalarFloats;
 using binlog::kScoreDiffOutputFloats;
+using binlog::kSpatialFloats;
+using binlog::kSpatialPlanes;
 using binlog::kWldFloats;
 
 // Names of the engine's I/O tensors. These match the input_names / output_names
@@ -54,11 +56,15 @@ std::vector<char> read_file_bytes(const std::string& path) {
   return bytes;
 }
 
-// Write `bytes` to `path` atomically (tmp file + rename), creating parents.
+// Write `bytes` to `path` atomically (tmp file + rename), creating parents. The
+// temp name carries the pid and a random suffix so two processes building the
+// same plan concurrently (multiple self-play workers share one cache directory)
+// never write to the same temp file and corrupt each other's rename.
 void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::path p(path);
   std::filesystem::create_directories(p.parent_path());
-  std::string tmp = path + ".tmp";
+  std::string tmp =
+    path + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(std::random_device{}());
   {
     std::ofstream f(tmp, std::ios::binary);
     if (!f) throw std::runtime_error("Failed to open temp file: " + tmp);
@@ -117,7 +123,9 @@ struct NeuralNet::Impl {
   float* h_input_scalar = nullptr;
   float* h_wld = nullptr;
   float* h_score_diff = nullptr;
-  float* h_opp = nullptr;
+  // No host buffer for the opp_next_placement output: the engine still produces
+  // it (d_opp must stay bound for enqueueV3), but no inference consumer reads
+  // it, so it is never copied back to the host.
 
   int last_rows = -1;
 };
@@ -133,7 +141,6 @@ NeuralNet::Impl::~Impl() {
     if (h_input_scalar) host_free(h_input_scalar);
     if (h_wld) host_free(h_wld);
     if (h_score_diff) host_free(h_score_diff);
-    if (h_opp) host_free(h_opp);
     destroy_stream(stream);
   }
 }
@@ -182,9 +189,7 @@ void NeuralNet::Impl::allocate_buffers() {
 
   int b = params.max_batch_size;
   auto dev = [](int floats) { return device_malloc(sizeof(float) * floats); };
-  auto host = [](int floats) {
-    return static_cast<float*>(host_malloc(sizeof(float) * floats));
-  };
+  auto host = [](int floats) { return static_cast<float*>(host_malloc(sizeof(float) * floats)); };
 
   d_input_spatial = dev(b * kSpatialFloats);
   d_input_scalar = dev(b * kScalarFloats);
@@ -196,7 +201,6 @@ void NeuralNet::Impl::allocate_buffers() {
   h_input_scalar = host(b * kScalarFloats);
   h_wld = host(b * kWldFloats);
   h_score_diff = host(b * kScoreDiffOutputFloats);
-  h_opp = host(b * kOppNextPlacementFloats);
 
   context->setTensorAddress(kInputSpatial, d_input_spatial);
   context->setTensorAddress(kInputScalar, d_input_scalar);
@@ -218,9 +222,8 @@ void NeuralNet::load(const std::string& onnx_path) {
 
   std::vector<char> onnx_bytes = read_file_bytes(onnx_path);
   std::string hash = content_hash(onnx_bytes);
-  std::string cache_path = engine_plan_cache_path(hash, impl_->params.precision,
-                                                  impl_->params.max_batch_size,
-                                                  impl_->params.mount_root);
+  std::string cache_path = engine_plan_cache_path(
+    hash, impl_->params.precision, impl_->params.max_batch_size, impl_->params.mount_root);
 
   if (std::filesystem::exists(cache_path)) {
     impl_->deserialize_engine(read_file_bytes(cache_path));
@@ -238,7 +241,6 @@ float* NeuralNet::input_spatial_host() { return impl_->h_input_spatial; }
 float* NeuralNet::input_scalar_host() { return impl_->h_input_scalar; }
 const float* NeuralNet::wld_host() const { return impl_->h_wld; }
 const float* NeuralNet::score_diff_host() const { return impl_->h_score_diff; }
-const float* NeuralNet::opp_next_placement_host() const { return impl_->h_opp; }
 
 void NeuralNet::predict(int num_rows) {
   Impl& m = *impl_;
@@ -259,11 +261,11 @@ void NeuralNet::predict(int num_rows) {
 
   if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
 
+  // Only the wld and score_diff outputs are copied back; opp_next_placement is
+  // produced into d_opp but has no inference consumer, so it stays on the GPU.
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
                        sizeof(float) * num_rows * kScoreDiffOutputFloats);
-  device_to_host_async(m.stream, m.h_opp, m.d_opp,
-                       sizeof(float) * num_rows * kOppNextPlacementFloats);
 
   synchronize_stream(m.stream);
 }

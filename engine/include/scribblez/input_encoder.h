@@ -121,9 +121,9 @@ inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for 
 // the regression target (kScoreDiffClip), one unary slot per integer
 // differential. Owned here: the value head predicts a Gaussian (mean/std), not
 // bins, so the input feature no longer borrows the head's binning.
-inline constexpr int kScoreDiffThermoBins = 2 * kScoreDiffClip + 1;     // 801
-inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;     // 801
-inline constexpr int kMoveMetaTypeFloats = 3;                  // PLAY / EXCHANGE / PASS one-hot
+inline constexpr int kScoreDiffThermoBins = 2 * kScoreDiffClip + 1;  // 801
+inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;  // 801
+inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
 

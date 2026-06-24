@@ -45,7 +45,7 @@ constexpr int kFieldsPerRow = 6;
 // little room for genuine precision drift, so a real regression (a wrong head,
 // a decode bug) shows up well outside these bounds. The test prints the actual
 // max deviations, so tune here if a future model legitimately needs more slack.
-constexpr float kProbTol = 1e-3f;  // bounds the four probability fields
+constexpr float kProbTol = 1e-3f;      // bounds the four probability fields
 constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
 
 static std::vector<float> read_floats(const std::string& path) {
@@ -98,18 +98,17 @@ static bool check_precision(const std::string& onnx_path, scribblez::nn::Precisi
 
   const bool ok = max_prob_err <= kProbTol && max_sd_err <= kScoreDiffTol;
   std::cout << "  [" << label << "] max prob err = " << max_prob_err << " (tol " << kProbTol
-            << "), max score_diff_mean err = " << max_sd_err << " (tol " << kScoreDiffTol
-            << ") -> " << (ok ? "OK" : "FAIL") << "\n";
+            << "), max score_diff_mean err = " << max_sd_err << " (tol " << kScoreDiffTol << ") -> "
+            << (ok ? "OK" : "FAIL") << "\n";
   return ok;
 }
 
 #ifdef SCRIBBLEZ_PY_DIR
 // Create a unique scratch directory for a self-generated fixture.
 static std::filesystem::path make_scratch_dir() {
-  std::filesystem::path base =
-    std::filesystem::temp_directory_path() /
-    ("scribblez_nnparity_" + std::to_string(::time(nullptr)) + "_" +
-     std::to_string(static_cast<unsigned long>(std::random_device{}())));
+  std::filesystem::path base = std::filesystem::temp_directory_path() /
+                               ("scribblez_nnparity_" + std::to_string(::time(nullptr)) + "_" +
+                                std::to_string(static_cast<unsigned long>(std::random_device{}())));
   std::filesystem::create_directories(base);
   return base;
 }

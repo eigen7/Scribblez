@@ -1,14 +1,17 @@
 // Command-line construction of NeuralAgent, kept separate from the agent's
-// selection logic (neural_agent.cpp). Parsing the `--type=neural` option string
-// pulls in Boost.program_options, the process-wide Lexicon, and the TensorRT
-// precision parser; isolating it here means the core agent translation unit --
-// and the agent's unit tests -- carry none of those dependencies.
-
-#include "scribblez/neural_agent.h"
+// selection logic (neural_agent.cpp). This is also the only translation unit
+// that references the concrete nn::NNEvaluationService: the production
+// constructor and make_service() live here, so the core agent TU -- and the
+// agent's unit tests, which inject a stub through the other constructor --
+// carry no CUDA/TensorRT dependency. Parsing the `--type=neural` option string
+// additionally pulls in Boost.program_options, the process-wide Lexicon, and
+// the TensorRT precision parser, all confined to this file.
 
 #include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
+#include "scribblez/neural_agent.h"
 #include "scribblez/nn/neural_net.h"
+#include "scribblez/nn/nn_evaluation_service.h"
 #include "scribblez/nn/trt_util.h"
 #include "scribblez/seed_producer.h"
 
@@ -16,9 +19,30 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 
 namespace scribblez {
+
+NeuralAgent::NeuralAgent(int thread_id, const std::string& name, const std::string& onnx_path,
+                         int top_k, Objective objective, const nn::NeuralNetParams& net_params,
+                         double temperature, uint64_t seed)
+    : Agent(thread_id, name),
+      top_k_(top_k),
+      objective_(objective),
+      temperature_(temperature),
+      max_batch_(net_params.max_batch_size),
+      service_(make_service(net_params, onnx_path)),
+      rng_(seed) {
+  init();
+}
+
+std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetParams& net_params,
+                                                           const std::string& onnx_path) {
+  auto svc = std::make_unique<nn::NNEvaluationService>(net_params);
+  svc->load(onnx_path);
+  return svc;
+}
 
 std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::string>& tokens,
                                                     int thread_id, const std::string& name) {
@@ -35,16 +59,16 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
   bool have_seed = false;
 
   po::options_description desc("neural options");
-  desc.add_options()                                                                          //
-    ("model", po::value<std::string>(&model), "path to the exported ONNX model (required)")    //
+  desc.add_options()                                                                         //
+    ("model", po::value<std::string>(&model), "path to the exported ONNX model (required)")  //
     ("top-k", po::value<int>(&top_k)->default_value(top_k),
      "candidate moves to evaluate: K>0 = top-K by static equity, 0 = all plays")              //
-    ("batch-size", po::value<int>(&batch_size)->default_value(batch_size), "max GPU batch")    //
-    ("cuda-device", po::value<int>(&cuda_device)->default_value(cuda_device), "GPU index")      //
-    ("precision", po::value<std::string>(&precision)->default_value(precision), "FP16|FP32")    //
+    ("batch-size", po::value<int>(&batch_size)->default_value(batch_size), "max GPU batch")   //
+    ("cuda-device", po::value<int>(&cuda_device)->default_value(cuda_device), "GPU index")    //
+    ("precision", po::value<std::string>(&precision)->default_value(precision), "FP16|FP32")  //
     ("temperature", po::value<double>(&temperature)->default_value(temperature),
-     "softmax sampling temperature (0 = greedy argmax)")                                        //
-    ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)")          //
+     "softmax sampling temperature (0 = greedy argmax)")                                //
+    ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)")  //
     ("objective", po::value<std::string>(&objective)->default_value(objective),
      "selection objective: scorediff|winprob");
 
@@ -72,8 +96,10 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
 
   nn::NeuralNetParams params;
   params.cuda_device_id = cuda_device;
-  // top_k > 0 is scored in one evaluate() call, so the engine must admit a batch
-  // at least that large; top_k == 0 (all plays) is chunked to batch_size.
+  // The agent always chunks candidates to max_batch_size, so any value is
+  // correct; sizing the engine batch to at least top_k just lets the whole
+  // top-K set be scored in a single chunk. top_k == 0 (all plays) is chunked to
+  // batch_size.
   params.max_batch_size = std::max({batch_size, top_k, 1});
   params.precision = nn::parse_precision(precision);
 
