@@ -1,5 +1,7 @@
 #include "scribblez/training_targets.h"
 
+#include "util/grid.h"
+
 #include <algorithm>
 
 namespace scribblez {
@@ -29,7 +31,7 @@ void ScoreDiffTarget::encode(const TargetInputs& v, float* out) {
 namespace {
 // Flipping is a transpose across the main diagonal: cell (r,c) -> (c,r).
 inline int plane_idx(int r, int c, bool flip) {
-  return flip ? (c * OppNextPlacementTarget::kSide + r) : (r * OppNextPlacementTarget::kSide + c);
+  return util::plane_index(r, c, OppNextPlacementTarget::kSide, flip);
 }
 }  // namespace
 

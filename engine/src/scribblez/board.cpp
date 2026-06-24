@@ -3,6 +3,7 @@
 #include "scribblez/dictionary.h"
 #include "scribblez/move.h"
 #include "scribblez/tile.h"
+#include "util/grid.h"
 
 #include <array>
 #include <string>
@@ -130,19 +131,44 @@ std::string Board::to_string() const {
 // (e.g. PASS/EXCHANGE) and only touches the affected squares on a PLAY.
 // ---------------------------------------------------------------------------
 
-CrossCheck Board::cross_check_at(bool t, int r, int c) const {
-  CrossCheck cc;
-  if (!oriented_at(r, c, t).is_empty()) return cc;  // filled squares: unused default
-
-  // Maximal existing perpendicular run touching (r, c): rows [top, r-1] above
-  // and [r+1, bot] below at fixed column c (in the current orientation).
+std::pair<int, int> Board::perpendicular_run_bounds(bool t, int r, int c) const {
   int top = r - 1;
   while (top >= 0 && !oriented_at(top, c, t).is_empty()) --top;
   ++top;
   int bot = r + 1;
   while (bot < BOARD_SIZE && !oriented_at(bot, c, t).is_empty()) ++bot;
   --bot;
+  return {top, bot};
+}
 
+uint32_t Board::cross_check_letter_mask(bool t, int c, uint32_t prefix_node, int r, int bot) const {
+  const Dictionary& dict = *dict_;
+  uint32_t mask = 0;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    auto tr_l = dict.step(prefix_node, L);
+    if (!tr_l.valid) continue;
+    bool acc = tr_l.accepts;
+    uint32_t node = tr_l.next;
+    bool ok = true;
+    for (int rr = r + 1; rr <= bot; ++rr) {
+      auto tr_s = dict.step(node, oriented_at(rr, c, t).letter());
+      if (!tr_s.valid) {
+        ok = false;
+        break;
+      }
+      acc = tr_s.accepts;
+      node = tr_s.next;
+    }
+    if (ok && acc) mask |= (1u << L);
+  }
+  return mask;
+}
+
+CrossCheck Board::cross_check_at(bool t, int r, int c) const {
+  CrossCheck cc;
+  if (!oriented_at(r, c, t).is_empty()) return cc;  // filled squares: unused default
+
+  auto [top, bot] = perpendicular_run_bounds(t, r, c);
   cc.has_neighbor = (top < r) || (bot > r);
   if (!cc.has_neighbor) {
     cc.mask = kAllLettersMask;
@@ -150,6 +176,8 @@ CrossCheck Board::cross_check_at(bool t, int r, int c) const {
     return cc;
   }
 
+  // Walk the dictionary through the run above (r, c) and total the run's tile
+  // score (filled squares above plus below, excluding blanks).
   const Dictionary& dict = *dict_;
   uint32_t prefix_node = dict.root();
   int prefix_score = 0;
@@ -170,28 +198,7 @@ CrossCheck Board::cross_check_at(bool t, int r, int c) const {
     if (!sq.is_blank()) suffix_score += TILE_VALUES[sq.letter()];
   }
   cc.score = prefix_score + suffix_score;
-
-  uint32_t mask = 0;
-  if (prefix_ok) {
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      auto tr_l = dict.step(prefix_node, L);
-      if (!tr_l.valid) continue;
-      bool acc = tr_l.accepts;
-      uint32_t node = tr_l.next;
-      bool ok = true;
-      for (int rr = r + 1; rr <= bot; ++rr) {
-        auto tr_s = dict.step(node, oriented_at(rr, c, t).letter());
-        if (!tr_s.valid) {
-          ok = false;
-          break;
-        }
-        acc = tr_s.accepts;
-        node = tr_s.next;
-      }
-      if (ok && acc) mask |= (1u << L);
-    }
-  }
-  cc.mask = mask;
+  cc.mask = prefix_ok ? cross_check_letter_mask(t, c, prefix_node, r, bot) : 0;
   return cc;
 }
 
@@ -247,14 +254,12 @@ void Board::update_caches_after_place(const std::pair<int, int>* placed, int n) 
   }
 
   // A GADDAG anchor depends on a square and its four neighbors, so re-evaluate
-  // each placed square and its neighbors.
-  static const int dr[4] = {-1, 1, 0, 0};
-  static const int dc[4] = {0, 0, -1, 1};
+  // each placed square and its neighbors (k == -1 is the square itself).
   for (int i = 0; i < n; ++i) {
     const int br = placed[i].first, bc = placed[i].second;
     for (int k = -1; k < 4; ++k) {
-      const int ar = (k < 0) ? br : br + dr[k];
-      const int ac = (k < 0) ? bc : bc + dc[k];
+      const int ar = (k < 0) ? br : br + util::kFourNeighborDeltas[k].first;
+      const int ac = (k < 0) ? bc : bc + util::kFourNeighborDeltas[k].second;
       if (!in_bounds(ar, ac)) continue;
       for (int t = 0; t < 2; ++t) {
         const int vr = t ? ac : ar;

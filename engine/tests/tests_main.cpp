@@ -20,6 +20,8 @@
 #include "scribblez/streaming_row_buffer.h"
 #include "scribblez/tile_counts.h"
 #include "scribblez/training_targets.h"
+#include "util/grid.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <atomic>
@@ -3053,7 +3055,46 @@ static void test_wmp_benchmark() {
             << " us, generate+equity=" << (shadow_w_us - extents_us) << " us\n";
 }
 
+static void test_util_helpers() {
+  // round_up_pow2: exact powers map to themselves; everything else rounds up.
+  CHECK(util::round_up_pow2(0) == 1);
+  CHECK(util::round_up_pow2(1) == 1);
+  CHECK(util::round_up_pow2(2) == 2);
+  CHECK(util::round_up_pow2(3) == 4);
+  CHECK(util::round_up_pow2(5) == 8);
+  CHECK(util::round_up_pow2(8) == 8);
+  CHECK(util::round_up_pow2(9) == 16);
+  CHECK(util::round_up_pow2(1u << 20) == (1u << 20));
+  CHECK(util::round_up_pow2((1u << 20) + 1) == (1u << 21));
+
+  // align_up to a power-of-two boundary.
+  CHECK(util::align_up(0, 8) == 0);
+  CHECK(util::align_up(1, 8) == 8);
+  CHECK(util::align_up(7, 8) == 8);
+  CHECK(util::align_up(8, 8) == 8);
+  CHECK(util::align_up(9, 8) == 16);
+  CHECK(util::align_up(7, 1) == 7);
+
+  // plane_index: row-major vs transpose across the diagonal.
+  CHECK(util::plane_index(2, 3, 15, false) == 2 * 15 + 3);
+  CHECK(util::plane_index(2, 3, 15, true) == 3 * 15 + 2);
+  CHECK(util::plane_index(4, 4, 15, false) == util::plane_index(4, 4, 15, true));
+
+  // The four orthogonal neighbor deltas are unit steps with zero net sum.
+  int sum_dr = 0, sum_dc = 0;
+  for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
+    CHECK((dr == 0) != (dc == 0));  // exactly one axis moves
+    CHECK(dr >= -1 && dr <= 1 && dc >= -1 && dc <= 1);
+    sum_dr += dr;
+    sum_dc += dc;
+  }
+  CHECK(sum_dr == 0 && sum_dc == 0);
+
+  std::cout << "test_util_helpers passed\n";
+}
+
 int main() {
+  test_util_helpers();
   test_dict_basic();
   test_shadow_movegen_matches_full();
   test_wmp_generate_matches_full();

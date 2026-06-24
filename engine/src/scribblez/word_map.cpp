@@ -1,6 +1,7 @@
 #include "scribblez/word_map.h"
 
 #include "scribblez/dictionary.h"
+#include "util/math.h"
 
 #include <unordered_map>
 #include <vector>
@@ -42,13 +43,6 @@ void dfs(const Dictionary& dict, uint32_t node, std::vector<Tile>& word, BitRack
   }
 }
 
-// Smallest power of two >= n (and >= 1).
-uint64_t round_up_pow2(uint64_t n) {
-  uint64_t p = 1;
-  while (p < n) p <<= 1;
-  return p;
-}
-
 }  // namespace
 
 WordMap WordMap::build(const Dictionary& dict) {
@@ -64,7 +58,7 @@ WordMap WordMap::build(const Dictionary& dict) {
     if (keys.empty()) continue;
 
     // ~50% load factor keeps open-addressing probe chains short.
-    const uint64_t table_size = round_up_pow2(static_cast<uint64_t>(keys.size()) * 2);
+    const uint64_t table_size = util::round_up_pow2(static_cast<uint64_t>(keys.size()) * 2);
     pl.slots.assign(table_size, Slot{});
     pl.mask = table_size - 1;
 

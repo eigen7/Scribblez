@@ -87,19 +87,20 @@ void maybe_emit_post_event_racks(std::ostringstream& o, const GcgWriteOptions& o
   if (racks.rack2.has_value()) o << "#Rack2 " << *racks.rack2 << "\n";
 }
 
-}  // namespace
-
-std::string game_log_to_gcg(const GameLog& log) { return game_log_to_gcg(log, GcgWriteOptions{}); }
-
-std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) {
-  std::ostringstream o;
-
+// The two players' GCG nicknames, made unique by appending "1"/"2" on collision.
+std::array<std::string, 2> player_nicks(const GameLog& log) {
   std::array<std::string, 2> nick = {nickify(log.player_names[0]), nickify(log.player_names[1])};
   if (nick[0] == nick[1]) {
     nick[0] += "1";
     nick[1] += "2";
   }
+  return nick;
+}
 
+// GCG metadata header: character encoding, optional lexicon, the two player
+// lines, optional initial racks, and any free-form notes.
+void write_gcg_header(std::ostringstream& o, const GameLog& log,
+                      const std::array<std::string, 2>& nick, const GcgWriteOptions& options) {
   o << "#character-encoding UTF-8\n";
   if (options.lexicon_name.has_value() && !options.lexicon_name->empty()) {
     o << "#lexicon " << *options.lexicon_name << "\n";
@@ -111,11 +112,15 @@ std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) 
   for (const std::string& note : options.notes) {
     if (!note.empty()) o << "#note " << note << "\n";
   }
+}
 
-  // Replay the board so each play can be rendered relative to the tiles already
-  // down, and track each player's last cumulative score for the end-game lines.
+// Replay the board so each play renders relative to the tiles already down, and
+// write one '>' event line per turn. last_cumulative records each player's most
+// recent cumulative score for the subsequent end-game adjustment lines.
+void write_gcg_turns(std::ostringstream& o, const GameLog& log,
+                     const std::array<std::string, 2>& nick, const GcgWriteOptions& options,
+                     std::array<int, 2>& last_cumulative) {
   Board board;
-  std::array<int, 2> last_cumulative = {0, 0};
   for (size_t turn_idx = 0; turn_idx < static_cast<size_t>(log.num_records); ++turn_idx) {
     const TurnRecord& t = log.records[turn_idx];
     const Move& m = t.move;
@@ -156,10 +161,14 @@ std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) 
         break;
     }
   }
+}
 
-  // End-of-game rack adjustments. A player who went out gains the value of the
-  // opponent's leftover tiles (END_RACK_PTS); a player left holding tiles loses
-  // their value (END_RACK_PENALTY). Emit the positive adjustment first.
+// End-of-game rack adjustments. A player who went out gains the value of the
+// opponent's leftover tiles (END_RACK_PTS); a player left holding tiles loses
+// their value (END_RACK_PENALTY). The positive adjustment is emitted first.
+void write_gcg_endgame_adjustments(std::ostringstream& o, const GameLog& log,
+                                   const std::array<std::string, 2>& nick,
+                                   const std::array<int, 2>& last_cumulative) {
   for (int pass = 0; pass < 2; ++pass) {
     for (int p = 0; p < 2; ++p) {
       const int delta = log.final_scores[p] - last_cumulative[p];
@@ -176,6 +185,20 @@ std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) 
       }
     }
   }
+}
+
+}  // namespace
+
+std::string game_log_to_gcg(const GameLog& log) { return game_log_to_gcg(log, GcgWriteOptions{}); }
+
+std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) {
+  std::ostringstream o;
+  const std::array<std::string, 2> nick = player_nicks(log);
+  std::array<int, 2> last_cumulative = {0, 0};
+
+  write_gcg_header(o, log, nick, options);
+  write_gcg_turns(o, log, nick, options, last_cumulative);
+  write_gcg_endgame_adjustments(o, log, nick, last_cumulative);
 
   return o.str();
 }

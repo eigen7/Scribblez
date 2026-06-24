@@ -3,6 +3,7 @@
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/tile.h"
+#include "util/grid.h"
 
 #include <cassert>
 #include <cstring>
@@ -13,9 +14,7 @@ namespace binlog {
 namespace {
 
 // Index into a single 15x15 plane: row-major if !flip, transposed if flip.
-inline int plane_idx(int r, int c, bool flip) {
-  return flip ? (c * kBoardSide + r) : (r * kBoardSide + c);
-}
+inline int plane_idx(int r, int c, bool flip) { return util::plane_index(r, c, kBoardSide, flip); }
 
 // Letter, blank-marker, and premium planes.
 void encode_board_planes(const Board& board, bool flip, float* planes_out) {

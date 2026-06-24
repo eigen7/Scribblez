@@ -107,6 +107,16 @@ class Board {
   CrossCheck cross_check_at(bool transposed, int r, int c) const;
   bool gaddag_anchor_at(bool transposed, int r, int c) const;
 
+  // Inclusive [top, bot] row extent of the maximal filled perpendicular run
+  // through the empty square (r, c) at fixed column c.
+  std::pair<int, int> perpendicular_run_bounds(bool transposed, int r, int c) const;
+
+  // Bitmask (bit L set) of letters that, placed at (r, c), form a word accepted
+  // by the dictionary together with the perpendicular run below it. prefix_node
+  // is the node reached by walking the run above (r, c); bot is its bottom row.
+  uint32_t cross_check_letter_mask(bool transposed, int c, uint32_t prefix_node, int r,
+                                   int bot) const;
+
   // Full and incremental cache maintenance.
   void recompute_all_caches() const;
   void update_caches_after_place(const std::pair<int, int>* placed, int n) const;

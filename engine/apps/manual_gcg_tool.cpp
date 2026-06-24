@@ -185,6 +185,59 @@ int board_tile_count(const Board& board) {
   return n;
 }
 
+// Both players' racks as a JSON array of per-slot {letter, score, known} tiles;
+// empty slots render as an unknown "?" tile.
+boost::json::array racks_json(const std::array<RackSlots, 2>& display_racks) {
+  boost::json::array racks;
+  for (int p = 0; p < 2; ++p) {
+    boost::json::array r;
+    for (int s = 0; s < kRackSlots; ++s) {
+      if (display_racks[p][s].has_value()) {
+        const Tile t = display_racks[p][s].value();
+        r.emplace_back(boost::json::object{
+          {"letter", std::string(1, t.to_char())}, {"score", t.value()}, {"known", true}});
+      } else {
+        r.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"known", false}});
+      }
+    }
+    racks.emplace_back(std::move(r));
+  }
+  return racks;
+}
+
+// Remaining bag contents as a JSON array of {letter, score, count}, listing each
+// present letter (and the blank as "?") with a positive count.
+boost::json::array bag_tiles_json(const ManualSnapshot& snap) {
+  boost::json::array bag_tiles;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int count = snap.bag.count(L);
+    if (count <= 0) continue;
+    bag_tiles.emplace_back(boost::json::object{
+      {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
+  }
+  const int blanks = snap.bag.count(BLANK);
+  if (blanks > 0) {
+    bag_tiles.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
+  }
+  return bag_tiles;
+}
+
+// The move history as a JSON array, one {player, text, score, cumulative, rack}
+// entry per turn.
+boost::json::array turns_json(const std::vector<ManualTurn>& turns) {
+  boost::json::array turn_list;
+  for (const ManualTurn& t : turns) {
+    turn_list.emplace_back(boost::json::object{
+      {"player", t.record.player},
+      {"text", t.notation},
+      {"score", t.record.score_delta},
+      {"cumulative", {t.record.cumulative_scores[0], t.record.cumulative_scores[1]}},
+      {"rack", t.include_rack_before ? boost::json::value(t.record.rack_before.to_string())
+                                     : boost::json::value(nullptr)}});
+  }
+  return turn_list;
+}
+
 class ManualGame {
  public:
   explicit ManualGame(const Dictionary& dict) : dict_(dict), movegen_(board_, dict_) {
@@ -215,47 +268,9 @@ class ManualGame {
     o["view_ply"] = view_ply_;
     o["tail_ply"] = static_cast<int>(turns_.size());
     o["backtracking"] = is_backtracking();
-
-    boost::json::array racks;
-    for (int p = 0; p < 2; ++p) {
-      boost::json::array r;
-      for (int s = 0; s < kRackSlots; ++s) {
-        if (display_racks[p][s].has_value()) {
-          const Tile t = display_racks[p][s].value();
-          r.emplace_back(boost::json::object{
-            {"letter", std::string(1, t.to_char())}, {"score", t.value()}, {"known", true}});
-        } else {
-          r.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"known", false}});
-        }
-      }
-      racks.emplace_back(std::move(r));
-    }
-    o["racks"] = std::move(racks);
-
-    boost::json::array bag_tiles;
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      const int count = snap.bag.count(L);
-      if (count <= 0) continue;
-      bag_tiles.emplace_back(boost::json::object{
-        {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
-    }
-    const int blanks = snap.bag.count(BLANK);
-    if (blanks > 0) {
-      bag_tiles.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
-    }
-    o["bag_tiles"] = std::move(bag_tiles);
-
-    boost::json::array turn_list;
-    for (const ManualTurn& t : turns_) {
-      turn_list.emplace_back(boost::json::object{
-        {"player", t.record.player},
-        {"text", t.notation},
-        {"score", t.record.score_delta},
-        {"cumulative", {t.record.cumulative_scores[0], t.record.cumulative_scores[1]}},
-        {"rack", t.include_rack_before ? boost::json::value(t.record.rack_before.to_string())
-                                       : boost::json::value(nullptr)}});
-    }
-    o["turns"] = std::move(turn_list);
+    o["racks"] = racks_json(display_racks);
+    o["bag_tiles"] = bag_tiles_json(snap);
+    o["turns"] = turns_json(turns_);
 
     return o;
   }

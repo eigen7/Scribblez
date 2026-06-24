@@ -1,7 +1,11 @@
 #include "scribblez/movegen.h"
 
+#include "util/grid.h"
+#include "util/math.h"
+
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <climits>
 #include <cstdint>
 #include <functional>
@@ -54,13 +58,11 @@ Anchors compute_anchors(const View& view) {
     anchor[idx(CENTER, CENTER)] = true;
     return anchor;
   }
-  static const int dr[4] = {-1, 1, 0, 0};
-  static const int dc[4] = {0, 0, -1, 1};
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       if (!view.at(r, c).is_empty()) continue;
-      for (int k = 0; k < 4; ++k) {
-        int nr = r + dr[k], nc = c + dc[k];
+      for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
+        int nr = r + dr, nc = c + dc;
         if (nr < 0 || nr >= BOARD_SIZE || nc < 0 || nc >= BOARD_SIZE) continue;
         if (!view.at(nr, nc).is_empty()) {
           anchor[idx(r, c)] = true;
@@ -938,7 +940,7 @@ namespace {
 
 // MAGPIE's word-aligned rack size (the unrestricted-multiplier arrays are sized
 // to it) and the (playthrough_blocks, tiles_played) anchor-table dimensions.
-constexpr int kRackAlign = (RACK_SIZE + 7) & ~7;
+constexpr int kRackAlign = static_cast<int>(util::align_up(RACK_SIZE, 8));
 constexpr int kMaxPlaythroughBlocks = (BOARD_SIZE / 2) + 1;
 constexpr int kMaxShadowAnchors = (RACK_SIZE + 1) * kMaxPlaythroughBlocks;
 constexpr uint32_t kTrivialCrossSet = kAllLettersMask;
@@ -1007,9 +1009,6 @@ BitRack set_playthrough_bitrack(const ShadowLane& lane, int rightmost_start_col,
   }
   return pt;
 }
-
-inline bool is_single_bit_set(uint32_t b) { return b != 0 && (b & (b - 1)) == 0; }
-inline int single_bit_index(uint32_t b) { return __builtin_ctz(b); }
 
 // The faithful translation of MAGPIE's shadow walk (move_gen.c). It enumerates,
 // for one anchor, the highest possible score of every play family keyed by
@@ -1147,7 +1146,7 @@ struct ShadowGen {
 
   void restrict_tile_and_accumulate_score(uint32_t possible, int letter_mult, int this_word_mult,
                                           int col) {
-    const int ml = single_bit_index(possible);
+    const int ml = std::countr_zero(possible);
     rack.remove(Tile::of(ml));
     if (rack.count(Tile::of(ml)) == 0) rack_cross_set &= ~possible;
     const int tile_score = TILE_VALUES[ml];
@@ -1158,7 +1157,7 @@ struct ShadowGen {
   }
 
   bool try_restrict_tile(uint32_t possible, int letter_mult, int this_word_mult, int col) {
-    if (!is_single_bit_set(possible)) return false;
+    if (!std::has_single_bit(possible)) return false;
     restrict_tile_and_accumulate_score(possible, letter_mult, this_word_mult, col);
     return true;
   }
@@ -1272,7 +1271,7 @@ struct ShadowGen {
       shadow_perpendicular_additional_score += lane.cross_score[current_right_col] * this_word_mult;
       shadow_word_multiplier *= this_word_mult;
 
-      if (is_single_bit_set(possible)) {
+      if (std::has_single_bit(possible)) {
         if (!restricted_any) {
           player_rack_shadow_right_copy = rack;
           descending_tile_scores_copy = descending_tile_scores;

@@ -34,6 +34,9 @@ add_library(scribblez_core STATIC
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp
+  src/util/encoding.cpp
+  src/util/crypto.cpp
+  src/util/io.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
 # in the core engine on Linux.

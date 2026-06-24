@@ -87,18 +87,26 @@ void BinaryLogWriter::flush() {
   if (!batch.empty()) write_batch(std::move(batch));
 }
 
-void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
-  // Pre-build per-game blobs so we can compute offsets up front. Games
-  // with no eligible sampling turn (bag empty for every turn -- shouldn't
-  // happen in practice but we guard anyway) are dropped here.
-  std::vector<InitialRacks> per_game_initial;
-  std::vector<std::vector<TurnBlob>> per_game_turns;
-  std::vector<int> per_game_sampled_turn;
-  std::vector<GameLog> kept_games;  // non-owning views into `games`
-  per_game_initial.reserve(games.size());
-  per_game_turns.reserve(games.size());
-  per_game_sampled_turn.reserve(games.size());
-  kept_games.reserve(games.size());
+namespace {
+
+// One batch of games packed into serialization-ready pieces, gathered before
+// any file offsets are known. The GameLog entries are non-owning views into the
+// source GameLogStorage vector, which must outlive the PreparedBatch.
+struct PreparedBatch {
+  std::vector<InitialRacks> initial;
+  std::vector<std::vector<TurnBlob>> turns;
+  std::vector<int> sampled_turn;
+  std::vector<GameLog> games;
+};
+
+// Pre-build per-game blobs. Games with no eligible sampling turn (bag empty for
+// every turn -- shouldn't happen in practice but we guard anyway) are dropped.
+PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
+  PreparedBatch p;
+  p.initial.reserve(games.size());
+  p.turns.reserve(games.size());
+  p.sampled_turn.reserve(games.size());
+  p.games.reserve(games.size());
   std::mt19937_64& rng = sampler_rng();
   for (const GameLogStorage& gs : games) {
     const GameLog g = gs.view();
@@ -107,40 +115,41 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
       continue;
     }
-    per_game_initial.push_back(initial_racks_of(g));
+    p.initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
     turns.reserve(static_cast<size_t>(g.num_records));
     for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
-    per_game_turns.push_back(std::move(turns));
-    per_game_sampled_turn.push_back(sampled);
-    kept_games.push_back(g);
+    p.turns.push_back(std::move(turns));
+    p.sampled_turn.push_back(sampled);
+    p.games.push_back(g);
   }
-  if (kept_games.empty()) return;
+  return p;
+}
 
-  // Build metadata table (in-memory; we know all offsets up front).
-  const uint64_t meta_end = sizeof(FileHeader) + kept_games.size() * sizeof(GameMetadata);
-
+// Build the metadata index: one entry per game with its absolute start offset
+// (all offsets are known up front) plus scores and turn counts.
+std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   std::vector<GameMetadata> meta;
-  meta.reserve(kept_games.size());
-  uint64_t cursor = meta_end;
-  for (size_t i = 0; i < kept_games.size(); ++i) {
+  meta.reserve(p.games.size());
+  uint64_t cursor = sizeof(FileHeader) + p.games.size() * sizeof(GameMetadata);
+  for (size_t i = 0; i < p.games.size(); ++i) {
     GameMetadata gm{};
     gm.start_offset = cursor;
-    gm.num_turns = static_cast<uint32_t>(per_game_turns[i].size());
-    gm.sampled_turn = static_cast<uint32_t>(per_game_sampled_turn[i]);
-    gm.final_score_p0 = static_cast<int16_t>(kept_games[i].final_scores[0]);
-    gm.final_score_p1 = static_cast<int16_t>(kept_games[i].final_scores[1]);
-    gm.initial_score_p0 = static_cast<int16_t>(kept_games[i].initial_scores[0]);
-    gm.initial_score_p1 = static_cast<int16_t>(kept_games[i].initial_scores[1]);
+    gm.num_turns = static_cast<uint32_t>(p.turns[i].size());
+    gm.sampled_turn = static_cast<uint32_t>(p.sampled_turn[i]);
+    gm.final_score_p0 = static_cast<int16_t>(p.games[i].final_scores[0]);
+    gm.final_score_p1 = static_cast<int16_t>(p.games[i].final_scores[1]);
+    gm.initial_score_p0 = static_cast<int16_t>(p.games[i].initial_scores[0]);
+    gm.initial_score_p1 = static_cast<int16_t>(p.games[i].initial_scores[1]);
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }
+  return meta;
+}
 
-  // Pick a globally unique filename. The unique_id helper is already used by
-  // gcg log filenames.
-  std::filesystem::path path =
-    std::filesystem::path(dir_) / (std::to_string(get_unique_id()) + ".slog");
-
+// Write header, metadata table, and per-game data to path.
+void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
+                     const std::vector<GameMetadata>& meta) {
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) {
     std::cerr << "Warning: failed to open binary log file: " << path << "\n";
@@ -151,14 +160,14 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.reserved = 0;
-  hdr.num_games = static_cast<uint32_t>(kept_games.size());
+  hdr.num_games = static_cast<uint32_t>(p.games.size());
   hdr.reserved2 = 0;
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),
           static_cast<std::streamsize>(meta.size() * sizeof(GameMetadata)));
-  for (size_t i = 0; i < kept_games.size(); ++i) {
-    f.write(reinterpret_cast<const char*>(&per_game_initial[i]), sizeof(InitialRacks));
-    const auto& turns = per_game_turns[i];
+  for (size_t i = 0; i < p.games.size(); ++i) {
+    f.write(reinterpret_cast<const char*>(&p.initial[i]), sizeof(InitialRacks));
+    const auto& turns = p.turns[i];
     if (!turns.empty()) {
       f.write(reinterpret_cast<const char*>(turns.data()),
               static_cast<std::streamsize>(turns.size() * sizeof(TurnBlob)));
@@ -167,6 +176,19 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   if (!f) {
     std::cerr << "Warning: I/O error writing binary log: " << path << "\n";
   }
+}
+
+}  // namespace
+
+void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
+  const PreparedBatch prepared = prepare_batch(games);
+  if (prepared.games.empty()) return;
+
+  const std::vector<GameMetadata> meta = build_metadata_table(prepared);
+  // unique_id keeps slog filenames globally unique, as with gcg log filenames.
+  const std::filesystem::path path =
+    std::filesystem::path(dir_) / (std::to_string(get_unique_id()) + ".slog");
+  write_slog_file(path, prepared, meta);
 }
 
 }  // namespace binlog
