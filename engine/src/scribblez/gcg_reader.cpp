@@ -124,6 +124,7 @@ class GcgReader {
     turns_.clear();
     snapshots_.clear();
     snapshots_.push_back(CurrentSnapshot());
+    end_adjustments_.clear();
     saw_turn_ = false;
   }
 
@@ -172,6 +173,8 @@ class GcgReader {
     const std::vector<std::string> tok = split_ws(rest);
     if (tok.size() < 2) return;
 
+    if (TryParseEndAdjustment(player, tok)) return;
+
     SetRackSlotsFromToken(player, tok[0]);
     if (tok[1] == "-") {
       ParsePassTurn(player, tok);
@@ -182,6 +185,50 @@ class GcgReader {
       return;
     }
     ParsePlayTurn(player, tok);
+  }
+
+  static std::string StripParens(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+      if (c != '(' && c != ')') out.push_back(c);
+    }
+    return out;
+  }
+
+  // Recognize the two end-of-game adjustment line shapes and record them
+  // instead of treating them as plays:
+  //   ">nick: (opp_rack) +delta total"        (player went out, gains tiles)
+  //   ">nick: rack (rack) -delta total"        (player held tiles, penalized)
+  // Returns true if the line was an adjustment (and was consumed).
+  bool TryParseEndAdjustment(int player, const std::vector<std::string>& tok) {
+    if (!tok.empty() && tok.front().front() == '(') {
+      if (tok.size() >= 3) RecordEndAdjustment(player, StripParens(tok[0]), tok[1], tok[2]);
+      return true;
+    }
+    if (tok.size() >= 2 && tok[1].front() == '(') {
+      if (tok.size() >= 4) RecordEndAdjustment(player, StripParens(tok[1]), tok[2], tok.back());
+      return true;
+    }
+    return false;
+  }
+
+  void RecordEndAdjustment(int player, const std::string& tiles, const std::string& delta_tok,
+                           const std::string& total_tok) {
+    const auto delta = parse_signed_int(delta_tok);
+    const auto total = parse_signed_int(total_tok);
+    if (!delta.has_value() || !total.has_value()) return;
+
+    ParsedGcgEndAdjustment adj;
+    adj.player = player;
+    adj.tiles = tiles;
+    adj.delta = *delta;
+    adj.total = *total;
+    end_adjustments_.push_back(adj);
+
+    // Fold the adjustment into the final scores so the end-of-game position
+    // shows the adjusted totals, not the last move's cumulative.
+    scores_[player] = *total;
+    if (!snapshots_.empty()) snapshots_.back().scores = scores_;
   }
 
   void ParsePassTurn(int player, const std::vector<std::string>& tok) {
@@ -370,6 +417,7 @@ class GcgReader {
     out_game->player_names = names_;
     out_game->turns = turns_;
     out_game->snapshots = snapshots_;
+    out_game->end_adjustments = end_adjustments_;
   }
 
   std::array<std::string, 2> names_ = {"Player 1", "Player 2"};
@@ -380,6 +428,7 @@ class GcgReader {
   TileCounts bag_;
   std::vector<ParsedGcgTurn> turns_;
   std::vector<ParsedGcgSnapshot> snapshots_;
+  std::vector<ParsedGcgEndAdjustment> end_adjustments_;
   bool saw_turn_ = false;
 };
 

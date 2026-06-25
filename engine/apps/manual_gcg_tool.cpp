@@ -51,6 +51,32 @@ struct ManualTilePlacement {
 
 enum class RackSlotState : uint8_t { UNKNOWN, KNOWN, EMPTY };
 
+// A rack slot as shown in the UI: KNOWN carries a revealed tile; UNKNOWN is a
+// tile that is present but hidden (rendered as "?", still selectable for
+// exchange); EMPTY is a slot holding no tile (rendered as empty space).
+struct DisplaySlot {
+  RackSlotState state = RackSlotState::UNKNOWN;
+  Tile tile = EMPTY_SQUARE;
+};
+using RackDisplay = std::array<DisplaySlot, kRackSlots>;
+
+// A rack's slots for display. A revealed tile is KNOWN. An empty slot is hidden:
+// while tiles remain in the bag the player holds a full rack, so it is a
+// present-but-unknown "?"; once the bag is empty the player holds only their
+// revealed tiles, so the remaining slots are genuinely absent (empty space).
+RackDisplay display_from_slots(const RackSlots& slots, bool bag_empty) {
+  const RackSlotState hidden = bag_empty ? RackSlotState::EMPTY : RackSlotState::UNKNOWN;
+  RackDisplay display;
+  for (int i = 0; i < kRackSlots; ++i) {
+    if (slots[i].has_value()) {
+      display[i] = {RackSlotState::KNOWN, slots[i].value()};
+    } else {
+      display[i].state = hidden;
+    }
+  }
+  return display;
+}
+
 struct ManualTurn {
   TurnRecord record;
   bool include_rack_before = false;
@@ -189,19 +215,37 @@ int board_tile_count(const Board& board) {
   return n;
 }
 
-// Both players' racks as a JSON array of per-slot {letter, score, known} tiles;
-// empty slots render as an unknown "?" tile.
-boost::json::array racks_json(const std::array<RackSlots, 2>& display_racks) {
+// Tiles left in the bag, estimated from the board the same way the UI's bag
+// count is: 100 tiles total, less those on the board and the (up to) 14 on the
+// two racks. Used to decide whether unknown rack slots are still drawable "?"
+// tiles or genuinely empty.
+int bag_estimate(const Board& board) { return std::max(0, 100 - board_tile_count(board) - 14); }
+
+// Both players' racks as a JSON array of per-slot tiles. A known slot carries
+// its letter/score; an unknown ("present" but hidden) slot renders as "?" and
+// stays selectable for exchange; an absent slot (present:false) renders as
+// empty space.
+boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   boost::json::array racks;
   for (int p = 0; p < 2; ++p) {
     boost::json::array r;
     for (int s = 0; s < kRackSlots; ++s) {
-      if (display_racks[p][s].has_value()) {
-        const Tile t = display_racks[p][s].value();
-        r.emplace_back(boost::json::object{
-          {"letter", std::string(1, t.to_char())}, {"score", t.value()}, {"known", true}});
-      } else {
-        r.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"known", false}});
+      const DisplaySlot& slot = display_racks[p][s];
+      switch (slot.state) {
+        case RackSlotState::KNOWN:
+          r.emplace_back(boost::json::object{{"letter", std::string(1, slot.tile.to_char())},
+                                             {"score", slot.tile.value()},
+                                             {"known", true},
+                                             {"present", true}});
+          break;
+        case RackSlotState::UNKNOWN:
+          r.emplace_back(boost::json::object{
+            {"letter", "?"}, {"score", 0}, {"known", false}, {"present", true}});
+          break;
+        case RackSlotState::EMPTY:
+          r.emplace_back(boost::json::object{
+            {"letter", ""}, {"score", 0}, {"known", false}, {"present", false}});
+          break;
       }
     }
     racks.emplace_back(std::move(r));
@@ -252,7 +296,9 @@ class ManualGame {
 
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
-    const std::array<RackSlots, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
+    const int bag_count = bag_estimate(snap.board);
+    const std::array<RackDisplay, 2> display_racks =
+      display_racks_for_view(view_ply_, snap.racks, bag_count == 0);
 
     boost::json::object o;
     o["type"] = "manual_state";
@@ -261,7 +307,6 @@ class ManualGame {
     o["scores"] = {snap.scores[0], snap.scores[1]};
     o["player_names"] = {names_[0], names_[1]};
     o["current_player"] = snap.turn_player;
-    const int bag_count = std::max(0, 100 - board_tile_count(snap.board) - 14);
     o["bag_count"] = bag_count;
     o["rack_known_counts"] = {known_count(display_racks[0]), known_count(display_racks[1])};
     o["lexicon"] = Lexicon::instance().name();
@@ -272,11 +317,44 @@ class ManualGame {
     o["view_ply"] = view_ply_;
     o["tail_ply"] = static_cast<int>(turns_.size());
     o["backtracking"] = is_backtracking();
+    o["game_over"] = !end_adjustments_.empty();
     o["racks"] = racks_json(display_racks);
     o["bag_tiles"] = bag_tiles_json(snap);
     o["turns"] = turns_json(turns_);
+    o["end_adjustments"] = end_adjustments_json();
+    o["last_move"] = last_move_squares();
 
     return o;
+  }
+
+  // Board squares of the tiles newly placed by the move that produced the
+  // currently viewed position, as [row, col] pairs. Empty at the start position
+  // and for pass/exchange turns (which place no tiles).
+  boost::json::array last_move_squares() const {
+    boost::json::array squares;
+    if (view_ply_ <= 0 || view_ply_ > static_cast<int>(turns_.size())) return squares;
+    const Move& m = turns_[view_ply_ - 1].record.move;
+    if (m.type() != MoveType::PLAY) return squares;
+
+    const uint16_t mask = m.square_mask();
+    for (int lane = 0; lane < BOARD_SIZE; ++lane) {
+      if ((mask & (static_cast<uint16_t>(1) << lane)) == 0) continue;
+      const int r = m.horizontal() ? m.start() : lane;
+      const int c = m.horizontal() ? lane : m.start();
+      squares.emplace_back(boost::json::array{r, c});
+    }
+    return squares;
+  }
+
+  // End-of-game rack adjustments as a JSON array of {player, tiles, delta,
+  // total}, one per scoring/penalty line; empty during a game in progress.
+  boost::json::array end_adjustments_json() const {
+    boost::json::array out;
+    for (const ParsedGcgEndAdjustment& adj : end_adjustments_) {
+      out.emplace_back(boost::json::object{
+        {"player", adj.player}, {"tiles", adj.tiles}, {"delta", adj.delta}, {"total", adj.total}});
+    }
+    return out;
   }
 
   void reset() {
@@ -284,6 +362,7 @@ class ManualGame {
     scores_ = {0, 0};
     turn_player_ = 0;
     turns_.clear();
+    end_adjustments_.clear();
     status_ = "";
     for (int p = 0; p < 2; ++p) {
       for (int s = 0; s < kRackSlots; ++s) racks_[p][s].reset();
@@ -596,12 +675,13 @@ class ManualGame {
       status_ = "Already at latest position";
       return;
     }
-    const std::array<RackSlots, 2> fork_racks =
-      display_racks_for_view(view_ply_, snapshots_[view_ply_].racks);
+    const std::array<RackDisplay, 2> fork_racks = display_racks_for_view(
+      view_ply_, snapshots_[view_ply_].racks, bag_estimate(snapshots_[view_ply_].board) == 0);
+    end_adjustments_.clear();
     turns_.resize(view_ply_);
     snapshots_.resize(static_cast<std::size_t>(view_ply_ + 1));
     restore_live_from_snapshot(snapshots_.back());
-    racks_ = fork_racks;
+    for (int p = 0; p < 2; ++p) racks_[p] = slots_from_display(fork_racks[p]);
     snapshots_.back().racks = racks_;
     view_ply_ = static_cast<int>(turns_.size());
     status_ = "Forked game at turn " + std::to_string(view_ply_);
@@ -665,6 +745,8 @@ class ManualGame {
       snapshot.turn_player = parsed_snapshot.turn_player;
       snapshots_.push_back(std::move(snapshot));
     }
+
+    end_adjustments_ = parsed.end_adjustments;
 
     restore_live_from_snapshot(snapshots_.back());
     view_ply_ = static_cast<int>(turns_.size());
@@ -741,6 +823,52 @@ class ManualGame {
     return n;
   }
 
+  int known_count(const RackDisplay& display) const {
+    int n = 0;
+    for (const DisplaySlot& slot : display) {
+      if (slot.state == RackSlotState::KNOWN) ++n;
+    }
+    return n;
+  }
+
+  // The known tiles of a display rack as plain rack slots; unknown and absent
+  // slots become unset. Used when forking a game off a viewed position.
+  RackSlots slots_from_display(const RackDisplay& display) const {
+    RackSlots slots;
+    for (int i = 0; i < kRackSlots; ++i) {
+      if (display[i].state == RackSlotState::KNOWN) slots[i] = display[i].tile;
+    }
+    return slots;
+  }
+
+  // The leftover tiles of `player` as recorded in an end-of-game adjustment, if
+  // any. A gain line (delta >= 0) scores the opponent's tiles, so its tiles
+  // belong to the other player; a penalty line (delta < 0) scores the player's
+  // own tiles.
+  std::optional<std::string> end_rack_tiles_for(int player) const {
+    for (const ParsedGcgEndAdjustment& adj : end_adjustments_) {
+      const int owner = adj.delta >= 0 ? 1 - adj.player : adj.player;
+      if (owner == player && !adj.tiles.empty()) return adj.tiles;
+    }
+    return std::nullopt;
+  }
+
+  // Parse a rack string ("AER?" etc.; '?' is a blank) into rack slots.
+  RackSlots rack_slots_from_letters(const std::string& letters) const {
+    RackSlots slots;
+    int i = 0;
+    for (char ch : letters) {
+      if (i >= kRackSlots) break;
+      const char up = upper_ch(ch);
+      if (up == '?') {
+        slots[i++] = BLANK;
+      } else if (up >= 'A' && up <= 'Z') {
+        slots[i++] = Tile::from_char(up);
+      }
+    }
+    return slots;
+  }
+
   bool rack_fully_known(int player) const { return rack_fully_known(racks_[player]); }
 
   bool rack_fully_known(const RackSlots& slots) const {
@@ -759,7 +887,7 @@ class ManualGame {
     return fallback;
   }
 
-  RackSlots post_move_rack_from_turn(const ManualTurn& t) const {
+  RackDisplay post_move_rack_from_turn(const ManualTurn& t, bool bag_empty) const {
     std::array<RackSlotState, kRackSlots> state;
     std::array<std::optional<Tile>, kRackSlots> letters;
     for (int i = 0; i < kRackSlots; ++i) {
@@ -772,41 +900,26 @@ class ManualGame {
       }
     }
 
-    int consumed = 0;
     if (t.record.move.type() == MoveType::PLAY || t.record.move.type() == MoveType::EXCHANGE) {
-      consumed = t.record.move.num_glyphs();
       for (int i = 0; i < t.record.move.num_glyphs(); ++i) {
         consume_rack_tile_for_post_move(&state, &letters, t.record.move.glyph(i).rack_tile());
       }
     }
 
-    int draws = 0;
-    if (t.record.move.type() == MoveType::PLAY) {
-      draws = std::min(consumed, t.record.bag_size_before);
-    } else if (t.record.move.type() == MoveType::EXCHANGE) {
-      draws = consumed;
-    }
-
-    for (int i = 0; i < kRackSlots && draws > 0; ++i) {
-      if (state[i] == RackSlotState::EMPTY) {
-        state[i] = RackSlotState::UNKNOWN;
-        --draws;
-      }
-    }
-
-    // Any remaining empty slots correspond to unknown draw outcomes (or
-    // partial rack information in source logs), so represent them as unknowns
-    // in the UI.
-    for (int i = 0; i < kRackSlots; ++i) {
-      if (state[i] == RackSlotState::EMPTY) state[i] = RackSlotState::UNKNOWN;
-    }
-
-    RackSlots out;
+    // Show the player's leave: the tiles still in hand after the move. Played
+    // tiles leave their slots empty, and drawn replacements are not displayed
+    // (they render as empty space too). Remaining known tiles render as
+    // themselves; a remaining hidden tile is a "?" while the bag still holds
+    // tiles, or empty space once the bag is exhausted (the player holds only
+    // their revealed tiles).
+    RackDisplay out;
     for (int i = 0; i < kRackSlots; ++i) {
       if (state[i] == RackSlotState::KNOWN) {
-        out[i] = letters[i];
+        out[i] = {RackSlotState::KNOWN, letters[i].value()};
+      } else if (state[i] == RackSlotState::UNKNOWN && !bag_empty) {
+        out[i].state = RackSlotState::UNKNOWN;
       } else {
-        out[i].reset();
+        out[i].state = RackSlotState::EMPTY;
       }
     }
     return out;
@@ -831,17 +944,29 @@ class ManualGame {
     }
   }
 
-  std::array<RackSlots, 2> display_racks_for_view(int view_ply,
-                                                  const std::array<RackSlots, 2>& fallback) const {
-    std::array<RackSlots, 2> out = fallback;
+  std::array<RackDisplay, 2> display_racks_for_view(int view_ply,
+                                                    const std::array<RackSlots, 2>& fallback,
+                                                    bool bag_empty) const {
+    std::array<RackDisplay, 2> out = {display_from_slots(fallback[0], bag_empty),
+                                      display_from_slots(fallback[1], bag_empty)};
     if (view_ply <= 0 || view_ply > static_cast<int>(turns_.size())) return out;
 
     const ManualTurn& viewed = turns_[view_ply - 1];
     const int mover = viewed.record.player;
     const int waiting = 1 - mover;
 
-    out[mover] = post_move_rack_from_turn(viewed);
-    out[waiting] = next_known_rack_before(waiting, view_ply, fallback[waiting]);
+    out[mover] = post_move_rack_from_turn(viewed, bag_empty);
+    out[waiting] =
+      display_from_slots(next_known_rack_before(waiting, view_ply, fallback[waiting]), bag_empty);
+
+    // At the final position, the player who didn't go out still holds their
+    // leftover tiles. These survive only in the end-of-game adjustment (the
+    // per-turn racks are cleared after each move), so reveal them here.
+    if (view_ply == static_cast<int>(turns_.size())) {
+      if (const auto tiles = end_rack_tiles_for(waiting)) {
+        out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), bag_empty);
+      }
+    }
     return out;
   }
 
@@ -911,6 +1036,7 @@ class ManualGame {
   TileCounts bag_;
   std::vector<ManualTurn> turns_;
   std::vector<ManualSnapshot> snapshots_;
+  std::vector<ParsedGcgEndAdjustment> end_adjustments_;
   int view_ply_ = 0;
   int turn_player_ = 0;
   std::string status_;

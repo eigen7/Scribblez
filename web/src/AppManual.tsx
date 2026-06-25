@@ -12,6 +12,10 @@ interface ManualRackSlot {
   letter: string;
   score: number;
   known: boolean;
+  // Whether a tile occupies this slot at all. A present-but-unknown slot
+  // renders as a "?" tile (selectable for exchange); an absent slot renders as
+  // empty space.
+  present: boolean;
 }
 
 interface BagTile {
@@ -27,6 +31,29 @@ interface TurnSummary {
   cumulative: [number, number];
 }
 
+// An end-of-game rack adjustment shown as a final history row in the scoring
+// player's column: the tiles scored/penalized, the point delta, and the
+// resulting total.
+interface EndAdjustment {
+  player: number;
+  tiles: string;
+  delta: number;
+  total: number;
+}
+
+// Split a turn's notation into the board location and main word shown as
+// separate, aligned columns in the history grid. A play reads as
+// "<pos> <word> <score>" (three whitespace-free tokens); pass and exchange
+// turns have no location, so their verb ("pass", "exch AQWW") fills the word
+// cell and the location is left blank.
+function historyParts(text: string): { location: string; word: string } {
+  if (/^(pass|exch)\b/.test(text)) {
+    return { location: '', word: text };
+  }
+  const tokens = text.split(' ');
+  return { location: tokens[0] ?? '', word: tokens[1] ?? '' };
+}
+
 interface UnseenSlot {
   letter: string;
   present: boolean;
@@ -37,7 +64,9 @@ function rackSlotToTile(slot: ManualRackSlot): {
   score: number;
   isBlank?: boolean;
   isUnknown?: boolean;
+  isAbsent?: boolean;
 } {
+  if (!slot.present) return { letter: '', score: 0, isAbsent: true };
   if (!slot.known) return { letter: '?', score: 0, isUnknown: true };
   if (slot.letter === '?') return { letter: '', score: 0, isBlank: true };
   return { letter: slot.letter, score: slot.score };
@@ -63,9 +92,12 @@ interface ManualState {
   bag_count: number;
   lexicon: string;
   turns: TurnSummary[];
+  end_adjustments: EndAdjustment[];
+  last_move: [number, number][];
   view_ply: number;
   tail_ply: number;
   backtracking: boolean;
+  game_over: boolean;
   status?: string;
   tile_scores: Record<string, number>;
 }
@@ -157,6 +189,12 @@ function AppManual() {
     for (const c of candidateTiles) m.set(`${c.row},${c.col}`, c);
     return m;
   }, [candidateTiles]);
+
+  // Squares of the tiles placed by the move that produced the viewed position.
+  const lastMoveCells = useMemo(
+    () => new Set((state?.last_move ?? []).map(([r, c]) => `${r},${c}`)),
+    [state?.last_move],
+  );
 
   const onCellDrop = (row: number, col: number, payload: DragTilePayload) => {
     if (!state) return;
@@ -278,6 +316,24 @@ function AppManual() {
     submitMove,
     send,
   ]);
+
+  // Left/right arrows step backward/forward through the move history. Skipped
+  // while a text field is focused so they still move the caret there.
+  useEffect(() => {
+    const onArrowKey = (e: KeyboardEvent) => {
+      if (!state) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      const target = e.key === 'ArrowLeft' ? state.view_ply - 1 : state.view_ply + 1;
+      if (target < 0 || target > state.tail_ply) return;
+      e.preventDefault();
+      send({ type: 'jump_to_ply', ply: target });
+      clearEntry();
+    };
+    window.addEventListener('keydown', onArrowKey);
+    return () => window.removeEventListener('keydown', onArrowKey);
+  }, [state, send, clearEntry]);
 
   const handleBlankDesignation = (letter: string) => {
     if (interactionLocked) return;
@@ -434,13 +490,11 @@ function AppManual() {
   };
 
   const newGame = () => {
-    if (interactionLocked) return;
     send({ type: 'reset' });
     clearEntry();
   };
 
   const createRandomGame = () => {
-    if (interactionLocked) return;
     send({ type: 'create_random_game' });
     clearEntry();
   };
@@ -553,7 +607,11 @@ function AppManual() {
       <h1>Scribblez Manual GCG Tool</h1>
       <div className="manual-layout">
         <div className="manual-board-section">
-          <div className="manual-rack-row top">
+          <div
+            className={`manual-rack-row top${
+              state.current_player === 1 ? ' manual-rack-row-active' : ''
+            }`}
+          >
             <input
               className="rack-name-input"
               value={state.player_names[1]}
@@ -590,9 +648,14 @@ function AppManual() {
             interactive={!interactionLocked}
             onCellClick={handleCellClick}
             onCellDrop={onCellDrop}
+            lastMoveCells={lastMoveCells}
           />
 
-          <div className="manual-rack-row">
+          <div
+            className={`manual-rack-row${
+              state.current_player === 0 ? ' manual-rack-row-active' : ''
+            }`}
+          >
             <input
               className="rack-name-input"
               value={state.player_names[0]}
@@ -639,17 +702,17 @@ function AppManual() {
               </>
             ) : (
               <>
-                <button className="btn btn-pass" onClick={passTurn}>Pass</button>
-                <button className="btn btn-exchange" onClick={startExchangeMode}>Exchange</button>
+                <button className="btn btn-pass" onClick={passTurn} disabled={state.game_over}>Pass</button>
+                <button className="btn btn-exchange" onClick={startExchangeMode} disabled={state.game_over}>Exchange</button>
               </>
             )}
           </div>
           <div className="action-bar manual-secondary-actions">
-            <button className="btn btn-clear" onClick={newGame} disabled={interactionLocked}>New Game</button>
-            <button className="btn btn-clear" onClick={createRandomGame} disabled={interactionLocked}>Create Random Game</button>
-            {interactionLocked && (
-              <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
-            )}
+            <button className="btn btn-game" onClick={newGame}>New Game</button>
+            <button className="btn btn-game" onClick={createRandomGame}>Create Random Game</button>
+          </div>
+          <div className="action-bar manual-secondary-actions">
+            <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
             <button className="btn btn-pass" onClick={triggerLoad}>Load Game</button>
             <button className="btn btn-exchange" onClick={exportGcg}>Export GCG</button>
             <input
@@ -663,6 +726,60 @@ function AppManual() {
           {status && <div className="manual-status">{status}</div>}
           <div className="cursor-hint">
             Lexicon: {state.lexicon} | Rack known: {state.rack_known_counts[0]} / {state.rack_known_counts[1]}
+          </div>
+
+          <div className="move-list manual-history-panel">
+            <div className="move-list-header">
+              <h3>Turn History ({state.turns.length})</h3>
+            </div>
+            <div className="manual-history">
+              <button
+                type="button"
+                className={`manual-history-row manual-history-start${state.view_ply === 0 ? ' active' : ''}`}
+                onClick={() => jumpToPly(0)}
+              >
+                <span>Start Position</span>
+                <span>0-0</span>
+              </button>
+              <div className="manual-history-columns">
+                {[0, 1].map((p) => (
+                  <div key={p} className="manual-history-column">
+                    <div className="manual-history-name">{state.player_names[p]}</div>
+                    {state.turns
+                      .map((t, idx) => ({ t, ply: idx + 1 }))
+                      .filter(({ t }) => t.player === p)
+                      .map(({ t, ply }) => {
+                        const { location, word } = historyParts(t.text);
+                        return (
+                          <button
+                            key={ply}
+                            type="button"
+                            className={`manual-history-row manual-history-move${
+                              state.view_ply === ply ? ' active' : ''
+                            }`}
+                            onClick={() => jumpToPly(ply)}
+                          >
+                            <span className="mh-loc">{location}</span>
+                            <span className="mh-word">{word}</span>
+                            <span className="mh-delta">{t.score >= 0 ? `+${t.score}` : t.score}</span>
+                            <span className="mh-total">{t.cumulative[p]}</span>
+                          </button>
+                        );
+                      })}
+                    {state.end_adjustments
+                      .filter((adj) => adj.player === p)
+                      .map((adj, i) => (
+                        <div key={`adj-${i}`} className="manual-history-row manual-history-move manual-history-adjustment">
+                          <span className="mh-loc" />
+                          <span className="mh-word">({adj.tiles})</span>
+                          <span className="mh-delta">{adj.delta >= 0 ? `+${adj.delta}` : adj.delta}</span>
+                          <span className="mh-total">{adj.total}</span>
+                        </div>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -700,35 +817,6 @@ function AppManual() {
                   <div key={i} className="unseen-cell absent" />
                 )
               ))}
-            </div>
-          </div>
-
-          <div className="move-list">
-            <div className="move-list-header">
-              <h3>Turn History ({state.turns.length})</h3>
-            </div>
-            <div className="manual-history">
-              {state.turns
-                .slice()
-                .map((t, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    className={`manual-history-row${state.view_ply === idx + 1 ? ' active' : ''}`}
-                    onClick={() => jumpToPly(idx + 1)}
-                  >
-                    <span>{state.player_names[t.player]}: {t.text}</span>
-                    <span>{t.cumulative[0]}-{t.cumulative[1]}</span>
-                  </button>
-                ))}
-              <button
-                type="button"
-                className={`manual-history-row manual-history-start${state.view_ply === 0 ? ' active' : ''}`}
-                onClick={() => jumpToPly(0)}
-              >
-                <span>Start Position</span>
-                <span>0-0</span>
-              </button>
             </div>
           </div>
         </div>

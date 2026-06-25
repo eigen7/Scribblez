@@ -67,6 +67,10 @@ const Rack: React.FC<RackProps> = ({
       <div className="rack-label">{label}</div>
       <div className="rack-tiles">
         {tiles.map((t, i) => {
+          // A slot with no tile renders as empty space and is not interactive.
+          if (t.isAbsent) {
+            return <div key={i} className="rack-tile empty" />;
+          }
           const used = usedIndices.has(i);
           const selectedForExchange = exchangeMode && (exchangeSelected?.has(i) ?? false);
           const exchangeClickable = interactive && exchangeMode && !used;

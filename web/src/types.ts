@@ -3,6 +3,8 @@ export interface TileInfo {
   score: number;
   isBlank?: boolean;
   isUnknown?: boolean;
+  // No tile occupies this slot; rendered as empty space rather than a "?" tile.
+  isAbsent?: boolean;
 }
 
 export interface DragTilePayload {

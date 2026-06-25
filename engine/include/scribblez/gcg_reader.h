@@ -29,10 +29,21 @@ struct ParsedGcgSnapshot {
   int turn_player = 0;
 };
 
+// An end-of-game rack adjustment: the player who went out gains the value of
+// the opponent's leftover tiles (positive delta); a player left holding tiles
+// loses their value (negative delta). `tiles` is the rack scored or penalized.
+struct ParsedGcgEndAdjustment {
+  int player = 0;
+  std::string tiles;
+  int delta = 0;
+  int total = 0;  // resulting cumulative score for `player`
+};
+
 struct ParsedGcgGame {
   std::array<std::string, 2> player_names = {"Player 1", "Player 2"};
   std::vector<ParsedGcgTurn> turns;
   std::vector<ParsedGcgSnapshot> snapshots;
+  std::vector<ParsedGcgEndAdjustment> end_adjustments;
   GameLogStorage game_log;
 
   GameLogStorage to_game_log_storage() const;
