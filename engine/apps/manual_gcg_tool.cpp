@@ -4,8 +4,10 @@
 #include "scribblez/game_runner.h"
 #include "scribblez/gcg_reader.h"
 #include "scribblez/gcg_writer.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/instance_ports.h"
 #include "scribblez/lexicon.h"
+#include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/web_server.h"
 
@@ -23,6 +25,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
@@ -604,6 +607,28 @@ class ManualGame {
     status_ = "Forked game at turn " + std::to_string(view_ply_);
   }
 
+  // Play a full game between two in-process HastyBot agents and load the result
+  // as the current game, so the whole self-play game can be reviewed turn by
+  // turn. The played-out game log is serialized to GCG and routed through the
+  // same load path as an imported file, reusing its snapshot/rack
+  // reconstruction.
+  void create_random_game() {
+    HastyEquity::ensure_initialized(Lexicon::instance().name());
+    HastyBotAgent player0(0, "Hasty 1");
+    HastyBotAgent player1(0, "Hasty 2");
+
+    std::random_device rd;
+    const uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+    Game game(player0, player1, dict_, seed);
+    game.play();
+
+    load_gcg_text(game_log_to_gcg(game.log()), "random hasty-vs-hasty game");
+    if (!turns_.empty()) {
+      status_ = "Created random game: " + names_[0] + " " + std::to_string(scores_[0]) + " - " +
+                std::to_string(scores_[1]) + " " + names_[1];
+    }
+  }
+
   void load_gcg_text(const std::string& gcg_text, const std::string& source_name) {
     reset();
 
@@ -946,6 +971,10 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
   }
   if (type == "reset") {
     game.reset();
+    return;
+  }
+  if (type == "create_random_game") {
+    game.create_random_game();
     return;
   }
 }

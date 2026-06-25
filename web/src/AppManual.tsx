@@ -439,6 +439,12 @@ function AppManual() {
     clearEntry();
   };
 
+  const createRandomGame = () => {
+    if (interactionLocked) return;
+    send({ type: 'create_random_game' });
+    clearEntry();
+  };
+
   const jumpToPly = (ply: number) => {
     send({ type: 'jump_to_ply', ply });
     clearEntry();
@@ -640,6 +646,7 @@ function AppManual() {
           </div>
           <div className="action-bar manual-secondary-actions">
             <button className="btn btn-clear" onClick={newGame} disabled={interactionLocked}>New Game</button>
+            <button className="btn btn-clear" onClick={createRandomGame} disabled={interactionLocked}>Create Random Game</button>
             {interactionLocked && (
               <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
             )}
