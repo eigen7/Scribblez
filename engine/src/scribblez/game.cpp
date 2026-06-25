@@ -100,12 +100,13 @@ void Game::play() {
     log_.turns.push_back(std::move(rec));
 
     if (rack_emptied) {
-      // Standard end: out-going player gets sum of opponents' remaining tile values added,
-      // opponents subtract their own remaining tile values.
+      // Standard end: the out-going player gains twice the sum of the
+      // opponents' remaining tile values, and the opponents' scores are left
+      // unchanged. This is the modern tournament convention (a single +2N
+      // bonus) rather than awarding +N to the winner and -N to the loser.
       int opp = 1 - cur;
       int opp_remain = racks_[opp].point_value();
-      scores_[cur] += opp_remain;
-      scores_[opp] -= opp_remain;
+      scores_[cur] += 2 * opp_remain;
       log_.end_reason = "out";
       break;
     }
