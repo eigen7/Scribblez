@@ -5,8 +5,11 @@ import AppManual from './AppManual';
 import AppBoard from './AppBoard';
 import './index.css';
 
+// The engine injects VITE_TOOL when it launches the dev server, so each tool's
+// bare URL serves the right UI. A standalone `npm run dev` has no such env var
+// and falls back to a `?tool=` query param (default: play_game's App).
 const params = new URLSearchParams(window.location.search);
-const tool = params.get('tool');
+const tool = import.meta.env.VITE_TOOL ?? params.get('tool');
 const Root = tool === 'manual' ? AppManual : tool === 'board' ? AppBoard : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

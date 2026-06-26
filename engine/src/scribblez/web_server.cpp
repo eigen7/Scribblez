@@ -270,8 +270,9 @@ std::string game_state_json(const StateView& v) {
 
 // ------------------------------ ViteDevServer ----------------------------
 
-ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_port)
-    : dev_port_(dev_port), ws_port_(ws_port) {
+ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_port,
+                             const std::string& tool)
+    : dev_port_(dev_port), ws_port_(ws_port), tool_(tool) {
   namespace bp = boost::process;
 
   // If a dev server is already listening on this port, reuse it only when it
@@ -287,10 +288,12 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
   }
 
   // Pass the ports through to vite.config.ts so the browser UI and the engine's
-  // WebSocket server always agree on which ports to use / proxy.
+  // WebSocket server always agree on which ports to use / proxy, and the tool
+  // name through to main.tsx so the bare URL mounts the right UI.
   bp::environment env = boost::this_process::environment();
   env["VITE_DEV_PORT"] = std::to_string(dev_port_);
   env["VITE_WS_PORT"] = std::to_string(ws_port_);
+  if (!tool_.empty()) env["VITE_TOOL"] = tool_;
 
   // Redirect Vite's chatty output to a log file so it can never corrupt
   // play_game's own stdout (which may carry the game-log JSON).

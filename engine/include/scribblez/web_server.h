@@ -34,8 +34,10 @@ class ViteDevServer {
   // Launch `npm run dev` with cwd `web_dir` (the front-end package directory).
   // `dev_port` is the port Vite listens on; `ws_port` is the WebSession port
   // Vite proxies `/ws` to (passed through as env vars VITE_DEV_PORT /
-  // VITE_WS_PORT). Throws if the child process cannot be started.
-  ViteDevServer(const std::string& web_dir, int dev_port, int ws_port);
+  // VITE_WS_PORT). `tool` selects which front-end UI to mount (passed through as
+  // env var VITE_TOOL; empty means play_game's default UI). Throws if the child
+  // process cannot be started.
+  ViteDevServer(const std::string& web_dir, int dev_port, int ws_port, const std::string& tool);
   ~ViteDevServer();
 
   ViteDevServer(const ViteDevServer&) = delete;
@@ -52,6 +54,7 @@ class ViteDevServer {
  private:
   int dev_port_;
   int ws_port_;
+  std::string tool_;
   std::unique_ptr<boost::process::group> group_;
   std::unique_ptr<boost::process::child> child_;
 };

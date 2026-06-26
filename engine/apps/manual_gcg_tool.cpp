@@ -1121,14 +1121,14 @@ int main(int argc, char** argv) {
 
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
-    scribblez::ViteDevServer vite(web_dir, vite_port, ws_port);
+    scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual");
     if (!vite.wait_until_ready()) {
       throw std::runtime_error("the Vite dev server did not start; see web/.vite-dev.log");
     }
 
     std::cerr << "\nManual GCG tool ready at " << vite.url()
-              << "?tool=manual (lexicon: " << scribblez::Lexicon::instance().name() << ")\n";
-    std::string cmd = "xdg-open '" + vite.url() + "?tool=manual' >/dev/null 2>&1 &";
+              << " (lexicon: " << scribblez::Lexicon::instance().name() << ")\n";
+    std::string cmd = "xdg-open '" + vite.url() + "' >/dev/null 2>&1 &";
     int rc = std::system(cmd.c_str());
     (void)rc;
 
