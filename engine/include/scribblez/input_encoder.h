@@ -90,7 +90,6 @@
 #include "scribblez/training_targets.h"  // kScoreDiffClip
 
 namespace scribblez {
-namespace binlog {
 
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
@@ -138,5 +137,4 @@ inline constexpr int kMoveMetaOffset = kScoreDiffOffset + kScoreDiffThermoFloats
 
 inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 20061
 
-}  // namespace binlog
 }  // namespace scribblez

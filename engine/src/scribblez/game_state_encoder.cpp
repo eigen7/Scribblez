@@ -10,11 +10,6 @@
 
 namespace scribblez {
 
-// The spatial/scalar plane layout constants and the kInputFloats/kSpatialFloats
-// sizes used by the encode helpers below live in the binlog input-encoding
-// namespace.
-using namespace binlog;
-
 namespace {
 
 // Index into a single 15x15 plane: row-major if !flip, transposed if flip.

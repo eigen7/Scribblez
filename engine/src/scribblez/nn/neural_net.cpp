@@ -21,14 +21,6 @@ namespace nn {
 
 namespace {
 
-using binlog::kBoardSide;
-using binlog::kOppNextPlacementFloats;
-using binlog::kScalarFloats;
-using binlog::kScoreDiffOutputFloats;
-using binlog::kSpatialFloats;
-using binlog::kSpatialPlanes;
-using binlog::kWldFloats;
-
 // Names of the engine's I/O tensors. These match the input_names / output_names
 // passed to torch.onnx.export in py/scribblez/onnx_export.py.
 constexpr const char* kInputSpatial = "input_spatial";
@@ -114,7 +106,7 @@ struct NeuralNet::Impl {
   stream_t stream = nullptr;
 
   // TODO(Refactor): Decouple C++ inference buffers from the strict neural net architecture.
-  // Currently, adding a new head (e.g., 'ownership') requires manually hardcoding new 
+  // Currently, adding a new head (e.g., 'ownership') requires manually hardcoding new
   // device/host pointers, cudaMallocs, and cudaMemcpys across 5+ different places.
   //
   // Implementation Plan:
@@ -129,9 +121,6 @@ struct NeuralNet::Impl {
   //    - context->setTensorAddress(tensor.name, tensor.d_ptr)
   // 5. Replace manual cudaMemcpy/execution calls with loops over the `tensors` vector
   //    and execute using `context->enqueueV3(stream)`.
-  void* d_input_spatial = nullptr;
-  void* d_input_scalar = nullptr;
-  // ... rest of your pointers ...
   void* d_input_spatial = nullptr;
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;

@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
     // All-zero inputs (the canonical game-start-ish encoding); we only care that
     // the model produces finite, well-formed outputs.
-    std::vector<float> inputs(static_cast<size_t>(rows) * scribblez::binlog::kInputFloats, 0.0f);
+    std::vector<float> inputs(static_cast<size_t>(rows) * scribblez::kInputFloats, 0.0f);
     std::vector<scribblez::nn::Eval> evals = service.evaluate(inputs.data(), rows);
 
     for (int r = 0; r < rows; ++r) {

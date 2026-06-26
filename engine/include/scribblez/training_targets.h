@@ -22,7 +22,6 @@
 #include <cstddef>
 
 namespace scribblez {
-namespace binlog {
 
 // A snapshot of the per-sample inputs needed to compute every target
 // head. The caller (BlockDecoder, or a test) populates this from the
@@ -120,7 +119,6 @@ inline constexpr int kScoreDiffOutputFloats = 2;
 inline constexpr int kOppNextPlacementFloats = detail::target_floats<OppNextPlacementTarget>();
 inline constexpr int kOppNextPlacementSide = OppNextPlacementTarget::kSide;
 
-}  // namespace binlog
 }  // namespace scribblez
 
 #include "inlines/scribblez/training_targets.inl"

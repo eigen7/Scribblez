@@ -386,8 +386,6 @@ static Rack leave_after(const Rack& rack, const Move& mv) {
 }
 
 static void test_encode_candidate_matches_replay() {
-  using binlog::kInputFloats;
-
   // A short move history applied to both the agent (via observe_move) and an
   // independent reference encoder.
   Move move_a = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
@@ -460,7 +458,6 @@ static std::vector<char> build_slog(const binlog::InitialRacks& ir,
 }
 
 static void test_encode_candidate_matches_training_decoder() {
-  using binlog::kInputFloats;
   using binlog::kRowFloats;
 
   // A three-turn game. The sampled turn (2, post-move) is player 0's, so the

@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-using scribblez::binlog::kInputFloats;
+using scribblez::kInputFloats;
 using scribblez::nn::Eval;
 
 // win_prob, p_win, p_draw, p_loss, score_diff_mean, score_diff_std

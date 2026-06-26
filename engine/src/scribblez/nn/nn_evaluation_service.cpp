@@ -28,7 +28,7 @@ void fill_wld(const float* logits, Eval& e) {
   e.p_win = probs[0];
   e.p_draw = probs[1];
   e.p_loss = probs[2];
-  
+
   e.win_prob = e.p_win + 0.5f * e.p_draw;
 }
 */

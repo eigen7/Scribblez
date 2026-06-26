@@ -32,9 +32,9 @@ namespace {
 // Static dim arrays referenced by the ScribblezShape entries below. These
 // have static storage duration; the addresses returned to the caller stay
 // valid for the lifetime of the process.
-constexpr int kInputSpatialDims[3] = {scribblez::binlog::kSpatialPlanes,
-                                      scribblez::binlog::kBoardSide, scribblez::binlog::kBoardSide};
-constexpr int kInputScalarDims[1] = {scribblez::binlog::kScalarFloats};
+constexpr int kInputSpatialDims[3] = {scribblez::kSpatialPlanes, scribblez::kBoardSide,
+                                      scribblez::kBoardSide};
+constexpr int kInputScalarDims[1] = {scribblez::kScalarFloats};
 
 const ScribblezShape kInputShapes[] = {
   {"input_spatial", kInputSpatialDims, 3, -1},
@@ -43,14 +43,14 @@ const ScribblezShape kInputShapes[] = {
 };
 
 // Build the (null-terminated) target shape table at compile time directly
-// from scribblez::binlog::AllTargets, so adding/removing a target struct
+// from scribblez::AllTargets, so adding/removing a target struct
 // in training_targets.h automatically updates the FFI advertisement with
 // no edits here.
 template <typename List>
 struct TargetShapeTable;
 
 template <typename... Ts>
-struct TargetShapeTable<scribblez::binlog::TargetList<Ts...>> {
+struct TargetShapeTable<scribblez::TargetList<Ts...>> {
   static constexpr std::size_t kCount = sizeof...(Ts);
   static constexpr std::array<ScribblezShape, kCount + 1> kValue = []() {
     std::array<ScribblezShape, kCount + 1> a{};
@@ -64,7 +64,7 @@ struct TargetShapeTable<scribblez::binlog::TargetList<Ts...>> {
   }();
 };
 
-constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::binlog::AllTargets>::kValue;
+constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::AllTargets>::kValue;
 
 }  // namespace
 
@@ -75,7 +75,7 @@ const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.da
 
 int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 
-int scribblez_input_floats(void) { return scribblez::binlog::kInputFloats; }
+int scribblez_input_floats(void) { return scribblez::kInputFloats; }
 
 namespace {
 
@@ -104,8 +104,7 @@ int scribblez_encode_score_diff_sweep(const char* path, int64_t game_idx, int po
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
 
-  const int64_t sweep =
-    static_cast<int64_t>(diff_hi - diff_lo + 1) * scribblez::binlog::kInputFloats;
+  const int64_t sweep = static_cast<int64_t>(diff_hi - diff_lo + 1) * scribblez::kInputFloats;
   scribblez::binlog::BlockDecoder decoder;
   if (game_idx >= 0) {
     // A single position.

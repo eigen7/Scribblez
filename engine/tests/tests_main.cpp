@@ -1116,7 +1116,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     const int dd = static_cast<int>(row[label_off + 1]);
     const int l = static_cast<int>(row[label_off + 2]);
     // Score-diff target is a single scalar: the clipped final differential.
-    const int sd = static_cast<int>(row[label_off + scribblez::binlog::kWldFloats]);
+    const int sd = static_cast<int>(row[label_off + scribblez::kWldFloats]);
     CHECK(w + dd + l == 1);  // exactly one of W/D/L
     CHECK(valid_labels.count({w, dd, l, sd}) == 1);
   }
@@ -1556,8 +1556,8 @@ namespace {
 
 // Helper: build a TargetInputs with just the fields encode_labels reads for
 // heads 0 and 1 (no next move set -> head 2 emits all zeros).
-scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
-                                                 bool apply_flip = false) {
+scribblez::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
+                                         bool apply_flip = false) {
   using namespace scribblez::binlog;
   TargetInputs v{};
   v.has_next_move = false;
@@ -1570,8 +1570,8 @@ scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int 
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
 // size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
-void encode_labels_flat(const scribblez::binlog::TargetInputs& view, float* flat) {
-  scribblez::binlog::AllTargets::encode_all(view, flat);
+void encode_labels_flat(const scribblez::TargetInputs& view, float* flat) {
+  scribblez::AllTargets::encode_all(view, flat);
 }
 
 }  // namespace

@@ -5,7 +5,6 @@
 #include <algorithm>
 
 namespace scribblez {
-namespace binlog {
 
 // ---------- WldTarget ---------------------------------------------------
 
@@ -50,5 +49,4 @@ void OppNextPlacementTarget::encode(const TargetInputs& v, float* out) {
   }
 }
 
-}  // namespace binlog
 }  // namespace scribblez
