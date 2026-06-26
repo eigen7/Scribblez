@@ -781,12 +781,11 @@ struct LiveSnapshot {
   int score_opp = 0;
   int turn_index = 0;
   int active_player = 0;
-  scribblez::binlog::PositionKind kind = scribblez::binlog::PositionKind::kPreMove;
+  scribblez::PositionKind kind = scribblez::PositionKind::kPreMove;
 };
 
 std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStorage& log) {
   using namespace scribblez;
-  using binlog::PositionKind;
 
   std::vector<LiveSnapshot> out;
   Board board;
@@ -943,7 +942,7 @@ static void test_extract_positions_movegen_roundtrip() {
       // ---- pre-move snapshot ----
       CHECK(snap_idx < live_snaps.size());
       const LiveSnapshot& pre = live_snaps[snap_idx++];
-      CHECK(pre.kind == scribblez::binlog::PositionKind::kPreMove);
+      CHECK(pre.kind == scribblez::PositionKind::kPreMove);
       const int active = enc.active_player();
       CHECK(active == pre.active_player);
       CHECK(enc.score(active) == pre.score_active);
@@ -959,7 +958,7 @@ static void test_extract_positions_movegen_roundtrip() {
       if (turn.move.type() == scribblez::MoveType::PLAY) {
         CHECK(snap_idx < live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
-        CHECK(post.kind == scribblez::binlog::PositionKind::kPostMove);
+        CHECK(post.kind == scribblez::PositionKind::kPostMove);
 
         // Materialize post-state from the encoder + parallel racks by hand
         // and compare.

@@ -40,8 +40,6 @@
 
 namespace scribblez {
 
-namespace binlog {
-
 // Sample kinds within a single game turn. Used by the DataLoader's replay
 // decoder to label which of the two per-PLAY-turn samples is which.
 enum class PositionKind : uint8_t {
@@ -50,8 +48,6 @@ enum class PositionKind : uint8_t {
                   // (unseen-pool composition unchanged from pre-move).
                   // Only emitted for PLAY turns.
 };
-
-}  // namespace binlog
 
 class GameStateEncoder {
  public:
