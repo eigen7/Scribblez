@@ -56,6 +56,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
     p.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
     p.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
+    p.add_argument(
+        "--huber-delta-mean", type=float, default=1.0,
+        help="Huber transition point (points) for the score-diff mean head.")
+    p.add_argument(
+        "--huber-delta-var", type=float, default=1.0,
+        help="Huber transition point (points^2) for the score-diff variance head.")
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
     p.add_argument(
@@ -243,7 +249,10 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             source.release(slot_idx)
 
             outputs = model(input_spatial, input_scalar)
-            losses = compute_loss(outputs, tgt, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp)
+            losses = compute_loss(
+                outputs, tgt, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
+                huber_delta_mean=args.huber_delta_mean, huber_delta_var=args.huber_delta_var,
+            )
             optimizer.zero_grad()
             losses["total"].backward()
             optimizer.step()

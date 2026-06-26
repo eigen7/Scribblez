@@ -111,7 +111,8 @@ def evaluate_calibration(
             value.append((wld_t[:, 0] + 0.5 * wld_t[:, 1]).cpu().numpy())
             wld_logprob.append((-(wld_t * F.log_softmax(out["wld"], dim=1)).sum(1)).cpu().numpy())
 
-            # The score-diff head emits a Gaussian: [mean, std] of the final diff.
+            # The score-diff head emits [mean, std] of the final diff; the std is
+            # read here as the spread of a Gaussian belief about that diff.
             mean = out["score_diff"][:, 0]
             std = out["score_diff"][:, 1]
             pred_mean.append(mean.cpu().numpy())

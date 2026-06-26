@@ -6,8 +6,12 @@ Architecture:
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
-    * ScoreDiff (aux): FC -> 2 = [mean, std] of the final score-differential
-      Gaussian (std via softplus), trained by Gaussian NLL
+    * ScoreDiff (aux): FC -> 2 = [mean, variance] of the final score
+      differential. The mean is regressed against the observed differential and
+      the variance against the mean's squared residual, both with Huber loss.
+      The variance stack reads a detached copy of the trunk summary, so its loss
+      trains only that stack and never perturbs the trunk or the mean. The
+      exported second value is the std (sqrt of the variance).
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 
 The two model inputs (85 spatial planes, 936 scalars) and the three head output
@@ -141,13 +145,22 @@ class ScribblezModel(nn.Module):
             nn.Linear(64, 3),
         )
 
-        # Score-diff head (aux): FC -> 2 = [mean, raw_std] of the final
-        # score-differential Gaussian. forward() maps raw_std through softplus to
-        # a positive std, so the exported output is [mean, std].
-        self.sd_fc = nn.Sequential(
+        # Score-diff head (aux): two independent FC stacks over the value
+        # summary. The mean stack regresses the final score differential; the
+        # variance stack regresses the mean's squared residual and reads a
+        # detached copy of the value summary (see forward()), so the variance
+        # loss updates only this stack -- never the shared trunk or the mean.
+        # forward() maps raw_var through softplus to a positive variance and
+        # exports its sqrt, so the exported output is [mean, std].
+        self.sd_mean_fc = nn.Sequential(
             nn.Linear(value_in, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 2),
+            nn.Linear(256, 1),
+        )
+        self.sd_var_fc = nn.Sequential(
+            nn.Linear(value_in, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1),
         )
 
         # Opp-next-placement head (aux): 1x1 conv -> (1, 15, 15).
@@ -189,11 +202,13 @@ class ScribblezModel(nn.Module):
         wld = self.wld_fc(value_in)
         opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
 
-        # Score-diff Gaussian: [mean, std]. softplus + floor keeps std positive
-        # and away from 0 so the Gaussian NLL stays finite.
-        sd_raw = self.sd_fc(value_in)  # (B, 2): [mean, raw_std]
-        sd_mean = sd_raw[:, 0:1]
-        sd_std = F.softplus(sd_raw[:, 1:2]) + 1e-3
+        # Score-diff head: [mean, std]. The variance stack reads a detached copy
+        # of the value summary, so its loss never flows into the trunk or the
+        # mean. softplus + floor keeps the variance positive; the exported second
+        # value is its sqrt (the std).
+        sd_mean = self.sd_mean_fc(value_in)  # (B, 1)
+        sd_var = F.softplus(self.sd_var_fc(value_in.detach())) + 1e-6  # (B, 1)
+        sd_std = torch.sqrt(sd_var)
         sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
         return {"wld": wld, "score_diff": sd, "opp_next_placement": opp}
@@ -204,6 +219,8 @@ def compute_loss(
     targets: dict[str, torch.Tensor],
     lambda_sd: float = 1.0,
     lambda_opp: float = 0.5,
+    huber_delta_mean: float = 1.0,
+    huber_delta_var: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
@@ -212,6 +229,8 @@ def compute_loss(
                  (B,2 = [mean, std]), "opp_next_placement" (B,15,15 logits).
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
                  final differential, "opp_next_placement" (B,15,15) binary mask.
+        huber_delta_mean: Huber transition point (points) for the mean head.
+        huber_delta_var: Huber transition point (points^2) for the variance head.
 
     Returns:
         Dict with "total", "wld", "score_diff", "opp_next_placement" losses.
@@ -220,12 +239,19 @@ def compute_loss(
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
 
-    # Score-diff: Gaussian negative log-likelihood of the observed differential
-    # under the head's predicted (mean, std).
+    # Score-diff: two Huber regressions. The mean predicts the observed
+    # differential; the variance predicts the mean's squared residual (an
+    # empirical variance), which is quartic in the score scale and so produces
+    # large targets that Huber's linear tail keeps the gradients bounded against.
+    # The mean is detached in the variance target so the variance loss trains
+    # only the variance, never pulling the mean toward easier-to-predict spreads.
     sd_mean = outputs["score_diff"][:, 0]
     sd_var = outputs["score_diff"][:, 1] ** 2
     sd_target = targets["score_diff"].squeeze(1)
-    loss_sd = F.gaussian_nll_loss(sd_mean, sd_target, sd_var)
+    loss_sd_mean = F.huber_loss(sd_mean, sd_target, delta=huber_delta_mean)
+    var_target = (sd_mean.detach() - sd_target) ** 2
+    loss_sd_var = F.huber_loss(sd_var, var_target, delta=huber_delta_var)
+    loss_sd = loss_sd_mean + loss_sd_var
 
     # Opp-next-placement: binary cross-entropy per cell.
     loss_opp = F.binary_cross_entropy_with_logits(

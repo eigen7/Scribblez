@@ -169,6 +169,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     parser.add_argument(
+        "--huber-delta-mean", type=float, default=1.0,
+        help="Huber transition point (points) for the score-diff mean head.")
+    parser.add_argument(
+        "--huber-delta-var", type=float, default=1.0,
+        help="Huber transition point (points^2) for the score-diff variance head.")
+    parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
     parser.add_argument(
@@ -312,7 +318,8 @@ def main() -> int:
 
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
-                outputs, targets, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp
+                outputs, targets, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
+                huber_delta_mean=args.huber_delta_mean, huber_delta_var=args.huber_delta_var,
             )
 
             optimizer.zero_grad()

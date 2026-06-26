@@ -26,11 +26,11 @@ def row_layout() -> tuple[list, list[tuple[str, int, int, tuple[int, ...]]]]:
     """
     input_shapes = get_input_shapes()
     target_shapes = get_target_shapes()
-    input_total = sum(_prod(s.dims) for s in input_shapes)
+    input_total = sum(int(np.prod(s.dims)) for s in input_shapes)
     targets: list[tuple[str, int, int, tuple[int, ...]]] = []
     offset = input_total
     for ts in target_shapes:
-        size = _prod(ts.dims)
+        size = int(np.prod(ts.dims))
         targets.append((ts.name, offset, offset + size, ts.dims))
         offset += size
     return input_shapes, targets
@@ -46,7 +46,7 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
     result: dict[str, torch.Tensor] = {}
     offset = 0
     for s in input_shapes:
-        size = _prod(s.dims)
+        size = int(np.prod(s.dims))
         arr = batch_2d[:, offset : offset + size]
         result[s.name] = torch.from_numpy(arr.reshape(-1, *s.dims).copy())
         offset += size
@@ -149,10 +149,3 @@ class SlogDataset:
 
     def _slice_batch(self, batch_data: np.ndarray) -> dict[str, torch.Tensor]:
         return slice_row_batch(batch_data, self._input_layout, self._targets)
-
-
-def _prod(dims: tuple[int, ...]) -> int:
-    r = 1
-    for d in dims:
-        r *= d
-    return r
