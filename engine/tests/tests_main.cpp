@@ -586,13 +586,13 @@ static void test_encoder_flip_symmetry() {
   }
 }
 
-static void test_encoder_anchor_planes_qi() {
+static void test_encoder_cross_check_planes_qi() {
   using namespace scribblez::binlog;
 
   Dictionary d = medium_dict();
 
   // p0 opens with horizontal "QI" at (7,7)..(7,8). We then encode from p1's
-  // POV (active after one move) and verify directional per-letter anchor
+  // POV (active after one move) and verify directional per-letter cross-check
   // planes around that word.
   Move qi_play = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
                                 {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
@@ -601,16 +601,16 @@ static void test_encoder_anchor_planes_qi() {
   enc.apply_move(qi_play);
   enc.board().ensure_movegen_caches(d);
 
-  Rack active_rack;  // p1 rack is irrelevant for spatial-anchor checks
+  Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
   std::vector<float> out(kInputFloats, 0.0f);
   enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   auto plane_value = [&out](int plane, int r, int c) { return out[plane * 225 + r * 15 + c]; };
-  auto h_anchor = [&plane_value](Tile letter, int r, int c) {
-    return plane_value(kHorizontalAnchorPlane0 + letter.index(), r, c);
+  auto h_cross_check = [&plane_value](Tile letter, int r, int c) {
+    return plane_value(kHorizontalCrossCheckPlane0 + letter.index(), r, c);
   };
-  auto v_anchor = [&plane_value](Tile letter, int r, int c) {
-    return plane_value(kVerticalAnchorPlane0 + letter.index(), r, c);
+  auto v_cross_check = [&plane_value](Tile letter, int r, int c) {
+    return plane_value(kVerticalCrossCheckPlane0 + letter.index(), r, c);
   };
   auto has = [](const std::initializer_list<char>& letters, char ch) {
     for (char x : letters)
@@ -622,7 +622,7 @@ static void test_encoder_anchor_planes_qi() {
     for (int l = 0; l < 26; ++l) {
       const char ch = static_cast<char>('A' + l);
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
-      CHECK(h_anchor(Tile::of(l), r, c) == expected);
+      CHECK(h_cross_check(Tile::of(l), r, c) == expected);
     }
   };
 
@@ -630,7 +630,7 @@ static void test_encoder_anchor_planes_qi() {
     for (int l = 0; l < 26; ++l) {
       const char ch = static_cast<char>('A' + l);
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
-      CHECK(v_anchor(Tile::of(l), r, c) == expected);
+      CHECK(v_cross_check(Tile::of(l), r, c) == expected);
     }
   };
 
@@ -649,19 +649,19 @@ static void test_encoder_anchor_planes_qi() {
   assert_vertical_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
   assert_vertical_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
 
-  // Occupied squares are never anchors.
+  // Occupied squares never carry cross-check planes.
   assert_horizontal_set(7, 7, {});
   assert_horizontal_set(7, 8, {});
   assert_vertical_set(7, 7, {});
   assert_vertical_set(7, 8, {});
 
-  // Spot-check that non-anchor spatial cells stay zero in both families.
+  // Spot-check that cells with no cross-check stay zero in both families.
   const Tile a = Tile::from_char('A');
   const Tile z = Tile::from_char('Z');
-  CHECK(h_anchor(a, 0, 0) == 0.0f);
-  CHECK(h_anchor(z, 14, 14) == 0.0f);
-  CHECK(v_anchor(a, 0, 0) == 0.0f);
-  CHECK(v_anchor(z, 14, 14) == 0.0f);
+  CHECK(h_cross_check(a, 0, 0) == 0.0f);
+  CHECK(h_cross_check(z, 14, 14) == 0.0f);
+  CHECK(v_cross_check(a, 0, 0) == 0.0f);
+  CHECK(v_cross_check(z, 14, 14) == 0.0f);
 }
 
 static void test_encoder_forced_score_diff_isolation() {
@@ -3109,7 +3109,7 @@ int main() {
   test_encoder_basic_layout();
   test_encoder_last_opp_plane_mask();
   test_encoder_flip_symmetry();
-  test_encoder_anchor_planes_qi();
+  test_encoder_cross_check_planes_qi();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();

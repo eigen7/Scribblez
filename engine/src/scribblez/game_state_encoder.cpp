@@ -68,13 +68,13 @@ void encode_placement_plane(const Move& m, bool flip, int plane, float* planes_o
   }
 }
 
-// Per-letter directional anchor planes.
+// Per-letter directional cross-check planes.
 //
-// Horizontal anchor plane L marks empty squares where placing letter L would
-// fuse with an existing left/right neighbor and pass horizontal-play
-// cross-check constraints. Vertical anchor planes are defined analogously using
-// above/below neighbors and the transposed cross-check table.
-void encode_anchor_planes(const Board& board, bool flip, float* planes_out) {
+// Horizontal cross-check plane L marks empty squares where placing letter L
+// would fuse with an existing left/right neighbor and pass horizontal-play
+// cross-check constraints. Vertical cross-check planes are defined analogously
+// using above/below neighbors and the transposed cross-check table.
+void encode_cross_check_planes(const Board& board, bool flip, float* planes_out) {
   const auto& hcross = board.cross_checks(/*transposed=*/false);
   const auto& vcross = board.cross_checks(/*transposed=*/true);
 
@@ -97,7 +97,7 @@ void encode_anchor_planes(const Board& board, bool flip, float* planes_out) {
         const uint32_t mask = perp_mask & main_mask;
         for (int l = 0; l < 26; ++l) {
           if ((mask & (1u << l)) == 0) continue;
-          planes_out[(kHorizontalAnchorPlane0 + l) * kBoardCells + out_ix] = 1.0f;
+          planes_out[(kHorizontalCrossCheckPlane0 + l) * kBoardCells + out_ix] = 1.0f;
         }
       }
 
@@ -110,7 +110,7 @@ void encode_anchor_planes(const Board& board, bool flip, float* planes_out) {
         const uint32_t mask = main_mask & perp_mask;
         for (int l = 0; l < 26; ++l) {
           if ((mask & (1u << l)) == 0) continue;
-          planes_out[(kVerticalAnchorPlane0 + l) * kBoardCells + out_ix] = 1.0f;
+          planes_out[(kVerticalCrossCheckPlane0 + l) * kBoardCells + out_ix] = 1.0f;
         }
       }
     }
@@ -197,7 +197,7 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
   encode_board_planes(board, apply_flip, out);
   encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
   encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
-  encode_anchor_planes(board, apply_flip, out);
+  encode_cross_check_planes(board, apply_flip, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
   encode_scalars(my_rack, unseen, self_move, opp_move, score_diff, out + kSpatialFloats);

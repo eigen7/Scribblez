@@ -37,11 +37,11 @@
 //                       the opponent's leave, and to interpret a candidate move
 //                       whose leave is the POV rack). A placement plane is
 //                       all-zero for an EXCHANGE / PASS / game-start move.
-//     planes  [33..58]  horizontal anchor letters A..Z: plane L marks empty
+//     planes  [33..58]  horizontal cross-check letters A..Z: plane L marks empty
 //                       squares where placing letter L would fuse with an
 //                       existing left and/or right neighbor and satisfy the
 //                       horizontal-pass cross-check mask.
-//     planes  [59..84]  vertical anchor letters A..Z: plane L marks empty
+//     planes  [59..84]  vertical cross-check letters A..Z: plane L marks empty
 //                       squares where placing letter L would fuse with an
 //                       existing above and/or below neighbor and satisfy the
 //                       vertical-pass cross-check mask.
@@ -99,11 +99,11 @@ inline constexpr int kLetterPlanes = 26;
 inline constexpr int kBlankMarkerPlanes = 1;
 inline constexpr int kPremiumPlanes = 4;
 inline constexpr int kPlacementPlanes = 2;  // self + opponent most-recent placements
-inline constexpr int kHorizontalAnchorPlanes = 26;
-inline constexpr int kVerticalAnchorPlanes = 26;
+inline constexpr int kHorizontalCrossCheckPlanes = 26;
+inline constexpr int kVerticalCrossCheckPlanes = 26;
 inline constexpr int kSpatialPlanes = kLetterPlanes + kBlankMarkerPlanes + kPremiumPlanes +
-                                      kPlacementPlanes + kHorizontalAnchorPlanes +
-                                      kVerticalAnchorPlanes;         // 85
+                                      kPlacementPlanes + kHorizontalCrossCheckPlanes +
+                                      kVerticalCrossCheckPlanes;     // 85
 inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;  // 19125
 
 // Plane offsets within the spatial block (single source of truth).
@@ -111,9 +111,9 @@ inline constexpr int kBlankMarkerPlane = kLetterPlanes;                        /
 inline constexpr int kPremiumPlane0 = kBlankMarkerPlane + kBlankMarkerPlanes;  // 27
 inline constexpr int kSelfPlacementPlane = kPremiumPlane0 + kPremiumPlanes;    // 31
 inline constexpr int kOppPlacementPlane = kSelfPlacementPlane + 1;             // 32
-inline constexpr int kHorizontalAnchorPlane0 = kOppPlacementPlane + 1;         // 33
-inline constexpr int kVerticalAnchorPlane0 =
-  kHorizontalAnchorPlane0 + kHorizontalAnchorPlanes;  // 59
+inline constexpr int kHorizontalCrossCheckPlane0 = kOppPlacementPlane + 1;     // 33
+inline constexpr int kVerticalCrossCheckPlane0 =
+  kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;  // 59
 
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
