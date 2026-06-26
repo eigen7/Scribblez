@@ -29,18 +29,7 @@ from scribblez.eval.sampling import build_test_subset
 from scribblez.model import ScribblezModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
-
-
-def _fmt_dur(secs: float) -> str:
-    """Compact duration: "1h05m", "5m12s", or "42s"."""
-    s = int(secs + 0.5)
-    h, s = divmod(s, 3600)
-    m, s = divmod(s, 60)
-    if h:
-        return f"{h}h{m:02d}m"
-    if m:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
+from scribblez.util import fmt_duration
 
 
 def print_epoch_progress(epoch, total_epochs, done_batches, total_batches, samples, t0, final=False):
@@ -54,7 +43,7 @@ def print_epoch_progress(epoch, total_epochs, done_batches, total_batches, sampl
     eta = elapsed * remaining / done_batches if done_batches else 0.0
     sys.stdout.write(
         f"\rEpoch {epoch:3d}/{total_epochs} | batch {done_batches}/{total_batches} "
-        f"({pct:5.1f}%) | {rate / 1000:.1f}k samples/s | ETA {_fmt_dur(eta)}    "
+        f"({pct:5.1f}%) | {rate / 1000:.1f}k samples/s | ETA {fmt_duration(eta)}    "
     )
     sys.stdout.write("\n" if final else "")
     sys.stdout.flush()
