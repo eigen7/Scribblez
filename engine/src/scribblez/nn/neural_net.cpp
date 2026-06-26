@@ -113,6 +113,20 @@ struct NeuralNet::Impl {
   std::unique_ptr<nvinfer1::IExecutionContext> context;
   stream_t stream = nullptr;
 
+  // TODO(Refactor): Decouple C++ inference buffers from the strict neural net architecture.
+  // Currently, adding a new head requires manually hardcoding new 
+  // device/host pointers, cudaMallocs, and cudaMemcpys across different places.
+  //
+  // Implementation Plan:
+  // 1. Define a `TensorBuffer` struct (name, size_bytes, is_input, d_ptr, h_ptr).
+  // 2. Query the engine dynamically during `allocate_buffers`:
+  //    - num_tensors = engine->getNbIOTensors()
+  //    - name = engine->getIOTensorName(i)
+  //    - mode = engine->getTensorIOMode(name)  // Check for kINPUT vs kOUTPUT
+  //    - shape = engine->getTensorShape(name)  // Calculate size_bytes
+  // 3. Store buffers in `std::vector<TensorBuffer> inputs/outputs`.
+  // 4. Maintain a flat `std::vector<void*> bindings` to pass cleanly to `enqueueV3()`.
+  // 5. Replace manual cudaMemcpy calls with loops over the `inputs` and `outputs` vectors.
   void* d_input_spatial = nullptr;
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;
