@@ -10,7 +10,6 @@
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/web_server.h"
-#include "util/encoding.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -20,8 +19,6 @@
 #include <cctype>
 #include <chrono>
 #include <ctime>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -310,7 +307,7 @@ class ManualGame {
     o["lexicon"] = Lexicon::instance().name();
     o["max_name_len"] = kMaxNameLen;
     o["status"] = status_;
-    o["default_export_path"] = "/workspace/repo/manual_game.gcg";
+    o["gcg_text"] = build_gcg();
     o["tile_scores"] = tile_score_map();
     o["view_ply"] = view_ply_;
     o["tail_ply"] = static_cast<int>(turns_.size());
@@ -751,16 +748,9 @@ class ManualGame {
     status_ = "Loaded " + source_name;
   }
 
-  bool export_gcg(const std::string& path) {
-    std::string out_path = path;
-    if (out_path.empty()) out_path = "/workspace/repo/manual_game.gcg";
-
-    std::filesystem::path p(out_path);
-    if (p.has_parent_path()) {
-      std::error_code ec;
-      std::filesystem::create_directories(p.parent_path(), ec);
-    }
-
+  // The current game serialized as GCG text. The front-end offers it for
+  // download, so the file is written browser-side rather than here.
+  std::string build_gcg() const {
     GameLogStorage log;
     log.player_names = names_;
     log.final_scores = scores_;
@@ -790,35 +780,7 @@ class ManualGame {
     opts.exchange_fields = std::move(exchange_fields);
     opts.post_event_racks = std::move(post_event_racks);
 
-    std::ofstream out(out_path);
-    if (!out) {
-      status_ = "Failed to open export path: " + out_path;
-      return false;
-    }
-    write_game_log_gcg(log.view(), out, opts);
-    status_ = "Exported " + out_path;
-    return true;
-  }
-
-  // Write a PNG rendered by the browser (base64, no data-URL prefix) to `path`.
-  void export_png(const std::string& path, const std::string& base64_data) {
-    if (path.empty()) {
-      status_ = "No export path given";
-      return;
-    }
-    std::filesystem::path p(path);
-    if (p.has_parent_path()) {
-      std::error_code ec;
-      std::filesystem::create_directories(p.parent_path(), ec);
-    }
-    const std::string bytes = util::base64_decode(base64_data);
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-      status_ = "Failed to open export path: " + path;
-      return;
-    }
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    status_ = "Exported " + path;
+    return game_log_to_gcg(log.view(), opts);
   }
 
  private:
@@ -1105,14 +1067,6 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
   }
   if (type == "load_gcg_text") {
     game.load_gcg_text(str_field(obj, "text"), str_field(obj, "file_name"));
-    return;
-  }
-  if (type == "export") {
-    game.export_gcg(str_field(obj, "path"));
-    return;
-  }
-  if (type == "export_png") {
-    game.export_png(str_field(obj, "path"), str_field(obj, "data"));
     return;
   }
   if (type == "reset") {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { toPng } from 'html-to-image';
+import { toBlob } from 'html-to-image';
 import Board from './components/Board';
 import Rack from './components/Rack';
 import ScoreBoard from './components/ScoreBoard';
@@ -101,6 +101,7 @@ interface ManualState {
   game_over: boolean;
   status?: string;
   tile_scores: Record<string, number>;
+  gcg_text: string;
 }
 
 interface PlayBuildResult {
@@ -111,6 +112,62 @@ interface PlayBuildResult {
 }
 
 const MAX_NAME_LENGTH = 18;
+
+// Save a file via the browser's native "Save As" dialog (File System Access
+// API), letting the user navigate the native filesystem. `produceBlob` runs
+// only after the picker opens, so async rendering doesn't consume the click's
+// user activation. Browsers without the API fall back to a normal download.
+async function saveViaPicker(
+  produceBlob: () => Promise<Blob>,
+  suggestedName: string,
+  accept: Record<string, string[]>,
+  label: string,
+  setStatus: (s: string) => void,
+): Promise<void> {
+  const picker = (
+    window as unknown as {
+      showSaveFilePicker?: (opts: object) => Promise<{
+        createWritable: () => Promise<{
+          write: (b: Blob) => Promise<void>;
+          close: () => Promise<void>;
+        }>;
+      }>;
+    }
+  ).showSaveFilePicker;
+
+  if (picker) {
+    let handle;
+    try {
+      handle = await picker({ suggestedName, types: [{ accept }] });
+    } catch (e) {
+      if ((e as { name?: string })?.name !== 'AbortError') setStatus('Failed to open save dialog.');
+      return; // user cancelled
+    }
+    try {
+      const blob = await produceBlob();
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      setStatus(`Saved ${label}.`);
+    } catch {
+      setStatus(`Failed to save ${label}.`);
+    }
+    return;
+  }
+
+  // Browsers without the File System Access API download to the default folder.
+  try {
+    const blob = await produceBlob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = suggestedName;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    setStatus(`Failed to export ${label}.`);
+  }
+}
 
 function AppManual() {
   const [state, setState] = useState<ManualState | null>(null);
@@ -528,39 +585,48 @@ function AppManual() {
     setExchangeSelected(new Set());
   };
 
-  const exportGcg = () => {
-    const defaultPath = '/workspace/repo/manual_positions.gcg';
-    const path = window.prompt('Export path', defaultPath);
-    if (!path) return;
-    send({ type: 'export', path });
-  };
+  // Save the current game as GCG via the browser's native "Save As" dialog, so
+  // the location is a native-filesystem path the user navigates to (like Load
+  // Game's file chooser). The GCG text comes from the engine in the state.
+  const exportGcg = useCallback(() => {
+    const text = state?.gcg_text ?? '';
+    return saveViaPicker(
+      async () => new Blob([text], { type: 'text/plain' }),
+      'manual_position.gcg',
+      { 'text/plain': ['.gcg'] },
+      'GCG',
+      setStatus,
+    );
+  }, [state?.gcg_text]);
 
   // Render the board + racks + history + sidebar to a PNG matching the
-  // on-screen look, and save it to a path the user picks (the backend writes
-  // the file, mirroring Export GCG). The page title is outside the captured
-  // node; the action bars, status line, and cursor hint are filtered out.
-  const exportPng = useCallback(async () => {
+  // on-screen look, and save it via the same native dialog. The page title is
+  // outside the captured node; the action bars, status line, and cursor hint
+  // are filtered out.
+  const exportPng = useCallback(() => {
     const node = layoutRef.current;
     if (!node) return;
-    const path = window.prompt('Export PNG path', '/workspace/repo/manual_position.png');
-    if (!path) return;
-    try {
-      const dataUrl = await toPng(node, {
-        pixelRatio: 2,
-        backgroundColor: getComputedStyle(document.body).backgroundColor || '#1a2632',
-        filter: (el) =>
-          !(
-            el instanceof HTMLElement &&
-            (el.classList.contains('action-bar') ||
-              el.classList.contains('manual-status') ||
-              el.classList.contains('cursor-hint'))
-          ),
-      });
-      send({ type: 'export_png', path, data: dataUrl.split(',')[1] ?? '' });
-    } catch {
-      setStatus('Failed to export PNG.');
-    }
-  }, [send]);
+    return saveViaPicker(
+      async () => {
+        const blob = await toBlob(node, {
+          pixelRatio: 2,
+          backgroundColor: getComputedStyle(document.body).backgroundColor || '#1a2632',
+          filter: (el: HTMLElement) =>
+            !(
+              el.classList?.contains('action-bar') ||
+              el.classList?.contains('manual-status') ||
+              el.classList?.contains('cursor-hint')
+            ),
+        });
+        if (!blob) throw new Error('render failed');
+        return blob;
+      },
+      'manual_position.png',
+      { 'image/png': ['.png'] },
+      'PNG',
+      setStatus,
+    );
+  }, []);
 
   const newGame = () => {
     send({ type: 'reset' });
