@@ -8,6 +8,7 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/seed_producer.h"
 #include "scribblez/unique_id.h"
+#include "util/string.h"
 
 #include <boost/program_options.hpp>
 
@@ -20,34 +21,12 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 namespace scribblez {
-
-namespace {
-
-// Compact human-readable duration: "6h32m", "45m12s", or "30s".
-std::string fmt_dur(double secs) {
-  long s = static_cast<long>(secs + 0.5);
-  const long h = s / 3600;
-  s %= 3600;
-  const long m = s / 60;
-  s %= 60;
-  std::ostringstream o;
-  if (h > 0)
-    o << h << "h" << m << "m";
-  else if (m > 0)
-    o << m << "m" << s << "s";
-  else
-    o << s << "s";
-  return o.str();
-}
-
-}  // namespace
 
 const Dictionary& GameRunner::load_dictionary_or_throw() {
   try {
@@ -108,7 +87,7 @@ class GameRunner::Results {
     const double eta = rate > 0 ? (static_cast<double>(total) - done) / rate : 0.0;
     os << "[progress] " << done << "/" << total << " games (" << std::fixed << std::setprecision(1)
        << pct << "%) | " << std::setprecision(2) << rate << " games/s | elapsed "
-       << fmt_dur(elapsed_secs) << " | ETA " << fmt_dur(eta) << "\n";
+       << util::fmt_dur(elapsed_secs) << " | ETA " << util::fmt_dur(eta) << "\n";
   }
 
   void print_batch_summary(std::ostream& os, double elapsed_secs) const {
