@@ -33,6 +33,11 @@ constexpr const char* Premium::code() const {
   return nullptr;
 }
 
+inline void Board::set(int r, int c, Glyph g) {
+  squares_[r * BOARD_SIZE + c] = g;
+  caches_valid_ = false;
+}
+
 inline bool Board::in_bounds(int r, int c) const {
   return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
 }

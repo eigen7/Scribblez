@@ -63,10 +63,7 @@ class Board {
   Board();
 
   Glyph at(int r, int c) const { return squares_[r * BOARD_SIZE + c]; }
-  void set(int r, int c, Glyph g) {
-    squares_[r * BOARD_SIZE + c] = g;
-    caches_valid_ = false;
-  }
+  void set(int r, int c, Glyph g);
   bool in_bounds(int r, int c) const;
   bool empty_board() const;
 

@@ -21,53 +21,18 @@ namespace scribblez {
 // one per turn (HastyEquity::turn_leaves) and reuse it across the turn's moves.
 class TurnLeaves {
  public:
-  TurnLeaves(const Rack& rack, const LeaveValues& lv) : lv_(lv), size_(rack.size()) {
-    const auto& t = rack.tiles();
-    for (int i = 0; i < size_; ++i) tile_of_bit_[i] = t[i];
-    TileCounts counts = rack.counts();
-    int b = 0;
-    for (Tile L = Tile::of(0); L <= BLANK; ++L) {
-      int c = counts.count(L);
-      indices_[L] = static_cast<uint8_t>(((1u << c) - 1u) << b);
-      b += c;
-    }
-    full_ = static_cast<uint8_t>((1u << size_) - 1);
-  }
+  TurnLeaves(const Rack& rack, const LeaveValues& lv);
 
   // The move's leave as a bitmask: the full rack minus its played tiles. Each
   // played tile claims its letter's lowest still-available bit.
-  uint8_t mask_for(const Move& move) const {
-    uint8_t mask = full_;
-    std::array<uint8_t, 27> indices = indices_;
-    for (int i = 0; i < move.num_glyphs(); ++i) {
-      uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
-      int bit = std::countr_zero(idx);
-      mask &= static_cast<uint8_t>(~(1u << bit));
-      idx &= static_cast<uint8_t>(idx - 1);
-    }
-    return mask;
-  }
+  uint8_t mask_for(const Move& move) const;
 
-  double value(uint8_t mask) {
-    ensure(mask);
-    return static_cast<double>(value_[mask]);
-  }
+  double value(uint8_t mask);
 
-  int point_value(uint8_t mask) {
-    ensure(mask);
-    return pv_[mask];
-  }
+  int point_value(uint8_t mask);
 
  private:
-  void ensure(uint8_t mask) {
-    if (computed_[mask]) return;
-    Rack leave;
-    for (int i = 0; i < size_; ++i)
-      if (mask & (1u << i)) leave.add(tile_of_bit_[i]);
-    value_[mask] = lv_.lookup(leave);
-    pv_[mask] = static_cast<int16_t>(leave.point_value());
-    computed_[mask] = true;
-  }
+  void ensure(uint8_t mask);
 
   const LeaveValues& lv_;
   int size_;
@@ -159,3 +124,5 @@ class HastyEquity {
 };
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/hasty_equity.inl"

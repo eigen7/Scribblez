@@ -51,17 +51,7 @@ class LeaveValues {
   // Match one tile `code` in sibling list `arc_list`, adding the skipped earlier
   // siblings' subtree word counts to *index. Returns the matched arc, or 0 if the
   // tile is absent (siblings are sorted, so a larger tile means absent).
-  uint32_t klv_step(uint32_t arc_list, uint8_t code, uint32_t* index) const {
-    if (arc_list == 0) return 0;
-    for (uint32_t i = arc_list;; ++i) {
-      const uint32_t e = nodes_[i];
-      const uint32_t t = e >> kTileShift;
-      if (t == code) return i;
-      if (t > code) return 0;
-      *index += subtree_words_[i];
-      if (e & kIsEndBit) return 0;
-    }
-  }
+  uint32_t klv_step(uint32_t arc_list, uint8_t code, uint32_t* index) const;
 
   bool klv_accepts(uint32_t arc) const { return (nodes_[arc] & kAcceptsBit) != 0; }
   uint32_t klv_next(uint32_t arc) const { return nodes_[arc] & kArcMask; }
@@ -83,3 +73,5 @@ class LeaveValues {
 };
 
 }  // namespace scribblez
+
+#include "inlines/scribblez/leave_values.inl"
