@@ -73,6 +73,13 @@ namespace binlog {
 
 inline constexpr int kRowFloats = kInputFloats + kLabelFloats;
 
+// A (game, turn) sample location within a single .slog file: the expansion of a
+// flat position index back into the game it belongs to and the turn within it.
+struct GameTurn {
+  uint32_t game_idx;
+  uint16_t turn_idx;
+};
+
 class DataLoader {
  public:
   struct Params {
@@ -154,11 +161,6 @@ class DataLoader {
    public:
     DataFile(const std::string& path, int64_t num_positions, int64_t file_size);
     ~DataFile();
-
-    struct GameTurn {
-      uint32_t game_idx;
-      uint16_t turn_idx;
-    };
 
     const std::string& path() const { return path_; }
     int64_t num_positions() const { return num_positions_; }

@@ -85,8 +85,7 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
 
 DataLoader::DataFile::~DataFile() { unload(); }
 
-DataLoader::DataFile::GameTurn DataLoader::DataFile::sample_to_game_turn(
-  int64_t sample_index) const {
+GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
   // cumulative_eligible_[g] <= sample_index.
   auto it =
@@ -423,7 +422,7 @@ void DataLoader::WorkerThread::do_work() {
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
     // Each local position is a flat (game, turn) sample index within the file.
-    DataFile::GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
+    GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
     decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
                         unit_.flips[i] != 0, config_.post_move,
                         /*output_row=*/unit_.output_indices[i], output_);
