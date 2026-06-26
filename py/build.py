@@ -68,6 +68,40 @@ def link_lexica_into_macondo():
 
 
 
+def clone_and_build_macondo():
+    """Clone the pinned Macondo tag and build its shell binary, atomically.
+
+    The clone and `go build` are coupled so the build runs only once, when the
+    checkout is first created -- not on every build.py run. If either step
+    fails, the partial checkout is removed so the next run starts clean.
+    """
+    print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
+    try:
+        run(f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
+            f"{MACONDO_REPO_URL} {MACONDO_DIR}")
+        os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
+        run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
+    except BaseException:
+        shutil.rmtree(MACONDO_DIR, ignore_errors=True)
+        raise
+
+
+def check_macondo_tag():
+    """Error out if the existing Macondo checkout is not at the expected tag."""
+    result = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match", "HEAD"],
+        capture_output=True, text=True, cwd=MACONDO_DIR,
+    )
+    current_tag = result.stdout.strip()
+    if result.returncode != 0 or current_tag != MACONDO_TAG:
+        display = current_tag or "(not on an exact tag)"
+        print(
+            f"\nError: macondo at {MACONDO_DIR} is at '{display}', "
+            f"but this project expects '{MACONDO_TAG}'.\n"
+            "Update MACONDO_TAG in py/build.py, re-clone the directory, "
+            "or pass --skip-macondo-tag-check to build anyway."
+        )
+        sys.exit(1)
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,7 +154,7 @@ def main():
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
-    # 3. Clone (if absent) and build the Macondo shell binary.
+    # 3. Clone + build the Macondo shell binary (only when first cloned).
     if not args.skip_macondo:
         if shutil.which("git") is None:
             print("\nWARNING: `git` not found on PATH -- skipping Macondo build.")
@@ -128,26 +162,9 @@ def main():
             print("\nWARNING: `go` not found on PATH -- skipping Macondo build.")
         else:
             if not os.path.isdir(MACONDO_DIR):
-                print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
-                run(f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
-                    f"{MACONDO_REPO_URL} {MACONDO_DIR}")
+                clone_and_build_macondo()
             elif not args.skip_macondo_tag_check:
-                result = subprocess.run(
-                    ["git", "describe", "--tags", "--exact-match", "HEAD"],
-                    capture_output=True, text=True, cwd=MACONDO_DIR,
-                )
-                current_tag = result.stdout.strip()
-                if result.returncode != 0 or current_tag != MACONDO_TAG:
-                    display = current_tag or "(not on an exact tag)"
-                    print(
-                        f"\nError: macondo at {MACONDO_DIR} is at '{display}', "
-                        f"but this project expects '{MACONDO_TAG}'.\n"
-                        "Update MACONDO_TAG in py/build.py, re-clone the directory, "
-                        "or pass --skip-macondo-tag-check to build anyway."
-                    )
-                    sys.exit(1)
-            os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
-            run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
+                check_macondo_tag()
 
             # Make the installed lexica resolvable by the macondo subprocess.
             link_lexica_into_macondo()
