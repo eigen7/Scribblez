@@ -45,32 +45,14 @@ def run(cmd, cwd=None):
         sys.exit(result.returncode)
 
 
-# Build artifacts we never want to list as runnable binaries.
-_NON_BINARY_EXTS = {".so", ".a", ".o", ".cmake", ".json", ".txt", ".ninja",
-                    ".make", ".marks", ".stamp", ".onnx", ".engine", ".py"}
-
-
 def list_built_binaries(target_dir: str) -> list[str]:
-    """Return the executable files produced by the build (sorted, absolute).
-
-    Walks `target_dir` for regular, executable files, skipping CMake's own
-    bookkeeping (CMakeFiles/) and non-runnable artifacts (shared/static libs,
-    object files, generated scripts). These are the things you can copy and run
-    directly, e.g. ./target/engine/play_game.
-    """
+    engine_dir = os.path.join(target_dir, "engine")
     binaries = []
-    for dirpath, dirnames, filenames in os.walk(target_dir):
-        if "CMakeFiles" in dirpath.split(os.sep):
-            dirnames[:] = []  # don't descend into CMake's scratch tree
-            continue
-        for name in filenames:
-            path = os.path.join(dirpath, name)
-            if os.path.islink(path) or not os.path.isfile(path):
-                continue
-            if os.path.splitext(name)[1] in _NON_BINARY_EXTS:
-                continue
-            if os.access(path, os.X_OK):
-                binaries.append(path)
+    for name in os.listdir(engine_dir) if os.path.isdir(engine_dir) else []:
+        path = os.path.join(engine_dir, name)
+        if (os.path.splitext(name)[1] == "" and os.path.isfile(path)
+                and os.access(path, os.X_OK)):
+            binaries.append(path)
     return sorted(binaries)
 
 
