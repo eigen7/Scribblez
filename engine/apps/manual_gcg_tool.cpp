@@ -689,8 +689,8 @@ class ManualGame {
   // reconstruction.
   void create_random_game() {
     HastyEquity::ensure_initialized(Lexicon::instance().name());
-    HastyBotAgent player0(0, "Hasty 1");
-    HastyBotAgent player1(0, "Hasty 2");
+    HastyBotAgent player0(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty 1"});
+    HastyBotAgent player1(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty 2"});
 
     std::random_device rd;
     const uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();

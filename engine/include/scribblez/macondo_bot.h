@@ -57,16 +57,24 @@ Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm);
 // unconstrained sampling hurts.
 class HastyBotAgent : public Agent {
  public:
-  // Greedy HastyBot (temperature 0): the historical argmax behavior.
-  HastyBotAgent(int thread_id, const std::string& name);
+  // Agent identity plus move-selection configuration.
+  //   thread_id, name : the base Agent identity.
+  //   temperature == 0 : pure argmax; `top_k` and `seed` are unused.
+  //   temperature  > 0 : softmax-sample among the top `top_k` moves by equity,
+  //                      with `seed` seeding the sampler.
+  //   temperature_min_bag > 0 : sample only while `bag_size >= it`, playing
+  //                             argmax below it; 0 samples for the whole game.
+  // The defaults (off the identity fields) describe greedy HastyBot.
+  struct Params {
+    int thread_id = 0;
+    std::string name;
+    int top_k = 1;
+    double temperature = 0.0;
+    uint64_t seed = 0;
+    int temperature_min_bag = 0;
+  };
 
-  // Exploratory HastyBot: when `temperature > 0`, sample among the top `top_k`
-  // moves by equity; `seed` seeds the sampler. `temperature == 0` ignores
-  // top_k/seed and plays argmax. When `temperature_min_bag > 0`, sampling is
-  // applied only while `bag_size >= temperature_min_bag` (greedy below it);
-  // 0 (the default) samples for the whole game.
-  HastyBotAgent(int thread_id, const std::string& name, int top_k, double temperature,
-                uint64_t seed, int temperature_min_bag = 0);
+  explicit HastyBotAgent(const Params& params);
 
   Move make_move(const MoveRequest& req) override;
   bool supports_parallelism() const override { return true; }

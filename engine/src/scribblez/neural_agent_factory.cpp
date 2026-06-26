@@ -24,23 +24,20 @@
 
 namespace scribblez {
 
-NeuralAgent::NeuralAgent(int thread_id, const std::string& name, const std::string& onnx_path,
-                         int top_k, Objective objective, const nn::NeuralNetParams& net_params,
-                         double temperature, uint64_t seed)
-    : Agent(thread_id, name),
-      top_k_(top_k),
-      objective_(objective),
-      temperature_(temperature),
+NeuralAgent::NeuralAgent(const Params& params, const nn::NeuralNetParams& net_params)
+    : Agent(params.thread_id, params.name),
+      top_k_(params.top_k),
+      objective_(params.objective),
+      temperature_(params.temperature),
       max_batch_(net_params.max_batch_size),
-      service_(make_service(net_params, onnx_path)),
-      rng_(seed) {
+      service_(make_service(net_params)),
+      rng_(params.seed) {
   init();
 }
 
-std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetParams& net_params,
-                                                           const std::string& onnx_path) {
+std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetParams& net_params) {
   auto svc = std::make_unique<nn::NNEvaluationService>(net_params);
-  svc->load(onnx_path);
+  svc->load();
   return svc;
 }
 
@@ -94,19 +91,25 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
                              "')");
   }
 
-  nn::NeuralNetParams params;
-  params.cuda_device_id = cuda_device;
+  nn::NeuralNetParams net_params;
+  net_params.onnx_path = model;
+  net_params.cuda_device_id = cuda_device;
   // The agent always chunks candidates to max_batch_size, so any value is
   // correct; sizing the engine batch to at least top_k just lets the whole
   // top-K set be scored in a single chunk. top_k == 0 (all plays) is chunked to
   // batch_size.
-  params.max_batch_size = std::max({batch_size, top_k, 1});
-  params.precision = nn::parse_precision(precision);
+  net_params.max_batch_size = std::max({batch_size, top_k, 1});
+  net_params.precision = nn::parse_precision(precision);
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
-  return std::make_unique<NeuralAgent>(thread_id, name, model, top_k, obj, params, temperature,
-                                       resolved_seed);
+  return std::make_unique<NeuralAgent>(NeuralAgent::Params{.thread_id = thread_id,
+                                                           .name = name,
+                                                           .top_k = top_k,
+                                                           .objective = obj,
+                                                           .temperature = temperature,
+                                                           .seed = resolved_seed},
+                                       net_params);
 }
 
 std::string NeuralAgent::options_help() {

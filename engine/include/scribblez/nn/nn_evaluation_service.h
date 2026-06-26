@@ -30,8 +30,9 @@ class NNEvaluationService : public EvalService {
  public:
   explicit NNEvaluationService(const NeuralNetParams& params);
 
-  // Build/load the engine. Call once before evaluate().
-  void load(const std::string& onnx_path);
+  // Build/load the engine from the params' onnx_path. Call once before
+  // evaluate().
+  void load();
 
   // Evaluate `count` rows (`inputs` is count * kInputFloats floats) and write
   // `count` results into `out`. Blocks until inference completes.

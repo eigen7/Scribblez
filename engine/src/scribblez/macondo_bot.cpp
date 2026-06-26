@@ -21,16 +21,12 @@
 
 namespace scribblez {
 
-HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name)
-    : HastyBotAgent(thread_id, name, /*top_k=*/1, /*temperature=*/0.0, /*seed=*/0) {}
-
-HastyBotAgent::HastyBotAgent(int thread_id, const std::string& name, int top_k, double temperature,
-                             uint64_t seed, int temperature_min_bag)
-    : Agent(thread_id, name),
-      top_k_(top_k),
-      temperature_(temperature),
-      temperature_min_bag_(temperature_min_bag),
-      rng_(seed) {
+HastyBotAgent::HastyBotAgent(const Params& params)
+    : Agent(params.thread_id, params.name),
+      top_k_(params.top_k),
+      temperature_(params.temperature),
+      temperature_min_bag_(params.temperature_min_bag),
+      rng_(params.seed) {
   if (top_k_ < 1) throw std::runtime_error("hastybot: --top-k must be >= 1");
   if (temperature_ < 0.0) throw std::runtime_error("hastybot: --temperature must be >= 0");
   if (temperature_min_bag_ < 0)
@@ -433,8 +429,13 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
-  return std::make_unique<HastyBotAgent>(thread_id, name, top_k, temperature, resolved_seed,
-                                         temperature_min_bag);
+  return std::make_unique<HastyBotAgent>(
+    HastyBotAgent::Params{.thread_id = thread_id,
+                          .name = name,
+                          .top_k = top_k,
+                          .temperature = temperature,
+                          .seed = resolved_seed,
+                          .temperature_min_bag = temperature_min_bag});
 }
 
 std::string HastyBotAgent::options_help() {

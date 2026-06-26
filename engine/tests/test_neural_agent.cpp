@@ -240,7 +240,11 @@ static void test_topk_selection_uses_objective() {
   {
     auto stub = std::make_unique<StubEvalService>();
     StubEvalService* sp = stub.get();
-    NeuralAgent agent(0, "stub", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
+    NeuralAgent agent({.thread_id = 0,
+                       .name = "stub",
+                       .top_k = top_k,
+                       .objective = NeuralAgent::Objective::kScoreDiff},
+                      std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
     CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
@@ -250,7 +254,11 @@ static void test_topk_selection_uses_objective() {
   {
     auto stub = std::make_unique<StubEvalService>();
     StubEvalService* sp = stub.get();
-    NeuralAgent agent(0, "stub", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
+    NeuralAgent agent({.thread_id = 0,
+                       .name = "stub",
+                       .top_k = top_k,
+                       .objective = NeuralAgent::Objective::kScoreDiff},
+                      std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(9.0f), sd(1.0f)};
     CHECK(same_move(agent.make_move(req), pos.plays[order[0]]));
@@ -260,7 +268,11 @@ static void test_topk_selection_uses_objective() {
   {
     auto stub = std::make_unique<StubEvalService>();
     StubEvalService* sp = stub.get();
-    NeuralAgent agent(0, "stub-wp", std::move(stub), top_k, NeuralAgent::Objective::kWinProb);
+    NeuralAgent agent({.thread_id = 0,
+                       .name = "stub-wp",
+                       .top_k = top_k,
+                       .objective = NeuralAgent::Objective::kWinProb},
+                      std::move(stub));
     agent.begin_game();
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
     CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
@@ -285,7 +297,11 @@ static void test_topk_excludes_low_equity_play() {
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted = {sd(1.0f), sd(5.0f)};  // among the two survivors, processing-pos 1 wins
-  NeuralAgent agent(0, "topk", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff);
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "topk",
+                     .top_k = top_k,
+                     .objective = NeuralAgent::Objective::kScoreDiff},
+                    std::move(stub));
   agent.begin_game();
 
   Move got = agent.make_move(req);
@@ -318,7 +334,9 @@ static void test_all_moves_evaluated() {
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
   sp->scripted[static_cast<size_t>(lo)] = sd(9.0f);  // generation index == processing index
-  NeuralAgent agent(0, "full", std::move(stub), /*top_k=*/0, NeuralAgent::Objective::kScoreDiff);
+  NeuralAgent agent(
+    {.thread_id = 0, .name = "full", .top_k = 0, .objective = NeuralAgent::Objective::kScoreDiff},
+    std::move(stub));
   agent.begin_game();
 
   Move got = agent.make_move(req);
@@ -345,8 +363,9 @@ static void test_chunked_evaluation() {
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
   sp->scripted[static_cast<size_t>(target)] = sd(9.0f);
-  NeuralAgent agent(0, "chunk", std::move(stub), /*top_k=*/0, NeuralAgent::Objective::kScoreDiff,
-                    /*temperature=*/0.0, /*seed=*/0, /*max_batch=*/2);
+  NeuralAgent agent(
+    {.thread_id = 0, .name = "chunk", .top_k = 0, .objective = NeuralAgent::Objective::kScoreDiff},
+    std::move(stub), /*max_batch=*/2);
   agent.begin_game();
 
   Move got = agent.make_move(req);
@@ -379,8 +398,9 @@ static void test_encode_candidate_matches_replay() {
     make_play_full(9, 7, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
 
   // encode_candidate uses only the tracked encoder, so no model/service is run.
-  NeuralAgent agent(/*thread_id=*/0, "stub", std::make_unique<StubEvalService>(), /*top_k=*/4,
-                    NeuralAgent::Objective::kScoreDiff);
+  NeuralAgent agent(
+    {.thread_id = 0, .name = "stub", .top_k = 4, .objective = NeuralAgent::Objective::kScoreDiff},
+    std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move_a);
   agent.observe_move(move_b);
@@ -482,8 +502,9 @@ static void test_encode_candidate_matches_training_decoder() {
 
   // Inference path: the agent observes turns 0..1, then encodes the move played
   // at the sampled turn from the rack it holds there (CATERST -> ... -> DONERST).
-  NeuralAgent agent(/*thread_id=*/0, "stub", std::make_unique<StubEvalService>(), /*top_k=*/4,
-                    NeuralAgent::Objective::kScoreDiff);
+  NeuralAgent agent(
+    {.thread_id = 0, .name = "stub", .top_k = 4, .objective = NeuralAgent::Objective::kScoreDiff},
+    std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move0);
   agent.observe_move(move1);
@@ -516,8 +537,12 @@ static void test_temperature_sampling_spreads() {
   {
     auto stub = std::make_unique<StubEvalService>();
     StubEvalService* gp = stub.get();
-    NeuralAgent greedy(0, "greedy", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff,
-                       /*temperature=*/0.0);
+    NeuralAgent greedy({.thread_id = 0,
+                        .name = "greedy",
+                        .top_k = top_k,
+                        .objective = NeuralAgent::Objective::kScoreDiff,
+                        .temperature = 0.0},
+                       std::move(stub));
     greedy.begin_game();
     gp->scripted = {sd(2.0f), sd(0.0f)};
     for (int i = 0; i < 50; ++i) CHECK(same_move(greedy.make_move(req), pos.plays[order[0]]));
@@ -528,8 +553,13 @@ static void test_temperature_sampling_spreads() {
   {
     auto stub = std::make_unique<StubEvalService>();
     StubEvalService* sp = stub.get();
-    NeuralAgent sampler(0, "sampler", std::move(stub), top_k, NeuralAgent::Objective::kScoreDiff,
-                        /*temperature=*/5.0, /*seed=*/12345);
+    NeuralAgent sampler({.thread_id = 0,
+                         .name = "sampler",
+                         .top_k = top_k,
+                         .objective = NeuralAgent::Objective::kScoreDiff,
+                         .temperature = 5.0,
+                         .seed = 12345},
+                        std::move(stub));
     sampler.begin_game();
     sp->scripted = {sd(2.0f), sd(0.0f)};
     int high = 0, low = 0;

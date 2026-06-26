@@ -32,11 +32,12 @@ int main(int argc, char** argv) {
 
   try {
     scribblez::nn::NeuralNetParams params;
+    params.onnx_path = model;
     params.max_batch_size = std::max(rows, 1);
     params.precision = scribblez::nn::parse_precision(precision);
 
     scribblez::nn::NNEvaluationService service(params);
-    service.load(model);
+    service.load();
 
     // All-zero inputs (the canonical game-start-ish encoding); we only care that
     // the model produces finite, well-formed outputs.

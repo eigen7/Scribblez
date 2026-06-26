@@ -13,10 +13,11 @@
 // (N,15,15)). The input shapes mirror the constants in input_encoder.h, which
 // is the single source of truth for the encoding layout.
 //
-// load() builds a TensorRT engine from an ONNX file (or deserializes a cached
-// plan keyed by the model's content hash + precision + batch size + GPU
-// compute capability + TRT version), then allocates one execution context, one
-// CUDA stream, and pinned host + device buffers sized to max_batch_size.
+// load() builds a TensorRT engine from the ONNX file at params.onnx_path (or
+// deserializes a cached plan keyed by the model's content hash + precision +
+// batch size + GPU compute capability + TRT version), then allocates one
+// execution context, one CUDA stream, and pinned host + device buffers sized to
+// max_batch_size.
 //
 // predict() is blocking: it copies the host input rows to the GPU, runs the
 // engine, copies the wld and score_diff outputs back, and synchronizes the
@@ -29,6 +30,7 @@ namespace scribblez {
 namespace nn {
 
 struct NeuralNetParams {
+  std::string onnx_path;  // exported ONNX model load() builds from
   int cuda_device_id = 0;
   int max_batch_size = 256;
   Precision precision = Precision::kFP16;
@@ -44,9 +46,9 @@ class NeuralNet {
   NeuralNet(const NeuralNet&) = delete;
   NeuralNet& operator=(const NeuralNet&) = delete;
 
-  // Build (or load a cached) engine from the ONNX file at `onnx_path` and ready
-  // the GPU resources. Must be called exactly once before predict().
-  void load(const std::string& onnx_path);
+  // Build (or load a cached) engine from the ONNX file at params.onnx_path and
+  // ready the GPU resources. Must be called exactly once before predict().
+  void load();
 
   int max_batch_size() const;
 

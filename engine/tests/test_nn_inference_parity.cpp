@@ -78,10 +78,11 @@ static bool check_precision(const std::string& onnx_path, scribblez::nn::Precisi
                             const char* label, const std::vector<float>& inputs,
                             const std::vector<float>& expected, int n) {
   scribblez::nn::NeuralNetParams params;
+  params.onnx_path = onnx_path;
   params.max_batch_size = n;
   params.precision = precision;
   scribblez::nn::NNEvaluationService service(params);
-  service.load(onnx_path);
+  service.load();
 
   std::vector<Eval> evals = service.evaluate(inputs.data(), n);
 

@@ -2695,7 +2695,7 @@ namespace {
 class ShadowCheckAgent : public scribblez::Agent {
  public:
   ShadowCheckAgent(int tid, const std::string& name)
-      : scribblez::Agent(tid, name), bot_(tid, name) {}
+      : scribblez::Agent(tid, name), bot_({.thread_id = tid, .name = name}) {}
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
     const scribblez::Move shadow = bot_.make_move(req);
     const scribblez::Move ref = scribblez::hasty_best_move_reference(req);
@@ -2814,7 +2814,10 @@ class CapturingAgent : public scribblez::Agent {
  public:
   CapturingAgent(int tid, const std::string& name, std::vector<CapturedPos>& sink,
                  std::vector<CapturedPos>& blanked_sink)
-      : scribblez::Agent(tid, name), bot_(tid, name), sink_(sink), blanked_sink_(blanked_sink) {}
+      : scribblez::Agent(tid, name),
+        bot_({.thread_id = tid, .name = name}),
+        sink_(sink),
+        blanked_sink_(blanked_sink) {}
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
     auto& dst = req.my_rack.counts().blanks() == 0 ? sink_ : blanked_sink_;
     dst.push_back(
@@ -2871,7 +2874,7 @@ static void test_wmp_benchmark() {
 
   // Blanked racks fall back to the GADDAG path, so the WordMap bot must still pick
   // exactly the move HastyBot (make_move) does on them.
-  HastyBotAgent blank_bot(0, "blankcheck");
+  HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     CHECK(move_key(p.board, blank_bot.make_move(req)) ==
@@ -2923,7 +2926,7 @@ static void test_wmp_benchmark() {
   // The regime HastyBot actually uses: shadow best-first with early-exit, so only
   // a few anchors are ever generated. This is where WordMap lookup should beat
   // GADDAG (as MAGPIE's static move-gen does), because the lookup count collapses.
-  HastyBotAgent bot(0, "bench");
+  HastyBotAgent bot({.thread_id = 0, .name = "bench"});
   for (const CapturedPos& p : positions) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     const Move g = bot.make_move(req);

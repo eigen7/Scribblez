@@ -51,21 +51,31 @@ class NeuralAgent : public Agent {
   //                 chosen by from_spec().
   enum class Objective { kScoreDiff, kWinProb };
 
-  // Production constructor: builds an NNEvaluationService from `net_params` and
-  // loads `onnx_path` into it. `top_k` selects the candidate set (0 = all
-  // moves); `temperature` controls selection (0 == greedy argmax; > 0 == softmax
-  // sampling) and `seed` seeds that sampler.
-  NeuralAgent(int thread_id, const std::string& name, const std::string& onnx_path, int top_k,
-              Objective objective, const nn::NeuralNetParams& net_params, double temperature,
-              uint64_t seed);
+  // Agent identity plus move-selection configuration, shared by both
+  // constructors.
+  //   thread_id, name -- the base Agent identity.
+  //   top_k       -- candidate set: 0 evaluates every legal play; K > 0 keeps
+  //                  the top-K plays by HastyBot static equity.
+  //   objective   -- which model head ranks the candidates.
+  //   temperature -- 0 == greedy argmax; > 0 == softmax sampling.
+  //   seed        -- seeds the sampler (used only when temperature > 0).
+  struct Params {
+    int thread_id = 0;
+    std::string name;
+    int top_k = 0;
+    Objective objective = Objective::kWinProb;
+    double temperature = 0.0;
+    uint64_t seed = 0;
+  };
+
+  // Production constructor: builds an NNEvaluationService from `net_params`,
+  // loading the model at `net_params.onnx_path` into it.
+  NeuralAgent(const Params& params, const nn::NeuralNetParams& net_params);
 
   // Test/injection constructor: takes an already-constructed evaluator (real or
   // a scripted stub). Performs no model loading and touches no GPU. `max_batch`
-  // is the per-evaluate row limit the chunked evaluation respects. Defaults to
-  // greedy, deterministic selection so selection tests stay reproducible.
-  NeuralAgent(int thread_id, const std::string& name, std::unique_ptr<nn::EvalService> service,
-              int top_k, Objective objective, double temperature = 0.0, uint64_t seed = 0,
-              int max_batch = 256);
+  // is the per-evaluate row limit the chunked evaluation respects.
+  NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service, int max_batch = 256);
 
   Move make_move(const MoveRequest& req) override;
   void begin_game() override;
@@ -92,9 +102,8 @@ class NeuralAgent : public Agent {
   void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, float* dst) const;
 
  private:
-  // Build an NNEvaluationService from `net_params` and load `onnx_path` into it.
-  static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params,
-                                                       const std::string& onnx_path);
+  // Build an NNEvaluationService from `net_params` and load its model into it.
+  static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params);
 
   // Validate parameters and size the input scratch buffer. Shared by both ctors.
   void init();

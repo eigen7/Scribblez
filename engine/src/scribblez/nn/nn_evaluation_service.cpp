@@ -36,7 +36,7 @@ void fill_wld(const float* logits, Eval& e) {
 
 NNEvaluationService::NNEvaluationService(const NeuralNetParams& params) : net_(params) {}
 
-void NNEvaluationService::load(const std::string& onnx_path) { net_.load(onnx_path); }
+void NNEvaluationService::load() { net_.load(); }
 
 void NNEvaluationService::evaluate(const float* inputs, int count, Eval* out) {
   const int batch = net_.max_batch_size();

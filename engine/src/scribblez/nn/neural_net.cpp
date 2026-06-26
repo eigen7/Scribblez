@@ -217,10 +217,10 @@ NeuralNet::NeuralNet(const NeuralNetParams& params) : impl_(std::make_unique<Imp
 
 NeuralNet::~NeuralNet() = default;
 
-void NeuralNet::load(const std::string& onnx_path) {
+void NeuralNet::load() {
   set_device(impl_->params.cuda_device_id);
 
-  std::vector<char> onnx_bytes = read_file_bytes(onnx_path);
+  std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
   std::string hash = content_hash(onnx_bytes);
   std::string cache_path = engine_plan_cache_path(
     hash, impl_->params.precision, impl_->params.max_batch_size, impl_->params.mount_root);

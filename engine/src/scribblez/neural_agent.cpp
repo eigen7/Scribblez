@@ -18,16 +18,15 @@ namespace scribblez {
 
 using binlog::kInputFloats;
 
-NeuralAgent::NeuralAgent(int thread_id, const std::string& name,
-                         std::unique_ptr<nn::EvalService> service, int top_k, Objective objective,
-                         double temperature, uint64_t seed, int max_batch)
-    : Agent(thread_id, name),
-      top_k_(top_k),
-      objective_(objective),
-      temperature_(temperature),
+NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
+                         int max_batch)
+    : Agent(params.thread_id, params.name),
+      top_k_(params.top_k),
+      objective_(params.objective),
+      temperature_(params.temperature),
       max_batch_(max_batch),
       service_(std::move(service)),
-      rng_(seed) {
+      rng_(params.seed) {
   init();
 }
 
