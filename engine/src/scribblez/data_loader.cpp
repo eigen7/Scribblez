@@ -42,7 +42,7 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
 // cum.back() = total expanded rows). Sets `num_games`. On any read failure,
 // returns a one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
 std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& num_games,
-                                       int64_t num_games_fallback) {
+                                              int64_t num_games_fallback) {
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
@@ -468,50 +468,51 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
   order_.clear();
 
   if (config.turns_per_game <= 0) {
-    build_full_order(files, config);
+    collect_full_order(files);
   } else {
-    build_sampled_order(files, config);
+    collect_sampled_order(files, config);
   }
+
+  // The one and only ordering shuffle: a single global shuffle over every
+  // sample of every file. next_batch() slices contiguous windows of order_, so
+  // this is what decorrelates a batch -- without it, a batch would draw mostly
+  // from one file's games (samples sit in order_ grouped by file). The
+  // selection of *which* turns each game contributes is done above and is
+  // independent of this shuffle.
+  std::mt19937_64 rng(config.seed);
+  std::shuffle(order_.begin(), order_.end(), rng);
 
   total_positions_ = static_cast<int64_t>(order_.size());
   build_flips(config);
 }
 
-void DataLoader::SamplingManager::build_full_order(const std::vector<DataFile*>& files,
-                                                   const EpochConfig& config) {
+void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*>& files) {
   int64_t total = 0;
   for (auto* f : files) total += f->num_positions();
   order_.reserve(static_cast<size_t>(total));
 
-  // For each file (in caller-provided shuffled order), append a shuffled
-  // permutation of its local positions.
+  // Every flat position of every file, in file-then-position order. build_epoch
+  // shuffles order_ globally afterwards.
   for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
     const int64_t n = files[fi]->num_positions();
-    std::vector<int64_t> perm(static_cast<size_t>(n));
-    std::iota(perm.begin(), perm.end(), int64_t{0});
-    std::mt19937_64 pos_rng(config.seed ^ static_cast<uint64_t>(fi + 1));
-    std::shuffle(perm.begin(), perm.end(), pos_rng);
-    for (int64_t p : perm) {
+    for (int64_t p = 0; p < n; ++p) {
       order_.push_back(EpochPosition{fi, p});
     }
   }
 }
 
-void DataLoader::SamplingManager::build_sampled_order(const std::vector<DataFile*>& files,
-                                                      const EpochConfig& config) {
-  // For each file, sample config.turns_per_game turns from every game, then
-  // shuffle that file's sampled rows so a batch isn't a run of one file's games
-  // in game order.
+void DataLoader::SamplingManager::collect_sampled_order(const std::vector<DataFile*>& files,
+                                                        const EpochConfig& config) {
+  // For each file, select config.turns_per_game turns from every game. The
+  // resulting rows are left grouped by file; build_epoch shuffles order_
+  // globally afterwards.
   for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
     DataFile* f = files[fi];
     const uint64_t file_key = std::hash<std::string>{}(f->path());
-    const size_t begin = order_.size();
     for (int64_t g = 0; g < f->num_games(); ++g) {
       append_game_turns(fi, g, f->eligible_turns(g), f->game_base(g), file_key,
                         config.turns_per_game, config.epoch_index);
     }
-    std::mt19937_64 pos_rng(config.seed ^ static_cast<uint64_t>(fi + 1));
-    std::shuffle(order_.begin() + static_cast<std::ptrdiff_t>(begin), order_.end(), pos_rng);
   }
 }
 
@@ -620,16 +621,15 @@ int DataLoader::epoch_start(const EpochConfig& config) {
   std::lock_guard<std::mutex> lock(epoch_mu_);
   epoch_config_ = config;
 
-  // Snapshot and shuffle files.
+  // Snapshot the files. Their order doesn't matter: SamplingManager globally
+  // shuffles the per-sample epoch plan, so file_idx assignment is irrelevant to
+  // batch composition.
   epoch_files_ = file_manager_.snapshot_files();
 
   if (epoch_files_.empty() || config.batch_size <= 0) {
     epoch_active_ = false;
     return 0;
   }
-
-  std::mt19937_64 file_rng(config.seed);
-  std::shuffle(epoch_files_.begin(), epoch_files_.end(), file_rng);
 
   sampling_manager_.build_epoch(epoch_files_, config);
   epoch_active_ = true;

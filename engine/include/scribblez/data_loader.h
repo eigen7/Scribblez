@@ -16,9 +16,10 @@
 // Sampling model
 // --------------
 // Each .slog file records one (turn-index) sample point per game, picked
-// at write-time. Shuffling is done internally: epoch_start() shuffles
-// file order and position indices within each file, all deterministically
-// seeded by the caller-provided seed.
+// at write-time. epoch_start() selects which rows the epoch contains, then
+// applies a single global shuffle over all selected rows across all files
+// (deterministically seeded by the caller-provided seed), so a batch draws
+// uniformly from the whole epoch rather than from one file's games.
 //
 // Output row layout (row_size_floats() floats per row)
 // ----------------------------------------------------
@@ -366,13 +367,13 @@ class DataLoader {
       int64_t local_pos;
     };
 
-    // Build order_ for an all-turns epoch: every flat position of every file,
-    // shuffled within each file.
-    void build_full_order(const std::vector<DataFile*>& files, const EpochConfig& config);
+    // Collect order_ for an all-turns epoch: every flat position of every file,
+    // grouped by file. build_epoch shuffles order_ globally afterwards.
+    void collect_full_order(const std::vector<DataFile*>& files);
 
-    // Build order_ for a subsampled epoch: config.turns_per_game turns drawn per
-    // game, shuffled within each file.
-    void build_sampled_order(const std::vector<DataFile*>& files, const EpochConfig& config);
+    // Collect order_ for a subsampled epoch: config.turns_per_game turns drawn
+    // per game, grouped by file. build_epoch shuffles order_ globally afterwards.
+    void collect_sampled_order(const std::vector<DataFile*>& files, const EpochConfig& config);
 
     // Append one game's sampled turns to order_. `n` is the game's eligible-turn
     // count, `base` its first flat position; the turns are picked from a fixed
