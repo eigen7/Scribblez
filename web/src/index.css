@@ -34,6 +34,33 @@ h1 {
   text-transform: uppercase;
 }
 
+/* The manual tool's title holds an editable game-name field, so it reads in
+   normal case rather than the spaced-out uppercase of other titles. */
+.manual-title {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.game-name-input {
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-bottom: 2px dashed #4a6278;
+  min-width: 240px;
+  padding: 0 6px;
+}
+
+.game-name-input::placeholder {
+  color: #8aa0b4;
+}
+
+.game-name-input:focus {
+  outline: none;
+  border-bottom-color: #aed581;
+}
+
 .game-layout {
   display: flex;
   gap: 20px;

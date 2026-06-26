@@ -138,7 +138,9 @@ async function saveViaPicker(
   if (picker) {
     let handle;
     try {
-      handle = await picker({ suggestedName, types: [{ accept }] });
+      // A shared `id` makes the browser reopen in the last directory used for
+      // either export; `startIn` is the first-time default (the Downloads dir).
+      handle = await picker({ suggestedName, id: 'scribblez-save', startIn: 'downloads', types: [{ accept }] });
     } catch (e) {
       if ((e as { name?: string })?.name !== 'AbortError') setStatus('Failed to open save dialog.');
       return; // user cancelled
@@ -173,6 +175,10 @@ function AppManual() {
   const [state, setState] = useState<ManualState | null>(null);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState('');
+  // The game's title; also the default base name for GCG/PNG exports (with
+  // characters illegal in filenames stripped).
+  const [gameName, setGameName] = useState('');
+  const exportBase = gameName.trim().replace(/[\\/:*?"<>|]/g, '') || 'Untitled';
   const [candidateTiles, setCandidateTiles] = useState<ManualCandidate[]>([]);
   const [cursorRow, setCursorRow] = useState<number | null>(null);
   const [cursorCol, setCursorCol] = useState<number | null>(null);
@@ -592,12 +598,12 @@ function AppManual() {
     const text = state?.gcg_text ?? '';
     return saveViaPicker(
       async () => new Blob([text], { type: 'text/plain' }),
-      'manual_position.gcg',
+      `${exportBase}.gcg`,
       { 'text/plain': ['.gcg'] },
       'GCG',
       setStatus,
     );
-  }, [state?.gcg_text]);
+  }, [state?.gcg_text, exportBase]);
 
   // Render the board + racks + history + sidebar to a PNG matching the
   // on-screen look, and save it via the same native dialog. The page title is
@@ -621,12 +627,12 @@ function AppManual() {
         if (!blob) throw new Error('render failed');
         return blob;
       },
-      'manual_position.png',
+      `${exportBase}.png`,
       { 'image/png': ['.png'] },
       'PNG',
       setStatus,
     );
-  }, []);
+  }, [exportBase]);
 
   const newGame = () => {
     send({ type: 'reset' });
@@ -671,10 +677,23 @@ function AppManual() {
     clearEntry();
   }, [state?.backtracking, clearEntry]);
 
+  const titleBar = (
+    <h1 className="manual-title">
+      Game:{' '}
+      <input
+        className="game-name-input"
+        value={gameName}
+        placeholder="[Untitled]"
+        maxLength={60}
+        onChange={(e) => setGameName(e.target.value)}
+      />
+    </h1>
+  );
+
   if (!connected) {
     return (
       <div className="container">
-        <h1>Scribblez Manual GCG Tool</h1>
+        {titleBar}
         <p>Connecting to backend...</p>
         <button onClick={connect}>Reconnect</button>
       </div>
@@ -684,7 +703,7 @@ function AppManual() {
   if (!state) {
     return (
       <div className="container">
-        <h1>Scribblez Manual GCG Tool</h1>
+        {titleBar}
         <p>Loading state...</p>
       </div>
     );
@@ -717,7 +736,7 @@ function AppManual() {
 
   return (
     <div className="container">
-      <h1>Scribblez Manual GCG Tool</h1>
+      {titleBar}
       <div className="manual-layout" ref={layoutRef}>
         <div className="manual-board-section">
           <div
