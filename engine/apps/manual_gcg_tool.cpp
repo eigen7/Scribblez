@@ -60,12 +60,10 @@ struct DisplaySlot {
 };
 using RackDisplay = std::array<DisplaySlot, kRackSlots>;
 
-// A rack's slots for display. A revealed tile is KNOWN. An empty slot is hidden:
-// while tiles remain in the bag the player holds a full rack, so it is a
-// present-but-unknown "?"; once the bag is empty the player holds only their
-// revealed tiles, so the remaining slots are genuinely absent (empty space).
-RackDisplay display_from_slots(const RackSlots& slots, bool bag_empty) {
-  const RackSlotState hidden = bag_empty ? RackSlotState::EMPTY : RackSlotState::UNKNOWN;
+// A rack's slots for display. A revealed tile is KNOWN; every other slot takes
+// `hidden`: UNKNOWN ("?") when the rack is assumed full but its tiles aren't
+// known, or EMPTY when the player is known to hold only their revealed tiles.
+RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   RackDisplay display;
   for (int i = 0; i < kRackSlots; ++i) {
     if (slots[i].has_value()) {
@@ -297,8 +295,7 @@ class ManualGame {
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
     const int bag_count = bag_estimate(snap.board);
-    const std::array<RackDisplay, 2> display_racks =
-      display_racks_for_view(view_ply_, snap.racks, bag_count == 0);
+    const std::array<RackDisplay, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
 
     boost::json::object o;
     o["type"] = "manual_state";
@@ -675,8 +672,8 @@ class ManualGame {
       status_ = "Already at latest position";
       return;
     }
-    const std::array<RackDisplay, 2> fork_racks = display_racks_for_view(
-      view_ply_, snapshots_[view_ply_].racks, bag_estimate(snapshots_[view_ply_].board) == 0);
+    const std::array<RackDisplay, 2> fork_racks =
+      display_racks_for_view(view_ply_, snapshots_[view_ply_].racks);
     end_adjustments_.clear();
     turns_.resize(view_ply_);
     snapshots_.resize(static_cast<std::size_t>(view_ply_ + 1));
@@ -887,7 +884,7 @@ class ManualGame {
     return fallback;
   }
 
-  RackDisplay post_move_rack_from_turn(const ManualTurn& t, bool bag_empty) const {
+  RackDisplay post_move_rack_from_turn(const ManualTurn& t) const {
     std::array<RackSlotState, kRackSlots> state;
     std::array<std::optional<Tile>, kRackSlots> letters;
     for (int i = 0; i < kRackSlots; ++i) {
@@ -909,18 +906,11 @@ class ManualGame {
     // Show the player's leave: the tiles still in hand after the move. Played
     // tiles leave their slots empty, and drawn replacements are not displayed
     // (they render as empty space too). Remaining known tiles render as
-    // themselves; a remaining hidden tile is a "?" while the bag still holds
-    // tiles, or empty space once the bag is exhausted (the player holds only
-    // their revealed tiles).
+    // themselves; a remaining hidden tile renders as "?".
     RackDisplay out;
     for (int i = 0; i < kRackSlots; ++i) {
-      if (state[i] == RackSlotState::KNOWN) {
-        out[i] = {RackSlotState::KNOWN, letters[i].value()};
-      } else if (state[i] == RackSlotState::UNKNOWN && !bag_empty) {
-        out[i].state = RackSlotState::UNKNOWN;
-      } else {
-        out[i].state = RackSlotState::EMPTY;
-      }
+      out[i].state = state[i];
+      if (state[i] == RackSlotState::KNOWN) out[i].tile = letters[i].value();
     }
     return out;
   }
@@ -944,27 +934,31 @@ class ManualGame {
     }
   }
 
-  std::array<RackDisplay, 2> display_racks_for_view(int view_ply,
-                                                    const std::array<RackSlots, 2>& fallback,
-                                                    bool bag_empty) const {
-    std::array<RackDisplay, 2> out = {display_from_slots(fallback[0], bag_empty),
-                                      display_from_slots(fallback[1], bag_empty)};
+  std::array<RackDisplay, 2> display_racks_for_view(
+    int view_ply, const std::array<RackSlots, 2>& fallback) const {
+    // An unrevealed slot of a rack we have no count for is assumed to be a held
+    // (present) tile, shown as "?". A rack might legitimately be full and hidden
+    // even at the end of the game (e.g. the opponent's rack after the final
+    // play), so empty slots are not inferred from the bag being empty.
+    std::array<RackDisplay, 2> out = {display_from_slots(fallback[0], RackSlotState::UNKNOWN),
+                                      display_from_slots(fallback[1], RackSlotState::UNKNOWN)};
     if (view_ply <= 0 || view_ply > static_cast<int>(turns_.size())) return out;
 
     const ManualTurn& viewed = turns_[view_ply - 1];
     const int mover = viewed.record.player;
     const int waiting = 1 - mover;
 
-    out[mover] = post_move_rack_from_turn(viewed, bag_empty);
-    out[waiting] =
-      display_from_slots(next_known_rack_before(waiting, view_ply, fallback[waiting]), bag_empty);
+    out[mover] = post_move_rack_from_turn(viewed);
+    out[waiting] = display_from_slots(next_known_rack_before(waiting, view_ply, fallback[waiting]),
+                                      RackSlotState::UNKNOWN);
 
     // At the final position, the player who didn't go out still holds their
     // leftover tiles. These survive only in the end-of-game adjustment (the
-    // per-turn racks are cleared after each move), so reveal them here.
+    // per-turn racks are cleared after each move), so reveal them here. The
+    // adjustment lists their whole rack, so any other slot is genuinely empty.
     if (view_ply == static_cast<int>(turns_.size())) {
       if (const auto tiles = end_rack_tiles_for(waiting)) {
-        out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), bag_empty);
+        out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
       }
     }
     return out;
