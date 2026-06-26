@@ -740,6 +740,35 @@ h1 {
   font-size: 13px;
 }
 
+.board-validation {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  border: 1px solid transparent;
+}
+
+.board-validation.valid {
+  background: rgba(39, 174, 96, 0.15);
+  border-color: #27ae60;
+  color: #aed581;
+}
+
+.board-validation.invalid {
+  background: rgba(231, 76, 60, 0.12);
+  border-color: #e74c3c;
+  color: #f5b7b1;
+}
+
+.board-validation ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.board-validation li {
+  margin: 2px 0;
+}
+
 .manual-bag-tiles {
   display: flex;
   flex-wrap: wrap;

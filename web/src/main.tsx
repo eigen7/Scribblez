@@ -2,11 +2,12 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import AppManual from './AppManual';
+import AppBoard from './AppBoard';
 import './index.css';
 
 const params = new URLSearchParams(window.location.search);
 const tool = params.get('tool');
-const Root = tool === 'manual' ? AppManual : App;
+const Root = tool === 'manual' ? AppManual : tool === 'board' ? AppBoard : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

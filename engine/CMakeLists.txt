@@ -83,6 +83,15 @@ target_link_libraries(manual_gcg_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+add_executable(board_tool apps/board_tool.cpp)
+target_link_libraries(board_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 add_executable(scribblez_tests
   tests/tests_main.cpp
   src/scribblez/hasty_equity.cpp

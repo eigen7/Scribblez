@@ -196,6 +196,46 @@ function AppManual() {
     [state?.last_move],
   );
 
+  // Remaining count in the bag for each key (letter, or '?' for the blank),
+  // after accounting for tiles already on the board, on known rack slots, and
+  // staged as candidate plays. Used both to render the unseen pool and to block
+  // placing a tile the bag can't supply.
+  const bagRemaining = useMemo(() => {
+    const remaining: Record<string, number> = {};
+    if (!state) return remaining;
+    const gone: Record<string, number> = {};
+    for (const rack of state.racks) {
+      for (const t of rack) {
+        if (t.known) gone[t.letter] = (gone[t.letter] ?? 0) + 1;
+      }
+    }
+    for (const row of state.board) {
+      for (const cell of row) {
+        if (!cell) continue;
+        const key = cell >= 'a' && cell <= 'z' ? '?' : cell;
+        gone[key] = (gone[key] ?? 0) + 1;
+      }
+    }
+    for (const t of candidateTiles) {
+      if (t.source !== 'bag') continue;
+      const key = t.isBlank ? '?' : t.letter;
+      gone[key] = (gone[key] ?? 0) + 1;
+    }
+    for (const [letter, total] of DISTRIBUTION) {
+      remaining[letter] = Math.max(0, total - (gone[letter] ?? 0));
+    }
+    return remaining;
+  }, [state, candidateTiles]);
+
+  const bagBlocks = useCallback(
+    (key: string): boolean => {
+      if ((bagRemaining[key] ?? 0) > 0) return false;
+      setStatus(key === '?' ? 'No blank tiles left in the bag' : `No ${key} tiles left in the bag`);
+      return true;
+    },
+    [bagRemaining],
+  );
+
   const onCellDrop = (row: number, col: number, payload: DragTilePayload) => {
     if (!state) return;
     if (interactionLocked) return;
@@ -209,6 +249,8 @@ function AppManual() {
       : payload.rackIndex != null
         ? { source: 'rack', slot: payload.rackIndex }
         : { source: 'bag' };
+    // A tile drawn from the bag can only be placed if the bag still has it.
+    if (source.source === 'bag' && bagBlocks(payload.isBlank ? '?' : letter)) return;
     if (payload.isBlank) {
       setBlankPending({ row, col, source });
       return;
@@ -295,6 +337,7 @@ function AppManual() {
       if (r >= 15 || c >= 15) return;
 
       const isBlank = e.shiftKey;
+      if (bagBlocks(isBlank ? '?' : letter)) return;
       setCandidateTiles((prev) => [...prev, { row: r, col: c, letter, isBlank, source: 'bag' }]);
       if (cursorDir === 'horizontal') setCursorCol(Math.min(14, c + 1));
       else setCursorRow(Math.min(14, r + 1));
@@ -315,6 +358,7 @@ function AppManual() {
     candidateMap,
     submitMove,
     send,
+    bagBlocks,
   ]);
 
   // Left/right arrows step backward/forward through the move history. Skipped
@@ -551,35 +595,9 @@ function AppManual() {
     );
   }
 
-  const knownRackCounts: Record<string, number> = {};
-  for (const rack of state.racks) {
-    for (const t of rack) {
-      if (!t.known) continue;
-      knownRackCounts[t.letter] = (knownRackCounts[t.letter] ?? 0) + 1;
-    }
-  }
-
-  const boardCounts: Record<string, number> = {};
-  for (const row of state.board) {
-    for (const cell of row) {
-      if (!cell) continue;
-      const isBlank = cell >= 'a' && cell <= 'z';
-      const key = isBlank ? '?' : cell;
-      boardCounts[key] = (boardCounts[key] ?? 0) + 1;
-    }
-  }
-
-  const candidateBagCounts: Record<string, number> = {};
-  for (const t of candidateTiles) {
-    if (t.source !== 'bag') continue;
-    const key = t.isBlank ? '?' : t.letter;
-    candidateBagCounts[key] = (candidateBagCounts[key] ?? 0) + 1;
-  }
-
   const unseenSlots: UnseenSlot[] = [];
   for (const [letter, total] of DISTRIBUTION) {
-    const gone = (knownRackCounts[letter] ?? 0) + (boardCounts[letter] ?? 0) + (candidateBagCounts[letter] ?? 0);
-    const remain = Math.max(0, total - gone);
+    const remain = bagRemaining[letter] ?? 0;
     for (let i = 0; i < remain; ++i) unseenSlots.push({ letter, present: true });
     for (let i = remain; i < total; ++i) unseenSlots.push({ letter, present: false });
   }

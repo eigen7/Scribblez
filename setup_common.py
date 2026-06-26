@@ -36,6 +36,7 @@ MINIMUM_REQUIRED_IMAGE_VERSION = "3.0.0"
 REQUIRED_PORTS = [
     5173,  # Vite dev server (browser UI)
     5174,  # Vite dev server (browser UI)
+    5175,  # Vite dev server (browser UI)
     8080,  # engine WebSocket (default human_web_agent --port)
     5006,  # Bokeh training-metrics dashboard
 ]
