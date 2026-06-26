@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toPng } from 'html-to-image';
 import Board from './components/Board';
 import Rack from './components/Rack';
 import ScoreBoard from './components/ScoreBoard';
@@ -128,6 +129,7 @@ function AppManual() {
     source: CandidateSource;
   } | null>(null);
   const loadInputRef = useRef<HTMLInputElement | null>(null);
+  const layoutRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const interactionLocked = !!state?.backtracking;
@@ -533,6 +535,33 @@ function AppManual() {
     send({ type: 'export', path });
   };
 
+  // Render the board + racks + history + sidebar to a PNG matching the
+  // on-screen look, and save it to a path the user picks (the backend writes
+  // the file, mirroring Export GCG). The page title is outside the captured
+  // node; the action bars, status line, and cursor hint are filtered out.
+  const exportPng = useCallback(async () => {
+    const node = layoutRef.current;
+    if (!node) return;
+    const path = window.prompt('Export PNG path', '/workspace/repo/manual_position.png');
+    if (!path) return;
+    try {
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: getComputedStyle(document.body).backgroundColor || '#1a2632',
+        filter: (el) =>
+          !(
+            el instanceof HTMLElement &&
+            (el.classList.contains('action-bar') ||
+              el.classList.contains('manual-status') ||
+              el.classList.contains('cursor-hint'))
+          ),
+      });
+      send({ type: 'export_png', path, data: dataUrl.split(',')[1] ?? '' });
+    } catch {
+      setStatus('Failed to export PNG.');
+    }
+  }, [send]);
+
   const newGame = () => {
     send({ type: 'reset' });
     clearEntry();
@@ -623,7 +652,7 @@ function AppManual() {
   return (
     <div className="container">
       <h1>Scribblez Manual GCG Tool</h1>
-      <div className="manual-layout">
+      <div className="manual-layout" ref={layoutRef}>
         <div className="manual-board-section">
           <div
             className={`manual-rack-row top${
@@ -733,6 +762,7 @@ function AppManual() {
             <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
             <button className="btn btn-pass" onClick={triggerLoad}>Load Game</button>
             <button className="btn btn-exchange" onClick={exportGcg}>Export GCG</button>
+            <button className="btn btn-exchange" onClick={exportPng}>Export PNG</button>
             <input
               ref={loadInputRef}
               type="file"

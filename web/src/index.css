@@ -114,9 +114,12 @@ h1 {
   box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-/* Tiles placed by the most recent move (offline position renders). */
+/* Tiles placed by the most recent move: a warm tile tint plus an orange border,
+   instead of an inset ring, so the score in the lower-right corner stays clear. */
 .board-cell.has-tile.last-move {
-  box-shadow: inset 0 0 0 3px #e67e22, 1px 1px 2px rgba(0, 0, 0, 0.3);
+  background: #f0b86e;
+  border-color: #e67e22;
+  box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .tile-letter {

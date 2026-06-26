@@ -457,12 +457,18 @@ void WebSession::send_text(const std::string& msg) {
 
 std::optional<std::string> WebSession::recv_text() {
   if (ws_fd_ < 0) return std::nullopt;
+  // Accumulates the payload of a fragmented message: a data frame with FIN
+  // clear, followed by continuation frames (opcode 0x0) until one has FIN set.
+  // Browsers fragment large messages (e.g. a big PNG export), so we must
+  // reassemble rather than return the first frame.
+  std::string message;
   for (;;) {
     uint8_t hdr[2];
     if (!read_n(ws_fd_, hdr, 2)) {
       disconnect();
       return std::nullopt;
     }
+    bool fin = (hdr[0] & 0x80) != 0;
     int opcode = hdr[0] & 0x0f;
     bool masked = (hdr[1] & 0x80) != 0;
     uint64_t len = hdr[1] & 0x7f;
@@ -496,8 +502,12 @@ std::optional<std::string> WebSession::recv_text() {
       for (uint64_t i = 0; i < len; ++i) payload[i] ^= mask[i & 3];
 
     switch (opcode) {
+      case 0x0:  // continuation
       case 0x1:  // text
-        return payload;
+      case 0x2:  // binary
+        message += payload;
+        if (fin) return message;
+        break;   // more fragments to come
       case 0x8:  // close
         disconnect();
         return std::nullopt;
@@ -513,7 +523,7 @@ std::optional<std::string> WebSession::recv_text() {
         break;
       }
       default:
-        break;  // pong / continuation / binary: ignore
+        break;  // pong: ignore
     }
   }
 }

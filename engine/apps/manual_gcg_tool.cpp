@@ -10,6 +10,7 @@
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/web_server.h"
+#include "util/encoding.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -799,6 +800,27 @@ class ManualGame {
     return true;
   }
 
+  // Write a PNG rendered by the browser (base64, no data-URL prefix) to `path`.
+  void export_png(const std::string& path, const std::string& base64_data) {
+    if (path.empty()) {
+      status_ = "No export path given";
+      return;
+    }
+    std::filesystem::path p(path);
+    if (p.has_parent_path()) {
+      std::error_code ec;
+      std::filesystem::create_directories(p.parent_path(), ec);
+    }
+    const std::string bytes = util::base64_decode(base64_data);
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+      status_ = "Failed to open export path: " + path;
+      return;
+    }
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    status_ = "Exported " + path;
+  }
+
  private:
   Rack rack_known_tiles_from_slots(const RackSlots& slots) const {
     Rack r;
@@ -1087,6 +1109,10 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
   }
   if (type == "export") {
     game.export_gcg(str_field(obj, "path"));
+    return;
+  }
+  if (type == "export_png") {
+    game.export_png(str_field(obj, "path"), str_field(obj, "data"));
     return;
   }
   if (type == "reset") {
