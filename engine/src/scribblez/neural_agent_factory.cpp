@@ -20,9 +20,63 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 
 namespace scribblez {
+
+namespace {
+
+namespace po = boost::program_options;
+
+// Parsed `--type=neural` option values, with their defaults. A single
+// options_description is built over these fields (make_options_description) and
+// reused for both parsing (from_spec) and help rendering (options_help), so the
+// two can never drift.
+struct NeuralOptions {
+  std::string model;
+  int top_k = 10;
+  int batch_size = 256;
+  int cuda_device = 0;
+  std::string precision = "FP16";
+  std::string objective = "winprob";
+  double temperature = 0.0;
+  uint64_t seed = 0;
+};
+
+// Boost.program_options renders defaults set via default_value() as "(=...)" in
+// the help text, so the option descriptions deliberately omit them.
+po::options_description make_options_description(NeuralOptions& opts) {
+  po::options_description desc("Neural agent (--type=neural) options");
+  desc.add_options()
+    ("model,m", po::value<std::string>(&opts.model), "exported ONNX model (required)")(
+      "top-k,k", po::value<int>(&opts.top_k)->default_value(opts.top_k),
+      "candidate plays to evaluate: K>0 = top-K by static equity; 0 = ALL legal plays (most "
+      "diverse, but slowest -- every play hits the GPU)")(
+      "objective,o", po::value<std::string>(&opts.objective)->default_value(opts.objective),
+      "selection head: winprob = highest P(win)+0.5*P(draw); scorediff = highest expected final "
+      "score differential")("batch-size,b",
+                            po::value<int>(&opts.batch_size)->default_value(opts.batch_size),
+                            "max GPU batch")(
+      "cuda-device,d", po::value<int>(&opts.cuda_device)->default_value(opts.cuda_device),
+      "GPU index")("precision,p",
+                   po::value<std::string>(&opts.precision)->default_value(opts.precision),
+                   "TensorRT precision: FP16|FP32")(
+      "temperature,t", po::value<double>(&opts.temperature)->default_value(opts.temperature),
+      "softmax move-sampling temperature (0 = greedy argmax)")(
+      "seed,s", po::value<uint64_t>(&opts.seed), "sampling PRNG seed (default: SeedProducer)");
+  return desc;
+}
+
+NeuralAgent::Objective parse_objective(const std::string& objective) {
+  if (objective == "scorediff") return NeuralAgent::Objective::kScoreDiff;
+  if (objective == "winprob") return NeuralAgent::Objective::kWinProb;
+  throw std::runtime_error("--objective must be 'scorediff' or 'winprob' (got '" + objective +
+                           "')");
+}
+
+}  // namespace
 
 NeuralAgent::NeuralAgent(const Params& params, const nn::NeuralNetParams& net_params)
     : Agent(params.thread_id, params.name),
@@ -43,32 +97,10 @@ std::unique_ptr<nn::EvalService> NeuralAgent::make_service(const nn::NeuralNetPa
 
 std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::string>& tokens,
                                                     int thread_id, const std::string& name) {
-  namespace po = boost::program_options;
+  NeuralOptions opts;
+  po::options_description desc = make_options_description(opts);
 
-  std::string model;
-  int top_k = 10;
-  int batch_size = 256;
-  int cuda_device = 0;
-  std::string precision = "FP16";
-  std::string objective = "winprob";
-  double temperature = 0.0;
-  uint64_t seed = 0;
   bool have_seed = false;
-
-  po::options_description desc("neural options");
-  desc.add_options()                                                                         //
-    ("model", po::value<std::string>(&model), "path to the exported ONNX model (required)")  //
-    ("top-k", po::value<int>(&top_k)->default_value(top_k),
-     "candidate moves to evaluate: K>0 = top-K by static equity, 0 = all plays")              //
-    ("batch-size", po::value<int>(&batch_size)->default_value(batch_size), "max GPU batch")   //
-    ("cuda-device", po::value<int>(&cuda_device)->default_value(cuda_device), "GPU index")    //
-    ("precision", po::value<std::string>(&precision)->default_value(precision), "FP16|FP32")  //
-    ("temperature", po::value<double>(&temperature)->default_value(temperature),
-     "softmax sampling temperature (0 = greedy argmax)")                                //
-    ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)")  //
-    ("objective", po::value<std::string>(&objective)->default_value(objective),
-     "selection objective: scorediff|winprob");
-
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
@@ -78,57 +110,40 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
     throw std::runtime_error(std::string("bad --type=neural options: ") + e.what());
   }
 
-  if (model.empty()) throw std::runtime_error("--type=neural requires --model=<path.onnx>");
-  if (top_k < 0) throw std::runtime_error("--top-k must be >= 0 (0 = all legal plays)");
+  if (opts.model.empty()) throw std::runtime_error("--type=neural requires --model=<path.onnx>");
+  if (opts.top_k < 0) throw std::runtime_error("--top-k must be >= 0 (0 = all legal plays)");
 
-  Objective obj;
-  if (objective == "scorediff") {
-    obj = Objective::kScoreDiff;
-  } else if (objective == "winprob") {
-    obj = Objective::kWinProb;
-  } else {
-    throw std::runtime_error("--objective must be 'scorediff' or 'winprob' (got '" + objective +
-                             "')");
-  }
+  const Objective obj = parse_objective(opts.objective);
 
   nn::NeuralNetParams net_params;
-  net_params.onnx_path = model;
-  net_params.cuda_device_id = cuda_device;
+  net_params.onnx_path = opts.model;
+  net_params.cuda_device_id = opts.cuda_device;
   // The agent always chunks candidates to max_batch_size, so any value is
   // correct; sizing the engine batch to at least top_k just lets the whole
   // top-K set be scored in a single chunk. top_k == 0 (all plays) is chunked to
   // batch_size.
-  net_params.max_batch_size = std::max({batch_size, top_k, 1});
-  net_params.precision = nn::parse_precision(precision);
+  net_params.max_batch_size = std::max({opts.batch_size, opts.top_k, 1});
+  net_params.precision = nn::parse_precision(opts.precision);
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
-  const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
+  const uint64_t resolved_seed = have_seed ? opts.seed : SeedProducer::instance().next();
   return std::make_unique<NeuralAgent>(NeuralAgent::Params{.thread_id = thread_id,
                                                            .name = name,
-                                                           .top_k = top_k,
+                                                           .top_k = opts.top_k,
                                                            .objective = obj,
-                                                           .temperature = temperature,
+                                                           .temperature = opts.temperature,
                                                            .seed = resolved_seed},
                                        net_params);
 }
 
 std::string NeuralAgent::options_help() {
-  return "  HastyBot move-gen + M_post value model: applies candidate plays and\n"
-         "  plays the one whose post-move state the model's objective head rates\n"
-         "  highest.\n"
-         "  Options:\n"
-         "    --model=<path.onnx>      exported model (required)\n"
-         "    --top-k=K                candidate plays to evaluate: K>0 = top-K by\n"
-         "                             static equity; 0 = ALL legal plays (most\n"
-         "                             diverse, but slowest -- every play hits the GPU)\n"
-         "    --objective=scorediff|winprob  selection head (default winprob:\n"
-         "                             highest P(win)+0.5*P(draw); scorediff picks\n"
-         "                             the highest expected final score differential)\n"
-         "    --batch-size=N           max GPU batch (default 256)\n"
-         "    --cuda-device=D          GPU index (default 0)\n"
-         "    --precision=FP16|FP32    TensorRT precision (default FP16)\n"
-         "    --temperature=T          softmax move sampling (default 0 = greedy)\n"
-         "    --seed=N                 sampling PRNG seed (default: SeedProducer)\n";
+  NeuralOptions opts;
+  std::ostringstream os;
+  os << "  HastyBot move-gen + M_post value model: applies candidate plays and\n"
+        "  plays the one whose post-move state the model's objective head rates\n"
+        "  highest.\n"
+     << make_options_description(opts);
+  return os.str();
 }
 
 }  // namespace scribblez
