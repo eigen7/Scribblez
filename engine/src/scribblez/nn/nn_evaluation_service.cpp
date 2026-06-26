@@ -10,16 +10,28 @@
 namespace scribblez {
 namespace nn {
 
-using binlog::kInputFloats;
-using binlog::kScalarFloats;
-using binlog::kScoreDiffOutputFloats;
-using binlog::kSpatialFloats;
-using binlog::kWldFloats;
-
 namespace {
 
 // Softmax the 3 WLD logits [win, draw, loss] into the WLD fields of `e`. The
 // win-probability scalar treats a draw as half a win (expected game points).
+// TODO: Incorporate Eigen so that we can do operations like this naturally in a vectorized manner.
+/*
+void fill_wld(const float* logits, Eval& e) {
+  // 1. Map the raw float pointer to an Eigen array (zero-copy)
+  Eigen::Map<const Eigen::Array3f> v(logits);
+
+  // 2. Vectorized, numerically stable softmax
+  Eigen::Array3f probs = (v - v.maxCoeff()).exp();
+  probs /= probs.sum();
+
+  // 3. Unpack the results
+  e.p_win = probs[0];
+  e.p_draw = probs[1];
+  e.p_loss = probs[2];
+  
+  e.win_prob = e.p_win + 0.5f * e.p_draw;
+}
+*/
 void fill_wld(const float* logits, Eval& e) {
   float m = std::max({logits[0], logits[1], logits[2]});
   float ew = std::exp(logits[0] - m);
