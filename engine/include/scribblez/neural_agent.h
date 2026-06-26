@@ -139,7 +139,7 @@ class NeuralAgent : public Agent {
   double temperature_;
   int max_batch_;
   std::unique_ptr<nn::EvalService> service_;
-  binlog::GameStateEncoder encoder_;
+  GameStateEncoder encoder_;
   std::mt19937_64 rng_;  // drives softmax sampling when temperature_ > 0
 
   // Scratch reused across turns to avoid per-move allocation.

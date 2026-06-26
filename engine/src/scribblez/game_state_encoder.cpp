@@ -9,7 +9,11 @@
 #include <cstring>
 
 namespace scribblez {
-namespace binlog {
+
+// The spatial/scalar plane layout constants and the kInputFloats/kSpatialFloats
+// sizes used by the encode helpers below live in the binlog input-encoding
+// namespace.
+using namespace binlog;
 
 namespace {
 
@@ -232,5 +236,4 @@ void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_r
              out);
 }
 
-}  // namespace binlog
 }  // namespace scribblez

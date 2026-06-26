@@ -37,7 +37,7 @@ void NeuralAgent::init() {
   input_buf_.resize(static_cast<size_t>(max_batch_) * kInputFloats);
 }
 
-void NeuralAgent::begin_game() { encoder_ = binlog::GameStateEncoder(); }
+void NeuralAgent::begin_game() { encoder_ = GameStateEncoder(); }
 
 void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
 
@@ -88,7 +88,7 @@ void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_s
   Rack leave = my_rack;
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
 
-  binlog::GameStateEncoder post = encoder_;
+  GameStateEncoder post = encoder_;
   post.apply_move(mv);
   post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
 }

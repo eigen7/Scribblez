@@ -114,8 +114,8 @@ struct NeuralNet::Impl {
   stream_t stream = nullptr;
 
   // TODO(Refactor): Decouple C++ inference buffers from the strict neural net architecture.
-  // Currently, adding a new head requires manually hardcoding new 
-  // device/host pointers, cudaMallocs, and cudaMemcpys across different places.
+  // Currently, adding a new head (e.g., 'ownership') requires manually hardcoding new 
+  // device/host pointers, cudaMallocs, and cudaMemcpys across 5+ different places.
   //
   // Implementation Plan:
   // 1. Define a `TensorBuffer` struct (name, size_bytes, is_input, d_ptr, h_ptr).
@@ -124,9 +124,14 @@ struct NeuralNet::Impl {
   //    - name = engine->getIOTensorName(i)
   //    - mode = engine->getTensorIOMode(name)  // Check for kINPUT vs kOUTPUT
   //    - shape = engine->getTensorShape(name)  // Calculate size_bytes
-  // 3. Store buffers in `std::vector<TensorBuffer> inputs/outputs`.
-  // 4. Maintain a flat `std::vector<void*> bindings` to pass cleanly to `enqueueV3()`.
-  // 5. Replace manual cudaMemcpy calls with loops over the `inputs` and `outputs` vectors.
+  // 3. Store buffers dynamically in `std::vector<TensorBuffer> tensors`.
+  // 4. Bind memory to the context before execution:
+  //    - context->setTensorAddress(tensor.name, tensor.d_ptr)
+  // 5. Replace manual cudaMemcpy/execution calls with loops over the `tensors` vector
+  //    and execute using `context->enqueueV3(stream)`.
+  void* d_input_spatial = nullptr;
+  void* d_input_scalar = nullptr;
+  // ... rest of your pointers ...
   void* d_input_spatial = nullptr;
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;

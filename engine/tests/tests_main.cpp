@@ -930,7 +930,7 @@ static void test_extract_positions_movegen_roundtrip() {
 
     auto live_snaps = live_replay_all_snapshots(log);
 
-    scribblez::binlog::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc;
     // The encoder no longer tracks racks (an outside observer cannot see
     // opponent draws). The test, however, has full information, so we
     // maintain a parallel rack pair alongside the encoder.
@@ -1146,7 +1146,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     CHECK(racks_equal(r1_init, logs[gi].initial_racks[1]));
 
     auto live_snaps = live_replay_all_snapshots(logs[gi]);
-    scribblez::binlog::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc;
     std::array<scribblez::Rack, 2> racks = {r0_init, r1_init};
 
     size_t snap_idx = 0;

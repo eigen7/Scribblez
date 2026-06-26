@@ -386,7 +386,6 @@ static Rack leave_after(const Rack& rack, const Move& mv) {
 }
 
 static void test_encode_candidate_matches_replay() {
-  using binlog::GameStateEncoder;
   using binlog::kInputFloats;
 
   // A short move history applied to both the agent (via observe_move) and an

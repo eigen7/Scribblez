@@ -39,6 +39,7 @@
 #include <cstdint>
 
 namespace scribblez {
+
 namespace binlog {
 
 // Sample kinds within a single game turn. Used by the DataLoader's replay
@@ -49,6 +50,8 @@ enum class PositionKind : uint8_t {
                   // (unseen-pool composition unchanged from pre-move).
                   // Only emitted for PLAY turns.
 };
+
+}  // namespace binlog
 
 class GameStateEncoder {
  public:
@@ -105,5 +108,4 @@ class GameStateEncoder {
   int turn_index_ = 0;
 };
 
-}  // namespace binlog
 }  // namespace scribblez
