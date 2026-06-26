@@ -49,23 +49,23 @@ struct NeuralOptions {
 // the help text, so the option descriptions deliberately omit them.
 po::options_description make_options_description(NeuralOptions& opts) {
   po::options_description desc("Neural agent (--type=neural) options");
-  desc.add_options()
-    ("model,m", po::value<std::string>(&opts.model), "exported ONNX model (required)")(
-      "top-k,k", po::value<int>(&opts.top_k)->default_value(opts.top_k),
-      "candidate plays to evaluate: K>0 = top-K by static equity; 0 = ALL legal plays (most "
-      "diverse, but slowest -- every play hits the GPU)")(
-      "objective,o", po::value<std::string>(&opts.objective)->default_value(opts.objective),
-      "selection head: winprob = highest P(win)+0.5*P(draw); scorediff = highest expected final "
-      "score differential")("batch-size,b",
-                            po::value<int>(&opts.batch_size)->default_value(opts.batch_size),
-                            "max GPU batch")(
-      "cuda-device,d", po::value<int>(&opts.cuda_device)->default_value(opts.cuda_device),
-      "GPU index")("precision,p",
-                   po::value<std::string>(&opts.precision)->default_value(opts.precision),
-                   "TensorRT precision: FP16|FP32")(
-      "temperature,t", po::value<double>(&opts.temperature)->default_value(opts.temperature),
-      "softmax move-sampling temperature (0 = greedy argmax)")(
-      "seed,s", po::value<uint64_t>(&opts.seed), "sampling PRNG seed (default: SeedProducer)");
+  desc.add_options()("model,m", po::value<std::string>(&opts.model),
+                     "exported ONNX model (required)")(
+    "top-k,k", po::value<int>(&opts.top_k)->default_value(opts.top_k),
+    "candidate plays to evaluate: K>0 = top-K by static equity; 0 = ALL legal plays (most "
+    "diverse, but slowest -- every play hits the GPU)")(
+    "objective,o", po::value<std::string>(&opts.objective)->default_value(opts.objective),
+    "selection head: winprob = highest P(win)+0.5*P(draw); scorediff = highest expected final "
+    "score differential")("batch-size,b",
+                          po::value<int>(&opts.batch_size)->default_value(opts.batch_size),
+                          "max GPU batch")(
+    "cuda-device,d", po::value<int>(&opts.cuda_device)->default_value(opts.cuda_device),
+    "GPU index")("precision,p",
+                 po::value<std::string>(&opts.precision)->default_value(opts.precision),
+                 "TensorRT precision: FP16|FP32")(
+    "temperature,t", po::value<double>(&opts.temperature)->default_value(opts.temperature),
+    "softmax move-sampling temperature (0 = greedy argmax)")(
+    "seed,s", po::value<uint64_t>(&opts.seed), "sampling PRNG seed (default: SeedProducer)");
   return desc;
 }
 

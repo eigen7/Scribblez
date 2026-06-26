@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -137,6 +138,22 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "print final score and turn count to stderr");
 }
 
+// --------------------------- monitor -------------------------------------
+
+void GameRunner::run_progress_monitor(const std::atomic<bool>& done,
+                                      std::chrono::steady_clock::time_point t0,
+                                      uint64_t total) const {
+  const int ticks = params_.progress_secs * 10;  // poll the stop flag at 10 Hz
+  while (!done.load(std::memory_order_acquire)) {
+    for (int i = 0; i < ticks && !done.load(std::memory_order_acquire); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (done.load(std::memory_order_acquire)) break;
+    const double secs =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    results_->print_progress(std::cerr, secs, total);
+  }
+}
+
 // --------------------------- ctor / run ----------------------------------
 
 GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
@@ -239,17 +256,7 @@ void GameRunner::run() {
     std::atomic<bool> done{false};
     std::thread monitor;
     if (params_.progress_secs > 0) {
-      monitor = std::thread([&]() {
-        const int ticks = params_.progress_secs * 10;  // poll the stop flag at 10 Hz
-        while (!done.load(std::memory_order_acquire)) {
-          for (int i = 0; i < ticks && !done.load(std::memory_order_acquire); ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          if (done.load(std::memory_order_acquire)) break;
-          const double secs =
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-          results_->print_progress(std::cerr, secs, total);
-        }
-      });
+      monitor = std::thread(&GameRunner::run_progress_monitor, this, std::ref(done), t0, total);
     }
 
     std::vector<std::thread> workers;
