@@ -125,6 +125,8 @@ int NeuralAgent::select_index(int k) {
   return sampler_.sample(obj_values_, k, temperature_, rng_);
 }
 
+// TODO: use the WMP/shadow-play based play-generation that the streaming data generation code 
+// uses in order to generate just the top-K plays efficiently 
 Move NeuralAgent::make_move(const MoveRequest& req) {
   const std::vector<Move> plays = generate_legal_plays(req);
   if (plays.empty()) return Move::pass();
