@@ -113,7 +113,7 @@ def main() -> int:
              "diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
     )
     parser.add_argument(
-        "--temperature", type=float, default=3.0,
+        "--temperature", type=float, default=0.0,
         help="Neural agent softmax sampling temperature (only used with --model).",
     )
     parser.add_argument(
