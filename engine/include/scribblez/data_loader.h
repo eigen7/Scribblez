@@ -154,6 +154,11 @@ class DataLoader {
     DataFile(const std::string& path, int64_t num_positions, int64_t file_size);
     ~DataFile();
 
+    struct GameTurn {
+      uint32_t game_idx;
+      uint32_t turn_idx;
+    };
+
     const std::string& path() const { return path_; }
     int64_t num_positions() const { return num_positions_; }
     int64_t file_size() const { return file_size_; }
@@ -170,7 +175,7 @@ class DataLoader {
 
     // Map a flat position index in [0, num_positions()) to the (game_idx,
     // turn_idx) it expands to, using the per-game index read at construction.
-    std::pair<uint32_t, uint32_t> sample_to_game_turn(int64_t sample_index) const;
+    GameTurn sample_to_game_turn(int64_t sample_index) const;
 
     // Per-game index, read from the file header + metadata table at
     // construction (no resident body required).

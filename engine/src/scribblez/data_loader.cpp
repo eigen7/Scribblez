@@ -85,14 +85,14 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
 
 DataLoader::DataFile::~DataFile() { unload(); }
 
-std::pair<uint32_t, uint32_t> DataLoader::DataFile::sample_to_game_turn(
+DataLoader::DataFile::GameTurn DataLoader::DataFile::sample_to_game_turn(
   int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
   // cum_eligible_[g] <= sample_index.
   auto it = std::upper_bound(cum_eligible_.begin(), cum_eligible_.end(), sample_index);
-  const int64_t g = (it - cum_eligible_.begin()) - 1;
-  const int64_t turn = sample_index - cum_eligible_[static_cast<size_t>(g)];
-  return {static_cast<uint32_t>(g), static_cast<uint32_t>(turn)};
+  uint64_t g = (it - cum_eligible_.begin()) - 1;
+  uint64_t turn = sample_index - cum_eligible_[g];
+  return GameTurn{static_cast<uint32_t>(g), static_cast<uint32_t>(turn)};
 }
 
 bool DataLoader::DataFile::is_loaded() const {
