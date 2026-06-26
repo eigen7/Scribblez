@@ -4,6 +4,7 @@
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/nn/eval_service.h"
 #include "scribblez/nn/neural_net.h"
+#include "util/math.h"
 
 #include <array>
 #include <cstdint>
@@ -146,7 +147,7 @@ class NeuralAgent : public Agent {
   std::vector<float> input_buf_;    // max_batch_ rows x kInputFloats
   std::vector<nn::Eval> eval_buf_;  // per-candidate evals (grows as needed)
   std::vector<double> obj_values_;  // per-candidate objective values for sampling
-  std::vector<double> weights_;     // softmax weight scratch
+  util::SoftmaxSampler sampler_;    // draws a candidate when temperature_ > 0
 };
 
 }  // namespace scribblez

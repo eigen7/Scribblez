@@ -3,7 +3,7 @@
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
-#include "scribblez/sampling.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <numeric>
@@ -124,7 +124,7 @@ int NeuralAgent::select_index(int k) {
 
   if (static_cast<int>(obj_values_.size()) < k) obj_values_.resize(static_cast<size_t>(k));
   for (int j = 0; j < k; ++j) obj_values_[j] = objective_value(eval_buf_[j]);
-  return softmax_sample(obj_values_, k, temperature_, rng_, weights_);
+  return sampler_.sample(obj_values_, k, temperature_, rng_);
 }
 
 Move NeuralAgent::make_move(const MoveRequest& req) {

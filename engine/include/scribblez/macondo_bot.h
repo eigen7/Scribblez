@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scribblez/agent.h"
+#include "util/math.h"
 
 #include <cstdint>
 #include <memory>
@@ -93,9 +94,9 @@ class HastyBotAgent : public Agent {
  private:
   int top_k_;
   double temperature_;
-  int temperature_min_bag_;      // sample only while bag_size >= this (0 = all game)
-  std::mt19937_64 rng_;          // drives softmax sampling when temperature_ > 0
-  std::vector<double> weights_;  // scratch softmax weights, reused across turns
+  int temperature_min_bag_;       // sample only while bag_size >= this (0 = all game)
+  std::mt19937_64 rng_;           // drives softmax sampling when temperature_ > 0
+  util::SoftmaxSampler sampler_;  // draws a move when temperature_ > 0
 };
 
 }  // namespace scribblez

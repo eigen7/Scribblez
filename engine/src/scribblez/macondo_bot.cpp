@@ -5,9 +5,9 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/move.h"
 #include "scribblez/movegen.h"
-#include "scribblez/sampling.h"
 #include "scribblez/seed_producer.h"
 #include "scribblez/word_map.h"
+#include "util/math.h"
 
 #include <boost/program_options.hpp>
 
@@ -393,7 +393,7 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
                     [&](int a, int b) { return vals[a] > vals[b]; });
   std::vector<double> top_vals(static_cast<size_t>(k));
   for (int j = 0; j < k; ++j) top_vals[j] = vals[idx[j]];
-  const int chosen = softmax_sample(top_vals, k, temperature_, rng_, weights_);
+  const int chosen = sampler_.sample(top_vals, k, temperature_, rng_);
   return plays[static_cast<size_t>(idx[chosen])];
 }
 

@@ -39,6 +39,7 @@ add_library(scribblez_core STATIC
   src/util/encoding.cpp
   src/util/crypto.cpp
   src/util/io.cpp
+  src/util/math.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
 # in the core engine on Linux.
