@@ -15,6 +15,17 @@
 
 namespace scribblez {
 
+// TODO: Collapse the per-type knowledge scattered across this file into a single
+// edit point. Several functions each carry their own switch over the known
+// player types: parse_player_spec() validates the type string, make_one()
+// dispatches to the right Agent's from_spec(), PlayerSpec::display_name()
+// supplies a default name, and all_player_types_help() lists each type's help.
+// Adding a player type today means touching all of them.
+//
+// Replace this with a compile-time type-list of agent traits — one entry per
+// agent (e.g. a struct exposing the type string, default display name, and the
+// Agent subclass) — and have each of the above iterate the list generically.
+// Then a new player type is a single new entry in that list.
 namespace {
 
 namespace po = boost::program_options;
