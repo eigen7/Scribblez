@@ -41,7 +41,7 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
 // metadata table without resident body (cum[g] = first flat row index of game g,
 // cum.back() = total expanded rows). Sets `num_games`. On any read failure,
 // returns a one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
-std::vector<int64_t> read_cum_eligible(const std::string& path, int64_t& num_games,
+std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& num_games,
                                        int64_t num_games_fallback) {
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
@@ -79,7 +79,7 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
   // resident body needed), so an epoch can be sized and subsampled before the
   // file body is loaded. num_positions_ is the expanded row count (== the
   // header's num_sample_positions); the caller-passed value is only a fallback.
-  cumulative_eligible_ = read_cum_eligible(path_, num_games_, num_positions);
+  cumulative_eligible_ = read_cumulative_eligible(path_, num_games_, num_positions);
   num_positions_ = cumulative_eligible_.back();
 }
 
