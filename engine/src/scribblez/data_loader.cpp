@@ -79,8 +79,8 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
   // resident body needed), so an epoch can be sized and subsampled before the
   // file body is loaded. num_positions_ is the expanded row count (== the
   // header's num_sample_positions); the caller-passed value is only a fallback.
-  cum_eligible_ = read_cum_eligible(path_, num_games_, num_positions);
-  num_positions_ = cum_eligible_.back();
+  cumulative_eligible_ = read_cum_eligible(path_, num_games_, num_positions);
+  num_positions_ = cumulative_eligible_.back();
 }
 
 DataLoader::DataFile::~DataFile() { unload(); }
@@ -88,11 +88,12 @@ DataLoader::DataFile::~DataFile() { unload(); }
 DataLoader::DataFile::GameTurn DataLoader::DataFile::sample_to_game_turn(
   int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
-  // cum_eligible_[g] <= sample_index.
-  auto it = std::upper_bound(cum_eligible_.begin(), cum_eligible_.end(), sample_index);
-  uint64_t g = (it - cum_eligible_.begin()) - 1;
-  uint64_t turn = sample_index - cum_eligible_[g];
-  return GameTurn{static_cast<uint32_t>(g), static_cast<uint32_t>(turn)};
+  // cumulative_eligible_[g] <= sample_index.
+  auto it =
+    std::upper_bound(cumulative_eligible_.begin(), cumulative_eligible_.end(), sample_index);
+  int64_t g = (it - cumulative_eligible_.begin()) - 1;
+  int64_t turn = sample_index - cumulative_eligible_[g];
+  return GameTurn{static_cast<uint32_t>(g), static_cast<uint16_t>(turn)};
 }
 
 bool DataLoader::DataFile::is_loaded() const {
@@ -422,9 +423,10 @@ void DataLoader::WorkerThread::do_work() {
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
     // Each local position is a flat (game, turn) sample index within the file.
-    auto [game_idx, turn_idx] = file->sample_to_game_turn(unit_.local_positions[i]);
-    decoder_.decode_one(buf, file->path(), game_idx, turn_idx, unit_.flips[i] != 0,
-                        config_.post_move, /*output_row=*/unit_.output_indices[i], output_);
+    DataFile::GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
+    decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
+                        unit_.flips[i] != 0, config_.post_move,
+                        /*output_row=*/unit_.output_indices[i], output_);
   }
 }
 

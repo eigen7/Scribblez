@@ -156,7 +156,7 @@ class DataLoader {
 
     struct GameTurn {
       uint32_t game_idx;
-      uint32_t turn_idx;
+      uint16_t turn_idx;
     };
 
     const std::string& path() const { return path_; }
@@ -181,10 +181,9 @@ class DataLoader {
     // construction (no resident body required).
     int64_t num_games() const { return num_games_; }
     int eligible_turns(int64_t game) const {
-      return static_cast<int>(cum_eligible_[static_cast<size_t>(game) + 1] -
-                              cum_eligible_[static_cast<size_t>(game)]);
+      return static_cast<int>(cumulative_eligible_[game + 1] - cumulative_eligible_[game]);
     }
-    int64_t game_base(int64_t game) const { return cum_eligible_[static_cast<size_t>(game)]; }
+    int64_t game_base(int64_t game) const { return cumulative_eligible_[game]; }
 
    private:
     std::string path_;
@@ -193,9 +192,9 @@ class DataLoader {
     int64_t num_games_ = 0;
 
     // Per-game prefix sums of eligible_turns (size num_games_ + 1), read from the
-    // file's metadata table at construction; cum_eligible_[g] is the first flat
-    // position index of game g and cum_eligible_.back() is num_positions_.
-    std::vector<int64_t> cum_eligible_;
+    // file's metadata table at construction; cumulative_eligible_[g] is the first flat
+    // position index of game g and cumulative_eligible_.back() is num_positions_.
+    std::vector<int64_t> cumulative_eligible_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
