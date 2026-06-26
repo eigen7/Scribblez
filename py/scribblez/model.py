@@ -123,6 +123,13 @@ class ScribblezModel(nn.Module):
         self.trunk_bn = nn.BatchNorm2d(trunk_channels)
 
         # --- Heads ---
+        # TODO: make the set of heads modular so experimenting with additional
+        # auxiliary heads touches as few places as possible. Right now each head
+        # is hardcoded in several spots that must stay in sync: its submodule here
+        # in __init__, its output entry in forward(), its loss term and weight in
+        # compute_loss(), and the class/forward docstrings. A registry of head
+        # objects (each owning its modules, forward, and loss) iterated over in
+        # these spots would let a new head be added in one place.
         # The value heads read a 3C summary: mean+max board pooling (2C) plus the
         # scalar projection (C), so the score-diff scalar reaches them directly.
         value_in = 3 * trunk_channels
