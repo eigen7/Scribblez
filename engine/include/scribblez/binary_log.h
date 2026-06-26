@@ -15,7 +15,7 @@
 // File layout
 // -----------
 //   [FileHeader              16 B]
-//   [GameMetadata  num_games 26 B]
+//   [GameMetadata  num_games 24 B]
 //   For each game g in [0, num_games):
 //     [InitialRacks                       16 B]
 //     [TurnBlob       num_turns(g)        24 B each]
@@ -73,7 +73,7 @@ static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 struct GameMetadata {
   uint64_t start_offset;  // file offset of this game's InitialRacks blob
   uint32_t num_turns;     // length of the TurnBlob array
-  uint32_t sampled_turn;  // 0-based turn index, eval-only: one representative
+  uint16_t sampled_turn;  // 0-based turn index, eval-only: one representative
                           // position per game for probes / position dumps. NOT
                           // used by training, which expands over eligible_turns.
   int16_t final_score_p0;
@@ -88,7 +88,7 @@ struct GameMetadata {
                             // non-increasing, eligible turns are always a leading
                             // prefix.
 };
-static_assert(sizeof(GameMetadata) == 26, "GameMetadata must be 26 bytes");
+static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 
 // Per-game initial state: the tiles dealt to each player before play starts.
 // Trailing entries of each rack slot are empty Tiles when the bag was starved
