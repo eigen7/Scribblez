@@ -1,5 +1,6 @@
 #include "scribblez/human_web_agent.h"
 
+#include "scribblez/agent_options.h"
 #include "scribblez/game.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
@@ -23,6 +24,23 @@
 namespace scribblez {
 
 namespace {
+
+namespace po = boost::program_options;
+
+// The command-line options for `--type=human`, binding each flag to a field of
+// `params`. Both from_spec() (to parse) and options_help() (to document) build
+// this, so the two share one source of truth for the option list.
+po::options_description human_options(HumanWebAgent::Params& params) {
+  po::options_description desc;
+  desc.add_options()                                                                   //
+    ("port", po::value<int>(&params.port)->default_value(params.port),                 //
+     "engine WebSocket port")                                                          //
+    ("vite-port", po::value<int>(&params.vite_port)->default_value(params.vite_port),  //
+     "browser UI (Vite) port")                                                         //
+    ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
+     "front-end package dir (cwd of `npm run dev`)");
+  return desc;
+}
 
 // Best-effort string field from a parsed client message (empty if absent or
 // not a string).
@@ -202,16 +220,8 @@ EndGameResult HumanWebAgent::end_game(const Game& game, int my_seat) {
 std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::string>& tokens,
                                                         int thread_id, const std::string& name,
                                                         const std::string& opp_name) {
-  namespace po = boost::program_options;
   Params params;
-  po::options_description desc("human options");
-  desc.add_options()                                                                   //
-    ("port", po::value<int>(&params.port)->default_value(params.port),                 //
-     "engine WebSocket port")                                                          //
-    ("vite-port", po::value<int>(&params.vite_port)->default_value(params.vite_port),  //
-     "browser UI (Vite) port")                                                         //
-    ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
-     "front-end package dir (cwd of `npm run dev`)");
+  po::options_description desc = human_options(params);
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
@@ -235,11 +245,9 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
 }
 
 std::string HumanWebAgent::options_help() {
-  return "  A human player driven through the local browser UI.\n"
-         "  Options:\n"
-         "    --port=N        engine WebSocket port (default 8080 + instance offset)\n"
-         "    --vite-port=N   browser UI (Vite) port (default 5173 + instance offset)\n"
-         "    --web-dir=DIR   front-end package dir (default \"web\")\n";
+  Params params;  // defaults only; used to render the option list and its defaults
+  return agent_options_help("  A human player driven through the local browser UI.\n",
+                            human_options(params));
 }
 
 }  // namespace scribblez

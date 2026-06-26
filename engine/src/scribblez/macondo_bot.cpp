@@ -1,5 +1,6 @@
 #include "scribblez/macondo_bot.h"
 
+#include "scribblez/agent_options.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
 #include "scribblez/move.h"
@@ -346,7 +347,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
   // pre-endgame) are process-wide: a play_game --leaves-file overrides them,
   // but otherwise we lazily load Macondo's defaults for the active lexicon, so
   // running a HastyBot never requires extra command-line flags.
-  po::options_description desc("hastybot options");
+  po::options_description desc;
   try {
     po::variables_map vm;
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
@@ -360,9 +361,11 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 }
 
 std::string HastyBotAgent::options_help() {
-  return "  In-process HastyBot: enumerates all legal plays and picks the one\n"
-         "  with highest static equity (score + leave value + adjustments).\n"
-         "  Options: (none)\n";
+  // HastyBot has no command-line options, so the helper renders "Options: (none)".
+  return agent_options_help(
+    "  In-process HastyBot: enumerates all legal plays and picks the one\n"
+    "  with highest static equity (score + leave value + adjustments).\n",
+    boost::program_options::options_description());
 }
 
 }  // namespace scribblez

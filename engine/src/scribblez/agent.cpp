@@ -1,5 +1,6 @@
 #include "scribblez/agent.h"
 
+#include "scribblez/agent_options.h"
 #include "scribblez/movegen.h"
 #include "scribblez/seed_producer.h"
 
@@ -9,6 +10,23 @@
 #include <stdexcept>
 
 namespace scribblez {
+
+namespace {
+
+namespace po = boost::program_options;
+
+// The command-line options for `--type=greedy`, binding `--seed` to `seed`. Both
+// from_spec() (to parse) and options_help() (to document) build this, so the two
+// share one source of truth for the option list.
+po::options_description greedy_options(uint64_t& seed) {
+  po::options_description desc;
+  desc.add_options()                      //
+    ("seed", po::value<uint64_t>(&seed),  //
+     "PRNG seed for tie-breaking (default: derived from SeedProducer)");
+  return desc;
+}
+
+}  // namespace
 
 std::vector<Move> generate_legal_plays(const MoveRequest& req) {
   return MoveGenerator(req.board, req.dict).generate(req.my_rack);
@@ -40,15 +58,10 @@ Move GreedyAgent::make_move(const MoveRequest& req) {
 
 std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::string>& tokens,
                                                     int thread_id, const std::string& name) {
-  namespace po = boost::program_options;
   uint64_t seed = 0;
   bool have_seed = false;
 
-  po::options_description desc("greedy options");
-  desc.add_options()                                  //
-    ("seed", po::value<uint64_t>(&seed),              //
-     "PRNG seed for tie-breaking (default: derived "  //
-     "from SeedProducer)");
+  po::options_description desc = greedy_options(seed);
 
   try {
     po::variables_map vm;
@@ -64,9 +77,9 @@ std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::strin
 }
 
 std::string GreedyAgent::options_help() {
-  return "  Picks the highest-scoring play; ties broken randomly.\n"
-         "  Options:\n"
-         "    --seed=N    PRNG seed for tie-breaking (default: derived from --seed)\n";
+  uint64_t seed = 0;  // unused; greedy_options() only needs a binding target
+  return agent_options_help("  Picks the highest-scoring play; ties broken randomly.\n",
+                            greedy_options(seed));
 }
 
 }  // namespace scribblez

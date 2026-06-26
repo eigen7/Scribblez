@@ -23,6 +23,7 @@ add_library(scribblez_core STATIC
   src/scribblez/data_loader.cpp
   src/scribblez/unique_id.cpp
   src/scribblez/agent.cpp
+  src/scribblez/agent_options.cpp
   src/scribblez/cli.cpp
   src/scribblez/self_play_engine.cpp
   src/scribblez/game_runner.cpp

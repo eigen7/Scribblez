@@ -16,23 +16,32 @@ namespace scribblez {
 
 namespace {
 
+namespace po = boost::program_options;
+
+// The universal --player options common to every agent type, binding `--type`
+// and `--name` to the given storage. parse_player_spec() builds this to parse a
+// spec; all_player_types_help() builds it to document the same flags, so the two
+// share one source of truth.
+po::options_description universal_player_options(std::string& type_str, std::string& name) {
+  po::options_description desc;
+  desc.add_options()                                         //
+    ("type", po::value<std::string>(&type_str)->required(),  //
+     "player type: greedy | human | hastybot")               //
+    ("name", po::value<std::string>(&name),                  //
+     "display name shown in the UI");
+  return desc;
+}
+
 // Parse one --player spec string into a PlayerSpec. Implementation detail of
 // PlayerFactory::make_players(); not part of the public API.
 PlayerSpec parse_player_spec(const std::string& spec) {
-  namespace po = boost::program_options;
-
   std::string type_str;
   PlayerSpec out;
 
   // Only the universal options (--type and --name) are parsed here. Anything
   // else is forwarded to the chosen agent's from_spec() as remaining tokens,
   // so adding a new agent never requires touching this function.
-  po::options_description desc("player options");
-  desc.add_options()                                         //
-    ("type", po::value<std::string>(&type_str)->required(),  //
-     "player type: greedy | human | hastybot")               //
-    ("name", po::value<std::string>(&out.name),              //
-     "display name shown in the UI");
+  po::options_description desc = universal_player_options(type_str, out.name);
 
   try {
     // Each --player value is its own little option string; tokenize it the way
@@ -123,8 +132,9 @@ std::string PlayerFactory::all_player_types_help() {
   o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
   o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
+  std::string type_str, name;  // scratch binding targets; never read here
   o << "Universal --player options (parsed by the factory before dispatch):\n"
-    << "  --name=NAME   display name shown in the UI\n";
+    << universal_player_options(type_str, name);
   return o.str();
 }
 
