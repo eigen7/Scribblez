@@ -54,14 +54,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     p.add_argument("--num-blocks", type=int, default=8, help="Residual blocks.")
     p.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
-    p.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
+    p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     p.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     p.add_argument(
-        "--huber-delta-mean", type=float, default=1.0,
+        "--huber-delta-mean", type=float, default=10.0,
         help="Huber transition point (points) for the score-diff mean head.")
     p.add_argument(
-        "--huber-delta-var", type=float, default=1.0,
-        help="Huber transition point (points^2) for the score-diff variance head.")
+        "--huber-delta-std", type=float, default=10.0,
+        help="Huber transition point (points) for the score-diff std head.")
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
     p.add_argument(
@@ -180,7 +180,10 @@ class _IntervalLoss:
         self.reset()
 
     def reset(self):
-        self.sums = {"total": 0.0, "wld": 0.0, "score_diff": 0.0, "opp_next_placement": 0.0}
+        self.sums = {
+            "total": 0.0, "wld": 0.0, "score_diff": 0.0,
+            "score_diff_mean": 0.0, "score_diff_std": 0.0, "opp_next_placement": 0.0,
+        }
         self.n_batches = 0
         self.correct = 0
         self.samples = 0
@@ -198,6 +201,8 @@ class _IntervalLoss:
             "loss": self.sums["total"] / nb,
             "loss_wld": self.sums["wld"] / nb,
             "loss_score_diff": self.sums["score_diff"] / nb,
+            "loss_score_diff_mean": self.sums["score_diff_mean"] / nb,
+            "loss_score_diff_std": self.sums["score_diff_std"] / nb,
             "loss_opp_next_placement": self.sums["opp_next_placement"] / nb,
             "wld_acc": self.correct / max(self.samples, 1),
         }
@@ -251,7 +256,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
                 outputs, tgt, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
-                huber_delta_mean=args.huber_delta_mean, huber_delta_var=args.huber_delta_var,
+                huber_delta_mean=args.huber_delta_mean, huber_delta_std=args.huber_delta_std,
             )
             optimizer.zero_grad()
             losses["total"].backward()
@@ -267,6 +272,8 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
                 "step": step, "positions": positions,
                 "loss": batch_losses["total"], "loss_wld": batch_losses["wld"],
                 "loss_score_diff": batch_losses["score_diff"],
+                "loss_score_diff_mean": batch_losses["score_diff_mean"],
+                "loss_score_diff_std": batch_losses["score_diff_std"],
                 "loss_opp_next_placement": batch_losses["opp_next_placement"],
                 "wld_acc": batch_acc,
             })

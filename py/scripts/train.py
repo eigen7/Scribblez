@@ -166,14 +166,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     parser.add_argument("--num-blocks", type=int, default=10, help="Residual blocks.")
     parser.add_argument("--trunk-channels", type=int, default=192, help="Trunk width.")
-    parser.add_argument("--lambda-sd", type=float, default=0.05, help="Score-diff loss weight.")
+    parser.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     parser.add_argument(
-        "--huber-delta-mean", type=float, default=1.0,
+        "--huber-delta-mean", type=float, default=10.0,
         help="Huber transition point (points) for the score-diff mean head.")
     parser.add_argument(
-        "--huber-delta-var", type=float, default=1.0,
-        help="Huber transition point (points^2) for the score-diff variance head.")
+        "--huber-delta-std", type=float, default=10.0,
+        help="Huber transition point (points) for the score-diff std head.")
     parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
@@ -295,7 +295,10 @@ def main() -> int:
         model.train()
         t0 = time.time()
         last_progress = 0.0
-        losses_accum = {"total": 0.0, "wld": 0.0, "score_diff": 0.0, "opp_next_placement": 0.0}
+        losses_accum = {
+            "total": 0.0, "wld": 0.0, "score_diff": 0.0,
+            "score_diff_mean": 0.0, "score_diff_std": 0.0, "opp_next_placement": 0.0,
+        }
         n_batches = 0
         correct_wld = 0
         total_samples = 0
@@ -319,7 +322,7 @@ def main() -> int:
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
                 outputs, targets, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
-                huber_delta_mean=args.huber_delta_mean, huber_delta_var=args.huber_delta_var,
+                huber_delta_mean=args.huber_delta_mean, huber_delta_std=args.huber_delta_std,
             )
 
             optimizer.zero_grad()
@@ -360,8 +363,9 @@ def main() -> int:
         wld_acc = correct_wld / max(total_samples, 1)
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
-            f"loss={avg['total']:.4f} (wld={avg['wld']:.4f} sd={avg['score_diff']:.4f} "
-            f"opp={avg['opp_next_placement']:.4f}) | "
+            f"loss={avg['total']:.4f} (wld={avg['wld']:.4f} "
+            f"sd={avg['score_diff']:.4f} [mean={avg['score_diff_mean']:.4f} "
+            f"std={avg['score_diff_std']:.4f}] opp={avg['opp_next_placement']:.4f}) | "
             f"wld_acc={wld_acc:.3f} | lr={lr_now:.2e} | {elapsed:.1f}s"
         )
 
@@ -371,6 +375,8 @@ def main() -> int:
             "loss": avg["total"],
             "loss_wld": avg["wld"],
             "loss_score_diff": avg["score_diff"],
+            "loss_score_diff_mean": avg["score_diff_mean"],
+            "loss_score_diff_std": avg["score_diff_std"],
             "loss_opp_next_placement": avg["opp_next_placement"],
             "wld_acc": wld_acc,
             "lr": lr_now,

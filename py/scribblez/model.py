@@ -6,12 +6,12 @@ Architecture:
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
-    * ScoreDiff (aux): FC -> 2 = [mean, variance] of the final score
-      differential. The mean is regressed against the observed differential and
-      the variance against the mean's squared residual, both with Huber loss.
-      The variance stack reads a detached copy of the trunk summary, so its loss
-      trains only that stack and never perturbs the trunk or the mean. The
-      exported second value is the std (sqrt of the variance).
+    * ScoreDiff (aux): FC -> 2 = [mean, std] of the final score differential.
+      The mean is regressed against the observed differential and the std
+      against the absolute residual of the mean, both with Huber loss in score
+      points. The std stack reads a detached copy of the trunk summary, so its
+      loss trains only that stack and never perturbs the trunk or the mean. The
+      exported second value is the std directly.
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 
 The two model inputs (85 spatial planes, 936 scalars) and the three head output
@@ -19,9 +19,16 @@ shapes are fixed by the training pipeline and the C++ inference contract; the
 trunk between them is free to change.
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
+# absolute residual would otherwise converge to ~0.8*sigma; this rescales the
+# target so the optimum matches a Gaussian sigma (what consumers assume).
+MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
 
 
 def _mean_max_pool(x: torch.Tensor) -> torch.Tensor:
@@ -147,17 +154,17 @@ class ScribblezModel(nn.Module):
 
         # Score-diff head (aux): two independent FC stacks over the value
         # summary. The mean stack regresses the final score differential; the
-        # variance stack regresses the mean's squared residual and reads a
-        # detached copy of the value summary (see forward()), so the variance
-        # loss updates only this stack -- never the shared trunk or the mean.
-        # forward() maps raw_var through softplus to a positive variance and
-        # exports its sqrt, so the exported output is [mean, std].
+        # std stack regresses the absolute residual of the mean and reads a
+        # detached copy of the value summary (see forward()), so the std loss
+        # updates only this stack -- never the shared trunk or the mean.
+        # forward() maps the std stack's output through softplus to a positive
+        # std, so the exported second value is the std directly.
         self.sd_mean_fc = nn.Sequential(
             nn.Linear(value_in, 256),
             nn.ReLU(inplace=True),
             nn.Linear(256, 1),
         )
-        self.sd_var_fc = nn.Sequential(
+        self.sd_std_fc = nn.Sequential(
             nn.Linear(value_in, 256),
             nn.ReLU(inplace=True),
             nn.Linear(256, 1),
@@ -202,13 +209,12 @@ class ScribblezModel(nn.Module):
         wld = self.wld_fc(value_in)
         opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
 
-        # Score-diff head: [mean, std]. The variance stack reads a detached copy
-        # of the value summary, so its loss never flows into the trunk or the
-        # mean. softplus + floor keeps the variance positive; the exported second
-        # value is its sqrt (the std).
+        # Score-diff head: [mean, std] in score points. The std stack reads a
+        # detached copy of the value summary, so its loss never flows into the
+        # trunk or the mean. softplus + floor keeps the std positive and away
+        # from zero.
         sd_mean = self.sd_mean_fc(value_in)  # (B, 1)
-        sd_var = F.softplus(self.sd_var_fc(value_in.detach())) + 1e-6  # (B, 1)
-        sd_std = torch.sqrt(sd_var)
+        sd_std = F.softplus(self.sd_std_fc(value_in.detach())) + 1e-3  # (B, 1)
         sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
         return {"wld": wld, "score_diff": sd, "opp_next_placement": opp}
@@ -219,8 +225,8 @@ def compute_loss(
     targets: dict[str, torch.Tensor],
     lambda_sd: float = 1.0,
     lambda_opp: float = 0.5,
-    huber_delta_mean: float = 1.0,
-    huber_delta_var: float = 1.0,
+    huber_delta_mean: float = 10.0,
+    huber_delta_std: float = 10.0,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
@@ -229,8 +235,8 @@ def compute_loss(
                  (B,2 = [mean, std]), "opp_next_placement" (B,15,15 logits).
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
                  final differential, "opp_next_placement" (B,15,15) binary mask.
-        huber_delta_mean: Huber transition point (points) for the mean head.
-        huber_delta_var: Huber transition point (points^2) for the variance head.
+        huber_delta_mean: Huber transition point (points) for the mean.
+        huber_delta_std: Huber transition point (points) for the std.
 
     Returns:
         Dict with "total", "wld", "score_diff", "opp_next_placement" losses.
@@ -239,19 +245,18 @@ def compute_loss(
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
 
-    # Score-diff: two Huber regressions. The mean predicts the observed
-    # differential; the variance predicts the mean's squared residual (an
-    # empirical variance), which is quartic in the score scale and so produces
-    # large targets that Huber's linear tail keeps the gradients bounded against.
-    # The mean is detached in the variance target so the variance loss trains
-    # only the variance, never pulling the mean toward easier-to-predict spreads.
+    # Score-diff: two Huber regressions in score points. The mean regresses the
+    # observed differential. The std regresses the absolute residual of the mean
+    # (scaled by MAD_TO_STD so its optimum is a Gaussian sigma). The std
+    # prediction and the residual target are both detached from the trunk and
+    # the mean, so the std loss trains only the std stack.
     sd_mean = outputs["score_diff"][:, 0]
-    sd_var = outputs["score_diff"][:, 1] ** 2
+    sd_std = outputs["score_diff"][:, 1]
     sd_target = targets["score_diff"].squeeze(1)
     loss_sd_mean = F.huber_loss(sd_mean, sd_target, delta=huber_delta_mean)
-    var_target = (sd_mean.detach() - sd_target) ** 2
-    loss_sd_var = F.huber_loss(sd_var, var_target, delta=huber_delta_var)
-    loss_sd = loss_sd_mean + loss_sd_var
+    std_target = (sd_mean.detach() - sd_target).abs() * MAD_TO_STD
+    loss_sd_std = F.huber_loss(sd_std, std_target, delta=huber_delta_std)
+    loss_sd = loss_sd_mean + loss_sd_std
 
     # Opp-next-placement: binary cross-entropy per cell.
     loss_opp = F.binary_cross_entropy_with_logits(
@@ -264,5 +269,7 @@ def compute_loss(
         "total": total,
         "wld": loss_wld,
         "score_diff": loss_sd,
+        "score_diff_mean": loss_sd_mean,
+        "score_diff_std": loss_sd_std,
         "opp_next_placement": loss_opp,
     }
