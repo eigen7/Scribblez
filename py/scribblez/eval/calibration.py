@@ -11,11 +11,13 @@ Two heads are scored:
     the actual game value (1 / 0.5 / 0 for win / draw / loss). Reported as Brier
     score, multiclass log-loss (== the test-set wld cross-entropy), a decile
     reliability diagram, and its expected calibration error (ECE).
-  * ScoreDiff -- the predicted distribution's mean vs the actual final score
+  * ScoreDiff -- the head's predicted Gaussian mean vs the actual final score
     differential. Reported as mean absolute error, signed bias, and sharpness
-    (mean predictive entropy), plus a reliability binning.
+    (mean predictive entropy of the Gaussian), plus a reliability binning of
+    predicted-mean against realized differential.
 """
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -91,8 +93,6 @@ def evaluate_calibration(
     state is restored before returning. Per-position scalars are collected
     (a few float arrays of length N -- trivial for test sets up to millions).
     """
-    centers = torch.arange(801, device=device, dtype=torch.float32) - 400.0
-
     was_training = model.training
     model.eval()
     win_rate, value, wld_logprob = [], [], []
@@ -111,13 +111,15 @@ def evaluate_calibration(
             value.append((wld_t[:, 0] + 0.5 * wld_t[:, 1]).cpu().numpy())
             wld_logprob.append((-(wld_t * F.log_softmax(out["wld"], dim=1)).sum(1)).cpu().numpy())
 
-            sd_p = torch.softmax(out["score_diff"], dim=1)
-            mean = (sd_p * centers).sum(1)
+            # The score-diff head emits [mean, std] of the final diff; the std is
+            # read here as the spread of a Gaussian belief about that diff.
+            mean = out["score_diff"][:, 0]
+            std = out["score_diff"][:, 1]
             pred_mean.append(mean.cpu().numpy())
-            actual_diff.append((sd_t.argmax(1).float() - 400.0).cpu().numpy())
-            entropy.append((-(sd_p * torch.log(sd_p + 1e-12)).sum(1)).cpu().numpy())
-            var = (sd_p * (centers[None, :] - mean[:, None]) ** 2).sum(1)
-            pdf_std.append(torch.sqrt(var).cpu().numpy())
+            actual_diff.append(sd_t.squeeze(1).cpu().numpy())
+            # Differential entropy of a Gaussian: 0.5*log(2*pi*e*var).
+            entropy.append((0.5 * torch.log(2 * math.pi * math.e * std**2)).cpu().numpy())
+            pdf_std.append(std.cpu().numpy())
 
             seen += spatial.shape[0]
             if max_positions is not None and seen >= max_positions:

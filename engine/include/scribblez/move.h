@@ -29,6 +29,14 @@ enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 //           is set iff lane cell k holds a newly placed tile (k is a column for
 //           a horizontal play, a row for a vertical one). Squares in the run
 //           that are not set in the mask are read from the board.
+//
+//           Example: an `E` already sits at (row 7, col 8), and READ is played
+//           horizontally across row 7 -- R, A, D newly placed at cols 7, 9, 10,
+//           reusing the board's E at col 8. Then start() == 7, square_mask has
+//           bits 7, 9, 10 set (bit 8 clear -> read from the board), and the
+//           stored glyphs are {R, A, D} in word order (the E is not stored).
+//           main_word() interleaves stored glyphs with board tiles to recover
+//           "READ".
 // EXCHANGE: the played glyphs are the tiles surrendered (an unassigned blank is
 //           Glyph::blank()). `square_mask()` is unused (0).
 // PASS:     no played glyphs. `square_mask()` is unused (0).

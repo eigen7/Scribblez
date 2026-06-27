@@ -3,7 +3,6 @@
 #include "scribblez/training_targets.h"
 
 namespace scribblez {
-namespace binlog {
 
 template <typename... Ts>
 void TargetList<Ts...>::encode_all(const TargetInputs& v, float* out) {
@@ -11,5 +10,4 @@ void TargetList<Ts...>::encode_all(const TargetInputs& v, float* out) {
   ((Ts::encode(v, out + off), off += detail::target_floats<Ts>()), ...);
 }
 
-}  // namespace binlog
 }  // namespace scribblez

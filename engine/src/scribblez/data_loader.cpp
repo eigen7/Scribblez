@@ -1,10 +1,12 @@
 #include "scribblez/data_loader.h"
 
+#include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 
 #include <algorithm>
 #include <cassert>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -35,6 +37,36 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
+// Read the per-game prefix sums of eligible_turns from a .slog file's header and
+// metadata table without resident body (cum[g] = first flat row index of game g,
+// cum.back() = total expanded rows). Sets `num_games`. On any read failure,
+// returns a one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
+std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& num_games,
+                                              int64_t num_games_fallback) {
+  std::ifstream f(path, std::ios::binary);
+  FileHeader hdr{};
+  if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
+    num_games = static_cast<int64_t>(hdr.num_games);
+    std::vector<GameMetadata> metas(static_cast<size_t>(num_games));
+    if (num_games == 0 || f.read(reinterpret_cast<char*>(metas.data()),
+                                 static_cast<std::streamsize>(num_games) * sizeof(GameMetadata))) {
+      std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
+      cum[0] = 0;
+      for (int64_t g = 0; g < num_games; ++g) {
+        cum[g + 1] = cum[g] + static_cast<int64_t>(metas[g].eligible_turns);
+      }
+      return cum;
+    }
+    std::cerr << "DataLoader: could not read metadata table of " << path << "\n";
+  } else {
+    std::cerr << "DataLoader: could not read header of " << path << "; using caller count\n";
+    num_games = num_games_fallback;
+  }
+  std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
+  std::iota(cum.begin(), cum.end(), int64_t{0});
+  return cum;
+}
+
 }  // namespace
 
 // ===========================================================================
@@ -42,9 +74,26 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
 // ===========================================================================
 
 DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size)
-    : path_(path), num_positions_(num_positions), file_size_(file_size) {}
+    : path_(path), num_positions_(num_positions), file_size_(file_size) {
+  // Read the per-game eligible-turn index from the header + metadata table (no
+  // resident body needed), so an epoch can be sized and subsampled before the
+  // file body is loaded. num_positions_ is the expanded row count (== the
+  // header's num_sample_positions); the caller-passed value is only a fallback.
+  cumulative_eligible_ = read_cumulative_eligible(path_, num_games_, num_positions);
+  num_positions_ = cumulative_eligible_.back();
+}
 
 DataLoader::DataFile::~DataFile() { unload(); }
+
+GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
+  // Find the game whose flat-index range contains sample_index: the last g with
+  // cumulative_eligible_[g] <= sample_index.
+  auto it =
+    std::upper_bound(cumulative_eligible_.begin(), cumulative_eligible_.end(), sample_index);
+  int64_t g = (it - cumulative_eligible_.begin()) - 1;
+  int64_t turn = sample_index - cumulative_eligible_[g];
+  return GameTurn{static_cast<uint32_t>(g), static_cast<uint16_t>(turn)};
+}
 
 bool DataLoader::DataFile::is_loaded() const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -179,9 +228,11 @@ DataLoader::FileManager::~FileManager() {
 
 void DataLoader::FileManager::append(const std::string& path, int64_t num_positions,
                                      int64_t file_size) {
+  // DataFile derives its true (expanded) position count from the file header;
+  // tally that, not the caller-passed value (which is the game count).
   auto* f = new DataFile(path, num_positions, file_size);
   std::lock_guard<std::mutex> lock(mutex_);
-  num_positions_ += num_positions;
+  num_positions_ += f->num_positions();
   all_files_.push_back(f);
 }
 
@@ -370,9 +421,11 @@ void DataLoader::WorkerThread::do_work() {
   const char* buf = file->buffer();  // blocks until loaded
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
-    uint8_t flip = unit_.flips[i];
-    decoder_.decode(buf, file->path(), unit_.local_positions[i], /*n_rows=*/1, &flip,
-                    config_.post_move, /*output_row_start=*/unit_.output_indices[i], output_);
+    // Each local position is a flat (game, turn) sample index within the file.
+    GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
+    decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
+                        unit_.flips[i] != 0, config_.post_move,
+                        /*output_row=*/unit_.output_indices[i], output_);
   }
 }
 
@@ -411,27 +464,79 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
                                               const EpochConfig& config) {
   cursor_ = 0;
   batch_size_ = config.batch_size;
-
-  total_positions_ = 0;
-  for (auto* f : files) total_positions_ += f->num_positions();
-
-  // Build flattened iteration order: for each file (in caller-provided
-  // shuffled order), generate a permutation of its local positions.
   order_.clear();
-  order_.reserve(static_cast<size_t>(total_positions_));
 
+  if (config.turns_per_game <= 0) {
+    collect_full_order(files);
+  } else {
+    collect_sampled_order(files, config);
+  }
+
+  // The one and only ordering shuffle: a single global shuffle over every
+  // sample of every file. next_batch() slices contiguous windows of order_, so
+  // this is what decorrelates a batch -- without it, a batch would draw mostly
+  // from one file's games (samples sit in order_ grouped by file). The
+  // selection of *which* turns each game contributes is done above and is
+  // independent of this shuffle.
+  std::mt19937_64 rng(config.seed);
+  std::shuffle(order_.begin(), order_.end(), rng);
+
+  total_positions_ = static_cast<int64_t>(order_.size());
+  build_flips(config);
+}
+
+void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*>& files) {
+  int64_t total = 0;
+  for (auto* f : files) total += f->num_positions();
+  order_.reserve(static_cast<size_t>(total));
+
+  // Every flat position of every file, in file-then-position order. build_epoch
+  // shuffles order_ globally afterwards.
   for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
     const int64_t n = files[fi]->num_positions();
-    std::vector<int64_t> perm(static_cast<size_t>(n));
-    std::iota(perm.begin(), perm.end(), int64_t{0});
-    std::mt19937_64 pos_rng(config.seed ^ static_cast<uint64_t>(fi + 1));
-    std::shuffle(perm.begin(), perm.end(), pos_rng);
-    for (int64_t p : perm) {
+    for (int64_t p = 0; p < n; ++p) {
       order_.push_back(EpochPosition{fi, p});
     }
   }
+}
 
-  // Pre-compute flip bits for the entire epoch.
+void DataLoader::SamplingManager::collect_sampled_order(const std::vector<DataFile*>& files,
+                                                        const EpochConfig& config) {
+  // For each file, select config.turns_per_game turns from every game. The
+  // resulting rows are left grouped by file; build_epoch shuffles order_
+  // globally afterwards.
+  for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
+    DataFile* f = files[fi];
+    const uint64_t file_key = std::hash<std::string>{}(f->path());
+    for (int64_t g = 0; g < f->num_games(); ++g) {
+      append_game_turns(fi, g, f->eligible_turns(g), f->game_base(g), file_key,
+                        config.turns_per_game, config.epoch_index);
+    }
+  }
+}
+
+void DataLoader::SamplingManager::append_game_turns(int file_idx, int64_t game, int n, int64_t base,
+                                                    uint64_t file_key, int turns_per_game,
+                                                    int epoch_index) {
+  if (n <= 0) return;
+
+  // A fixed per-game ordering of the game's eligible turns, independent of the
+  // epoch, so that epoch e drawing the window [e*k, e*k + k) of it covers turns
+  // disjoint from neighboring epochs until the ordering wraps after n turns.
+  std::vector<int64_t> turn_order(static_cast<size_t>(n));
+  std::iota(turn_order.begin(), turn_order.end(), int64_t{0});
+  std::mt19937_64 turn_rng(file_key ^ (static_cast<uint64_t>(game) * 0x9E3779B97F4A7C15ULL));
+  std::shuffle(turn_order.begin(), turn_order.end(), turn_rng);
+
+  const int m = std::min(turns_per_game, n);
+  for (int j = 0; j < m; ++j) {
+    const int64_t idx =
+      (static_cast<int64_t>(epoch_index) * turns_per_game + j) % static_cast<int64_t>(n);
+    order_.push_back(EpochPosition{file_idx, base + turn_order[static_cast<size_t>(idx)]});
+  }
+}
+
+void DataLoader::SamplingManager::build_flips(const EpochConfig& config) {
   flips_.resize(static_cast<size_t>(total_positions_));
   if (config.apply_symmetry) {
     std::mt19937_64 flip_rng(config.seed ^ 0xDEADBEEFCAFEF00DULL);
@@ -515,16 +620,15 @@ int DataLoader::epoch_start(const EpochConfig& config) {
   std::lock_guard<std::mutex> lock(epoch_mu_);
   epoch_config_ = config;
 
-  // Snapshot and shuffle files.
+  // Snapshot the files. Their order doesn't matter: SamplingManager globally
+  // shuffles the per-sample epoch plan, so file_idx assignment is irrelevant to
+  // batch composition.
   epoch_files_ = file_manager_.snapshot_files();
 
   if (epoch_files_.empty() || config.batch_size <= 0) {
     epoch_active_ = false;
     return 0;
   }
-
-  std::mt19937_64 file_rng(config.seed);
-  std::shuffle(epoch_files_.begin(), epoch_files_.end(), file_rng);
 
   sampling_manager_.build_epoch(epoch_files_, config);
   epoch_active_ = true;

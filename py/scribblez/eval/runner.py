@@ -14,7 +14,7 @@ from ..dashboard import db
 from .calibration import evaluate_calibration
 from .monotonicity import score_monotonicity
 from .probe_eval import evaluate_subset
-from .score_belief import DEFAULT_QUANTILES, percentile_bands
+from .score_belief import DEFAULT_QUANTILES, gaussian_bands
 from .web_render import render_position_images
 
 
@@ -43,7 +43,7 @@ def run_probes(model, slog_path, device, conn, epoch: int, diff_lo: int, diff_hi
         dtype=np.float32,
     )
     db.write_monotonicity(conn, epoch, outs.score_diffs, outs.win_rate, curve_scores)
-    bands = percentile_bands(outs.score_pdf, DEFAULT_QUANTILES).astype(np.float32)
+    bands = gaussian_bands(outs.score_mean, outs.score_std, DEFAULT_QUANTILES).astype(np.float32)
     quantiles = np.asarray(DEFAULT_QUANTILES, dtype=np.float64)
     db.write_score_belief(conn, epoch, outs.score_diffs, quantiles, bands)
     print(

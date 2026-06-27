@@ -27,6 +27,14 @@
 // scores. The starting scores are normally {0, 0} but can be a head-start
 // handicap; the replay decoder seeds its score accumulator from them so the
 // score-differential input feature reflects the handicap at every position.
+//
+// Training sampling: each game contributes ONE training row per *eligible* turn
+// (GameMetadata::eligible_turns of them -- the turns the writer deemed
+// trainable, a prefix [0, eligible_turns) of the move sequence). The DataLoader
+// expands the file into eligible_turns rows per game; FileHeader's
+// num_sample_positions is their sum across the file (so the loader knows the
+// epoch size without scanning the body). The single sampled_turn is a separate,
+// eval-only convenience (probes / position dumps pick one position per game).
 
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
@@ -46,7 +54,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 8;
+inline constexpr uint16_t kVersion = 9;
 
 #pragma pack(push, 1)
 
@@ -54,25 +62,31 @@ struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
   uint16_t reserved;
-  uint32_t num_games;  // games in this file == sample positions in this
-                       // file (one sample per game, chosen at write-time)
-  uint32_t reserved2;
+  uint32_t num_games;             // games in this file
+  uint32_t num_sample_positions;  // total training rows == sum of every game's
+                                  // GameMetadata::eligible_turns; the DataLoader
+                                  // reads this to size an epoch without scanning
+                                  // the body.
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
 struct GameMetadata {
   uint64_t start_offset;  // file offset of this game's InitialRacks blob
   uint32_t num_turns;     // length of the TurnBlob array
-  uint32_t sampled_turn;  // 0-based turn index chosen for this game's sample
-                          // (pre-move snapshot encodes state AT this turn;
-                          // post-move snapshot encodes state AFTER this
-                          // turn's move is applied, before draw). Chosen
-                          // uniformly at write-time among turns where the
-                          // bag has > 0 tiles when the turn begins.
+  uint16_t sampled_turn;  // 0-based turn index, eval-only: one representative
+                          // position per game for probes / position dumps. NOT
+                          // used by training, which expands over eligible_turns.
   int16_t final_score_p0;
   int16_t final_score_p1;
   int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
   int16_t initial_score_p1;
+  uint16_t eligible_turns;  // number of training-eligible turns: a prefix
+                            // [0, eligible_turns) of the move sequence. Training
+                            // emits one row per eligible turn. Eligibility is
+                            // fixed at write time -- the pre-endgame turns (bag
+                            // had tiles when the turn began). Because the bag is
+                            // non-increasing, eligible turns are always a leading
+                            // prefix.
 };
 static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 
@@ -80,8 +94,8 @@ static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 // Trailing entries of each rack slot are empty Tiles when the bag was starved
 // and a player received fewer than RACK_SIZE tiles.
 struct InitialRacks {
-  Rack p0;  // 7 B
-  Rack p1;  // 7 B
+  Rack p0;  // 8 B
+  Rack p1;  // 8 B
 };
 static_assert(sizeof(InitialRacks) == 16, "InitialRacks must be 16 bytes");
 
@@ -96,11 +110,11 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
 
-// Pick a turn index for `log` uniformly at random among turns whose
-// bag_size_before > 0 (i.e. pre-endgame positions, where one position is
-// sampled per game). Returns -1 iff no eligible turn exists (a degenerate
-// game), in which case the game must be excluded from any output. Operates on a
-// GameLog view, so it serves both the disk writer and the streaming producer.
+// Pick a turn index for `log` uniformly at random among eligible turns: those
+// whose bag_size_before > 0 (pre-endgame positions). Returns -1 iff no eligible
+// turn exists (a degenerate game), in which case the game must be excluded from
+// any output. Operates on a GameLog view, so it serves both the disk writer and
+// the streaming producer.
 int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
 
 // Thread-safe writer that accumulates GameLog objects from one or more

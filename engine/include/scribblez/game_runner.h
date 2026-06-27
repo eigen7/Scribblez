@@ -6,6 +6,8 @@
 #include "scribblez/self_play_engine.h"
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -42,6 +44,9 @@ class GameRunner : public GameSink {
     int threads = 1;              // number of parallel game threads
     int random_handicap_max = 0;  // if > 0, gift a random player a head-start of
                                   // P points, P uniform in [0, this], each game
+    int progress_secs = 10;       // print a games-done/rate/ETA line to stderr
+                                  // every this many seconds (0 disables); only
+                                  // active in the parallel batch loop
     bool verbose = false;         // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
@@ -76,6 +81,13 @@ class GameRunner : public GameSink {
   // Per-game-and-batch tally, indexed by *player identity* rather than seat
   // (seats alternate every game). Thread-safe via an internal mutex.
   class Results;
+
+  // Body of the monitor thread spawned during the parallel batch loop: every
+  // progress_secs seconds, prints a games-done/rate/ETA line to stderr until
+  // `done` is set. `t0` is the batch start time and `total` the target game
+  // count. Polls `done` at 10 Hz so it exits promptly once the workers finish.
+  void run_progress_monitor(const std::atomic<bool>& done, std::chrono::steady_clock::time_point t0,
+                            uint64_t total) const;
 
   Params params_;
   uint64_t seed_;

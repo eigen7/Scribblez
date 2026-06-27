@@ -39,7 +39,6 @@
 #include <cstdint>
 
 namespace scribblez {
-namespace binlog {
 
 // Sample kinds within a single game turn. Used by the DataLoader's replay
 // decoder to label which of the two per-PLAY-turn samples is which.
@@ -105,5 +104,4 @@ class GameStateEncoder {
   int turn_index_ = 0;
 };
 
-}  // namespace binlog
 }  // namespace scribblez

@@ -781,12 +781,11 @@ struct LiveSnapshot {
   int score_opp = 0;
   int turn_index = 0;
   int active_player = 0;
-  scribblez::binlog::PositionKind kind = scribblez::binlog::PositionKind::kPreMove;
+  scribblez::PositionKind kind = scribblez::PositionKind::kPreMove;
 };
 
 std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStorage& log) {
   using namespace scribblez;
-  using binlog::PositionKind;
 
   std::vector<LiveSnapshot> out;
   Board board;
@@ -930,7 +929,7 @@ static void test_extract_positions_movegen_roundtrip() {
 
     auto live_snaps = live_replay_all_snapshots(log);
 
-    scribblez::binlog::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc;
     // The encoder no longer tracks racks (an outside observer cannot see
     // opponent draws). The test, however, has full information, so we
     // maintain a parallel rack pair alongside the encoder.
@@ -943,7 +942,7 @@ static void test_extract_positions_movegen_roundtrip() {
       // ---- pre-move snapshot ----
       CHECK(snap_idx < live_snaps.size());
       const LiveSnapshot& pre = live_snaps[snap_idx++];
-      CHECK(pre.kind == scribblez::binlog::PositionKind::kPreMove);
+      CHECK(pre.kind == scribblez::PositionKind::kPreMove);
       const int active = enc.active_player();
       CHECK(active == pre.active_player);
       CHECK(enc.score(active) == pre.score_active);
@@ -959,7 +958,7 @@ static void test_extract_positions_movegen_roundtrip() {
       if (turn.move.type() == scribblez::MoveType::PLAY) {
         CHECK(snap_idx < live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
-        CHECK(post.kind == scribblez::binlog::PositionKind::kPostMove);
+        CHECK(post.kind == scribblez::PositionKind::kPostMove);
 
         // Materialize post-state from the encoder + parallel racks by hand
         // and compare.
@@ -1047,8 +1046,14 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   CHECK(hdr->magic == scribblez::binlog::kMagic);
   CHECK(hdr->version == scribblez::binlog::kVersion);
   CHECK(hdr->num_games == static_cast<uint32_t>(kGames));
-  const int64_t total_positions = hdr->num_games;  // one sample per game
+  // Training expands each game into one row per eligible (pre-endgame) turn, so
+  // the loader's position count is the sum of those across all games.
+  int64_t total_positions = 0;
+  for (const auto& log : logs)
+    for (const auto& turn : log.turns)
+      if (turn.bag_size_before > 0) ++total_positions;
   CHECK(total_positions > 0);
+  CHECK(static_cast<int64_t>(hdr->num_sample_positions) == total_positions);
 
   // Register with DataLoader and drain rows via epoch_start/load_batch
   // for both pre-move and post-move phases.
@@ -1109,19 +1114,8 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     const int w = static_cast<int>(row[label_off + 0]);
     const int dd = static_cast<int>(row[label_off + 1]);
     const int l = static_cast<int>(row[label_off + 2]);
-    // Score-diff head is now a one-hot over clipped integer bins.
-    const float* sd_bins = row + label_off + scribblez::binlog::kWldFloats;
-    int sd_argmax = -1;
-    float sd_sum = 0.0f;
-    for (int b = 0; b < scribblez::binlog::kScoreDiffBins; ++b) {
-      sd_sum += sd_bins[b];
-      if (sd_bins[b] == 1.0f) {
-        CHECK(sd_argmax == -1);  // exactly one hot bin
-        sd_argmax = b;
-      }
-    }
-    CHECK(sd_sum == 1.0f);
-    const int sd = sd_argmax - scribblez::binlog::kScoreDiffClip;
+    // Score-diff target is a single scalar: the clipped final differential.
+    const int sd = static_cast<int>(row[label_off + scribblez::kWldFloats]);
     CHECK(w + dd + l == 1);  // exactly one of W/D/L
     CHECK(valid_labels.count({w, dd, l, sd}) == 1);
   }
@@ -1151,7 +1145,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     CHECK(racks_equal(r1_init, logs[gi].initial_racks[1]));
 
     auto live_snaps = live_replay_all_snapshots(logs[gi]);
-    scribblez::binlog::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc;
     std::array<scribblez::Rack, 2> racks = {r0_init, r1_init};
 
     size_t snap_idx = 0;
@@ -1561,8 +1555,8 @@ namespace {
 
 // Helper: build a TargetInputs with just the fields encode_labels reads for
 // heads 0 and 1 (no next move set -> head 2 emits all zeros).
-scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
-                                                 bool apply_flip = false) {
+scribblez::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
+                                         bool apply_flip = false) {
   using namespace scribblez::binlog;
   TargetInputs v{};
   v.has_next_move = false;
@@ -1574,9 +1568,9 @@ scribblez::binlog::TargetInputs make_scores_view(int fs_active, int fs_opp, int 
 }
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
-// size kLabelFloats laid out as [wld(3), score_diff(801), opp_next(225)].
-void encode_labels_flat(const scribblez::binlog::TargetInputs& view, float* flat) {
-  scribblez::binlog::AllTargets::encode_all(view, flat);
+// size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
+void encode_labels_flat(const scribblez::TargetInputs& view, float* flat) {
+  scribblez::AllTargets::encode_all(view, flat);
 }
 
 }  // namespace
@@ -1585,19 +1579,11 @@ static void test_encode_labels() {
   using namespace scribblez::binlog;
   float flat[kLabelFloats];
 
-  auto sd_argmax = [&](int diff_signed) {
-    // Score-diff head starts at offset kWldFloats; bin i corresponds to a
-    // signed differential of (i - kScoreDiffClip).
-    const float* sd = flat + kWldFloats;
-    float total = 0.0f;
-    int hot = -1;
-    for (int b = 0; b < kScoreDiffBins; ++b) {
-      total += sd[b];
-      if (sd[b] == 1.0f) hot = b;
-    }
-    CHECK(total == 1.0f);
+  auto check_score_diff = [&](int diff_signed) {
+    // Score-diff target is a single scalar at offset kWldFloats: the final
+    // differential clamped to +/- kScoreDiffClip.
     const int expected_clipped = std::clamp(diff_signed, -kScoreDiffClip, kScoreDiffClip);
-    CHECK(hot == expected_clipped + kScoreDiffClip);
+    CHECK(flat[kWldFloats] == static_cast<float>(expected_clipped));
   };
 
   // Win.
@@ -1606,7 +1592,7 @@ static void test_encode_labels() {
   CHECK(flat[0] == 1.0f);
   CHECK(flat[1] == 0.0f);
   CHECK(flat[2] == 0.0f);
-  sd_argmax(20);
+  check_score_diff(20);
 
   // Draw.
   auto v_draw = make_scores_view(75, 75, 1);
@@ -1614,7 +1600,7 @@ static void test_encode_labels() {
   CHECK(flat[0] == 0.0f);
   CHECK(flat[1] == 1.0f);
   CHECK(flat[2] == 0.0f);
-  sd_argmax(0);
+  check_score_diff(0);
 
   // Loss with negative score_diff.
   auto v_loss = make_scores_view(80, 95, 0);
@@ -1622,15 +1608,15 @@ static void test_encode_labels() {
   CHECK(flat[0] == 0.0f);
   CHECK(flat[1] == 0.0f);
   CHECK(flat[2] == 1.0f);
-  sd_argmax(-15);
+  check_score_diff(-15);
 
   // Differentials beyond +/- kScoreDiffClip are clipped (not rejected).
   auto v_huge_win = make_scores_view(/*fs_active=*/kScoreDiffClip + 50, /*fs_opp=*/0, 0);
   encode_labels_flat(v_huge_win, flat);
-  sd_argmax(kScoreDiffClip + 50);  // helper expects pre-clip; argmax matches clipped bin
+  check_score_diff(kScoreDiffClip + 50);  // helper clamps; stored value is the clipped diff
   auto v_huge_loss = make_scores_view(0, kScoreDiffClip + 50, 0);
   encode_labels_flat(v_huge_loss, flat);
-  sd_argmax(-(kScoreDiffClip + 50));
+  check_score_diff(-(kScoreDiffClip + 50));
 
   // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
@@ -1701,84 +1687,22 @@ static void test_encode_labels() {
 // Build a one-game .slog file under `dir` whose 2-turn game is:
 //   turn 0: p0 PLAYs a synthetic single-tile move placing 'Q' at (3,5)
 //   turn 1: p1 PASSes
-// This produces 3 eligible positions (turn 0 pre + turn 0 post + turn 1 pre);
-// the asymmetric one we want to test is position index 2 (the pre-move at
-// turn 1, where the board already holds the Q). Returns the file path, the
-// on-disk size, and the (path-independent) state describing position 2 so the
-// test can build its reference encoding.
+// The file declares a single eligible turn (turn 0), so the loader expands it to
+// exactly one training row. The position under test is turn 0 POST-move: the
+// board already holds the asymmetric Q, the POV is the mover (p0), whose leave
+// is the 6 As. Returns the file path, the on-disk size, and the
+// (path-independent) state describing that position so the test can build its
+// reference encoding.
 struct SymFixture {
   std::filesystem::path path;
   int64_t fsize;
   // Reproducible inputs to encode_input for the position we'll sample.
-  scribblez::Board board;
-  scribblez::Rack active_rack;
-  scribblez::Rack opp_rack;
-  scribblez::Move last_opp_move;
-  int score_active;
-  int score_opp;
+  scribblez::Rack active_rack;  // POV (p0) leave after the Q play: 6 As
+  scribblez::Move self_move;    // the Q play, applied to reach the post-move state
   int final_score_p0;
   int final_score_p1;
-  int active_player;
+  int active_player;  // POV = p0 (the mover at turn 0)
 };
-
-// Decode a one-game .slog whose only non-trivial content is a head-start
-// handicap of `initial_score_p0` points for p0, and return the score
-// differential recovered from the sampled position's input encoding. The two
-// turns are PASSes, so the board stays empty and the handicap is the sole
-// contributor to the score-diff feature.
-static int decode_handicap_score_diff(int initial_score_p0) {
-  using namespace scribblez::binlog;
-  using namespace scribblez;
-
-  FileHeader hdr{};
-  hdr.magic = kMagic;
-  hdr.version = kVersion;
-  hdr.num_games = 1;
-
-  GameMetadata gm{};
-  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
-  gm.num_turns = 2;
-  gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
-  gm.initial_score_p0 = static_cast<int16_t>(initial_score_p0);
-
-  InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
-  TurnBlob t0{};
-  t0.move = Move::pass();
-  TurnBlob t1{};
-  t1.move = Move::pass();
-
-  std::vector<char> buf;
-  auto append_bytes = [&buf](const void* p, size_t n) {
-    const char* c = reinterpret_cast<const char*>(p);
-    buf.insert(buf.end(), c, c + n);
-  };
-  append_bytes(&hdr, sizeof(hdr));
-  append_bytes(&gm, sizeof(gm));
-  append_bytes(&ir, sizeof(ir));
-  append_bytes(&t0, sizeof(t0));
-  append_bytes(&t1, sizeof(t1));
-
-  std::vector<float> output(kRowFloats, 0.0f);
-  uint8_t flip = 0;
-  BlockDecoder dec;
-  dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
-             /*post_move=*/false, /*output_row_start=*/0, output.data());
-
-  // Thermometer invariant: the number of set slots equals
-  // (clipped_diff + kScoreDiffClip + 1).
-  const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
-  int ones = 0;
-  for (int i = 0; i < kScoreDiffBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
-  return ones - kScoreDiffClip - 1;
-}
-
-// A head-start handicap stored in GameMetadata must reach the replayed
-// position's score-differential input (the decoder seeds its score
-// accumulator from the metadata's initial scores).
-static void test_handicap_shifts_score_diff_input() {
-  CHECK(decode_handicap_score_diff(0) == 0);
-  CHECK(decode_handicap_score_diff(80) == 80);
-}
 
 static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   using namespace scribblez::binlog;
@@ -1811,12 +1735,13 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = 1;
-  hdr.reserved2 = 0;
+  hdr.num_sample_positions = 1;  // one eligible turn -> one training row
 
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.sampled_turn = 1;  // sample the pre-move state at turn 1
+  gm.sampled_turn = 0;    // eval-only; training uses eligible_turns
+  gm.eligible_turns = 1;  // expand to one row: turn 0
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
@@ -1832,22 +1757,16 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   }
   int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
 
-  // Build the canonical state for position index 1 (pre-move turn 1):
-  //   board has Q at (3,5); active is p1 (empty rack); opp is p0 (now
-  //   holding the 6 As after Q was placed); last_opp_move == q_play;
-  //   score_active=0, score_opp=42.
+  // Canonical state for turn 0 post-move: POV is p0 (the mover), whose leave is
+  // the 6 As; applying q_play places the Q and gives p0 a score of 42.
   SymFixture out;
   out.path = path;
   out.fsize = fsize;
-  out.board.set(3, 5, Glyph::of(Tile::from_char('Q')));
-  // out.active_rack starts empty (p1)
-  for (int i = 0; i < 6; ++i) out.opp_rack.add(Tile::from_char('A'));
-  out.last_opp_move = q_play;
-  out.score_active = 0;
-  out.score_opp = 42;
+  for (int i = 0; i < 6; ++i) out.active_rack.add(Tile::from_char('A'));
+  out.self_move = q_play;
   out.final_score_p0 = gm.final_score_p0;
   out.final_score_p1 = gm.final_score_p1;
-  out.active_player = 1;
+  out.active_player = 0;
   return out;
 }
 
@@ -1869,30 +1788,29 @@ static void test_dataloader_per_row_symmetry() {
   SymFixture fix = write_one_position_slog(dir);
 
   // Build the two reference input encodings (canonical + flipped) for the
-  // sampled position.
+  // sampled position (turn 0 post-move).
   std::vector<float> ref_normal(kInputFloats, 0.0f);
   std::vector<float> ref_flipped(kInputFloats, 0.0f);
   {
-    // Replay the q_play so the encoder lands in the state that exists at
-    // sampled position 1 (pre-move turn 1): active=p1, last_move_by_p0 =
-    // q_play, board has Q at (3,5), scores=[42,0].
+    // Apply the q_play so the encoder lands in the turn-0 post-move state:
+    // board has Q at (3,5), p0 (the mover) scored 42, last_move_by_p0 = q_play.
+    // The POV is the mover (p0), encoded with its post-play leave (6 As).
     GameStateEncoder ref_enc;
-    ref_enc.apply_move(fix.last_opp_move);
-    ref_enc.encode_input(ref_enc.active_player(), fix.active_rack, /*apply_flip=*/false,
+    ref_enc.apply_move(fix.self_move);
+    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
                          ref_normal.data());
-    ref_enc.encode_input(ref_enc.active_player(), fix.active_rack, /*apply_flip=*/true,
+    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/true,
                          ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
 
-  // Expected labels for active=p1 (final p0=350 vs p1=200 -> active loses by
-  // 150). The fixture's "next move" after sampled position 1 doesn't exist
-  // (it's the last turn), so the opp-next-placement head is all-zero,
-  // making the whole label tail flip-invariant.
+  // Expected labels for active=p0 (final p0=350 vs p1=200 -> active wins by
+  // 150). The move after turn 0 is p1's PASS, so the opp-next-placement head is
+  // all-zero, making the whole label tail flip-invariant.
   float ref_labels[kLabelFloats];
   encode_labels_flat(
-    make_scores_view(/*fs_active=*/fix.final_score_p1, /*fs_opp=*/fix.final_score_p0,
+    make_scores_view(/*fs_active=*/fix.final_score_p0, /*fs_opp=*/fix.final_score_p1,
                      /*active_player=*/fix.active_player),
     ref_labels);
 
@@ -1909,7 +1827,7 @@ static void test_dataloader_per_row_symmetry() {
   {
     DataLoader::EpochConfig cfg;
     cfg.batch_size = 1;
-    cfg.post_move = false;
+    cfg.post_move = true;
     cfg.apply_symmetry = false;
     cfg.seed = 1;
     loader.epoch_start(cfg);
@@ -1928,7 +1846,7 @@ static void test_dataloader_per_row_symmetry() {
     for (int i = 0; i < n; ++i) {
       DataLoader::EpochConfig cfg;
       cfg.batch_size = 1;
-      cfg.post_move = false;
+      cfg.post_move = true;
       cfg.apply_symmetry = true;
       cfg.seed = static_cast<uint64_t>(i + 100);
       loader.epoch_start(cfg);
@@ -2106,16 +2024,16 @@ static void test_epoch_coverage() {
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
 
-  int64_t total_positions = 0;
   for (auto& p : fix.slog_paths) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
     int64_t fsize = static_cast<int64_t>(fs::file_size(p));
     loader.add_file(p.string(), hdr.num_games, fsize);
-    total_positions += hdr.num_games;
   }
-  CHECK(total_positions == fix.total_games);
+  // Each game expands to one row per eligible turn; the loader knows the total.
+  const int64_t total_positions = loader.num_positions();
+  CHECK(total_positions > fix.total_games);  // strictly more rows than games
 
   // Helper: drain a full epoch into a flat float vector.
   const int row_sz = DataLoader::row_size_floats();
@@ -2203,11 +2121,10 @@ static void test_epoch_memory_budget_stress() {
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
 
-  int64_t total_positions = 0;
   for (int i = 0; i < static_cast<int>(fix.slog_paths.size()); ++i) {
     loader.add_file(fix.slog_paths[i].string(), file_info[i].first, file_info[i].second);
-    total_positions += file_info[i].first;
   }
+  const int64_t total_positions = loader.num_positions();
 
   // Run epoch with batch_size=2 (small batches = more file switches).
   DataLoader::EpochConfig cfg;
@@ -2777,7 +2694,7 @@ namespace {
 class ShadowCheckAgent : public scribblez::Agent {
  public:
   ShadowCheckAgent(int tid, const std::string& name)
-      : scribblez::Agent(tid, name), bot_(tid, name) {}
+      : scribblez::Agent(tid, name), bot_({.thread_id = tid, .name = name}) {}
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
     const scribblez::Move shadow = bot_.make_move(req);
     const scribblez::Move ref = scribblez::hasty_best_move_reference(req);
@@ -2896,7 +2813,10 @@ class CapturingAgent : public scribblez::Agent {
  public:
   CapturingAgent(int tid, const std::string& name, std::vector<CapturedPos>& sink,
                  std::vector<CapturedPos>& blanked_sink)
-      : scribblez::Agent(tid, name), bot_(tid, name), sink_(sink), blanked_sink_(blanked_sink) {}
+      : scribblez::Agent(tid, name),
+        bot_({.thread_id = tid, .name = name}),
+        sink_(sink),
+        blanked_sink_(blanked_sink) {}
   scribblez::Move make_move(const scribblez::MoveRequest& req) override {
     auto& dst = req.my_rack.counts().blanks() == 0 ? sink_ : blanked_sink_;
     dst.push_back(
@@ -2953,7 +2873,7 @@ static void test_wmp_benchmark() {
 
   // Blanked racks fall back to the GADDAG path, so the WordMap bot must still pick
   // exactly the move HastyBot (make_move) does on them.
-  HastyBotAgent blank_bot(0, "blankcheck");
+  HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     CHECK(move_key(p.board, blank_bot.make_move(req)) ==
@@ -3005,7 +2925,7 @@ static void test_wmp_benchmark() {
   // The regime HastyBot actually uses: shadow best-first with early-exit, so only
   // a few anchors are ever generated. This is where WordMap lookup should beat
   // GADDAG (as MAGPIE's static move-gen does), because the lookup count collapses.
-  HastyBotAgent bot(0, "bench");
+  HastyBotAgent bot({.thread_id = 0, .name = "bench"});
   for (const CapturedPos& p : positions) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     const Move g = bot.make_move(req);
@@ -3093,6 +3013,124 @@ static void test_util_helpers() {
   std::cout << "test_util_helpers passed\n";
 }
 
+// Backs the invariant "NeuralAgent with --top-k=1 plays exactly HastyBot's
+// move" without instantiating the (TensorRT-linked) agent. At k=1 both agents
+// reduce to the same equity argmax over the legal plays, via two different
+// HastyEquity entry points: HastyBot scores moves one at a time with
+// HastyEquity::equity(), while NeuralAgent ranks the batch from
+// HastyEquity::equities(). This checks (a) the batch and per-move APIs
+// agree value-for-value and (b) their argmax -- the move each agent returns --
+// is identical.
+static void test_topk1_selection_matches_hastybot() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_topk1_XXXXXX";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+  const HastyEquity& eq = HastyEquity::instance();
+
+  Dictionary d = tiny_dict();
+  Board board;  // opening position
+  MoveGenerator gen(board, d);
+  Rack my_rack = rack_from("CATSOHE");
+  std::vector<Move> plays = gen.generate(my_rack);
+  CHECK(plays.size() >= 2);  // a meaningful argmax needs >1 candidate
+
+  Rack opp;  // empty
+  const int bag_size = 80;
+
+  // Batch path (what NeuralAgent uses) must match the per-move path (what
+  // HastyBot uses) value-for-value.
+  std::vector<double> batch = eq.equities(plays, board, bag_size, opp, my_rack);
+  CHECK(batch.size() == plays.size());
+  std::vector<double> per_move(plays.size());
+  for (size_t i = 0; i < plays.size(); ++i) {
+    per_move[i] = eq.equity(plays[i], board, bag_size, opp, my_rack);
+    CHECK(std::abs(batch[i] - per_move[i]) < 1e-9);
+  }
+
+  // HastyBot's selection: first move with strictly-greatest per-move equity.
+  int hasty_pick = 0;
+  for (size_t i = 1; i < per_move.size(); ++i) {
+    if (per_move[i] > per_move[hasty_pick]) hasty_pick = static_cast<int>(i);
+  }
+  // NeuralAgent k=1 selection: top-1 of the batch ranking (same rule).
+  int topk1_pick = 0;
+  for (size_t i = 1; i < batch.size(); ++i) {
+    if (batch[i] > batch[topk1_pick]) topk1_pick = static_cast<int>(i);
+  }
+  CHECK(hasty_pick == topk1_pick);
+
+  fs::remove_all(tmp);
+  std::cout << "test_topk1_selection_matches_hastybot passed (" << plays.size()
+            << " candidates, pick=" << hasty_pick << ")\n";
+}
+
+// Build a one-game .slog buffer whose two turns are both PASSes, with a starting
+// handicap of `initial_score_p0` points for p0, and return the score
+// differential recovered from the sampled position's input encoding. The two
+// turns are PASSes, so the board stays empty and the handicap is the sole
+// contributor to the score-diff feature.
+static int decode_handicap_score_diff(int initial_score_p0) {
+  using namespace scribblez::binlog;
+  using namespace scribblez;
+
+  FileHeader hdr{};
+  hdr.magic = kMagic;
+  hdr.version = kVersion;
+  hdr.num_games = 1;
+
+  GameMetadata gm{};
+  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
+  gm.num_turns = 2;
+  gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
+  gm.initial_score_p0 = static_cast<int16_t>(initial_score_p0);
+
+  InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
+  TurnBlob t0{};
+  t0.move = Move::pass();
+  TurnBlob t1{};
+  t1.move = Move::pass();
+
+  std::vector<char> buf;
+  auto append_bytes = [&buf](const void* p, size_t n) {
+    const char* c = reinterpret_cast<const char*>(p);
+    buf.insert(buf.end(), c, c + n);
+  };
+  append_bytes(&hdr, sizeof(hdr));
+  append_bytes(&gm, sizeof(gm));
+  append_bytes(&ir, sizeof(ir));
+  append_bytes(&t0, sizeof(t0));
+  append_bytes(&t1, sizeof(t1));
+
+  std::vector<float> output(kRowFloats, 0.0f);
+  uint8_t flip = 0;
+  BlockDecoder dec;
+  dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
+             /*post_move=*/false, /*output_row_start=*/0, output.data());
+
+  // Thermometer invariant: the number of set slots equals
+  // (clipped_diff + kScoreDiffClip + 1).
+  const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
+  int ones = 0;
+  for (int i = 0; i < kScoreDiffThermoBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
+  return ones - kScoreDiffClip - 1;
+}
+
+// A head-start handicap stored in GameMetadata must reach the replayed
+// position's score-differential input (the decoder seeds its score
+// accumulator from the metadata's initial scores).
+static void test_handicap_shifts_score_diff_input() {
+  CHECK(decode_handicap_score_diff(0) == 0);
+  CHECK(decode_handicap_score_diff(80) == 80);
+  std::cout << "test_handicap_shifts_score_diff_input passed\n";
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
@@ -3114,6 +3152,7 @@ int main() {
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
   test_binary_log_file_and_data_loader_roundtrip();
+  test_handicap_shifts_score_diff_input();
   test_tile_glyph_basics();
   test_rack_invariants();
   test_bag_basics();
@@ -3124,7 +3163,6 @@ int main() {
   test_game_end_stalemate_penalty();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
-  test_handicap_shifts_score_diff_input();
   test_epoch_determinism();
   test_epoch_coverage();
   test_epoch_memory_budget_stress();
@@ -3137,6 +3175,7 @@ int main() {
   test_streaming_row_buffer_concurrency();
   test_streaming_row_buffer_shutdown();
   test_pick_sampled_turn_eligibility();
+  test_topk1_selection_matches_hastybot();
   std::cout << "All tests passed.\n";
   return 0;
 }

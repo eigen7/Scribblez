@@ -5,7 +5,6 @@
 #include <algorithm>
 
 namespace scribblez {
-namespace binlog {
 
 // ---------- WldTarget ---------------------------------------------------
 
@@ -20,10 +19,8 @@ void WldTarget::encode(const TargetInputs& v, float* out) {
 // ---------- ScoreDiffTarget --------------------------------------------
 
 void ScoreDiffTarget::encode(const TargetInputs& v, float* out) {
-  std::fill_n(out, kBins, 0.0f);
   const int diff = v.final_active() - v.final_opp();
-  const int clipped = std::clamp(diff, -kClip, kClip);
-  out[clipped + kClip] = 1.0f;
+  out[0] = static_cast<float>(std::clamp(diff, -kClip, kClip));
 }
 
 // ---------- OppNextPlacementTarget -------------------------------------
@@ -52,5 +49,4 @@ void OppNextPlacementTarget::encode(const TargetInputs& v, float* out) {
   }
 }
 
-}  // namespace binlog
 }  // namespace scribblez

@@ -23,15 +23,24 @@ class BlockDecoder {
  public:
   BlockDecoder() = default;
 
-  // Decode games [local_start, local_start + n_rows) of the .slog file pointed
-  // to by `buf` into output rows [output_row_start, output_row_start + n_rows).
-  // One row per game (each game contributes its single pre-chosen sampled
-  // turn). `flips[i] != 0` selects diagonal-symmetry augmentation for output
-  // row (output_row_start + i). `post_move` picks pre-move vs post-move snapshot
-  // at the sampled turn. `path` is used only for diagnostic messages on
-  // malformed buffers.
+  // Decode games [local_start, local_start + n_rows) of the .slog file
+  // pointed to by `buf`, emitting each game's eval-only `sampled_turn` into
+  // output rows [output_row_start, output_row_start + n_rows). One row per
+  // game. `flips[i] != 0` selects diagonal-symmetry augmentation for output
+  // row (output_row_start + i). `post_move` picks pre-move vs post-move
+  // snapshot. `path` is used only for diagnostic messages. (Training uses
+  // decode_one, which addresses an explicit turn; this game-indexed form is
+  // for tests / one-position-per-game callers.)
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* flips, bool post_move, int64_t output_row_start, float* output);
+
+  // Decode a single (game, turn) position of the .slog file `buf` into output
+  // row `output_row`. This is the training entry point: the DataLoader expands
+  // each game into one position per eligible turn and calls this per row.
+  // `turn_idx` selects which turn to encode (replacing the file's sampled_turn);
+  // `flip` toggles diagonal symmetry; `post_move` picks the snapshot.
+  void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
+                  bool flip, bool post_move, int64_t output_row, float* output);
 
   // Replay game `game_idx` to its sampled position, then encode that fixed
   // position once per integer score differential in [diff_lo, diff_hi],

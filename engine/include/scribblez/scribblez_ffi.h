@@ -34,7 +34,7 @@ const ScribblezShape* scribblez_input_shapes(void);
 
 // Static description of the target tensor(s) in row order:
 //   target_index=0  "wld"                (3,)
-//   target_index=1  "score_diff"         (801,)
+//   target_index=1  "score_diff"         (1,)
 //   target_index=2  "opp_next_placement" (15, 15)
 const ScribblezShape* scribblez_target_shapes(void);
 
@@ -111,8 +111,13 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 // Epoch-based streaming API. Shuffles files and positions within files
 // deterministically based on `seed`. Returns the number of complete batches
 // in the epoch (the last partial batch, if any, is also yielded).
+//
+// `turns_per_game` controls per-game turn subsampling: 0 trains on every
+// eligible turn; k > 0 draws k turns per game per epoch, and `epoch_index`
+// selects which turns so successive epochs cover distinct turns (see
+// DataLoader::EpochConfig).
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
-                             uint64_t seed);
+                             uint64_t seed, int turns_per_game, int epoch_index);
 
 // Fill `output` with the next batch of the current epoch. Returns the
 // number of rows written (0 = epoch exhausted). `output` must have capacity

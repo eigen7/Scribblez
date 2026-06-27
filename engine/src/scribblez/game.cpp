@@ -50,6 +50,11 @@ void Game::play() {
   log_.initial_racks[0] = racks_[0];
   log_.initial_racks[1] = racks_[1];
 
+  // Let stateful agents reset to a clean position (seats alternate across a
+  // series, so the same Agent instances are reused game to game).
+  players_[0]->begin_game();
+  players_[1]->begin_game();
+
   int cur = 0;
   int consecutive_zero_turns = 0;
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
@@ -96,6 +101,13 @@ void Game::play() {
     }
 
     rec.move = std::move(m);
+
+    // Notify both seats of the applied move, in turn order, so stateful agents
+    // (e.g. NeuralAgent) can mirror the full game even on the opponent's
+    // turns. The board/score are already updated above for a PLAY.
+    players_[0]->observe_move(rec.move);
+    players_[1]->observe_move(rec.move);
+
     rec.cumulative_scores = scores_;
     log_.turns.push_back(std::move(rec));
 

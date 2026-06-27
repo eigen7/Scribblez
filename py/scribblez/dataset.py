@@ -1,5 +1,6 @@
 """Training dataset backed by .slog files via the native C++ DataLoader."""
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -25,11 +26,11 @@ def row_layout() -> tuple[list, list[tuple[str, int, int, tuple[int, ...]]]]:
     """
     input_shapes = get_input_shapes()
     target_shapes = get_target_shapes()
-    input_total = sum(_prod(s.dims) for s in input_shapes)
+    input_total = sum(int(np.prod(s.dims)) for s in input_shapes)
     targets: list[tuple[str, int, int, tuple[int, ...]]] = []
     offset = input_total
     for ts in target_shapes:
-        size = _prod(ts.dims)
+        size = int(np.prod(ts.dims))
         targets.append((ts.name, offset, offset + size, ts.dims))
         offset += size
     return input_shapes, targets
@@ -45,7 +46,7 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
     result: dict[str, torch.Tensor] = {}
     offset = 0
     for s in input_shapes:
-        size = _prod(s.dims)
+        size = int(np.prod(s.dims))
         arr = batch_2d[:, offset : offset + size]
         result[s.name] = torch.from_numpy(arr.reshape(-1, *s.dims).copy())
         offset += size
@@ -65,36 +66,53 @@ class SlogDataset:
 
     def __init__(
         self,
-        data_dir: str | Path,
+        data_dir: str | Path | Iterable[str | Path],
         post_move: bool = True,
         apply_symmetry: bool = True,
         memory_budget: int = 512 * 1024 * 1024,
         num_workers: int = 4,
         num_prefetch: int = 2,
     ):
-        self.data_dir = Path(data_dir)
+        # Accept a single directory or several; a multi-directory dataset is the
+        # union of every directory's .slog files (e.g. data accumulated across
+        # separate generation runs). A lone str/Path is one directory, not an
+        # iterable of characters.
+        if isinstance(data_dir, (str, Path)):
+            self.data_dirs = [Path(data_dir)]
+        else:
+            self.data_dirs = [Path(d) for d in data_dir]
         self.post_move = post_move
         self.apply_symmetry = apply_symmetry
 
-        # Discover and register .slog files.
-        slog_files = sorted(self.data_dir.glob("*.slog"))
+        # Discover and register .slog files across every directory.
+        slog_files = sorted(f for d in self.data_dirs for f in d.glob("*.slog"))
         if not slog_files:
-            raise FileNotFoundError(f"No .slog files in {self.data_dir}")
+            dirs = ", ".join(str(d) for d in self.data_dirs)
+            raise FileNotFoundError(f"No .slog files in {dirs}")
 
         self._loader = NativeDataLoader(memory_budget, num_workers, num_prefetch)
-        total = 0
+        self._num_games = 0
         for path in slog_files:
-            num_pos, file_size = read_file_header(path)
-            self._loader.add_file(path, num_pos, file_size)
-            total += num_pos
+            num_games, file_size = read_file_header(path)
+            self._loader.add_file(path, num_games, file_size)
+            self._num_games += num_games
 
-        self._total = total
+        # num_samples is the loader's EXPANDED row count (one per eligible turn
+        # across every game), not the game count -- read it back from the loader,
+        # which derives it from each file's header.
+        self._total = self._loader.num_positions
         self._row_floats = row_size_floats()
         self._input_layout, self._targets = row_layout()
 
     @property
     def num_samples(self) -> int:
         return self._total
+
+    @property
+    def num_games(self) -> int:
+        """Total games across all files (the all-turns epoch expands each game
+        into eligible_turns rows; a turns_per_game=1 epoch is one row per game)."""
+        return self._num_games
 
     @property
     def input_shapes(self) -> dict[str, tuple[int, ...]]:
@@ -107,15 +125,22 @@ class SlogDataset:
         seed: int = 42,
         post_move: bool | None = None,
         apply_symmetry: bool | None = None,
+        turns_per_game: int = 0,
+        epoch_index: int = 0,
     ):
         """Yield batch dicts for one epoch, streaming from disk.
 
         All data is loaded on-demand with LRU eviction. Deterministic for
         a given seed.
+
+        turns_per_game: 0 (default) iterates every eligible turn of every game.
+        k > 0 draws k turns per game this epoch; pass a distinct epoch_index per
+        epoch so successive epochs cover distinct turns (k == 1 makes every row
+        in the epoch come from a different game).
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry
-        self._loader.epoch_start(batch_size, pm, sym, seed)
+        self._loader.epoch_start(batch_size, pm, sym, seed, turns_per_game, epoch_index)
         while True:
             batch_data = self._loader.load_batch()
             if batch_data is None:
@@ -124,10 +149,3 @@ class SlogDataset:
 
     def _slice_batch(self, batch_data: np.ndarray) -> dict[str, torch.Tensor]:
         return slice_row_batch(batch_data, self._input_layout, self._targets)
-
-
-def _prod(dims: tuple[int, ...]) -> int:
-    r = 1
-    for d in dims:
-        r *= d
-    return r

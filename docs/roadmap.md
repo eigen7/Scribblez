@@ -21,9 +21,9 @@ residual rack (post-play leave), the score differential, and recent move
 context, M_post predicts:
 
 - **Win/Draw/Loss probabilities** (WLD head) — the primary value signal.
-- **Score differential distribution** (ScoreDiff head) — a 801-bin
-  probability distribution over clipped final score differentials [-400, +400],
-  following KataGo's score-belief approach.
+- **Score differential** (ScoreDiff head) — a Gaussian (mean and standard
+  deviation) over the clipped final score differential [-400, +400], trained by
+  Gaussian negative log-likelihood against the observed differential.
 - **Opponent's next tile placement** (OppNextPlacement head) — a 15×15 binary
   mask predicting where the opponent will place tiles on their next turn.
 
@@ -32,14 +32,15 @@ context, M_post predicts:
 1. **Self-play**: HastyBot vs. HastyBot games are played in parallel via
    `GameRunner`. Each completed game is serialized to `.slog` format — a
    compact binary log storing initial racks, every move, and every tile draw
-   (~24 bytes per turn). One turn per game is sampled uniformly (among turns
-   where the bag is non-empty) and recorded as the training position.
+   (~24 bytes per turn). Each game records how many of its turns are
+   training-eligible (the bag-non-empty prefix, or all turns under
+   `--sample-endgames`); every eligible turn becomes a training position.
 
 2. **Training**: The `DataLoader` streams `.slog` files through an epoch-based
-   API. For each sampled game, a `BlockDecoder` replays the game forward to the
-   sampled turn, materializing the post-move (or pre-move) input features on
-   the fly. Diagonal symmetry augmentation (the board is invariant under
-   `(r,c) → (c,r)`) is applied stochastically per-row.
+   API, expanding each game into one row per eligible turn. A `BlockDecoder`
+   replays the game forward to each turn, materializing the post-move (or
+   pre-move) input features on the fly. Diagonal symmetry augmentation (the
+   board is invariant under `(r,c) → (c,r)`) is applied stochastically per-row.
 
 3. **Model**: A ResNet trunk (85 spatial input planes × 15×15, plus 936 scalar
    features) branches into the three heads above. Training uses AdamW with

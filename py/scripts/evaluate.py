@@ -39,8 +39,8 @@ def build_model_from_checkpoint(ckpt: dict, device: torch.device) -> ScribblezMo
     model = ScribblezModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
-        num_blocks=targs.get("num_blocks", 8),
-        trunk_channels=targs.get("trunk_channels", 128),
+        num_blocks=targs.get("num_blocks", 10),
+        trunk_channels=targs.get("trunk_channels", 192),
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     return model

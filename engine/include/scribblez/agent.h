@@ -4,6 +4,7 @@
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
+#include <array>
 #include <memory>
 #include <random>
 #include <string>
@@ -63,6 +64,19 @@ class Agent {
   int thread_id() const { return thread_id_; }
 
   virtual Move make_move(const MoveRequest& req) = 0;
+
+  // Called once at the start of each game, before any make_move() on it. Lets a
+  // stateful agent reset to a clean starting position. The same Agent instance
+  // is reused across a series of games (seats alternate), so this is the reset
+  // point. Default: no-op.
+  virtual void begin_game() {}
+
+  // Called after every applied move in the game -- the agent's own moves and
+  // the opponent's -- in turn order. Lets a stateful agent mirror the full game
+  // progression even though make_move() only fires on its own turns (needed,
+  // e.g., to maintain a GameStateEncoder whose features depend on both players'
+  // most-recent placements). `move` is the move just applied. Default: no-op.
+  virtual void observe_move(const Move& move) {}
 
   // Called once after the game ends, on each seat's agent. The returned
   // EndGameResult tells play_game what to do next: the default no-op result
