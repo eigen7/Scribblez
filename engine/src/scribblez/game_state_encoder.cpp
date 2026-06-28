@@ -1,5 +1,6 @@
 #include "scribblez/game_state_encoder.h"
 
+#include "scribblez/board_planes.h"
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/tile.h"
@@ -14,40 +15,6 @@ namespace {
 
 // Index into a single 15x15 plane: row-major if !flip, transposed if flip.
 inline int plane_idx(int r, int c, bool flip) { return util::plane_index(r, c, kBoardSide, flip); }
-
-// Letter, blank-marker, and premium planes.
-void encode_board_planes(const Board& board, bool flip, float* planes_out) {
-  for (int r = 0; r < kBoardSide; ++r) {
-    for (int c = 0; c < kBoardSide; ++c) {
-      const Glyph g = board.at(r, c);
-      if (g.is_empty()) continue;
-      const int letter = g.letter().index();  // 0..25, valid for any non-empty glyph
-      planes_out[letter * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
-      if (g.is_blank()) {
-        planes_out[kBlankMarkerPlane * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
-      }
-    }
-  }
-
-  const auto& prem = Board::PREMIUM;
-  for (int r = 0; r < kBoardSide; ++r) {
-    for (int c = 0; c < kBoardSide; ++c) {
-      const Premium p = prem[r * kBoardSide + c];
-      if (p == Premium::NONE) continue;
-      int offset = -1;
-      if (p == Premium::DLS)
-        offset = 0;
-      else if (p == Premium::TLS)
-        offset = 1;
-      else if (p == Premium::DWS)
-        offset = 2;
-      else if (p == Premium::TWS)
-        offset = 3;
-      if (offset < 0) continue;
-      planes_out[(kPremiumPlane0 + offset) * kBoardCells + plane_idx(r, c, flip)] = 1.0f;
-    }
-  }
-}
 
 // Placement plane: mark squares `m` placed tiles on. Uses Move::square_mask
 // -- an absolute bitmask over the play's lane (bit k set iff lane cell k was a
@@ -192,8 +159,15 @@ void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Mo
 // POV-visible inputs; `score_diff` is the active player's score advantage.
 void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
                 const Move& opp_move, int score_diff, bool apply_flip, float* out) {
+  // The shared board-content block sits at the front of the spatial features,
+  // with the placement/cross-check planes following it.
+  static_assert(BoardPlanes::kBlankMarkerPlane == kBlankMarkerPlane &&
+                  BoardPlanes::kPremiumPlane0 == kPremiumPlane0 &&
+                  BoardPlanes::kPlanes == kSelfPlacementPlane,
+                "post-move spatial layout must keep the shared board-plane block at the front");
+
   std::memset(out, 0, sizeof(float) * static_cast<size_t>(kInputFloats));
-  encode_board_planes(board, apply_flip, out);
+  BoardPlanes::encode(board, apply_flip, out);
   encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
   encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
   encode_cross_check_planes(board, apply_flip, out);

@@ -5,6 +5,7 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 #include "scribblez/board.h"
+#include "scribblez/board_planes.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
@@ -14,6 +15,7 @@
 #include "scribblez/input_encoder.h"
 #include "scribblez/lane_targets.h"
 #include "scribblez/leave_values.h"
+#include "scribblez/lexical_input_encoder.h"
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
@@ -3190,10 +3192,80 @@ static void test_lane_targets() {
   }
 }
 
+// The lexical model's input encoder: 31 board planes (letters, blank-marker,
+// premiums) + 27 raw rack counts, with NO cross-check planes. Pins the plane
+// contents, premium consistency, rack counts, and the flip transpose.
+static int prem_plane_offset(Premium p) {
+  if (p == Premium::DLS) return 0;
+  if (p == Premium::TLS) return 1;
+  if (p == Premium::DWS) return 2;
+  if (p == Premium::TWS) return 3;
+  return -1;
+}
+
+static void test_lexical_input_encoder() {
+  Board b;
+  b.set(7, 7, Glyph::of(Tile::from_char('C')));
+  b.set(7, 8, Glyph::of(Tile::from_char('A')));
+  b.set(7, 9, Glyph::of(Tile::from_char('T')));
+  b.set(5, 5, Glyph::played(Tile::from_char('S'), /*is_blank=*/true));  // designated blank
+  const Rack rack = rack_from("AAB?");
+
+  using Enc = LexicalInputEncoder;
+  const int A = Tile::from_char('A').index();
+  const int B = Tile::from_char('B').index();
+  const int C = Tile::from_char('C').index();
+  const int Sx = Tile::from_char('S').index();
+  const int cells = Enc::kBoardCells;
+  auto cell = [](int r, int c) { return r * BOARD_SIZE + c; };
+
+  std::vector<float> out(Enc::kInputFloats, -1.0f);
+  Enc::encode(b, rack, /*flip=*/false, out.data());
+
+  // Letter planes (a designated blank still sets its letter plane).
+  CHECK(out[C * cells + cell(7, 7)] == 1.0f);
+  CHECK(out[A * cells + cell(7, 8)] == 1.0f);
+  CHECK(out[Sx * cells + cell(5, 5)] == 1.0f);
+  CHECK(out[A * cells + cell(7, 7)] == 0.0f);
+
+  // Blank-marker plane: set under the blank only.
+  CHECK(out[BoardPlanes::kBlankMarkerPlane * cells + cell(5, 5)] == 1.0f);
+  CHECK(out[BoardPlanes::kBlankMarkerPlane * cells + cell(7, 7)] == 0.0f);
+
+  // Premium planes agree with Board::PREMIUM at every cell (reported even under
+  // a played tile), and exactly one premium plane is set per premium square.
+  for (int r = 0; r < BOARD_SIZE; ++r) {
+    for (int c = 0; c < BOARD_SIZE; ++c) {
+      const int want = prem_plane_offset(b.premium_at(r, c));
+      for (int off = 0; off < BoardPlanes::kPremiumPlanes; ++off) {
+        const float v = out[(BoardPlanes::kPremiumPlane0 + off) * cells + cell(r, c)];
+        CHECK(v == (off == want ? 1.0f : 0.0f));
+      }
+    }
+  }
+
+  // Rack scalars: raw counts, blank in slot 26.
+  const float* counts = out.data() + Enc::kSpatialFloats;
+  CHECK(counts[A] == 2.0f);
+  CHECK(counts[B] == 1.0f);
+  CHECK(counts[26] == 1.0f);  // blank
+  CHECK(counts[C] == 0.0f);
+
+  // Flip transposes the spatial planes but leaves rack scalars untouched.
+  std::vector<float> flipped(Enc::kInputFloats, -1.0f);
+  Enc::encode(b, rack, /*flip=*/true, flipped.data());
+  CHECK(flipped[A * cells + cell(8, 7)] == 1.0f);  // (7,8) -> (8,7)
+  CHECK(flipped[A * cells + cell(7, 8)] == 0.0f);
+  CHECK(flipped[C * cells + cell(7, 7)] == 1.0f);  // on the diagonal, unchanged
+  const float* fcounts = flipped.data() + Enc::kSpatialFloats;
+  CHECK(fcounts[A] == 2.0f && fcounts[26] == 1.0f);
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
   test_lane_targets();
+  test_lexical_input_encoder();
   test_shadow_movegen_matches_full();
   test_wmp_generate_matches_full();
   test_wmp_matches_gaddag_real_lexicon();
