@@ -3,6 +3,7 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/position_json.h"
+#include "scribblez/training_task.h"
 
 #include <iostream>
 
@@ -108,8 +109,8 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
     const uint32_t game_idx = static_cast<uint32_t>(local_start + i);
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
-    pos_.encode_row(g, static_cast<int>(sampled), post_move, flips[i] != 0,
-                    output + (output_row_start + i) * kRowFloats);
+    pos_.encode_row<PostMoveTask>(g, static_cast<int>(sampled), post_move, flips[i] != 0,
+                                  output + (output_row_start + i) * kRowFloats);
   }
 }
 
@@ -127,7 +128,8 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
     return;
   }
   const GameLog g = game_view(buf, game_idx, nullptr);
-  pos_.encode_row(g, static_cast<int>(turn_idx), post_move, flip, output + output_row * kRowFloats);
+  pos_.encode_row<PostMoveTask>(g, static_cast<int>(turn_idx), post_move, flip,
+                                output + output_row * kRowFloats);
 }
 
 void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,

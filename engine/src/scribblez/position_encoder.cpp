@@ -1,7 +1,6 @@
 #include "scribblez/position_encoder.h"
 
 #include "scribblez/input_encoder.h"
-#include "scribblez/training_task.h"
 
 #include <cassert>
 #include <cstdint>
@@ -56,15 +55,14 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
   return mover;
 }
 
-void PositionEncoder::encode_row(const GameLog& g, int sampled_turn, bool post_move, bool flip,
-                                 float* out_row) {
-  const int mover = replay_to_sampled(g, sampled_turn, post_move);
-
+EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, int mover,
+                                            bool flip) const {
   EncodeContext ctx{};
   ctx.enc = &enc_;
   ctx.pov_rack = &racks_[mover];
   ctx.active_player = mover;
   ctx.apply_flip = flip;
+  ctx.dict = dict_;
 
   // The "opponent next move" -- whichever upcoming turn was played by
   // (1 - mover). Pre-move: that's turn sampled_turn+1. Post-move: enc_ has
@@ -77,8 +75,7 @@ void PositionEncoder::encode_row(const GameLog& g, int sampled_turn, bool post_m
   }
   ctx.final_score_p0 = g.final_scores[0];
   ctx.final_score_p1 = g.final_scores[1];
-
-  PostMoveTask::encode_row(ctx, out_row);
+  return ctx;
 }
 
 void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move,

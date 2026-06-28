@@ -16,6 +16,7 @@
 #include "scribblez/lane_targets.h"
 #include "scribblez/leave_values.h"
 #include "scribblez/lexical_input_encoder.h"
+#include "scribblez/lexical_task.h"
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
@@ -23,6 +24,7 @@
 #include "scribblez/streaming_row_buffer.h"
 #include "scribblez/tile_counts.h"
 #include "scribblez/training_targets.h"
+#include "scribblez/training_task.h"
 #include "util/grid.h"
 #include "util/math.h"
 
@@ -2531,7 +2533,8 @@ static void test_streaming_disk_encode_equivalence() {
 
       std::vector<float> row_stream(row_floats, 0.0f);
       PositionEncoder enc;
-      enc.encode_row(storage.view(), sampled, post_move, /*flip=*/false, row_stream.data());
+      enc.encode_row<PostMoveTask>(storage.view(), sampled, post_move, /*flip=*/false,
+                                   row_stream.data());
 
       for (int i = 0; i < row_floats; ++i) CHECK(row_disk[i] == row_stream[i]);
       ++compared;
@@ -3139,7 +3142,7 @@ static void test_lane_targets() {
                        Glyph::of(Tile::from_char('T'))}));
     const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
     std::vector<float> row(kLaneLabelFloats, -1.0f);
-    encode_lane_targets(t, row.data());
+    encode_lane_targets(t, /*flip=*/false, row.data());
 
     const float* occ = row.data();
     const float* score = occ + kLaneOccupancyFloats;
@@ -3161,6 +3164,17 @@ static void test_lane_targets() {
     CHECK(mask[0] == 0.0f);
     CHECK(score[0] == 0.0f);
     for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) CHECK(occ[i] == 0.0f);
+
+    // Flip is a rows<->cols swap: the horizontal CATS play that lived in axis-0
+    // lane CENTER now lives in axis-1 (vertical) lane CENTER, same cell.
+    std::vector<float> frow(kLaneLabelFloats, -1.0f);
+    encode_lane_targets(t, /*flip=*/true, frow.data());
+    const float* focc = frow.data();
+    const float* v_lane = focc + (kLanesPerAxis + CENTER) * kLaneLen * kLaneTileKinds;
+    const float* h_lane = focc + CENTER * kLaneLen * kLaneTileKinds;
+    CHECK(v_lane[(CENTER + 3) * kLaneTileKinds + sk] == 1.0f);                     // now vertical
+    for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) CHECK(h_lane[i] == 0.0f);  // cols empty
+    CHECK((focc + kLaneOccupancyFloats)[kLanesPerAxis + CENTER] == score[row_id]);
   }
 
   // 4. Random-walk invariant: the structural global max always equals the raw
@@ -3261,11 +3275,48 @@ static void test_lexical_input_encoder() {
   CHECK(fcounts[A] == 2.0f && fcounts[26] == 1.0f);
 }
 
+// The lexical training task: one full row is exactly the lexical input encoding
+// followed by the per-lane labels for the board/rack at the sampled position.
+// Checked for both symmetry orientations.
+static void test_lexical_task_row() {
+  const Dictionary d = tiny_dict();
+
+  // CAT on the board (the context exposes the board via its GameStateEncoder).
+  GameStateEncoder gse;
+  gse.apply_move(make_play(CENTER, CENTER, /*horizontal=*/true,
+                           {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                            Glyph::of(Tile::from_char('T'))}));
+  const Rack rack = rack_from("S");
+
+  for (bool flip : {false, true}) {
+    EncodeContext ctx{};
+    ctx.enc = &gse;
+    ctx.pov_rack = &rack;
+    ctx.apply_flip = flip;
+    ctx.dict = &d;
+
+    std::vector<float> row(LexicalTask::kRowFloats, -1.0f);
+    LexicalTask::encode_row(ctx, row.data());
+
+    std::vector<float> ref_in(LexicalInputEncoder::kInputFloats);
+    LexicalInputEncoder::encode(gse.board(), rack, flip, ref_in.data());
+    std::vector<float> ref_lab(kLaneLabelFloats);
+    encode_lane_targets(compute_lane_targets(gse.board(), rack, d), flip, ref_lab.data());
+
+    CHECK(LexicalTask::kInputFloats == static_cast<int>(ref_in.size()));
+    CHECK(LexicalTask::kLabelFloats == static_cast<int>(ref_lab.size()));
+    for (int i = 0; i < LexicalTask::kInputFloats; ++i) CHECK(row[i] == ref_in[i]);
+    for (int i = 0; i < LexicalTask::kLabelFloats; ++i)
+      CHECK(row[LexicalTask::kInputFloats + i] == ref_lab[i]);
+  }
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
   test_lane_targets();
   test_lexical_input_encoder();
+  test_lexical_task_row();
   test_shadow_movegen_matches_full();
   test_wmp_generate_matches_full();
   test_wmp_matches_gaddag_real_lexicon();

@@ -3,6 +3,7 @@
 #include "scribblez/binary_log.h"
 #include "scribblez/game_sink.h"
 #include "scribblez/position_encoder.h"
+#include "scribblez/training_task.h"
 
 #include <array>
 #include <random>
@@ -36,7 +37,7 @@ class RingBufferGameSink : public GameSink {
     const uint64_t r = ring_.claim_row();
     if (r == StreamingRowBuffer::kNoRow) return;  // buffer stopped
     const bool flip = apply_symmetry_ && (rng_() & 1ULL);
-    pos_.encode_row(view, turn, post_move_, flip, ring_.row_dest(r));
+    pos_.encode_row<PostMoveTask>(view, turn, post_move_, flip, ring_.row_dest(r));
     ring_.commit_row(r);
     games_played_->fetch_add(1, std::memory_order_relaxed);
   }

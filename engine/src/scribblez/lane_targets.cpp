@@ -119,27 +119,29 @@ void encode_lane_occupancy(const LaneBest& lane, float* out) {
 
 }  // namespace
 
-void encode_lane_targets(const LaneTargets& t, float* out) {
+void encode_lane_targets(const LaneTargets& t, bool flip, float* out) {
   float* occ = out;
   float* score = out + kLaneOccupancyFloats;
   float* mask = score + kLaneScoreFloats;
 
-  // Flat lane id `axis * 15 + lane`: axis 0 = rows (horizontal), axis 1 = cols.
+  // Flat lane id `axis * 15 + lane`: axis 0 = horizontal lanes, axis 1 = vertical
+  // lanes. A diagonal flip swaps the two axes (see header).
+  const auto& horizontal = flip ? t.cols : t.rows;
+  const auto& vertical = flip ? t.rows : t.cols;
+
   for (int lane = 0; lane < kLanesPerAxis; ++lane) {
-    const LaneBest& row = t.rows[lane];
-    const LaneBest& col = t.cols[lane];
-    const int row_id = lane;
-    const int col_id = kLanesPerAxis + lane;
+    const LaneBest& h = horizontal[lane];
+    const LaneBest& v = vertical[lane];
+    const int h_id = lane;
+    const int v_id = kLanesPerAxis + lane;
 
-    encode_lane_occupancy(row, occ + row_id * kLaneLen * kLaneTileKinds);
-    encode_lane_occupancy(col, occ + col_id * kLaneLen * kLaneTileKinds);
+    encode_lane_occupancy(h, occ + h_id * kLaneLen * kLaneTileKinds);
+    encode_lane_occupancy(v, occ + v_id * kLaneLen * kLaneTileKinds);
 
-    score[row_id] =
-      static_cast<float>(row.has_move ? std::min(row.max_score, kLaneScoreBins - 1) : 0);
-    score[col_id] =
-      static_cast<float>(col.has_move ? std::min(col.max_score, kLaneScoreBins - 1) : 0);
-    mask[row_id] = row.has_move ? 1.0f : 0.0f;
-    mask[col_id] = col.has_move ? 1.0f : 0.0f;
+    score[h_id] = static_cast<float>(h.has_move ? std::min(h.max_score, kLaneScoreBins - 1) : 0);
+    score[v_id] = static_cast<float>(v.has_move ? std::min(v.max_score, kLaneScoreBins - 1) : 0);
+    mask[h_id] = h.has_move ? 1.0f : 0.0f;
+    mask[v_id] = v.has_move ? 1.0f : 0.0f;
   }
 }
 

@@ -74,6 +74,12 @@ inline constexpr int kLaneLabelFloats =
 
 // Flatten `t` into the kLaneLabelFloats-long label region at `out` (occupancy,
 // then score bins, then mask), zero-filling the occupancy of empty lanes.
-void encode_lane_targets(const LaneTargets& t, float* out);
+//
+// `flip` applies the diagonal symmetry (r,c) -> (c,r) so the labels stay aligned
+// with a flipped input. A transpose turns each horizontal lane into the vertical
+// lane of the same index (and vice versa) while preserving the along-lane cell
+// position, so it is exactly a rows<->cols swap: the horizontal-lane axis is
+// read from `t.cols` and the vertical-lane axis from `t.rows`.
+void encode_lane_targets(const LaneTargets& t, bool flip, float* out);
 
 }  // namespace scribblez
