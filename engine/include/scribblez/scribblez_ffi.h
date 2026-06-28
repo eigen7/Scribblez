@@ -42,6 +42,17 @@ const ScribblezShape* scribblez_target_shapes(void);
 // to size the output buffer without iterating the shape arrays in Python.
 int scribblez_row_size_floats(void);
 
+// Shapes / sizes for the LEXICAL task (the "highest-scoring move per lane"
+// model), a sibling layout to the post-move shapes above. Input: a (31, 15, 15)
+// board-plane tensor + a 27-float rack-count vector. Targets, in row order:
+//   target_index=0  "lane_occupancy" (30, 15, 27)
+//   target_index=1  "lane_score"     (30,)
+//   target_index=2  "lane_mask"      (30,)
+const ScribblezShape* scribblez_lexical_input_shapes(void);
+const ScribblezShape* scribblez_lexical_target_shapes(void);
+int scribblez_lexical_row_size_floats(void);
+int scribblez_lexical_input_floats(void);
+
 // Score-differential sweep encoder -- a sister to the DataLoader that reads a
 // .slog and materializes input tensors with NO sampling or shuffling. It
 // replays a sampled position and re-encodes it once per integer score
@@ -164,6 +175,16 @@ StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int r
                                    int num_threads, int post_move, int apply_symmetry,
                                    uint64_t seed, int handicap_max, const char* const* player_specs,
                                    int num_specs);
+
+// Like scribblez_stream_new, but streams LEXICAL-task rows
+// (scribblez_lexical_row_size_floats() floats each): every slot row is a lexical
+// input + per-lane labels, sampled uniformly over all turns (there is no
+// post_move snapshot choice). Shares the rest of the streaming API
+// (start/wait/release/stats/stop/delete) with the post-move streamer.
+StreamHandle* scribblez_lexical_stream_new(float* const* slot_ptrs, int num_slots,
+                                           int rows_per_slot, int num_threads, int apply_symmetry,
+                                           uint64_t seed, int handicap_max,
+                                           const char* const* player_specs, int num_specs);
 
 // Spawn the producer threads. Idempotent.
 void scribblez_stream_start(StreamHandle* h);

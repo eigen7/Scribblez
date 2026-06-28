@@ -5,7 +5,11 @@
 #include "scribblez/data_loader.h"
 #include "scribblez/game_runner.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/lane_targets.h"
+#include "scribblez/lexical_input_encoder.h"
+#include "scribblez/lexical_task.h"
 #include "scribblez/player_factory.h"
+#include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
 #include "scribblez/slog_subset.h"
 #include "scribblez/streaming_game_producer.h"
@@ -66,6 +70,31 @@ struct TargetShapeTable<scribblez::TargetList<Ts...>> {
 
 constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::AllTargets>::kValue;
 
+// --- Lexical task shapes (hand-written; the lexical encoders are not part of
+// the AllTargets pack). Input: 31 board planes + 27 rack scalars. Labels: the
+// per-lane occupancy / score / mask blocks of encode_lane_targets. ---
+constexpr int kLexInputSpatialDims[3] = {scribblez::LexicalInputEncoder::kSpatialPlanes,
+                                         scribblez::kBoardSide, scribblez::kBoardSide};
+constexpr int kLexInputScalarDims[1] = {scribblez::LexicalInputEncoder::kScalarFloats};
+
+const ScribblezShape kLexicalInputShapes[] = {
+  {"input_spatial", kLexInputSpatialDims, 3, -1},
+  {"input_scalar", kLexInputScalarDims, 1, -1},
+  {nullptr, nullptr, 0, 0},
+};
+
+constexpr int kLexOccupancyDims[3] = {scribblez::kNumLanes, scribblez::kLaneLen,
+                                      scribblez::kLaneTileKinds};
+constexpr int kLexScoreDims[1] = {scribblez::kNumLanes};
+constexpr int kLexMaskDims[1] = {scribblez::kNumLanes};
+
+const ScribblezShape kLexicalTargetShapes[] = {
+  {"lane_occupancy", kLexOccupancyDims, 3, 0},
+  {"lane_score", kLexScoreDims, 1, 1},
+  {"lane_mask", kLexMaskDims, 1, 2},
+  {nullptr, nullptr, 0, 0},
+};
+
 }  // namespace
 
 extern "C" {
@@ -76,6 +105,13 @@ const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.da
 int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 
 int scribblez_input_floats(void) { return scribblez::kInputFloats; }
+
+const ScribblezShape* scribblez_lexical_input_shapes(void) { return kLexicalInputShapes; }
+const ScribblezShape* scribblez_lexical_target_shapes(void) { return kLexicalTargetShapes; }
+
+int scribblez_lexical_row_size_floats(void) { return scribblez::LexicalTask::kRowFloats; }
+
+int scribblez_lexical_input_floats(void) { return scribblez::LexicalInputEncoder::kInputFloats; }
 
 namespace {
 
@@ -253,10 +289,17 @@ struct StreamHandle {
         producer(engine_params, player_params, stream_params, ring) {}
 };
 
-StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
-                                   int num_threads, int post_move, int apply_symmetry,
-                                   uint64_t seed, int handicap_max, const char* const* player_specs,
-                                   int num_specs) {
+namespace {
+
+// Shared construction for both streaming entry points: validate the config,
+// build the engine + player params, and create the StreamHandle with the given
+// row width and per-worker encoder factory. Returns nullptr on bad config or a
+// lexicon-load failure. Both tasks play the same HastyBot self-play games; only
+// the per-row encoding (and thus the row width) differs.
+StreamHandle* new_stream(float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads,
+                         int apply_symmetry, uint64_t seed, int handicap_max,
+                         const char* const* player_specs, int num_specs, int row_floats,
+                         scribblez::binlog::RowEncoderFactory factory) {
   if (!slot_ptrs || num_slots < 1 || rows_per_slot < 1 || !player_specs || num_specs < 1) {
     return nullptr;
   }
@@ -270,18 +313,48 @@ StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int r
   engine_params.seed = seed;
   engine_params.handicap_max = handicap_max;
   scribblez::binlog::StreamingGameProducer::Params stream_params;
-  stream_params.post_move = post_move != 0;
   stream_params.apply_symmetry = apply_symmetry != 0;
+  stream_params.make_encoder = std::move(factory);
   try {
     // Surface a missing-lexicon error here (at construction) rather than mid-game.
     scribblez::GameRunner::load_dictionary_or_throw();
-    return new StreamHandle(slot_ptrs, num_slots, rows_per_slot,
-                            scribblez::binlog::DataLoader::row_size_floats(), engine_params,
+    return new StreamHandle(slot_ptrs, num_slots, rows_per_slot, row_floats, engine_params,
                             player_params, stream_params);
   } catch (const std::exception& e) {
-    std::cerr << "scribblez_stream_new: " << e.what() << "\n";
+    std::cerr << "new_stream: " << e.what() << "\n";
     return nullptr;
   }
+}
+
+}  // namespace
+
+StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
+                                   int num_threads, int post_move, int apply_symmetry,
+                                   uint64_t seed, int handicap_max, const char* const* player_specs,
+                                   int num_specs) {
+  const bool pm = post_move != 0;
+  return new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
+                    handicap_max, player_specs, num_specs,
+                    scribblez::binlog::DataLoader::row_size_floats(),
+                    [pm]() { return scribblez::binlog::make_post_move_row_encoder(pm); });
+}
+
+StreamHandle* scribblez_lexical_stream_new(float* const* slot_ptrs, int num_slots,
+                                           int rows_per_slot, int num_threads, int apply_symmetry,
+                                           uint64_t seed, int handicap_max,
+                                           const char* const* player_specs, int num_specs) {
+  // The lexical encoder enumerates legal moves, so it needs the lexicon. Bind it
+  // once (a process-static reference) into the per-worker encoder factory.
+  const scribblez::Dictionary* dict = nullptr;
+  try {
+    dict = &scribblez::GameRunner::load_dictionary_or_throw();
+  } catch (const std::exception& e) {
+    std::cerr << "scribblez_lexical_stream_new: " << e.what() << "\n";
+    return nullptr;
+  }
+  return new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
+                    handicap_max, player_specs, num_specs, scribblez::LexicalTask::kRowFloats,
+                    [dict]() { return scribblez::binlog::make_lexical_row_encoder(*dict); });
 }
 
 void scribblez_stream_start(StreamHandle* h) {

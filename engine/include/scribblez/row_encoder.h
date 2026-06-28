@@ -1,0 +1,50 @@
+#pragma once
+
+#include "scribblez/game.h"
+
+#include <functional>
+#include <memory>
+#include <random>
+
+namespace scribblez {
+
+class Dictionary;
+
+namespace binlog {
+
+// Per-worker policy that turns a finished self-play game into one training row:
+// choose a sampled turn, then encode that position's row for a specific
+// TrainingTask. Stateful (owns a PositionEncoder), so the streaming producer
+// builds one per worker thread; the RingBufferGameSink drives it and stays
+// task-agnostic.
+class RowEncoder {
+ public:
+  virtual ~RowEncoder() = default;
+
+  // Width of the row this encoder writes (the task's kRowFloats).
+  virtual int row_floats() const = 0;
+
+  // Choose a turn of `view` to sample, or -1 to drop the game (no eligible
+  // turn). Called before a ring slot is claimed, so a dropped game never holds
+  // one.
+  virtual int pick_turn(const GameLog& view, std::mt19937_64& rng) = 0;
+
+  // Encode the row for `view` at `turn` into `dest` (row_floats() floats);
+  // `flip` applies the diagonal-symmetry augmentation.
+  virtual void encode(const GameLog& view, int turn, bool flip, float* dest) = 0;
+};
+
+// Builds a fresh per-worker RowEncoder; the streaming producer calls it once per
+// thread.
+using RowEncoderFactory = std::function<std::unique_ptr<RowEncoder>()>;
+
+// Built-in row encoders.
+//   * post-move: the win-probability task; samples bag-nonempty turns; the
+//     `post_move` flag picks the pre-move vs post-move snapshot.
+//   * lexical: the per-lane best-move task; samples any turn (incl. endgames)
+//     pre-move, and reads `dict` to enumerate legal moves.
+std::unique_ptr<RowEncoder> make_post_move_row_encoder(bool post_move);
+std::unique_ptr<RowEncoder> make_lexical_row_encoder(const Dictionary& dict);
+
+}  // namespace binlog
+}  // namespace scribblez

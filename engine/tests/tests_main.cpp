@@ -2647,7 +2647,19 @@ static void test_pick_sampled_turn_eligibility() {
   GameLogStorage z;
   z.turns.resize(2);  // all ineligible
   CHECK(pick_sampled_turn(z.view(), rng) == -1);
-  std::cout << "  pick_sampled_turn eligibility OK\n";
+
+  // pick_any_turn (lexical sampling) ignores bag size: every turn is eligible,
+  // and the choice covers the whole range. An empty game yields -1.
+  std::array<bool, 3> seen{};
+  for (int i = 0; i < 200; ++i) {
+    const int t = pick_any_turn(s.view(), rng);
+    CHECK(t >= 0 && t < 3);
+    seen[t] = true;
+  }
+  CHECK(seen[0] && seen[1] && seen[2]);  // bag_size_before == 0 turns included
+  GameLogStorage empty;
+  CHECK(pick_any_turn(empty.view(), rng) == -1);
+  std::cout << "  pick_sampled_turn / pick_any_turn eligibility OK\n";
 }
 
 // ShadowMoveGen, summed over every anchor (no pruning), reproduces exactly the

@@ -63,6 +63,12 @@ int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
   return eligible[dist(rng)];
 }
 
+int pick_any_turn(const GameLog& log, std::mt19937_64& rng) {
+  if (log.num_records <= 0) return -1;
+  std::uniform_int_distribution<int> dist(0, log.num_records - 1);
+  return dist(rng);
+}
+
 // ---------------------------------------------------------------------------
 // BinaryLogWriter
 // ---------------------------------------------------------------------------

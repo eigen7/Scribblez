@@ -13,6 +13,7 @@
 // ever claiming a slot row (which would otherwise stall that slot forever).
 
 #include "scribblez/player_factory.h"
+#include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
 #include "scribblez/streaming_row_buffer.h"
 
@@ -33,7 +34,9 @@ struct ProducerStats {
 class StreamingGameProducer {
  public:
   struct Params {
-    bool post_move = true;
+    // Builds one row encoder per worker thread; selects the training task (and,
+    // for the post-move task, the pre/post-move snapshot).
+    RowEncoderFactory make_encoder;
     bool apply_symmetry = true;
   };
 

@@ -117,6 +117,11 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 // the streaming producer.
 int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
 
+// Pick a turn index for `log` uniformly among ALL turns (including endgame
+// positions, regardless of bag size). Returns -1 iff the game has no turns.
+// Used by tasks that sample the whole game (the lexical task).
+int pick_any_turn(const GameLog& log, std::mt19937_64& rng);
+
 // Thread-safe writer that accumulates GameLog objects from one or more
 // GameRunner threads and flushes them to .slog files as fixed-size batches.
 //
