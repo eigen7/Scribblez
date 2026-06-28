@@ -32,6 +32,7 @@ endif()
 # linked) for launching the web UI.
 find_package(Boost REQUIRED COMPONENTS program_options json filesystem system)
 find_package(Threads REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 enable_testing()
 add_subdirectory(engine)

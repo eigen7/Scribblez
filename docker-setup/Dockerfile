@@ -84,6 +84,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
 
+# 6c) Eigen
+RUN apt-get update && \
+    apt-get install -y libeigen3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
@@ -101,7 +106,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.0.0"
+ARG VERSION="3.1.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 

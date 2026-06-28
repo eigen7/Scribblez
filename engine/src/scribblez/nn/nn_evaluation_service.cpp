@@ -3,8 +3,9 @@
 #include "scribblez/input_encoder.h"
 #include "scribblez/training_targets.h"
 
+#include <Eigen/Core>
+
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 namespace scribblez {
@@ -14,33 +15,17 @@ namespace {
 
 // Softmax the 3 WLD logits [win, draw, loss] into the WLD fields of `e`. The
 // win-probability scalar treats a draw as half a win (expected game points).
-// TODO: Incorporate Eigen so that we can do operations like this naturally in a vectorized manner.
-/*
 void fill_wld(const float* logits, Eval& e) {
-  // 1. Map the raw float pointer to an Eigen array (zero-copy)
+  // Map the raw float pointer to an Eigen array (zero-copy).
   Eigen::Map<const Eigen::Array3f> v(logits);
 
-  // 2. Vectorized, numerically stable softmax
+  // Numerically stable softmax: subtract the max before exponentiating.
   Eigen::Array3f probs = (v - v.maxCoeff()).exp();
   probs /= probs.sum();
 
-  // 3. Unpack the results
   e.p_win = probs[0];
   e.p_draw = probs[1];
   e.p_loss = probs[2];
-
-  e.win_prob = e.p_win + 0.5f * e.p_draw;
-}
-*/
-void fill_wld(const float* logits, Eval& e) {
-  float m = std::max({logits[0], logits[1], logits[2]});
-  float ew = std::exp(logits[0] - m);
-  float ed = std::exp(logits[1] - m);
-  float el = std::exp(logits[2] - m);
-  float z = ew + ed + el;
-  e.p_win = ew / z;
-  e.p_draw = ed / z;
-  e.p_loss = el / z;
   e.win_prob = e.p_win + 0.5f * e.p_draw;
 }
 

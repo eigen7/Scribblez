@@ -114,6 +114,7 @@ target_include_directories(scribblez_nn
   PRIVATE ${CUDA_INCLUDE_DIR} ${TENSORRT_INCLUDE_DIR})
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
+target_link_libraries(scribblez_nn PRIVATE Eigen3::Eigen)
 
 # The NeuralAgent TUs are the only agent sources not already in scribblez_core;
 # they are kept out of the core library so it carries no CUDA/TensorRT
