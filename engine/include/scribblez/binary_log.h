@@ -119,7 +119,7 @@ int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
 
 // Pick a turn index for `log` uniformly among ALL turns (including endgame
 // positions, regardless of bag size). Returns -1 iff the game has no turns.
-// Used by tasks that sample the whole game (the lexical task).
+// Used by tasks that sample the whole game (the max-move-per-lane task).
 int pick_any_turn(const GameLog& log, std::mt19937_64& rng);
 
 // Thread-safe writer that accumulates GameLog objects from one or more

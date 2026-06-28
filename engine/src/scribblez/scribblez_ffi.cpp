@@ -6,8 +6,8 @@
 #include "scribblez/game_runner.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/lane_targets.h"
-#include "scribblez/lexical_input_encoder.h"
-#include "scribblez/lexical_task.h"
+#include "scribblez/max_move_per_lane_input_encoder.h"
+#include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
@@ -70,28 +70,30 @@ struct TargetShapeTable<scribblez::TargetList<Ts...>> {
 
 constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::AllTargets>::kValue;
 
-// --- Lexical task shapes (hand-written; the lexical encoders are not part of
+// --- Max-move-per-lane task shapes (hand-written; the max-move-per-lane encoders are not part of
 // the AllTargets pack). Input: 31 board planes + 27 rack scalars. Labels: the
 // per-lane occupancy / score / mask blocks of encode_lane_targets. ---
-constexpr int kLexInputSpatialDims[3] = {scribblez::LexicalInputEncoder::kSpatialPlanes,
-                                         scribblez::kBoardSide, scribblez::kBoardSide};
-constexpr int kLexInputScalarDims[1] = {scribblez::LexicalInputEncoder::kScalarFloats};
+constexpr int kMaxMovePerLaneInputSpatialDims[3] = {
+  scribblez::MaxMovePerLaneInputEncoder::kSpatialPlanes, scribblez::kBoardSide,
+  scribblez::kBoardSide};
+constexpr int kMaxMovePerLaneInputScalarDims[1] = {
+  scribblez::MaxMovePerLaneInputEncoder::kScalarFloats};
 
-const ScribblezShape kLexicalInputShapes[] = {
-  {"input_spatial", kLexInputSpatialDims, 3, -1},
-  {"input_scalar", kLexInputScalarDims, 1, -1},
+const ScribblezShape kMaxMovePerLaneInputShapes[] = {
+  {"input_spatial", kMaxMovePerLaneInputSpatialDims, 3, -1},
+  {"input_scalar", kMaxMovePerLaneInputScalarDims, 1, -1},
   {nullptr, nullptr, 0, 0},
 };
 
-constexpr int kLexOccupancyDims[3] = {scribblez::kNumLanes, scribblez::kLaneLen,
-                                      scribblez::kLaneTileKinds};
-constexpr int kLexScoreDims[1] = {scribblez::kNumLanes};
-constexpr int kLexMaskDims[1] = {scribblez::kNumLanes};
+constexpr int kMaxMovePerLaneOccupancyDims[3] = {scribblez::kNumLanes, scribblez::kLaneLen,
+                                                 scribblez::kLaneTileKinds};
+constexpr int kMaxMovePerLaneScoreDims[1] = {scribblez::kNumLanes};
+constexpr int kMaxMovePerLaneMaskDims[1] = {scribblez::kNumLanes};
 
-const ScribblezShape kLexicalTargetShapes[] = {
-  {"lane_occupancy", kLexOccupancyDims, 3, 0},
-  {"lane_score", kLexScoreDims, 1, 1},
-  {"lane_mask", kLexMaskDims, 1, 2},
+const ScribblezShape kMaxMovePerLaneTargetShapes[] = {
+  {"lane_occupancy", kMaxMovePerLaneOccupancyDims, 3, 0},
+  {"lane_score", kMaxMovePerLaneScoreDims, 1, 1},
+  {"lane_mask", kMaxMovePerLaneMaskDims, 1, 2},
   {nullptr, nullptr, 0, 0},
 };
 
@@ -106,12 +108,20 @@ int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 
 int scribblez_input_floats(void) { return scribblez::kInputFloats; }
 
-const ScribblezShape* scribblez_lexical_input_shapes(void) { return kLexicalInputShapes; }
-const ScribblezShape* scribblez_lexical_target_shapes(void) { return kLexicalTargetShapes; }
+const ScribblezShape* scribblez_max_move_per_lane_input_shapes(void) {
+  return kMaxMovePerLaneInputShapes;
+}
+const ScribblezShape* scribblez_max_move_per_lane_target_shapes(void) {
+  return kMaxMovePerLaneTargetShapes;
+}
 
-int scribblez_lexical_row_size_floats(void) { return scribblez::LexicalTask::kRowFloats; }
+int scribblez_max_move_per_lane_row_size_floats(void) {
+  return scribblez::MaxMovePerLaneTask::kRowFloats;
+}
 
-int scribblez_lexical_input_floats(void) { return scribblez::LexicalInputEncoder::kInputFloats; }
+int scribblez_max_move_per_lane_input_floats(void) {
+  return scribblez::MaxMovePerLaneInputEncoder::kInputFloats;
+}
 
 namespace {
 
@@ -336,25 +346,25 @@ StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int r
   return new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
                     handicap_max, player_specs, num_specs,
                     scribblez::binlog::DataLoader::row_size_floats(),
-                    [pm]() { return scribblez::binlog::make_post_move_row_encoder(pm); });
+                    [pm]() { return scribblez::binlog::make_post_move_value_row_encoder(pm); });
 }
 
-StreamHandle* scribblez_lexical_stream_new(float* const* slot_ptrs, int num_slots,
-                                           int rows_per_slot, int num_threads, int apply_symmetry,
-                                           uint64_t seed, int handicap_max,
-                                           const char* const* player_specs, int num_specs) {
-  // The lexical encoder enumerates legal moves, so it needs the lexicon. Bind it
+StreamHandle* scribblez_max_move_per_lane_stream_new(
+  float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads, int apply_symmetry,
+  uint64_t seed, int handicap_max, const char* const* player_specs, int num_specs) {
+  // The max-move-per-lane encoder enumerates legal moves, so it needs the lexicon. Bind it
   // once (a process-static reference) into the per-worker encoder factory.
   const scribblez::Dictionary* dict = nullptr;
   try {
     dict = &scribblez::GameRunner::load_dictionary_or_throw();
   } catch (const std::exception& e) {
-    std::cerr << "scribblez_lexical_stream_new: " << e.what() << "\n";
+    std::cerr << "scribblez_max_move_per_lane_stream_new: " << e.what() << "\n";
     return nullptr;
   }
-  return new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
-                    handicap_max, player_specs, num_specs, scribblez::LexicalTask::kRowFloats,
-                    [dict]() { return scribblez::binlog::make_lexical_row_encoder(*dict); });
+  return new_stream(
+    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
+    player_specs, num_specs, scribblez::MaxMovePerLaneTask::kRowFloats,
+    [dict]() { return scribblez::binlog::make_max_move_per_lane_row_encoder(*dict); });
 }
 
 void scribblez_stream_start(StreamHandle* h) {

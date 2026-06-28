@@ -27,7 +27,7 @@ class PositionEncoder {
  public:
   PositionEncoder() = default;
   // `dict` is the lexicon for tasks that enumerate moves at the position (the
-  // lexical task). The post-move task does not use it, so it may be left null.
+  // max-move-per-lane task). The post-move task does not use it, so it may be left null.
   explicit PositionEncoder(const Dictionary* dict) : dict_(dict) {}
 
   // Replay `g` from its initial state up to (and, when post_move, including)

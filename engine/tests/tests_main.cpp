@@ -15,9 +15,9 @@
 #include "scribblez/input_encoder.h"
 #include "scribblez/lane_targets.h"
 #include "scribblez/leave_values.h"
-#include "scribblez/lexical_input_encoder.h"
-#include "scribblez/lexical_task.h"
 #include "scribblez/macondo_bot.h"
+#include "scribblez/max_move_per_lane_input_encoder.h"
+#include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
 #include "scribblez/rack.h"
@@ -2533,8 +2533,8 @@ static void test_streaming_disk_encode_equivalence() {
 
       std::vector<float> row_stream(row_floats, 0.0f);
       PositionEncoder enc;
-      enc.encode_row<PostMoveTask>(storage.view(), sampled, post_move, /*flip=*/false,
-                                   row_stream.data());
+      enc.encode_row<PostMoveValueTask>(storage.view(), sampled, post_move, /*flip=*/false,
+                                        row_stream.data());
 
       for (int i = 0; i < row_floats; ++i) CHECK(row_disk[i] == row_stream[i]);
       ++compared;
@@ -2648,7 +2648,7 @@ static void test_pick_sampled_turn_eligibility() {
   z.turns.resize(2);  // all ineligible
   CHECK(pick_sampled_turn(z.view(), rng) == -1);
 
-  // pick_any_turn (lexical sampling) ignores bag size: every turn is eligible,
+  // pick_any_turn (max-move-per-lane sampling) ignores bag size: every turn is eligible,
   // and the choice covers the whole range. An empty game yields -1.
   std::array<bool, 3> seen{};
   for (int i = 0; i < 200; ++i) {
@@ -3089,7 +3089,7 @@ static int lane_global_max(const LaneTargets& t) {
   return best;
 }
 
-// The lexical task's per-lane targets: every legal play is bucketed into the
+// The max-move-per-lane task's per-lane targets: every legal play is bucketed into the
 // row it lies along (horizontal) or column (vertical); single-tile plays go to
 // whichever direction(s) they form a word in. These pin the bucketing, the
 // union-over-tied-maxima, and the single-tile cross rule, and cross-check the
@@ -3218,7 +3218,7 @@ static void test_lane_targets() {
   }
 }
 
-// The lexical model's input encoder: 31 board planes (letters, blank-marker,
+// The max-move-per-lane model's input encoder: 31 board planes (letters, blank-marker,
 // premiums) + 27 raw rack counts, with NO cross-check planes. Pins the plane
 // contents, premium consistency, rack counts, and the flip transpose.
 static int prem_plane_offset(Premium p) {
@@ -3229,7 +3229,7 @@ static int prem_plane_offset(Premium p) {
   return -1;
 }
 
-static void test_lexical_input_encoder() {
+static void test_max_move_per_lane_input_encoder() {
   Board b;
   b.set(7, 7, Glyph::of(Tile::from_char('C')));
   b.set(7, 8, Glyph::of(Tile::from_char('A')));
@@ -3237,7 +3237,7 @@ static void test_lexical_input_encoder() {
   b.set(5, 5, Glyph::played(Tile::from_char('S'), /*is_blank=*/true));  // designated blank
   const Rack rack = rack_from("AAB?");
 
-  using Enc = LexicalInputEncoder;
+  using Enc = MaxMovePerLaneInputEncoder;
   const int A = Tile::from_char('A').index();
   const int B = Tile::from_char('B').index();
   const int C = Tile::from_char('C').index();
@@ -3287,10 +3287,10 @@ static void test_lexical_input_encoder() {
   CHECK(fcounts[A] == 2.0f && fcounts[26] == 1.0f);
 }
 
-// The lexical training task: one full row is exactly the lexical input encoding
+// The max-move-per-lane training task: one full row is exactly the max-move-per-lane input encoding
 // followed by the per-lane labels for the board/rack at the sampled position.
 // Checked for both symmetry orientations.
-static void test_lexical_task_row() {
+static void test_max_move_per_lane_task_row() {
   const Dictionary d = tiny_dict();
 
   // CAT on the board (the context exposes the board via its GameStateEncoder).
@@ -3307,19 +3307,19 @@ static void test_lexical_task_row() {
     ctx.apply_flip = flip;
     ctx.dict = &d;
 
-    std::vector<float> row(LexicalTask::kRowFloats, -1.0f);
-    LexicalTask::encode_row(ctx, row.data());
+    std::vector<float> row(MaxMovePerLaneTask::kRowFloats, -1.0f);
+    MaxMovePerLaneTask::encode_row(ctx, row.data());
 
-    std::vector<float> ref_in(LexicalInputEncoder::kInputFloats);
-    LexicalInputEncoder::encode(gse.board(), rack, flip, ref_in.data());
+    std::vector<float> ref_in(MaxMovePerLaneInputEncoder::kInputFloats);
+    MaxMovePerLaneInputEncoder::encode(gse.board(), rack, flip, ref_in.data());
     std::vector<float> ref_lab(kLaneLabelFloats);
     encode_lane_targets(compute_lane_targets(gse.board(), rack, d), flip, ref_lab.data());
 
-    CHECK(LexicalTask::kInputFloats == static_cast<int>(ref_in.size()));
-    CHECK(LexicalTask::kLabelFloats == static_cast<int>(ref_lab.size()));
-    for (int i = 0; i < LexicalTask::kInputFloats; ++i) CHECK(row[i] == ref_in[i]);
-    for (int i = 0; i < LexicalTask::kLabelFloats; ++i)
-      CHECK(row[LexicalTask::kInputFloats + i] == ref_lab[i]);
+    CHECK(MaxMovePerLaneTask::kInputFloats == static_cast<int>(ref_in.size()));
+    CHECK(MaxMovePerLaneTask::kLabelFloats == static_cast<int>(ref_lab.size()));
+    for (int i = 0; i < MaxMovePerLaneTask::kInputFloats; ++i) CHECK(row[i] == ref_in[i]);
+    for (int i = 0; i < MaxMovePerLaneTask::kLabelFloats; ++i)
+      CHECK(row[MaxMovePerLaneTask::kInputFloats + i] == ref_lab[i]);
   }
 }
 
@@ -3327,8 +3327,8 @@ int main() {
   test_util_helpers();
   test_dict_basic();
   test_lane_targets();
-  test_lexical_input_encoder();
-  test_lexical_task_row();
+  test_max_move_per_lane_input_encoder();
+  test_max_move_per_lane_task_row();
   test_shadow_movegen_matches_full();
   test_wmp_generate_matches_full();
   test_wmp_matches_gaddag_real_lexicon();

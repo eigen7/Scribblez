@@ -11,7 +11,7 @@ class Dictionary;
 // The post-replay state at a sampled position, from which a TrainingTask encodes
 // one training row (input tensor + labels). It is the single context object both
 // the input encoder and every target read from; a task uses only the fields it
-// needs (the post-move task ignores `dict`; the lexical task ignores the
+// needs (the post-move task ignores `dict`; the max-move-per-lane task ignores the
 // final-score / next-move fields).
 struct EncodeContext {
   // Replayed state at the sampled position. `enc` exposes the board, cumulative
@@ -23,7 +23,7 @@ struct EncodeContext {
   int active_player = 0;
   bool apply_flip = false;  // transpose spatial planes/labels across the diagonal
 
-  // Lexicon, for tasks that enumerate legal moves at the position (the lexical
+  // Lexicon, for tasks that enumerate legal moves at the position (the max-move-per-lane
   // task); null for tasks that do not need it.
   const Dictionary* dict = nullptr;
 

@@ -9,7 +9,7 @@
 
 namespace scribblez {
 
-// Per-lane maximal-move targets for the lexical training task. A "lane" is a
+// Per-lane maximal-move targets for the max-move-per-lane training task. A "lane" is a
 // single row (read horizontally) or a single column (read vertically); there
 // are 15 + 15 = 30 lanes, and each is a sub-task: predict the highest-scoring
 // play that lies in that lane, plus the union of all plays tied for that score.
@@ -48,7 +48,7 @@ struct LaneTargets {
 // tile contributes to both lanes, with the same score).
 LaneTargets compute_lane_targets(const Board& board, const Rack& rack, const Dictionary& dict);
 
-// ---- Flat label layout for the lexical training row -------------------------
+// ---- Flat label layout for the max-move-per-lane training row -------------------------
 //
 // A row's label region is three contiguous blocks, all indexed by a flat lane
 // id `axis * 15 + lane`, where axis 0 is the horizontal lanes (a lane is a row)

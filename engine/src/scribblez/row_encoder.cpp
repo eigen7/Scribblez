@@ -1,7 +1,7 @@
 #include "scribblez/row_encoder.h"
 
 #include "scribblez/binary_log.h"  // pick_sampled_turn, pick_any_turn
-#include "scribblez/lexical_task.h"
+#include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/position_encoder.h"
 #include "scribblez/training_task.h"
 
@@ -10,19 +10,19 @@ namespace binlog {
 
 namespace {
 
-// Win-probability rows: bag-nonempty turn sampling + PostMoveTask encoding.
-class PostMoveRowEncoder : public RowEncoder {
+// Win-probability rows: bag-nonempty turn sampling + PostMoveValueTask encoding.
+class PostMoveValueRowEncoder : public RowEncoder {
  public:
-  explicit PostMoveRowEncoder(bool post_move) : post_move_(post_move) {}
+  explicit PostMoveValueRowEncoder(bool post_move) : post_move_(post_move) {}
 
-  int row_floats() const override { return PostMoveTask::kRowFloats; }
+  int row_floats() const override { return PostMoveValueTask::kRowFloats; }
 
   int pick_turn(const GameLog& view, std::mt19937_64& rng) override {
     return pick_sampled_turn(view, rng);
   }
 
   void encode(const GameLog& view, int turn, bool flip, float* dest) override {
-    pos_.encode_row<PostMoveTask>(view, turn, post_move_, flip, dest);
+    pos_.encode_row<PostMoveValueTask>(view, turn, post_move_, flip, dest);
   }
 
  private:
@@ -30,20 +30,20 @@ class PostMoveRowEncoder : public RowEncoder {
   PositionEncoder pos_;
 };
 
-// Lexical rows: uniform all-turn sampling + LexicalTask encoding (always
+// Max-move-per-lane rows: uniform all-turn sampling + MaxMovePerLaneTask encoding (always
 // pre-move; the lexicon drives the per-lane move enumeration).
-class LexicalRowEncoder : public RowEncoder {
+class MaxMovePerLaneRowEncoder : public RowEncoder {
  public:
-  explicit LexicalRowEncoder(const Dictionary& dict) : pos_(&dict) {}
+  explicit MaxMovePerLaneRowEncoder(const Dictionary& dict) : pos_(&dict) {}
 
-  int row_floats() const override { return LexicalTask::kRowFloats; }
+  int row_floats() const override { return MaxMovePerLaneTask::kRowFloats; }
 
   int pick_turn(const GameLog& view, std::mt19937_64& rng) override {
     return pick_any_turn(view, rng);
   }
 
   void encode(const GameLog& view, int turn, bool flip, float* dest) override {
-    pos_.encode_row<LexicalTask>(view, turn, /*post_move=*/false, flip, dest);
+    pos_.encode_row<MaxMovePerLaneTask>(view, turn, /*post_move=*/false, flip, dest);
   }
 
  private:
@@ -52,12 +52,12 @@ class LexicalRowEncoder : public RowEncoder {
 
 }  // namespace
 
-std::unique_ptr<RowEncoder> make_post_move_row_encoder(bool post_move) {
-  return std::make_unique<PostMoveRowEncoder>(post_move);
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(bool post_move) {
+  return std::make_unique<PostMoveValueRowEncoder>(post_move);
 }
 
-std::unique_ptr<RowEncoder> make_lexical_row_encoder(const Dictionary& dict) {
-  return std::make_unique<LexicalRowEncoder>(dict);
+std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict) {
+  return std::make_unique<MaxMovePerLaneRowEncoder>(dict);
 }
 
 }  // namespace binlog

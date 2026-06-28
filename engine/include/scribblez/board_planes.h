@@ -5,7 +5,7 @@
 namespace scribblez {
 
 // The static board-content planes shared, identically, by the post-move and
-// lexical input encoders: 26 letter planes, a blank-marker plane, and 4 premium
+// max-move-per-lane input encoders: 26 letter planes, a blank-marker plane, and 4 premium
 // planes. A stateless, composable sub-encoder -- both full input encoders place
 // this 31-plane block at the very start of their spatial features, so it owns
 // the canonical plane offsets rather than taking them as parameters.

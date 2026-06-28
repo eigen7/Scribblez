@@ -9,8 +9,8 @@ add_library(scribblez_core STATIC
   src/scribblez/movegen.cpp
   src/scribblez/lane_targets.cpp
   src/scribblez/board_planes.cpp
-  src/scribblez/lexical_input_encoder.cpp
-  src/scribblez/lexical_task.cpp
+  src/scribblez/max_move_per_lane_input_encoder.cpp
+  src/scribblez/max_move_per_lane_task.cpp
   src/scribblez/row_encoder.cpp
   src/scribblez/game.cpp
   src/scribblez/gcg_reader.cpp

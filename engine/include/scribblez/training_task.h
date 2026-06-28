@@ -15,7 +15,7 @@ namespace scribblez {
 // The win-probability task: the post-move board/leave/score input (via the
 // stateful GameStateEncoder the context points at) plus the WLD, score-diff, and
 // opponent-next-placement labels.
-struct PostMoveTask {
+struct PostMoveValueTask {
   static constexpr int kInputFloats = scribblez::kInputFloats;
   static constexpr int kLabelFloats = scribblez::kLabelFloats;
   static constexpr int kRowFloats = kInputFloats + kLabelFloats;

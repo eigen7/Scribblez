@@ -41,10 +41,10 @@ using RowEncoderFactory = std::function<std::unique_ptr<RowEncoder>()>;
 // Built-in row encoders.
 //   * post-move: the win-probability task; samples bag-nonempty turns; the
 //     `post_move` flag picks the pre-move vs post-move snapshot.
-//   * lexical: the per-lane best-move task; samples any turn (incl. endgames)
+//   * max-move-per-lane: the per-lane best-move task; samples any turn (incl. endgames)
 //     pre-move, and reads `dict` to enumerate legal moves.
-std::unique_ptr<RowEncoder> make_post_move_row_encoder(bool post_move);
-std::unique_ptr<RowEncoder> make_lexical_row_encoder(const Dictionary& dict);
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(bool post_move);
+std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict);
 
 }  // namespace binlog
 }  // namespace scribblez

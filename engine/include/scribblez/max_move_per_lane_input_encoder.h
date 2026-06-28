@@ -6,15 +6,15 @@
 
 namespace scribblez {
 
-// Stateless input encoder for the lexical "highest-scoring move per lane" model:
-// a lean board + rack tensor. It deliberately OMITS two things the post-move
-// encoder carries:
+// Stateless input encoder for the "highest-scoring move per lane" model: a lean
+// board + rack tensor. It deliberately OMITS two things the post-move encoder
+// carries:
 //
 //   * cross-check planes -- they encode which letters are legal where, i.e. the
 //     very lexicon knowledge this model is meant to learn; feeding them in would
 //     defeat the experiment.
 //   * post-move-specific features (scores, unseen pool, move history) -- a
-//     single-move lexical query does not depend on game context.
+//     single-move query does not depend on game context.
 //
 // All-static (it carries no state), so it composes as a policy type: its
 // constants and encode() plug into the training-task machinery alongside the
@@ -25,7 +25,7 @@ namespace scribblez {
 // Scalar -- kScalarFloats floats:
 //   [0..26]  the POV rack as raw per-tile counts (A..Z, blank). Raw (not unary)
 //            because rack counts are tiny, and exact ("can I play two R's").
-struct LexicalInputEncoder {
+struct MaxMovePerLaneInputEncoder {
   static constexpr int kSpatialPlanes = BoardPlanes::kPlanes;          // 31
   static constexpr int kBoardCells = BOARD_SIZE * BOARD_SIZE;          // 225
   static constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;  // 6975
