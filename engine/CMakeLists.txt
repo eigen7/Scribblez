@@ -53,6 +53,7 @@ target_include_directories(scribblez_core PUBLIC
 # position_json serializes the GameState schema with Boost.Json; expose it to
 # every consumer of the core library (FFI, web server, tests).
 target_link_libraries(scribblez_core PUBLIC Boost::json)
+target_link_libraries(scribblez_core PUBLIC Eigen3::Eigen)
 
 # Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
 # so the resulting libscribblez_ffi.so is a single self-contained artifact
@@ -114,7 +115,7 @@ target_include_directories(scribblez_nn
   PRIVATE ${CUDA_INCLUDE_DIR} ${TENSORRT_INCLUDE_DIR})
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
-target_link_libraries(scribblez_nn PRIVATE Eigen3::Eigen)
+target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen)
 
 # The NeuralAgent TUs are the only agent sources not already in scribblez_core;
 # they are kept out of the core library so it carries no CUDA/TensorRT

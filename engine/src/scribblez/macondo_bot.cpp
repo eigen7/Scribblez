@@ -415,8 +415,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
   uint64_t seed = 0;
   bool have_seed = false;
 
-  po::options_description desc =
-    hastybot_options(top_k, temperature, temperature_min_bag, seed);
+  po::options_description desc = hastybot_options(top_k, temperature, temperature_min_bag, seed);
 
   try {
     po::variables_map vm;
