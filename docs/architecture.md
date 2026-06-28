@@ -37,7 +37,7 @@ generate_data.py ─▶ play_game ─▶ GameRunner ─▶ Game ─▶ GameLog
 | Input layout | [input_encoder.h](../engine/include/scribblez/input_encoder.h) | Plane/scalar offsets and counts (85 spatial planes + 936 scalars = 20061 floats). |
 | Label layout | [training_targets.h](../engine/include/scribblez/training_targets.h) | The `AllTargets` registry — single source of truth for the label heads. |
 | Stream to Python | [scribblez_ffi.cpp](../engine/src/scribblez/scribblez_ffi.cpp) → [py/scribblez/ffi.py](../py/scribblez/ffi.py) → [dataset.py](../py/scribblez/dataset.py) | C ABI over the `DataLoader`; epoch-based batch streaming. |
-| Train | [py/scripts/train.py](../py/scripts/train.py), [py/scribblez/model.py](../py/scribblez/model.py) | ResNet trunk + the heads in `AllTargets`. |
+| Train | [py/scripts/train.py](../py/scripts/train.py), [py/scribblez/post_move_value_model.py](../py/scribblez/post_move_value_model.py) | ResNet trunk + the heads in `AllTargets`. |
 
 ## The `.slog` lifecycle
 

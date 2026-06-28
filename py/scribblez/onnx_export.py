@@ -1,4 +1,4 @@
-"""Export a trained ScribblezModel to ONNX.
+"""Export a trained PostMoveValueModel to ONNX.
 
 The exported graph takes the same two inputs as the PyTorch model
 (`input_spatial`, `input_scalar`) and produces all three head outputs

@@ -32,7 +32,7 @@ from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
 from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
-from scribblez.model import ScribblezModel, compute_loss
+from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 
@@ -378,7 +378,7 @@ def main() -> int:
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
-    model = ScribblezModel(
+    model = PostMoveValueModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
         num_blocks=args.num_blocks,

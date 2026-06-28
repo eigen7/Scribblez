@@ -7,7 +7,7 @@ PyTorch side as ground truth so the C++ test can confirm the TensorRT path (and
 the C++ Eval decode -- softmax, win_prob, score-diff mean/std) reproduces it.
 
 It writes three files into --out-dir:
-  * model.onnx   -- a randomly-initialized ScribblezModel exported to ONNX.
+  * model.onnx   -- a randomly-initialized PostMoveValueModel exported to ONNX.
   * inputs.bin   -- N rows x kInputFloats float32, laid out exactly as
                     GameStateEncoder::encode_input writes them (spatial floats
                     then scalar floats), row-major. N is recovered C++-side from
@@ -28,7 +28,7 @@ import numpy as np
 import torch
 
 from scribblez.ffi import get_input_shapes
-from scribblez.model import ScribblezModel
+from scribblez.post_move_value_model import PostMoveValueModel
 from scribblez.onnx_export import export_onnx
 
 # Input contract is owned by the C++ encoder
@@ -44,9 +44,9 @@ SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 INPUT_FLOATS = SPATIAL_FLOATS + SCALAR_SIZE
 
 
-def build_model(seed: int) -> ScribblezModel:
+def build_model(seed: int) -> PostMoveValueModel:
     torch.manual_seed(seed)
-    model = ScribblezModel(
+    model = PostMoveValueModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=8,
@@ -58,7 +58,7 @@ def build_model(seed: int) -> ScribblezModel:
 
 
 @torch.no_grad()
-def reference_evals(model: ScribblezModel, rows: np.ndarray) -> np.ndarray:
+def reference_evals(model: PostMoveValueModel, rows: np.ndarray) -> np.ndarray:
     """PyTorch decode of each row into
     [win_prob, p_win, p_draw, p_loss, sd_mean, sd_std]."""
     spatial = torch.from_numpy(

@@ -218,7 +218,7 @@ def test_streaming_loop_one_step(tmp_path):
 
     from scribblez.dashboard import db
     from scribblez.ffi import get_input_shapes, row_size_floats
-    from scribblez.model import ScribblezModel
+    from scribblez.post_move_value_model import PostMoveValueModel
     from scribblez.paths import TagPaths
     from scripts.train_post_move_model import build_arg_parser, run_streaming_training
 
@@ -236,7 +236,7 @@ def test_streaming_loop_one_step(tmp_path):
     paths = TagPaths("looptest", mount_root=tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cpu")
-    model = ScribblezModel(spatial_planes=sp, scalar_size=sc, num_blocks=1, trunk_channels=8)
+    model = PostMoveValueModel(spatial_planes=sp, scalar_size=sc, num_blocks=1, trunk_channels=8)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     conn = db.connect(paths.dashboard_db)
 

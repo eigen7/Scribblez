@@ -22,7 +22,7 @@ from scribblez.dataset import SlogDataset
 from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
 from scribblez.ffi import get_input_shapes
-from scribblez.model import ScribblezModel
+from scribblez.post_move_value_model import PostMoveValueModel
 from scribblez.paths import TagPaths
 
 
@@ -33,10 +33,10 @@ def latest_checkpoint(paths: TagPaths) -> Path:
     return ckpts[-1]
 
 
-def build_model_from_checkpoint(ckpt: dict, device: torch.device) -> ScribblezModel:
+def build_model_from_checkpoint(ckpt: dict, device: torch.device) -> PostMoveValueModel:
     shapes = {s.name: s.dims for s in get_input_shapes()}
     targs = ckpt.get("args", {})
-    model = ScribblezModel(
+    model = PostMoveValueModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
         num_blocks=targs.get("num_blocks", 10),

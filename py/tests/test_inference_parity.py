@@ -2,7 +2,7 @@
 
 The agent (NeuralAgent) and the dashboard probes run the *same weights*
 through *different* inference stacks: the dashboard calls the in-memory PyTorch
-ScribblezModel (FP32), while the agent uses onnx_export -> TensorRT. This test
+PostMoveValueModel (FP32), while the agent uses onnx_export -> TensorRT. This test
 pins the first hop of that chain -- that exporting to ONNX and running it under
 ONNXRuntime reproduces the PyTorch outputs bit-for-bit (FP32) -- so an export
 regression (wrong head order/names, opset/tracing breakage) fails loudly here
@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from scribblez.ffi import get_input_shapes
-from scribblez.model import ScribblezModel
+from scribblez.post_move_value_model import PostMoveValueModel
 from scribblez.onnx_export import export_onnx
 
 # Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
@@ -39,11 +39,11 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 OUTPUT_NAMES = ["wld", "score_diff", "opp_next_placement"]
 
 
-def _random_model(seed: int = 0) -> ScribblezModel:
+def _random_model(seed: int = 0) -> PostMoveValueModel:
     """A small randomly-initialized model in eval mode (BatchNorm uses its
     default running stats, so the forward pass is deterministic)."""
     torch.manual_seed(seed)
-    model = ScribblezModel(
+    model = PostMoveValueModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,  # tiny: this test checks numerics, not capacity

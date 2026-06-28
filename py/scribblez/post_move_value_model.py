@@ -98,7 +98,7 @@ def _make_block(channels: int, index: int) -> nn.Module:
     return GlobalPoolingResBlock(channels) if index % 3 == 2 else ResBlock(channels)
 
 
-class ScribblezModel(nn.Module):
+class PostMoveValueModel(nn.Module):
     """Post-move value network with 3 heads."""
 
     def __init__(

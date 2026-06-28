@@ -26,7 +26,7 @@ from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset
 from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
-from scribblez.model import ScribblezModel, compute_loss
+from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 from scribblez.util import fmt_duration
@@ -231,7 +231,7 @@ def main() -> int:
     # truth) so they never drift from the encoder.
     spatial_planes = ds.input_shapes["input_spatial"][0]
     scalar_size = ds.input_shapes["input_scalar"][0]
-    model = ScribblezModel(
+    model = PostMoveValueModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
         num_blocks=args.num_blocks,
