@@ -12,6 +12,7 @@
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/lane_targets.h"
 #include "scribblez/leave_values.h"
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
@@ -3054,9 +3055,145 @@ static void test_handicap_shifts_score_diff_input() {
   std::cout << "test_handicap_shifts_score_diff_input passed\n";
 }
 
+// Highest raw score among a move list (0 if empty).
+static int best_move_score(const std::vector<Move>& moves) {
+  int best = 0;
+  for (const auto& m : moves) best = std::max<int>(best, m.score());
+  return best;
+}
+
+// Highest per-lane max over all 30 lanes (0 if every lane is empty).
+static int lane_global_max(const LaneTargets& t) {
+  int best = 0;
+  for (const auto& lane : t.rows)
+    if (lane.has_move) best = std::max(best, lane.max_score);
+  for (const auto& lane : t.cols)
+    if (lane.has_move) best = std::max(best, lane.max_score);
+  return best;
+}
+
+// The lexical task's per-lane targets: every legal play is bucketed into the
+// row it lies along (horizontal) or column (vertical); single-tile plays go to
+// whichever direction(s) they form a word in. These pin the bucketing, the
+// union-over-tied-maxima, and the single-tile cross rule, and cross-check the
+// structural global max against the raw move list.
+static void test_lane_targets() {
+  const Dictionary d = tiny_dict();
+
+  // 1. Extending CAT -> CATS is a horizontal play in CENTER's row only; the
+  //    lone S forms no vertical word, so its column stays empty.
+  {
+    Board b;
+    b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                      {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                       Glyph::of(Tile::from_char('T'))}));
+    const Rack r = rack_from("S");
+    const LaneTargets t = compute_lane_targets(b, r, d);
+
+    MoveGenerator gen(b, d);
+    const auto moves = gen.generate(r);
+    const int sk = Tile::from_char('S').index();
+
+    CHECK(t.rows[CENTER].has_move);
+    CHECK((t.rows[CENTER].placed[CENTER + 3] >> sk) & 1u);  // S newly placed after CAT
+    CHECK(t.rows[CENTER].max_score == best_move_score(moves));
+    CHECK(!t.cols[CENTER + 3].has_move);
+    CHECK(lane_global_max(t) == best_move_score(moves));
+  }
+
+  // 2. A single tile that crosses (forms a word both ways) lands in BOTH its
+  //    row and its column, at the same score.
+  {
+    Board b;
+    b.set(CENTER, CENTER - 1, Glyph::of(Tile::from_char('A')));  // A to S's left
+    b.set(CENTER - 1, CENTER, Glyph::of(Tile::from_char('A')));  // A above S
+    const Rack r = rack_from("S");
+    const LaneTargets t = compute_lane_targets(b, r, d);
+    const int sk = Tile::from_char('S').index();
+
+    CHECK(t.rows[CENTER].has_move);
+    CHECK(t.cols[CENTER].has_move);
+    CHECK((t.rows[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell == column
+    CHECK((t.cols[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell == row
+    CHECK(t.rows[CENTER].max_score == t.cols[CENTER].max_score);
+  }
+
+  // 3. A single tile cannot open the game (no word formed), so every lane is
+  //    empty on an empty board.
+  {
+    Board b;
+    const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
+    for (const auto& lane : t.rows) CHECK(!lane.has_move);
+    for (const auto& lane : t.cols) CHECK(!lane.has_move);
+  }
+
+  // 3b. The flat label encoding mirrors the LaneTargets for the CATS position:
+  //     CENTER's row lane carries the S occupancy + score bin + mask bit, and an
+  //     untouched lane is all zeros.
+  {
+    Board b;
+    b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                      {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                       Glyph::of(Tile::from_char('T'))}));
+    const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
+    std::vector<float> row(kLaneLabelFloats, -1.0f);
+    encode_lane_targets(t, row.data());
+
+    const float* occ = row.data();
+    const float* score = occ + kLaneOccupancyFloats;
+    const float* mask = score + kLaneScoreFloats;
+    const int row_id = CENTER;  // axis 0, lane CENTER
+    const int sk = Tile::from_char('S').index();
+
+    // Occupancy: only S at cell CENTER+3 of CENTER's row lane is set.
+    const float* lane_occ = occ + row_id * kLaneLen * kLaneTileKinds;
+    CHECK(lane_occ[(CENTER + 3) * kLaneTileKinds + sk] == 1.0f);
+    CHECK(lane_occ[(CENTER + 3) * kLaneTileKinds + Tile::from_char('C').index()] == 0.0f);
+    CHECK(lane_occ[CENTER * kLaneTileKinds + sk] == 0.0f);  // CAT tiles are not "placed"
+
+    CHECK(mask[row_id] == 1.0f);
+    CHECK(score[row_id] ==
+          static_cast<float>(std::min(t.rows[CENTER].max_score, kLaneScoreBins - 1)));
+
+    // An empty lane (row 0) is all zeros: mask off, score 0, no occupancy.
+    CHECK(mask[0] == 0.0f);
+    CHECK(score[0] == 0.0f);
+    for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) CHECK(occ[i] == 0.0f);
+  }
+
+  // 4. Random-walk invariant: the structural global max always equals the raw
+  //    best move score, and lanes are marked iff legal moves exist.
+  {
+    std::mt19937 rng(0x1a2b3c);
+    Board b;
+    for (int step = 0; step < 60; ++step) {
+      const Rack r = random_rack(rng);
+      MoveGenerator gen(b, d);
+      const auto moves = gen.generate(r);
+      const LaneTargets t = compute_lane_targets(b, r, d);
+
+      CHECK(lane_global_max(t) == best_move_score(moves));
+      bool any_lane = false;
+      for (const auto& lane : t.rows) any_lane = any_lane || lane.has_move;
+      for (const auto& lane : t.cols) any_lane = any_lane || lane.has_move;
+      CHECK(any_lane == !moves.empty());
+
+      if (moves.empty()) {
+        b = Board();  // reset when the position is stuck
+        continue;
+      }
+      const Move* best = &moves.front();
+      for (const auto& m : moves)
+        if (m.score() > best->score()) best = &m;
+      b.apply(*best);
+    }
+  }
+}
+
 int main() {
   test_util_helpers();
   test_dict_basic();
+  test_lane_targets();
   test_shadow_movegen_matches_full();
   test_wmp_generate_matches_full();
   test_wmp_matches_gaddag_real_lexicon();
