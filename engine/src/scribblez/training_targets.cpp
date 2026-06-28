@@ -8,7 +8,7 @@ namespace scribblez {
 
 // ---------- WldTarget ---------------------------------------------------
 
-void WldTarget::encode(const TargetInputs& v, float* out) {
+void WldTarget::encode(const EncodeContext& v, float* out) {
   const int a = v.final_active();
   const int o = v.final_opp();
   out[0] = (a > o) ? 1.0f : 0.0f;
@@ -18,7 +18,7 @@ void WldTarget::encode(const TargetInputs& v, float* out) {
 
 // ---------- ScoreDiffTarget --------------------------------------------
 
-void ScoreDiffTarget::encode(const TargetInputs& v, float* out) {
+void ScoreDiffTarget::encode(const EncodeContext& v, float* out) {
   const int diff = v.final_active() - v.final_opp();
   out[0] = static_cast<float>(std::clamp(diff, -kClip, kClip));
 }
@@ -32,7 +32,7 @@ inline int plane_idx(int r, int c, bool flip) {
 }
 }  // namespace
 
-void OppNextPlacementTarget::encode(const TargetInputs& v, float* out) {
+void OppNextPlacementTarget::encode(const EncodeContext& v, float* out) {
   std::fill_n(out, kSide * kSide, 0.0f);
   if (!v.has_next_move) return;
   const Move& m = v.next_move;

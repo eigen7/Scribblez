@@ -10,41 +10,25 @@
 // Each target struct must expose:
 //   * static constexpr const char* kName  -- display / FFI name
 //   * static constexpr int kDims[]        -- tensor shape (any rank >= 1)
-//   * static void encode(const TargetInputs&, float* out)
+//   * static void encode(const EncodeContext&, float* out)
 //                                         -- writes product(kDims) floats
 //
 // Targets are emitted into the row in declaration order; offsets are
 // computed by TargetList::encode_all().
 
-#include "scribblez/move.h"
+#include "scribblez/encode_context.h"
 
 #include <array>
 #include <cstddef>
 
 namespace scribblez {
 
-// A snapshot of the per-sample inputs needed to compute every target
-// head. The caller (BlockDecoder, or a test) populates this from the
-// replay state at the sampled position.
-struct TargetInputs {
-  Move next_move{};  // the opponent's response to the sampled position;
-                     // only consulted when has_next_move is true
-  bool has_next_move = false;
-  int active_player = 0;  // 0 or 1 -- the POV for WLD / score_diff
-  int final_score_p0 = 0;
-  int final_score_p1 = 0;
-  bool apply_flip = false;  // transpose spatial outputs when true
-
-  int final_active() const { return active_player == 0 ? final_score_p0 : final_score_p1; }
-  int final_opp() const { return active_player == 0 ? final_score_p1 : final_score_p0; }
-};
-
 // ---------- per-target structs -----------------------------------------
 
 struct WldTarget {
   static constexpr const char* kName = "wld";
   static constexpr int kDims[] = {3};  // [win, draw, loss]
-  static void encode(const TargetInputs& v, float* out);
+  static void encode(const EncodeContext& v, float* out);
 };
 
 struct ScoreDiffTarget {
@@ -58,19 +42,19 @@ struct ScoreDiffTarget {
   static constexpr int kClip = 400;
   static constexpr const char* kName = "score_diff";
   static constexpr int kDims[] = {1};
-  static void encode(const TargetInputs& v, float* out);
+  static void encode(const EncodeContext& v, float* out);
 };
 
 struct OppNextPlacementTarget {
   // 15x15 binary mask: cell (r,c) is 1.0 iff the opponent placed a tile
   // on (r,c) on their next move. All zeros if the next move is missing,
-  // EXCHANGE, or PASS. Transposed across the main diagonal when
-  // view.apply_flip is true (so it stays aligned with the InputEncoder's
-  // spatial planes).
+  // EXCHANGE, or PASS. Transposed across the main diagonal when the context's
+  // apply_flip is true (so it stays aligned with the InputEncoder's spatial
+  // planes).
   static constexpr int kSide = 15;
   static constexpr const char* kName = "opp_next_placement";
   static constexpr int kDims[] = {kSide, kSide};
-  static void encode(const TargetInputs& v, float* out);
+  static void encode(const EncodeContext& v, float* out);
 };
 
 // ---------- TargetList: derives everything else from the pack ----------
@@ -94,7 +78,7 @@ struct TargetList {
 
   // Writes total_floats floats starting at `out`, one target after the
   // next in declaration order.
-  static void encode_all(const TargetInputs& v, float* out);
+  static void encode_all(const EncodeContext& v, float* out);
 };
 
 // ---------- The single source of truth ---------------------------------

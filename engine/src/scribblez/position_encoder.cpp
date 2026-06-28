@@ -1,7 +1,7 @@
 #include "scribblez/position_encoder.h"
 
 #include "scribblez/input_encoder.h"
-#include "scribblez/training_targets.h"
+#include "scribblez/training_task.h"
 
 #include <cassert>
 #include <cstdint>
@@ -59,23 +59,26 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
 void PositionEncoder::encode_row(const GameLog& g, int sampled_turn, bool post_move, bool flip,
                                  float* out_row) {
   const int mover = replay_to_sampled(g, sampled_turn, post_move);
-  enc_.encode_input(mover, racks_[mover], flip, out_row);
+
+  EncodeContext ctx{};
+  ctx.enc = &enc_;
+  ctx.pov_rack = &racks_[mover];
+  ctx.active_player = mover;
+  ctx.apply_flip = flip;
 
   // The "opponent next move" -- whichever upcoming turn was played by
   // (1 - mover). Pre-move: that's turn sampled_turn+1. Post-move: enc_ has
   // advanced past sampled_turn (active is now opp), whose next move is also at
   // sampled_turn+1.
   const int next_idx = sampled_turn + 1;
-  TargetInputs view{};
   if (next_idx < g.num_records) {
-    view.next_move = g.records[next_idx].move;
-    view.has_next_move = true;
+    ctx.next_move = g.records[next_idx].move;
+    ctx.has_next_move = true;
   }
-  view.active_player = mover;
-  view.final_score_p0 = g.final_scores[0];
-  view.final_score_p1 = g.final_scores[1];
-  view.apply_flip = flip;
-  AllTargets::encode_all(view, out_row + kInputFloats);
+  ctx.final_score_p0 = g.final_scores[0];
+  ctx.final_score_p1 = g.final_scores[1];
+
+  PostMoveTask::encode_row(ctx, out_row);
 }
 
 void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move,

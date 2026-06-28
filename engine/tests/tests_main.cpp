@@ -1555,12 +1555,12 @@ static void test_game_end_stalemate_penalty() {
 
 namespace {
 
-// Helper: build a TargetInputs with just the fields encode_labels reads for
+// Helper: build an EncodeContext with just the fields encode_labels reads for
 // heads 0 and 1 (no next move set -> head 2 emits all zeros).
-scribblez::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_player,
-                                         bool apply_flip = false) {
+scribblez::EncodeContext make_scores_view(int fs_active, int fs_opp, int active_player,
+                                          bool apply_flip = false) {
   using namespace scribblez::binlog;
-  TargetInputs v{};
+  EncodeContext v{};
   v.has_next_move = false;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
@@ -1571,7 +1571,7 @@ scribblez::TargetInputs make_scores_view(int fs_active, int fs_opp, int active_p
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
 // size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
-void encode_labels_flat(const scribblez::TargetInputs& view, float* flat) {
+void encode_labels_flat(const scribblez::EncodeContext& view, float* flat) {
   scribblez::AllTargets::encode_all(view, flat);
 }
 
@@ -1642,7 +1642,7 @@ static void test_encode_labels() {
                                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                    Glyph::of(Tile::from_char('C'))});
 
-  TargetInputs v_with_next{};
+  EncodeContext v_with_next{};
   v_with_next.next_move = next_play;
   v_with_next.has_next_move = true;
   v_with_next.active_player = 0;
