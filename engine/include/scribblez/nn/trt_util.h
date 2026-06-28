@@ -30,8 +30,12 @@ std::string content_hash(const std::vector<char>& bytes);
 // hash, built at `precision` for `batch_size`. The path also encodes the GPU's
 // compute capability and the TensorRT version, since a plan is invalid across
 // either. Lives under <mount>/TensorRT-cache/.
+//
+// `fast_build` engines (TensorRT builder optimization level 0: minimal build
+// effort, much lower inference throughput) are cached under a separate subtree
+// so a fast-built plan can never satisfy a normal full-optimization load.
 std::string engine_plan_cache_path(const std::string& model_hash, Precision precision,
-                                   int batch_size, const std::string& mount_root);
+                                   int batch_size, bool fast_build, const std::string& mount_root);
 
 }  // namespace nn
 }  // namespace scribblez

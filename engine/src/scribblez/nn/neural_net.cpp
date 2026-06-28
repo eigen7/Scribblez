@@ -173,6 +173,9 @@ std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_byte
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
   if (params.precision == Precision::kFP16) config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  // Level 0 takes the first working tactic per layer instead of timing the full
+  // tactic set, trading inference speed for a far shorter build.
+  if (params.fast_build) config->setBuilderOptimizationLevel(0);
 
   nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
   int b = params.max_batch_size;
@@ -230,8 +233,9 @@ void NeuralNet::load() {
 
   std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
   std::string hash = content_hash(onnx_bytes);
-  std::string cache_path = engine_plan_cache_path(
-    hash, impl_->params.precision, impl_->params.max_batch_size, impl_->params.mount_root);
+  std::string cache_path =
+    engine_plan_cache_path(hash, impl_->params.precision, impl_->params.max_batch_size,
+                           impl_->params.fast_build, impl_->params.mount_root);
 
   if (std::filesystem::exists(cache_path)) {
     impl_->deserialize_engine(read_file_bytes(cache_path));

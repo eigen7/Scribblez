@@ -36,6 +36,14 @@ struct NeuralNetParams {
   Precision precision = Precision::kFP16;
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
+
+  // Build the engine at TensorRT builder optimization level 0: skip the tactic-
+  // timing search and take the first working kernel for each layer. This cuts a
+  // cold engine build by several-fold (tens of seconds down to a few seconds for
+  // this model) at the cost of much slower inference, so it is meant for tests
+  // and quick checks, not for production agents. Fast-built plans are cached
+  // separately from full-optimization plans (see engine_plan_cache_path).
+  bool fast_build = false;
 };
 
 class NeuralNet {

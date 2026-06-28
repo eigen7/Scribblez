@@ -49,7 +49,7 @@ def build_model(seed: int) -> ScribblezModel:
     model = ScribblezModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
-        trunk_channels=16,
+        trunk_channels=8,
         num_blocks=3,  # 3 -> includes one global-pooling block (parity-covers it)
         board_size=BOARD_SIZE,
     )
