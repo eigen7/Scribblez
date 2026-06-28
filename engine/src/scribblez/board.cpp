@@ -18,25 +18,26 @@ const Premium Premium::DWS = Premium(Premium::kDWS);
 const Premium Premium::TWS = Premium(Premium::kTWS);
 namespace {
 
-// Encoded as: '.' NONE, '-' DLS, '+' TLS, '*' DWS, '$' TWS.
-// Center (7,7) is treated as DWS for first-move scoring.
+// Encoded as: ' ' NONE, '\'' DLS, '"' TLS, '-' DWS, '=' TWS (matching MAGPIE's
+// bonus-square character codes). Center (7,7) is treated as DWS for first-move
+// scoring.
 // clang-format off
 constexpr const char* kPremiumLayout[BOARD_SIZE] = {
-    "$..-...$...-..$",
-    ".*...+...+...*.",
-    "..*...-.-...*..",
-    "-..*...-...*..-",
-    "....*.....*....",
-    ".+...+...+...+.",
-    "..-...-.-...-..",
-    "$..-...*...-..$",
-    "..-...-.-...-..",
-    ".+...+...+...+.",
-    "....*.....*....",
-    "-..*...-...*..-",
-    "..*...-.-...*..",
-    ".*...+...+...*.",
-    "$..-...$...-..$",
+    "=  '   =   '  =",
+    " -   \"   \"   - ",
+    "  -   ' '   -  ",
+    "'  -   '   -  '",
+    "    -     -    ",
+    " \"   \"   \"   \" ",
+    "  '   ' '   '  ",
+    "=  '   -   '  =",
+    "  '   ' '   '  ",
+    " \"   \"   \"   \" ",
+    "    -     -    ",
+    "'  -   '   -  '",
+    "  -   ' '   -  ",
+    " -   \"   \"   - ",
+    "=  '   =   '  =",
 };
 // clang-format on
 

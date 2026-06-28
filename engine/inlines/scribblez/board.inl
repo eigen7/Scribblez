@@ -3,22 +3,22 @@
 namespace scribblez {
 
 constexpr char Premium::display_char() const {
-  if (kind_ == kDLS) return '-';
-  if (kind_ == kTLS) return '+';
-  if (kind_ == kDWS) return '*';
-  if (kind_ == kTWS) return '$';
-  return '.';
+  if (kind_ == kDLS) return '\'';
+  if (kind_ == kTLS) return '"';
+  if (kind_ == kDWS) return '-';
+  if (kind_ == kTWS) return '=';
+  return ' ';
 }
 
 inline Premium decode(char c) {
   switch (c) {
-    case '-':
+    case '\'':
       return Premium::DLS;
-    case '+':
+    case '"':
       return Premium::TLS;
-    case '*':
+    case '-':
       return Premium::DWS;
-    case '$':
+    case '=':
       return Premium::TWS;
     default:
       return Premium::NONE;
