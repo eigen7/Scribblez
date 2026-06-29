@@ -37,6 +37,7 @@ from scribblez.train_common import (
     ThroughputMeter,
     TrainStepWriter,
     add_train_log_args,
+    timed_print,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
@@ -246,14 +247,12 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             })
 
             if positions >= next_log:
-                st = source.stats()
-                sample = meter.sample(time.time(), positions, st)
+                sample = meter.sample(time.time(), positions, source.stats())
                 db.write_throughput(conn, sample)
                 writer.commit()
-                print(
+                timed_print(
                     f"pos={positions:>9} | {sample['positions_per_s']:8.0f} pos/s | "
-                    f"loss={batch_losses['total']:.4f} | games={st['games_played']} "
-                    f"dropped={st['games_dropped']} | bottleneck={sample['bottleneck']}"
+                    f"loss={batch_losses['total']:.4f} | bottleneck={sample['bottleneck']}"
                 )
                 next_log += args.log_every
 
@@ -269,12 +268,12 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
                 model.train()
                 next_ckpt += args.checkpoint_every
     except KeyboardInterrupt:
-        print("\nInterrupted; shutting down.")
+        timed_print("Interrupted; shutting down.")
     finally:
         writer.close()
         source.stop()
 
-    print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
+    timed_print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
     return positions
 
 
@@ -287,9 +286,9 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
     eval/dashboard stack is reused unchanged.
     """
     record = {"epoch": ckpt_idx, "positions": positions, **interval.record()}
-    print(
+    timed_print(
         f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-        f"wld_acc={record['wld_acc']:.3f}"
+        f"wld_acc={record['wld_acc']:.5f}"
     )
     if probe_enabled:
         record.update(
@@ -308,7 +307,7 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
                             args)
     onnx_path = paths.onnx_path(ckpt_idx)
     export_onnx(model, onnx_path, spatial_planes, scalar_size)
-    print(f"  -> saved {paths.rolling_checkpoint.name} and {onnx_path.name}")
+    timed_print(f"  -> saved {paths.rolling_checkpoint.name} and {onnx_path.name}")
 
 
 def main() -> int:

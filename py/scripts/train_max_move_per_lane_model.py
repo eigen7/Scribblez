@@ -37,6 +37,7 @@ from scribblez.train_common import (
     ThroughputMeter,
     TrainStepWriter,
     add_train_log_args,
+    timed_print,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
@@ -173,13 +174,11 @@ def run_streaming_training(
             writer.record(step, positions, metrics)
 
             if positions >= next_log:
-                st = source.stats()
-                db.write_throughput(conn, meter.sample(time.time(), positions, st))
+                db.write_throughput(conn, meter.sample(time.time(), positions, source.stats()))
                 writer.commit()
-                print(
+                timed_print(
                     f"pos={positions:>9} | loss={metrics['loss']:.4f} "
-                    f"move_acc={metrics['move_acc']:.3f} score_acc={metrics['score_acc']:.3f} | "
-                    f"games={st['games_played']} dropped={st['games_dropped']}"
+                    f"move_acc={metrics['move_acc']:.5f} score_acc={metrics['score_acc']:.5f}"
                 )
                 next_log += args.log_every
 
@@ -191,18 +190,18 @@ def run_streaming_training(
                 save_rolling_checkpoint(
                     paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step, args
                 )
-                print(f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-                      f"-> saved {paths.rolling_checkpoint.name}")
+                timed_print(f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
+                    f"-> saved {paths.rolling_checkpoint.name}")
                 interval.reset()
                 model.train()
                 next_ckpt += args.checkpoint_every
     except KeyboardInterrupt:
-        print("\nInterrupted; shutting down.")
+        timed_print("Interrupted; shutting down.")
     finally:
         writer.close()
         source.stop()
 
-    print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
+    timed_print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")
     return positions
 
 

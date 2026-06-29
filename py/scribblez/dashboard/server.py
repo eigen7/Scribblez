@@ -17,14 +17,23 @@ APP_PATH = Path(__file__).with_name("app.py")
 DEFAULT_PORT = 5006 + port_offset()
 
 
-def serve_command(port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount") -> list[str]:
-    """The `bokeh serve` argv for the dashboard app, bound for Docker port-forwarding.
+# Run `bokeh serve` through a tiny `python -c` shim that first sets logging's
+# millisecond separator to a period (Bokeh prints '...:09,812'; we want
+# '...:09.812'). `default_msec_format` is a public logging.Formatter attribute, so
+# setting it before Bokeh configures logging changes every line, startup included.
+# Using -c (not -m bokeh) keeps it working regardless of the `bokeh` console script.
+_SERVE_SHIM = (
+    "import sys, logging; "
+    "logging.Formatter.default_msec_format = '%s.%03d'; "
+    "from bokeh.command.bootstrap import main; "
+    "main(['bokeh', *sys.argv[1:]])"
+)
 
-    Invokes Bokeh via ``python -m bokeh`` so it works regardless of whether the
-    ``bokeh`` console script is on PATH.
-    """
+
+def serve_command(port: int = DEFAULT_PORT, mount_root: str = "/workspace/mount") -> list[str]:
+    """The argv that serves the dashboard app, bound for Docker port-forwarding."""
     return [
-        sys.executable, "-m", "bokeh", "serve", str(APP_PATH),
+        sys.executable, "-c", _SERVE_SHIM, "serve", str(APP_PATH),
         "--port", str(port),
         "--address", "0.0.0.0",
         "--allow-websocket-origin", f"localhost:{port}",

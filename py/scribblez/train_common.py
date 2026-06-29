@@ -8,12 +8,19 @@ trainer keeps only its task-specific model, loss, and eval.
 """
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import torch
 
 from .dashboard import db
 from .paths import TagPaths
+
+
+def timed_print(msg: str):
+    """Print `msg` with a millisecond-resolution local-time prefix, e.g.
+    '2026-06-29 11:45:09.815 <msg>'. Used for the trainers' progress lines."""
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} {msg}")
 
 
 def reset_tag(paths: TagPaths):
