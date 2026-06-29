@@ -20,10 +20,8 @@ Usage:
 
 import argparse
 import atexit
-import shutil
 import sys
 import time
-from pathlib import Path
 
 import torch
 
@@ -35,6 +33,12 @@ from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
 from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
+from scribblez.train_common import (
+    ThroughputMeter,
+    maybe_resume,
+    reset_tag,
+    save_rolling_checkpoint,
+)
 
 # Imported lazily-friendly: shelling out to play_game for the one-time val set.
 from scripts.generate_data import run_games
@@ -104,15 +108,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def reset_tag(paths: TagPaths):
-    """Wipe prior run artifacts (checkpoints, onnx, dashboard DB). Keeps the val set."""
-    print(f"--restart: clearing prior run artifacts under {paths.root}", file=sys.stderr)
-    shutil.rmtree(paths.checkpoints_dir, ignore_errors=True)
-    shutil.rmtree(paths.onnx_dir, ignore_errors=True)
-    for suffix in ("", "-wal", "-shm"):
-        Path(str(paths.dashboard_db) + suffix).unlink(missing_ok=True)
-
-
 def ensure_validation_set(paths: TagPaths, args) -> bool:
     """Generate the held-out validation split once (if absent). Returns availability."""
     if paths.test_dir.exists() and any(paths.test_dir.glob("*.slog")):
@@ -137,35 +132,6 @@ def ensure_probe_subset(paths: TagPaths, num_positions: int) -> bool:
     if not paths.position_dump_path(0).with_suffix(".png").exists():
         render_boards(paths.test_subset_slog, paths.test_subset_dir)
     return True
-
-
-def save_rolling_checkpoint(path: Path, model, optimizer, ckpt_idx: int, positions: int, step: int,
-                            args):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "ckpt_idx": ckpt_idx,
-            "positions": positions,
-            "step": step,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "args": vars(args),
-        },
-        path,
-    )
-
-
-def maybe_resume(paths: TagPaths, model, optimizer, device) -> tuple[int, int, int]:
-    """Load the rolling checkpoint if present; return (ckpt_idx, positions, step)."""
-    p = paths.rolling_checkpoint
-    if not p.exists():
-        return 0, 0, 0
-    ckpt = torch.load(p, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    ci, pos, step = int(ckpt["ckpt_idx"]), int(ckpt["positions"]), int(ckpt.get("step", 0))
-    print(f"Resuming from {p.name}: checkpoint {ci}, {pos} positions trained")
-    return ci, pos, step
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +196,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every
     t0 = time.time()
-    last_t = t0
-    last_positions = positions
-    last_prod_ns = 0
-    last_cons_ns = 0
+    meter = ThroughputMeter(positions, t0)
 
     try:
         while args.max_positions == 0 or positions < args.max_positions:
@@ -279,34 +242,16 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             })
 
             if positions >= next_log:
-                now = time.time()
                 st = source.stats()
-                d_prod = st["producer_blocked_ns"] - last_prod_ns
-                d_cons = st["consumer_blocked_ns"] - last_cons_ns
-                dt = max(now - last_t, 1e-9)
-                bottleneck = "cpu" if d_cons > d_prod else "gpu"
-                pos_per_s = (positions - last_positions) / dt
-                db.write_throughput(
-                    conn,
-                    {
-                        "t": now,
-                        "positions": positions,
-                        "games": st["games_played"],
-                        "positions_per_s": pos_per_s,
-                        "producer_blocked_ns": st["producer_blocked_ns"],
-                        "consumer_blocked_ns": st["consumer_blocked_ns"],
-                        "bottleneck": bottleneck,
-                    },
-                )
+                sample = meter.sample(time.time(), positions, st)
+                db.write_throughput(conn, sample)
                 db.write_train_steps(conn, step_buffer)
                 step_buffer.clear()
                 print(
-                    f"pos={positions:>9} | {pos_per_s:8.0f} pos/s | "
+                    f"pos={positions:>9} | {sample['positions_per_s']:8.0f} pos/s | "
                     f"loss={batch_losses['total']:.4f} | games={st['games_played']} "
-                    f"dropped={st['games_dropped']} | bottleneck={bottleneck}"
+                    f"dropped={st['games_dropped']} | bottleneck={sample['bottleneck']}"
                 )
-                last_t, last_positions = now, positions
-                last_prod_ns, last_cons_ns = st["producer_blocked_ns"], st["consumer_blocked_ns"]
                 next_log += args.log_every
 
             if positions >= next_ckpt:

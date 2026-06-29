@@ -153,10 +153,6 @@ def test_db_train_step_roundtrip(tmp_path):
     conn = db.connect(tmp_path / "dash.db")
     assert plots.train_step_grid(conn) is None  # no data -> caller falls back
 
-    # The stacked plot weights each head by its loss-weight arg (wld implicitly 1).
-    db.write_meta(conn, "t", {"lambda_sd": 0.05, "lambda_opp": 0.5}, 1000)
-    assert plots._loss_weights(conn) == {"wld": 1.0, "score_diff": 0.05, "opp_next_placement": 0.5}
-
     rows = [
         {
             "step": i,

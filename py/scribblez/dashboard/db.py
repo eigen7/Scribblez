@@ -82,8 +82,8 @@ CREATE TABLE IF NOT EXISTS throughput (
 CREATE TABLE IF NOT EXISTS train_step (
   step INTEGER,                 -- cumulative minibatch index (x-axis)
   positions INTEGER,            -- cumulative positions trained
-  loss REAL, loss_wld REAL, loss_score_diff REAL, loss_opp_next_placement REAL,
-  wld_acc REAL                  -- this minibatch's WLD accuracy
+  name TEXT,                    -- metric name: 'loss', 'loss_<head>', '<x>_acc'
+  value REAL
 );
 """
 
@@ -199,26 +199,24 @@ def write_throughput(conn: sqlite3.Connection, sample: dict):
     conn.commit()
 
 
-_TRAIN_STEP_COLS = (
-    "step",
-    "positions",
-    "loss",
-    "loss_wld",
-    "loss_score_diff",
-    "loss_opp_next_placement",
-    "wld_acc",
-)
-
-
 def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
-    """Append per-minibatch training stats (batched insert; no-op if empty)."""
+    """Append per-minibatch training stats (batched insert; no-op if empty).
+
+    Long-format: each row is `{step, positions, <metric>: value, ...}` and every
+    metric becomes its own `(step, positions, name, value)` record. New loss or
+    accuracy series therefore need no schema change -- a metric appears simply by
+    being present in the row dicts."""
     if not rows:
         return
+    long_rows = [
+        (r["step"], r["positions"], name, float(value))
+        for r in rows
+        for name, value in r.items()
+        if name not in ("step", "positions")
+    ]
     conn.executemany(
-        "INSERT INTO train_step "
-        "(step, positions, loss, loss_wld, loss_score_diff, loss_opp_next_placement, wld_acc) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [tuple(r[c] for c in _TRAIN_STEP_COLS) for r in rows],
+        "INSERT INTO train_step (step, positions, name, value) VALUES (?, ?, ?, ?)",
+        long_rows,
     )
     conn.commit()
 
@@ -299,12 +297,34 @@ def read_throughput(conn: sqlite3.Connection) -> list[dict]:
 
 
 def read_train_steps(conn: sqlite3.Connection) -> dict:
-    """All per-minibatch training stats as a dict of arrays (empty if none)."""
-    rows = conn.execute(
-        "SELECT step, positions, loss, loss_wld, loss_score_diff, loss_opp_next_placement, wld_acc "
-        "FROM train_step ORDER BY rowid"
-    ).fetchall()
-    return {c: np.array([r[c] for r in rows], dtype=np.float64) for c in _TRAIN_STEP_COLS}
+    """All per-minibatch training stats as a dict of aligned arrays (pivoted from
+    the long format). Always includes 'step' and 'positions'; every other key is
+    a metric series aligned to 'step' order (missing values are NaN). Empty dict
+    arrays when there is no data."""
+    try:
+        rows = conn.execute(
+            "SELECT step, positions, name, value FROM train_step ORDER BY rowid"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # A dashboard.db written before the long-format train_step schema. Treat
+        # it as having no per-minibatch data (the view falls back to per-epoch).
+        return {"step": np.array([]), "positions": np.array([])}
+    steps: list[int] = []
+    pos_by_step: dict[int, int] = {}
+    series: dict[str, dict[int, float]] = {}
+    for r in rows:
+        s = r["step"]
+        if s not in pos_by_step:
+            pos_by_step[s] = r["positions"]
+            steps.append(s)
+        series.setdefault(r["name"], {})[s] = r["value"]
+    out = {
+        "step": np.array(steps, dtype=np.float64),
+        "positions": np.array([pos_by_step[s] for s in steps], dtype=np.float64),
+    }
+    for name, by_step in series.items():
+        out[name] = np.array([by_step.get(s, np.nan) for s in steps], dtype=np.float64)
+    return out
 
 
 def read_all_calibration(conn: sqlite3.Connection):
