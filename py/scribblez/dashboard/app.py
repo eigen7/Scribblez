@@ -24,7 +24,7 @@ from functools import partial
 
 from bokeh.io import curdoc
 from bokeh.layouts import column, row
-from bokeh.models import Button, CustomJS, Div, InlineStyleSheet, Select
+from bokeh.models import Button, CustomJS, Div, InlineStyleSheet, RadioButtonGroup, Select
 
 from scribblez.dashboard import db, plots
 from scribblez.paths import TagPaths
@@ -112,6 +112,13 @@ class Dashboard:
         for i, b in enumerate(self.nav):
             b.on_click(partial(self.select_tab, i))
 
+        # Absolute vs. %-of-total toggle for the stacked-loss panel. Persistent
+        # (kept across refreshes) so its state and handler survive the poll's
+        # piecewise rebuilds; only shown when the loss panel is the weighted stack.
+        self.loss_normalized = False
+        self.loss_mode = RadioButtonGroup(labels=["Absolute", "% of total"], active=0, width=180)
+        self.loss_mode.on_change("active", lambda a, o, n: self._set_loss_mode(n))
+
         # One card container per content block (replaced piecewise on refresh).
         self.loss_card = self._card()
         self.training_card = self._card()
@@ -196,10 +203,19 @@ class Dashboard:
         self.probes_curves.children = [plots.series_grid(self.conn, PROBE_CURVES)]
         self.calib_curves.children = [plots.series_grid(self.conn, CALIB_CURVES)]
 
+    def _set_loss_mode(self, active: int):
+        self.loss_normalized = active == 1
+        self.refresh_loss()
+
     def refresh_loss(self):
         """Per-minibatch loss/accuracy if the streaming pipeline recorded it; else per-epoch."""
-        grid = plots.train_step_grid(self.conn)
-        self.loss_card.children = [grid or plots.series_grid(self.conn, LOSS, ncols=1)]
+        grid = plots.train_step_grid(self.conn, normalized=self.loss_normalized)
+        if grid is None:
+            self.loss_card.children = [plots.series_grid(self.conn, LOSS, ncols=1)]
+            return
+        # The Absolute/% toggle only applies to the weighted stack (needs weights).
+        head = [self.loss_mode] if db.read_loss_weights(self.conn) else []
+        self.loss_card.children = head + [grid]
 
     def refresh_streaming(self):
         """Rebuild the streaming throughput/backpressure card."""

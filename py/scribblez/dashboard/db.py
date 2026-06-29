@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS train_step (
   name TEXT,                    -- metric name: 'loss', 'loss_<head>', '<x>_acc'
   value REAL
 );
+CREATE TABLE IF NOT EXISTS loss_weights (
+  name TEXT PRIMARY KEY,        -- a per-component loss series ('loss_<head>')
+  weight REAL                   -- its coefficient in the optimized total loss
+);
 """
 
 
@@ -131,6 +135,28 @@ def write_metrics(conn: sqlite3.Connection, epoch: int, record: dict):
         rows,
     )
     conn.commit()
+
+
+def write_loss_weights(conn: sqlite3.Connection, weights: dict):
+    """Record each per-component loss series' coefficient in the optimized total
+    (e.g. {'loss_score_cdf': lambda_cdf, ...}). The dashboard stacks the WEIGHTED
+    components, so a band's height is how much that term actually drives the loss.
+    Idempotent; insertion order is preserved (it sets the stacking order)."""
+    conn.executemany(
+        "INSERT INTO loss_weights (name, weight) VALUES (?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET weight=excluded.weight",
+        [(name, float(w)) for name, w in weights.items()],
+    )
+    conn.commit()
+
+
+def read_loss_weights(conn: sqlite3.Connection) -> dict:
+    """The per-component loss weights in insertion order (empty if none recorded,
+    e.g. a DB written before this table existed -> the plot falls back to lines)."""
+    return {
+        r["name"]: r["weight"]
+        for r in conn.execute("SELECT name, weight FROM loss_weights ORDER BY rowid")
+    }
 
 
 def write_monotonicity(

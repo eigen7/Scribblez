@@ -337,6 +337,13 @@ def main() -> int:
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, args.tag, vars(args), n_params)
+    # Coefficients of each loss term in the optimized total (WLD has weight 1),
+    # so the dashboard can stack the weighted contributions.
+    db.write_loss_weights(conn, {
+        "loss_wld": 1.0,
+        "loss_score_diff": args.lambda_sd,
+        "loss_opp_next_placement": args.lambda_opp,
+    })
 
     # Held-out validation set (written once) drives the probes + calibration.
     val_ok = ensure_validation_set(paths, args)

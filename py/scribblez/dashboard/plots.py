@@ -152,12 +152,55 @@ def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"
     return fig
 
 
-def train_step_grid(conn):
+def _stacked_loss_figure(x, bands, title="Train loss (stacked, weighted)", y_label="loss"):
+    """Stacked area of per-component losses, `bands` = (label, y) bottom-to-top.
+    Click a legend entry to hide it -- hide all but one to read a single
+    component's own curve (from zero)."""
+    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title,
+                 x_axis_label="positions", y_axis_label=y_label,
+                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    palette = Category10[10]
+    xs = list(x)
+    cum = np.zeros(len(xs), dtype=np.float64)
+    for i, (label, y) in enumerate(bands):
+        lo, hi = cum, cum + np.asarray(y, dtype=np.float64)
+        src = ColumnDataSource(dict(x=xs, y1=list(lo), y2=list(hi)))
+        fig.varea(x="x", y1="y1", y2="y2", source=src, fill_color=palette[i % len(palette)],
+                  fill_alpha=0.85, legend_label=label)
+        cum = hi
+    fig.y_range.start = 0
+    fig.legend.location = "top_right"
+    fig.legend.label_text_font_size = "8pt"
+    fig.legend.click_policy = "hide"
+    return fig
+
+
+def _loss_bands(ts, idx, weights, normalized):
+    """Weighted per-component loss bands [(label, y), ...] bottom-to-top. When
+    `normalized`, each point is divided by that point's stack total, so every
+    column sums to 1 and band heights read as a share of the loss."""
+    bands = [
+        (name if w == 1 else f"{w:g} x {name}", ts[name][idx] * w)
+        for name, w in weights.items()
+        if name in ts
+    ]
+    if normalized and bands:
+        total = sum(y for _, y in bands)
+        total = np.where(total == 0.0, 1.0, total)  # leave all-zero columns at 0
+        bands = [(label, y / total) for label, y in bands]
+    return bands
+
+
+def train_step_grid(conn, normalized: bool = False):
     """Streaming loss + accuracy curves vs. positions trained.
 
-    Task-agnostic: it discovers the series recorded by whichever trainer wrote
-    the DB -- every 'loss'/'loss_<head>' name overlays on the loss panel, every
-    '<x>_acc' name on the accuracy panel. Returns None when no streaming data
+    Task-agnostic: it discovers the series recorded by whichever trainer wrote the
+    DB. The loss panel is a stacked area of the WEIGHTED per-component losses when
+    the trainer recorded their coefficients (see db.write_loss_weights) -- band
+    heights then show each term's share of the optimized total -- and falls back
+    to overlaid lines otherwise. `normalized` switches the stack to per-column
+    fractions (each band = share of the total, regardless of overall scale). Every
+    '<x>_acc' name goes on the accuracy panel. Returns None when no streaming data
     exists, so the caller can fall back to the per-checkpoint loss view (the disk
     pipeline records only the latter).
 
@@ -173,15 +216,22 @@ def train_step_grid(conn):
     idx = _stride_idx(len(x_all), 4000)
     x = x_all[idx]
 
-    # 'loss' (the total) first, then each component; accuracies on their own panel.
-    loss_names = [k for k in ("loss",) if k in ts] + sorted(
-        k for k in ts if k.startswith("loss_")
-    )
-    acc_names = sorted(k for k in ts if k.endswith("_acc"))
+    weights = db.read_loss_weights(conn)
+    if weights:
+        bands = _loss_bands(ts, idx, weights, normalized)
+        if normalized:
+            loss_fig = _stacked_loss_figure(
+                x, bands, title="Train loss (stacked, % of total)", y_label="fraction of total loss"
+            )
+        else:
+            loss_fig = _stacked_loss_figure(x, bands)
+    else:
+        loss_names = [k for k in ("loss",) if k in ts] + sorted(
+            k for k in ts if k.startswith("loss_")
+        )
+        loss_fig = _step_figure("Train loss", x, [(ts[k][idx], k) for k in loss_names], "loss")
 
-    loss_fig = _step_figure(
-        "Train loss", x, [(ts[k][idx], k) for k in loss_names], "loss"
-    )
+    acc_names = sorted(k for k in ts if k.endswith("_acc"))
     figs = [loss_fig]
     if acc_names:
         figs.append(

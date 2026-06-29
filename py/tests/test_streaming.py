@@ -173,6 +173,33 @@ def test_db_train_step_roundtrip(tmp_path):
     assert type(plots.train_step_grid(conn)).__name__ == "Column"
 
 
+def test_db_loss_weights_drive_stacked_plot(tmp_path):
+    """Recorded loss weights round-trip in order and switch the loss panel to the
+    weighted-stack view; without them the plot falls back to lines."""
+    from scribblez.dashboard import db, plots
+
+    conn = db.connect(tmp_path / "dash.db")
+    db.write_train_steps(conn, [{"step": 1, "positions": 8, "loss": 1.0, "loss_a": 0.6, "loss_b": 0.4}])
+
+    assert db.read_loss_weights(conn) == {}  # none yet -> overlaid lines
+    assert type(plots.train_step_grid(conn)).__name__ == "Column"
+
+    db.write_loss_weights(conn, {"loss_a": 1.0, "loss_b": 0.5})
+    assert list(db.read_loss_weights(conn).items()) == [("loss_a", 1.0), ("loss_b", 0.5)]
+    assert type(plots.train_step_grid(conn)).__name__ == "Column"  # absolute stack
+    assert type(plots.train_step_grid(conn, normalized=True)).__name__ == "Column"
+
+    # Normalized bands are each point's share of the weighted column total.
+    import numpy as np
+
+    ts = db.read_train_steps(conn)
+    bands = plots._loss_bands(ts, slice(None), db.read_loss_weights(conn), normalized=True)
+    assert [lbl for lbl, _ in bands] == ["loss_a", "0.5 x loss_b"]  # weight-1 label omits factor
+    total = sum(y for _, y in bands)  # 0.6*1 + 0.4*0.5 = 0.8 -> shares 0.75, 0.25
+    assert np.allclose(total, 1.0)
+    assert np.allclose(bands[0][1], 0.75) and np.allclose(bands[1][1], 0.25)
+
+
 def test_train_step_writer_adaptive_resolution(tmp_path):
     """One row per minibatch until fine_positions, then one mean-aggregated row
     per window. Partial final bucket is flushed by close()."""

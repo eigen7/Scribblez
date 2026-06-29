@@ -236,6 +236,14 @@ def main() -> int:
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, args.tag, vars(args), n_params)
+    # Coefficients of each loss term in compute_loss's total (PDF has weight 1),
+    # so the dashboard can stack the weighted contributions.
+    db.write_loss_weights(conn, {
+        "loss_score_pdf": 1.0,
+        "loss_score_cdf": args.lambda_cdf,
+        "loss_move": args.lambda_occ,
+        "loss_has_move": args.lambda_has_move,
+    })
 
     if not args.no_dashboard:
         proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag)
