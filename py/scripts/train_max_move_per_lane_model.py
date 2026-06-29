@@ -62,7 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ffn-mult", type=int, default=4, help="Lane transformer FFN width multiple.")
     p.add_argument("--rack-tokens", type=int, default=4, help="Rack tokens prepended per lane.")
     p.add_argument("--lambda-cdf", type=float, default=1.0, help="Score-CDF (CRPS) loss weight.")
-    p.add_argument("--lambda-occ", type=float, default=1.0, help="Occupancy (move) loss weight.")
+    p.add_argument("--lambda-occ", type=float, default=100.0, help="Occupancy (move) loss weight.")
     p.add_argument("--lambda-has-move", type=float, default=1.0, help="Has-move loss weight.")
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
