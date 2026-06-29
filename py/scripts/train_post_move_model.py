@@ -195,7 +195,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     step = start_step
     ckpt_idx = start_ckpt
     interval = _IntervalLoss()
-    writer = TrainStepWriter(conn, args.max_log_points, args.batch_size)
+    writer = TrainStepWriter(conn, args.max_log_points)
 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every

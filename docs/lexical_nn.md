@@ -144,11 +144,12 @@ the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and t
   and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the accuracy
   panel.
 
-**Resolution.** Recording every minibatch forever bloats the SQLite store. `TrainStepWriter` instead
-keeps the series at a single *uniform* resolution that coarsens as the run grows: every point is the
-mean of the same number of minibatches (a power of two), and whenever the series reaches
-`--max-log-points`, the WHOLE series re-aggregates -- adjacent points merge pairwise (equal-weight
-means compose), halving the count and doubling the bucket. So the plot is always one smooth series
-(no dense-early/sparse-late seam) and the DB stays bounded to ~`max-log-points` rows. The writer owns
-the downsampled series in memory and rewrites it on commit (one transaction); the Bokeh panels plot
-against *positions trained*.
+**Resolution.** Recording every minibatch forever bloats the SQLite store. Storage and display are
+decoupled: `TrainStepWriter` *appends* points at a coarsening **gradient** of resolutions -- each
+point is the mean (+ a weight `n`) of `r` consecutive minibatches, where `r` is the power of two that
+keeps the newest data at ~`--max-log-points` points (`r` doubles as the run grows). Nothing is ever
+rewritten, and storage grows only logarithmically (~`max-log-points` rows per doubling). The read
+(`db.read_train_steps`) then rolls the whole gradient up to one *uniform* resolution with a
+weight-aware average (`SUM(value·n)/SUM(n)` grouped into power-of-two blocks), so the plot looks as
+if the data were stored uniformly -- a single smooth series, ~`max-log-points` points, no
+dense-early/sparse-late seam. The Bokeh panels plot against *positions trained*.

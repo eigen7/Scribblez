@@ -200,34 +200,35 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert np.allclose(bands[0][1], 0.75) and np.allclose(bands[1][1], 0.25)
 
 
-def test_train_step_writer_doubling_resolution(tmp_path):
-    """The series stays one uniform resolution that halves (re-aggregates the whole
-    series) whenever it would exceed max_points, so it never exceeds the budget."""
+def test_train_step_writer_gradient_storage_uniform_read(tmp_path):
+    """Storage is append-only at a coarsening gradient (older data finer); the read
+    rolls it up, weight-aware, to one uniform resolution for display."""
     from scribblez.dashboard import db
     from scribblez.train_common import TrainStepWriter
 
     conn = db.connect(tmp_path / "dash.db")
-    # max 4 points; batch_size 1, so positions == minibatch index.
-    w = TrainStepWriter(conn, max_points=4, batch_size=1)
+    w = TrainStepWriter(conn, max_points=2)
     for i in range(1, 9):  # 8 minibatches, loss = i at positions 1..8
         w.record(step=i, positions=i, metrics={"loss": float(i)})
-    w.commit()
-
-    ts = db.read_train_steps(conn)
-    # 8 minibatches halved twice -> 2 points, each a mean over 4 minibatches.
-    assert list(ts["positions"]) == [4, 8]
-    assert list(ts["loss"]) == [2.5, 6.5]  # mean(1..4), mean(5..8)
-
-    # Never exceeds the budget; resume reloads the existing series and continues.
-    for i in range(9, 401):
-        w.record(step=i, positions=i, metrics={"loss": float(i)})
-        if i % 50 == 0:
-            w.commit()
     w.close()
-    assert len(db.read_train_steps(conn)["positions"]) <= 4
 
-    w2 = TrainStepWriter(conn, max_points=4, batch_size=1)
-    assert len(w2._points) == len(db.read_train_steps(conn)["positions"])  # resumed
+    # Append-only gradient: res 1 (steps 1,2), then 2 (->step 4), then 4 (->step 8).
+    stored = conn.execute(
+        "SELECT step, n FROM train_step WHERE name = 'loss' ORDER BY step"
+    ).fetchall()
+    assert [(r["step"], r["n"]) for r in stored] == [(1, 1), (2, 1), (4, 2), (8, 4)]
+
+    # Read rolls up to a uniform res of 4 (weight-aware) -> 2 points.
+    ts = db.read_train_steps(conn, max_points=2)
+    assert list(ts["positions"]) == [4, 8]
+    assert list(ts["loss"]) == [2.5, 6.5]  # mean(1..4), mean(5..8) -- reconstructed exactly
+
+    # Storage grows only logarithmically: 64 minibatches -> ~7 rows, not 64.
+    for i in range(9, 65):
+        w.record(step=i, positions=i, metrics={"loss": float(i)})
+    w.close()
+    n_rows = conn.execute("SELECT COUNT(DISTINCT step) AS c FROM train_step").fetchone()["c"]
+    assert n_rows <= 12
 
 
 class _FakeSource:
