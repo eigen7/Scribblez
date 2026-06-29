@@ -7,6 +7,8 @@ throughput/backpressure accounting, and interval averaging -- lives here. Each
 trainer keeps only its task-specific model, loss, and eval.
 """
 
+import math
+import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -121,80 +123,114 @@ class IntervalStats:
 
 
 def add_train_log_args(parser):
-    """Register the two knobs that control per-minibatch dashboard resolution.
-    Shared by the trainers so the defaults and help text live in one place."""
+    """Register the knob that bounds per-minibatch dashboard resolution.
+    Shared by the trainers so the default and help text live in one place."""
     parser.add_argument(
-        "--fine-log-positions", type=int, default=102400,
-        help="Log every minibatch until this many positions are trained (catch early anomalies).",
-    )
-    parser.add_argument(
-        "--coarse-log-window", type=int, default=25600,
-        help="After the fine phase, log one mean-aggregated point per this many positions.",
+        "--max-log-points", type=int, default=1024,
+        help="Max per-minibatch dashboard points kept. When the series reaches "
+             "this, the WHOLE series re-aggregates to the next coarser power-of-two "
+             "resolution -- the plot stays one uniform, smoothly-coarsening series.",
     )
 
 
 class TrainStepWriter:
-    """Writes per-minibatch training metrics to the dashboard DB at an adaptive
-    resolution, so a long run does not bloat the DB while early detail is kept.
+    """Writes per-minibatch training metrics to the dashboard at a uniform, self-
+    coarsening resolution.
 
-    Resolution schedule (positions = cumulative training rows):
-      * fine phase   -- one row per minibatch, until `fine_positions` positions;
-      * coarse phase -- one row per `window` positions, each the MEAN of the
-                        minibatches in that span.
-    Aggregation is the only state; the DB stays a plain long-format point store
-    and the dashboard downsamples further at render time.
+    Every point in the series represents the same number of minibatches, `bucket`
+    (a power of two). New minibatches accumulate into the open bucket; a full
+    bucket becomes a point. When the series reaches `max_points`, the WHOLE series
+    re-aggregates: adjacent points are merged pairwise (equal-weight means
+    compose), which halves the count and doubles `bucket`. So the plot is always
+    ONE uniform resolution that doubles over the run -- no dense-early/sparse-late
+    seam -- and the DB stays bounded to ~max_points rows.
 
-    Lifecycle: record() each minibatch; commit() on a cadence to batch completed
-    rows to the DB; close() at the end to flush the final partial bucket. commit()
-    deliberately leaves the in-progress bucket alone so a coarse bucket keeps
-    accumulating across commits (no partial coarse rows reach the DB until full).
+    The writer owns the entire (downsampled) series in memory and rewrites it to
+    the DB on commit() (one transaction, so the dashboard never reads it empty);
+    close() also flushes the open partial bucket. On construction it reloads any
+    existing series (resume) and infers `bucket` from the point spacing.
     """
 
-    def __init__(self, conn, fine_positions: int, window: int, start_positions: int = 0):
+    def __init__(self, conn, max_points: int, batch_size: int):
         self._conn = conn
-        self._fine_positions = fine_positions
-        self._window = max(window, 1)
-        self._bucket_start = start_positions  # positions at the last flush boundary
-        self._pending: list[dict] = []
-        self._reset_bucket()
+        self._max_points = max(2, max_points - max_points % 2)  # even: halving splits cleanly
+        self._batch = max(batch_size, 1)
+        self._points: list[dict] = []
+        self._bucket = 1  # minibatches per point (a power of two)
+        self._dirty = False
+        self._reset_open()
+        self._load_existing()
 
-    def _reset_bucket(self):
+    def _reset_open(self):
         self._sums: dict[str, float] = {}
         self._count = 0
         self._last_step = 0
         self._last_positions = 0
 
-    def _bucket_full(self, positions: int) -> bool:
-        if positions <= self._fine_positions:
-            return True  # fine phase: every minibatch is its own bucket
-        return positions - self._bucket_start >= self._window
+    def _load_existing(self):
+        """Reload the series from the DB (resume) and infer the current `bucket`."""
+        existing = db.read_train_steps(self._conn)
+        pos = existing.get("positions", [])
+        if len(pos) == 0:
+            return
+        metrics = [k for k in existing if k not in ("step", "positions")]
+        self._points = [
+            {"step": int(existing["step"][i]), "positions": int(pos[i]),
+             **{m: float(existing[m][i]) for m in metrics}}
+            for i in range(len(pos))
+        ]
+        if len(pos) >= 2:
+            spacing = statistics.median(pos[i + 1] - pos[i] for i in range(len(pos) - 1))
+            self._bucket = 2 ** round(math.log2(max(spacing / self._batch, 1.0)))
+        while len(self._points) > self._max_points:
+            self._halve()
 
-    def _close_bucket(self):
-        """Reduce the open bucket to one mean row in `_pending` (no-op if empty)."""
+    @staticmethod
+    def _merge(a: dict, b: dict) -> dict:
+        """Mean of two equal-weight points; the later one's step/positions span it."""
+        out = {"step": b["step"], "positions": b["positions"]}
+        for k in a:
+            if k not in ("step", "positions"):
+                out[k] = (a[k] + b[k]) / 2.0
+        return out
+
+    def _halve(self):
+        pts = self._points
+        merged = [self._merge(pts[i], pts[i + 1]) for i in range(0, len(pts) - 1, 2)]
+        if len(pts) % 2:
+            merged.append(pts[-1])  # odd tail (a resume edge); keep as-is
+        self._points = merged
+        self._bucket *= 2
+
+    def _emit_point(self):
+        """Turn the full (or, on close, partial) open bucket into a point."""
         if self._count == 0:
             return
-        row = {"step": self._last_step, "positions": self._last_positions}
-        row.update({name: total / self._count for name, total in self._sums.items()})
-        self._pending.append(row)
-        self._bucket_start = self._last_positions
-        self._reset_bucket()
+        self._points.append({
+            "step": self._last_step, "positions": self._last_positions,
+            **{name: total / self._count for name, total in self._sums.items()},
+        })
+        self._reset_open()
+        self._dirty = True
+        if len(self._points) >= self._max_points:
+            self._halve()
 
     def record(self, step: int, positions: int, metrics: dict):
-        """Fold one minibatch's metrics into the open bucket, closing it when full."""
+        """Fold one minibatch into the open bucket, emitting a point when it fills."""
         for name, value in metrics.items():
             self._sums[name] = self._sums.get(name, 0.0) + float(value)
         self._count += 1
         self._last_step, self._last_positions = step, positions
-        if self._bucket_full(positions):
-            self._close_bucket()
+        if self._count >= self._bucket:
+            self._emit_point()
 
     def commit(self):
-        """Batch-write the completed bucket rows; keep any in-progress bucket open."""
-        if self._pending:
-            db.write_train_steps(self._conn, self._pending)
-            self._pending.clear()
+        """Rewrite the (bounded) series to the DB if it changed since last commit."""
+        if self._dirty:
+            db.replace_train_steps(self._conn, self._points)
+            self._dirty = False
 
     def close(self):
-        """Flush the final partial bucket, then commit."""
-        self._close_bucket()
+        """Emit the open partial bucket as a final point, then commit."""
+        self._emit_point()
         self.commit()

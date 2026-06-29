@@ -132,9 +132,7 @@ def run_streaming_training(
     model.train()
     positions, step, ckpt_idx = start_positions, start_step, start_ckpt
     interval = IntervalStats()
-    writer = TrainStepWriter(
-        conn, args.fine_log_positions, args.coarse_log_window, start_positions=positions
-    )
+    writer = TrainStepWriter(conn, args.max_log_points, args.batch_size)
 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every

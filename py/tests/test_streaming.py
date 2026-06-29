@@ -200,27 +200,34 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert np.allclose(bands[0][1], 0.75) and np.allclose(bands[1][1], 0.25)
 
 
-def test_train_step_writer_adaptive_resolution(tmp_path):
-    """One row per minibatch until fine_positions, then one mean-aggregated row
-    per window. Partial final bucket is flushed by close()."""
+def test_train_step_writer_doubling_resolution(tmp_path):
+    """The series stays one uniform resolution that halves (re-aggregates the whole
+    series) whenever it would exceed max_points, so it never exceeds the budget."""
     from scribblez.dashboard import db
     from scribblez.train_common import TrainStepWriter
 
     conn = db.connect(tmp_path / "dash.db")
-    # Minibatches of 4 positions; fine until 16, then aggregate every 8 positions.
-    w = TrainStepWriter(conn, fine_positions=16, window=8, start_positions=0)
-    pos = 0
-    for i in range(8):
-        pos += 4
-        w.record(step=i + 1, positions=pos, metrics={"loss": float(i), "x_acc": 1.0})
-        w.commit()  # completed buckets flush; an open coarse bucket stays open
-    w.close()
+    # max 4 points; batch_size 1, so positions == minibatch index.
+    w = TrainStepWriter(conn, max_points=4, batch_size=1)
+    for i in range(1, 9):  # 8 minibatches, loss = i at positions 1..8
+        w.record(step=i, positions=i, metrics={"loss": float(i)})
+    w.commit()
 
     ts = db.read_train_steps(conn)
-    # fine: one row per minibatch at 4,8,12,16; coarse: {20,24}->24, {28,32}->32.
-    assert list(ts["positions"]) == [4, 8, 12, 16, 24, 32]
-    assert list(ts["loss"]) == [0.0, 1.0, 2.0, 3.0, 4.5, 6.5]  # coarse rows are means
-    assert list(ts["x_acc"]) == [1.0] * 6
+    # 8 minibatches halved twice -> 2 points, each a mean over 4 minibatches.
+    assert list(ts["positions"]) == [4, 8]
+    assert list(ts["loss"]) == [2.5, 6.5]  # mean(1..4), mean(5..8)
+
+    # Never exceeds the budget; resume reloads the existing series and continues.
+    for i in range(9, 401):
+        w.record(step=i, positions=i, metrics={"loss": float(i)})
+        if i % 50 == 0:
+            w.commit()
+    w.close()
+    assert len(db.read_train_steps(conn)["positions"]) <= 4
+
+    w2 = TrainStepWriter(conn, max_points=4, batch_size=1)
+    assert len(w2._points) == len(db.read_train_steps(conn)["positions"])  # resumed
 
 
 class _FakeSource:

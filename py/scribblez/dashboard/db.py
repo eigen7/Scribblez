@@ -225,25 +225,40 @@ def write_throughput(conn: sqlite3.Connection, sample: dict):
     conn.commit()
 
 
-def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
-    """Append per-minibatch training stats (batched insert; no-op if empty).
-
-    Long-format: each row is `{step, positions, <metric>: value, ...}` and every
-    metric becomes its own `(step, positions, name, value)` record. New loss or
-    accuracy series therefore need no schema change -- a metric appears simply by
-    being present in the row dicts."""
-    if not rows:
-        return
-    long_rows = [
+def _train_step_long_rows(rows: list[dict]) -> list[tuple]:
+    """Expand `{step, positions, <metric>: value, ...}` dicts into long-format
+    `(step, positions, name, value)` tuples (one per metric). New loss/accuracy
+    series need no schema change -- a metric appears simply by being present."""
+    return [
         (r["step"], r["positions"], name, float(value))
         for r in rows
         for name, value in r.items()
         if name not in ("step", "positions")
     ]
+
+
+def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
+    """Append per-minibatch training stats (batched insert; no-op if empty)."""
+    if not rows:
+        return
     conn.executemany(
         "INSERT INTO train_step (step, positions, name, value) VALUES (?, ?, ?, ?)",
-        long_rows,
+        _train_step_long_rows(rows),
     )
+    conn.commit()
+
+
+def replace_train_steps(conn: sqlite3.Connection, rows: list[dict]):
+    """Replace the ENTIRE train_step series with `rows`, in one transaction (so a
+    concurrent dashboard read never sees an empty table). The TrainStepWriter owns
+    the whole downsampled series and rewrites it as the resolution coarsens."""
+    conn.execute("DELETE FROM train_step")
+    long_rows = _train_step_long_rows(rows)
+    if long_rows:
+        conn.executemany(
+            "INSERT INTO train_step (step, positions, name, value) VALUES (?, ?, ?, ?)",
+            long_rows,
+        )
     conn.commit()
 
 

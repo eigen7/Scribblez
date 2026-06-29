@@ -144,9 +144,11 @@ the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and t
   and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the accuracy
   panel.
 
-**Resolution.** Recording every minibatch forever bloats the SQLite store, but early per-minibatch
-detail is valuable for spotting anomalies. So `TrainStepWriter` logs at an adaptive resolution: one
-row per minibatch until `--fine-log-positions` positions are trained, then one mean-aggregated row
-per `--coarse-log-window` positions. The DB stays a plain point store (it does not know the policy);
-the Bokeh panels plot against *positions trained* (so the dense early and aggregated later regions
-line up by true progress) and apply a stride so the rendered point count stays bounded regardless.
+**Resolution.** Recording every minibatch forever bloats the SQLite store. `TrainStepWriter` instead
+keeps the series at a single *uniform* resolution that coarsens as the run grows: every point is the
+mean of the same number of minibatches (a power of two), and whenever the series reaches
+`--max-log-points`, the WHOLE series re-aggregates -- adjacent points merge pairwise (equal-weight
+means compose), halving the count and doubling the bucket. So the plot is always one smooth series
+(no dense-early/sparse-late seam) and the DB stays bounded to ~`max-log-points` rows. The writer owns
+the downsampled series in memory and rewrites it on commit (one transaction); the Bokeh panels plot
+against *positions trained*.
