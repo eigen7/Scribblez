@@ -15,17 +15,19 @@ from .ffi import (
 )
 
 
-def row_layout() -> tuple[list, list[tuple[str, int, int, tuple[int, ...]]]]:
+def row_layout(input_shapes=None, target_shapes=None):
     """Describe the contiguous training row.
 
     Returns (input_shapes, targets): the list of input ShapeInfo (in row order)
     and a list of (name, start, end, dims) slices for each target head, where
     start/end are float offsets into the row. Single source of truth for how a
     flat (B, row_floats) batch maps to named tensors, shared by the disk
-    DataLoader and the streaming source.
+    DataLoader and the streaming source. Pass explicit input/target ShapeInfo
+    lists to describe a non-default task (e.g. the max-move-per-lane shapes);
+    both default to the post-move task's shapes.
     """
-    input_shapes = get_input_shapes()
-    target_shapes = get_target_shapes()
+    input_shapes = get_input_shapes() if input_shapes is None else input_shapes
+    target_shapes = get_target_shapes() if target_shapes is None else target_shapes
     input_total = sum(int(np.prod(s.dims)) for s in input_shapes)
     targets: list[tuple[str, int, int, tuple[int, ...]]] = []
     offset = input_total

@@ -95,17 +95,38 @@ R's" is a counting fact).
 
 ## NN Architecture
 
-I asked Claude Opus 4.8 to produce a potential NN architecture for this task. Its output can be
-found in `py/scribblez/claude_max_score_net.py`. Note that Claude produced this from the web client,
-without any view into the Scribblez code base, so it does not match the decisions above and is a
-reference, not a spec. The notable gaps to close when adapting it:
+The model is `py/scribblez/max_move_per_lane_model.py` (`MaxMovePerLaneModel`). It has two stages
+that split the problem into "where" and "what word":
 
-- Its score head is per-cell; we want **per-lane** score (pool each lane's 15 cells to one
-  distribution -> 15 row scores + 15 col scores), with the global max as a structural max-pool over
-  those 30.
-- Its occupancy head is a single global union with no recovery path; ours is the per-lane
-  (15, 15, 27) x2 target above, masked per-lane.
-- Its stem consumes cross-check-free inputs per the Input Encoding section.
+- **Spatial stage (CNN).** A conv trunk -- the `SpatialTrunk` shared with the post-move model (stem,
+  rack-scalar injection, a residual tower with KataGo-style global-pooling blocks) -- encodes the
+  board into a `(C, 15, 15)` feature map. Convolution is the natural tool for the spatial facts:
+  premium-square geometry, which tiles sit where, board openness.
+
+- **Lexical stage (the lexicon store).** A single small **transformer encoder is run along every
+  lane** -- once per row and once per column, with *transpose-shared weights* -- over the trunk's
+  per-cell features (plus a few rack tokens prepended so the lane can attend rack<->board). This is
+  where the lexicon is learned. The key reasons a transformer, and not more convolution, carries the
+  lexical knowledge: a word threads *through* tiles already on the board, so its letters are
+  non-adjacent in the lane, and self-attention binds those disjoint positions in a single layer
+  (a fixed-width conv cannot); and the dictionary itself lives in the FFN width under the key-value-
+  memory view of a transformer -- attention indexes into it, width *is* lexical capacity. Running the
+  same weights on rows and columns makes main-word scoring and perpendicular cross-word checking the
+  same operation applied on two axes.
+
+**Fusion** is simply that the lane transformer consumes the CNN's per-cell lane features: the conv
+supplies spatially-grounded, premium-aware cell vectors, and the transformer turns each lane's
+sequence of them into word-level judgments. Neither stage alone suffices -- conv can't bind a word's
+non-adjacent letters, and a transformer on raw squares would have to relearn board geometry the conv
+gives for free.
+
+Heads, all shared across the two axes: a per-cell **occupancy** head (`C -> 27`) emits the
+`(30, 15, 27)` union target; a per-lane **score** head reads the pooled (mean+max over cells) lane
+vector and emits 100-bin score logits; a per-lane **has-move** head predicts whether the lane has any
+legal play. The global best-move score is the structural max over the 30 lanes' expected scores,
+gated by the has-move probability so empty (score-unsupervised) lanes can't win the max. Losses:
+masked score-PDF (cross-entropy) + score-CDF (discrete CRPS), masked occupancy BCE, and has-move BCE
+over all 30 lanes.
 
 ## Dashboard
 

@@ -79,6 +79,16 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_input_floats.restype = ctypes.c_int
     lib.scribblez_input_floats.argtypes = []
 
+    # Max-move-per-lane task: sibling shape/size queries.
+    lib.scribblez_max_move_per_lane_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
+    lib.scribblez_max_move_per_lane_input_shapes.argtypes = []
+    lib.scribblez_max_move_per_lane_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
+    lib.scribblez_max_move_per_lane_target_shapes.argtypes = []
+    lib.scribblez_max_move_per_lane_row_size_floats.restype = ctypes.c_int
+    lib.scribblez_max_move_per_lane_row_size_floats.argtypes = []
+    lib.scribblez_max_move_per_lane_input_floats.restype = ctypes.c_int
+    lib.scribblez_max_move_per_lane_input_floats.argtypes = []
+
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
         ctypes.c_char_p,
@@ -173,6 +183,22 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # num_specs
     ]
 
+    # Max-move-per-lane streamer: same shape as scribblez_stream_new, minus the
+    # post_move flag (the task always samples the pre-move snapshot). Returns the
+    # same opaque StreamHandle, so it shares the rest of the streaming API.
+    lib.scribblez_max_move_per_lane_stream_new.restype = ctypes.c_void_p
+    lib.scribblez_max_move_per_lane_stream_new.argtypes = [
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),  # slot_ptrs
+        ctypes.c_int,  # num_slots
+        ctypes.c_int,  # rows_per_slot
+        ctypes.c_int,  # num_threads
+        ctypes.c_int,  # apply_symmetry
+        ctypes.c_uint64,  # seed
+        ctypes.c_int,  # handicap_max
+        ctypes.POINTER(ctypes.c_char_p),  # player_specs
+        ctypes.c_int,  # num_specs
+    ]
+
     lib.scribblez_stream_start.restype = None
     lib.scribblez_stream_start.argtypes = [ctypes.c_void_p]
 
@@ -239,6 +265,22 @@ def row_size_floats() -> int:
 def input_floats() -> int:
     """Floats in a single input tensor (spatial + scalar)."""
     return _lib().scribblez_input_floats()
+
+
+def get_max_move_per_lane_input_shapes() -> list[ShapeInfo]:
+    return _read_shapes(_lib().scribblez_max_move_per_lane_input_shapes())
+
+
+def get_max_move_per_lane_target_shapes() -> list[ShapeInfo]:
+    return _read_shapes(_lib().scribblez_max_move_per_lane_target_shapes())
+
+
+def max_move_per_lane_row_size_floats() -> int:
+    return _lib().scribblez_max_move_per_lane_row_size_floats()
+
+
+def max_move_per_lane_input_floats() -> int:
+    return _lib().scribblez_max_move_per_lane_input_floats()
 
 
 def encode_score_diff_sweep(
@@ -422,6 +464,7 @@ class StreamingTrainSource:
     def __init__(
         self,
         batch_size: int,
+        task: str = "post_move",
         num_slots: int = 2,
         num_threads: int = 4,
         post_move: bool = True,
@@ -433,10 +476,15 @@ class StreamingTrainSource:
     ):
         import torch
 
+        if task not in ("post_move", "max_move_per_lane"):
+            raise ValueError(f"unknown streaming task {task!r}")
         self._lib = _lib()
+        self.task = task
         self.batch_size = batch_size
         self.num_slots = num_slots
-        self._row_floats = row_size_floats()
+        self._row_floats = (
+            row_size_floats() if task == "post_move" else max_move_per_lane_row_size_floats()
+        )
 
         # Pin only when CUDA is present (pinned alloc requires it); pinning lets
         # the trainer's host->device copy overlap with production.
@@ -451,20 +499,21 @@ class StreamingTrainSource:
         spec_arr = (ctypes.c_char_p * len(player_specs))(
             *[s.encode("utf-8") for s in player_specs]
         )
-        self._handle = self._lib.scribblez_stream_new(
-            ptr_arr,
-            num_slots,
-            batch_size,
-            num_threads,
-            int(post_move),
-            int(apply_symmetry),
-            ctypes.c_uint64(seed),
-            handicap_max,
-            spec_arr,
-            len(player_specs),
-        )
+        # The two tasks share the rest of the streaming API; only the constructor
+        # differs (the max-move-per-lane task has no pre/post-move snapshot).
+        if task == "post_move":
+            self._handle = self._lib.scribblez_stream_new(
+                ptr_arr, num_slots, batch_size, num_threads, int(post_move),
+                int(apply_symmetry), ctypes.c_uint64(seed), handicap_max, spec_arr,
+                len(player_specs),
+            )
+        else:
+            self._handle = self._lib.scribblez_max_move_per_lane_stream_new(
+                ptr_arr, num_slots, batch_size, num_threads, int(apply_symmetry),
+                ctypes.c_uint64(seed), handicap_max, spec_arr, len(player_specs),
+            )
         if not self._handle:
-            raise RuntimeError("scribblez_stream_new returned NULL (lexicon/agent setup failed)")
+            raise RuntimeError(f"{task} stream_new returned NULL (lexicon/agent setup failed)")
         self._started = False
 
     def start(self):

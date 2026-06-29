@@ -25,77 +25,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .spatial_trunk import SpatialTrunk, mean_max_pool
+
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
 # absolute residual would otherwise converge to ~0.8*sigma; this rescales the
 # target so the optimum matches a Gaussian sigma (what consumers assume).
 MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
-
-
-def _mean_max_pool(x: torch.Tensor) -> torch.Tensor:
-    """Concatenate the channel-wise mean and max over the spatial dims:
-    (B, C, H, W) -> (B, 2C). Mean captures average board texture; max captures
-    the strongest local activation (e.g. a high-value square or threat)."""
-    return torch.cat([x.mean(dim=(2, 3)), x.amax(dim=(2, 3))], dim=1)
-
-
-class ResBlock(nn.Module):
-    """Pre-activation residual block: BN -> ReLU -> conv -> BN -> ReLU -> conv -> skip."""
-
-    def __init__(self, channels: int):
-        super().__init__()
-        self.bn1 = nn.BatchNorm2d(channels)
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(channels)
-        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        out = self.conv1(F.relu(self.bn1(x)))
-        out = self.conv2(F.relu(self.bn2(out)))
-        return out + residual
-
-
-class GlobalPoolingResBlock(nn.Module):
-    """Residual block that injects board-global context (KataGo-style).
-
-    The first conv's output is split into a spatial branch and a pooling branch.
-    The pooling branch is mean+max pooled over the whole board and projected to a
-    per-channel bias that is broadcast-added to the spatial branch before the
-    second conv. This lets the block re-read global state (score differential,
-    tiles remaining, overall board openness) instead of relying on it surviving
-    unchanged from the stem injection through every preceding conv.
-    """
-
-    def __init__(self, channels: int, pool_channels: int | None = None):
-        super().__init__()
-        if pool_channels is None:
-            pool_channels = channels // 2
-        self.pool_channels = pool_channels
-        self.spatial_channels = channels - pool_channels
-
-        self.bn1 = nn.BatchNorm2d(channels)
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
-        # mean + max over the pooling branch -> per-(spatial-channel) bias.
-        self.pool_fc = nn.Linear(2 * pool_channels, self.spatial_channels)
-        self.bn2 = nn.BatchNorm2d(self.spatial_channels)
-        self.conv2 = nn.Conv2d(self.spatial_channels, channels, 3, padding=1, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        out = self.conv1(F.relu(self.bn1(x)))
-        spatial = out[:, : self.spatial_channels]
-        pool = out[:, self.spatial_channels :]
-        bias = self.pool_fc(_mean_max_pool(pool))  # (B, spatial_channels)
-        spatial = spatial + bias[:, :, None, None]
-        out = self.conv2(F.relu(self.bn2(spatial)))
-        return out + residual
-
-
-def _make_block(channels: int, index: int) -> nn.Module:
-    """Every third block is a global-pooling block; the rest are plain residual
-    blocks. Interleaving keeps the cost modest while periodically re-broadcasting
-    global context through the tower."""
-    return GlobalPoolingResBlock(channels) if index % 3 == 2 else ResBlock(channels)
 
 
 class PostMoveValueModel(nn.Module):
@@ -112,26 +47,8 @@ class PostMoveValueModel(nn.Module):
         super().__init__()
         self.board_size = board_size
 
-        # Spatial stem.
-        self.stem = nn.Sequential(
-            nn.Conv2d(spatial_planes, trunk_channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(trunk_channels),
-            nn.ReLU(inplace=True),
-        )
-
-        # Scalar injection: project scalars to trunk_channels, broadcast-add. The
-        # same projection is also fed to the value heads (see forward()).
-        self.scalar_proj = nn.Sequential(
-            nn.Linear(scalar_size, trunk_channels),
-            nn.ReLU(inplace=True),
-            nn.Linear(trunk_channels, trunk_channels),
-        )
-
-        # Residual tower (some blocks re-inject global context).
-        self.blocks = nn.Sequential(
-            *[_make_block(trunk_channels, i) for i in range(num_blocks)]
-        )
-        self.trunk_bn = nn.BatchNorm2d(trunk_channels)
+        # Shared conv trunk: stem + scalar injection + residual tower.
+        self.trunk = SpatialTrunk(spatial_planes, scalar_size, trunk_channels, num_blocks)
 
         # --- Heads ---
         # TODO: make the set of heads modular so experimenting with additional
@@ -191,20 +108,13 @@ class PostMoveValueModel(nn.Module):
             Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),
             "opp_next_placement" (B,15,15 logits).
         """
-        # Spatial stem.
-        x = self.stem(input_spatial)
-
-        # Scalar injection (s is reused by the value heads below).
-        s = self.scalar_proj(input_scalar)  # (B, C)
-        x = x + s[:, :, None, None]  # broadcast add over spatial dims
-
-        # Residual tower.
-        x = self.blocks(x)
-        x = F.relu(self.trunk_bn(x))
+        # Shared conv trunk (s, the scalar projection, is reused by the value
+        # heads below).
+        x, s = self.trunk(input_spatial, input_scalar)
 
         # Value summary: mean+max board pooling concatenated with the scalar
         # projection, so the heads see global board context and the raw scalars.
-        value_in = torch.cat([_mean_max_pool(x), s], dim=1)  # (B, 3C)
+        value_in = torch.cat([mean_max_pool(x), s], dim=1)  # (B, 3C)
 
         wld = self.wld_fc(value_in)
         opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
