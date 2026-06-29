@@ -2,10 +2,12 @@
 
 #include "scribblez/board.h"
 #include "scribblez/dictionary.h"
+#include "scribblez/move.h"
 #include "scribblez/rack.h"
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace scribblez {
 
@@ -47,6 +49,28 @@ struct LaneTargets {
 // horizontal word and to its column iff it forms a vertical word (so a crossing
 // tile contributes to both lanes, with the same score).
 LaneTargets compute_lane_targets(const Board& board, const Rack& rack, const Dictionary& dict);
+
+// The actual maximal play(s) for one lane: every move tied for the lane's best
+// score. `compute_lane_targets` keeps only the placed-tile union and the score;
+// this keeps the moves themselves so a consumer can recover each play's word and
+// coordinates (e.g. the lane-analysis UI). `moves` is empty iff !has_move.
+struct LaneBestMoves {
+  bool has_move = false;
+  int max_score = 0;
+  std::vector<Move> moves;
+};
+
+// All 30 lanes' best-move lists, indexed like LaneTargets (rows = horizontal
+// plays by row, cols = vertical plays by column).
+struct LaneBestMovesSet {
+  std::array<LaneBestMoves, kLanesPerAxis> rows;
+  std::array<LaneBestMoves, kLanesPerAxis> cols;
+};
+
+// Like compute_lane_targets, but collects the moves tied for each lane's maximum
+// (using the identical per-lane assignment rule) instead of their union.
+LaneBestMovesSet compute_lane_best_moves(const Board& board, const Rack& rack,
+                                         const Dictionary& dict);
 
 // ---- Flat label layout for the max-move-per-lane training row -------------------------
 //

@@ -5,6 +5,7 @@
 #include "scribblez/data_loader.h"
 #include "scribblez/game_runner.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/lane_analysis.h"
 #include "scribblez/lane_targets.h"
 #include "scribblez/max_move_per_lane_input_encoder.h"
 #include "scribblez/max_move_per_lane_task.h"
@@ -200,6 +201,23 @@ int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_mo
   return emit_string(
     decoder.dump_position_json(buf.data(), static_cast<uint32_t>(game_idx), post_move != 0), out,
     out_cap);
+}
+
+int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
+                                            float* out_input) {
+  if (!gcg_text) return -1;
+  try {
+    scribblez::GcgAnalysisPosition pos;
+    std::string error;
+    if (!scribblez::parse_gcg_analysis_position(gcg_text, &pos, &error)) return -1;
+    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    if (out_input)
+      scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, /*flip=*/false, out_input);
+    return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, dict),
+                       out_json, out_cap);
+  } catch (const std::exception&) {
+    return -1;
+  }
 }
 
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,

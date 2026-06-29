@@ -89,6 +89,19 @@ int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, c
 int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_move, char* out,
                                  int out_cap);
 
+// Parse a GCG file's text into its max-move-per-lane analysis position (the board
+// after all recorded moves, the on-move player, and that player's #Rack), then:
+//   - if `out_input` is non-null, fill it with the model input tensor
+//     (MaxMovePerLaneInputEncoder, no flip): scribblez_max_move_per_lane_input_floats()
+//     floats;
+//   - emit the lane-analysis JSON (board + ground-truth per-lane targets and
+//     maximal plays) into `out_json` (NUL-terminated, truncated to out_cap).
+// Returns the full JSON length (same retry/truncation contract as the dump
+// functions), or -1 on a parse error or missing lexicon. Requires the lexicon
+// (the ground truth enumerates legal moves).
+int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
+                                            float* out_input);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied

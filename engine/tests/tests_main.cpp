@@ -13,6 +13,7 @@
 #include "scribblez/glyph.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/lane_analysis.h"
 #include "scribblez/lane_targets.h"
 #include "scribblez/leave_values.h"
 #include "scribblez/macondo_bot.h"
@@ -27,6 +28,8 @@
 #include "scribblez/training_task.h"
 #include "util/grid.h"
 #include "util/math.h"
+
+#include <boost/json.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -3218,6 +3221,98 @@ static void test_lane_targets() {
   }
 }
 
+// compute_lane_best_moves keeps the actual plays tied for each lane's maximum,
+// sharing compute_lane_targets' assignment rule. Pins: the two agree on
+// has_move/max_score for every lane; every kept move scores exactly the lane max;
+// and a kept play's word and origin recover from the pre-move board (CATS extends
+// CAT in CENTER's row).
+static void test_lane_best_moves() {
+  const Dictionary d = tiny_dict();
+
+  Board b;
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                     Glyph::of(Tile::from_char('T'))}));
+  const Rack r = rack_from("S");
+
+  const LaneTargets t = compute_lane_targets(b, r, d);
+  const LaneBestMovesSet bm = compute_lane_best_moves(b, r, d);
+
+  // Agreement with the union targets across all 30 lanes.
+  for (int i = 0; i < kLanesPerAxis; ++i) {
+    CHECK(bm.rows[i].has_move == t.rows[i].has_move);
+    CHECK(bm.cols[i].has_move == t.cols[i].has_move);
+    CHECK(bm.rows[i].max_score == t.rows[i].max_score);
+    CHECK(bm.cols[i].max_score == t.cols[i].max_score);
+  }
+
+  // Every kept move scores exactly its lane's max (no sub-maximal plays retained).
+  for (const auto& lane : bm.rows)
+    for (const Move& m : lane.moves) CHECK(static_cast<int>(m.score()) == lane.max_score);
+  for (const auto& lane : bm.cols)
+    for (const Move& m : lane.moves) CHECK(static_cast<int>(m.score()) == lane.max_score);
+
+  // CENTER's row holds the maximal play CATS; its word and origin recover from the
+  // pre-move board.
+  const LaneBestMoves& row = bm.rows[CENTER];
+  CHECK(row.has_move);
+  CHECK(!row.moves.empty());
+  bool found_cats = false;
+  for (const Move& m : row.moves)
+    if (m.main_word(b) == "CATS") {
+      found_cats = true;
+      CHECK(m.horizontal());
+      CHECK(m.word_origin(b) == std::make_pair(CENTER, CENTER));
+    }
+  CHECK(found_cats);
+}
+
+// The GCG -> analysis-position bridge and the lane-analysis JSON. parse_* takes the
+// board after all recorded moves with the next player to move and reads that
+// player's rack from the #Rack header (the move log clears it during replay); the
+// JSON carries the web board plus per-lane ground truth and maximal plays.
+static void test_lane_analysis() {
+  // One play by P1 (CAT across the center), so P2 is on move; #Rack2 is the
+  // analysis rack. Coordinate "8H" is row 8 (index 7 == CENTER), column H (index 7).
+  const std::string gcg =
+    "#player1 P1 Player One\n"
+    "#player2 P2 Player Two\n"
+    "#Rack1 _______\n"
+    "#Rack2 EINRSTU\n"
+    ">P1: AACATTX 8H CAT +5 5\n";
+
+  GcgAnalysisPosition pos;
+  std::string error;
+  CHECK(parse_gcg_analysis_position(gcg, &pos, &error));
+  CHECK(pos.on_move == 1);                              // P2 to move after P1's single play
+  CHECK(pos.rack == rack_from("EINRSTU"));              // from #Rack2
+  CHECK(!pos.board.at(CENTER, CENTER).is_empty());      // C
+  CHECK(!pos.board.at(CENTER, CENTER + 2).is_empty());  // T
+  CHECK(pos.board.at(CENTER, CENTER + 3).is_empty());   // nothing past CAT
+
+  // JSON structure (built against a tiny dictionary, no real lexicon needed):
+  // extend CAT with S in CENTER's row.
+  const Dictionary d = tiny_dict();
+  Board b;
+  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
+                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                     Glyph::of(Tile::from_char('T'))}));
+  const std::string js = lane_analysis_json(b, rack_from("S"), /*on_move=*/0, d);
+  const boost::json::value v = boost::json::parse(js);
+  const boost::json::object& o = v.as_object();
+  CHECK(o.contains("board"));  // web GameState for rendering
+  CHECK(o.at("on_move").as_int64() == 0);
+  const boost::json::object& la = o.at("lane_analysis").as_object();
+  const boost::json::array& rows = la.at("rows").as_array();
+  CHECK(rows.size() == static_cast<size_t>(kLanesPerAxis));
+  const boost::json::object& center_row = rows[CENTER].as_object();
+  CHECK(center_row.at("has_move").as_bool());
+  bool json_has_cats = false;
+  for (const auto& mv : center_row.at("best_moves").as_array())
+    if (mv.as_object().at("word").as_string() == "CATS") json_has_cats = true;
+  CHECK(json_has_cats);
+}
+
 // The max-move-per-lane model's input encoder: 31 board planes (letters, blank-marker,
 // premiums) + 27 raw rack counts, with NO cross-check planes. Pins the plane
 // contents, premium consistency, rack counts, and the flip transpose.
@@ -3327,6 +3422,8 @@ int main() {
   test_util_helpers();
   test_dict_basic();
   test_lane_targets();
+  test_lane_best_moves();
+  test_lane_analysis();
   test_max_move_per_lane_input_encoder();
   test_max_move_per_lane_task_row();
   test_shadow_movegen_matches_full();
