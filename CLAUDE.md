@@ -55,6 +55,9 @@ run `py/tools/pull_git_subtrees.py` to pull the subtree to the latest.
 
 Note that the Docker image adds `/workspace/repo/py/` to `PYTHONPATH`.
 
+Do not add `import` statements inside of functions without good reason. By default, they should go
+atop the file.
+
 # C++ Code
 
 ## Building
