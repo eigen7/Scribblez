@@ -7,6 +7,7 @@ throughput/backpressure accounting, and interval averaging -- lives here. Each
 trainer keeps only its task-specific model, loss, and eval.
 """
 
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,8 +26,6 @@ def timed_print(msg: str):
 
 def reset_tag(paths: TagPaths):
     """Wipe prior run artifacts (checkpoints, onnx, dashboard DB). Keeps any val set."""
-    import shutil
-
     print(f"--restart: clearing prior run artifacts under {paths.root}", file=sys.stderr)
     shutil.rmtree(paths.checkpoints_dir, ignore_errors=True)
     shutil.rmtree(paths.onnx_dir, ignore_errors=True)

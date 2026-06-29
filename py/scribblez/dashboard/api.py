@@ -13,9 +13,11 @@ already present (a Bokeh dependency), so the API needs no extra dependency.
 See docs/react_dashboard.md for the architecture.
 """
 
+import argparse
 import sqlite3
 from pathlib import Path
 
+import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
 
@@ -130,15 +132,11 @@ def make_app(mount_root: str) -> tornado.web.Application:
 
 def run(port: int, mount_root: str):
     """Serve the API on `port` until interrupted (used by the dashboard launcher)."""
-    import tornado.ioloop
-
     make_app(mount_root).listen(port, address="0.0.0.0")
     tornado.ioloop.IOLoop.current().start()
 
 
 def main():
-    import argparse
-
     p = argparse.ArgumentParser(description="Serve the React dashboard's data API.")
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--mount-root", default="/workspace/mount")

@@ -13,6 +13,7 @@ generations can be scrolled to watch them become sigmoidal as training progresse
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import curve_fit
 
 
 @dataclass
@@ -32,8 +33,6 @@ def _logistic(x: np.ndarray, k: float, x0: float) -> np.ndarray:
 
 def _sigmoid_r2(diffs: np.ndarray, curve: np.ndarray) -> float:
     """R^2 of the best-fit logistic curve; 0 if the fit fails to converge."""
-    from scipy.optimize import curve_fit  # local import: optional at module load
-
     ss_tot = float(np.sum((curve - curve.mean()) ** 2))
     if ss_tot < 1e-9:  # flat curve -- a logistic explains none of its (zero) variance
         return 0.0

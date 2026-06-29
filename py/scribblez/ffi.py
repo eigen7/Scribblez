@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import torch
+
 
 # ---------------------------------------------------------------------------
 # Library discovery
@@ -474,8 +476,6 @@ class StreamingTrainSource:
         player_specs: tuple[str, ...] = ("--type=hastybot", "--type=hastybot"),
         pin_memory: bool = True,
     ):
-        import torch
-
         if task not in ("post_move", "max_move_per_lane"):
             raise ValueError(f"unknown streaming task {task!r}")
         self._lib = _lib()

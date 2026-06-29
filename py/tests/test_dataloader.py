@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scribblez.dataset import SlogDataset
 from scribblez.ffi import NativeDataLoader, read_file_header, row_size_floats
 
 
@@ -174,8 +175,6 @@ class TestMemoryBudgetStress:
 class TestStreamingDataset:
     def test_iter_batches(self, tmp_path):
         """Test the SlogDataset.iter_batches() method."""
-        from scribblez.dataset import SlogDataset
-
         slogs = generate_test_slogs(tmp_path)
 
         ds = SlogDataset(

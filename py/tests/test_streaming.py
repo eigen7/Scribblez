@@ -10,9 +10,18 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from scribblez.dashboard import db, plots
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import get_input_shapes, get_target_shapes, row_size_floats
+from scribblez.ffi import StreamingTrainSource
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.post_move_value.model import PostMoveValueModel
+from scribblez.train_common import TrainStepWriter
+
+from scripts.post_move_value.train import build_arg_parser, run_streaming_training
+
 
 _FFI_LIB = Path("/workspace/repo/target/engine/libscribblez_ffi.so")
 
@@ -51,7 +60,6 @@ def test_slice_row_batch_matches_dataset():
 def test_streaming_source_smoke():
     """Pull a few full slots, verify shape/finiteness, release, and stop."""
     _require_engine()
-    from scribblez.ffi import StreamingTrainSource
 
     bs = 32
     src = StreamingTrainSource(
@@ -78,7 +86,6 @@ def test_streaming_source_smoke():
 def test_streaming_source_anchor_planes_populated():
     """A streamed row carries non-zero per-letter anchor planes (encoder ran)."""
     _require_engine()
-    from scribblez.ffi import StreamingTrainSource
 
     bs = 32
     src = StreamingTrainSource(batch_size=bs, num_slots=2, num_threads=2, seed=3, pin_memory=False)
@@ -97,8 +104,6 @@ def test_streaming_source_anchor_planes_populated():
 
 def test_dashboard_throughput_grid(tmp_path):
     """The Streaming dashboard panel builds a figure when data exists, else a notice."""
-    from scribblez.dashboard import db, plots
-
     empty = db.connect(tmp_path / "empty.db")
     assert type(plots.throughput_grid(empty)).__name__ == "Div"  # no-data notice
 
@@ -121,8 +126,6 @@ def test_dashboard_throughput_grid(tmp_path):
 
 def test_db_throughput_roundtrip(tmp_path):
     """write_throughput then read_throughput returns the samples in order."""
-    from scribblez.dashboard import db
-
     conn = db.connect(tmp_path / "dash.db")
     samples = [
         {
@@ -148,8 +151,6 @@ def test_db_throughput_roundtrip(tmp_path):
 
 def test_db_train_step_roundtrip(tmp_path):
     """write_train_steps then read_train_steps returns per-minibatch arrays in order."""
-    from scribblez.dashboard import db, plots
-
     conn = db.connect(tmp_path / "dash.db")
     assert plots.train_step_grid(conn) is None  # no data -> caller falls back
 
@@ -176,8 +177,6 @@ def test_db_train_step_roundtrip(tmp_path):
 def test_db_loss_weights_drive_stacked_plot(tmp_path):
     """Recorded loss weights round-trip in order and switch the loss panel to the
     weighted-stack view; without them the plot falls back to lines."""
-    from scribblez.dashboard import db, plots
-
     conn = db.connect(tmp_path / "dash.db")
     db.write_train_steps(conn, [{"step": 1, "positions": 8, "loss": 1.0, "loss_a": 0.6, "loss_b": 0.4}])
 
@@ -190,8 +189,6 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert type(plots.train_step_grid(conn, normalized=True)).__name__ == "Column"
 
     # Normalized bands are each point's share of the weighted column total.
-    import numpy as np
-
     ts = db.read_train_steps(conn)
     bands = plots._loss_bands(ts, slice(None), db.read_loss_weights(conn), normalized=True)
     assert [lbl for lbl, _ in bands] == ["loss_a", "0.5 x loss_b"]  # weight-1 label omits factor
@@ -203,9 +200,6 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
 def test_train_step_writer_gradient_storage_uniform_read(tmp_path):
     """Storage is append-only at a coarsening gradient (older data finer); the read
     rolls it up, weight-aware, to one uniform resolution for display."""
-    from scribblez.dashboard import db
-    from scribblez.train_common import TrainStepWriter
-
     conn = db.connect(tmp_path / "dash.db")
     w = TrainStepWriter(conn, max_points=2)
     for i in range(1, 9):  # 8 minibatches, loss = i at positions 1..8
@@ -235,8 +229,6 @@ class _FakeSource:
     """Stands in for StreamingTrainSource: yields a fixed random batch each call."""
 
     def __init__(self, batch_size, row_floats):
-        import torch
-
         self.bs = batch_size
         self._tensor = torch.rand(batch_size, row_floats)
         self._n = 0
@@ -268,13 +260,6 @@ class _FakeSource:
 def test_streaming_loop_one_step(tmp_path):
     """The training loop writes a checkpoint, an ONNX export, and a throughput row."""
     _require_engine()
-    import torch
-
-    from scribblez.dashboard import db
-    from scribblez.ffi import get_input_shapes, row_size_floats
-    from scribblez.post_move_value.model import PostMoveValueModel
-    from scribblez.paths import POST_MOVE_VALUE, TagPaths
-    from scripts.post_move_value.train import build_arg_parser, run_streaming_training
 
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]

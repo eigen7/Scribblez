@@ -76,7 +76,7 @@ RUN npx --yes playwright@1.61.0 install --with-deps chromium && \
 RUN apt-get update && \
     apt-get install -y sqlite3 && \
     rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir bokeh
+RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
 
 # 6b) Install Node.js and Claude Code globally
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -106,7 +106,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.1.0"
+ARG VERSION="3.2.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 

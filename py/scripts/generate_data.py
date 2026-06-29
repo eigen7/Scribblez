@@ -26,7 +26,9 @@ import sys
 import time
 from pathlib import Path
 
+from scribblez.ffi import read_file_header
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
+
 
 PLAY_GAME = '/workspace/repo/target/engine/play_game'
 
@@ -74,8 +76,6 @@ def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
 def count_positions(out_dir: Path) -> int:
     """Sum the per-file position counts from .slog headers; -1 on failure."""
     try:
-        from scribblez.ffi import read_file_header
-
         total = 0
         for f in sorted(out_dir.glob("*.slog")):
             num_pos, _ = read_file_header(f)

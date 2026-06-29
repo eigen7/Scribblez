@@ -6,6 +6,9 @@ root -- on PYTHONPATH, so a plain `import setup_common` does not resolve. Use
 the imported module. It also works when run from outside the container.
 """
 
+import sys
+from pathlib import Path
+
 
 def import_setup_common():
     """Import and return the repo-root `setup_common` module.
@@ -17,9 +20,6 @@ def import_setup_common():
 
         setup_common = import_setup_common()
     """
-    import sys
-    from pathlib import Path
-
     repo_root = str(Path(__file__).resolve().parent.parent)
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
