@@ -32,7 +32,7 @@ from scribblez.eval.sampling import build_test_subset
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
 from scribblez.onnx_export import export_onnx
-from scribblez.paths import TagPaths
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.train_common import (
     ThroughputMeter,
     TrainStepWriter,
@@ -311,7 +311,7 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
 def main() -> int:
     args = build_arg_parser().parse_args()
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, POST_MOVE_VALUE)
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
     print(f"Tag root: {paths.root}\nDevice: {device}")

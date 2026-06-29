@@ -26,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-from scribblez.paths import TagPaths
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 PLAY_GAME = '/workspace/repo/target/engine/play_game'
 
@@ -135,7 +135,7 @@ def main() -> int:
         print("--test-ratio must be in [0, 1).", file=sys.stderr)
         return 2
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, POST_MOVE_VALUE)
     player_spec = build_player_spec(args)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games

@@ -23,7 +23,7 @@ from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
 from scribblez.ffi import get_input_shapes
 from scribblez.post_move_value_model import PostMoveValueModel
-from scribblez.paths import TagPaths
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 
 def latest_checkpoint(paths: TagPaths) -> Path:
@@ -68,7 +68,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, POST_MOVE_VALUE)
     device = torch.device(args.device)
 
     ckpt_path = paths.checkpoint_path(args.epoch) if args.epoch else latest_checkpoint(paths)

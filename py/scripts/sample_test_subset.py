@@ -15,7 +15,7 @@ import sys
 
 from scribblez.eval.sampling import build_test_subset
 from scribblez.eval.web_render import render_position_images
-from scribblez.paths import TagPaths
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("-n", "--num-positions", type=int, default=12, help="Positions to sample.")
     args = parser.parse_args()
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, POST_MOVE_VALUE)
     if not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
         print(f"No test split at {paths.test_dir}.", file=sys.stderr)
         return 1

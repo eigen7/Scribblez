@@ -1,9 +1,10 @@
 """Filesystem layout for a training tag.
 
-Every artifact tied to a tag lives under a single per-tag root,
-`<mount_root>/tags/<tag>/`, organized as:
+Tags are namespaced by training task, so each task's runs are isolated (and the
+dashboard's tag selector shows only its own task's tags). Every artifact tied to
+a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
 
-    tags/<tag>/
+    tags/<task>/<tag>/
       data/train/                 *.slog  -- training games
       data/test/                  *.slog  -- frozen held-out games
       checkpoints/                model_epoch_XXXX.pt
@@ -22,17 +23,23 @@ from pathlib import Path
 
 DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 
+# Training-task identifiers: the `<task>` level of the tags/ tree and the
+# dashboard's --task choices. The single source of truth for these slugs.
+POST_MOVE_VALUE = "post_move_value"
+MAX_MOVE_PER_LANE = "max_move_per_lane"
+
 
 class TagPaths:
-    """Resolves every per-tag artifact path under `<mount_root>/tags/<tag>/`."""
+    """Resolves every per-tag artifact path under `<mount_root>/tags/<task>/<tag>/`."""
 
-    def __init__(self, tag: str, mount_root: str | Path = DEFAULT_MOUNT_ROOT):
+    def __init__(self, tag: str, task: str, mount_root: str | Path = DEFAULT_MOUNT_ROOT):
         self.tag = tag
+        self.task = task
         self.mount_root = Path(mount_root)
 
     @property
     def root(self) -> Path:
-        return self.mount_root / "tags" / self.tag
+        return self.mount_root / "tags" / self.task / self.tag
 
     @property
     def data_dir(self) -> Path:

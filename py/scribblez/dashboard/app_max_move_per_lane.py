@@ -8,8 +8,9 @@ Streaming.
 """
 
 from scribblez.dashboard.shell import LossTab, StreamingTab, run
+from scribblez.paths import MAX_MOVE_PER_LANE
 
 run([
     LossTab(),
     StreamingTab(),
-])
+], task=MAX_MOVE_PER_LANE)

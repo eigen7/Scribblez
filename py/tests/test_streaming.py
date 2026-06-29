@@ -273,7 +273,7 @@ def test_streaming_loop_one_step(tmp_path):
     from scribblez.dashboard import db
     from scribblez.ffi import get_input_shapes, row_size_floats
     from scribblez.post_move_value_model import PostMoveValueModel
-    from scribblez.paths import TagPaths
+    from scribblez.paths import POST_MOVE_VALUE, TagPaths
     from scripts.train_post_move_model import build_arg_parser, run_streaming_training
 
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
@@ -287,7 +287,7 @@ def test_streaming_loop_one_step(tmp_path):
             "--no-dashboard", "--no-probe", "--no-calibration",
         ]
     )
-    paths = TagPaths("looptest", mount_root=tmp_path)
+    paths = TagPaths("looptest", POST_MOVE_VALUE, mount_root=tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cpu")
     model = PostMoveValueModel(spatial_planes=sp, scalar_size=sc, num_blocks=1, trunk_channels=8)

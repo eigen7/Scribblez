@@ -28,7 +28,7 @@ from scribblez.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.eval.sampling import build_test_subset
 from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
 from scribblez.onnx_export import export_onnx
-from scribblez.paths import TagPaths
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.util import fmt_duration
 
 
@@ -207,7 +207,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_arg_parser().parse_args()
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, POST_MOVE_VALUE)
     device = torch.device(args.device)
     print(f"Device: {device}")
 
@@ -216,7 +216,7 @@ def main() -> int:
 
     # Data source(s): the --data-tag list (union), or the output tag itself.
     data_tags = args.data_tag or [args.tag]
-    data_paths = [TagPaths(t) for t in data_tags]
+    data_paths = [TagPaths(t, POST_MOVE_VALUE) for t in data_tags]
     train_dirs = [p.train_dir for p in data_paths]
     test_dirs = [p.test_dir for p in data_paths]
     if data_tags != [args.tag]:

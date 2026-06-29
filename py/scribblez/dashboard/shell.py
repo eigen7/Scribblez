@@ -134,15 +134,16 @@ class StreamingTab(Tab):
 class Dashboard:
     """Sidebar-navigated dashboard over a configurable list of `Tab`s."""
 
-    def __init__(self, mount_root: str, tabs: list[Tab], initial_tag: str | None = None):
+    def __init__(self, mount_root: str, task: str, tabs: list[Tab], initial_tag: str | None = None):
         self.mount_root = mount_root
+        self.task = task
         self.tabs = tabs
         self.conn = None
         self.tag = None
         self.active = 0
         self._watch = [None] * len(tabs)
 
-        tags = db.list_tags(mount_root)
+        tags = db.list_tags(mount_root, task)
         default = initial_tag if initial_tag in tags else (tags[0] if tags else "(none)")
         self.tag_select = Select(options=tags or ["(none)"], value=default, width=120)
         self.tag_select.on_change("value", lambda a, o, n: self.on_tag())
@@ -161,7 +162,7 @@ class Dashboard:
     # --- context the tabs read -------------------------------------------
 
     def image_dir(self):
-        return TagPaths(self.tag, self.mount_root).test_subset_dir
+        return TagPaths(self.tag, self.task, self.mount_root).test_subset_dir
 
     def row_count(self, table: str) -> int:
         if not self.conn:
@@ -204,14 +205,14 @@ class Dashboard:
         if tag == "(none)":
             return
         self.tag = tag
-        self.conn = db.connect(TagPaths(tag, self.mount_root).dashboard_db)
+        self.conn = db.connect(TagPaths(tag, self.task, self.mount_root).dashboard_db)
         for i, t in enumerate(self.tabs):
             t.refresh(self)
             self._watch[i] = t.watch(self)
         self.select_tab(self.active)
 
     def poll(self):
-        new_tags = db.list_tags(self.mount_root)
+        new_tags = db.list_tags(self.mount_root, self.task)
         if new_tags and new_tags != self.tag_select.options:
             self.tag_select.options = new_tags
         if not self.conn:
@@ -248,10 +249,11 @@ def _requested_tag() -> str | None:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-def run(tabs: list[Tab], title: str = "Scribblez training dashboard"):
-    """Wire a Dashboard with `tabs` into the Bokeh document. Called at import time
-    by each app_<task>.py (which `bokeh serve` runs)."""
-    dash = Dashboard(_parse_mount_root(), tabs, _requested_tag())
+def run(tabs: list[Tab], task: str, title: str = "Scribblez training dashboard"):
+    """Wire a `task`'s Dashboard with `tabs` into the Bokeh document. Called at
+    import time by each app_<task>.py (which `bokeh serve` runs); `task` scopes the
+    tag selector to that task's tags (tags/<task>/)."""
+    dash = Dashboard(_parse_mount_root(), task, tabs, _requested_tag())
     doc = curdoc()
     doc.title = title
     doc.add_root(dash.layout())

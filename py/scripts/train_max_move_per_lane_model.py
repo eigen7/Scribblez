@@ -31,7 +31,7 @@ from scribblez.ffi import (
     get_max_move_per_lane_target_shapes,
 )
 from scribblez.max_move_per_lane_model import MaxMovePerLaneModel, compute_loss
-from scribblez.paths import TagPaths
+from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 from scribblez.train_common import (
     IntervalStats,
     ThroughputMeter,
@@ -206,7 +206,7 @@ def run_streaming_training(
 def main() -> int:
     args = build_arg_parser().parse_args()
 
-    paths = TagPaths(args.tag)
+    paths = TagPaths(args.tag, MAX_MOVE_PER_LANE)
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
     print(f"Tag root: {paths.root}\nDevice: {device}")

@@ -264,9 +264,9 @@ def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
 # --------------------------------------------------------------------------
 
 
-def list_tags(mount_root: str | Path = "/workspace/mount") -> list[str]:
-    """Tags that have a dashboard DB, sorted."""
-    tags_dir = Path(mount_root) / "tags"
+def list_tags(mount_root: str | Path, task: str) -> list[str]:
+    """Tags of one task that have a dashboard DB, sorted (tags/<task>/<tag>/)."""
+    tags_dir = Path(mount_root) / "tags" / task
     if not tags_dir.exists():
         return []
     return sorted(p.parent.name for p in tags_dir.glob("*/dashboard.db"))
