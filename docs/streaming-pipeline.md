@@ -36,7 +36,7 @@ the same time, saturating GPU and CPU concurrently.
 I envision a single python script, launched via something like:
 
 ```
-./py/train_post_move_model.py -t tag_name
+python -m scripts.post_move_value.train -t tag_name
 ```
 
 This creates a directory like `/workspace/mount/post_move_training/<tag_name>`, where stuff is

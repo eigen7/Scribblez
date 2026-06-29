@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..ffi import read_file_header, sample_slog
+from scribblez.ffi import read_file_header, sample_slog
 
 
 def select_positions(test_dir: str | Path, num_positions: int) -> list[tuple[Path, int]]:

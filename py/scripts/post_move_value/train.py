@@ -15,7 +15,7 @@ written to the per-tag dashboard DB. A single rolling model.pt holds resume
 state; ONNX is exported per checkpoint.
 
 Usage:
-    python -m scripts.train_post_move_model -t mytag --batch-size 256
+    python -m scripts.post_move_value.train -t mytag --batch-size 256
 """
 
 import argparse
@@ -27,11 +27,11 @@ import torch
 
 from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
-from scribblez.eval.runner import render_boards, run_calibration, run_probes
-from scribblez.eval.sampling import build_test_subset
+from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
+from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
-from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
-from scribblez.onnx_export import export_onnx
+from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
+from scribblez.post_move_value.onnx_export import export_onnx
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.train_common import (
     ThroughputMeter,

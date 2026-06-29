@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..dashboard import db
+from scribblez.dashboard import db
 from .calibration import evaluate_calibration
 from .monotonicity import score_monotonicity
 from .probe_eval import evaluate_subset

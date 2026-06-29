@@ -25,7 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
 # absolute residual would otherwise converge to ~0.8*sigma; this rescales the

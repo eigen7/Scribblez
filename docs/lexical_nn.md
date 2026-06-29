@@ -4,15 +4,15 @@
 
 Train a NN whose weights encode knowledge of a Scrabble lexicon.
 
-Existing NN training pipelines like `py/scripts/train_post_move_model.py` train a CNN, which
+Existing NN training pipelines like `py/scripts/post_move_value/train.py` train a CNN, which
 likely lacks the capability to learn the thousands of commonly occurring Scrabble words.
 
 ## Learning Setup
 
-Similarly to `train_post_move_model.py`, play fast hasty-vs-hasty games in c++ and stream training
+Similarly to `scripts/post_move_value/train.py`, play fast hasty-vs-hasty games in c++ and stream training
 data, one-sample-per-game, to the python side.
 
-Unlike `train_post_move_model.py`, we will sample any position from the game, including endgame
+Unlike `scripts/post_move_value/train.py`, we will sample any position from the game, including endgame
 positions (sample uniformly over all turns).
 
 The learning problem is to take a pre-move rack and a board, and to predict the highest-scoring
@@ -79,7 +79,7 @@ For CDF-loss, we can use sum_{0 <= k <= 99} (sum_{j <= k} B(j) - B_hat(j))^2.
 
 ## Input Encoding
 
-This task needs its own lean input encoder, **not** the one from `train_post_move_model.py`. Two
+This task needs its own lean input encoder, **not** the one from `scripts/post_move_value/train.py`. Two
 points:
 
 - The post-move encoder's spatial planes include horizontal/vertical cross-checks (which letters are
@@ -95,7 +95,7 @@ R's" is a counting fact).
 
 ## NN Architecture
 
-The model is `py/scribblez/max_move_per_lane_model.py` (`MaxMovePerLaneModel`). It has two stages
+The model is `py/scribblez/max_move_per_lane/model.py` (`MaxMovePerLaneModel`). It has two stages
 that split the problem into "where" and "what word":
 
 - **Spatial stage (CNN).** A conv trunk -- the `SpatialTrunk` shared with the post-move model (stem,
@@ -130,7 +130,7 @@ over all 30 lanes.
 
 ## Dashboard
 
-`train_max_move_per_lane_model.py` writes to the same per-tag dashboard the post-move trainer uses;
+`scripts/max_move_per_lane/train.py` writes to the same per-tag dashboard the post-move trainer uses;
 the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and the entire dashboard
 (`scribblez/dashboard/`). The shared streaming metrics are task-agnostic:
 

@@ -28,8 +28,8 @@ import numpy as np
 import torch
 
 from scribblez.ffi import get_input_shapes
-from scribblez.post_move_value_model import PostMoveValueModel
-from scribblez.onnx_export import export_onnx
+from scribblez.post_move_value.model import PostMoveValueModel
+from scribblez.post_move_value.onnx_export import export_onnx
 
 # Input contract is owned by the C++ encoder
 # (engine/include/scribblez/input_encoder.h) and surfaced through the FFI, so the

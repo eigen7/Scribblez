@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .spatial_trunk import SpatialTrunk
+from scribblez.spatial_trunk import SpatialTrunk
 
 # Label dimensions -- must match the C++ lane-target layout (lane_targets.h).
 BOARD_SIZE = 15

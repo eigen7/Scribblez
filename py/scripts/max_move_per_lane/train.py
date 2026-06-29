@@ -13,7 +13,7 @@ accuracy (does the model get each legal lane's best move and its score right?),
 recorded alongside the losses. A single rolling model.pt holds resume state.
 
 Usage:
-    python -m scripts.train_max_move_per_lane_model -t mytag --batch-size 256
+    python -m scripts.max_move_per_lane.train -t mytag --batch-size 256
 """
 
 import argparse
@@ -30,7 +30,7 @@ from scribblez.ffi import (
     get_max_move_per_lane_input_shapes,
     get_max_move_per_lane_target_shapes,
 )
-from scribblez.max_move_per_lane_model import MaxMovePerLaneModel, compute_loss
+from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 from scribblez.train_common import (
     IntervalStats,

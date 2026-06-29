@@ -272,9 +272,9 @@ def test_streaming_loop_one_step(tmp_path):
 
     from scribblez.dashboard import db
     from scribblez.ffi import get_input_shapes, row_size_floats
-    from scribblez.post_move_value_model import PostMoveValueModel
+    from scribblez.post_move_value.model import PostMoveValueModel
     from scribblez.paths import POST_MOVE_VALUE, TagPaths
-    from scripts.train_post_move_model import build_arg_parser, run_streaming_training
+    from scripts.post_move_value.train import build_arg_parser, run_streaming_training
 
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]

@@ -2,7 +2,7 @@
 """Train a post-move value model from .slog training data.
 
 Usage:
-    python -m scripts.train -t mytag --epochs 20 --batch-size 256
+    python -m scripts.post_move_value.train_disk -t mytag --epochs 20 --batch-size 256
 
 Reads the tag's training split (tags/<tag>/data/train), writes .pt checkpoints
 and .onnx exports under tags/<tag>/, and after every epoch runs the structural
@@ -24,10 +24,10 @@ import torch
 
 from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset
-from scribblez.eval.runner import render_boards, run_calibration, run_probes
-from scribblez.eval.sampling import build_test_subset
-from scribblez.post_move_value_model import PostMoveValueModel, compute_loss
-from scribblez.onnx_export import export_onnx
+from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
+from scribblez.post_move_value.eval.sampling import build_test_subset
+from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
+from scribblez.post_move_value.onnx_export import export_onnx
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.util import fmt_duration
 

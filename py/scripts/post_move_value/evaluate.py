@@ -2,8 +2,8 @@
 """Run the evaluation suite over a trained checkpoint and store it in the dashboard DB.
 
 Usage:
-    python -m scripts.evaluate -t mytag                # latest checkpoint
-    python -m scripts.evaluate -t mytag --epoch 30
+    python -m scripts.post_move_value.evaluate -t mytag                # latest checkpoint
+    python -m scripts.post_move_value.evaluate -t mytag --epoch 30
 
 Runs the structural probes (3.1) and full-test-set calibration (3.3) for one
 checkpoint, writing all results to tags/<tag>/dashboard.db keyed by that epoch.
@@ -19,10 +19,10 @@ import torch
 
 from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
-from scribblez.eval.runner import render_boards, run_calibration, run_probes
-from scribblez.eval.sampling import build_test_subset
+from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
+from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.ffi import get_input_shapes
-from scribblez.post_move_value_model import PostMoveValueModel
+from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 

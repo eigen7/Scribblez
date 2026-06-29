@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..ffi import encode_score_diff_sweep, get_input_shapes, read_file_header
+from scribblez.ffi import encode_score_diff_sweep, get_input_shapes, read_file_header
 
 
 @dataclass
