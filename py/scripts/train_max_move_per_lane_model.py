@@ -243,7 +243,8 @@ def main() -> int:
     })
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag)
+        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag,
+                                       app=server.MAX_MOVE_PER_LANE_APP)
         if proc is not None:
             atexit.register(proc.terminate)
 

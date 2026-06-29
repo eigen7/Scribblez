@@ -274,7 +274,8 @@ def main() -> int:
 
     # Launch the dashboard alongside training (torn down on exit).
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag)
+        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag,
+                                       app=server.POST_MOVE_VALUE_APP)
         if proc is not None:
             atexit.register(proc.terminate)
 

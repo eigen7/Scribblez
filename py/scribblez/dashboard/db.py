@@ -86,7 +86,6 @@ CREATE TABLE IF NOT EXISTS train_step (
   value REAL,                   -- mean of the metric over the point's `n` minibatches
   n INTEGER                     -- minibatches this point aggregates (its weight/resolution)
 );
-CREATE INDEX IF NOT EXISTS train_step_step ON train_step(name, step);
 CREATE TABLE IF NOT EXISTS loss_weights (
   name TEXT PRIMARY KEY,        -- a per-component loss series ('loss_<head>')
   weight REAL                   -- its coefficient in the optimized total loss
@@ -103,6 +102,14 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
+    # The train_step read index references the current columns; create it
+    # separately so a pre-schema train_step table (missing them) doesn't abort the
+    # whole connect -- such a stale table is simply not read (read_train_steps
+    # returns empty for it).
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS train_step_step ON train_step(name, step)")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     return conn
 
