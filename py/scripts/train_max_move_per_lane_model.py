@@ -35,6 +35,8 @@ from scribblez.paths import TagPaths
 from scribblez.train_common import (
     IntervalStats,
     ThroughputMeter,
+    TrainStepWriter,
+    add_train_log_args,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
@@ -73,6 +75,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--log-every", type=int, default=25600, help="Sample throughput every N positions."
     )
+    add_train_log_args(p)
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
@@ -101,12 +104,10 @@ def lane_accuracy(outputs: dict, targets: dict) -> dict:
     return {"score_acc": score_ok, "move_acc": move_ok, "has_move_acc": has_move_ok}
 
 
-def _step_row(step: int, positions: int, losses: dict, accs: dict) -> dict:
-    """One per-minibatch dashboard row: the total + per-component losses and the
-    per-lane accuracies (long-format, so the names define the dashboard series)."""
+def _step_metrics(losses: dict, accs: dict) -> dict:
+    """One minibatch's dashboard metrics: the total + per-component losses and the
+    per-lane accuracies (the names define the dashboard series)."""
     return {
-        "step": step,
-        "positions": positions,
         "loss": losses["total"].item(),
         "loss_score_pdf": losses["score_pdf"].item(),
         "loss_score_cdf": losses["score_cdf"].item(),
@@ -130,7 +131,9 @@ def run_streaming_training(
     model.train()
     positions, step, ckpt_idx = start_positions, start_step, start_ckpt
     interval = IntervalStats()
-    step_buffer: list[dict] = []
+    writer = TrainStepWriter(
+        conn, args.fine_log_positions, args.coarse_log_window, start_positions=positions
+    )
 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every
@@ -165,26 +168,24 @@ def run_streaming_training(
             step += 1
             with torch.no_grad():
                 accs = lane_accuracy(outputs, tgt)
-            row = _step_row(step, positions, losses, accs)
-            interval.update({k: v for k, v in row.items() if k not in ("step", "positions")})
-            step_buffer.append(row)
+            metrics = _step_metrics(losses, accs)
+            interval.update(metrics)
+            writer.record(step, positions, metrics)
 
             if positions >= next_log:
                 st = source.stats()
                 db.write_throughput(conn, meter.sample(time.time(), positions, st))
-                db.write_train_steps(conn, step_buffer)
-                step_buffer.clear()
+                writer.commit()
                 print(
-                    f"pos={positions:>9} | loss={row['loss']:.4f} "
-                    f"move_acc={row['move_acc']:.3f} score_acc={row['score_acc']:.3f} | "
+                    f"pos={positions:>9} | loss={metrics['loss']:.4f} "
+                    f"move_acc={metrics['move_acc']:.3f} score_acc={metrics['score_acc']:.3f} | "
                     f"games={st['games_played']} dropped={st['games_dropped']}"
                 )
                 next_log += args.log_every
 
             if positions >= next_ckpt:
                 ckpt_idx += 1
-                db.write_train_steps(conn, step_buffer)
-                step_buffer.clear()
+                writer.commit()
                 record = {"epoch": ckpt_idx, "positions": positions, **interval.record()}
                 db.write_metrics(conn, ckpt_idx, record)
                 save_rolling_checkpoint(
@@ -198,7 +199,7 @@ def run_streaming_training(
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
     finally:
-        db.write_train_steps(conn, step_buffer)
+        writer.close()
         source.stop()
 
     print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")

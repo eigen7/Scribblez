@@ -35,6 +35,8 @@ from scribblez.onnx_export import export_onnx
 from scribblez.paths import TagPaths
 from scribblez.train_common import (
     ThroughputMeter,
+    TrainStepWriter,
+    add_train_log_args,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
@@ -80,6 +82,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--log-every", type=int, default=25600, help="Sample throughput every this many positions."
     )
+    add_train_log_args(p)
     p.add_argument("--val-games", type=int, default=20000, help="Held-out validation games (first run).")
     p.add_argument(
         "--val-games-per-file", type=int, default=10000, help="Games per validation .slog file."
@@ -191,7 +194,9 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     step = start_step
     ckpt_idx = start_ckpt
     interval = _IntervalLoss()
-    step_buffer: list[dict] = []  # per-minibatch rows, flushed in batches
+    writer = TrainStepWriter(
+        conn, args.fine_log_positions, args.coarse_log_window, start_positions=positions
+    )
 
     next_log = positions + args.log_every
     next_ckpt = positions + args.checkpoint_every
@@ -231,8 +236,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             batch_losses = {k: losses[k].item() for k in interval.sums}
             batch_acc = (outputs["wld"].argmax(1) == tgt["wld"].argmax(1)).float().mean().item()
             interval.update(batch_losses, batch_acc, n)
-            step_buffer.append({
-                "step": step, "positions": positions,
+            writer.record(step, positions, {
                 "loss": batch_losses["total"], "loss_wld": batch_losses["wld"],
                 "loss_score_diff": batch_losses["score_diff"],
                 "loss_score_diff_mean": batch_losses["score_diff_mean"],
@@ -245,8 +249,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
                 st = source.stats()
                 sample = meter.sample(time.time(), positions, st)
                 db.write_throughput(conn, sample)
-                db.write_train_steps(conn, step_buffer)
-                step_buffer.clear()
+                writer.commit()
                 print(
                     f"pos={positions:>9} | {sample['positions_per_s']:8.0f} pos/s | "
                     f"loss={batch_losses['total']:.4f} | games={st['games_played']} "
@@ -256,8 +259,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
 
             if positions >= next_ckpt:
                 ckpt_idx += 1
-                db.write_train_steps(conn, step_buffer)
-                step_buffer.clear()
+                writer.commit()
                 _checkpoint_and_eval(
                     model, optimizer, conn, paths, device, args, ckpt_idx, positions, step, interval,
                     probe_enabled=probe_enabled, test_ds=test_ds,
@@ -269,7 +271,7 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     except KeyboardInterrupt:
         print("\nInterrupted; shutting down.")
     finally:
-        db.write_train_steps(conn, step_buffer)
+        writer.close()
         source.stop()
 
     print(f"Trained on {positions} positions in {time.time() - t0:.1f}s.")

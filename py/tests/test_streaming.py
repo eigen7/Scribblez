@@ -173,6 +173,29 @@ def test_db_train_step_roundtrip(tmp_path):
     assert type(plots.train_step_grid(conn)).__name__ == "Column"
 
 
+def test_train_step_writer_adaptive_resolution(tmp_path):
+    """One row per minibatch until fine_positions, then one mean-aggregated row
+    per window. Partial final bucket is flushed by close()."""
+    from scribblez.dashboard import db
+    from scribblez.train_common import TrainStepWriter
+
+    conn = db.connect(tmp_path / "dash.db")
+    # Minibatches of 4 positions; fine until 16, then aggregate every 8 positions.
+    w = TrainStepWriter(conn, fine_positions=16, window=8, start_positions=0)
+    pos = 0
+    for i in range(8):
+        pos += 4
+        w.record(step=i + 1, positions=pos, metrics={"loss": float(i), "x_acc": 1.0})
+        w.commit()  # completed buckets flush; an open coarse bucket stays open
+    w.close()
+
+    ts = db.read_train_steps(conn)
+    # fine: one row per minibatch at 4,8,12,16; coarse: {20,24}->24, {28,32}->32.
+    assert list(ts["positions"]) == [4, 8, 12, 16, 24, 32]
+    assert list(ts["loss"]) == [0.0, 1.0, 2.0, 3.0, 4.5, 6.5]  # coarse rows are means
+    assert list(ts["x_acc"]) == [1.0] * 6
+
+
 class _FakeSource:
     """Stands in for StreamingTrainSource: yields a fixed random batch each call."""
 

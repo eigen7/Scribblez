@@ -137,10 +137,10 @@ def _stride_idx(n: int, max_points: int):
     return np.arange(0, n, (n + max_points - 1) // max_points)
 
 
-def _step_figure(title: str, x, series, y_label: str):
-    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title, x_axis_label="minibatch",
+def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"):
+    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title, x_axis_label=x_label,
                  y_axis_label=y_label, tools="pan,box_zoom,wheel_zoom,reset,save")
-    fig.add_tools(HoverTool(tooltips=[("minibatch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
+    fig.add_tools(HoverTool(tooltips=[(x_label, "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
@@ -153,20 +153,25 @@ def _step_figure(title: str, x, series, y_label: str):
 
 
 def train_step_grid(conn):
-    """Per-minibatch loss + accuracy curves (x-axis = minibatch).
+    """Streaming loss + accuracy curves vs. positions trained.
 
     Task-agnostic: it discovers the series recorded by whichever trainer wrote
     the DB -- every 'loss'/'loss_<head>' name overlays on the loss panel, every
-    '<x>_acc' name on the accuracy panel. Returns None when no per-minibatch data
+    '<x>_acc' name on the accuracy panel. Returns None when no streaming data
     exists, so the caller can fall back to the per-checkpoint loss view (the disk
     pipeline records only the latter).
+
+    Points are logged at an adaptive resolution (dense early, then aggregated;
+    see TrainStepWriter), so the x-axis is positions trained -- the dense and
+    aggregated regions then line up by true progress -- and a stride caps the
+    rendered count.
     """
     ts = db.read_train_steps(conn)
-    step = ts["step"]
-    if len(step) == 0:
+    x_all = ts["positions"]
+    if len(x_all) == 0:
         return None
-    idx = _stride_idx(len(step), 4000)
-    x = step[idx]
+    idx = _stride_idx(len(x_all), 4000)
+    x = x_all[idx]
 
     # 'loss' (the total) first, then each component; accuracies on their own panel.
     loss_names = [k for k in ("loss",) if k in ts] + sorted(
@@ -175,14 +180,12 @@ def train_step_grid(conn):
     acc_names = sorted(k for k in ts if k.endswith("_acc"))
 
     loss_fig = _step_figure(
-        "Train loss (per minibatch)", x, [(ts[k][idx], k) for k in loss_names], "loss"
+        "Train loss", x, [(ts[k][idx], k) for k in loss_names], "loss"
     )
     figs = [loss_fig]
     if acc_names:
         figs.append(
-            _step_figure(
-                "Accuracy (per minibatch)", x, [(ts[k][idx], k) for k in acc_names], "accuracy"
-            )
+            _step_figure("Accuracy", x, [(ts[k][idx], k) for k in acc_names], "accuracy")
         )
     return column(row(*figs))
 

@@ -130,19 +130,23 @@ over all 30 lanes.
 
 ## Dashboard
 
-We need a streaming dashboard similar to that produced by `train_post_move_model.py`. The key
-metrics:
+`train_max_move_per_lane_model.py` writes to the same per-tag dashboard the post-move trainer uses;
+the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and the entire dashboard
+(`scribblez/dashboard/`). The shared streaming metrics are task-agnostic:
 
-- Train loss (stacked plots: score-PDF, score-CDF, move). If any auxiliary loss terms are
-added (cross-checks?), that should be another stack component.
+- **Train loss** -- the total plus every per-component loss (here: score-PDF, score-CDF, move
+  occupancy, has-move) overlaid on one panel. The dashboard stores metrics in a long format
+  (`train_step(step, positions, name, value)`) and the loss panel discovers every `loss`/`loss_<x>`
+  series automatically, so adding an auxiliary loss term needs no schema or front-end change.
 
-- Train accuracy: for each of the 30 lane sub-tasks that permits at least one legal move: does it get
-the move right? Does it get the score right? Show accuracy stats.
+- **Train accuracy** -- per-minibatch over the 30 lanes that have a legal move: `move_acc` (the
+  thresholded occupancy union matches the target exactly), `score_acc` (argmax score bin matches),
+  and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the accuracy
+  panel.
 
-Having a database entry per-minibatch is too much, both for the sqlite3 tables and for the front-end
-rendering. Maybe one per minute? Or maybe have one per-minibatch in the early going, so I can spot
-any anomalies early-on, but then switch to  aggregating at some point, with the plots choosing the
-resolution appropriately?
-
-There is probably opportunity to reuse code from the existing dashboard. Please refactor
-accordingly.
+**Resolution.** Recording every minibatch forever bloats the SQLite store, but early per-minibatch
+detail is valuable for spotting anomalies. So `TrainStepWriter` logs at an adaptive resolution: one
+row per minibatch until `--fine-log-positions` positions are trained, then one mean-aggregated row
+per `--coarse-log-window` positions. The DB stays a plain point store (it does not know the policy);
+the Bokeh panels plot against *positions trained* (so the dense early and aggregated later regions
+line up by true progress) and apply a stride so the rendered point count stays bounded regardless.

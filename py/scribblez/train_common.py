@@ -12,6 +12,7 @@ from pathlib import Path
 
 import torch
 
+from .dashboard import db
 from .paths import TagPaths
 
 
@@ -110,3 +111,83 @@ class IntervalStats:
     def record(self) -> dict:
         nb = max(self.n_batches, 1)
         return {k: v / nb for k, v in self.sums.items()}
+
+
+def add_train_log_args(parser):
+    """Register the two knobs that control per-minibatch dashboard resolution.
+    Shared by the trainers so the defaults and help text live in one place."""
+    parser.add_argument(
+        "--fine-log-positions", type=int, default=102400,
+        help="Log every minibatch until this many positions are trained (catch early anomalies).",
+    )
+    parser.add_argument(
+        "--coarse-log-window", type=int, default=25600,
+        help="After the fine phase, log one mean-aggregated point per this many positions.",
+    )
+
+
+class TrainStepWriter:
+    """Writes per-minibatch training metrics to the dashboard DB at an adaptive
+    resolution, so a long run does not bloat the DB while early detail is kept.
+
+    Resolution schedule (positions = cumulative training rows):
+      * fine phase   -- one row per minibatch, until `fine_positions` positions;
+      * coarse phase -- one row per `window` positions, each the MEAN of the
+                        minibatches in that span.
+    Aggregation is the only state; the DB stays a plain long-format point store
+    and the dashboard downsamples further at render time.
+
+    Lifecycle: record() each minibatch; commit() on a cadence to batch completed
+    rows to the DB; close() at the end to flush the final partial bucket. commit()
+    deliberately leaves the in-progress bucket alone so a coarse bucket keeps
+    accumulating across commits (no partial coarse rows reach the DB until full).
+    """
+
+    def __init__(self, conn, fine_positions: int, window: int, start_positions: int = 0):
+        self._conn = conn
+        self._fine_positions = fine_positions
+        self._window = max(window, 1)
+        self._bucket_start = start_positions  # positions at the last flush boundary
+        self._pending: list[dict] = []
+        self._reset_bucket()
+
+    def _reset_bucket(self):
+        self._sums: dict[str, float] = {}
+        self._count = 0
+        self._last_step = 0
+        self._last_positions = 0
+
+    def _bucket_full(self, positions: int) -> bool:
+        if positions <= self._fine_positions:
+            return True  # fine phase: every minibatch is its own bucket
+        return positions - self._bucket_start >= self._window
+
+    def _close_bucket(self):
+        """Reduce the open bucket to one mean row in `_pending` (no-op if empty)."""
+        if self._count == 0:
+            return
+        row = {"step": self._last_step, "positions": self._last_positions}
+        row.update({name: total / self._count for name, total in self._sums.items()})
+        self._pending.append(row)
+        self._bucket_start = self._last_positions
+        self._reset_bucket()
+
+    def record(self, step: int, positions: int, metrics: dict):
+        """Fold one minibatch's metrics into the open bucket, closing it when full."""
+        for name, value in metrics.items():
+            self._sums[name] = self._sums.get(name, 0.0) + float(value)
+        self._count += 1
+        self._last_step, self._last_positions = step, positions
+        if self._bucket_full(positions):
+            self._close_bucket()
+
+    def commit(self):
+        """Batch-write the completed bucket rows; keep any in-progress bucket open."""
+        if self._pending:
+            db.write_train_steps(self._conn, self._pending)
+            self._pending.clear()
+
+    def close(self):
+        """Flush the final partial bucket, then commit."""
+        self._close_bucket()
+        self.commit()
