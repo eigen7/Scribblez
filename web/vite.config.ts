@@ -7,6 +7,9 @@ import react from '@vitejs/plugin-react';
 // vite's 5173 and play_game's 8080 for a standalone `npm run dev`.
 const devPort = Number(process.env.VITE_DEV_PORT ?? 5173);
 const wsPort = Number(process.env.VITE_WS_PORT ?? 8080);
+// The React dashboard talks to the Python (Tornado) data API; the engine injects
+// this port when it launches the dashboard dev server. Defaults to the API's 8090.
+const apiPort = Number(process.env.VITE_API_PORT ?? 8090);
 
 export default defineConfig({
   plugins: [react()],
@@ -22,6 +25,10 @@ export default defineConfig({
       '/ws': {
         target: `ws://localhost:${wsPort}`,
         ws: true,
+      },
+      '/api': {
+        target: `http://localhost:${apiPort}`,
+        changeOrigin: true,
       },
     },
   },

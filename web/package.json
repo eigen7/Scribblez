@@ -12,6 +12,7 @@
     "render-positions": "tsx tools/render_positions.tsx"
   },
   "dependencies": {
+    "@bokeh/bokehjs": "3.9.1",
     "html-to-image": "^1.11.13",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
