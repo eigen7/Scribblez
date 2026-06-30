@@ -1,0 +1,34 @@
+# Tooling configuration for the project's Python sources.
+#
+# This file holds Ruff's settings only; the repo is not a packaged
+# distribution (Python under py/ is made importable via a .pth file in the dev
+# image, not via an installed package), so there is no [build-system] table.
+#
+# Ruff is the Python analog of the C++ clang-format setup: `ruff format` is the
+# autoformatter and `ruff check` is the linter (it also sorts imports, the job
+# IncludeCategories does in .clang-format). The wrapper at
+# py/tools/ruff_format_all_py_files.py drives both, mirroring
+# py/tools/clang_format_all_cpp_files.py.
+
+[tool.ruff]
+# Match the C++ ColumnLimit of 100 in .clang-format.
+line-length = 100
+
+# The dev image ships CPython 3.12; target its syntax for lint/upgrade rules.
+target-version = "py312"
+
+# Vendored subtrees are read-only mirrors (updated only via
+# py/tools/pull_git_subtrees.py); build output lives under target/. Neither is
+# ours to reformat. Ruff already skips target/ via .gitignore, but listing both
+# here keeps the exclusion explicit and independent of git state.
+extend-exclude = ["subtrees", "target"]
+
+[tool.ruff.lint]
+# A conservative, high-signal starting set:
+#   E, W  pycodestyle errors/warnings (style)
+#   F     pyflakes (real bugs: undefined names, unused imports/vars)
+#   I     import sorting (isort)
+#   UP    pyupgrade (modernize for the target Python)
+#   B     flake8-bugbear (likely-bug patterns)
+# Grow this list as the codebase stabilizes.
+select = ["E", "W", "F", "I", "UP", "B"]

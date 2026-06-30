@@ -89,10 +89,14 @@ RUN apt-get update && \
     apt-get install -y libeigen3-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# 6d) ruff (python formatting)
+RUN pip3 install --no-cache-dir ruff
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
     open(site.getsitepackages()[0]+'/scribblez.pth','w').write('/workspace/repo/py\n')"
+
 
 # 8) Macondo's own data-path env var, so its child process finds the kwg/leaves
 #    under <mount>/macondo/data when the engine launches it as a subprocess.
@@ -106,7 +110,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.2.0"
+ARG VERSION="3.3.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 
