@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
@@ -173,7 +173,17 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
     if (!tag) return;
     const refresh = () =>
       getJSON(`/api/lane/generations?task=${task}&tag=${tag}`)
-        .then((d) => setGenerations(d.generations))
+        .then((d: { generations: Generation[] }) =>
+          // Keep the same array reference when nothing changed, so an unchanged
+          // poll doesn't re-render the tab (only a genuinely new generation does).
+          setGenerations((prev) => {
+            const next = d.generations;
+            const same =
+              prev.length === next.length &&
+              prev[prev.length - 1]?.generation === next[next.length - 1]?.generation;
+            return same ? prev : next;
+          }),
+        )
         .catch(() => {});
     refresh();
     const id = setInterval(refresh, 3000);
@@ -203,11 +213,14 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
       .catch(() => setPayload(null));
   }, [task, tag, positions.length, posIdx, effGen]);
 
-  // On a NEW position, default the selected lane to the globally highest-scoring
-  // one (the lane holding the position's best move). Keyed on the position name,
-  // so changing only the generation doesn't override a lane the user picked.
+  // Default the selected lane to the globally highest-scoring one (the lane holding
+  // the position's best move) -- but ONLY once per position. The ref guard makes
+  // this provably independent of generation changes (a new generation refetches the
+  // payload for the same position, which must not move the user's lane/selection).
+  const defaultedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!payload) return;
+    if (!payload || defaultedFor.current === payload.name) return;
+    defaultedFor.current = payload.name;
     let best = { h: true, i: -1, score: -1 };
     payload.lanes.rows.forEach((l, i) => {
       if (l.has_move && l.max_score > best.score) best = { h: true, i, score: l.max_score };
@@ -220,8 +233,7 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
       setLaneIdx(best.i);
     }
     setSelected(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payload?.name]);
+  }, [payload]);
 
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
