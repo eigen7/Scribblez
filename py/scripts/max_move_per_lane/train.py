@@ -22,6 +22,8 @@ import sys
 import time
 
 import torch
+
+from scribblez import lane_analysis
 from scribblez.dashboard import db, server
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import (
@@ -76,6 +78,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--log-every", type=int, default=25600, help="Sample throughput every N positions."
     )
     add_train_log_args(p)
+    p.add_argument(
+        "--lane-eval-dataset", type=str, default=str(lane_analysis.DEFAULT_DATASET),
+        help="GCG dataset directory the lane-analysis tab evaluates each checkpoint over.",
+    )
+    p.add_argument("--no-lane-eval", action="store_true",
+                   help="Disable the per-checkpoint lane-analysis evaluation.")
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
@@ -117,15 +125,43 @@ def _step_metrics(losses: dict, accs: dict) -> dict:
     }
 
 
+def load_lane_eval(args, spatial_planes: int) -> dict | None:
+    """Build the frozen lane-analysis input batch once (or None if disabled / the
+    dataset is empty / the lexicon is unavailable). At each checkpoint the model is
+    run over it and the predictions are written to the dashboard DB."""
+    if args.no_lane_eval:
+        return None
+    try:
+        names, inputs = lane_analysis.load_inputs(args.lane_eval_dataset)
+    except Exception as e:  # missing lexicon / unreadable dataset
+        timed_print(f"lane-analysis eval disabled: {e}")
+        return None
+    if not names:
+        timed_print(f"lane-analysis eval disabled: no GCG positions in {args.lane_eval_dataset}")
+        return None
+    timed_print(f"lane-analysis eval: {len(names)} positions from {args.lane_eval_dataset}")
+    return {"inputs": inputs, "spatial_planes": spatial_planes}
+
+
+def eval_lane_analysis(model, lane_eval: dict, device, conn, generation: int, positions: int):
+    """Run the model over the frozen lane-analysis set and store this generation's
+    per-(position, lane) predictions for the dashboard."""
+    model.eval()
+    preds = lane_analysis.predict(model, lane_eval["inputs"], lane_eval["spatial_planes"], device)
+    db.write_lane_preds(conn, generation, positions, preds)
+
+
 def run_streaming_training(
     model, optimizer, source, conn, paths, device, args, *, start_ckpt, start_positions, start_step
 ) -> int:
     """Consume streamed batches; record per-minibatch loss/accuracy, throughput,
     and a rolling checkpoint on cadence. `source` exposes start/next_slot/release/
     stats/stop (the real StreamingTrainSource or a fake in tests)."""
+    input_shapes = {s.name: s.dims for s in get_max_move_per_lane_input_shapes()}
     input_layout, targets_layout = row_layout(
         get_max_move_per_lane_input_shapes(), get_max_move_per_lane_target_shapes()
     )
+    lane_eval = load_lane_eval(args, input_shapes["input_spatial"][0])
     source.start()
 
     model.train()
@@ -190,10 +226,10 @@ def run_streaming_training(
                 save_rolling_checkpoint(
                     paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step, args
                 )
-                timed_print(
-                    f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-                    f"-> saved {paths.rolling_checkpoint.name}"
-                )
+                if lane_eval is not None:
+                    eval_lane_analysis(model, lane_eval, device, conn, ckpt_idx, positions)
+                timed_print(f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
+                    f"-> saved {paths.rolling_checkpoint.name}")
                 interval.reset()
                 model.train()
                 next_ckpt += args.checkpoint_every

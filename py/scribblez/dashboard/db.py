@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS loss_weights (
   name TEXT PRIMARY KEY,        -- a per-component loss series ('loss_<head>')
   weight REAL                   -- its coefficient in the optimized total loss
 );
+CREATE TABLE IF NOT EXISTS lane_pred (
+  generation INTEGER,           -- checkpoint index this prediction was made at
+  positions  INTEGER,           -- positions trained at that checkpoint (display label)
+  position   INTEGER,           -- lane-analysis dataset position index
+  occ        BLOB,              -- (30,15,27) uint8: thresholded predicted occupancy union
+  score_pmf  BLOB,              -- (30,100) float32: predicted per-lane score distribution
+  has_move   BLOB,              -- (30,) float32: predicted per-lane has-move probability
+  PRIMARY KEY (generation, position)
+);
 """
 
 
@@ -166,6 +175,52 @@ def read_loss_weights(conn: sqlite3.Connection) -> dict:
         r["name"]: r["weight"]
         for r in conn.execute("SELECT name, weight FROM loss_weights ORDER BY rowid")
     }
+
+
+def write_lane_preds(conn: sqlite3.Connection, generation: int, positions: int, preds: dict):
+    """Store one model generation's lane-analysis predictions over the dataset.
+
+    `preds` holds per-position-stacked arrays: occ (N,30,15,27) uint8, score_pmf
+    (N,30,100) float32, has_move (N,30) float32. One row per dataset position;
+    re-recording a generation replaces it (idempotent on resume)."""
+    occ, pmf, has = preds["occ"], preds["score_pmf"], preds["has_move"]
+    rows = [
+        (generation, positions, i, to_blob(occ[i]), to_blob(pmf[i]), to_blob(has[i]))
+        for i in range(occ.shape[0])
+    ]
+    conn.executemany(
+        "INSERT INTO lane_pred (generation, positions, position, occ, score_pmf, has_move) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(generation, position) DO UPDATE SET positions=excluded.positions, "
+        "occ=excluded.occ, score_pmf=excluded.score_pmf, has_move=excluded.has_move",
+        rows,
+    )
+    conn.commit()
+
+
+def read_lane_generations(conn: sqlite3.Connection) -> list[dict]:
+    """The recorded generations (checkpoints), each {generation, positions}, oldest
+    first -- the dashboard's model slider scrubs over these."""
+    return [
+        {"generation": r["generation"], "positions": r["positions"]}
+        for r in conn.execute(
+            "SELECT generation, MAX(positions) AS positions FROM lane_pred "
+            "GROUP BY generation ORDER BY generation"
+        )
+    ]
+
+
+def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> dict | None:
+    """One generation's prediction for one dataset position (occ / score_pmf /
+    has_move arrays), or None if absent."""
+    r = conn.execute(
+        "SELECT occ, score_pmf, has_move FROM lane_pred WHERE generation=? AND position=?",
+        (generation, position),
+    ).fetchone()
+    if r is None:
+        return None
+    return {"occ": from_blob(r["occ"]), "score_pmf": from_blob(r["score_pmf"]),
+            "has_move": from_blob(r["has_move"])}
 
 
 def write_monotonicity(conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores):

@@ -1,6 +1,7 @@
 """ctypes wrapper around libscribblez_ffi.so."""
 
 import ctypes
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +89,14 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_max_move_per_lane_row_size_floats.argtypes = []
     lib.scribblez_max_move_per_lane_input_floats.restype = ctypes.c_int
     lib.scribblez_max_move_per_lane_input_floats.argtypes = []
+
+    lib.scribblez_max_move_per_lane_analyze_gcg.restype = ctypes.c_int
+    lib.scribblez_max_move_per_lane_analyze_gcg.argtypes = [
+        ctypes.c_char_p,  # gcg_text
+        ctypes.c_char_p,  # out_json
+        ctypes.c_int,  # out_cap
+        ctypes.POINTER(ctypes.c_float),  # out_input
+    ]
 
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
@@ -338,6 +347,33 @@ def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) 
     return _read_string_ffi(
         _lib().scribblez_dump_position_json, path, game_idx, post_move, "dump_position_json"
     )
+
+
+def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
+    """Parse GCG text into the max-move-per-lane analysis bundle.
+
+    Returns (bundle, model_input): `bundle` is the lane-analysis JSON parsed to a
+    dict (the web board/bonuses/rack the dashboard renders, plus per-lane ground
+    truth and maximal plays); `model_input` is the flat float32 model-input tensor
+    for the analysis position (board after all recorded moves, on-move player's
+    rack). Requires the lexicon. Raises IOError on a parse error / missing lexicon.
+    """
+    lib = _lib()
+    fn = lib.scribblez_max_move_per_lane_analyze_gcg
+    encoded = gcg_text.encode("utf-8")
+    inp = np.zeros(lib.scribblez_max_move_per_lane_input_floats(), dtype=np.float32)
+    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+
+    cap = 1 << 16
+    out = ctypes.create_string_buffer(cap)
+    n = fn(encoded, out, cap, inp_ptr)
+    if n < 0:
+        raise IOError("analyze_gcg failed (GCG parse error or missing lexicon)")
+    if n >= cap:  # JSON was truncated; retry once at the exact size
+        cap = n + 1
+        out = ctypes.create_string_buffer(cap)
+        n = fn(encoded, out, cap, inp_ptr)
+    return json.loads(out.value.decode("utf-8")), inp
 
 
 def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
