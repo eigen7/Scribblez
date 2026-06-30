@@ -42,6 +42,7 @@ add_library(scribblez_core STATIC
   src/scribblez/macondo_bot.cpp
   src/scribblez/monte_carlo_sim.cpp
   src/scribblez/player_factory.cpp
+  src/scribblez/post_move_analysis.cpp
   src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp
   src/util/encoding.cpp

@@ -10,6 +10,7 @@
 #include "scribblez/max_move_per_lane_input_encoder.h"
 #include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/player_factory.h"
+#include "scribblez/post_move_analysis.h"
 #include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
 #include "scribblez/slog_subset.h"
@@ -215,6 +216,17 @@ int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json
       scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, /*flip=*/false, out_input);
     return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, dict),
                        out_json, out_cap);
+  } catch (const std::exception&) {
+    return -1;
+  }
+}
+
+int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input) {
+  if (!gcg_text || !out_input) return -1;
+  try {
+    std::string error;
+    if (!scribblez::encode_post_move_analysis_input(gcg_text, out_input, &error)) return -1;
+    return scribblez::kInputFloats;
   } catch (const std::exception&) {
     return -1;
   }

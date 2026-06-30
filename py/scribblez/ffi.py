@@ -98,6 +98,12 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # out_input
     ]
 
+    lib.scribblez_post_move_value_analyze_gcg.restype = ctypes.c_int
+    lib.scribblez_post_move_value_analyze_gcg.argtypes = [
+        ctypes.c_char_p,  # gcg_text
+        ctypes.POINTER(ctypes.c_float),  # out_input
+    ]
+
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
         ctypes.c_char_p,
@@ -374,6 +380,23 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
         out = ctypes.create_string_buffer(cap)
         n = fn(encoded, out, cap, inp_ptr)
     return json.loads(out.value.decode("utf-8")), inp
+
+
+def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
+    """Encode a penultimate-bingo GCG's post-move analysis position into the
+    post-move value model's flat float32 input tensor (input_floats() long).
+
+    The position is the board after the final recorded move, encoded from the POV of
+    the player that made it (its leave is the encode-time rack) -- the same seat the
+    Monte-Carlo ground truth scores. Raises IOError on a parse error or a non-PLAY
+    final move.
+    """
+    lib = _lib()
+    inp = np.zeros(lib.scribblez_input_floats(), dtype=np.float32)
+    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    if lib.scribblez_post_move_value_analyze_gcg(gcg_text.encode("utf-8"), inp_ptr) < 0:
+        raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
+    return inp
 
 
 def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):

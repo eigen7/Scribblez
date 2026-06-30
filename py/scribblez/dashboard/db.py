@@ -99,6 +99,15 @@ CREATE TABLE IF NOT EXISTS lane_pred (
   has_move   BLOB,              -- (30,) float32: predicted per-lane has-move probability
   PRIMARY KEY (generation, position)
 );
+CREATE TABLE IF NOT EXISTS post_move_pred (
+  generation INTEGER,           -- checkpoint index this prediction was made at
+  positions  INTEGER,           -- positions trained at that checkpoint (display label)
+  position   INTEGER,           -- post-move-value dataset position index
+  wld        BLOB,              -- (3,) float32: model win/draw/loss probabilities
+  sd_mean    REAL,              -- predicted final-score-delta mean (points)
+  sd_std     REAL,              -- predicted final-score-delta std (points, Gaussian)
+  PRIMARY KEY (generation, position)
+);
 """
 
 
@@ -223,6 +232,55 @@ def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> 
         "occ": from_blob(r["occ"]),
         "score_pmf": from_blob(r["score_pmf"]),
         "has_move": from_blob(r["has_move"]),
+    }
+
+
+def write_post_move_preds(conn: sqlite3.Connection, generation: int, positions: int, preds: dict):
+    """Store one model generation's post-move-value predictions over the dataset.
+
+    `preds` holds per-position-stacked arrays: wld (N,3) float32, sd_mean (N,)
+    float32, sd_std (N,) float32. One row per dataset position; re-recording a
+    generation replaces it (idempotent on resume)."""
+    wld, sd_mean, sd_std = preds["wld"], preds["sd_mean"], preds["sd_std"]
+    rows = [
+        (generation, positions, i, to_blob(wld[i]), float(sd_mean[i]), float(sd_std[i]))
+        for i in range(wld.shape[0])
+    ]
+    conn.executemany(
+        "INSERT INTO post_move_pred (generation, positions, position, wld, sd_mean, sd_std) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(generation, position) DO UPDATE SET positions=excluded.positions, "
+        "wld=excluded.wld, sd_mean=excluded.sd_mean, sd_std=excluded.sd_std",
+        rows,
+    )
+    conn.commit()
+
+
+def read_post_move_generations(conn: sqlite3.Connection) -> list[dict]:
+    """The recorded generations (checkpoints), each {generation, positions}, oldest
+    first -- the dashboard's model slider scrubs over these."""
+    return [
+        {"generation": r["generation"], "positions": r["positions"]}
+        for r in conn.execute(
+            "SELECT generation, MAX(positions) AS positions FROM post_move_pred "
+            "GROUP BY generation ORDER BY generation"
+        )
+    ]
+
+
+def read_post_move_pred(conn: sqlite3.Connection, generation: int, position: int) -> dict | None:
+    """One generation's prediction for one dataset position (wld / sd_mean / sd_std),
+    or None if absent."""
+    r = conn.execute(
+        "SELECT wld, sd_mean, sd_std FROM post_move_pred WHERE generation=? AND position=?",
+        (generation, position),
+    ).fetchone()
+    if r is None:
+        return None
+    return {
+        "wld": from_blob(r["wld"]),
+        "sd_mean": r["sd_mean"],
+        "sd_std": r["sd_std"],
     }
 
 

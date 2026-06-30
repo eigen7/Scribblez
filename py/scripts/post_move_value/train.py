@@ -28,6 +28,7 @@ from scribblez.dashboard import db, react_server
 from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.post_move_value import analysis as post_move_analysis
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
@@ -111,6 +112,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--calibration-batch-size", type=int, default=512, help="Batch size for calibration."
     )
+    p.add_argument(
+        "--post-move-eval-dataset",
+        type=str,
+        default=str(post_move_analysis.DEFAULT_DATASET),
+        help="GCG dataset the Positions tab evaluates each checkpoint against the "
+        "Monte-Carlo ground truth.",
+    )
+    p.add_argument(
+        "--no-post-move-eval",
+        action="store_true",
+        help="Disable the per-checkpoint post-move-value dataset evaluation.",
+    )
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/onnx/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
@@ -156,6 +169,37 @@ def ensure_probe_subset(paths: TagPaths, num_positions: int) -> bool:
     if not paths.position_dump_path(0).with_suffix(".png").exists():
         render_boards(paths.test_subset_slog, paths.test_subset_dir)
     return True
+
+
+def load_post_move_eval(args, spatial_planes: int) -> dict | None:
+    """Build the frozen post-move-value input batch once (or None if disabled / the
+    dataset is empty / the lexicon is unavailable). At each checkpoint the model is
+    run over it and the predictions are written to the dashboard DB, where the
+    Positions tab pairs them with the Monte-Carlo ground truth."""
+    if args.no_post_move_eval:
+        return None
+    try:
+        names, inputs = post_move_analysis.load_inputs(args.post_move_eval_dataset)
+    except Exception as e:  # missing lexicon / unreadable dataset
+        timed_print(f"post-move-value eval disabled: {e}")
+        return None
+    if not names:
+        timed_print(
+            f"post-move-value eval disabled: no GCG positions in {args.post_move_eval_dataset}"
+        )
+        return None
+    timed_print(f"post-move-value eval: {len(names)} positions from {args.post_move_eval_dataset}")
+    return {"inputs": inputs, "spatial_planes": spatial_planes}
+
+
+def eval_post_move(model, post_move_eval: dict, device, conn, generation: int, positions: int):
+    """Run the model over the frozen post-move-value set and store this generation's
+    per-position predictions (WLD probabilities + score-delta mean/std)."""
+    model.eval()
+    preds = post_move_analysis.predict(
+        model, post_move_eval["inputs"], post_move_eval["spatial_planes"], device
+    )
+    db.write_post_move_preds(conn, generation, positions, preds)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +257,7 @@ def run_streaming_training(
     *,
     probe_enabled,
     test_ds,
+    post_move_eval,
     start_ckpt,
     start_positions,
     start_step,
@@ -317,6 +362,7 @@ def run_streaming_training(
                     interval,
                     probe_enabled=probe_enabled,
                     test_ds=test_ds,
+                    post_move_eval=post_move_eval,
                     spatial_planes=spatial_planes,
                     scalar_size=scalar_size,
                 )
@@ -347,6 +393,7 @@ def _checkpoint_and_eval(
     *,
     probe_enabled,
     test_ds,
+    post_move_eval,
     spatial_planes,
     scalar_size,
 ):
@@ -378,6 +425,8 @@ def _checkpoint_and_eval(
             run_calibration(model, test_ds, device, conn, ckpt_idx, args.calibration_batch_size)
         )
     db.write_metrics(conn, ckpt_idx, record)
+    if post_move_eval is not None:
+        eval_post_move(model, post_move_eval, device, conn, ckpt_idx, positions)
 
     save_rolling_checkpoint(
         paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step, args
@@ -435,6 +484,8 @@ def main() -> int:
         test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
         print(f"  {test_ds.num_samples} val positions")
 
+    post_move_eval = load_post_move_eval(args, spatial_planes)
+
     if not args.no_dashboard:
         for proc in react_server.spawn(
             "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port, tag=args.tag
@@ -466,6 +517,7 @@ def main() -> int:
         args,
         probe_enabled=probe_enabled,
         test_ds=test_ds,
+        post_move_eval=post_move_eval,
         start_ckpt=start_ckpt,
         start_positions=start_positions,
         start_step=start_step,

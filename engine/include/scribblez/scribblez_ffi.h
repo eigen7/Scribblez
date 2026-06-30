@@ -102,6 +102,14 @@ int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_mo
 int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                             float* out_input);
 
+// Parse a penultimate-bingo GCG's text into its post-move analysis position and fill
+// `out_input` with the post-move value model's input tensor (scribblez_input_floats()
+// floats), encoded from the POV of the player that made the final recorded move
+// (whose leave is the encode-time rack). The encoding replays the recorded moves, so
+// it is byte-identical to a training row's input for the same position. Returns
+// scribblez_input_floats() on success, or -1 on a parse error / non-PLAY final move.
+int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied
