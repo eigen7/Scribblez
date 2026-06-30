@@ -117,11 +117,12 @@ class LossTab(Tab):
         return ctx.row_count("train_step")
 
 
-class StreamingTab(Tab):
-    """Live throughput / backpressure for the streaming pipeline. Shared by every
-    task (both trainers stream self-play through the ring buffer)."""
+class PerformanceTab(Tab):
+    """Live training-pipeline performance: throughput and producer/consumer
+    backpressure. Shared by every task (both trainers stream self-play through the
+    ring buffer)."""
 
-    label = "Streaming"
+    label = "Performance"
 
     def refresh(self, ctx):
         self.node.children = [plots.throughput_grid(ctx.conn)]

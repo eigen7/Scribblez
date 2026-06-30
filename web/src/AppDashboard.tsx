@@ -95,8 +95,8 @@ export default function AppDashboard() {
   const task = requestedTask();
   const tabs =
     task === MAX_MOVE_PER_LANE
-      ? ['Training', 'Streaming', 'Lane analysis']
-      : ['Training', 'Streaming'];
+      ? ['Training', 'Performance', 'Lane analysis']
+      : ['Training', 'Performance'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
@@ -153,7 +153,7 @@ export default function AppDashboard() {
 
       {tabs[tab] === 'Lane analysis' ? (
         <LaneAnalysis task={task} tag={tag} />
-      ) : tabs[tab] === 'Streaming' ? (
+      ) : tabs[tab] === 'Performance' ? (
         <FigureTab
           task={task} tag={tag} figure="throughput" versionKey="throughput"
           toggle={false} emptyText="No throughput data yet — start a streaming run."
