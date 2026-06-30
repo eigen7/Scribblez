@@ -9,6 +9,7 @@ from scribblez.max_move_per_lane.lexicon_modules import (
     available_modules,
     build_lexicon_module,
     parse_module_opts,
+    resolve_lane_ffn_mult,
 )
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 
@@ -108,16 +109,10 @@ def test_model_integration_matches_shapes():
 
     base = MaxMovePerLaneModel(sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2)
     mod = SoftTraversalLexicon(channels=32, compiled=_lexicon(), topk=8)
-    # "add" mode so the module is purely additive (replace shrinks the FFN, which
-    # is covered separately by test_replace_mode_shrinks_lane_ffn).
+    # No FFN override (full width), so the module is purely additive; the shrink
+    # is covered separately by test_lane_ffn_mult_override.
     withlex = MaxMovePerLaneModel(
-        sp,
-        sc,
-        trunk_channels=32,
-        num_blocks=2,
-        lane_layers=2,
-        lexicon_module=mod,
-        lexicon_mode="add",
+        sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2, lexicon_module=mod
     )
 
     out_base = base(spatial, scalar)
@@ -135,10 +130,37 @@ def _lane_ffn_width(model):
     return model.lane.encoder.layers[0].linear1.out_features
 
 
-def test_replace_mode_shrinks_lane_ffn():
+def test_resolve_lane_ffn_mult():
+    # "add" mode never overrides the FFN width.
+    assert (
+        resolve_lane_ffn_mult("add", has_module=True, starve_ffn=False, replace_ffn_mult=1) is None
+    )
+    assert (
+        resolve_lane_ffn_mult("add", has_module=False, starve_ffn=True, replace_ffn_mult=1) is None
+    )
+
+    # "replace" + tool -> shrink to replace_ffn_mult.
+    assert (
+        resolve_lane_ffn_mult("replace", has_module=True, starve_ffn=False, replace_ffn_mult=1) == 1
+    )
+    assert (
+        resolve_lane_ffn_mult("replace", has_module=True, starve_ffn=False, replace_ffn_mult=2) == 2
+    )
+
+    # "replace" + no tool -> override only with the starve flag (the control).
+    assert (
+        resolve_lane_ffn_mult("replace", has_module=False, starve_ffn=False, replace_ffn_mult=1)
+        is None
+    )
+    assert (
+        resolve_lane_ffn_mult("replace", has_module=False, starve_ffn=True, replace_ffn_mult=1) == 1
+    )
+
+
+def test_lane_ffn_mult_override():
     sp, sc, c = 31, 27, 32
 
-    def make(module, mode, replace_mult=1):
+    def make(lane_ffn_mult):
         return MaxMovePerLaneModel(
             sp,
             sc,
@@ -146,26 +168,14 @@ def test_replace_mode_shrinks_lane_ffn():
             num_blocks=1,
             lane_layers=1,
             ffn_mult=4,
-            lexicon_module=module,
-            lexicon_mode=mode,
-            lexicon_replace_ffn_mult=replace_mult,
+            lane_ffn_mult=lane_ffn_mult,
         )
 
-    full = 4 * c  # ffn_mult * channels
+    assert _lane_ffn_width(make(None)) == 4 * c  # no override -> default ffn_mult width
+    assert _lane_ffn_width(make(1)) == c  # shrunk
 
-    # No tool -> full FFN regardless of mode (behavior unchanged).
-    assert _lane_ffn_width(make(None, "replace")) == full
-    assert _lane_ffn_width(make(None, "add")) == full
-
-    # Tool + add -> full FFN; tool + replace -> shrunk to replace_mult * channels.
-    assert (
-        _lane_ffn_width(make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "add")) == full
-    )
-    rep = make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "replace", replace_mult=1)
-    assert _lane_ffn_width(rep) == c
-
-    # replace_mult=0 is attention-only, clamped to a 1-unit FFN, and still runs.
-    m0 = make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "replace", replace_mult=0)
+    # An override of 0 is attention-only, clamped to a 1-unit FFN, and still runs.
+    m0 = make(0)
     assert _lane_ffn_width(m0) == 1
     out = m0(torch.zeros(2, sp, 15, 15), torch.rand(2, sc))
     assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)

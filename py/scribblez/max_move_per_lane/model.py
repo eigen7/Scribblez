@@ -104,8 +104,7 @@ class MaxMovePerLaneModel(nn.Module):
         n_rack_tokens: int = 4,
         n_score_bins: int = N_SCORE_BINS,
         lexicon_module: LexiconModule | None = None,
-        lexicon_mode: str = "replace",
-        lexicon_replace_ffn_mult: int = 1,
+        lane_ffn_mult: int | None = None,
     ):
         super().__init__()
         self.n_rack_tokens = n_rack_tokens
@@ -127,18 +126,17 @@ class MaxMovePerLaneModel(nn.Module):
         self.lexicon_module = lexicon_module
         n_lex_tokens = lexicon_module.n_tokens if lexicon_module is not None else 0
 
-        # When the tool is plugged in as the lexical store ("replace" mode), the
-        # lane transformer's FFN -- where an internal lexicon would be memorized
-        # (a key-value store; see docs/lexical_nn.md) -- is shrunk so word
-        # knowledge must come from the tool instead. Attention is left intact: it
-        # is the capacity the network needs to USE the tool (relate the tool's
-        # per-cell legality to the rack and board). With no tool, or in "add"
-        # mode, the full FFN width is used and behavior is unchanged.
-        replacing = lexicon_module is not None and lexicon_mode == "replace"
-        lane_ffn_mult = lexicon_replace_ffn_mult if replacing else ffn_mult
+        # The lane transformer's FFN is where an internal lexicon would be
+        # memorized (a key-value store; see docs/lexical_nn.md). `lane_ffn_mult`
+        # optionally overrides its width (vs the default `ffn_mult`) so it can be
+        # shrunk when a compiled-lexicon tool supplies the lexicon instead;
+        # attention is left intact, since that is the capacity needed to USE the
+        # tool. None keeps the default width. The replace-vs-add policy that
+        # picks this value lives in the trainer (lexicon_modules.resolve_lane_ffn_mult).
+        effective_ffn_mult = ffn_mult if lane_ffn_mult is None else lane_ffn_mult
 
         self.lane = LaneModel(
-            trunk_channels, lane_layers, lane_heads, lane_ffn_mult, n_rack_tokens, n_lex_tokens
+            trunk_channels, lane_layers, lane_heads, effective_ffn_mult, n_rack_tokens, n_lex_tokens
         )
 
         # Heads, shared across the two axes (the per-lane operation is the same).

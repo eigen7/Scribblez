@@ -109,6 +109,24 @@ def _coerce(value: str) -> object:
     return value
 
 
+def resolve_lane_ffn_mult(
+    mode: str, has_module: bool, starve_ffn: bool, replace_ffn_mult: int
+) -> int | None:
+    """The lane transformer's FFN-width override for the lexicon experiment, or
+    None to keep the default width.
+
+    In "replace" mode the lane FFN -- where an internal lexicon would be
+    memorized -- is shrunk to ``replace_ffn_mult`` so word knowledge must come
+    from the tool. That fires when a tool is plugged in, OR when ``starve_ffn`` is
+    set: the starved-no-tool control -- a shrunk backbone with no tool, which
+    should then FAIL to learn the lexicon, proving the FFN is genuinely starved.
+    "add" mode never overrides (the tool augments a full internal store).
+    """
+    if mode == "replace" and (has_module or starve_ffn):
+        return replace_ffn_mult
+    return None
+
+
 def build_lexicon_module(
     name: str, *, channels: int, kwg_path: str, **opts: object
 ) -> LexiconModule | None:

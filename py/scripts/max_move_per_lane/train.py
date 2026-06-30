@@ -35,6 +35,7 @@ from scribblez.max_move_per_lane.lexicon_modules import (
     available_modules,
     build_lexicon_module,
     parse_module_opts,
+    resolve_lane_ffn_mult,
 )
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
@@ -106,6 +107,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Lane transformer FFN width multiple under --lexicon-mode replace "
         "(0 ~ attention-only). Sweep down until a tool-off model can no longer "
         "learn the lexicon -- that is where internal memorization is starved.",
+    )
+    p.add_argument(
+        "--lexicon-starve-ffn",
+        action="store_true",
+        help="Apply the replace-mode FFN shrink even with --lexicon-module none "
+        "(the starved-no-tool control): a shrunk backbone with no tool, which "
+        "should then fail to learn the lexicon. The experiment command minus the tool.",
     )
     p.add_argument("--lambda-cdf", type=float, default=1.0, help="Score-CDF (CRPS) loss weight.")
     p.add_argument("--lambda-occ", type=float, default=100.0, help="Occupancy (move) loss weight.")
@@ -319,6 +327,14 @@ def main() -> int:
     )
     if lexicon_module is not None:
         print(f"Lexicon module: {args.lexicon_module} (from {args.lexicon_path})")
+    lane_ffn_mult = resolve_lane_ffn_mult(
+        args.lexicon_mode,
+        has_module=lexicon_module is not None,
+        starve_ffn=args.lexicon_starve_ffn,
+        replace_ffn_mult=args.lexicon_replace_ffn_mult,
+    )
+    if lane_ffn_mult is not None:
+        print(f"Lane FFN width multiple shrunk to {lane_ffn_mult} (replace mode).")
     model = MaxMovePerLaneModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
@@ -329,8 +345,7 @@ def main() -> int:
         ffn_mult=args.ffn_mult,
         n_rack_tokens=args.rack_tokens,
         lexicon_module=lexicon_module,
-        lexicon_mode=args.lexicon_mode,
-        lexicon_replace_ffn_mult=args.lexicon_replace_ffn_mult,
+        lane_ffn_mult=lane_ffn_mult,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
