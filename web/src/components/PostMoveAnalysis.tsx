@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
+import UnseenTiles from './UnseenTiles';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 
@@ -38,6 +39,8 @@ interface Payload {
   rack: TileInfo[];
   tile_scores: Record<string, number>;
   scores: [number, number];
+  bag_count: number;
+  opponent_rack_count: number;
   generation: number | null;
   has_prediction: boolean;
   mc: MC;
@@ -313,6 +316,22 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
                 onCellDrop={() => {}}
               />
             </div>
+            {/* The unseen pool the Monte-Carlo samples: 100 tiles minus the board and
+                the POV's leave (i.e. the bag + the opponent's rack). */}
+            <UnseenTiles
+              state={{
+                type: 'state',
+                board: payload.board,
+                bonuses: payload.bonuses,
+                rack: payload.rack,
+                scores: payload.scores,
+                player_names: ['Player 1', 'Player 2'],
+                bag_count: payload.bag_count,
+                opponent_rack_count: payload.opponent_rack_count,
+                your_turn: false,
+                game_over: false,
+              }}
+            />
           </div>
 
           <div className="lane-rack">

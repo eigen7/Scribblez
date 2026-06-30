@@ -286,6 +286,8 @@ def post_move_position_payload(conn, position: int, generation) -> dict:
         "rack": bundle["rack"],
         "tile_scores": bundle["tile_scores"],
         "scores": bundle["scores"],
+        "bag_count": bundle["bag_count"],
+        "opponent_rack_count": bundle["opponent_rack_count"],
         "generation": generation,
         "has_prediction": pred is not None,
         "mc": _mc_payload(name),
