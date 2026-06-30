@@ -8,11 +8,11 @@ straight into the GPU training loop through an in-process ring buffer -- no
 one position per game (no shuffle needed), fresh games are produced continuously
 rather than recycled across epochs.
 
-A held-out validation set IS written to disk once (so it is stable across
-restarts); the model is evaluated against it on a fixed positions-trained cadence
-("checkpoints"), and those metrics + the live throughput/backpressure series are
-written to the per-tag dashboard DB. A single rolling model.pt holds resume
-state; ONNX is exported per checkpoint.
+On a fixed positions-trained cadence ("checkpoints"), the model is evaluated over
+the committed post-move-value dataset and its predictions are written to the
+per-tag dashboard DB, where the Positions tab pairs them with the Monte-Carlo
+ground truth; the live throughput/backpressure series are recorded too. A single
+rolling model.pt holds resume state; ONNX is exported per checkpoint.
 
 Usage:
     python -m scripts.post_move_value.train -t mytag --batch-size 256
@@ -25,12 +25,10 @@ import time
 
 import torch
 from scribblez.dashboard import db, react_server
-from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
+from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
-from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
-from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
 from scribblez.post_move_value.onnx_export import export_onnx
 from scribblez.train_common import (
@@ -42,9 +40,6 @@ from scribblez.train_common import (
     save_rolling_checkpoint,
     timed_print,
 )
-
-# Imported lazily-friendly: shelling out to play_game for the one-time val set.
-from scripts.generate_data import run_games
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -94,25 +89,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     add_train_log_args(p)
     p.add_argument(
-        "--val-games", type=int, default=20000, help="Held-out validation games (first run)."
-    )
-    p.add_argument(
-        "--val-games-per-file", type=int, default=10000, help="Games per validation .slog file."
-    )
-    p.add_argument(
-        "--num-probe-positions", type=int, default=12, help="Positions in the probe subset."
-    )
-    p.add_argument(
-        "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
-    )
-    p.add_argument("--no-probe", action="store_true", help="Disable the structural probes.")
-    p.add_argument(
-        "--no-calibration", action="store_true", help="Disable full-val-set calibration."
-    )
-    p.add_argument(
-        "--calibration-batch-size", type=int, default=512, help="Batch size for calibration."
-    )
-    p.add_argument(
         "--post-move-eval-dataset",
         type=str,
         default=str(post_move_analysis.DEFAULT_DATASET),
@@ -138,37 +114,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Setup helpers
 # ---------------------------------------------------------------------------
-
-
-def ensure_validation_set(paths: TagPaths, args) -> bool:
-    """Generate the held-out validation split once (if absent). Returns availability."""
-    if paths.test_dir.exists() and any(paths.test_dir.glob("*.slog")):
-        return True
-    print(f"Generating {args.val_games} validation games to {paths.test_dir} ...")
-    # HastyBot self-play, matching the games the streaming trainer trains on.
-    rc = run_games(
-        paths.test_dir, args.val_games, args.val_games_per_file, args.gen_threads, "--type=hastybot"
-    )
-    if rc != 0:
-        print(
-            f"WARNING: validation-set generation failed (rc={rc}); eval disabled.", file=sys.stderr
-        )
-        return False
-    return True
-
-
-def ensure_probe_subset(paths: TagPaths, num_positions: int) -> bool:
-    """Build the frozen probe subset + board images if missing. Returns availability."""
-    if paths.test_subset_slog.exists():
-        print(f"Using probe subset {paths.test_subset_slog}")
-    elif not paths.test_dir.exists() or not any(paths.test_dir.glob("*.slog")):
-        return False
-    else:
-        n = build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=num_positions)
-        print(f"  Wrote {n} probe positions to {paths.test_subset_slog}")
-    if not paths.position_dump_path(0).with_suffix(".png").exists():
-        render_boards(paths.test_subset_slog, paths.test_subset_dir)
-    return True
 
 
 def load_post_move_eval(args, spatial_planes: int) -> dict | None:
@@ -255,8 +200,6 @@ def run_streaming_training(
     device,
     args,
     *,
-    probe_enabled,
-    test_ds,
     post_move_eval,
     start_ckpt,
     start_positions,
@@ -360,8 +303,6 @@ def run_streaming_training(
                     positions,
                     step,
                     interval,
-                    probe_enabled=probe_enabled,
-                    test_ds=test_ds,
                     post_move_eval=post_move_eval,
                     spatial_planes=spatial_planes,
                     scalar_size=scalar_size,
@@ -391,39 +332,21 @@ def _checkpoint_and_eval(
     step,
     interval,
     *,
-    probe_enabled,
-    test_ds,
     post_move_eval,
     spatial_planes,
     scalar_size,
 ):
-    """Run eval against the held-out val set, persist metrics, save .pt + .onnx.
+    """Persist this checkpoint's train metrics + the post-move-value dataset eval,
+    then save the rolling .pt and export ONNX.
 
     The dashboard DB is keyed on an integer `epoch`; here it is the monotonic
-    checkpoint index (one per `--checkpoint-every` positions), so the entire
-    eval/dashboard stack is reused unchanged.
+    checkpoint index (one per `--checkpoint-every` positions).
     """
     record = {"epoch": ckpt_idx, "positions": positions, **interval.record()}
     timed_print(
         f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
         f"wld_acc={record['wld_acc']:.5f}"
     )
-    if probe_enabled:
-        record.update(
-            run_probes(
-                model,
-                paths.test_subset_slog,
-                device,
-                conn,
-                ckpt_idx,
-                diff_lo=-args.probe_diff_range,
-                diff_hi=args.probe_diff_range,
-            )
-        )
-    if test_ds is not None:
-        record.update(
-            run_calibration(model, test_ds, device, conn, ckpt_idx, args.calibration_batch_size)
-        )
     db.write_metrics(conn, ckpt_idx, record)
     if post_move_eval is not None:
         eval_post_move(model, post_move_eval, device, conn, ckpt_idx, positions)
@@ -473,17 +396,6 @@ def main() -> int:
         },
     )
 
-    # Held-out validation set (written once) drives the probes + calibration.
-    val_ok = ensure_validation_set(paths, args)
-    probe_enabled = (
-        not args.no_probe and val_ok and ensure_probe_subset(paths, args.num_probe_positions)
-    )
-    test_ds = None
-    if val_ok and not args.no_calibration:
-        print(f"Loading calibration val set from {paths.test_dir} ...")
-        test_ds = SlogDataset(paths.test_dir, post_move=True, apply_symmetry=False)
-        print(f"  {test_ds.num_samples} val positions")
-
     post_move_eval = load_post_move_eval(args, spatial_planes)
 
     if not args.no_dashboard:
@@ -515,8 +427,6 @@ def main() -> int:
         paths,
         device,
         args,
-        probe_enabled=probe_enabled,
-        test_ds=test_ds,
         post_move_eval=post_move_eval,
         start_ckpt=start_ckpt,
         start_positions=start_positions,

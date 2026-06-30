@@ -232,6 +232,18 @@ int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input
   }
 }
 
+int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, int out_cap) {
+  if (!gcg_text) return -1;
+  try {
+    std::string error;
+    const std::string json = scribblez::post_move_analysis_board_json(gcg_text, &error);
+    if (json.empty()) return -1;
+    return emit_string(json, out_json, out_cap);
+  } catch (const std::exception&) {
+    return -1;
+  }
+}
+
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
                           const int64_t* game_indices, int num_picks) {
   if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;

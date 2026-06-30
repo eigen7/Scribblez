@@ -84,12 +84,13 @@ a Bokeh-served dashboard. It was done in three phases:
 
 | Task | Tabs |
 |---|---|
-| post_move_value | Loss · Positions · Calibration · Training · Performance |
+| post_move_value | Loss · Positions · Training · Performance |
 | max_move_per_lane | Loss · Performance · Lane analysis |
 
-Each non-`Lane analysis` tab is a `<FigureTab>` that embeds an API figure
-(`train_step`, `throughput`, `training_metrics`, `positions`, `calibration`) and
-re-fetches when its version-token table advances. `Lane analysis` is native React.
+`Loss`, `Training`, and `Performance` are `<FigureTab>`s that embed an API figure
+(`train_step`, `training_metrics`, `throughput`) and re-fetch when their
+version-token table advances. `Positions` (post-move-value) and `Lane analysis`
+(max-move-per-lane) are native-React interactive tabs (see below).
 
 ## Phase B — lane-analysis tab
 
@@ -137,3 +138,44 @@ enumeration is new.
   hallucinated.
 - Score histogram: the selected lane's predicted 100-bin score PMF with the true
   score bin highlighted.
+
+## Phase D — post-move-value Positions tab
+
+A native-React tab that compares each model generation's post-move-value
+prediction against a Monte-Carlo ground truth, over a GCG dataset
+(`positions/NWL23/post-move-value-test-dataset/`). It replaces the old Bokeh
+probe/calibration `Positions`+`Calibration` tabs (whose builders remain in
+`plots.py`, unused).
+
+### The analysis position (per `pos-N.gcg`)
+
+Each file's penultimate move is a bingo, so the player to act next drew a clean
+full rack. The analysis position is the board **after the final recorded move**,
+evaluated from the POV of the player that made it (the "start player"), whose
+**leave** (final `rack_before` minus the placed tiles) is its rack.
+
+### Ground truth (offline Monte-Carlo, committed)
+
+`engine/apps/monte_carlo_sim_tool.cpp` plays each position out N≈10k times —
+HastyBot vs HastyBot, `Game::play_from` seeding the unknown racks/bag per game
+`g` (deterministic, thread-independent) — and records the exact W/L/D and
+final-score-delta histogram from the start player's POV into
+`monte-carlo-sim-results.json`, committed beside the GCGs.
+
+### Model predictions (Python, in-process at each checkpoint)
+
+- One FFI (`scribblez_post_move_value_analyze_gcg`): replay the GCG into a fresh
+  `GameStateEncoder` and `encode_input` from the start player's POV — byte-identical
+  to a training row's input. A board-bundle FFI
+  (`scribblez_post_move_value_board_json`) serves the renderable board (leave rack).
+- The trainer's checkpoint hook runs the model on the dataset batch and writes each
+  generation's WLD probabilities + score-delta mean/std into the tag's
+  `dashboard.db` (`post_move_pred` table), keyed by generation.
+
+### UI (reuses `Board.tsx`)
+
+- Generation slider + "latest" checkbox; position dropdown + ◀/▶; the board + leave.
+- WLD chart: model-vs-Monte-Carlo paired bars for win / loss / draw.
+- Score-delta chart: the MC exact histogram (binned for display) with the model's
+  predicted Gaussian (mean/std) overlaid as probability mass per bucket, plus both
+  means marked.

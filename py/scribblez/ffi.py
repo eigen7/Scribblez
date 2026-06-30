@@ -104,6 +104,13 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # out_input
     ]
 
+    lib.scribblez_post_move_value_board_json.restype = ctypes.c_int
+    lib.scribblez_post_move_value_board_json.argtypes = [
+        ctypes.c_char_p,  # gcg_text
+        ctypes.c_char_p,  # out_json
+        ctypes.c_int,  # out_cap
+    ]
+
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
         ctypes.c_char_p,
@@ -397,6 +404,29 @@ def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
     if lib.scribblez_post_move_value_analyze_gcg(gcg_text.encode("utf-8"), inp_ptr) < 0:
         raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
     return inp
+
+
+def post_move_board_json(gcg_text: str) -> dict:
+    """The web-render board bundle for a penultimate-bingo GCG's post-move analysis
+    position (board / bonuses / rack / tile_scores / start_player), parsed to a dict.
+
+    The board is the position after the final recorded move; the rack is the leave of
+    the player that made it (the evaluated POV). Raises IOError on a parse error or a
+    non-PLAY final move.
+    """
+    lib = _lib()
+    fn = lib.scribblez_post_move_value_board_json
+    encoded = gcg_text.encode("utf-8")
+    cap = 1 << 16
+    out = ctypes.create_string_buffer(cap)
+    n = fn(encoded, out, cap)
+    if n < 0:
+        raise OSError("post_move_board_json failed (GCG parse error or non-PLAY final move)")
+    if n >= cap:  # JSON was truncated; retry once at the exact size
+        cap = n + 1
+        out = ctypes.create_string_buffer(cap)
+        n = fn(encoded, out, cap)
+    return json.loads(out.value.decode("utf-8"))
 
 
 def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):

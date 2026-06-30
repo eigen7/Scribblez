@@ -27,8 +27,9 @@ from bokeh.layouts import column
 
 from scribblez import lane_analysis
 from scribblez.dashboard import db, plots
-from scribblez.ffi import analyze_gcg
+from scribblez.ffi import analyze_gcg, post_move_board_json
 from scribblez.paths import TagPaths
+from scribblez.post_move_value import analysis as post_move_analysis
 
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
 _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
@@ -222,6 +223,76 @@ def lane_position_payload(conn, position: int, generation) -> dict:
     }
 
 
+@lru_cache(maxsize=1)
+def _post_move_dataset_files() -> tuple:
+    return tuple(post_move_analysis.dataset_gcgs(post_move_analysis.DEFAULT_DATASET))
+
+
+@lru_cache(maxsize=64)
+def _post_move_board(position: int) -> tuple:
+    """(name, board_bundle) for a post-move dataset position -- board / bonuses / leave
+    rack for rendering. Cached: it is fixed for the dataset."""
+    gcg = _post_move_dataset_files()[position]
+    return gcg.stem, post_move_board_json(gcg.read_text())
+
+
+@lru_cache(maxsize=1)
+def _mc_ground_truth() -> dict:
+    """The committed Monte-Carlo ground truth, keyed by position name (pos-1, ...)."""
+    path = post_move_analysis.DEFAULT_DATASET / post_move_analysis.GROUND_TRUTH_FILENAME
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _mc_payload(name: str) -> dict:
+    """A position's Monte-Carlo ground truth shaped for the UI: W/L/D as fractions, the
+    exact score-delta histogram as sorted [delta, count] pairs, and the mean delta (the
+    UI derives the std from the histogram)."""
+    gt = _mc_ground_truth().get(name, {})
+    n = gt.get("n", 0)
+    wld = gt.get("wld", {})
+    hist = sorted((int(d), c) for d, c in gt.get("score_delta_hist", {}).items())
+    total = sum(c for _d, c in hist) or 1
+    return {
+        "n": n,
+        "wld": {k: (wld.get(k, 0) / n if n else 0.0) for k in ("win", "loss", "draw")},
+        "score_delta_hist": hist,
+        "score_delta_mean": sum(d * c for d, c in hist) / total,
+    }
+
+
+def post_move_position_payload(conn, position: int, generation) -> dict:
+    """The full per-position view: board + leave for rendering, the Monte-Carlo ground
+    truth, and the selected generation's model prediction (WLD + score-delta Gaussian)
+    -- or None when no prediction exists for this generation/position."""
+    name, bundle = _post_move_board(position)
+    pred = (
+        db.read_post_move_pred(conn, generation, position)
+        if (conn is not None and generation is not None)
+        else None
+    )
+    model = None
+    if pred is not None:
+        w = pred["wld"]  # (3,) in [win, draw, loss] order
+        model = {
+            "wld": {"win": float(w[0]), "draw": float(w[1]), "loss": float(w[2])},
+            "sd_mean": float(pred["sd_mean"]),
+            "sd_std": float(pred["sd_std"]),
+        }
+    return {
+        "name": name,
+        "start_player": bundle["start_player"],
+        "board": bundle["board"],
+        "bonuses": bundle["bonuses"],
+        "rack": bundle["rack"],
+        "tile_scores": bundle["tile_scores"],
+        "scores": bundle["scores"],
+        "generation": generation,
+        "has_prediction": pred is not None,
+        "mc": _mc_payload(name),
+        "model": model,
+    }
+
+
 class _Base(tornado.web.RequestHandler):
     @property
     def mount_root(self) -> str:
@@ -379,6 +450,60 @@ class LanePositionHandler(_Base):
         return int(arg) if arg not in ("", "latest") else None
 
 
+class PostMovePositionsHandler(_Base):
+    """The post-move-value dataset's positions (the UI's position selector)."""
+
+    def get(self):
+        try:
+            self.write({"positions": [gcg.stem for gcg in _post_move_dataset_files()]})
+        except OSError:
+            self.write({"positions": []})
+
+
+class PostMoveGenerationsHandler(_Base):
+    """The model generations a tag has post-move-value predictions for (the slider)."""
+
+    def get(self):
+        conn = self._open_conn()
+        if conn is None:
+            self.write({"generations": []})
+            return
+        try:
+            self.write({"generations": db.read_post_move_generations(conn)})
+        finally:
+            conn.close()
+
+
+class PostMovePositionHandler(_Base):
+    """Board + Monte-Carlo ground truth merged with one generation's prediction.
+    `generation` may be omitted or 'latest' to use the newest recorded one."""
+
+    def get(self):
+        files = _post_move_dataset_files()
+        position = int(self.get_query_argument("position", "0"))
+        if not 0 <= position < len(files):
+            self.set_status(404)
+            self.write({"error": "position out of range"})
+            return
+        conn = self._open_conn()
+        try:
+            generation = self._resolve_generation(conn)
+            self.write(post_move_position_payload(conn, position, generation))
+        except OSError:  # engine unavailable -> can't build the board
+            self.set_status(503)
+            self.write({"error": "engine unavailable; cannot build board"})
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _resolve_generation(self, conn):
+        arg = self.get_query_argument("generation", "latest")
+        if conn is not None and arg in ("", "latest"):
+            gens = db.read_post_move_generations(conn)
+            return gens[-1]["generation"] if gens else None
+        return int(arg) if arg not in ("", "latest") else None
+
+
 def make_app(mount_root: str) -> tornado.web.Application:
     return tornado.web.Application(
         [
@@ -390,6 +515,9 @@ def make_app(mount_root: str) -> tornado.web.Application:
             (r"/api/lane/positions", LanePositionsHandler),
             (r"/api/lane/generations", LaneGenerationsHandler),
             (r"/api/lane/position", LanePositionHandler),
+            (r"/api/post_move/positions", PostMovePositionsHandler),
+            (r"/api/post_move/generations", PostMoveGenerationsHandler),
+            (r"/api/post_move/position", PostMovePositionHandler),
         ],
         mount_root=mount_root,
     )

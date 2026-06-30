@@ -1,9 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Component, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import BokehFigure from './components/BokehFigure';
 import GenerationFigureTab from './components/GenerationFigureTab';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
+import PostMoveAnalysis from './components/PostMoveAnalysis';
 import { getJSON } from './lib/api';
+
+// Contains a render error to the active tab: a crashing tab shows an inline message
+// instead of unmounting (blanking) the whole dashboard. Reset by remounting on a
+// `key` change (tab switch), so navigating away and back retries the tab.
+class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="card" style={{ color: '#a05a00', padding: 16 }}>
+          <b>This tab hit an error.</b>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, marginTop: 8 }}>
+            {String(this.state.error.message || this.state.error)}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // The React training dashboard. It renders the existing Bokeh metrics plots by
 // embedding json_items fetched from the Python (Tornado) data API, with the shell
@@ -114,24 +138,10 @@ const FIGURE_TABS: Record<
     emptyText: 'No per-epoch training metrics yet.' },
 };
 
-// Per-generation tabs: the React GenerationSlider scrubs the generation, re-fetching
-// the embedded Bokeh figure (which holds no generation slider of its own).
-const GENERATION_TABS: Record<string, { figure: string; genTable: string; emptyText: string }> = {
-  Positions: { figure: 'positions', genTable: 'monotonicity', emptyText: 'No structural-probe data yet.' },
-  Calibration: { figure: 'calibration', genTable: 'calibration', emptyText: 'No calibration data yet.' },
-};
-
 function renderTab(name: string, task: string, tag: string | null) {
   if (name === 'Info') return <InfoTab task={task} tag={tag} />;
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
-  if (name in GENERATION_TABS) {
-    const g = GENERATION_TABS[name];
-    return (
-      <GenerationFigureTab
-        task={task} tag={tag} figure={g.figure} genTable={g.genTable} emptyText={g.emptyText}
-      />
-    );
-  }
+  if (name === 'Positions') return <PostMoveAnalysis task={task} tag={tag} />;
   const cfg = FIGURE_TABS[name];
   return (
     <FigureTab
@@ -146,7 +156,7 @@ export default function AppDashboard() {
   const tabs =
     task === MAX_MOVE_PER_LANE
       ? ['Loss', 'Performance', 'Lane analysis', 'Info']
-      : ['Loss', 'Positions', 'Calibration', 'Training', 'Performance', 'Info'];
+      : ['Loss', 'Positions', 'Training', 'Performance', 'Info'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(requestedTag());
   const [tab, setTab] = useState(0);
@@ -201,7 +211,7 @@ export default function AppDashboard() {
         ))}
       </div>
 
-      {renderTab(tabs[tab], task, tag)}
+      <TabErrorBoundary key={tabs[tab]}>{renderTab(tabs[tab], task, tag)}</TabErrorBoundary>
     </div>
   );
 }

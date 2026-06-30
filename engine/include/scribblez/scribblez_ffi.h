@@ -110,6 +110,14 @@ int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json
 // scribblez_input_floats() on success, or -1 on a parse error / non-PLAY final move.
 int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input);
 
+// Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
+// tile_scores, plus a "start_player" field) for a penultimate-bingo GCG's post-move
+// analysis position, from the POV of the player that made the final move (its leave
+// is the shown rack), into `out_json` (NUL-terminated, truncated to out_cap). Returns
+// the full JSON length (same retry/truncation contract as the dump functions), or -1
+// on a parse error / non-PLAY final move.
+int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, int out_cap);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied

@@ -15,4 +15,12 @@ namespace scribblez {
 // final move is not a tile placement.
 bool encode_post_move_analysis_input(const std::string& gcg_text, float* out, std::string* error);
 
+// Build the web-render board bundle for the same post-move analysis position: the
+// GameState JSON (board / bonuses / rack / tile_scores, plus a "start_player" field)
+// from the POV of the player that made the final move, with its leave as the shown
+// rack. Uses the shared position serializer, so the board renders identically to the
+// lane-analysis tab. Returns "" (with *error set, if non-null) on a parse error or a
+// non-PLAY final move.
+std::string post_move_analysis_board_json(const std::string& gcg_text, std::string* error);
+
 }  // namespace scribblez
