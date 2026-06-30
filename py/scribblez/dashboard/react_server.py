@@ -34,7 +34,9 @@ def _listening_pids(port: int) -> list[int]:
     try:
         out = subprocess.run(
             [lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return []
@@ -67,8 +69,13 @@ def spawn(
     reclaim_port(dev_port)
     api = subprocess.Popen(
         [
-            sys.executable, "-m", "scribblez.dashboard.api",
-            "--port", str(api_port), "--mount-root", str(mount_root),
+            sys.executable,
+            "-m",
+            "scribblez.dashboard.api",
+            "--port",
+            str(api_port),
+            "--mount-root",
+            str(mount_root),
         ]
     )
     # fmt: on

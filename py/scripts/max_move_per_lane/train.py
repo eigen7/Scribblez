@@ -22,7 +22,6 @@ import sys
 import time
 
 import torch
-
 from scribblez import lane_analysis
 from scribblez.dashboard import db, react_server
 from scribblez.dataset import row_layout, slice_row_batch
@@ -79,15 +78,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     add_train_log_args(p)
     p.add_argument(
-        "--lane-eval-dataset", type=str, default=str(lane_analysis.DEFAULT_DATASET),
+        "--lane-eval-dataset",
+        type=str,
+        default=str(lane_analysis.DEFAULT_DATASET),
         help="GCG dataset directory the lane-analysis tab evaluates each checkpoint over.",
     )
-    p.add_argument("--no-lane-eval", action="store_true",
-                   help="Disable the per-checkpoint lane-analysis evaluation.")
+    p.add_argument(
+        "--no-lane-eval",
+        action="store_true",
+        help="Disable the per-checkpoint lane-analysis evaluation.",
+    )
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
-        "--dashboard-port", type=int, default=react_server.DEFAULT_DEV_PORT,
+        "--dashboard-port",
+        type=int,
+        default=react_server.DEFAULT_DEV_PORT,
         help="React dashboard (Vite) dev-server port; open this in a browser.",
     )
     return p
@@ -229,8 +235,10 @@ def run_streaming_training(
                 )
                 if lane_eval is not None:
                     eval_lane_analysis(model, lane_eval, device, conn, ckpt_idx, positions)
-                timed_print(f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-                    f"-> saved {paths.rolling_checkpoint.name}")
+                timed_print(
+                    f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
+                    f"-> saved {paths.rolling_checkpoint.name}"
+                )
                 interval.reset()
                 model.train()
                 next_ckpt += args.checkpoint_every

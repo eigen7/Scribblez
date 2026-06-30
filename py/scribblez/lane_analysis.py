@@ -49,7 +49,9 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
     (N, S)) halves -- the encoder lays spatial planes (channel-major) before the
     scalar rack counts."""
     cells = BOARD_SIZE * BOARD_SIZE
-    spatial = inputs[:, : spatial_planes * cells].reshape(-1, spatial_planes, BOARD_SIZE, BOARD_SIZE)
+    spatial = inputs[:, : spatial_planes * cells].reshape(
+        -1, spatial_planes, BOARD_SIZE, BOARD_SIZE
+    )
     scalar = inputs[:, spatial_planes * cells :]
     return spatial, scalar
 
@@ -71,6 +73,9 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
     out = model(sp, sc)
     return {
         "occ": (out["lane_occupancy_logits"] > 0).to(torch.uint8).cpu().numpy(),
-        "score_pmf": torch.softmax(out["lane_score_logits"], dim=-1).cpu().numpy().astype(np.float32),
+        "score_pmf": torch.softmax(out["lane_score_logits"], dim=-1)
+        .cpu()
+        .numpy()
+        .astype(np.float32),
         "has_move": torch.sigmoid(out["lane_has_move_logits"]).cpu().numpy().astype(np.float32),
     }

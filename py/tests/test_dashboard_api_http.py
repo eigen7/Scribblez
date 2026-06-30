@@ -43,7 +43,9 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
                 for s in range(1, 4)
             ],
         )
-        db.write_lane_preds(conn, generation=0, positions=204800, preds=_fake_lane_preds(_N_POSITIONS))
+        db.write_lane_preds(
+            conn, generation=0, positions=204800, preds=_fake_lane_preds(_N_POSITIONS)
+        )
         conn.close()
         super().setUp()
 
@@ -101,4 +103,5 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
         assert len(lane["pred_placed"]) == 15  # per-cell predicted union for the diff
 
     def test_lane_position_out_of_range_404(self):
-        assert self.fetch(f"/api/lane/position?task={MAX_MOVE_PER_LANE}&tag=run1&position=999").code == 404
+        resp = self.fetch(f"/api/lane/position?task={MAX_MOVE_PER_LANE}&tag=run1&position=999")
+        assert resp.code == 404

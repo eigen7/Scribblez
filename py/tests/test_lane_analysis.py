@@ -4,7 +4,6 @@ store (dashboard DB) and decoding a model's outputs over the dataset."""
 import numpy as np
 import pytest
 import torch
-
 from scribblez import lane_analysis
 from scribblez.dashboard import db
 
@@ -45,8 +44,14 @@ def test_predict_decode_shapes():
 
     spatial_planes, scalar = 31, 27
     model = MaxMovePerLaneModel(
-        spatial_planes=spatial_planes, scalar_size=scalar, trunk_channels=8, num_blocks=1,
-        lane_layers=1, lane_heads=2, ffn_mult=1, n_rack_tokens=2,
+        spatial_planes=spatial_planes,
+        scalar_size=scalar,
+        trunk_channels=8,
+        num_blocks=1,
+        lane_layers=1,
+        lane_heads=2,
+        ffn_mult=1,
+        n_rack_tokens=2,
     )
     n = 4
     inputs = np.random.default_rng(1).random((n, spatial_planes * 225 + scalar)).astype(np.float32)
@@ -64,7 +69,8 @@ def test_load_inputs_real_dataset():
     """The shipped GCG dataset loads in natural order with full-width inputs."""
     try:
         names, inputs = lane_analysis.load_inputs(lane_analysis.DEFAULT_DATASET)
-    except IOError:
+    except OSError:
         pytest.skip("lexicon unavailable")
-    assert names == [f"pos-{i}" for i in range(1, len(names) + 1)]  # natural order, not pos-1,pos-10
+    # natural order, not pos-1,pos-10
+    assert names == [f"pos-{i}" for i in range(1, len(names) + 1)]
     assert inputs.shape == (len(names), 7002)

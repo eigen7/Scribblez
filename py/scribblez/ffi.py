@@ -368,7 +368,7 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
     out = ctypes.create_string_buffer(cap)
     n = fn(encoded, out, cap, inp_ptr)
     if n < 0:
-        raise IOError("analyze_gcg failed (GCG parse error or missing lexicon)")
+        raise OSError("analyze_gcg failed (GCG parse error or missing lexicon)")
     if n >= cap:  # JSON was truncated; retry once at the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)

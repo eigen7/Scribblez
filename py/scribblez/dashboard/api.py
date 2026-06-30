@@ -134,7 +134,9 @@ def _merge_lane(gt: dict, occ_lane, pmf_lane, has_lane) -> dict:
     o["pred_score_pmf"] = [float(x) for x in pmf_lane]
     o["pred_has_move"] = float(has_lane)
     if gt["has_move"]:
-        o["move_correct"] = all(set(a) == set(b) for a, b in zip(gt["placed"], pred_placed))
+        o["move_correct"] = all(
+            set(a) == set(b) for a, b in zip(gt["placed"], pred_placed, strict=True)
+        )
         o["score_correct"] = pred_bin == min(gt["max_score"], _TOP_SCORE_BIN)
     return o
 
@@ -188,6 +190,11 @@ class _Base(tornado.web.RequestHandler):
     def _params(self) -> dict:
         return {k: self.get_query_argument(k) for k in self.request.query_arguments}
 
+    def _open_conn(self) -> sqlite3.Connection | None:
+        return _open(
+            self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
+        )
+
 
 class TagsHandler(_Base):
     def get(self):
@@ -197,9 +204,7 @@ class TagsHandler(_Base):
 
 class VersionHandler(_Base):
     def get(self):
-        conn = _open(
-            self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
-        )
+        conn = self._open_conn()
         if conn is None:
             self.set_status(404)
             self.write({"error": "unknown tag"})
@@ -216,9 +221,7 @@ class FigureHandler(_Base):
             self.set_status(404)
             self.write({"error": f"unknown figure {name!r}"})
             return
-        conn = _open(
-            self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
-        )
+        conn = self._open_conn()
         if conn is None:
             self.set_status(404)
             self.write({"error": "unknown tag"})
@@ -243,7 +246,7 @@ class LaneGenerationsHandler(_Base):
     """The model generations a tag has lane-analysis predictions for (the slider)."""
 
     def get(self):
-        conn = _open(self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag"))
+        conn = self._open_conn()
         if conn is None:
             self.write({"generations": []})
             return
@@ -264,7 +267,7 @@ class LanePositionHandler(_Base):
             self.set_status(404)
             self.write({"error": "position out of range"})
             return
-        conn = _open(self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag"))
+        conn = self._open_conn()
         try:
             generation = self._resolve_generation(conn)
             self.write(lane_position_payload(conn, position, generation))

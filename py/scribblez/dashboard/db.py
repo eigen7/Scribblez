@@ -219,8 +219,11 @@ def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> 
     ).fetchone()
     if r is None:
         return None
-    return {"occ": from_blob(r["occ"]), "score_pmf": from_blob(r["score_pmf"]),
-            "has_move": from_blob(r["has_move"])}
+    return {
+        "occ": from_blob(r["occ"]),
+        "score_pmf": from_blob(r["score_pmf"]),
+        "has_move": from_blob(r["has_move"]),
+    }
 
 
 def write_monotonicity(conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores):
