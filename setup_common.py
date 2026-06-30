@@ -41,6 +41,8 @@ REQUIRED_PORTS = [
     5175,  # Vite dev server (browser UI)
     8080,  # engine WebSocket (default human_web_agent --port)
     5006,  # Bokeh training-metrics dashboard
+    5180,  # React dashboard: Vite dev server (the page the browser opens)
+    8090,  # React dashboard: Tornado data API (proxied by Vite; handy for direct access)
 ]
 
 # Lexica we know how to fetch. The KWG files are not in this repo; they are
