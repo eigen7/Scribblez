@@ -108,15 +108,64 @@ def test_model_integration_matches_shapes():
 
     base = MaxMovePerLaneModel(sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2)
     mod = SoftTraversalLexicon(channels=32, compiled=_lexicon(), topk=8)
+    # "add" mode so the module is purely additive (replace shrinks the FFN, which
+    # is covered separately by test_replace_mode_shrinks_lane_ffn).
     withlex = MaxMovePerLaneModel(
-        sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2, lexicon_module=mod
+        sp,
+        sc,
+        trunk_channels=32,
+        num_blocks=2,
+        lane_layers=2,
+        lexicon_module=mod,
+        lexicon_mode="add",
     )
 
     out_base = base(spatial, scalar)
     out_lex = withlex(spatial, scalar)
     assert {k: v.shape for k, v in out_base.items()} == {k: v.shape for k, v in out_lex.items()}
 
-    # The module adds parameters and trains end-to-end.
+    # In add mode the module adds parameters and trains end-to-end.
     assert sum(p.numel() for p in withlex.parameters()) > sum(p.numel() for p in base.parameters())
     compute_loss(out_lex, targets, lambda_occ=100.0)["total"].backward()
     assert withlex.lexicon_module.query.weight.grad.abs().sum() > 0
+
+
+def _lane_ffn_width(model):
+    """The lane transformer's FFN hidden width (where an internal lexicon lives)."""
+    return model.lane.encoder.layers[0].linear1.out_features
+
+
+def test_replace_mode_shrinks_lane_ffn():
+    sp, sc, c = 31, 27, 32
+
+    def make(module, mode, replace_mult=1):
+        return MaxMovePerLaneModel(
+            sp,
+            sc,
+            trunk_channels=c,
+            num_blocks=1,
+            lane_layers=1,
+            ffn_mult=4,
+            lexicon_module=module,
+            lexicon_mode=mode,
+            lexicon_replace_ffn_mult=replace_mult,
+        )
+
+    full = 4 * c  # ffn_mult * channels
+
+    # No tool -> full FFN regardless of mode (behavior unchanged).
+    assert _lane_ffn_width(make(None, "replace")) == full
+    assert _lane_ffn_width(make(None, "add")) == full
+
+    # Tool + add -> full FFN; tool + replace -> shrunk to replace_mult * channels.
+    assert (
+        _lane_ffn_width(make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "add")) == full
+    )
+    rep = make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "replace", replace_mult=1)
+    assert _lane_ffn_width(rep) == c
+
+    # replace_mult=0 is attention-only, clamped to a 1-unit FFN, and still runs.
+    m0 = make(SoftTraversalLexicon(channels=c, compiled=_lexicon()), "replace", replace_mult=0)
+    assert _lane_ffn_width(m0) == 1
+    out = m0(torch.zeros(2, sp, 15, 15), torch.rand(2, sc))
+    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)

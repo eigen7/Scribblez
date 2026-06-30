@@ -58,7 +58,9 @@ class LaneModel(nn.Module):
         layer = nn.TransformerEncoderLayer(
             d_model=channels,
             nhead=n_heads,
-            dim_feedforward=ffn_mult * channels,
+            # Clamp to >= 1 so a lexicon-replace FFN multiple of 0 (attention-only)
+            # still builds a valid layer.
+            dim_feedforward=max(1, ffn_mult * channels),
             activation="gelu",
             batch_first=True,
             norm_first=True,
@@ -102,6 +104,8 @@ class MaxMovePerLaneModel(nn.Module):
         n_rack_tokens: int = 4,
         n_score_bins: int = N_SCORE_BINS,
         lexicon_module: LexiconModule | None = None,
+        lexicon_mode: str = "replace",
+        lexicon_replace_ffn_mult: int = 1,
     ):
         super().__init__()
         self.n_rack_tokens = n_rack_tokens
@@ -123,8 +127,18 @@ class MaxMovePerLaneModel(nn.Module):
         self.lexicon_module = lexicon_module
         n_lex_tokens = lexicon_module.n_tokens if lexicon_module is not None else 0
 
+        # When the tool is plugged in as the lexical store ("replace" mode), the
+        # lane transformer's FFN -- where an internal lexicon would be memorized
+        # (a key-value store; see docs/lexical_nn.md) -- is shrunk so word
+        # knowledge must come from the tool instead. Attention is left intact: it
+        # is the capacity the network needs to USE the tool (relate the tool's
+        # per-cell legality to the rack and board). With no tool, or in "add"
+        # mode, the full FFN width is used and behavior is unchanged.
+        replacing = lexicon_module is not None and lexicon_mode == "replace"
+        lane_ffn_mult = lexicon_replace_ffn_mult if replacing else ffn_mult
+
         self.lane = LaneModel(
-            trunk_channels, lane_layers, lane_heads, ffn_mult, n_rack_tokens, n_lex_tokens
+            trunk_channels, lane_layers, lane_heads, lane_ffn_mult, n_rack_tokens, n_lex_tokens
         )
 
         # Heads, shared across the two axes (the per-lane operation is the same).

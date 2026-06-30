@@ -89,6 +89,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="Per-module option, repeatable (e.g. --lexicon-opt topk=32).",
     )
+    p.add_argument(
+        "--lexicon-mode",
+        type=str,
+        default="replace",
+        choices=["add", "replace"],
+        help="How the lexicon tool relates to the lane transformer (only applies "
+        "when --lexicon-module is set). 'add': tool augments the internal lexical "
+        "store. 'replace': shrink the lane FFN so word knowledge must come from "
+        "the tool (attention is kept so the network can still use it).",
+    )
+    p.add_argument(
+        "--lexicon-replace-ffn-mult",
+        type=int,
+        default=1,
+        help="Lane transformer FFN width multiple under --lexicon-mode replace "
+        "(0 ~ attention-only). Sweep down until a tool-off model can no longer "
+        "learn the lexicon -- that is where internal memorization is starved.",
+    )
     p.add_argument("--lambda-cdf", type=float, default=1.0, help="Score-CDF (CRPS) loss weight.")
     p.add_argument("--lambda-occ", type=float, default=100.0, help="Occupancy (move) loss weight.")
     p.add_argument("--lambda-has-move", type=float, default=1.0, help="Has-move loss weight.")
@@ -311,6 +329,8 @@ def main() -> int:
         ffn_mult=args.ffn_mult,
         n_rack_tokens=args.rack_tokens,
         lexicon_module=lexicon_module,
+        lexicon_mode=args.lexicon_mode,
+        lexicon_replace_ffn_mult=args.lexicon_replace_ffn_mult,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
