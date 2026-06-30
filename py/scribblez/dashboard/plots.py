@@ -350,8 +350,12 @@ def _board_uri(path: Path) -> str:
 
 
 def probes_view(
-    conn, image_dir: Path, init_pos: int = 0, init_gen: int | None = None, follow: bool = True
+    conn, image_dir: Path, init_pos: int = 0, init_gen: int | None = None, follow: bool = True,
+    external_gen: bool = False,
 ) -> View | None:
+    # external_gen: drop the in-figure generation slider + latest checkbox (the React
+    # dashboard drives the generation with its own GenerationSlider, re-fetching the
+    # figure per generation). The position scrubber stays in the figure.
     epochs, diffs, win_rate, curve_scores = db.read_all_monotonicity(conn)
     _, _, _, bands = db.read_all_score_belief(conn)
     if not epochs or bands is None:
@@ -507,9 +511,12 @@ def probes_view(
 
     center_css = InlineStyleSheet(css=":host { align-items: center; gap: 10px; }")
     main = row(prev_btn, mono, belief, column(info, board), next_btn, stylesheets=[center_css])
-    controls = row(
-        _label("position"), pos, _label("generation"), gen, latest, stylesheets=[center_css]
-    )
+    # `gen` stays referenced by the CustomJS (its value pins the generation) even when
+    # not shown, so the figure renders the requested generation.
+    cells = [_label("position"), pos]
+    if not external_gen:
+        cells += [_label("generation"), gen, latest]
+    controls = row(*cells, stylesheets=[center_css])
     return View(layout=column(main, controls), gen=gen, latest=latest, pos=pos)
 
 
@@ -524,7 +531,9 @@ def _aligned_series(conn, name: str, epochs: list[int]) -> list[float]:
     return [lut.get(e, float("nan")) for e in epochs]
 
 
-def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> View | None:
+def calibration_view(
+    conn, init_gen: int | None = None, follow: bool = True, external_gen: bool = False
+) -> View | None:
     epochs, cal = db.read_all_calibration(conn)
     if not epochs:
         return None
@@ -637,11 +646,11 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
     )
     sd.title.text = f"Score-diff calibration — epoch {epochs[gi]}  MAE={mae[gi]:.1f}"
 
+    # external_gen: drop the in-figure generation slider + latest (React drives the
+    # generation). `gen` stays referenced by the CustomJS so the figure renders the
+    # requested generation.
     center = InlineStyleSheet(css=":host { align-items: center; }")
-    return View(
-        layout=column(
-            row(wld, sd), row(gen, latest, stylesheets=[center]), sizing_mode="stretch_width"
-        ),
-        gen=gen,
-        latest=latest,
-    )
+    rows = [row(wld, sd)]
+    if not external_gen:
+        rows.append(row(gen, latest, stylesheets=[center]))
+    return View(layout=column(*rows, sizing_mode="stretch_width"), gen=gen, latest=latest)

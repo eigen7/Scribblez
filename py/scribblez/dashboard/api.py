@@ -57,13 +57,21 @@ def _training_metrics(conn, params, image_dir):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
+def _gen_idx(params) -> int | None:
+    """The requested generation index (`?gen_idx=`), or None for the newest."""
+    v = params.get("gen_idx")
+    return int(v) if v not in (None, "", "latest") else None
+
+
 def _positions(conn, params, image_dir):
-    view = plots.probes_view(conn, image_dir, follow=True)
+    view = plots.probes_view(
+        conn, image_dir, init_gen=_gen_idx(params), follow=False, external_gen=True
+    )
     return column(view.layout, plots.series_grid(conn, plots.PROBE_CURVES)) if view else None
 
 
 def _calibration(conn, params, image_dir):
-    view = plots.calibration_view(conn, follow=True)
+    view = plots.calibration_view(conn, init_gen=_gen_idx(params), follow=False, external_gen=True)
     return column(view.layout, plots.series_grid(conn, plots.CALIB_CURVES)) if view else None
 
 
@@ -93,6 +101,18 @@ def _row_count(conn: sqlite3.Connection, table: str) -> int:
 def version_token(conn: sqlite3.Connection) -> dict:
     """Per-tag row counts the client polls to decide when to re-fetch figures."""
     return {table: _row_count(conn, table) for table in VERSION_TABLES}
+
+
+# Tables a per-generation tab (Positions, Calibration) scrubs with a GenerationSlider.
+_GENERATION_TABLES = ("monotonicity", "calibration")
+
+
+def _table_generations(conn: sqlite3.Connection, table: str) -> list:
+    """The recorded epochs in `table`, oldest first (the slider's generation list)."""
+    try:
+        return [r[0] for r in conn.execute(f"SELECT epoch FROM {table} ORDER BY epoch")]
+    except sqlite3.OperationalError:
+        return []
 
 
 def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, image_dir):
@@ -240,6 +260,25 @@ class VersionHandler(_Base):
             conn.close()
 
 
+class GenerationsHandler(_Base):
+    """The generations (epochs) recorded in a table -- drives a tab's GenerationSlider."""
+
+    def get(self):
+        table = self.get_query_argument("table")
+        if table not in _GENERATION_TABLES:
+            self.set_status(404)
+            self.write({"error": "unknown table"})
+            return
+        conn = self._open_conn()
+        if conn is None:
+            self.write({"generations": []})
+            return
+        try:
+            self.write({"generations": _table_generations(conn, table)})
+        finally:
+            conn.close()
+
+
 class FigureHandler(_Base):
     def get(self, name: str):
         if name not in FIGURES:
@@ -316,6 +355,7 @@ def make_app(mount_root: str) -> tornado.web.Application:
         [
             (r"/api/tags", TagsHandler),
             (r"/api/version", VersionHandler),
+            (r"/api/generations", GenerationsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
             (r"/api/lane/positions", LanePositionsHandler),
             (r"/api/lane/generations", LaneGenerationsHandler),

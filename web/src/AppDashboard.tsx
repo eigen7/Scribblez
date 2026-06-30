@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import BokehFigure from './components/BokehFigure';
+import GenerationFigureTab from './components/GenerationFigureTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import { getJSON } from './lib/api';
 
@@ -104,14 +105,25 @@ const FIGURE_TABS: Record<
     emptyText: 'No throughput data yet — start a streaming run.' },
   Training: { figure: 'training_metrics', versionKey: 'metrics', toggle: false,
     emptyText: 'No per-epoch training metrics yet.' },
-  Positions: { figure: 'positions', versionKey: 'monotonicity', toggle: false,
-    emptyText: 'No structural-probe data yet.' },
-  Calibration: { figure: 'calibration', versionKey: 'calibration', toggle: false,
-    emptyText: 'No calibration data yet.' },
+};
+
+// Per-generation tabs: the React GenerationSlider scrubs the generation, re-fetching
+// the embedded Bokeh figure (which holds no generation slider of its own).
+const GENERATION_TABS: Record<string, { figure: string; genTable: string; emptyText: string }> = {
+  Positions: { figure: 'positions', genTable: 'monotonicity', emptyText: 'No structural-probe data yet.' },
+  Calibration: { figure: 'calibration', genTable: 'calibration', emptyText: 'No calibration data yet.' },
 };
 
 function renderTab(name: string, task: string, tag: string | null) {
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
+  if (name in GENERATION_TABS) {
+    const g = GENERATION_TABS[name];
+    return (
+      <GenerationFigureTab
+        task={task} tag={tag} figure={g.figure} genTable={g.genTable} emptyText={g.emptyText}
+      />
+    );
+  }
   const cfg = FIGURE_TABS[name];
   return (
     <FigureTab

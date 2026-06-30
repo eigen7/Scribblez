@@ -84,6 +84,15 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
             assert r.code == 200, fig
             assert "item" in json.loads(r.body), fig
 
+    def test_generations_endpoint(self):
+        r = self.fetch(f"/api/generations?task={MAX_MOVE_PER_LANE}&tag=run1&table=monotonicity")
+        assert r.code == 200
+        assert json.loads(r.body)["generations"] == []  # none seeded for this tag
+
+    def test_generations_unknown_table_404(self):
+        r = self.fetch(f"/api/generations?task={MAX_MOVE_PER_LANE}&tag=run1&table=bogus")
+        assert r.code == 404
+
     def test_lane_positions(self):
         body = json.loads(self.fetch("/api/lane/positions").body)
         assert isinstance(body["positions"], list)  # the shipped dataset, or [] if absent
