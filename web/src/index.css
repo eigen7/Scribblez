@@ -947,39 +947,58 @@ h1 {
    Lane-analysis view (max-move-per-lane dashboard tab)
    --------------------------------------------------------------------------- */
 
+/* Larger and high-contrast (the dashboard root paints a light background over the
+   app's dark game theme, so dark text reads well). */
+.lane-analysis { font-size: 15px; color: #1a1f28; }
+
 /* A whole selected lane on the board (over tiles and bonuses alike). */
 .board-cell.lane-highlight {
   box-shadow: inset 0 0 0 2px #f1c40f;
 }
+/* The single clicked square, highlighted more strongly than its lane. Scoped to
+   the lane-analysis board so the game tools' keyboard cursor is unaffected. */
+.lane-board-area .board-cell.cursor-cell {
+  box-shadow: inset 0 0 0 3px #2563eb;
+}
 
-.lane-controls {
+/* Muted secondary text -- still dark enough to read comfortably. */
+.muted { color: #3a4250; font-size: 14px; }
+
+.lane-controls-row {
   display: flex;
-  gap: 24px;
+  gap: 28px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 14px;
-  font-size: 13px;
+  margin-bottom: 10px;
+  font-size: 15px;
+  color: #1a1f28;
 }
-.lane-controls .seg button {
+.lane-controls-row label { display: inline-flex; align-items: center; gap: 6px; }
+.lane-analysis .seg button {
   border: 1px solid #1f77b4;
   background: white;
-  color: #1f77b4;
-  padding: 3px 10px;
+  color: #1565a0;
+  padding: 4px 12px;
+  font-size: 13px;
   cursor: pointer;
 }
-.lane-controls .seg button.active {
+.lane-analysis .seg button.active {
   background: #1f77b4;
   color: white;
 }
-.lane-controls .seg button:first-child { border-radius: 4px 0 0 4px; }
-.lane-controls .seg button:last-child { border-radius: 0 4px 4px 0; }
-.lane-controls .arrow {
-  border: 1px solid #ccd;
+.lane-analysis .seg button:first-child { border-radius: 4px 0 0 4px; }
+.lane-analysis .seg button:last-child { border-radius: 0 4px 4px 0; }
+.lane-analysis .arrow {
+  border: 1px solid #aab;
   background: white;
   cursor: pointer;
   border-radius: 4px;
-  padding: 2px 8px;
+  padding: 2px 9px;
+  font-size: 13px;
 }
+
+/* Board + status strips, with an icon legend to the right. */
+.lane-main { display: flex; align-items: flex-start; gap: 24px; }
 
 /* Board flanked by per-lane status strips, aligned to the 36px board grid. */
 .lane-board-area {
@@ -987,10 +1006,14 @@ h1 {
   grid-template-areas: "board rows" "cols corner";
 }
 .lane-board-area .board { grid-area: board; }
-.lane-row-strip { grid-area: rows; display: flex; flex-direction: column; padding-top: 20px; }
-.lane-col-strip { grid-area: cols; display: flex; padding-left: 24px; }
-.lane-row-strip .lane-cell { height: var(--cell-size); width: 34px; }
-.lane-col-strip .lane-cell { width: var(--cell-size); height: 22px; flex-direction: column; }
+/* Offsets align the strips with the board cells: the board has a 3px border + 4px
+   padding, then a 20px column-header (rows) / 24px row-label (cols). */
+.lane-row-strip { grid-area: rows; display: flex; flex-direction: column; padding-top: 27px; }
+.lane-col-strip { grid-area: cols; display: flex; padding-left: 31px; }
+.lane-row-strip .lane-cell { height: var(--cell-size); width: 40px; }
+/* Columns stack the square atop the circle; flex-shrink:0 on the marks keeps the
+   circle round in the shorter cell. */
+.lane-col-strip .lane-cell { width: var(--cell-size); height: 36px; flex-direction: column; gap: 3px; }
 
 .lane-cell {
   display: flex;
@@ -1000,25 +1023,44 @@ h1 {
   cursor: pointer;
   box-sizing: border-box;
 }
-.lane-cell.selected { background: #fff7d6; border-radius: 4px; }
-.lane-cell.empty { opacity: 0.2; }
+.lane-cell.selected { background: #fff3c4; border-radius: 4px; }
+.lane-cell.empty { opacity: 0.18; }
+
+/* Move = square, score = circle; filled when the model is correct. flex-shrink:0
+   keeps the circle round (the strip cell must never squash it into an oval). */
 .lane-mark {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
   display: inline-block;
-  border: 1.5px solid;
+  border: 2px solid;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
-.lane-mark.move { border-color: #1e8449; }
-.lane-mark.score { border-color: #2471a3; }
+.lane-mark.move { border-radius: 2px; border-color: #1e8449; }   /* square */
+.lane-mark.score { border-radius: 50%; border-color: #1b4f72; }  /* circle */
 .lane-mark.move.ok { background: #2ecc71; }
-.lane-mark.score.ok { background: #5dade2; }
+.lane-mark.score.ok { background: #3498db; }
+
+/* Legend explaining the row/column status marks (to the right of the board). */
+.icon-legend {
+  font-size: 14px;
+  color: #1a1f28;
+  background: #ffffff;
+  border: 1px solid #d7dbe0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 175px;
+}
+.icon-legend .il-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.icon-legend .il-note { color: #3a4250; font-size: 13px; line-height: 1.55; margin-top: 6px; }
+
+/* On-move rack below the board. */
+.lane-rack { margin: 16px 0 4px; }
 
 /* Lane detail: true best moves + the true-vs-predicted union diff. */
-.lane-detail { margin-top: 18px; max-width: 640px; }
-.lane-detail h3 { font-size: 14px; margin: 0 0 6px; }
-.best-moves { font-size: 13px; color: #334; }
+.lane-detail { margin-top: 14px; max-width: 680px; }
+.lane-detail h3 { font-size: 17px; margin: 0 0 8px; color: #1a1f28; }
+.best-moves { font-size: 15px; color: #222831; }
 .best-moves .bm { display: inline-block; margin: 0 10px 4px 0; }
 .union-diff { display: flex; gap: 2px; margin: 10px 0; flex-wrap: nowrap; }
 .union-diff .dc {
@@ -1040,18 +1082,45 @@ h1 {
 .union-diff .dc .p { color: #7b241c; }
 
 /* Score histogram for the selected lane. */
+.score-hist-block { max-width: 100%; }
+
+/* The predicted-argmax value sits in its own row above every bar, positioned over
+   the argmax column (left:%), so it never overlaps a bar. */
+.hist-top { position: relative; height: 20px; }
+.argmax-num {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a4f72;
+  white-space: nowrap;
+}
+
 .score-hist {
+  position: relative;
   display: flex;
   align-items: flex-end;
   height: 120px;
-  gap: 1px;
-  margin-top: 8px;
-  border-bottom: 1px solid #ccd;
+  margin-top: 2px;
+  border-bottom: 1px solid #b8c0c8;
 }
 .score-hist .hbar { flex: 1 1 0; background: #5dade2; min-height: 1px; }
 .score-hist .hbar.truth { background: #e67e22; }
-.legend { font-size: 12px; color: #667; margin-top: 6px; }
-.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; vertical-align: middle; }
+/* Thin vertical separators grouping the 100 bins into buckets of 10. */
+.hgroup-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #aab2bb;
+  pointer-events: none;
+}
+/* Per-bucket axis labels, one centered under each group of 10. */
+.hist-axis { display: flex; margin-top: 4px; }
+.hist-axis .hgl { flex: 1 1 0; text-align: center; font-size: 11px; color: #3a4250; }
+.legend { font-size: 14px; color: #3a4250; margin-top: 8px; }
+.legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin: 0 6px 0 14px; vertical-align: middle; }
 
 /* Generic dashboard card (white rounded content box). */
 .card {

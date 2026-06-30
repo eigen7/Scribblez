@@ -85,7 +85,7 @@ function FigureTab({
       {item ? (
         <BokehFigure item={item} />
       ) : (
-        <div style={{ color: '#889', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
+        <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
       )}
     </div>
   );
@@ -116,11 +116,14 @@ export default function AppDashboard() {
   }, [refreshTags]);
 
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '12px 16px', color: '#223' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
-        <strong style={{ fontSize: 16 }}>Scribblez dashboard</strong>
-        <span style={{ color: '#889', fontSize: 13 }}>{task}</span>
-        <label style={{ fontSize: 13 }}>
+    <div style={{
+      fontFamily: 'system-ui, sans-serif', padding: '14px 18px', color: '#1a1f28', fontSize: 15,
+      background: '#f4f6f8', minHeight: '100vh',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
+        <strong style={{ fontSize: 19 }}>Scribblez dashboard</strong>
+        <span style={{ color: '#445063', fontSize: 14 }}>{task}</span>
+        <label style={{ fontSize: 15 }}>
           Tag{' '}
           <select value={tag ?? ''} onChange={(e) => setTag(e.target.value || null)}>
             {tags.length === 0 && <option value="">(no runs)</option>}
@@ -139,8 +142,8 @@ export default function AppDashboard() {
             key={name}
             onClick={() => setTab(i)}
             style={{
-              padding: '4px 12px', cursor: 'pointer', borderRadius: '6px 6px 0 0',
-              background: i === tab ? '#1f77b4' : '#e8eef4', color: i === tab ? 'white' : '#456',
+              padding: '5px 14px', cursor: 'pointer', borderRadius: '6px 6px 0 0', fontSize: 14,
+              background: i === tab ? '#1f77b4' : '#dde6ef', color: i === tab ? 'white' : '#2c3540',
             }}
           >
             {name}
