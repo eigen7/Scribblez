@@ -24,23 +24,22 @@ import sys
 import time
 
 import torch
-
 from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
+from scribblez.ffi import StreamingTrainSource, get_input_shapes
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
-from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
 from scribblez.post_move_value.onnx_export import export_onnx
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.train_common import (
     ThroughputMeter,
     TrainStepWriter,
     add_train_log_args,
-    timed_print,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
+    timed_print,
 )
 
 # Imported lazily-friendly: shelling out to play_game for the one-time val set.
@@ -64,15 +63,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     p.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     p.add_argument(
-        "--huber-delta-mean", type=float, default=10.0,
-        help="Huber transition point (points) for the score-diff mean head.")
+        "--huber-delta-mean",
+        type=float,
+        default=10.0,
+        help="Huber transition point (points) for the score-diff mean head.",
+    )
     p.add_argument(
-        "--huber-delta-std", type=float, default=10.0,
-        help="Huber transition point (points) for the score-diff std head.")
+        "--huber-delta-std",
+        type=float,
+        default=10.0,
+        help="Huber transition point (points) for the score-diff std head.",
+    )
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
     p.add_argument(
-        "--max-positions", type=int, default=0, help="Stop after this many positions (0=run forever)."
+        "--max-positions",
+        type=int,
+        default=0,
+        help="Stop after this many positions (0=run forever).",
     )
     p.add_argument(
         "--checkpoint-every",
@@ -84,7 +92,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--log-every", type=int, default=25600, help="Sample throughput every this many positions."
     )
     add_train_log_args(p)
-    p.add_argument("--val-games", type=int, default=20000, help="Held-out validation games (first run).")
+    p.add_argument(
+        "--val-games", type=int, default=20000, help="Held-out validation games (first run)."
+    )
     p.add_argument(
         "--val-games-per-file", type=int, default=10000, help="Games per validation .slog file."
     )
@@ -95,7 +105,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--probe-diff-range", type=int, default=100, help="Score-diff sweep half-width (±range)."
     )
     p.add_argument("--no-probe", action="store_true", help="Disable the structural probes.")
-    p.add_argument("--no-calibration", action="store_true", help="Disable full-val-set calibration.")
+    p.add_argument(
+        "--no-calibration", action="store_true", help="Disable full-val-set calibration."
+    )
     p.add_argument(
         "--calibration-batch-size", type=int, default=512, help="Batch size for calibration."
     )
@@ -119,7 +131,9 @@ def ensure_validation_set(paths: TagPaths, args) -> bool:
     print(f"Generating {args.val_games} validation games to {paths.test_dir} ...")
     rc = run_games(paths.test_dir, args.val_games, args.val_games_per_file, args.gen_threads)
     if rc != 0:
-        print(f"WARNING: validation-set generation failed (rc={rc}); eval disabled.", file=sys.stderr)
+        print(
+            f"WARNING: validation-set generation failed (rc={rc}); eval disabled.", file=sys.stderr
+        )
         return False
     return True
 
@@ -151,8 +165,12 @@ class _IntervalLoss:
 
     def reset(self):
         self.sums = {
-            "total": 0.0, "wld": 0.0, "score_diff": 0.0,
-            "score_diff_mean": 0.0, "score_diff_std": 0.0, "opp_next_placement": 0.0,
+            "total": 0.0,
+            "wld": 0.0,
+            "score_diff": 0.0,
+            "score_diff_mean": 0.0,
+            "score_diff_std": 0.0,
+            "opp_next_placement": 0.0,
         }
         self.n_batches = 0
         self.correct = 0
@@ -178,9 +196,23 @@ class _IntervalLoss:
         }
 
 
-def run_streaming_training(model, optimizer, source, conn, paths, device, args, *, probe_enabled,
-                           test_ds, start_ckpt, start_positions, start_step, spatial_planes,
-                           scalar_size) -> int:
+def run_streaming_training(
+    model,
+    optimizer,
+    source,
+    conn,
+    paths,
+    device,
+    args,
+    *,
+    probe_enabled,
+    test_ds,
+    start_ckpt,
+    start_positions,
+    start_step,
+    spatial_planes,
+    scalar_size,
+) -> int:
     """Consume streamed batches; record per-minibatch stats, checkpoint/eval, and
     sample throughput on cadence.
 
@@ -222,8 +254,12 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
 
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
-                outputs, tgt, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
-                huber_delta_mean=args.huber_delta_mean, huber_delta_std=args.huber_delta_std,
+                outputs,
+                tgt,
+                lambda_sd=args.lambda_sd,
+                lambda_opp=args.lambda_opp,
+                huber_delta_mean=args.huber_delta_mean,
+                huber_delta_std=args.huber_delta_std,
             )
             optimizer.zero_grad()
             losses["total"].backward()
@@ -235,14 +271,19 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
             batch_losses = {k: losses[k].item() for k in interval.sums}
             batch_acc = (outputs["wld"].argmax(1) == tgt["wld"].argmax(1)).float().mean().item()
             interval.update(batch_losses, batch_acc, n)
-            writer.record(step, positions, {
-                "loss": batch_losses["total"], "loss_wld": batch_losses["wld"],
-                "loss_score_diff": batch_losses["score_diff"],
-                "loss_score_diff_mean": batch_losses["score_diff_mean"],
-                "loss_score_diff_std": batch_losses["score_diff_std"],
-                "loss_opp_next_placement": batch_losses["opp_next_placement"],
-                "wld_acc": batch_acc,
-            })
+            writer.record(
+                step,
+                positions,
+                {
+                    "loss": batch_losses["total"],
+                    "loss_wld": batch_losses["wld"],
+                    "loss_score_diff": batch_losses["score_diff"],
+                    "loss_score_diff_mean": batch_losses["score_diff_mean"],
+                    "loss_score_diff_std": batch_losses["score_diff_std"],
+                    "loss_opp_next_placement": batch_losses["opp_next_placement"],
+                    "wld_acc": batch_acc,
+                },
+            )
 
             if positions >= next_log:
                 sample = meter.sample(time.time(), positions, source.stats())
@@ -258,9 +299,20 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
                 ckpt_idx += 1
                 writer.commit()
                 _checkpoint_and_eval(
-                    model, optimizer, conn, paths, device, args, ckpt_idx, positions, step, interval,
-                    probe_enabled=probe_enabled, test_ds=test_ds,
-                    spatial_planes=spatial_planes, scalar_size=scalar_size,
+                    model,
+                    optimizer,
+                    conn,
+                    paths,
+                    device,
+                    args,
+                    ckpt_idx,
+                    positions,
+                    step,
+                    interval,
+                    probe_enabled=probe_enabled,
+                    test_ds=test_ds,
+                    spatial_planes=spatial_planes,
+                    scalar_size=scalar_size,
                 )
                 interval.reset()
                 model.train()
@@ -275,8 +327,23 @@ def run_streaming_training(model, optimizer, source, conn, paths, device, args, 
     return positions
 
 
-def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, positions, step,
-                         interval, *, probe_enabled, test_ds, spatial_planes, scalar_size):
+def _checkpoint_and_eval(
+    model,
+    optimizer,
+    conn,
+    paths,
+    device,
+    args,
+    ckpt_idx,
+    positions,
+    step,
+    interval,
+    *,
+    probe_enabled,
+    test_ds,
+    spatial_planes,
+    scalar_size,
+):
     """Run eval against the held-out val set, persist metrics, save .pt + .onnx.
 
     The dashboard DB is keyed on an integer `epoch`; here it is the monotonic
@@ -291,8 +358,13 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
     if probe_enabled:
         record.update(
             run_probes(
-                model, paths.test_subset_slog, device, conn, ckpt_idx,
-                diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
+                model,
+                paths.test_subset_slog,
+                device,
+                conn,
+                ckpt_idx,
+                diff_lo=-args.probe_diff_range,
+                diff_hi=args.probe_diff_range,
             )
         )
     if test_ds is not None:
@@ -301,8 +373,9 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, ckpt_idx, 
         )
     db.write_metrics(conn, ckpt_idx, record)
 
-    save_rolling_checkpoint(paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step,
-                            args)
+    save_rolling_checkpoint(
+        paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step, args
+    )
     onnx_path = paths.onnx_path(ckpt_idx)
     export_onnx(model, onnx_path, spatial_planes, scalar_size)
     timed_print(f"  -> saved {paths.rolling_checkpoint.name} and {onnx_path.name}")
@@ -336,15 +409,20 @@ def main() -> int:
     db.write_meta(conn, args.tag, vars(args), n_params)
     # Coefficients of each loss term in the optimized total (WLD has weight 1),
     # so the dashboard can stack the weighted contributions.
-    db.write_loss_weights(conn, {
-        "loss_wld": 1.0,
-        "loss_score_diff": args.lambda_sd,
-        "loss_opp_next_placement": args.lambda_opp,
-    })
+    db.write_loss_weights(
+        conn,
+        {
+            "loss_wld": 1.0,
+            "loss_score_diff": args.lambda_sd,
+            "loss_opp_next_placement": args.lambda_opp,
+        },
+    )
 
     # Held-out validation set (written once) drives the probes + calibration.
     val_ok = ensure_validation_set(paths, args)
-    probe_enabled = not args.no_probe and val_ok and ensure_probe_subset(paths, args.num_probe_positions)
+    probe_enabled = (
+        not args.no_probe and val_ok and ensure_probe_subset(paths, args.num_probe_positions)
+    )
     test_ds = None
     if val_ok and not args.no_calibration:
         print(f"Loading calibration val set from {paths.test_dir} ...")
@@ -352,8 +430,9 @@ def main() -> int:
         print(f"  {test_ds.num_samples} val positions")
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag,
-                                       app=server.POST_MOVE_VALUE_APP)
+        proc = server.launch_dashboard(
+            args.dashboard_port, str(paths.mount_root), tag=args.tag, app=server.POST_MOVE_VALUE_APP
+        )
         if proc is not None:
             atexit.register(proc.terminate)
 
@@ -368,13 +447,25 @@ def main() -> int:
         seed=args.seed,
         handicap_max=args.handicap_max,
     )
-    print(f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}")
+    print(
+        f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}"
+    )
 
     run_streaming_training(
-        model, optimizer, source, conn, paths, device, args,
-        probe_enabled=probe_enabled, test_ds=test_ds,
-        start_ckpt=start_ckpt, start_positions=start_positions, start_step=start_step,
-        spatial_planes=spatial_planes, scalar_size=scalar_size,
+        model,
+        optimizer,
+        source,
+        conn,
+        paths,
+        device,
+        args,
+        probe_enabled=probe_enabled,
+        test_ds=test_ds,
+        start_ckpt=start_ckpt,
+        start_positions=start_positions,
+        start_step=start_step,
+        spatial_planes=spatial_planes,
+        scalar_size=scalar_size,
     )
     return 0
 

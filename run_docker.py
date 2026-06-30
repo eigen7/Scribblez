@@ -13,7 +13,7 @@ match your host user so that anything written into the bind-mounts is owned
 by you on the host.
 """
 
-from setup_common import make_config, check_setup_version
+from setup_common import check_setup_version, make_config
 from subtrees.devenv_utils import docker_launch
 
 

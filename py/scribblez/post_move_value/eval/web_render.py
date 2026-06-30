@@ -25,7 +25,10 @@ def render_position_images(slog_path: str | Path, out_dir: str | Path, post_move
     out_dir = Path(out_dir)
     num_pos, _ = read_file_header(slog_path)
     positions = [
-        {"name": f"pos-{k:02d}", "state": json.loads(dump_position_json(slog_path, k, post_move=post_move))}
+        {
+            "name": f"pos-{k:02d}",
+            "state": json.loads(dump_position_json(slog_path, k, post_move=post_move)),
+        }
         for k in range(num_pos)
     ]
     out_dir.mkdir(parents=True, exist_ok=True)

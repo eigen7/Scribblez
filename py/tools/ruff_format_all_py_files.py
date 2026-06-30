@@ -32,7 +32,7 @@ TARGETS = [
 ]
 
 
-def _abort(message: str) -> None:
+def _abort(message: str):
     """Print an error to stderr and exit non-zero."""
     print(f"ERROR: {message}", file=sys.stderr)
     sys.exit(1)
@@ -43,7 +43,7 @@ def _run_ruff(args: list[str]) -> int:
     return subprocess.run(["ruff", *args, *TARGETS], cwd=REPO_ROOT).returncode
 
 
-def main(check: bool) -> None:
+def main(check: bool):
     """Format and lint the targets, or check them when *check* is true."""
     if shutil.which("ruff") is None:
         _abort("ruff not found on PATH.")
@@ -82,4 +82,3 @@ def _parse_args() -> bool:
 
 if __name__ == "__main__":
     main(_parse_args())
-

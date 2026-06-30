@@ -9,6 +9,7 @@ py/build.py first if you haven't built yet). The Python tests are run via
 pytest against py/tests/. The web tests are run via `npm run test:run`
 (vitest) in web/.
 """
+
 import argparse
 import os
 import shutil
@@ -16,7 +17,6 @@ import subprocess
 import sys
 
 from setup_check import import_setup_common
-
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(ROOT, "target")
@@ -32,8 +32,10 @@ def run(cmd, cwd=None):
 
 def run_cpp_tests(verbose: bool) -> int:
     if not os.path.isdir(BUILD_DIR):
-        print(f"ERROR: build directory not found at {BUILD_DIR}.\n"
-              "Run py/build.py first.", file=sys.stderr)
+        print(
+            f"ERROR: build directory not found at {BUILD_DIR}.\nRun py/build.py first.",
+            file=sys.stderr,
+        )
         return 1
     if shutil.which("ctest") is None:
         print("ERROR: ctest not found on PATH.", file=sys.stderr)
@@ -46,13 +48,13 @@ def run_cpp_tests(verbose: bool) -> int:
 
 def run_web_tests(verbose: bool) -> int:
     if shutil.which("npm") is None:
-        print("ERROR: npm not found on PATH. Install Node.js to run web tests.",
-              file=sys.stderr)
+        print("ERROR: npm not found on PATH. Install Node.js to run web tests.", file=sys.stderr)
         return 1
     if not os.path.isdir(os.path.join(WEB_DIR, "node_modules")):
-        print(f"ERROR: web/node_modules not found.\n"
-              "Run py/build.py (or `npm install` in web/) first.",
-              file=sys.stderr)
+        print(
+            "ERROR: web/node_modules not found.\nRun py/build.py (or `npm install` in web/) first.",
+            file=sys.stderr,
+        )
         return 1
     cmd = "npm run test:run"
     if verbose:
@@ -66,8 +68,7 @@ def run_python_tests(verbose: bool) -> int:
         return 1
     test_dir = os.path.join(PYTHON_DIR, "tests")
     if not os.path.isdir(test_dir):
-        print(f"ERROR: python test directory not found at {test_dir}.",
-              file=sys.stderr)
+        print(f"ERROR: python test directory not found at {test_dir}.", file=sys.stderr)
         return 1
     flags = "-v" if verbose else ""
     env = os.environ.copy()
@@ -83,14 +84,10 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--cpp-only", action="store_true",
-                       help="run only the C++ engine tests")
-    group.add_argument("--python-only", action="store_true",
-                       help="run only the Python tests")
-    group.add_argument("--web-only", action="store_true",
-                       help="run only the web UI tests")
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="enable verbose test output")
+    group.add_argument("--cpp-only", action="store_true", help="run only the C++ engine tests")
+    group.add_argument("--python-only", action="store_true", help="run only the Python tests")
+    group.add_argument("--web-only", action="store_true", help="run only the web UI tests")
+    parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose test output")
     args = parser.parse_args()
     return args
 

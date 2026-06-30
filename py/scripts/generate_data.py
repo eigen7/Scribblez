@@ -29,8 +29,7 @@ from pathlib import Path
 from scribblez.ffi import read_file_header
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
-
-PLAY_GAME = '/workspace/repo/target/engine/play_game'
+PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
 
 def build_player_spec(args) -> str:
@@ -40,9 +39,11 @@ def build_player_spec(args) -> str:
     play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster)."""
     if not args.model:
         if args.hasty_temperature > 0:
-            return (f"--type=hastybot --temperature={args.hasty_temperature} "
-                    f"--top-k={args.hasty_top_k} "
-                    f"--temperature-min-bag={args.hasty_temp_min_bag}")
+            return (
+                f"--type=hastybot --temperature={args.hasty_temperature} "
+                f"--top-k={args.hasty_top_k} "
+                f"--temperature-min-bag={args.hasty_temp_min_bag}"
+            )
         return "--type=hastybot"
     return (
         f"--type=neural --model={args.model} --top-k={args.top_k} "
@@ -50,14 +51,16 @@ def build_player_spec(args) -> str:
     )
 
 
-def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
-              player_spec: str) -> int:
+def run_games(
+    out_dir: Path, num_games: int, games_per_file: int, threads: int, player_spec: str
+) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
     Both seats use `player_spec` (the value of a `--player` flag); each seat is a
     fresh agent, so two neural seats draw independent sampling seeds.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    # fmt: off
     cmd = [
         PLAY_GAME,
         "--player", player_spec,
@@ -67,6 +70,7 @@ def run_games(out_dir: Path, num_games: int, games_per_file: int, threads: int,
         "--games", str(num_games),
         "--threads", str(threads),
     ]
+    # fmt: on
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
     print(f"Output:  {out_dir}")
@@ -104,29 +108,42 @@ def main() -> int:
         help="Fraction of games routed to the held-out test split.",
     )
     parser.add_argument(
-        "--model", default="",
+        "--model",
+        default="",
         help="ONNX model for neural self-play; empty = HastyBot self-play.",
     )
     parser.add_argument(
-        "--top-k", type=int, default=0,
+        "--top-k",
+        type=int,
+        default=0,
         help="Neural candidate set (with --model): 0 = every legal play (most "
-             "diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
+        "diverse, slowest); K > 0 = top-K by HastyBot equity (faster).",
     )
     parser.add_argument(
-        "--temperature", type=float, default=0.0,
+        "--temperature",
+        type=float,
+        default=0.0,
         help="Neural agent softmax sampling temperature (only used with --model).",
     )
     parser.add_argument(
-        "--hasty-temperature", type=float, default=0.0,
+        "--hasty-temperature",
+        type=float,
+        default=0.0,
         help="HastyBot softmax temperature for model-free self-play (0 = greedy).",
     )
-    parser.add_argument("--hasty-top-k", type=int, default=10,
-                        help="HastyBot candidate count when --hasty-temperature > 0.")
     parser.add_argument(
-        "--hasty-temp-min-bag", type=int, default=0,
+        "--hasty-top-k",
+        type=int,
+        default=10,
+        help="HastyBot candidate count when --hasty-temperature > 0.",
+    )
+    parser.add_argument(
+        "--hasty-temp-min-bag",
+        type=int,
+        default=0,
         help="Confine HastyBot softmax sampling to turns where the bag has >= this "
-             "many tiles (greedy below it). 0 = sample the whole game; ~60 reproduces "
-             "an opening-only exploratory bot.",
+        "many tiles (greedy below it). 0 = sample the whole game; ~60 reproduces "
+        "an opening-only exploratory bot.",
     )
     parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     args = parser.parse_args()

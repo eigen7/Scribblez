@@ -11,6 +11,7 @@ Usage:
 Then play a human-vs-AI game with:
     ./target/engine/play_game --player "--type=human" --player "--type=greedy"
 """
+
 import argparse
 import os
 import shutil
@@ -18,7 +19,6 @@ import subprocess
 import sys
 
 from setup_check import import_setup_common
-
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -50,13 +50,12 @@ def list_built_binaries(target_dir: str) -> list[str]:
     binaries = []
     for name in os.listdir(engine_dir) if os.path.isdir(engine_dir) else []:
         path = os.path.join(engine_dir, name)
-        if (os.path.splitext(name)[1] == "" and os.path.isfile(path)
-                and os.access(path, os.X_OK)):
+        if os.path.splitext(name)[1] == "" and os.path.isfile(path) and os.access(path, os.X_OK):
             binaries.append(path)
     return sorted(binaries)
 
 
-def print_built_binaries(target_dir: str) -> None:
+def print_built_binaries(target_dir: str):
     binaries = list_built_binaries(target_dir)
     if not binaries:
         print("\nNo runnable binaries found under target/.")
@@ -77,8 +76,10 @@ def link_lexica_into_macondo():
     so it survives the mount dir being moved. Safe to run repeatedly.
     """
     if not os.path.isdir(LEXICA_DIR):
-        print(f"\nNo lexica dir at {LEXICA_DIR}; skipping macondo lexica link.\n"
-              "Run ./setup_wizard.py to install lexica.")
+        print(
+            f"\nNo lexica dir at {LEXICA_DIR}; skipping macondo lexica link.\n"
+            "Run ./setup_wizard.py to install lexica."
+        )
         return
     parent = os.path.dirname(MACONDO_GADDAG_DIR)
     os.makedirs(parent, exist_ok=True)
@@ -90,7 +91,6 @@ def link_lexica_into_macondo():
     print(f"\nLinked {LEXICA_DIR} -> {MACONDO_GADDAG_DIR}")
 
 
-
 def clone_and_build_macondo():
     """Clone the pinned Macondo tag and build its shell binary, atomically.
 
@@ -100,8 +100,10 @@ def clone_and_build_macondo():
     """
     print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
     try:
-        run(f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
-            f"{MACONDO_REPO_URL} {MACONDO_DIR}")
+        run(
+            f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
+            f"{MACONDO_REPO_URL} {MACONDO_DIR}"
+        )
         os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
         run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
     except BaseException:
@@ -113,7 +115,9 @@ def check_macondo_tag():
     """Error out if the existing Macondo checkout is not at the expected tag."""
     result = subprocess.run(
         ["git", "describe", "--tags", "--exact-match", "HEAD"],
-        capture_output=True, text=True, cwd=MACONDO_DIR,
+        capture_output=True,
+        text=True,
+        cwd=MACONDO_DIR,
     )
     current_tag = result.stdout.strip()
     if result.returncode != 0 or current_tag != MACONDO_TAG:
@@ -132,20 +136,26 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--debug", action="store_true",
-                        help="debug build (default: Release)")
-    parser.add_argument("--clean", action="store_true",
-                        help="remove the target/ directory before configuring")
-    parser.add_argument("-j", "--jobs", type=int, default=0,
-                        help="parallel build jobs (default: all CPUs)")
-    parser.add_argument("--skip-web", action="store_true",
-                        help="skip installing the web UI npm dependencies")
-    parser.add_argument("--skip-macondo", action="store_true",
-                        help="skip rebuilding the Macondo shell binary")
-    parser.add_argument("--skip-macondo-tag-check", action="store_true",
-                        help="skip verifying that the macondo checkout is at "
-                             f"the expected tag ({MACONDO_TAG}); useful when "
-                             "fiddling with the macondo source")
+    parser.add_argument("--debug", action="store_true", help="debug build (default: Release)")
+    parser.add_argument(
+        "--clean", action="store_true", help="remove the target/ directory before configuring"
+    )
+    parser.add_argument(
+        "-j", "--jobs", type=int, default=0, help="parallel build jobs (default: all CPUs)"
+    )
+    parser.add_argument(
+        "--skip-web", action="store_true", help="skip installing the web UI npm dependencies"
+    )
+    parser.add_argument(
+        "--skip-macondo", action="store_true", help="skip rebuilding the Macondo shell binary"
+    )
+    parser.add_argument(
+        "--skip-macondo-tag-check",
+        action="store_true",
+        help="skip verifying that the macondo checkout is at "
+        f"the expected tag ({MACONDO_TAG}); useful when "
+        "fiddling with the macondo source",
+    )
     args = parser.parse_args()
     return args
 
@@ -168,8 +178,10 @@ def main():
     #    Vite dev server (`npm run dev`) for human-vs-AI play.
     if not args.skip_web:
         if shutil.which("npm") is None:
-            print("\nWARNING: npm not found on PATH -- skipping web UI deps.\n"
-                  "Human-vs-AI web play needs Node.js/npm installed.")
+            print(
+                "\nWARNING: npm not found on PATH -- skipping web UI deps.\n"
+                "Human-vs-AI web play needs Node.js/npm installed."
+            )
         else:
             web_dir = os.path.join(ROOT, "web")
             if os.path.exists(os.path.join(web_dir, "package-lock.json")):

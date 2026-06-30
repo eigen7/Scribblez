@@ -27,7 +27,14 @@ from scribblez.paths import TagPaths
 # The tables whose row counts form the per-tag change token the React shell polls
 # (a change in any count means that tab's data advanced). Mirrors the Bokeh shell's
 # per-tab ``watch()``.
-VERSION_TABLES = ("train_step", "metrics", "throughput", "monotonicity", "calibration", "score_belief")
+VERSION_TABLES = (
+    "train_step",
+    "metrics",
+    "throughput",
+    "monotonicity",
+    "calibration",
+    "score_belief",
+)
 
 
 def _train_step(conn: sqlite3.Connection, params: dict):
@@ -91,7 +98,9 @@ class TagsHandler(_Base):
 
 class VersionHandler(_Base):
     def get(self):
-        conn = _open(self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag"))
+        conn = _open(
+            self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
+        )
         if conn is None:
             self.set_status(404)
             self.write({"error": "unknown tag"})
@@ -108,7 +117,9 @@ class FigureHandler(_Base):
             self.set_status(404)
             self.write({"error": f"unknown figure {name!r}"})
             return
-        conn = _open(self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag"))
+        conn = _open(
+            self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
+        )
         if conn is None:
             self.set_status(404)
             self.write({"error": "unknown tag"})

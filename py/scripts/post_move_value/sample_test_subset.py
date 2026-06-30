@@ -13,9 +13,9 @@ sampled positions) plus pos-NN.txt ASCII dumps. The structural probes read this
 import argparse
 import sys
 
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.eval.web_render import render_position_images
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 
 def main() -> int:

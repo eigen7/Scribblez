@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run clang-format over all C++ sources."""
+
 import sys
 from pathlib import Path
 

@@ -20,8 +20,12 @@ def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--task", choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE], default=POST_MOVE_VALUE,
-                   help="Which model's runs to serve.")
+    p.add_argument(
+        "--task",
+        choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE],
+        default=POST_MOVE_VALUE,
+        help="Which model's runs to serve.",
+    )
     p.add_argument("--mount-root", default="/workspace/mount")
     p.add_argument("--api-port", type=int, default=react_server.DEFAULT_API_PORT)
     p.add_argument("--dev-port", type=int, default=react_server.DEFAULT_DEV_PORT)

@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 
 import tornado.testing
-
 from scribblez.dashboard import api, db
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 
@@ -19,8 +18,17 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
         db.write_loss_weights(conn, {"loss_score_pdf": 1.0})
         db.write_train_steps(
             conn,
-            [{"step": s, "positions": 10 * s, "n": 1, "loss": 1.0 / s, "loss_score_pdf": 1.0 / s,
-              "score_acc": 0.5} for s in range(1, 4)],
+            [
+                {
+                    "step": s,
+                    "positions": 10 * s,
+                    "n": 1,
+                    "loss": 1.0 / s,
+                    "loss_score_pdf": 1.0 / s,
+                    "score_acc": 0.5,
+                }
+                for s in range(1, 4)
+            ],
         )
         conn.close()
         super().setUp()

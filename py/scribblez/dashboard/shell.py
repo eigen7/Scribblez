@@ -27,14 +27,18 @@ BODY_STYLE = (
     "<style>html,body{background:#eef2f7;margin:0;"
     "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}</style>"
 )
-SIDEBAR_CSS = InlineStyleSheet(css="""
+SIDEBAR_CSS = InlineStyleSheet(
+    css="""
 :host { background:#1f2733; padding:18px 12px; min-height:100vh;
         box-shadow:2px 0 12px rgba(15,22,33,.18); }
-""")
-CARD_CSS = InlineStyleSheet(css="""
+"""
+)
+CARD_CSS = InlineStyleSheet(
+    css="""
 :host { background:#ffffff; border-radius:10px; padding:14px; margin:0 0 16px 0;
         box-shadow:0 1px 5px rgba(20,30,50,.08); }
-""")
+"""
+)
 
 
 def card():
@@ -148,13 +152,19 @@ class Dashboard:
         self.tag_select = Select(options=tags or ["(none)"], value=default, width=120)
         self.tag_select.on_change("value", lambda a, o, n: self.on_tag())
         # Reflect the selected tag in the URL (?tag=<tag>) so it stays shareable.
-        self.tag_select.js_on_change("value", CustomJS(code="""
+        self.tag_select.js_on_change(
+            "value",
+            CustomJS(
+                code="""
             const url = new URL(window.location.href);
             url.searchParams.set('tag', cb_obj.value);
             window.history.replaceState({}, '', url);
-        """))
-        self.nav = [Button(label=t.label, button_type="light", sizing_mode="stretch_width")
-                    for t in tabs]
+        """
+            ),
+        )
+        self.nav = [
+            Button(label=t.label, button_type="light", sizing_mode="stretch_width") for t in tabs
+        ]
         for i, b in enumerate(self.nav):
             b.on_click(partial(self.select_tab, i))
         self.on_tag()
@@ -175,21 +185,34 @@ class Dashboard:
     # --- layout / navigation ---------------------------------------------
 
     def _sidebar(self):
-        brand = Div(text="<div style='color:#eef2f7;font-size:19px;font-weight:700'>Scribblez</div>"
-                         "<div style='color:#7d8aa0;font-size:11px'>training dashboard</div>",
-                    styles={"margin-bottom": "16px"})
-        tag_lbl = Div(text="<span style='color:#aab4c5;font-size:13px'>Tag</span>",
-                      styles={"align-self": "center"})
+        brand = Div(
+            text="<div style='color:#eef2f7;font-size:19px;font-weight:700'>Scribblez</div>"
+            "<div style='color:#7d8aa0;font-size:11px'>training dashboard</div>",
+            styles={"margin-bottom": "16px"},
+        )
+        tag_lbl = Div(
+            text="<span style='color:#aab4c5;font-size:13px'>Tag</span>",
+            styles={"align-self": "center"},
+        )
         spacer = Div(text="", styles={"height": "14px"})
-        return column(brand, row(tag_lbl, self.tag_select), spacer, *self.nav,
-                      width=210, stylesheets=[SIDEBAR_CSS])
+        return column(
+            brand,
+            row(tag_lbl, self.tag_select),
+            spacer,
+            *self.nav,
+            width=210,
+            stylesheets=[SIDEBAR_CSS],
+        )
 
     def layout(self):
-        main = column(*[t.node for t in self.tabs], sizing_mode="stretch_width",
-                      styles={"padding": "18px"})
-        return column(Div(text=BODY_STYLE),
-                      row(self._sidebar(), main, sizing_mode="stretch_width"),
-                      sizing_mode="stretch_width")
+        main = column(
+            *[t.node for t in self.tabs], sizing_mode="stretch_width", styles={"padding": "18px"}
+        )
+        return column(
+            Div(text=BODY_STYLE),
+            row(self._sidebar(), main, sizing_mode="stretch_width"),
+            sizing_mode="stretch_width",
+        )
 
     def select_tab(self, i: int):
         self.active = i

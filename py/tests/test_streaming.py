@@ -11,17 +11,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-
 from scribblez.dashboard import db, plots
 from scribblez.dataset import row_layout, slice_row_batch
-from scribblez.ffi import get_input_shapes, get_target_shapes, row_size_floats
-from scribblez.ffi import StreamingTrainSource
+from scribblez.ffi import StreamingTrainSource, get_input_shapes, get_target_shapes, row_size_floats
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.train_common import TrainStepWriter
-
 from scripts.post_move_value.train import build_arg_parser, run_streaming_training
-
 
 _FFI_LIB = Path("/workspace/repo/target/engine/libscribblez_ffi.so")
 
@@ -178,7 +174,9 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     """Recorded loss weights round-trip in order and switch the loss panel to the
     weighted-stack view; without them the plot falls back to lines."""
     conn = db.connect(tmp_path / "dash.db")
-    db.write_train_steps(conn, [{"step": 1, "positions": 8, "loss": 1.0, "loss_a": 0.6, "loss_b": 0.4}])
+    db.write_train_steps(
+        conn, [{"step": 1, "positions": 8, "loss": 1.0, "loss_a": 0.6, "loss_b": 0.4}]
+    )
 
     assert db.read_loss_weights(conn) == {}  # none yet -> overlaid lines
     assert type(plots.train_step_grid(conn)).__name__ == "Column"
@@ -264,6 +262,7 @@ def test_streaming_loop_one_step(tmp_path):
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]
 
+    # fmt: off
     args = build_arg_parser().parse_args(
         [
             "-t", "looptest", "--device", "cpu", "--batch-size", "8",
@@ -272,6 +271,7 @@ def test_streaming_loop_one_step(tmp_path):
             "--no-dashboard", "--no-probe", "--no-calibration",
         ]
     )
+    # fmt: on
     paths = TagPaths("looptest", POST_MOVE_VALUE, mount_root=tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device("cpu")
@@ -281,9 +281,20 @@ def test_streaming_loop_one_step(tmp_path):
 
     source = _FakeSource(args.batch_size, row_size_floats())
     final = run_streaming_training(
-        model, optimizer, source, conn, paths, device, args,
-        probe_enabled=False, test_ds=None, start_ckpt=0, start_positions=0, start_step=0,
-        spatial_planes=sp, scalar_size=sc,
+        model,
+        optimizer,
+        source,
+        conn,
+        paths,
+        device,
+        args,
+        probe_enabled=False,
+        test_ds=None,
+        start_ckpt=0,
+        start_positions=0,
+        start_step=0,
+        spatial_planes=sp,
+        scalar_size=sc,
     )
 
     assert final == 16

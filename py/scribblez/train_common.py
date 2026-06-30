@@ -123,11 +123,13 @@ def add_train_log_args(parser):
     """Register the knob for per-minibatch dashboard resolution.
     Shared by the trainers so the default and help text live in one place."""
     parser.add_argument(
-        "--max-log-points", type=int, default=1024,
+        "--max-log-points",
+        type=int,
+        default=1024,
         help="Target number of points the loss/accuracy plots show. New minibatches "
-             "are stored aggregated at ~total/this resolution (append-only; older "
-             "data stays finer), and the read rolls everything up to ~this many "
-             "uniform points. Storage grows only logarithmically with the run.",
+        "are stored aggregated at ~total/this resolution (append-only; older "
+        "data stays finer), and the read rolls everything up to ~this many "
+        "uniform points. Storage grows only logarithmically with the run.",
     )
 
 
@@ -174,10 +176,14 @@ class TrainStepWriter:
         """Turn the full (or, on close, partial) open bucket into a point."""
         if self._count == 0:
             return
-        self._pending.append({
-            "step": self._last_step, "positions": self._last_positions, "n": self._count,
-            **{name: total / self._count for name, total in self._sums.items()},
-        })
+        self._pending.append(
+            {
+                "step": self._last_step,
+                "positions": self._last_positions,
+                "n": self._count,
+                **{name: total / self._count for name, total in self._sums.items()},
+            }
+        )
         self._reset_open()
 
     def record(self, step: int, positions: int, metrics: dict):

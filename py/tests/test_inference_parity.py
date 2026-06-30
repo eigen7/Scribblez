@@ -20,7 +20,6 @@ stack and is covered separately.
 import numpy as np
 import pytest
 import torch
-
 from scribblez.ffi import get_input_shapes
 from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.post_move_value.onnx_export import export_onnx
@@ -68,8 +67,13 @@ def test_pytorch_matches_onnxruntime(tmp_path, batch):
 
     model = _random_model()
     onnx_path = tmp_path / "model.onnx"
-    export_onnx(model, onnx_path, spatial_planes=SPATIAL_PLANES, scalar_size=SCALAR_SIZE,
-                board_size=BOARD_SIZE)
+    export_onnx(
+        model,
+        onnx_path,
+        spatial_planes=SPATIAL_PLANES,
+        scalar_size=SCALAR_SIZE,
+        board_size=BOARD_SIZE,
+    )
 
     spatial, scalar = _random_inputs(batch)
 
@@ -79,13 +83,14 @@ def test_pytorch_matches_onnxruntime(tmp_path, batch):
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     # Exported output order must be the documented head order.
     assert [o.name for o in sess.get_outputs()] == OUTPUT_NAMES
-    ort_out = sess.run(
-        OUTPUT_NAMES, {"input_spatial": spatial, "input_scalar": scalar}
-    )
+    ort_out = sess.run(OUTPUT_NAMES, {"input_spatial": spatial, "input_scalar": scalar})
 
-    for name, ort_arr in zip(OUTPUT_NAMES, ort_out):
+    for name, ort_arr in zip(OUTPUT_NAMES, ort_out, strict=True):
         np.testing.assert_allclose(
-            ort_arr, torch_out[name].numpy(), atol=1e-4, rtol=1e-4,
+            ort_arr,
+            torch_out[name].numpy(),
+            atol=1e-4,
+            rtol=1e-4,
             err_msg=f"PyTorch vs ONNXRuntime mismatch on head '{name}' (batch={batch})",
         )
 
@@ -96,8 +101,13 @@ def test_dynamic_batch_axis(tmp_path):
 
     model = _random_model()
     onnx_path = tmp_path / "model.onnx"
-    export_onnx(model, onnx_path, spatial_planes=SPATIAL_PLANES, scalar_size=SCALAR_SIZE,
-                board_size=BOARD_SIZE)
+    export_onnx(
+        model,
+        onnx_path,
+        spatial_planes=SPATIAL_PLANES,
+        scalar_size=SCALAR_SIZE,
+        board_size=BOARD_SIZE,
+    )
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
     for batch in (1, 3, 8):

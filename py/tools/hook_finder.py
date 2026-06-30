@@ -6,8 +6,9 @@ Outputs all words that starts or ends with that letter, which have the property 
 that letter from the word, you still have a valid word in the dictionary. Sorts the output by word
 length (longest to shortest), then alphabetically.
 """
-from pathlib import Path
+
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 3:
     print("Usage: python hook_finder.py <dictionary_file> <letter>")
@@ -24,7 +25,7 @@ if not Path(dictionary_file).is_file():
     print(f"Error: The dictionary file '{dictionary_file}' does not exist.")
     sys.exit(1)
 
-with open(dictionary_file, 'r') as f:
+with open(dictionary_file) as f:
     word_list = [line.strip() for line in f if line.strip()]
 
 word_set = set(word_list)

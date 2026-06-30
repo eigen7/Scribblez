@@ -31,10 +31,14 @@ def launch(
 ):
     """Spawn the data API and the Vite dev server; block until interrupted, then
     tear both down."""
+    # fmt: off
     api = subprocess.Popen(
-        [sys.executable, "-m", "scribblez.dashboard.api",
-         "--port", str(api_port), "--mount-root", str(mount_root)]
+        [
+            sys.executable, "-m", "scribblez.dashboard.api",
+            "--port", str(api_port), "--mount-root", str(mount_root),
+        ]
     )
+    # fmt: on
     env = {
         **os.environ,
         "VITE_TOOL": "dashboard",

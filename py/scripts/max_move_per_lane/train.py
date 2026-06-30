@@ -22,7 +22,6 @@ import sys
 import time
 
 import torch
-
 from scribblez.dashboard import db, server
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import (
@@ -37,10 +36,10 @@ from scribblez.train_common import (
     ThroughputMeter,
     TrainStepWriter,
     add_train_log_args,
-    timed_print,
     maybe_resume,
     reset_tag,
     save_rolling_checkpoint,
+    timed_print,
 )
 
 
@@ -156,7 +155,10 @@ def run_streaming_training(
 
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
-                outputs, tgt, lambda_cdf=args.lambda_cdf, lambda_occ=args.lambda_occ,
+                outputs,
+                tgt,
+                lambda_cdf=args.lambda_cdf,
+                lambda_occ=args.lambda_occ,
                 lambda_has_move=args.lambda_has_move,
             )
             optimizer.zero_grad()
@@ -188,8 +190,10 @@ def run_streaming_training(
                 save_rolling_checkpoint(
                     paths.rolling_checkpoint, model, optimizer, ckpt_idx, positions, step, args
                 )
-                timed_print(f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-                    f"-> saved {paths.rolling_checkpoint.name}")
+                timed_print(
+                    f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
+                    f"-> saved {paths.rolling_checkpoint.name}"
+                )
                 interval.reset()
                 model.train()
                 next_ckpt += args.checkpoint_every
@@ -235,16 +239,23 @@ def main() -> int:
     db.write_meta(conn, args.tag, vars(args), n_params)
     # Coefficients of each loss term in compute_loss's total (PDF has weight 1),
     # so the dashboard can stack the weighted contributions.
-    db.write_loss_weights(conn, {
-        "loss_score_pdf": 1.0,
-        "loss_score_cdf": args.lambda_cdf,
-        "loss_move": args.lambda_occ,
-        "loss_has_move": args.lambda_has_move,
-    })
+    db.write_loss_weights(
+        conn,
+        {
+            "loss_score_pdf": 1.0,
+            "loss_score_cdf": args.lambda_cdf,
+            "loss_move": args.lambda_occ,
+            "loss_has_move": args.lambda_has_move,
+        },
+    )
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag,
-                                       app=server.MAX_MOVE_PER_LANE_APP)
+        proc = server.launch_dashboard(
+            args.dashboard_port,
+            str(paths.mount_root),
+            tag=args.tag,
+            app=server.MAX_MOVE_PER_LANE_APP,
+        )
         if proc is not None:
             atexit.register(proc.terminate)
 
@@ -259,11 +270,21 @@ def main() -> int:
         seed=args.seed,
         handicap_max=args.handicap_max,
     )
-    print(f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}")
+    print(
+        f"Streaming {args.gen_threads} gen-threads -> {args.num_slots} slots of {args.batch_size}"
+    )
 
     run_streaming_training(
-        model, optimizer, source, conn, paths, device, args,
-        start_ckpt=start_ckpt, start_positions=start_positions, start_step=start_step,
+        model,
+        optimizer,
+        source,
+        conn,
+        paths,
+        device,
+        args,
+        start_ckpt=start_ckpt,
+        start_positions=start_positions,
+        start_step=start_step,
     )
     return 0
 

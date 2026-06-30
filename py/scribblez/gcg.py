@@ -17,7 +17,7 @@ replaying the board forward, so the rest of the pipeline can stay format-blind.
 """
 
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 # Standard English set: 100 tiles, two full 7-tile racks dealt at the start.
 _INITIAL_BAG = 86
@@ -37,25 +37,26 @@ def _parse_position(pos: str) -> tuple[bool, int, int]:
     return False, int(m.group(2)) - 1, ord(m.group(1)) - ord("A")
 
 
-def parse_gcg(path) -> Dict[str, Any]:
-    nick_to_player: Dict[str, int] = {}
-    player_names: List[str] = ["", ""]
+def parse_gcg(path) -> dict[str, Any]:
+    nick_to_player: dict[str, int] = {}
+    player_names: list[str] = ["", ""]
 
-    board: List[List[int | None]] = [[None] * 15 for _ in range(15)]  # letter index or None
+    board: list[list[int | None]] = [[None] * 15 for _ in range(15)]  # letter index or None
     cumulative = [0, 0]
     bag = _INITIAL_BAG
-    turns: List[Dict[str, Any]] = []
+    turns: list[dict[str, Any]] = []
 
-    def record(player: int, rack: str, move: Dict[str, Any], score_delta: int,
-               bag_before: int):
-        turns.append({
-            "player": player,
-            "rack_before": rack,
-            "cumulative_scores": list(cumulative),  # after the move
-            "score_delta": score_delta,
-            "bag_size_before": bag_before,
-            "move": move,
-        })
+    def record(player: int, rack: str, move: dict[str, Any], score_delta: int, bag_before: int):
+        turns.append(
+            {
+                "player": player,
+                "rack_before": rack,
+                "cumulative_scores": list(cumulative),  # after the move
+                "score_delta": score_delta,
+                "bag_size_before": bag_before,
+                "move": move,
+            }
+        )
 
     with open(path, encoding="utf-8") as f:
         for raw in f:
@@ -77,7 +78,7 @@ def parse_gcg(path) -> Dict[str, Any]:
             player = nick_to_player.get(nick)
             if player is None:
                 continue
-            toks = line[colon + 1:].split()
+            toks = line[colon + 1 :].split()
             if not toks:
                 continue
 
@@ -108,8 +109,8 @@ def parse_gcg(path) -> Dict[str, Any]:
             cumulative[player] = int(cum_tok)
             horizontal, sr, sc = _parse_position(pos)
 
-            tiles: List[Dict[str, Any]] = []
-            main_word: List[str] = []
+            tiles: list[dict[str, Any]] = []
+            main_word: list[str] = []
             for i, ch in enumerate(word):
                 r = sr if horizontal else sr + i
                 c = sc + i if horizontal else sc

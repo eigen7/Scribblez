@@ -27,8 +27,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--task", choices=sorted(_APPS), default="post_move_value",
-                        help="Which model's dashboard to serve.")
+    parser.add_argument(
+        "--task",
+        choices=sorted(_APPS),
+        default="post_move_value",
+        help="Which model's dashboard to serve.",
+    )
     parser.add_argument("--port", type=int, default=server.DEFAULT_PORT, help="Server port.")
     args = parser.parse_args()
 

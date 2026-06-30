@@ -13,14 +13,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from scribblez.dataset import SlogDataset
-from scribblez.ffi import NativeDataLoader, read_file_header, row_size_floats
-
+from scribblez.ffi import NativeDataLoader, read_file_header
 
 # ---------------------------------------------------------------------------
 # Fixture: generate .slog files using the test_slog_writer binary.
 # ---------------------------------------------------------------------------
+
 
 def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int = 4) -> list[Path]:
     """Generate .slog files for testing using the test_slog_writer binary."""
@@ -30,7 +29,8 @@ def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int =
 
     result = subprocess.run(
         [str(binary), str(tmpdir), str(num_games), str(games_per_file)],
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, f"test_slog_writer failed: {result.stderr}"
 
@@ -43,13 +43,15 @@ def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int =
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestEpochDeterminism:
     def test_same_seed_same_output(self, tmp_path):
         slogs = generate_test_slogs(tmp_path)
-        row_floats = row_size_floats()
 
         def run_epoch(seed: int) -> np.ndarray:
-            loader = NativeDataLoader(memory_budget=256 * 1024 * 1024, num_workers=2, num_prefetch=1)
+            loader = NativeDataLoader(
+                memory_budget=256 * 1024 * 1024, num_workers=2, num_prefetch=1
+            )
             for p in slogs:
                 num_pos, fsize = read_file_header(p)
                 loader.add_file(p, num_pos, fsize)
@@ -119,7 +121,6 @@ class TestEpochCoverage:
 class TestMemoryBudgetStress:
     def test_tiny_budget(self, tmp_path):
         slogs = generate_test_slogs(tmp_path, num_games=20, games_per_file=4)
-        row_floats = row_size_floats()
 
         # Find largest file size.
         max_fsize = 0
@@ -130,9 +131,7 @@ class TestMemoryBudgetStress:
             max_fsize = max(max_fsize, fsize)
 
         # Budget: just one file. This forces eviction on every file switch.
-        loader = NativeDataLoader(
-            memory_budget=max_fsize + 1, num_workers=1, num_prefetch=1
-        )
+        loader = NativeDataLoader(memory_budget=max_fsize + 1, num_workers=1, num_prefetch=1)
         for i, p in enumerate(slogs):
             loader.add_file(p, file_info[i][0], file_info[i][1])
         # file_info holds per-file game counts; the epoch yields every eligible
@@ -175,7 +174,7 @@ class TestMemoryBudgetStress:
 class TestStreamingDataset:
     def test_iter_batches(self, tmp_path):
         """Test the SlogDataset.iter_batches() method."""
-        slogs = generate_test_slogs(tmp_path)
+        generate_test_slogs(tmp_path)
 
         ds = SlogDataset(
             tmp_path, post_move=True, apply_symmetry=True, memory_budget=256 * 1024 * 1024
@@ -199,7 +198,7 @@ class TestStreamingDataset:
         # Determinism: same seed, same output.
         batches2 = list(ds.iter_batches(batch_size=4, seed=555))
         assert len(batches) == len(batches2)
-        for b1, b2 in zip(batches, batches2):
+        for b1, b2 in zip(batches, batches2, strict=True):
             for key in b1:
                 np.testing.assert_array_equal(b1[key].numpy(), b2[key].numpy())
 

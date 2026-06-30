@@ -41,6 +41,7 @@ def serve_command(
 ) -> list[str]:
     """The argv that serves dashboard app `app`, bound for Docker port-forwarding."""
     app_path = Path(__file__).with_name(app)
+    # fmt: off
     return [
         sys.executable, "-c", _SERVE_SHIM, "serve", str(app_path),
         "--port", str(port),
@@ -49,6 +50,7 @@ def serve_command(
         "--allow-websocket-origin", f"127.0.0.1:{port}",
         "--args", "--mount-root", str(mount_root),
     ]
+    # fmt: on
 
 
 def launch_dashboard(

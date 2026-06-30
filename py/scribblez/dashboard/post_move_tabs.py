@@ -22,8 +22,10 @@ PROBE_CURVES = [
 CALIB_CURVES = [
     ("WLD accuracy & Brier / ECE", ["wld_acc", "calib_brier", "calib_ece"]),
     ("Calibration log-loss", ["calib_log_loss"]),
-    ("Score-diff calibration",
-     ["calib_scorediff_mae", "calib_scorediff_bias", "calib_scorediff_sharpness"]),
+    (
+        "Score-diff calibration",
+        ["calib_scorediff_mae", "calib_scorediff_bias", "calib_scorediff_sharpness"],
+    ),
 ]
 
 

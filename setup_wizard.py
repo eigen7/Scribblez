@@ -110,8 +110,9 @@ def get_args() -> argparse.Namespace:
 
 
 def main():
-    assert not in_docker_container(), \
+    assert not in_docker_container(), (
         "setup_wizard.py is intended to be run on the host, not inside the container."
+    )
     get_args()  # for --help
 
     config = make_config()

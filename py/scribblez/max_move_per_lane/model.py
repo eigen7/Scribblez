@@ -40,7 +40,9 @@ class LaneModel(nn.Module):
     two axes.
     """
 
-    def __init__(self, channels: int, n_layers: int, n_heads: int, ffn_mult: int, n_rack_tokens: int):
+    def __init__(
+        self, channels: int, n_layers: int, n_heads: int, ffn_mult: int, n_rack_tokens: int
+    ):
         super().__init__()
         self.n_rack_tokens = n_rack_tokens
         layer = nn.TransformerEncoderLayer(
@@ -102,11 +104,13 @@ class MaxMovePerLaneModel(nn.Module):
         # Heads, shared across the two axes (the per-lane operation is the same).
         self.occ_head = nn.Linear(trunk_channels, N_TILE_KINDS)  # per cell, per kind
         self.score_head = nn.Sequential(  # per lane (pooled), score PMF logits
-            nn.Linear(2 * trunk_channels, trunk_channels), nn.GELU(),
+            nn.Linear(2 * trunk_channels, trunk_channels),
+            nn.GELU(),
             nn.Linear(trunk_channels, n_score_bins),
         )
         self.has_move_head = nn.Sequential(  # per lane, "any legal move?" logit
-            nn.Linear(2 * trunk_channels, trunk_channels), nn.GELU(),
+            nn.Linear(2 * trunk_channels, trunk_channels),
+            nn.GELU(),
             nn.Linear(trunk_channels, 1),
         )
 
@@ -210,7 +214,9 @@ def compute_loss(
     loss_occ = occupancy_loss(outputs["lane_occupancy_logits"], targets["lane_occupancy"], mask)
     loss_has_move = F.binary_cross_entropy_with_logits(outputs["lane_has_move_logits"], mask)
 
-    total = loss_pdf + lambda_cdf * loss_cdf + lambda_occ * loss_occ + lambda_has_move * loss_has_move
+    total = (
+        loss_pdf + lambda_cdf * loss_cdf + lambda_occ * loss_occ + lambda_has_move * loss_has_move
+    )
     return {
         "total": total,
         "score_pdf": loss_pdf,

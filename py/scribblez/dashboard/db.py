@@ -168,9 +168,7 @@ def read_loss_weights(conn: sqlite3.Connection) -> dict:
     }
 
 
-def write_monotonicity(
-    conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores
-):
+def write_monotonicity(conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores):
     """Store the win-rate curves and per-curve scores (N x 3: structural, r2, violations)."""
     conn.execute(
         "INSERT INTO monotonicity (epoch, score_diffs, win_rate, curve_scores) VALUES (?, ?, ?, ?) "
@@ -195,7 +193,8 @@ def write_calibration(conn: sqlite3.Connection, epoch: int, report):
     """Store the calibration reliability binning (scalars go through write_metrics)."""
     conn.execute(
         "INSERT INTO calibration "
-        "(epoch, rel_edges, rel_pred, rel_actual, rel_count, sd_edges, sd_pred, sd_actual, sd_count) "
+        "(epoch, rel_edges, rel_pred, rel_actual, rel_count, "
+        "sd_edges, sd_pred, sd_actual, sd_count) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(epoch) DO UPDATE SET "
         "rel_edges=excluded.rel_edges, rel_pred=excluded.rel_pred, rel_actual=excluded.rel_actual, "
@@ -203,10 +202,14 @@ def write_calibration(conn: sqlite3.Connection, epoch: int, report):
         "sd_actual=excluded.sd_actual, sd_count=excluded.sd_count",
         (
             epoch,
-            to_blob(report.rel_bin_edges), to_blob(report.rel_bin_pred),
-            to_blob(report.rel_bin_actual), to_blob(report.rel_bin_count),
-            to_blob(report.sd_bin_edges), to_blob(report.sd_bin_pred),
-            to_blob(report.sd_bin_actual), to_blob(report.sd_bin_count),
+            to_blob(report.rel_bin_edges),
+            to_blob(report.rel_bin_pred),
+            to_blob(report.rel_bin_actual),
+            to_blob(report.rel_bin_count),
+            to_blob(report.sd_bin_edges),
+            to_blob(report.sd_bin_pred),
+            to_blob(report.sd_bin_actual),
+            to_blob(report.sd_bin_count),
         ),
     )
     conn.commit()

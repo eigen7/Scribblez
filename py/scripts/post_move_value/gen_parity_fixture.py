@@ -21,12 +21,10 @@ stack, not the quality of any trained model, and keeps the fixture hermetic.
 """
 
 import argparse
-import struct
 from pathlib import Path
 
 import numpy as np
 import torch
-
 from scribblez.ffi import get_input_shapes
 from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.post_move_value.onnx_export import export_onnx
@@ -75,9 +73,7 @@ def reference_evals(model: PostMoveValueModel, rows: np.ndarray) -> np.ndarray:
     sd = out["score_diff"].numpy()
     sd_mean, sd_std = sd[:, 0], sd[:, 1]
 
-    return np.stack(
-        [win_prob, p_win, p_draw, p_loss, sd_mean, sd_std], axis=1
-    ).astype(np.float32)
+    return np.stack([win_prob, p_win, p_draw, p_loss, sd_mean, sd_std], axis=1).astype(np.float32)
 
 
 def main() -> int:
@@ -90,8 +86,13 @@ def main() -> int:
 
     model = build_model(args.seed)
     onnx_path = args.out_dir / "model.onnx"
-    export_onnx(model, onnx_path, spatial_planes=SPATIAL_PLANES, scalar_size=SCALAR_SIZE,
-                board_size=BOARD_SIZE)
+    export_onnx(
+        model,
+        onnx_path,
+        spatial_planes=SPATIAL_PLANES,
+        scalar_size=SCALAR_SIZE,
+        board_size=BOARD_SIZE,
+    )
 
     rng = np.random.default_rng(args.seed)
     rows = rng.standard_normal((args.num_rows, INPUT_FLOATS), dtype=np.float32)

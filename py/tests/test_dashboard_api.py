@@ -11,9 +11,15 @@ def _seed(path):
     db.write_train_steps(
         conn,
         [
-            {"step": s, "positions": 100 * s, "n": 1,
-             "loss": 1.0 / s, "loss_score_pdf": 0.4 / s, "loss_score_cdf": 0.6 / s,
-             "score_acc": 0.5 + 0.01 * s}
+            {
+                "step": s,
+                "positions": 100 * s,
+                "n": 1,
+                "loss": 1.0 / s,
+                "loss_score_pdf": 0.4 / s,
+                "loss_score_cdf": 0.6 / s,
+                "score_acc": 0.5 + 0.01 * s,
+            }
             for s in range(1, 6)
         ],
     )

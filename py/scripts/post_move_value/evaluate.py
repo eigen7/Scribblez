@@ -16,14 +16,13 @@ import sys
 from pathlib import Path
 
 import torch
-
 from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
+from scribblez.ffi import get_input_shapes
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
-from scribblez.ffi import get_input_shapes
 from scribblez.post_move_value.model import PostMoveValueModel
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
 
 
 def latest_checkpoint(paths: TagPaths) -> Path:
@@ -52,7 +51,9 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
-    parser.add_argument("--epoch", type=int, default=None, help="Checkpoint epoch (default: latest).")
+    parser.add_argument(
+        "--epoch", type=int, default=None, help="Checkpoint epoch (default: latest)."
+    )
     parser.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
@@ -79,7 +80,9 @@ def main() -> int:
 
     if args.rebuild_subset or not paths.test_subset_slog.exists():
         print(f"Sampling evaluation subset from {paths.test_dir} ...")
-        build_test_subset(paths.test_dir, paths.test_subset_slog, num_positions=args.num_probe_positions)
+        build_test_subset(
+            paths.test_dir, paths.test_subset_slog, num_positions=args.num_probe_positions
+        )
 
     conn = db.connect(paths.dashboard_db)
     if not paths.position_dump_path(0).with_suffix(".png").exists():

@@ -141,9 +141,7 @@ def evaluate_calibration(
     rel_edges = np.linspace(0.0, 1.0, NUM_WLD_BINS + 1)
     rel_pred, rel_actual, rel_count = _bin_means(win_rate, value, win_rate, rel_edges)
     nonempty = rel_count > 0
-    ece = float(
-        np.sum(rel_count[nonempty] / n * np.abs(rel_pred[nonempty] - rel_actual[nonempty]))
-    )
+    ece = float(np.sum(rel_count[nonempty] / n * np.abs(rel_pred[nonempty] - rel_actual[nonempty])))
 
     # Score-diff reliability over a fixed range (out-of-range clamps to end bins).
     sd_edges = np.linspace(-SD_BIN_RANGE, SD_BIN_RANGE, NUM_SD_BINS + 1)

@@ -16,6 +16,8 @@ from subtrees.devenv_utils import (
     DevenvConfig,
     DevTool,
     SubtreeSpec,
+)
+from subtrees.devenv_utils import (
     check_setup_version as _check_setup_version,
 )
 
@@ -59,8 +61,7 @@ MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
 # remote URL nor its tracked branch, so they are declared here and consumed by
 # the pull/push tools in py/tools/ via DevTool.
 SUBTREES = [
-    SubtreeSpec(name="devenv_utils",
-                url="https://github.com/eigen7/devenv_utils.git"),
+    SubtreeSpec(name="devenv_utils", url="https://github.com/eigen7/devenv_utils.git"),
 ]
 
 

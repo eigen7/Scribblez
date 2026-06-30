@@ -21,18 +21,19 @@ import time
 from pathlib import Path
 
 import torch
-
 from scribblez.dashboard import db, server
 from scribblez.dataset import SlogDataset
+from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
 from scribblez.post_move_value.onnx_export import export_onnx
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.util import fmt_duration
 
 
-def print_epoch_progress(epoch, total_epochs, done_batches, total_batches, samples, t0, final=False):
+def print_epoch_progress(
+    epoch, total_epochs, done_batches, total_batches, samples, t0, final=False
+):
     """Render an in-place per-epoch progress line: batches done out of the epoch
     total, throughput, and a within-epoch ETA. `final` ends the line with a
     newline so the epoch summary that follows prints cleanly."""
@@ -141,24 +142,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Train Scribblez value model.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-t", "--tag", required=True,
-                        help="Output tag: checkpoints, .onnx, and the dashboard DB go here.")
     parser.add_argument(
-        "--data-tag", action="append", default=None, metavar="TAG",
+        "-t",
+        "--tag",
+        required=True,
+        help="Output tag: checkpoints, .onnx, and the dashboard DB go here.",
+    )
+    parser.add_argument(
+        "--data-tag",
+        action="append",
+        default=None,
+        metavar="TAG",
         help="Tag whose data/{train,test} splits supply the training data. Repeatable "
-             "to train on the union of several datasets. Defaults to --tag, i.e. data "
-             "and model share a tag (the original behavior). Use a separate data tag to "
-             "train many model variants over one dataset without copying it.",
+        "to train on the union of several datasets. Defaults to --tag, i.e. data "
+        "and model share a tag (the original behavior). Use a separate data tag to "
+        "train many model variants over one dataset without copying it.",
     )
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs.")
     parser.add_argument(
-        "--turns-per-game", type=int, default=0,
+        "--turns-per-game",
+        type=int,
+        default=0,
         help="Per-game turn subsampling per epoch. 0 = every eligible turn (the "
-             "full expanded epoch). 1 = one turn per game per epoch, so an epoch "
-             "is one decorrelated row per game (no two rows share a game) and is "
-             "~eligible_turns x smaller; K > 1 = K turns per game. A fresh turn "
-             "window is drawn each epoch, so over E epochs a game contributes "
-             "min(E*K, eligible_turns) distinct positions.",
+        "full expanded epoch). 1 = one turn per game per epoch, so an epoch "
+        "is one decorrelated row per game (no two rows share a game) and is "
+        "~eligible_turns x smaller; K > 1 = K turns per game. A fresh turn "
+        "window is drawn each epoch, so over E epochs a game contributes "
+        "min(E*K, eligible_turns) distinct positions.",
     )
     parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
@@ -169,11 +179,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     parser.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     parser.add_argument(
-        "--huber-delta-mean", type=float, default=10.0,
-        help="Huber transition point (points) for the score-diff mean head.")
+        "--huber-delta-mean",
+        type=float,
+        default=10.0,
+        help="Huber transition point (points) for the score-diff mean head.",
+    )
     parser.add_argument(
-        "--huber-delta-std", type=float, default=10.0,
-        help="Huber transition point (points) for the score-diff std head.")
+        "--huber-delta-std",
+        type=float,
+        default=10.0,
+        help="Huber transition point (points) for the score-diff std head.",
+    )
     parser.add_argument(
         "--num-probe-positions", type=int, default=12, help="Positions in the evaluation subset."
     )
@@ -191,11 +207,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--restart", action="store_true", help="Ignore existing checkpoints and start fresh."
     )
     parser.add_argument(
-        "--init-from", type=str, default="",
+        "--init-from",
+        type=str,
+        default="",
         help="Warm-start: load model weights (only) from this .pt checkpoint before "
-             "training (policy iteration: seed iter N+1 from iter N's model). The source "
-             "file is read-only and a fresh optimizer/LR schedule is used; ignored when "
-             "resuming this tag's own checkpoints.",
+        "training (policy iteration: seed iter N+1 from iter N's model). The source "
+        "file is read-only and a fresh optimizer/LR schedule is used; ignored when "
+        "resuming this tag's own checkpoints.",
     )
     parser.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     parser.add_argument(
@@ -274,8 +292,9 @@ def main() -> int:
 
     # Launch the dashboard alongside training (torn down on exit).
     if not args.no_dashboard:
-        proc = server.launch_dashboard(args.dashboard_port, str(paths.mount_root), tag=args.tag,
-                                       app=server.POST_MOVE_VALUE_APP)
+        proc = server.launch_dashboard(
+            args.dashboard_port, str(paths.mount_root), tag=args.tag, app=server.POST_MOVE_VALUE_APP
+        )
         if proc is not None:
             atexit.register(proc.terminate)
 
@@ -297,8 +316,12 @@ def main() -> int:
         t0 = time.time()
         last_progress = 0.0
         losses_accum = {
-            "total": 0.0, "wld": 0.0, "score_diff": 0.0,
-            "score_diff_mean": 0.0, "score_diff_std": 0.0, "opp_next_placement": 0.0,
+            "total": 0.0,
+            "wld": 0.0,
+            "score_diff": 0.0,
+            "score_diff_mean": 0.0,
+            "score_diff_std": 0.0,
+            "opp_next_placement": 0.0,
         }
         n_batches = 0
         correct_wld = 0
@@ -309,8 +332,10 @@ def main() -> int:
         # cover distinct turns.
         epoch_seed = epoch * 1000003
         for batch in ds.iter_batches(
-            args.batch_size, seed=epoch_seed,
-            turns_per_game=args.turns_per_game, epoch_index=epoch,
+            args.batch_size,
+            seed=epoch_seed,
+            turns_per_game=args.turns_per_game,
+            epoch_index=epoch,
         ):
             input_spatial = batch["input_spatial"].to(device)
             input_scalar = batch["input_scalar"].to(device)
@@ -322,8 +347,12 @@ def main() -> int:
 
             outputs = model(input_spatial, input_scalar)
             losses = compute_loss(
-                outputs, targets, lambda_sd=args.lambda_sd, lambda_opp=args.lambda_opp,
-                huber_delta_mean=args.huber_delta_mean, huber_delta_std=args.huber_delta_std,
+                outputs,
+                targets,
+                lambda_sd=args.lambda_sd,
+                lambda_opp=args.lambda_opp,
+                huber_delta_mean=args.huber_delta_mean,
+                huber_delta_std=args.huber_delta_std,
             )
 
             optimizer.zero_grad()
@@ -338,8 +367,9 @@ def main() -> int:
 
             # Throttled in-place progress line (~1 Hz) so long epochs show life.
             if time.time() - last_progress > 1.0:
-                print_epoch_progress(epoch, args.epochs, n_batches, num_batches_est,
-                                     total_samples, t0)
+                print_epoch_progress(
+                    epoch, args.epochs, n_batches, num_batches_est, total_samples, t0
+                )
                 last_progress = time.time()
 
             pred = outputs["wld"].argmax(dim=1)
@@ -348,8 +378,9 @@ def main() -> int:
 
         # Finalize the in-place progress line (true batch count) before the
         # epoch summary so they don't collide on the same terminal line.
-        print_epoch_progress(epoch, args.epochs, n_batches, n_batches, total_samples, t0,
-                             final=True)
+        print_epoch_progress(
+            epoch, args.epochs, n_batches, n_batches, total_samples, t0, final=True
+        )
 
         # Read the LR that was actually in effect for the epoch just finished
         # *before* advancing the schedule. Stepping first and reading after would
@@ -388,8 +419,13 @@ def main() -> int:
         if probe_enabled:
             record.update(
                 run_probes(
-                    model, paths.test_subset_slog, device, conn, epoch,
-                    diff_lo=-args.probe_diff_range, diff_hi=args.probe_diff_range,
+                    model,
+                    paths.test_subset_slog,
+                    device,
+                    conn,
+                    epoch,
+                    diff_lo=-args.probe_diff_range,
+                    diff_hi=args.probe_diff_range,
                 )
             )
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Pull each git subtree under subtrees/ to its upstream tip."""
+
 import sys
 from pathlib import Path
 

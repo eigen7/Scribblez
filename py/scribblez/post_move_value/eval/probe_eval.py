@@ -68,7 +68,9 @@ def evaluate_subset(
     score_mean = np.empty((num_pos, r), dtype=np.float32)
     score_std = np.empty((num_pos, r), dtype=np.float32)
     for k in range(num_pos):
-        spatial = torch.from_numpy(rows[k, :, :spatial_floats].reshape(r, *spatial_shape)).to(device)
+        spatial = torch.from_numpy(rows[k, :, :spatial_floats].reshape(r, *spatial_shape)).to(
+            device
+        )
         scalar = torch.from_numpy(rows[k, :, spatial_floats:]).to(device)
         out = model(spatial, scalar)
         wld = torch.softmax(out["wld"], dim=1)  # [win, draw, loss]

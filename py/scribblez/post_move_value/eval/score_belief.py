@@ -24,9 +24,7 @@ def gaussian_bands(mean: np.ndarray, std: np.ndarray, quantiles=DEFAULT_QUANTILE
     at each requested cumulative probability, i.e. mean + std * z_q where z_q is
     the standard-normal quantile for q.
     """
-    z = np.array(
-        [statistics.NormalDist().inv_cdf(q) for q in quantiles], dtype=np.float64
-    )
+    z = np.array([statistics.NormalDist().inv_cdf(q) for q in quantiles], dtype=np.float64)
     mean = np.asarray(mean, dtype=np.float64)
     std = np.asarray(std, dtype=np.float64)
     return mean[..., None] + std[..., None] * z

@@ -3,18 +3,16 @@
 import ctypes
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
-
 
 # ---------------------------------------------------------------------------
 # Library discovery
 # ---------------------------------------------------------------------------
 
-_FFI_LIB_PATH = '/workspace/repo/target/engine/libscribblez_ffi.so'
-_LIB: Optional[ctypes.CDLL] = None
+_FFI_LIB_PATH = "/workspace/repo/target/engine/libscribblez_ffi.so"
+_LIB: ctypes.CDLL | None = None
 
 
 def _load_lib() -> ctypes.CDLL:
@@ -316,7 +314,7 @@ def encode_score_diff_sweep(
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     if rc != 0:
-        raise IOError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
+        raise OSError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
     return out
 
 
@@ -327,7 +325,7 @@ def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what:
     out = ctypes.create_string_buffer(cap)
     n = fn(encoded, int(game_idx), int(post_move), out, cap)
     if n < 0:
-        raise IOError(f"{what} failed for {path} game {game_idx}")
+        raise OSError(f"{what} failed for {path} game {game_idx}")
     if n >= cap:  # buffer was too small; retry once with the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
@@ -349,7 +347,7 @@ def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
     idx_arr = (ctypes.c_int64 * n)(*[int(g) for _, g in picks])
     rc = _lib().scribblez_sample_slog(str(dst_path).encode("utf-8"), src_arr, idx_arr, n)
     if rc != 0:
-        raise IOError(f"sample_slog failed (rc={rc}) writing {dst_path}")
+        raise OSError(f"sample_slog failed (rc={rc}) writing {dst_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +365,7 @@ def read_file_header(path: str | Path) -> tuple[int, int]:
         ctypes.byref(file_sz),
     )
     if rc != 0:
-        raise IOError(f"Failed to read .slog header: {path}")
+        raise OSError(f"Failed to read .slog header: {path}")
     return int(num_pos.value), int(file_sz.value)
 
 
@@ -426,8 +424,13 @@ class NativeDataLoader:
         """
         self._batch_size = batch_size
         return self._lib.scribblez_dl_epoch_start(
-            self._handle, batch_size, int(post_move), int(apply_symmetry), seed,
-            turns_per_game, epoch_index,
+            self._handle,
+            batch_size,
+            int(post_move),
+            int(apply_symmetry),
+            seed,
+            turns_per_game,
+            epoch_index,
         )
 
     def load_batch(self) -> np.ndarray | None:
@@ -496,21 +499,33 @@ class StreamingTrainSource:
         ptr_arr = (ctypes.POINTER(ctypes.c_float) * num_slots)(
             *[ctypes.cast(t.data_ptr(), ctypes.POINTER(ctypes.c_float)) for t in self._slots]
         )
-        spec_arr = (ctypes.c_char_p * len(player_specs))(
-            *[s.encode("utf-8") for s in player_specs]
-        )
+        spec_arr = (ctypes.c_char_p * len(player_specs))(*[s.encode("utf-8") for s in player_specs])
         # The two tasks share the rest of the streaming API; only the constructor
         # differs (the max-move-per-lane task has no pre/post-move snapshot).
         if task == "post_move":
             self._handle = self._lib.scribblez_stream_new(
-                ptr_arr, num_slots, batch_size, num_threads, int(post_move),
-                int(apply_symmetry), ctypes.c_uint64(seed), handicap_max, spec_arr,
+                ptr_arr,
+                num_slots,
+                batch_size,
+                num_threads,
+                int(post_move),
+                int(apply_symmetry),
+                ctypes.c_uint64(seed),
+                handicap_max,
+                spec_arr,
                 len(player_specs),
             )
         else:
             self._handle = self._lib.scribblez_max_move_per_lane_stream_new(
-                ptr_arr, num_slots, batch_size, num_threads, int(apply_symmetry),
-                ctypes.c_uint64(seed), handicap_max, spec_arr, len(player_specs),
+                ptr_arr,
+                num_slots,
+                batch_size,
+                num_threads,
+                int(apply_symmetry),
+                ctypes.c_uint64(seed),
+                handicap_max,
+                spec_arr,
+                len(player_specs),
             )
         if not self._handle:
             raise RuntimeError(f"{task} stream_new returned NULL (lexicon/agent setup failed)")

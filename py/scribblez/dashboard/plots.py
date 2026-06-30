@@ -20,8 +20,17 @@ from pathlib import Path
 import numpy as np
 from bokeh.layouts import column, row
 from bokeh.models import (
-    Button, Checkbox, ColumnDataSource, CustomJS, Div, HoverTool, InlineStyleSheet,
-    LinearAxis, Range1d, Select, Slider,
+    Button,
+    Checkbox,
+    ColumnDataSource,
+    CustomJS,
+    Div,
+    HoverTool,
+    InlineStyleSheet,
+    LinearAxis,
+    Range1d,
+    Select,
+    Slider,
 )
 from bokeh.palettes import Category10
 from bokeh.plotting import figure
@@ -47,8 +56,13 @@ class View:
 
 
 def _series_figure(conn, title: str, names: list[str]):
-    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title, x_axis_label="epoch",
-                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig = figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title=title,
+        x_axis_label="epoch",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     fig.add_tools(HoverTool(tooltips=[("epoch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
     plotted = 0
@@ -74,7 +88,7 @@ def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
     figs = [f for title, names in groups if (f := _series_figure(conn, title, names))]
     if not figs:
         return Div(text="<i>No scalar metrics recorded yet.</i>")
-    rows = [row(*figs[i:i + ncols]) for i in range(0, len(figs), ncols)]
+    rows = [row(*figs[i : i + ncols]) for i in range(0, len(figs), ncols)]
     return column(*rows)
 
 
@@ -85,9 +99,14 @@ def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
 
 def _throughput_figure(rows, title, series, y_label, scale=1.0):
     """A line figure of the named throughput columns vs positions trained."""
-    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title,
-                 x_axis_label="positions trained", y_axis_label=y_label,
-                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig = figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title=title,
+        x_axis_label="positions trained",
+        y_axis_label=y_label,
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0}")], mode="vline"))
     palette = Category10[10]
     x = [r["positions"] for r in rows]
@@ -114,13 +133,20 @@ def throughput_grid(conn):
         return Div(text="<i>No throughput data yet — start a streaming run.</i>")
     # positions/s == games/s (one position sampled per game), so a single curve.
     rate = _throughput_figure(
-        rows, "Throughput", [("positions_per_s", "positions/s")], "positions per second",
+        rows,
+        "Throughput",
+        [("positions_per_s", "positions/s")],
+        "positions per second",
     )
     backpressure = _throughput_figure(
-        rows, "Backpressure — cumulative wait (s)",
-        [("consumer_blocked_ns", "training waits (CPU-bound ↑)"),
-         ("producer_blocked_ns", "gen waits (GPU-bound ↑)")],
-        "blocked time (s)", scale=1e-9,
+        rows,
+        "Backpressure — cumulative wait (s)",
+        [
+            ("consumer_blocked_ns", "training waits (CPU-bound ↑)"),
+            ("producer_blocked_ns", "gen waits (GPU-bound ↑)"),
+        ],
+        "blocked time (s)",
+        scale=1e-9,
     )
     return column(row(rate, backpressure))
 
@@ -138,15 +164,27 @@ def _stride_idx(n: int, max_points: int):
 
 
 def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"):
-    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title, x_axis_label=x_label,
-                 y_axis_label=y_label, tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig = figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title=title,
+        x_axis_label=x_label,
+        y_axis_label=y_label,
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     fig.add_tools(HoverTool(tooltips=[(x_label, "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
         src = ColumnDataSource(dict(x=xs, y=list(y)))
-        fig.line("x", "y", source=src, color=palette[i % len(palette)], line_width=1.5,
-                 legend_label=label)
+        fig.line(
+            "x",
+            "y",
+            source=src,
+            color=palette[i % len(palette)],
+            line_width=1.5,
+            legend_label=label,
+        )
     fig.legend.label_text_font_size = "8pt"
     fig.legend.click_policy = "hide"
     return fig
@@ -156,17 +194,29 @@ def _stacked_loss_figure(x, bands, title="Train loss (stacked, weighted)", y_lab
     """Stacked area of per-component losses, `bands` = (label, y) bottom-to-top.
     Click a legend entry to hide it -- hide all but one to read a single
     component's own curve (from zero)."""
-    fig = figure(width=SERIES_SIZE, height=SERIES_SIZE, title=title,
-                 x_axis_label="positions", y_axis_label=y_label,
-                 tools="pan,box_zoom,wheel_zoom,reset,save")
+    fig = figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title=title,
+        x_axis_label="positions",
+        y_axis_label=y_label,
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     palette = Category10[10]
     xs = list(x)
     cum = np.zeros(len(xs), dtype=np.float64)
     for i, (label, y) in enumerate(bands):
         lo, hi = cum, cum + np.asarray(y, dtype=np.float64)
         src = ColumnDataSource(dict(x=xs, y1=list(lo), y2=list(hi)))
-        fig.varea(x="x", y1="y1", y2="y2", source=src, fill_color=palette[i % len(palette)],
-                  fill_alpha=0.85, legend_label=label)
+        fig.varea(
+            x="x",
+            y1="y1",
+            y2="y2",
+            source=src,
+            fill_color=palette[i % len(palette)],
+            fill_alpha=0.85,
+            legend_label=label,
+        )
         cum = hi
     fig.y_range.start = 0
     fig.legend.location = "top_right"
@@ -234,9 +284,7 @@ def train_step_grid(conn, normalized: bool = False):
     acc_names = sorted(k for k in ts if k.endswith("_acc"))
     figs = [loss_fig]
     if acc_names:
-        figs.append(
-            _step_figure("Accuracy", x, [(ts[k][idx], k) for k in acc_names], "accuracy")
-        )
+        figs.append(_step_figure("Accuracy", x, [(ts[k][idx], k) for k in acc_names], "accuracy"))
     return column(row(*figs))
 
 
@@ -261,10 +309,13 @@ def _gen_controls(num_gens: int, init_gen: int, follow: bool):
     end = max(num_gens - 1, 1)
     gen = Slider(start=0, end=end, value=(end if follow else init_gen), step=1, title="", width=560)
     latest = Checkbox(label="latest", active=follow)
-    gen.js_on_change("value", CustomJS(args=dict(latest=latest),
-                                       code="latest.active = (cb_obj.value >= cb_obj.end);"))
-    latest.js_on_change("active", CustomJS(args=dict(gen=gen),
-                                           code="if (cb_obj.active) { gen.value = gen.end; }"))
+    gen.js_on_change(
+        "value",
+        CustomJS(args=dict(latest=latest), code="latest.active = (cb_obj.value >= cb_obj.end);"),
+    )
+    latest.js_on_change(
+        "active", CustomJS(args=dict(gen=gen), code="if (cb_obj.active) { gen.value = gen.end; }")
+    )
     return gen, latest
 
 
@@ -279,8 +330,9 @@ def _board_uri(path: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None = None,
-                follow: bool = True) -> View | None:
+def probes_view(
+    conn, image_dir: Path, init_pos: int = 0, init_gen: int | None = None, follow: bool = True
+) -> View | None:
     epochs, diffs, win_rate, curve_scores = db.read_all_monotonicity(conn)
     _, _, _, bands = db.read_all_score_belief(conn)
     if not epochs or bands is None:
@@ -297,9 +349,16 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
     info = Div(styles={"font-size": "13px", "color": "#445", "font-weight": "600"})
 
     mono_src = ColumnDataSource(dict(x=list(diffs), y=list(win_rate[gi, k0])))
-    mono = figure(width=620, height=580, title="", x_range=Range1d(diffs[0], diffs[-1]),
-                  y_range=Range1d(-0.02, 1.02), x_axis_label="input score differential",
-                  y_axis_label="predicted win rate", tools="pan,box_zoom,wheel_zoom,reset,save")
+    mono = figure(
+        width=620,
+        height=580,
+        title="",
+        x_range=Range1d(diffs[0], diffs[-1]),
+        y_range=Range1d(-0.02, 1.02),
+        x_axis_label="input score differential",
+        y_axis_label="predicted win rate",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     mono.line([diffs[0], diffs[-1]], [0.5, 0.5], color="#cccccc", line_dash="dashed")
     mono.line([0, 0], [0, 1], color="#cccccc", line_dash="dashed")
     mono.line("x", "y", source=mono_src, color="#1f77b4", line_width=2)
@@ -311,15 +370,28 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
     med = ColumnDataSource(dict(x=list(diffs), y=list(b0[:, q // 2])))
     fit = ColumnDataSource(dict(x=list(diffs), y=list(diffs + c0)))
     belief_yr = Range1d(float(b0.min()), float(b0.max()))
-    belief = figure(width=620, height=580, title="", x_range=Range1d(diffs[0], diffs[-1]),
-                    y_range=belief_yr, x_axis_label="input score differential",
-                    y_axis_label="predicted final score differential",
-                    tools="pan,box_zoom,wheel_zoom,reset,save")
+    belief = figure(
+        width=620,
+        height=580,
+        title="",
+        x_range=Range1d(diffs[0], diffs[-1]),
+        y_range=belief_yr,
+        x_axis_label="input score differential",
+        y_axis_label="predicted final score differential",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
     belief.varea("x", "y1", "y2", source=outer, fill_color="#1f77b4", fill_alpha=0.18)
     belief.varea("x", "y1", "y2", source=inner, fill_color="#1f77b4", fill_alpha=0.36)
     belief.line("x", "y", source=med, color="#08306b", line_width=1.5, legend_label="median")
-    belief.line("x", "y", source=fit, color="#e74c3c", line_width=1.5, line_dash="dashed",
-                legend_label="best fit y = x + C")
+    belief.line(
+        "x",
+        "y",
+        source=fit,
+        color="#e74c3c",
+        line_width=1.5,
+        line_dash="dashed",
+        legend_label="best fit y = x + C",
+    )
     belief.legend.location = "top_left"
     belief.legend.label_text_font_size = "9pt"
 
@@ -328,12 +400,27 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
 
     update = CustomJS(
         args=dict(
-            pos=pos, gen=gen, N=n, R=r, Q=q, xs=list(diffs), epochs=epochs, imgs=imgs,
+            pos=pos,
+            gen=gen,
+            N=n,
+            R=r,
+            Q=q,
+            xs=list(diffs),
+            epochs=epochs,
+            imgs=imgs,
             winrate=win_rate.astype(np.float32).ravel(),
             cscores=curve_scores.astype(np.float32).ravel(),
             bands=bands.astype(np.float32).ravel(),
-            mono_src=mono_src, outer=outer, inner=inner, med=med, fit=fit,
-            mono=mono, belief=belief, belief_yr=belief_yr, board=board, info=info,
+            mono_src=mono_src,
+            outer=outer,
+            inner=inner,
+            med=med,
+            fit=fit,
+            mono=mono,
+            belief=belief,
+            belief_yr=belief_yr,
+            board=board,
+            info=info,
         ),
         code="""
         const k = parseInt(pos.value)|0, gj = gen.value|0;
@@ -360,7 +447,8 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
         const pad=(ymax-ymin)*0.05+1; belief_yr.start=ymin-pad; belief_yr.end=ymax+pad;
         belief.title.text = `Score belief (5/25/50/75/95 percentiles)   best fit C=${C.toFixed(1)}`;
 
-        board.text = imgs[k] ? `<img src="${imgs[k]}" style="width:100%;height:auto;border-radius:6px;">`
+        const imgStyle = "width:100%;height:auto;border-radius:6px;";
+        board.text = imgs[k] ? `<img src="${imgs[k]}" style="${imgStyle}">`
                              : "<i>no board image</i>";
         info.text = `position #${k} &nbsp;•&nbsp; generation epoch ${epochs[gj]}`;
         """,
@@ -369,25 +457,40 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
     gen.js_on_change("value", update)
 
     # Prev/next arrows that step the position (client-side).
-    arrow_css = InlineStyleSheet(css=".bk-btn { font-size: 34px; font-weight: 700; color: #2c7be5; }")
+    arrow_css = InlineStyleSheet(
+        css=".bk-btn { font-size: 34px; font-weight: 700; color: #2c7be5; }"
+    )
     prev_btn = Button(label="❮", width=52, height=160, button_type="light", stylesheets=[arrow_css])
     next_btn = Button(label="❯", width=52, height=160, button_type="light", stylesheets=[arrow_css])
-    prev_btn.js_on_click(CustomJS(args=dict(pos=pos), code=
-        "pos.value = String(Math.max(0, (parseInt(pos.value)|0) - 1));"))
-    next_btn.js_on_click(CustomJS(args=dict(pos=pos, N=n), code=
-        "pos.value = String(Math.min(N-1, (parseInt(pos.value)|0) + 1));"))
+    prev_btn.js_on_click(
+        CustomJS(
+            args=dict(pos=pos), code="pos.value = String(Math.max(0, (parseInt(pos.value)|0) - 1));"
+        )
+    )
+    next_btn.js_on_click(
+        CustomJS(
+            args=dict(pos=pos, N=n),
+            code="pos.value = String(Math.min(N-1, (parseInt(pos.value)|0) + 1));",
+        )
+    )
 
     # Initial render (CustomJS only fires on change).
-    mono.title.text = f"Monotonicity — R²={curve_scores[gi,k0,1]:.2f}  viol={int(curve_scores[gi,k0,2])}"
+    mono.title.text = (
+        f"Monotonicity — R²={curve_scores[gi, k0, 1]:.2f}  viol={int(curve_scores[gi, k0, 2])}"
+    )
     belief.title.text = f"Score belief (5/25/50/75/95 percentiles)   best fit C={c0:.1f}"
-    board.text = (f'<img src="{imgs[k0]}" style="width:100%;height:auto;border-radius:6px;">'
-                  if imgs[k0] else "<i>no board image</i>")
+    board.text = (
+        f'<img src="{imgs[k0]}" style="width:100%;height:auto;border-radius:6px;">'
+        if imgs[k0]
+        else "<i>no board image</i>"
+    )
     info.text = f"position #{k0} &nbsp;•&nbsp; generation epoch {epochs[gi]}"
 
     center_css = InlineStyleSheet(css=":host { align-items: center; gap: 10px; }")
     main = row(prev_btn, mono, belief, column(info, board), next_btn, stylesheets=[center_css])
-    controls = row(_label("position"), pos, _label("generation"), gen, latest,
-                   stylesheets=[center_css])
+    controls = row(
+        _label("position"), pos, _label("generation"), gen, latest, stylesheets=[center_css]
+    )
     return View(layout=column(main, controls), gen=gen, latest=latest, pos=pos)
 
 
@@ -398,7 +501,7 @@ def probes_view(conn, image_dir: Path, init_pos: int = 0, init_gen: int | None =
 
 def _aligned_series(conn, name: str, epochs: list[int]) -> list[float]:
     eps, vals = db.read_metric_series(conn, name)
-    lut = {int(e): float(v) for e, v in zip(eps, vals)}
+    lut = {int(e): float(v) for e, v in zip(eps, vals, strict=True)}
     return [lut.get(e, float("nan")) for e in epochs]
 
 
@@ -422,22 +525,43 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
     wx, wy = masked(cal["rel_pred"][gi], cal["rel_actual"][gi], cal["rel_count"][gi])
     wld_src = ColumnDataSource(dict(x=wx, y=wy))
     count_src = ColumnDataSource(dict(x=list(rel_centers), top=list(cal["rel_count"][gi])))
-    wld = figure(width=720, height=620, x_range=Range1d(0, 1), y_range=Range1d(0, 1),
-                 x_axis_label="predicted win rate", y_axis_label="empirical win rate",
-                 tools="pan,box_zoom,wheel_zoom,reset,save", title="")
+    wld = figure(
+        width=720,
+        height=620,
+        x_range=Range1d(0, 1),
+        y_range=Range1d(0, 1),
+        x_axis_label="predicted win rate",
+        y_axis_label="empirical win rate",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+        title="",
+    )
     wld.extra_y_ranges = {"count": Range1d(start=0, end=count_max)}
     wld.add_layout(LinearAxis(y_range_name="count", axis_label="count"), "right")
-    wld.vbar(x="x", top="top", width=0.9 / K, source=count_src, fill_color="#dddddd",
-             line_color=None, y_range_name="count")
+    wld.vbar(
+        x="x",
+        top="top",
+        width=0.9 / K,
+        source=count_src,
+        fill_color="#dddddd",
+        line_color=None,
+        y_range_name="count",
+    )
     wld.line([0, 1], [0, 1], color="#bbbbbb", line_dash="dashed")
     wld.line("x", "y", source=wld_src, color="#1f77b4", line_width=2)
     wld.scatter("x", "y", source=wld_src, color="#1f77b4", size=7)
 
     sx, sy = masked(cal["sd_pred"][gi], cal["sd_actual"][gi], cal["sd_count"][gi])
     sd_src = ColumnDataSource(dict(x=sx, y=sy))
-    sd = figure(width=500, height=440, x_range=Range1d(-sd_lim, sd_lim), y_range=Range1d(-sd_lim, sd_lim),
-                x_axis_label="predicted mean score diff", y_axis_label="actual mean score diff",
-                tools="pan,box_zoom,wheel_zoom,reset,save", title="")
+    sd = figure(
+        width=500,
+        height=440,
+        x_range=Range1d(-sd_lim, sd_lim),
+        y_range=Range1d(-sd_lim, sd_lim),
+        x_axis_label="predicted mean score diff",
+        y_axis_label="actual mean score diff",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+        title="",
+    )
     sd.line([-sd_lim, sd_lim], [-sd_lim, sd_lim], color="#bbbbbb", line_dash="dashed")
     sd.line("x", "y", source=sd_src, color="#08306b", line_width=2)
     sd.scatter("x", "y", source=sd_src, color="#08306b", size=7)
@@ -449,15 +573,25 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
     gen, latest = _gen_controls(g, gi, follow)
     update = CustomJS(
         args=dict(
-            gen=gen, K=K, M=M, centers=list(rel_centers), epochs=epochs,
+            gen=gen,
+            K=K,
+            M=M,
+            centers=list(rel_centers),
+            epochs=epochs,
             rel_pred=cal["rel_pred"].astype(np.float32).ravel(),
             rel_actual=cal["rel_actual"].astype(np.float32).ravel(),
             rel_count=cal["rel_count"].astype(np.float32).ravel(),
             sd_pred=cal["sd_pred"].astype(np.float32).ravel(),
             sd_actual=cal["sd_actual"].astype(np.float32).ravel(),
             sd_count=cal["sd_count"].astype(np.float32).ravel(),
-            brier=brier, ece=ece, mae=mae,
-            wld_src=wld_src, count_src=count_src, sd_src=sd_src, wld=wld, sd=sd,
+            brier=brier,
+            ece=ece,
+            mae=mae,
+            wld_src=wld_src,
+            count_src=count_src,
+            sd_src=sd_src,
+            wld=wld,
+            sd=sd,
         ),
         code="""
         const gj = gen.value|0, rb = gj*K;
@@ -469,17 +603,26 @@ def calibration_view(conn, init_gen: int | None = None, follow: bool = True) -> 
         wld_src.data={x:wx, y:wy}; wld_src.change.emit();
         count_src.data={x:cx, top:ct}; count_src.change.emit();
         const sb = gj*M; const sx=[], sy=[];
-        for (let i=0;i<M;i++){ if (sd_count[sb+i] > 0){ sx.push(sd_pred[sb+i]); sy.push(sd_actual[sb+i]); } }
+        for (let i=0;i<M;i++){
+            if (sd_count[sb+i] > 0){ sx.push(sd_pred[sb+i]); sy.push(sd_actual[sb+i]); }
+        }
         sd_src.data={x:sx, y:sy}; sd_src.change.emit();
-        wld.title.text = `WLD reliability — epoch ${epochs[gj]}  Brier=${brier[gj].toFixed(4)}  ECE=${ece[gj].toFixed(4)}`;
+        wld.title.text = `WLD reliability — epoch ${epochs[gj]}  ` +
+            `Brier=${brier[gj].toFixed(4)}  ECE=${ece[gj].toFixed(4)}`;
         sd.title.text = `Score-diff calibration — epoch ${epochs[gj]}  MAE=${mae[gj].toFixed(1)}`;
         """,
     )
     gen.js_on_change("value", update)
-    wld.title.text = f"WLD reliability — epoch {epochs[gi]}  Brier={brier[gi]:.4f}  ECE={ece[gi]:.4f}"
+    wld.title.text = (
+        f"WLD reliability — epoch {epochs[gi]}  Brier={brier[gi]:.4f}  ECE={ece[gi]:.4f}"
+    )
     sd.title.text = f"Score-diff calibration — epoch {epochs[gi]}  MAE={mae[gi]:.1f}"
 
     center = InlineStyleSheet(css=":host { align-items: center; }")
-    return View(layout=column(row(wld, sd), row(gen, latest, stylesheets=[center]),
-                              sizing_mode="stretch_width"),
-                gen=gen, latest=latest)
+    return View(
+        layout=column(
+            row(wld, sd), row(gen, latest, stylesheets=[center]), sizing_mode="stretch_width"
+        ),
+        gen=gen,
+        latest=latest,
+    )

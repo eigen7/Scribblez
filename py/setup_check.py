@@ -24,4 +24,5 @@ def import_setup_common():
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
     import setup_common
+
     return setup_common
