@@ -83,6 +83,25 @@ def _series_figure(conn, title: str, names: list[str]):
     return fig
 
 
+# Per-epoch scalar-curve groups, by dashboard tab. Each entry is (figure title,
+# metric-series names) and feeds series_grid(). Shared by the dashboard's tab
+# builders (Bokeh shell and the React data API).
+LOSS = [("Loss", ["loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement"])]
+TRAINING = [("Learning rate", ["lr"]), ("Epoch time (s)", ["elapsed_s"])]
+PROBE_CURVES = [
+    ("Structural probe", ["probe_mean_structural_score", "probe_mean_sigmoid_r2"]),
+    ("Monotonicity violations", ["probe_total_violations"]),
+]
+CALIB_CURVES = [
+    ("WLD accuracy & Brier / ECE", ["wld_acc", "calib_brier", "calib_ece"]),
+    ("Calibration log-loss", ["calib_log_loss"]),
+    (
+        "Score-diff calibration",
+        ["calib_scorediff_mae", "calib_scorediff_bias", "calib_scorediff_sharpness"],
+    ),
+]
+
+
 def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
     """A grid of square learning-curve figures for the given (title, metric-names) groups."""
     figs = [f for title, names in groups if (f := _series_figure(conn, title, names))]

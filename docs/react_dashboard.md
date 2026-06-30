@@ -65,15 +65,31 @@ the `json_item`s.
 `train_step` → `train_step_grid(conn, normalized)`), serialized with `json_item`.
 The builders are reused unchanged.
 
-## Phasing
+## Status
 
-- **Phase A — foundation.** Python API (tags, version, `train_step` figure) +
-  React shell (tag select, polling, `<BokehFigure>`) showing the training-loss tab.
-  Proves embedded-Bokeh + React-shell + live refresh end to end. The Bokeh-server
-  dashboard keeps running in parallel (unchanged) during the migration.
-- **Phase B — lane analysis** (the feature, below).
-- **Phase C — migrate the rest.** Port positions/calibration/streaming tabs to
-  embedded `json_item`s; retire `bokeh serve` / `server.py` / the serve shim.
+The migration is **complete** — the dashboard is the React app; there is no longer
+a Bokeh-served dashboard. It was done in three phases:
+
+- **Phase A — foundation (done).** Python API (tags, version, `train_step` figure) +
+  React shell (tag select, polling, `<BokehFigure>`).
+- **Phase B — lane analysis (done).** The interactive board tab (below).
+- **Phase C — migrate the rest (done).** The post-move tabs (Loss, Positions,
+  Calibration, Training, Performance) are React tabs that embed `json_item`s built
+  by the `plots.py` builders; both post-move trainers and the standalone launcher
+  (`scripts/dashboard.py`) launch the React dashboard. The Bokeh-serving modules
+  (`server.py`, `shell.py`, `post_move_tabs.py`, the `app_*.py`) were deleted;
+  `plots.py` and `db.py` remain (the API reuses them).
+
+### Tabs (task-conditional, all in `web/src/AppDashboard.tsx`)
+
+| Task | Tabs |
+|---|---|
+| post_move_value | Loss · Positions · Calibration · Training · Performance |
+| max_move_per_lane | Loss · Performance · Lane analysis |
+
+Each non-`Lane analysis` tab is a `<FigureTab>` that embeds an API figure
+(`train_step`, `throughput`, `training_metrics`, `positions`, `calibration`) and
+re-fetches when its version-token table advances. `Lane analysis` is native React.
 
 ## Phase B — lane-analysis tab
 

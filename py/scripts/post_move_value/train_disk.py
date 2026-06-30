@@ -7,9 +7,9 @@ Usage:
 Reads the tag's training split (tags/<tag>/data/train), writes .pt checkpoints
 and .onnx exports under tags/<tag>/, and after every epoch runs the structural
 probes (over a frozen test subset) and full-test-set calibration. All metrics
-and eval data are written to tags/<tag>/dashboard.db; the Bokeh dashboard renders
-every plot on the fly. Training resumes from the latest checkpoint by default; a
-dashboard server is launched alongside unless disabled.
+and eval data are written to tags/<tag>/dashboard.db; the dashboard renders every
+plot on the fly. Training resumes from the latest checkpoint by default; the React
+dashboard is launched alongside unless disabled.
 """
 
 import argparse
@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 import torch
-from scribblez.dashboard import db, server
+from scribblez.dashboard import db, react_server
 from scribblez.dataset import SlogDataset
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
@@ -217,7 +217,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     parser.add_argument(
-        "--dashboard-port", type=int, default=server.DEFAULT_PORT, help="Dashboard server port."
+        "--dashboard-port",
+        type=int,
+        default=react_server.DEFAULT_DEV_PORT,
+        help="React dashboard (Vite) dev-server port; open this in a browser.",
     )
     return parser
 
@@ -290,12 +293,11 @@ def main() -> int:
         dirs = ", ".join(str(d) for d in test_dirs)
         print(f"WARNING: no test split at {dirs}; skipping calibration.", file=sys.stderr)
 
-    # Launch the dashboard alongside training (torn down on exit).
+    # Launch the React dashboard alongside training (torn down on exit).
     if not args.no_dashboard:
-        proc = server.launch_dashboard(
-            args.dashboard_port, str(paths.mount_root), tag=args.tag, app=server.POST_MOVE_VALUE_APP
-        )
-        if proc is not None:
+        for proc in react_server.spawn(
+            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port
+        ):
             atexit.register(proc.terminate)
 
     if start_epoch > args.epochs:

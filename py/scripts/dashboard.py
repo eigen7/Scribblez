@@ -1,46 +1,38 @@
 #!/usr/bin/env python3
-"""Launch a per-task training-metrics dashboard (Bokeh server).
+"""Launch the training dashboard (React app + Python data API) for a task.
+
+Run this to view a tag's dashboard when a trainer isn't already serving one (each
+trainer launches it automatically). It serves the per-tag dashboard.db stores under
+<mount-root>/tags/<task>/, reclaiming its ports if a stale dashboard holds them.
 
 Usage:
-    python -m scripts.dashboard                          # post-move (default)
-    python -m scripts.dashboard --task max_move_per_lane
-    python -m scripts.dashboard --port 5006
-
-Serves the per-tag dashboard.db stores under <mount-root>/tags/*/. Run this when
-a trainer isn't already serving the dashboard.
+    python -m scripts.dashboard --task post_move_value
+    python -m scripts.dashboard --task max_move_per_lane --dev-port 5180
 """
 
 import argparse
-import os
 import sys
-from pathlib import Path
 
-from scribblez.dashboard import server
-
-_APPS = {
-    "post_move_value": server.POST_MOVE_VALUE_APP,
-    "max_move_per_lane": server.MAX_MOVE_PER_LANE_APP,
-}
+from scribblez.dashboard import react_server
+from scribblez.paths import MAX_MOVE_PER_LANE, POST_MOVE_VALUE
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
+    p.add_argument(
         "--task",
-        choices=sorted(_APPS),
-        default="post_move_value",
-        help="Which model's dashboard to serve.",
+        choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE],
+        default=POST_MOVE_VALUE,
+        help="Which model's runs to serve.",
     )
-    parser.add_argument("--port", type=int, default=server.DEFAULT_PORT, help="Server port.")
-    args = parser.parse_args()
-
-    app = _APPS[args.task]
-    cmd = server.serve_command(args.port, app=app)
-    print(f"Serving dashboard: http://localhost:{args.port}/{Path(app).stem}")
-    os.execvp(cmd[0], cmd)  # replace this process with `bokeh serve`
-    return 0  # unreachable
+    p.add_argument("--mount-root", default="/workspace/mount")
+    p.add_argument("--api-port", type=int, default=react_server.DEFAULT_API_PORT)
+    p.add_argument("--dev-port", type=int, default=react_server.DEFAULT_DEV_PORT)
+    args = p.parse_args()
+    react_server.launch(args.task, args.mount_root, args.api_port, args.dev_port)
+    return 0
 
 
 if __name__ == "__main__":

@@ -14,8 +14,8 @@ from pathlib import Path
 
 from scribblez.ffi import dump_position_json, read_file_header
 
-# py/scribblez/eval/web_render.py -> repo root is four parents up.
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# py/scribblez/post_move_value/eval/web_render.py -> repo root is five parents up.
+REPO_ROOT = Path(__file__).resolve().parents[4]
 WEB_DIR = REPO_ROOT / "web"
 
 

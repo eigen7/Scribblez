@@ -24,7 +24,7 @@ import sys
 import time
 
 import torch
-from scribblez.dashboard import db, server
+from scribblez.dashboard import db, react_server
 from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
@@ -114,7 +114,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/onnx/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
-        "--dashboard-port", type=int, default=server.DEFAULT_PORT, help="Dashboard server port."
+        "--dashboard-port",
+        type=int,
+        default=react_server.DEFAULT_DEV_PORT,
+        help="React dashboard (Vite) dev-server port; open this in a browser.",
     )
     return p
 
@@ -129,7 +132,10 @@ def ensure_validation_set(paths: TagPaths, args) -> bool:
     if paths.test_dir.exists() and any(paths.test_dir.glob("*.slog")):
         return True
     print(f"Generating {args.val_games} validation games to {paths.test_dir} ...")
-    rc = run_games(paths.test_dir, args.val_games, args.val_games_per_file, args.gen_threads)
+    # HastyBot self-play, matching the games the streaming trainer trains on.
+    rc = run_games(
+        paths.test_dir, args.val_games, args.val_games_per_file, args.gen_threads, "--type=hastybot"
+    )
     if rc != 0:
         print(
             f"WARNING: validation-set generation failed (rc={rc}); eval disabled.", file=sys.stderr
@@ -430,10 +436,9 @@ def main() -> int:
         print(f"  {test_ds.num_samples} val positions")
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(
-            args.dashboard_port, str(paths.mount_root), tag=args.tag, app=server.POST_MOVE_VALUE_APP
-        )
-        if proc is not None:
+        for proc in react_server.spawn(
+            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port
+        ):
             atexit.register(proc.terminate)
 
     start_ckpt, start_positions, start_step = maybe_resume(paths, model, optimizer, device)

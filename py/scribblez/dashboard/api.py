@@ -22,6 +22,7 @@ import numpy as np
 import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
+from bokeh.layouts import column
 
 from scribblez import lane_analysis
 from scribblez.dashboard import db, plots
@@ -44,19 +45,37 @@ VERSION_TABLES = (
 )
 
 
-def _train_step(conn: sqlite3.Connection, params: dict):
+def _train_step(conn, params, image_dir):
     return plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
 
 
-def _throughput(conn: sqlite3.Connection, params: dict):
+def _throughput(conn, params, image_dir):
     return plots.throughput_grid(conn)
 
 
-# Figure name -> builder(conn, params) -> Bokeh model | None. Reuses plots.py
-# unchanged; the model is serialized with json_item for client-side embedding.
+def _training_metrics(conn, params, image_dir):
+    return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
+
+
+def _positions(conn, params, image_dir):
+    view = plots.probes_view(conn, image_dir, follow=True)
+    return column(view.layout, plots.series_grid(conn, plots.PROBE_CURVES)) if view else None
+
+
+def _calibration(conn, params, image_dir):
+    view = plots.calibration_view(conn, follow=True)
+    return column(view.layout, plots.series_grid(conn, plots.CALIB_CURVES)) if view else None
+
+
+# Figure name -> builder(conn, params, image_dir) -> Bokeh model | None. Reuses the
+# plots.py builders; the model is serialized with json_item for client-side
+# embedding. `image_dir` is the tag's board-image dir (only the probes view uses it).
 FIGURES = {
     "train_step": _train_step,
     "throughput": _throughput,
+    "training_metrics": _training_metrics,
+    "positions": _positions,
+    "calibration": _calibration,
 }
 
 
@@ -76,13 +95,13 @@ def version_token(conn: sqlite3.Connection) -> dict:
     return {table: _row_count(conn, table) for table in VERSION_TABLES}
 
 
-def build_figure_item(conn: sqlite3.Connection, name: str, params: dict):
+def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, image_dir):
     """The Bokeh ``json_item`` dict for figure `name`, or None when there's no data
     (or no such figure). The handler turns None into ``{"item": null}``."""
     builder = FIGURES.get(name)
     if builder is None:
         return None
-    model = builder(conn, params)
+    model = builder(conn, params, image_dir)
     return json_item(model) if model is not None else None
 
 
@@ -195,6 +214,12 @@ class _Base(tornado.web.RequestHandler):
             self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
         )
 
+    def _image_dir(self):
+        """The tag's board-image dir (the probes figure renders boards from it)."""
+        return TagPaths(
+            self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
+        ).test_subset_dir
+
 
 class TagsHandler(_Base):
     def get(self):
@@ -227,7 +252,7 @@ class FigureHandler(_Base):
             self.write({"error": "unknown tag"})
             return
         try:
-            self.write({"item": build_figure_item(conn, name, self._params())})
+            self.write({"item": build_figure_item(conn, name, self._params(), self._image_dir())})
         finally:
             conn.close()
 

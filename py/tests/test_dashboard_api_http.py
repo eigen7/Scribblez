@@ -77,6 +77,13 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_figure_unknown_name_404(self):
         assert self.fetch(f"/api/figure/bogus?task={MAX_MOVE_PER_LANE}&tag=run1").code == 404
 
+    def test_all_figures_routable(self):
+        # Every registered figure resolves (item may be null when its data isn't seeded).
+        for fig in ("train_step", "throughput", "training_metrics", "positions", "calibration"):
+            r = self.fetch(f"/api/figure/{fig}?task={MAX_MOVE_PER_LANE}&tag=run1")
+            assert r.code == 200, fig
+            assert "item" in json.loads(r.body), fig
+
     def test_lane_positions(self):
         body = json.loads(self.fetch("/api/lane/positions").body)
         assert isinstance(body["positions"], list)  # the shipped dataset, or [] if absent

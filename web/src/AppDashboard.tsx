@@ -91,12 +91,42 @@ function FigureTab({
   );
 }
 
+// Each embedded-figure tab: which API figure to fetch, which version-token table
+// to poll for changes, whether to show the loss Absolute/% toggle, and its empty
+// message. ("Lane analysis" is native React, handled separately.)
+const FIGURE_TABS: Record<
+  string,
+  { figure: string; versionKey: string; toggle: boolean; emptyText: string }
+> = {
+  Loss: { figure: 'train_step', versionKey: 'train_step', toggle: true,
+    emptyText: 'No loss / accuracy metrics recorded yet.' },
+  Performance: { figure: 'throughput', versionKey: 'throughput', toggle: false,
+    emptyText: 'No throughput data yet — start a streaming run.' },
+  Training: { figure: 'training_metrics', versionKey: 'metrics', toggle: false,
+    emptyText: 'No per-epoch training metrics yet.' },
+  Positions: { figure: 'positions', versionKey: 'monotonicity', toggle: false,
+    emptyText: 'No structural-probe data yet.' },
+  Calibration: { figure: 'calibration', versionKey: 'calibration', toggle: false,
+    emptyText: 'No calibration data yet.' },
+};
+
+function renderTab(name: string, task: string, tag: string | null) {
+  if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
+  const cfg = FIGURE_TABS[name];
+  return (
+    <FigureTab
+      task={task} tag={tag} figure={cfg.figure} versionKey={cfg.versionKey}
+      toggle={cfg.toggle} emptyText={cfg.emptyText}
+    />
+  );
+}
+
 export default function AppDashboard() {
   const task = requestedTask();
   const tabs =
     task === MAX_MOVE_PER_LANE
-      ? ['Training', 'Performance', 'Lane analysis']
-      : ['Training', 'Performance'];
+      ? ['Loss', 'Performance', 'Lane analysis']
+      : ['Loss', 'Positions', 'Calibration', 'Training', 'Performance'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
@@ -151,19 +181,7 @@ export default function AppDashboard() {
         ))}
       </div>
 
-      {tabs[tab] === 'Lane analysis' ? (
-        <LaneAnalysis task={task} tag={tag} />
-      ) : tabs[tab] === 'Performance' ? (
-        <FigureTab
-          task={task} tag={tag} figure="throughput" versionKey="throughput"
-          toggle={false} emptyText="No throughput data yet — start a streaming run."
-        />
-      ) : (
-        <FigureTab
-          task={task} tag={tag} figure="train_step" versionKey="train_step"
-          toggle emptyText="No streaming metrics recorded yet."
-        />
-      )}
+      {renderTab(tabs[tab], task, tag)}
     </div>
   );
 }
