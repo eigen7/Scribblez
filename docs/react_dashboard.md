@@ -105,9 +105,9 @@ enumeration is new.
   input-tensor batch under the tag.
 - The trainer's checkpoint hook runs the in-memory model on that batch, decodes per
   lane (predicted occupancy union, 100-bin score PMF, has-move), and writes
-  per-generation predictions under `tags/max_move_per_lane/<tag>/lane-analysis/`,
-  keyed by positions trained. Weights are not retained (a generation = one
-  checkpoint's predictions).
+  per-generation predictions (occupancy union, score PMF, has-move) into the tag's
+  `dashboard.db` (`lane_pred` table), keyed by generation. Weights are not retained
+  (a generation = one checkpoint's predictions).
 
 ### UI (reuses `Board.tsx`)
 
@@ -121,5 +121,3 @@ enumeration is new.
   hallucinated.
 - Score histogram: the selected lane's predicted 100-bin score PMF with the true
   score bin highlighted.
-</content>
-</invoke>

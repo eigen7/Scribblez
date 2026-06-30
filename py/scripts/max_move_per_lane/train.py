@@ -24,7 +24,7 @@ import time
 import torch
 
 from scribblez import lane_analysis
-from scribblez.dashboard import db, server
+from scribblez.dashboard import db, react_server
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import (
     StreamingTrainSource,
@@ -87,7 +87,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
-        "--dashboard-port", type=int, default=server.DEFAULT_PORT, help="Dashboard server port."
+        "--dashboard-port", type=int, default=react_server.DEFAULT_DEV_PORT,
+        help="React dashboard (Vite) dev-server port; open this in a browser.",
     )
     return p
 
@@ -286,13 +287,11 @@ def main() -> int:
     )
 
     if not args.no_dashboard:
-        proc = server.launch_dashboard(
-            args.dashboard_port,
-            str(paths.mount_root),
-            tag=args.tag,
-            app=server.MAX_MOVE_PER_LANE_APP,
-        )
-        if proc is not None:
+        # The React dashboard (Training + Streaming + Lane analysis); it embeds the
+        # Bokeh metrics plots and adds the interactive lane-analysis board.
+        for proc in react_server.spawn(
+            "max_move_per_lane", str(paths.mount_root), dev_port=args.dashboard_port
+        ):
             atexit.register(proc.terminate)
 
     start_ckpt, start_positions, start_step = maybe_resume(paths, model, optimizer, device)

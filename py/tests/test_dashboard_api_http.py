@@ -5,9 +5,22 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import tornado.testing
 from scribblez.dashboard import api, db
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
+
+# Match the shipped lane-analysis dataset size, so position indices line up.
+_N_POSITIONS = 10
+
+
+def _fake_lane_preds(n: int) -> dict:
+    rng = np.random.default_rng(0)
+    return {
+        "occ": (rng.random((n, 30, 15, 27)) > 0.7).astype(np.uint8),
+        "score_pmf": rng.random((n, 30, 100)).astype(np.float32),
+        "has_move": rng.random((n, 30)).astype(np.float32),
+    }
 
 
 class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
@@ -30,6 +43,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
                 for s in range(1, 4)
             ],
         )
+        db.write_lane_preds(conn, generation=0, positions=204800, preds=_fake_lane_preds(_N_POSITIONS))
         conn.close()
         super().setUp()
 
@@ -60,3 +74,31 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
 
     def test_figure_unknown_name_404(self):
         assert self.fetch(f"/api/figure/bogus?task={MAX_MOVE_PER_LANE}&tag=run1").code == 404
+
+    def test_lane_positions(self):
+        body = json.loads(self.fetch("/api/lane/positions").body)
+        assert isinstance(body["positions"], list)  # the shipped dataset, or [] if absent
+
+    def test_lane_generations(self):
+        body = json.loads(
+            self.fetch(f"/api/lane/generations?task={MAX_MOVE_PER_LANE}&tag=run1").body
+        )
+        assert body["generations"] == [{"generation": 0, "positions": 204800}]
+
+    def test_lane_position_merges_truth_and_prediction(self):
+        r = self.fetch(
+            f"/api/lane/position?task={MAX_MOVE_PER_LANE}&tag=run1&position=0&generation=0"
+        )
+        if r.code == 503:
+            self.skipTest("lexicon unavailable; ground truth cannot be computed")
+        assert r.code == 200
+        body = json.loads(r.body)
+        assert {"board", "bonuses", "rack", "lanes", "on_move"} <= set(body)
+        assert body["has_prediction"] is True
+        assert len(body["lanes"]["rows"]) == 15 and len(body["lanes"]["cols"]) == 15
+        lane = body["lanes"]["rows"][0]
+        assert len(lane["pred_score_pmf"]) == 100  # prediction attached for the histogram
+        assert len(lane["pred_placed"]) == 15  # per-cell predicted union for the diff
+
+    def test_lane_position_out_of_range_404(self):
+        assert self.fetch(f"/api/lane/position?task={MAX_MOVE_PER_LANE}&tag=run1&position=999").code == 404

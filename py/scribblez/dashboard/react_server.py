@@ -9,6 +9,8 @@ migration. See docs/react_dashboard.md.
 """
 
 import os
+import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -23,15 +25,46 @@ DEFAULT_API_PORT = 8090 + port_offset()
 DEFAULT_DEV_PORT = 5180 + port_offset()
 
 
-def launch(
+def _listening_pids(port: int) -> list[int]:
+    """PIDs LISTENing on `port` (TCP), via lsof. Client sockets are excluded
+    (`-sTCP:LISTEN`) so an unrelated client connection is never matched."""
+    lsof = shutil.which("lsof")
+    if not lsof:
+        return []
+    try:
+        out = subprocess.run(
+            [lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(x) for x in out.split() if x.strip().isdigit()]
+
+
+def reclaim_port(port: int):
+    """Free `port` by killing any process LISTENing on it. Mirrors the C++ web
+    server, which reclaims a stale dev-server port: a leftover dashboard from a
+    prior run otherwise makes Vite (or the API) fail to bind on relaunch."""
+    for pid in _listening_pids(port):
+        print(f"  Port {port} is in use by pid {pid}; reclaiming it.", file=sys.stderr)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def spawn(
     task: str,
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
-):
-    """Spawn the data API and the Vite dev server; block until interrupted, then
-    tear both down."""
-    # fmt: off
+) -> list[subprocess.Popen]:
+    """Spawn the data API and the Vite dev server in the background; return their
+    processes (so a caller can terminate them on exit). Non-blocking, so a trainer
+    can launch the dashboard alongside training. Any process already holding the
+    API or Vite port is reclaimed first (a stale dashboard from a prior run)."""
+    reclaim_port(api_port)
+    reclaim_port(dev_port)
     api = subprocess.Popen(
         [
             sys.executable, "-m", "scribblez.dashboard.api",
@@ -48,10 +81,22 @@ def launch(
     }
     vite = subprocess.Popen(["npm", "run", "dev"], cwd=WEB_DIR, env=env)
     print(f"React dashboard ({task}) at http://localhost:{dev_port}", file=sys.stderr)
+    return [api, vite]
+
+
+def launch(
+    task: str,
+    mount_root: str = "/workspace/mount",
+    api_port: int = DEFAULT_API_PORT,
+    dev_port: int = DEFAULT_DEV_PORT,
+):
+    """Spawn the dashboard and block until interrupted, then tear it down (the CLI
+    entry point)."""
+    procs = spawn(task, mount_root, api_port, dev_port)
     try:
-        vite.wait()
+        procs[-1].wait()  # the Vite process
     except KeyboardInterrupt:
         pass
     finally:
-        for p in (vite, api):
+        for p in procs:
             p.terminate()
