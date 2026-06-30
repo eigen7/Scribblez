@@ -27,11 +27,13 @@ def main() -> int:
         default=POST_MOVE_VALUE,
         help="Which model's runs to serve.",
     )
+    p.add_argument("--tag", default=None,
+                   help="Open the dashboard on this tag (default: the first available).")
     p.add_argument("--mount-root", default="/workspace/mount")
     p.add_argument("--api-port", type=int, default=react_server.DEFAULT_API_PORT)
     p.add_argument("--dev-port", type=int, default=react_server.DEFAULT_DEV_PORT)
     args = p.parse_args()
-    react_server.launch(args.task, args.mount_root, args.api_port, args.dev_port)
+    react_server.launch(args.task, args.mount_root, args.api_port, args.dev_port, args.tag)
     return 0
 
 

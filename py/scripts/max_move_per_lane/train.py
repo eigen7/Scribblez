@@ -298,7 +298,7 @@ def main() -> int:
         # The React dashboard (Training + Streaming + Lane analysis); it embeds the
         # Bokeh metrics plots and adds the interactive lane-analysis board.
         for proc in react_server.spawn(
-            "max_move_per_lane", str(paths.mount_root), dev_port=args.dashboard_port
+            "max_move_per_lane", str(paths.mount_root), dev_port=args.dashboard_port, tag=args.tag
         ):
             atexit.register(proc.terminate)
 

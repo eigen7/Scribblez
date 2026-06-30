@@ -18,6 +18,12 @@ function requestedTask(): string {
   return import.meta.env.VITE_TASK ?? params.get('task') ?? DEFAULT_TASK;
 }
 
+// A `?tag=<tag>` query param opens the dashboard on that run (the trainer prints
+// such a URL); absent, the tag selector defaults to the first available tag.
+function requestedTag(): string | null {
+  return new URLSearchParams(window.location.search).get('tag');
+}
+
 // A tab that embeds one Bokeh figure (fetched as a json_item from the data API)
 // and re-fetches it whenever the run advances (polling a cheap version token). The
 // loss figure adds an Absolute/% toggle; others (throughput) pass `toggle={false}`.
@@ -140,7 +146,7 @@ export default function AppDashboard() {
       ? ['Loss', 'Performance', 'Lane analysis']
       : ['Loss', 'Positions', 'Calibration', 'Training', 'Performance'];
   const [tags, setTags] = useState<string[]>([]);
-  const [tag, setTag] = useState<string | null>(null);
+  const [tag, setTag] = useState<string | null>(requestedTag());
   const [tab, setTab] = useState(0);
 
   const refreshTags = useCallback(() => {

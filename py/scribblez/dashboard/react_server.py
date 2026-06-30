@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 from scribblez.instance_ports import port_offset
 
@@ -60,11 +61,14 @@ def spawn(
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
+    tag: str | None = None,
 ) -> list[subprocess.Popen]:
     """Spawn the data API and the Vite dev server in the background; return their
     processes (so a caller can terminate them on exit). Non-blocking, so a trainer
     can launch the dashboard alongside training. Any process already holding the
-    API or Vite port is reclaimed first (a stale dashboard from a prior run)."""
+    API or Vite port is reclaimed first (a stale dashboard from a prior run). When
+    `tag` is given, the printed URL carries `?tag=<tag>` so the dashboard opens on
+    that run."""
     reclaim_port(api_port)
     reclaim_port(dev_port)
     api = subprocess.Popen(
@@ -87,7 +91,10 @@ def spawn(
         "VITE_API_PORT": str(api_port),
     }
     vite = subprocess.Popen(["npm", "run", "dev"], cwd=WEB_DIR, env=env)
-    print(f"React dashboard ({task}) at http://localhost:{dev_port}", file=sys.stderr)
+    url = f"http://localhost:{dev_port}"
+    if tag:
+        url += f"/?tag={quote(tag)}"
+    print(f"React dashboard ({task}) at {url}", file=sys.stderr)
     return [api, vite]
 
 
@@ -96,10 +103,11 @@ def launch(
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
+    tag: str | None = None,
 ):
     """Spawn the dashboard and block until interrupted, then tear it down (the CLI
     entry point)."""
-    procs = spawn(task, mount_root, api_port, dev_port)
+    procs = spawn(task, mount_root, api_port, dev_port, tag)
     try:
         procs[-1].wait()  # the Vite process
     except KeyboardInterrupt:

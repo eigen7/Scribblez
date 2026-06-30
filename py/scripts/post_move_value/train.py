@@ -437,7 +437,7 @@ def main() -> int:
 
     if not args.no_dashboard:
         for proc in react_server.spawn(
-            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port
+            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port, tag=args.tag
         ):
             atexit.register(proc.terminate)
 

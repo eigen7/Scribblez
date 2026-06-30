@@ -296,7 +296,7 @@ def main() -> int:
     # Launch the React dashboard alongside training (torn down on exit).
     if not args.no_dashboard:
         for proc in react_server.spawn(
-            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port
+            "post_move_value", str(paths.mount_root), dev_port=args.dashboard_port, tag=args.tag
         ):
             atexit.register(proc.terminate)
 
