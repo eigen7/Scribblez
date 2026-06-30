@@ -214,13 +214,19 @@ class SoftTraversalLexicon(LexiconModule):
         self.readout = nn.Linear(feat_dim, channels)
         self.token_proj = nn.Linear(2 * feat_dim, self.n_tokens * channels)
 
+    def _letter_query(self, lane_feats: torch.Tensor) -> torch.Tensor:
+        """Per-cell letter distribution used to probe empty cells -- ``(M, L, 26)``.
+        Soft (a full softmax): the traversal state spreads over every word the
+        query is compatible with, giving true (top-K truncated) gradients."""
+        return torch.softmax(self.query(lane_feats), dim=-1)
+
     def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
         m, length, _ = lane_feats.shape
         k = self.topk
         device = lane_feats.device
 
-        # Letter fed at each cell: board tile if occupied, else the soft query.
-        q = torch.softmax(self.query(lane_feats), dim=-1)  # (M, L, 26)
+        # Letter fed at each cell: board tile if occupied, else the queried letter.
+        q = self._letter_query(lane_feats)  # (M, L, 26)
         occ = lane_letters.sum(-1, keepdim=True).clamp(max=1.0)  # (M, L, 1)
         letters_in = occ * lane_letters + (1.0 - occ) * q  # (M, L, 26)
         restart = torch.sigmoid(self.restart(lane_feats)).squeeze(-1)  # (M, L)
@@ -266,3 +272,32 @@ class SoftTraversalLexicon(LexiconModule):
         pooled = torch.cat([feat.mean(1), feat.amax(1)], dim=-1)  # (M, 2*feat_dim)
         tokens = self.token_proj(pooled).view(m, self.n_tokens, self.channels)
         return LexiconOutput(cell_residual=cell_residual, tokens=tokens, cell_signals=feat)
+
+
+@register_module("straight_through")
+class StraightThroughLexicon(SoftTraversalLexicon):
+    """A DAWG walk with an EXACT (hard) forward pass and straight-through gradients.
+
+    Identical to :class:`SoftTraversalLexicon` except the letter probed at each
+    empty cell is the network's query **hardened to one-hot** (argmax) via a
+    straight-through estimator: the forward pass commits to a single letter, so
+    the traversal follows one exact path -- acceptance and continuation are crisp
+    0/1 facts with no top-K truncation -- while the backward pass flows gradient
+    to the query head as if the soft distribution had been used.
+
+    Tradeoffs / suitability
+    -----------------------
+    Exact and cheap forward (a single path; the soft module's truncation can
+    never drop the true branch), and the readout reflects the real lexicon, not a
+    smeared approximation. The cost is a **biased** gradient: the straight-through
+    estimator ignores how committing to argmax changes the path, so the query
+    head is trained on an approximate signal. A good toy baseline and a clean
+    contrast to ``soft_traversal`` (exact-but-biased vs. approximate-but-true
+    gradients); as a transfer primitive it is weaker, since the hard commitment
+    discards exactly the distributional softness a win-probability model wants.
+    """
+
+    def _letter_query(self, lane_feats: torch.Tensor) -> torch.Tensor:
+        q = torch.softmax(self.query(lane_feats), dim=-1)
+        hard = torch.zeros_like(q).scatter_(-1, q.argmax(-1, keepdim=True), 1.0)
+        return hard + (q - q.detach())  # forward: one-hot; backward: soft (STE)

@@ -6,6 +6,7 @@ import torch
 from scribblez.max_move_per_lane.lexicon_compiler import N_LETTERS, CompiledLexicon
 from scribblez.max_move_per_lane.lexicon_modules import (
     SoftTraversalLexicon,
+    StraightThroughLexicon,
     available_modules,
     build_lexicon_module,
     parse_module_opts,
@@ -31,10 +32,28 @@ def _board(word, gaps=()):
 
 def test_registry_and_build():
     assert "none" in available_modules()
-    assert "soft_traversal" in available_modules()
+    assert {"soft_traversal", "straight_through"} <= set(available_modules())
     assert build_lexicon_module("none", channels=8, kwg_path="/nonexistent") is None
     with pytest.raises(KeyError):
         build_lexicon_module("bogus", channels=8, kwg_path="/nonexistent")
+
+
+def test_straight_through_is_exact_and_differentiable():
+    mod = StraightThroughLexicon(channels=16, compiled=_lexicon(), topk=8)
+
+    # Forward commits to one path: acceptance is a crisp 0/1 fact. CAT is a word;
+    # CBT is not -- and there is no top-K smear in between.
+    feats = torch.zeros(1, 15, 16)
+    _force_query(mod, "A")
+    assert mod(feats, _board("CAT", gaps=(1,))).cell_signals[0, 2, 0].item() == pytest.approx(1.0)
+    _force_query(mod, "B")
+    assert mod(feats, _board("CAT", gaps=(1,))).cell_signals[0, 2, 0].item() == pytest.approx(0.0)
+
+    # Straight-through still routes gradient to the query head (nonzero features).
+    mod2 = StraightThroughLexicon(channels=16, compiled=_lexicon(), topk=8)
+    rfeats = torch.randn(2, 15, 16, requires_grad=True)
+    mod2(rfeats, torch.zeros(2, 15, N_LETTERS)).cell_residual.sum().backward()
+    assert mod2.query.weight.grad.abs().sum() > 0
 
 
 def test_parse_module_opts():
