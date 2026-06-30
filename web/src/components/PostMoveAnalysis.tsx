@@ -317,21 +317,24 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
               />
             </div>
             {/* The unseen pool the Monte-Carlo samples: 100 tiles minus the board and
-                the POV's leave (i.e. the bag + the opponent's rack). */}
-            <UnseenTiles
-              state={{
-                type: 'state',
-                board: payload.board,
-                bonuses: payload.bonuses,
-                rack: payload.rack,
-                scores: payload.scores,
-                player_names: ['Player 1', 'Player 2'],
-                bag_count: payload.bag_count,
-                opponent_rack_count: payload.opponent_rack_count,
-                your_turn: false,
-                game_over: false,
-              }}
-            />
+                the POV's leave (i.e. the bag + the opponent's rack). Constrained to the
+                game app's sidebar width so the tiles render at the same size. */}
+            <div style={{ width: 320, flexShrink: 0 }}>
+              <UnseenTiles
+                state={{
+                  type: 'state',
+                  board: payload.board,
+                  bonuses: payload.bonuses,
+                  rack: payload.rack,
+                  scores: payload.scores,
+                  player_names: ['Player 1', 'Player 2'],
+                  bag_count: payload.bag_count,
+                  opponent_rack_count: payload.opponent_rack_count,
+                  your_turn: false,
+                  game_over: false,
+                }}
+              />
+            </div>
           </div>
 
           <div className="lane-rack">
