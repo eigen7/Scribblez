@@ -55,7 +55,30 @@ void Game::play() {
   players_[0]->begin_game();
   players_[1]->begin_game();
 
-  int cur = 0;
+  play_loop(0);
+}
+
+void Game::play_from(const Board& board, std::array<int, 2> scores,
+                     const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move) {
+  board_ = board;
+  scores_ = scores;
+  racks_[0] = known_racks[0];
+  racks_[1] = known_racks[1];
+  bag_ = pool;
+  // Refill both racks from the seeded pool in turn order.
+  refill_rack(to_move, /*drawn_out=*/nullptr);
+  refill_rack(1 - to_move, /*drawn_out=*/nullptr);
+  log_.initial_racks[0] = racks_[0];
+  log_.initial_racks[1] = racks_[1];
+
+  players_[0]->begin_game();
+  players_[1]->begin_game();
+
+  play_loop(to_move);
+}
+
+void Game::play_loop(int start_player) {
+  int cur = start_player;
   int consecutive_zero_turns = 0;
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
   constexpr int kMaxTurns = 400;          // safety net

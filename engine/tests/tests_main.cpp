@@ -1554,6 +1554,52 @@ static void test_game_end_stalemate_penalty() {
   }
 }
 
+static bool rack_contains(const Rack& r, Tile want) {
+  for (int i = 0; i < r.size(); ++i)
+    if (r.tiles()[i].index() == want.index()) return true;
+  return false;
+}
+
+// Bag::remove (build the unseen pool) and Game::play_from (Monte-Carlo rollout from
+// a mid-game position): the deal keeps the post-mover's leave, refills both racks
+// from the seeded pool, plays to a natural end, and is deterministic per seed.
+static void test_game_play_from() {
+  // Bag::remove: a fully-removed letter never comes out of the bag.
+  {
+    Bag bag(123);
+    const Tile a = Tile::from_char('A');
+    for (int i = bag.counts()[a.index()]; i > 0; --i) bag.remove(a);
+    CHECK(bag.counts()[a.index()] == 0);
+    while (auto t = bag.draw()) CHECK(t->index() != a.index());
+  }
+
+  const Dictionary d = medium_dict();
+  const Board board;                    // empty post-move board (sufficient here)
+  const Rack leave = rack_from("ING");  // seat 0 (post-mover) leave
+  const std::array<Rack, 2> known = {leave, Rack{}};
+  const std::array<int, 2> scores = {120, 95};
+
+  GameLogStorage logs[2];
+  for (int run = 0; run < 2; ++run) {  // same seed twice -> identical (determinism)
+    const uint64_t seed = 7;
+    Bag pool(seed);
+    for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);  // leave is off the bag
+    TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+    TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+    scribblez::Game g(a0, a1, d, seed);
+    g.play_from(board, scores, known, pool, /*to_move=*/1);  // seat 0 just moved; seat 1 first
+    logs[run] = g.extract_log();
+  }
+
+  CHECK(!logs[0].end_reason.empty());                   // reached a natural end
+  CHECK(logs[0].initial_racks[0].size() == RACK_SIZE);  // post-mover topped up to 7
+  CHECK(logs[0].initial_racks[1].size() == RACK_SIZE);  // on-move drew a fresh rack
+  for (int i = 0; i < leave.size(); ++i)                // the leave is preserved
+    CHECK(rack_contains(logs[0].initial_racks[0], leave.tiles()[i]));
+  CHECK(logs[0].final_scores == logs[1].final_scores);  // deterministic per seed
+  CHECK(logs[0].end_reason == logs[1].end_reason);
+}
+
 // ===========================================================================
 // LabelEncoder
 // ===========================================================================
@@ -3453,6 +3499,7 @@ int main() {
   test_movegen_blank_scores_zero();
   test_game_end_rack_out_bonus();
   test_game_end_stalemate_penalty();
+  test_game_play_from();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
   test_epoch_determinism();

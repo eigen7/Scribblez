@@ -76,6 +76,15 @@ class Game {
 
   void play();
 
+  // Play out from a mid-game position (e.g. a Monte-Carlo rollout of an endgame).
+  // `board`/`scores` are the post-move state; `known_racks[p]` holds each player's
+  // already-known tiles (a leave, or an empty rack to deal fresh); both racks are
+  // then refilled to RACK_SIZE from `pool` (the unseen tiles, drawn in the Game's
+  // seeded order), and `to_move` plays first. The turn loop, draws, and endgame
+  // scoring are identical to play().
+  void play_from(const Board& board, std::array<int, 2> scores,
+                 const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move);
+
   // A non-owning view of this game's log. Valid for as long as the Game (and
   // its internal storage) lives and extract_log() has not been called.
   GameLog log() const { return log_.view(); }
@@ -104,6 +113,11 @@ class Game {
   // Draw from the bag until the player's rack is at RACK_SIZE. If
   // `drawn_out` is non-null, the drawn tiles are added to it.
   void refill_rack(int p, Rack* drawn_out);
+
+  // The turn loop shared by play() and play_from(): `start_player` moves first,
+  // play continues until the standard end (out / stalemate / max-turns) with the
+  // usual endgame scoring, and the final state is written to the log.
+  void play_loop(int start_player);
 };
 
 }  // namespace scribblez

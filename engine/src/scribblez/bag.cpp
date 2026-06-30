@@ -1,5 +1,7 @@
 #include "scribblez/bag.h"
 
+#include <cassert>
+
 namespace scribblez {
 
 Bag::Bag(uint64_t seed) : rng_(seed) {
@@ -25,6 +27,12 @@ std::optional<Tile> Bag::draw() {
 void Bag::put_back(Tile t) {
   ++counts_[t];
   ++remaining_;
+}
+
+void Bag::remove(Tile t) {
+  assert(counts_[t] > 0 && "Bag::remove: tile not present");
+  --counts_[t];
+  --remaining_;
 }
 
 }  // namespace scribblez
