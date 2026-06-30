@@ -13,6 +13,10 @@ const apiPort = Number(process.env.VITE_API_PORT ?? 8090);
 
 export default defineConfig({
   plugins: [react()],
+  // The engine/trainer launches Vite with the terminal inherited, so Vite's
+  // default screen-clearing on startup and restart would wipe the host process's
+  // output (e.g. a trainer's progress log). Keep the terminal intact.
+  clearScreen: false,
   server: {
     // Listen on all interfaces so that when play_game runs inside a Docker
     // container (see run_docker.py), the host's browser can reach the dev
