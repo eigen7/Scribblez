@@ -30,6 +30,12 @@ from scribblez.ffi import (
     get_max_move_per_lane_input_shapes,
     get_max_move_per_lane_target_shapes,
 )
+from scribblez.max_move_per_lane.lexicon_compiler import default_kwg_path
+from scribblez.max_move_per_lane.lexicon_modules import (
+    available_modules,
+    build_lexicon_module,
+    parse_module_opts,
+)
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 from scribblez.train_common import (
@@ -62,6 +68,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--lane-heads", type=int, default=4, help="Lane transformer attention heads.")
     p.add_argument("--ffn-mult", type=int, default=4, help="Lane transformer FFN width multiple.")
     p.add_argument("--rack-tokens", type=int, default=4, help="Rack tokens prepended per lane.")
+    p.add_argument(
+        "--lexicon-module",
+        type=str,
+        default="none",
+        choices=available_modules(),
+        help="Frozen compiled-lexicon tool plugged into the lane encoder.",
+    )
+    p.add_argument(
+        "--lexicon-path",
+        type=str,
+        default=default_kwg_path(),
+        help="KWG the lexicon module is compiled from. MUST match the lexicon the "
+        "self-play labels use, or the frozen tool and the targets disagree.",
+    )
+    p.add_argument(
+        "--lexicon-opt",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Per-module option, repeatable (e.g. --lexicon-opt topk=32).",
+    )
     p.add_argument("--lambda-cdf", type=float, default=1.0, help="Score-CDF (CRPS) loss weight.")
     p.add_argument("--lambda-occ", type=float, default=100.0, help="Occupancy (move) loss weight.")
     p.add_argument("--lambda-has-move", type=float, default=1.0, help="Has-move loss weight.")
@@ -266,6 +293,14 @@ def main() -> int:
     in_shapes = {s.name: s.dims for s in get_max_move_per_lane_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
+    lexicon_module = build_lexicon_module(
+        args.lexicon_module,
+        channels=args.trunk_channels,
+        kwg_path=args.lexicon_path,
+        **parse_module_opts(args.lexicon_opt),
+    )
+    if lexicon_module is not None:
+        print(f"Lexicon module: {args.lexicon_module} (from {args.lexicon_path})")
     model = MaxMovePerLaneModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
@@ -275,6 +310,7 @@ def main() -> int:
         lane_heads=args.lane_heads,
         ffn_mult=args.ffn_mult,
         n_rack_tokens=args.rack_tokens,
+        lexicon_module=lexicon_module,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")

@@ -19,6 +19,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scribblez.max_move_per_lane.lexicon_compiler import N_LETTERS
+from scribblez.max_move_per_lane.lexicon_modules import LexiconModule
 from scribblez.spatial_trunk import SpatialTrunk
 
 # Label dimensions -- must match the C++ lane-target layout (lane_targets.h).
@@ -41,10 +43,18 @@ class LaneModel(nn.Module):
     """
 
     def __init__(
-        self, channels: int, n_layers: int, n_heads: int, ffn_mult: int, n_rack_tokens: int
+        self,
+        channels: int,
+        n_layers: int,
+        n_heads: int,
+        ffn_mult: int,
+        n_rack_tokens: int,
+        n_lex_tokens: int = 0,
     ):
         super().__init__()
-        self.n_rack_tokens = n_rack_tokens
+        # Prefix tokens prepended to every lane: rack tokens, then any lexicon-
+        # module tokens. Both are dropped from the output.
+        self.n_prefix = n_rack_tokens + n_lex_tokens
         layer = nn.TransformerEncoderLayer(
             d_model=channels,
             nhead=n_heads,
@@ -54,14 +64,21 @@ class LaneModel(nn.Module):
             norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(layer, n_layers, enable_nested_tensor=False)
-        self.pos = nn.Parameter(torch.randn(1, n_rack_tokens + LANE_LEN, channels) * 0.02)
+        self.pos = nn.Parameter(torch.randn(1, self.n_prefix + LANE_LEN, channels) * 0.02)
 
-    def forward(self, lanes: torch.Tensor, rack_tokens: torch.Tensor) -> torch.Tensor:
-        """lanes: (M, LANE_LEN, C); rack_tokens: (M, n_rack_tokens, C) -> (M, LANE_LEN, C)."""
-        x = torch.cat([rack_tokens, lanes], dim=1)  # (M, nt + LANE_LEN, C)
+    def forward(
+        self,
+        lanes: torch.Tensor,
+        rack_tokens: torch.Tensor,
+        lex_tokens: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """lanes: (M, LANE_LEN, C); rack_tokens: (M, n_rack_tokens, C);
+        lex_tokens: (M, n_lex_tokens, C) or None -> (M, LANE_LEN, C)."""
+        prefix = [rack_tokens] if lex_tokens is None else [rack_tokens, lex_tokens]
+        x = torch.cat([*prefix, lanes], dim=1)  # (M, n_prefix + LANE_LEN, C)
         x = x + self.pos[:, : x.size(1)]
         x = self.encoder(x)
-        return x[:, self.n_rack_tokens :]  # drop rack tokens
+        return x[:, self.n_prefix :]  # drop prefix tokens
 
 
 def _lane_pool(feat: torch.Tensor, cell_dim: int) -> torch.Tensor:
@@ -84,6 +101,7 @@ class MaxMovePerLaneModel(nn.Module):
         ffn_mult: int = 4,
         n_rack_tokens: int = 4,
         n_score_bins: int = N_SCORE_BINS,
+        lexicon_module: LexiconModule | None = None,
     ):
         super().__init__()
         self.n_rack_tokens = n_rack_tokens
@@ -99,7 +117,15 @@ class MaxMovePerLaneModel(nn.Module):
             nn.Linear(trunk_channels, n_rack_tokens * trunk_channels),
         )
 
-        self.lane = LaneModel(trunk_channels, lane_layers, lane_heads, ffn_mult, n_rack_tokens)
+        # Optional frozen compiled-lexicon tool. It is queried per lane with the
+        # network's own features (never the ground-truth answer) and contributes
+        # a per-cell residual plus a few prepended tokens. See lexicon_modules.
+        self.lexicon_module = lexicon_module
+        n_lex_tokens = lexicon_module.n_tokens if lexicon_module is not None else 0
+
+        self.lane = LaneModel(
+            trunk_channels, lane_layers, lane_heads, ffn_mult, n_rack_tokens, n_lex_tokens
+        )
 
         # Heads, shared across the two axes (the per-lane operation is the same).
         self.occ_head = nn.Linear(trunk_channels, N_TILE_KINDS)  # per cell, per kind
@@ -114,16 +140,34 @@ class MaxMovePerLaneModel(nn.Module):
             nn.Linear(trunk_channels, 1),
         )
 
-    def _run_lanes(self, h: torch.Tensor, rack_tokens: torch.Tensor):
-        """h: (B, C, S, S) -> (row_feat, col_feat), each (B, row, col, C)."""
+    def _encode_axis(
+        self, lane_feats: torch.Tensor, lane_letters: torch.Tensor, rack_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        """Run one axis's lanes through the optional lexicon module and the lane
+        transformer. lane_feats/lane_letters: (M, S, C)/(M, S, 26) -> (M, S, C)."""
+        lex_tokens = None
+        if self.lexicon_module is not None:
+            out = self.lexicon_module(lane_feats, lane_letters)
+            if out.cell_residual is not None:
+                lane_feats = lane_feats + out.cell_residual
+            lex_tokens = out.tokens
+        return self.lane(lane_feats, rack_tokens, lex_tokens)
+
+    def _run_lanes(self, h: torch.Tensor, rack_tokens: torch.Tensor, input_spatial: torch.Tensor):
+        """h: (B, C, S, S) -> (row_feat, col_feat), each (B, row, col, C). The
+        lexicon module reads the board's per-lane letters from the first 26
+        (letter) planes of input_spatial."""
         b, c, s, _ = h.shape
         rt = rack_tokens.repeat_interleave(s, dim=0)  # one rack-token set per lane
+        letters = input_spatial[:, :N_LETTERS]  # (B, 26, S, S) one-hot board letters
         # Rows: each row is a sequence over columns -> indexed [b, row, col].
         rows = h.permute(0, 2, 3, 1).reshape(b * s, s, c)
-        row_feat = self.lane(rows, rt).reshape(b, s, s, c)
+        row_letters = letters.permute(0, 2, 3, 1).reshape(b * s, s, N_LETTERS)
+        row_feat = self._encode_axis(rows, row_letters, rt).reshape(b, s, s, c)
         # Cols: each column is a sequence over rows; permute back to [b, row, col].
         cols = h.permute(0, 3, 2, 1).reshape(b * s, s, c)
-        col_feat = self.lane(cols, rt).reshape(b, s, s, c).permute(0, 2, 1, 3)
+        col_letters = letters.permute(0, 3, 2, 1).reshape(b * s, s, N_LETTERS)
+        col_feat = self._encode_axis(cols, col_letters, rt).reshape(b, s, s, c).permute(0, 2, 1, 3)
         return row_feat, col_feat
 
     def forward(
@@ -133,7 +177,7 @@ class MaxMovePerLaneModel(nn.Module):
         h, _ = self.trunk(input_spatial, input_scalar)  # (B, C, 15, 15)
         rack_tokens = self.rack_tokens(input_scalar).view(b, self.n_rack_tokens, -1)
 
-        row_feat, col_feat = self._run_lanes(h, rack_tokens)  # (B, row, col, C) each
+        row_feat, col_feat = self._run_lanes(h, rack_tokens, input_spatial)  # (B,row,col,C) each
 
         # Occupancy: axis 0 (horizontal lanes) from row_feat [lane=row, cell=col];
         # axis 1 (vertical lanes) from col_feat, transposed to [lane=col, cell=row].
