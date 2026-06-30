@@ -14,6 +14,7 @@ See docs/react_dashboard.md for the architecture.
 """
 
 import argparse
+import json
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
@@ -260,6 +261,34 @@ class VersionHandler(_Base):
             conn.close()
 
 
+def _meta_payload(meta: dict) -> dict:
+    """The Info tab's view of a run's meta row: the run config (parsed from the
+    stored args JSON), model size, and timestamps."""
+    args = json.loads(meta["args_json"]) if meta.get("args_json") else {}
+    return {
+        "tag": meta.get("tag"),
+        "model_params": meta.get("model_params"),
+        "created_at": meta.get("created_at"),
+        "updated_at": meta.get("updated_at"),
+        "args": args,
+    }
+
+
+class MetaHandler(_Base):
+    """A run's recorded config (training args), model size, and timestamps."""
+
+    def get(self):
+        conn = self._open_conn()
+        if conn is None:
+            self.write({"meta": None})
+            return
+        try:
+            meta = db.read_meta(conn)
+        finally:
+            conn.close()
+        self.write({"meta": _meta_payload(meta) if meta else None})
+
+
 class GenerationsHandler(_Base):
     """The generations (epochs) recorded in a table -- drives a tab's GenerationSlider."""
 
@@ -355,6 +384,7 @@ def make_app(mount_root: str) -> tornado.web.Application:
         [
             (r"/api/tags", TagsHandler),
             (r"/api/version", VersionHandler),
+            (r"/api/meta", MetaHandler),
             (r"/api/generations", GenerationsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
             (r"/api/lane/positions", LanePositionsHandler),

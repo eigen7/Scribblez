@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import BokehFigure from './components/BokehFigure';
 import GenerationFigureTab from './components/GenerationFigureTab';
+import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import { getJSON } from './lib/api';
 
@@ -121,6 +122,7 @@ const GENERATION_TABS: Record<string, { figure: string; genTable: string; emptyT
 };
 
 function renderTab(name: string, task: string, tag: string | null) {
+  if (name === 'Info') return <InfoTab task={task} tag={tag} />;
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
   if (name in GENERATION_TABS) {
     const g = GENERATION_TABS[name];
@@ -143,8 +145,8 @@ export default function AppDashboard() {
   const task = requestedTask();
   const tabs =
     task === MAX_MOVE_PER_LANE
-      ? ['Loss', 'Performance', 'Lane analysis']
-      : ['Loss', 'Positions', 'Calibration', 'Training', 'Performance'];
+      ? ['Loss', 'Performance', 'Lane analysis', 'Info']
+      : ['Loss', 'Positions', 'Calibration', 'Training', 'Performance', 'Info'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(requestedTag());
   const [tab, setTab] = useState(0);
