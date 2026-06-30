@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Board from './Board';
+import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
@@ -123,10 +124,10 @@ function ScoreHistogram({ lane }: { lane: Lane }) {
           />
         ))}
       </div>
-      {/* Bucket-of-10 labels under each group. */}
+      {/* Bucket-of-10 labels under each group; the last bin is the ">=" catch-all. */}
       <div className="hist-axis">
         {Array.from({ length: 10 }, (_, g) => (
-          <div key={g} className="hgl">{`${g * 10 + 1}-${g * 10 + 10}`}</div>
+          <div key={g} className="hgl">{`${g * 10 + 1}-${g * 10 + 10}${g === 9 ? '+' : ''}`}</div>
         ))}
       </div>
       <div className="legend">
@@ -180,7 +181,14 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
   }, [task, tag]);
 
   const genCount = generations.length;
-  const effIdx = latest ? Math.max(0, genCount - 1) : Math.min(genIdx, Math.max(0, genCount - 1));
+
+  // While "Latest" is checked, pin the slider to the newest generation (so it
+  // follows as new checkpoints arrive). Unchecking leaves the index where it is.
+  useEffect(() => {
+    if (latest) setGenIdx(Math.max(0, genCount - 1));
+  }, [latest, genCount]);
+
+  const effIdx = Math.min(genIdx, Math.max(0, genCount - 1));
   const effGen = generations[effIdx]?.generation ?? null;
 
   // Fetch the merged board + ground-truth + prediction payload.
@@ -256,22 +264,17 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
     <div className="lane-analysis">
       {/* Controls: model on one row, position + orientation on the next. */}
       <div className="lane-controls-row">
-        <label>
-          Model{' '}
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, genCount - 1)}
-            value={effIdx}
-            disabled={latest || genCount <= 1}
-            onChange={(e) => setGenIdx(Number(e.target.value))}
-          />{' '}
-          <span className="muted">{genLabel}</span>
-        </label>
-        <label>
-          <input type="checkbox" checked={latest} onChange={(e) => setLatest(e.target.checked)} /> Latest
-          (follow newest checkpoint)
-        </label>
+        <span>Model</span>
+        <GenerationSlider
+          count={genCount}
+          valueIdx={effIdx}
+          follow={latest}
+          onChange={(idx, f) => {
+            setGenIdx(idx);
+            setLatest(f);
+          }}
+          label={genLabel}
+        />
       </div>
       <div className="lane-controls-row">
         <label>

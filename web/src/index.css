@@ -1130,3 +1130,8 @@ h1 {
   padding: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
+
+/* Generation slider + Latest checkbox (shared GenerationSlider component). */
+.gen-slider { display: inline-flex; align-items: center; gap: 12px; }
+.gen-slider input[type="range"] { width: 220px; }
+.gen-latest { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
