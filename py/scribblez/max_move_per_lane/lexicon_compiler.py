@@ -219,6 +219,44 @@ def compile_kwg(path: str) -> CompiledLexicon:
     )
 
 
+def write_kwg(compiled: CompiledLexicon, path: str) -> None:
+    """Serialize a compiled DAWG to a ``.kwg`` file -- the inverse of
+    :func:`compile_kwg` for the forward-trie half.
+
+    Writes the DAWG only (node 1's GADDAG-root slot is left empty); the lexicon
+    modules read just the DAWG, so this is enough to package a generated lexicon
+    (e.g. a phony lexicon) as a real KWG. Not minimized -- fine for an offline
+    artifact. ``compile_kwg`` of the result recovers the exact word set.
+    """
+    dead = compiled.dead_state
+    nxt, acc = compiled.next, compiled.accept
+    has_arc = (nxt != dead) | acc  # (state, letter) pairs that are real arcs
+
+    # The sorted arc letters of every state that has at least one outgoing arc.
+    arcs = {s: np.nonzero(has_arc[s])[0] for s in range(dead) if has_arc[s].any()}
+
+    # Lay each arc list in a contiguous block; indices 0 and 1 are header slots
+    # (node 0's arc_index is the DAWG root list; node 1's GADDAG root is unused).
+    start, cur = {}, 2
+    for s in sorted(arcs):
+        start[s] = cur
+        cur += len(arcs[s])
+
+    out = np.zeros(cur, dtype="<u4")
+    out[0] = start[compiled.root] & ARC_MASK
+    for s, letters in arcs.items():
+        base = start[s]
+        for i, letter in enumerate(letters):
+            child = int(nxt[s, letter])
+            word = ((int(letter) + 1) << 24) | (start.get(child, 0) & ARC_MASK)
+            if acc[s, letter]:
+                word |= ACCEPTS_BIT
+            if i == len(letters) - 1:
+                word |= IS_END_BIT
+            out[base + i] = word
+    out.tofile(path)
+
+
 @dataclass
 class RawKwg:
     """The original KWG arc-list traversal, kept for independent validation.
