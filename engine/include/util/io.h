@@ -1,8 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 
 namespace util {
+
+// Read an entire file into a string. Returns an empty string if it can't be opened.
+std::string read_file(const std::string& path);
 
 // Read exactly n bytes from socket fd into buf, looping over short reads.
 // Returns false on EOF or error.

@@ -40,12 +40,14 @@ add_library(scribblez_core STATIC
   src/scribblez/leave_values.cpp
   src/scribblez/lexicon.cpp
   src/scribblez/macondo_bot.cpp
+  src/scribblez/monte_carlo_sim.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp
   src/util/encoding.cpp
   src/util/crypto.cpp
   src/util/io.cpp
+  src/util/json.cpp
   src/util/math.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
@@ -153,6 +155,16 @@ target_link_libraries(manual_gcg_tool PRIVATE
 
 add_executable(board_tool apps/board_tool.cpp)
 target_link_libraries(board_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
+# One-off Monte-Carlo ground-truth generator for the post-move-value test dataset.
+add_executable(monte_carlo_sim_tool apps/monte_carlo_sim_tool.cpp)
+target_link_libraries(monte_carlo_sim_tool PRIVATE
   scribblez_core
   Boost::program_options
   Boost::json

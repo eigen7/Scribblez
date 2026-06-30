@@ -28,6 +28,7 @@
 #include "scribblez/training_task.h"
 #include "util/grid.h"
 #include "util/math.h"
+#include "util/string.h"
 
 #include <boost/json.hpp>
 
@@ -1552,6 +1553,21 @@ static void test_game_end_stalemate_penalty() {
   for (int p = 0; p < 2; ++p) {
     CHECK(log.final_scores[p] == -log.final_racks[p].point_value());
   }
+}
+
+static void test_natural_less() {
+  using util::natural_less;
+  CHECK(natural_less("pos-2", "pos-10"));  // numeric run compares by value, not lexically
+  CHECK(!natural_less("pos-10", "pos-2"));
+  CHECK(natural_less("pos-2.gcg", "pos-10.gcg"));
+  CHECK(natural_less("pos-09", "pos-10"));  // leading zeros ignored
+  CHECK(natural_less("a2", "a2b"));         // a prefix sorts before its extension
+  CHECK(!natural_less("pos-1", "pos-1"));   // equal -> not less (irreflexive)
+  CHECK(natural_less("abc", "abd"));        // non-digit chars compare lexically
+
+  std::vector<std::string> v = {"pos-10", "pos-2", "pos-1", "pos-20", "pos-3"};
+  std::sort(v.begin(), v.end(), natural_less);
+  CHECK((v == std::vector<std::string>{"pos-1", "pos-2", "pos-3", "pos-10", "pos-20"}));
 }
 
 static bool rack_contains(const Rack& r, Tile want) {
@@ -3500,6 +3516,7 @@ int main() {
   test_game_end_rack_out_bonus();
   test_game_end_stalemate_penalty();
   test_game_play_from();
+  test_natural_less();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
   test_epoch_determinism();

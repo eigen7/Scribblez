@@ -3,8 +3,15 @@
 #include <sys/socket.h>
 
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 
 namespace util {
+
+std::string read_file(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
 
 bool read_n(int fd, void* buf, size_t n) {
   auto* p = static_cast<uint8_t*>(buf);
