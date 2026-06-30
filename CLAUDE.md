@@ -58,6 +58,11 @@ Note that the Docker image adds `/workspace/repo/py/` to `PYTHONPATH`.
 Do not add `import` statements inside of functions without good reason. By default, they should go
 atop the file.
 
+## Ruff
+
+After editing any file, make sure to sanitize it with ruff. Alternatively, you can run
+`py/tools/ruff_format_all_py_files.py`.
+
 # C++ Code
 
 ## Building
