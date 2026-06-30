@@ -1,6 +1,5 @@
 import { Component, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import BokehFigure from './components/BokehFigure';
-import GenerationFigureTab from './components/GenerationFigureTab';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import PostMoveAnalysis from './components/PostMoveAnalysis';
