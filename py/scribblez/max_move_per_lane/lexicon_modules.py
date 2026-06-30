@@ -143,8 +143,26 @@ def build_lexicon_module(
     return LEXICON_MODULE_REGISTRY[name](channels=channels, compiled=compiled, **opts)
 
 
+class _DawgLexicon(LexiconModule):
+    """Base for modules that traverse the compiled DAWG.
+
+    Holds the frozen transition / acceptance / letter-legality tables as buffers
+    (the compiled lexicon, moved with the model but never trained). Subclasses
+    add the trainable adapters and the forward pass.
+    """
+
+    def __init__(self, compiled: CompiledLexicon):
+        super().__init__()
+        self.root = compiled.root
+        self.dead = compiled.dead_state
+        exists = (compiled.next != compiled.dead_state) | compiled.accept
+        self.register_buffer("next_tbl", torch.from_numpy(compiled.next.astype(np.int64)))
+        self.register_buffer("accept_tbl", torch.from_numpy(compiled.accept.astype(np.float32)))
+        self.register_buffer("exists_tbl", torch.from_numpy(exists.astype(np.float32)))
+
+
 @register_module("soft_traversal")
-class SoftTraversalLexicon(LexiconModule):
+class SoftTraversalLexicon(_DawgLexicon):
     """A differentiable forward-DAWG walk along the lane, queried by the network.
 
     Design
@@ -194,18 +212,10 @@ class SoftTraversalLexicon(LexiconModule):
     """
 
     def __init__(self, *, channels: int, compiled: CompiledLexicon, topk: int = 16):
-        super().__init__()
+        super().__init__(compiled)
         self.n_tokens = 2
         self.channels = channels
         self.topk = int(topk)
-        self.root = compiled.root
-        self.dead = compiled.dead_state
-
-        # Frozen lexicon: next state, acceptance, and letter-legality per state.
-        exists = (compiled.next != compiled.dead_state) | compiled.accept
-        self.register_buffer("next_tbl", torch.from_numpy(compiled.next.astype(np.int64)))
-        self.register_buffer("accept_tbl", torch.from_numpy(compiled.accept.astype(np.float32)))
-        self.register_buffer("exists_tbl", torch.from_numpy(exists.astype(np.float32)))
 
         # Trainable adapters (the network's "hands" on the tool).
         self.query = nn.Linear(channels, N_LETTERS)  # which letter to ask about
@@ -301,3 +311,149 @@ class StraightThroughLexicon(SoftTraversalLexicon):
         q = torch.softmax(self.query(lane_feats), dim=-1)
         hard = torch.zeros_like(q).scatter_(-1, q.argmax(-1, keepdim=True), 1.0)
         return hard + (q - q.detach())  # forward: one-hot; backward: soft (STE)
+
+
+@register_module("oracle_crosscheck")
+class OracleCrosscheckLexicon(_DawgLexicon):
+    """DIAGNOSTIC ONLY -- a cheating upper bound, NOT a legitimate result.
+
+    Feeds the network exact, board-derived lexical legality -- the very
+    cross-check knowledge the input encoder deliberately withholds (which is the
+    whole point of the experiment). It is NOT queried by the network's learned
+    representation: it reads the answer straight off the board, so it defeats the
+    experiment and would "pass" the held-out-word test for the wrong reason
+    (board-derived legality covers held-out words for free). Its only honest use
+    is as a ceiling -- how high lane accuracy can go given perfect per-cell
+    lexical info -- and as a wiring check. Never compare it to the real
+    generators as if it were one.
+
+    Mechanism: a single left-to-right DAWG scan with a hard reset at each empty
+    cell (a broken contiguous run). At every cell it reads, exactly, from the
+    state of the contiguous run on its left:
+      * run_word -- whether that left run is itself a complete word;
+      * cont     -- the letters that legally extend the run (prefix-valid);
+      * accept   -- the letters that, placed here, complete a word.
+    This is the LEFT-context cross-check (a simplification of the full
+    bidirectional cross-check; the perpendicular and right-context legality are
+    left to the shared transformer). The scan has no learnable part -- only the
+    readout that projects the exact signal into the trunk's feature space is
+    trained, i.e. the network learns to USE a perfect (cheating) oracle.
+    """
+
+    def __init__(self, *, channels: int, compiled: CompiledLexicon):
+        super().__init__(compiled)
+        self.n_tokens = 2
+        self.channels = channels
+        feat_dim = 1 + N_LETTERS + N_LETTERS  # run_word, cont(26), accept(26)
+        self.readout = nn.Linear(feat_dim, channels)
+        self.token_proj = nn.Linear(2 * feat_dim, self.n_tokens * channels)
+
+    def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
+        m, length, _ = lane_feats.shape
+        device = lane_feats.device
+        occupied = lane_letters.sum(-1) > 0  # (M, L)
+        letters = lane_letters.argmax(-1)  # (M, L); 0 where empty (unused there)
+
+        state = torch.full((m,), self.root, dtype=torch.long, device=device)
+        root = torch.full((m,), self.root, dtype=torch.long, device=device)
+        run_word = lane_feats.new_zeros(m)
+        zero = lane_feats.new_zeros(m)
+
+        run_steps, cont_steps, accept_steps = [], [], []
+        for c in range(length):
+            run_steps.append(run_word)  # left run (ending before c) is a word
+            cont_steps.append(self.exists_tbl[state])  # prefix-legal letters here
+            accept_steps.append(self.accept_tbl[state])  # word-completing letters here
+            occ_c = occupied[:, c]
+            lc = letters[:, c]
+            nxt = self.next_tbl[state, lc]
+            acc = self.accept_tbl[state, lc]
+            state = torch.where(occ_c, nxt, root)  # continue the run, or reset at a gap
+            run_word = torch.where(occ_c, acc, zero)
+
+        run = torch.stack(run_steps, dim=1).unsqueeze(-1)  # (M, L, 1)
+        cont = torch.stack(cont_steps, dim=1)  # (M, L, 26)
+        accept = torch.stack(accept_steps, dim=1)  # (M, L, 26)
+        feat = torch.cat([run, cont, accept], dim=-1)  # (M, L, feat_dim)
+
+        cell_residual = self.readout(feat)
+        pooled = torch.cat([feat.mean(1), feat.amax(1)], dim=-1)
+        tokens = self.token_proj(pooled).view(m, self.n_tokens, self.channels)
+        return LexiconOutput(cell_residual=cell_residual, tokens=tokens, cell_signals=feat)
+
+
+@register_module("kv_memory")
+class KvMemoryLexicon(LexiconModule):
+    """Frozen key-value lexicon memory with learned product-key addressing.
+
+    Compiles the lexicon into a frozen value memory -- one slot per word, holding
+    that word's letter bag (its letter-count distribution). The network forms a
+    query from its pooled lane features plus the lane's existing tiles and
+    retrieves a blend of the compatible words' letters via product-key attention
+    (Lample et al.): two learned sub-key codebooks of size ~sqrt(N) make top-k
+    retrieval over the ~170k-word memory cheap (2*sqrt(N) comparisons, not N).
+    The retrieved letter hint becomes lane tokens.
+
+    Frozen vs. trainable: the per-word value memory is a buffer (the compiled,
+    de-assemblable lexicon). Trainable: the query projection, the two sub-key
+    codebooks (HOW to address the memory), and the readout -- the network
+    learning to look words up.
+
+    Tradeoffs / suitability: retrieval, NOT an automaton. Clean gradients
+    (softmax over the retrieved slots) and tractable, but it returns a
+    lane-level letter *hint*, not exact per-cell legality, and the addressing
+    keys are learned rather than a structural encoding of the words, so the
+    "compiled lexicon" lives only in the frozen values. The coarsest,
+    fuzziest generator -- a differentiable lexicon lookup, weakest on exactness.
+    Options: ``knn`` (retrieved slots, default 32), ``key_dim`` (per-codebook
+    query width, default 32).
+    """
+
+    def __init__(
+        self, *, channels: int, compiled: CompiledLexicon, knn: int = 32, key_dim: int = 32
+    ):
+        super().__init__()
+        self.n_tokens = 2
+        self.channels = channels
+        self.key_dim = int(key_dim)
+
+        words = compiled.words()
+        codebook = int(np.ceil(np.sqrt(max(len(words), 1))))
+        self.codebook = codebook
+        self.knn = min(int(knn), codebook)
+
+        # One frozen value slot per word: its letter-count distribution.
+        value = np.zeros((codebook * codebook, N_LETTERS), dtype=np.float32)
+        for i, word in enumerate(words):
+            for ch in word:
+                value[i, ord(ch) - ord("A")] += 1.0
+        np.divide(value, np.clip(value.sum(1, keepdims=True), 1.0, None), out=value)
+        self.register_buffer("value_mem", torch.from_numpy(value))
+
+        # Learned addressing: query from lane context, two sub-key codebooks.
+        self.query = nn.Linear(channels + N_LETTERS, 2 * self.key_dim)
+        self.subkeys1 = nn.Parameter(torch.randn(codebook, self.key_dim) * 0.02)
+        self.subkeys2 = nn.Parameter(torch.randn(codebook, self.key_dim) * 0.02)
+        self.readout = nn.Linear(N_LETTERS, self.n_tokens * channels)
+
+    def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
+        m = lane_feats.size(0)
+        c, k = self.codebook, self.knn
+
+        ctx = torch.cat([lane_feats.mean(1), lane_letters.sum(1)], dim=-1)  # (M, C + 26)
+        q1, q2 = self.query(ctx).split(self.key_dim, dim=-1)
+        s1, s2 = q1 @ self.subkeys1.t(), q2 @ self.subkeys2.t()  # (M, c) each
+
+        # Product-key top-k: best k of each codebook, then the best k of the k*k
+        # combined slots (slot index == i1 * c + i2).
+        v1, i1 = s1.topk(k, dim=1)
+        v2, i2 = s2.topk(k, dim=1)
+        cand_score = (v1.unsqueeze(2) + v2.unsqueeze(1)).reshape(m, -1)  # (M, k*k)
+        cand_slot = (i1.unsqueeze(2) * c + i2.unsqueeze(1)).reshape(m, -1)
+        top_score, top_pos = cand_score.topk(k, dim=1)
+        slots = cand_slot.gather(1, top_pos)  # (M, k)
+
+        weights = torch.softmax(top_score, dim=1).unsqueeze(-1)  # (M, k, 1)
+        retrieved = (weights * self.value_mem[slots]).sum(1)  # (M, 26)
+        tokens = self.readout(retrieved).view(m, self.n_tokens, self.channels)
+        return LexiconOutput(tokens=tokens)

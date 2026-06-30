@@ -5,6 +5,8 @@ import pytest
 import torch
 from scribblez.max_move_per_lane.lexicon_compiler import N_LETTERS, CompiledLexicon
 from scribblez.max_move_per_lane.lexicon_modules import (
+    KvMemoryLexicon,
+    OracleCrosscheckLexicon,
     SoftTraversalLexicon,
     StraightThroughLexicon,
     available_modules,
@@ -32,7 +34,9 @@ def _board(word, gaps=()):
 
 def test_registry_and_build():
     assert "none" in available_modules()
-    assert {"soft_traversal", "straight_through"} <= set(available_modules())
+    assert {"soft_traversal", "straight_through", "oracle_crosscheck", "kv_memory"} <= set(
+        available_modules()
+    )
     assert build_lexicon_module("none", channels=8, kwg_path="/nonexistent") is None
     with pytest.raises(KeyError):
         build_lexicon_module("bogus", channels=8, kwg_path="/nonexistent")
@@ -54,6 +58,62 @@ def test_straight_through_is_exact_and_differentiable():
     rfeats = torch.randn(2, 15, 16, requires_grad=True)
     mod2(rfeats, torch.zeros(2, 15, N_LETTERS)).cell_residual.sum().backward()
     assert mod2.query.weight.grad.abs().sum() > 0
+
+
+def _model_with(module):
+    return MaxMovePerLaneModel(
+        31, 27, trunk_channels=8, num_blocks=1, lane_layers=1, lexicon_module=module
+    )
+
+
+def test_oracle_crosscheck_signals_and_integration():
+    orc = OracleCrosscheckLexicon(channels=8, compiled=_lexicon())
+    out = orc(torch.zeros(1, 15, 8), _board("CA"))
+    assert out.cell_residual.shape == (1, 15, 8)
+    assert out.tokens.shape == (1, 2, 8)
+    assert out.cell_signals.shape == (1, 15, 1 + N_LETTERS + N_LETTERS)
+
+    sig = out.cell_signals[0]
+    run, cont, accept = sig[:, 0], sig[:, 1 : 1 + N_LETTERS], sig[:, 1 + N_LETTERS :]
+    r, t, e = (ord(x) - ord("A") for x in "RTE")
+    # After the run "CA": R and T extend it (CAR, CAT) and both complete words;
+    # "CA" itself is not a word, and E does not extend it.
+    assert run[2] == pytest.approx(0.0)
+    assert cont[2, r] > 0.5 and cont[2, t] > 0.5 and cont[2, e] < 0.5
+    assert accept[2, r] > 0.5 and accept[2, t] > 0.5
+    # On a fully-placed "CAT", the run is a complete word at the following cell.
+    assert orc(torch.zeros(1, 15, 8), _board("CAT")).cell_signals[0, 3, 0] == pytest.approx(1.0)
+
+    # A cheat: no learnable query head; only the readout trains.
+    assert not hasattr(orc, "query")
+    orc(torch.zeros(1, 15, 8), _board("CAT")).cell_residual.sum().backward()
+    assert orc.readout.weight.grad.abs().sum() > 0
+
+    out = _model_with(OracleCrosscheckLexicon(channels=8, compiled=_lexicon()))(
+        torch.zeros(2, 31, 15, 15), torch.rand(2, 27)
+    )
+    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)
+
+
+def test_kv_memory_retrieval_and_integration():
+    kv = KvMemoryLexicon(channels=8, compiled=_lexicon())
+    feats = torch.randn(2, 15, 8, requires_grad=True)
+    out = kv(feats, torch.zeros(2, 15, N_LETTERS))
+    assert out.tokens.shape == (2, 2, 8)
+    assert out.cell_residual is None  # a lane-level hint, no per-cell residual
+
+    # The per-word value memory is frozen; addressing + readout are trainable.
+    assert "value_mem" in dict(kv.named_buffers())
+    assert "value_mem" not in dict(kv.named_parameters())
+    out.tokens.sum().backward()
+    assert kv.query.weight.grad.abs().sum() > 0
+    assert kv.subkeys1.grad.abs().sum() > 0
+    assert kv.readout.weight.grad.abs().sum() > 0
+
+    out = _model_with(KvMemoryLexicon(channels=8, compiled=_lexicon()))(
+        torch.zeros(2, 31, 15, 15), torch.rand(2, 27)
+    )
+    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)
 
 
 def test_parse_module_opts():
