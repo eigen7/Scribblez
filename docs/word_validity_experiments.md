@@ -1,9 +1,10 @@
 # Word-validity: a clean test of "compiled lexicon as a differentiable tool"
 
-This is the smallest experiment in the lexical-NN track (see `lexical_nn.md` for the
-larger per-lane task). It asks one question: can a neural network learn to *use* a
-frozen, compiled lexicon as a tool, and thereby generalize to words it never saw in
-training?
+This is the smallest experiment in the lexical-NN track (see `rack_best_experiments.md`
+for the next rung and `lexical_nn.md` for the larger per-lane task). It asks one
+question: can a neural network learn to *use* a frozen, compiled lexicon as a tool, and
+thereby generalize to words it never saw in training? The rack-best follow-up sharpens
+the lesson — that a tool only helps when its *structure* fits the task.
 
 **Task.** Classify a word (2–15 letters) as lexicon-legal (label 1) or a phony
 (label 0).
