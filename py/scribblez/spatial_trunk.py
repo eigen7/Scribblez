@@ -13,6 +13,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# The board's letter planes lead the spatial input (BoardPlanes lays the 26 letter
+# one-hots first), so input_spatial[:, :N_LETTERS] is the per-cell one-hot a lexicon
+# module reads.
+N_LETTERS = 26
+
 
 def mean_max_pool(x: torch.Tensor) -> torch.Tensor:
     """Concatenate the channel-wise mean and max over the spatial dims:
@@ -91,7 +96,14 @@ class SpatialTrunk(nn.Module):
     features directly (the post-move value heads do).
     """
 
-    def __init__(self, spatial_planes: int, scalar_size: int, trunk_channels: int, num_blocks: int):
+    def __init__(
+        self,
+        spatial_planes: int,
+        scalar_size: int,
+        trunk_channels: int,
+        num_blocks: int,
+        lexicon_module: nn.Module | None = None,
+    ):
         super().__init__()
         self.stem = nn.Sequential(
             nn.Conv2d(spatial_planes, trunk_channels, 3, padding=1, bias=False),
@@ -103,8 +115,33 @@ class SpatialTrunk(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, trunk_channels),
         )
+        # Optional compiled-lexicon tool (see scribblez.max_move_per_lane.lexicon_modules).
+        # It is a per-lane DAWG walker, so it is queried once per row and once per column
+        # and its per-cell residual is summed into the board feature map after the stem,
+        # giving the tower per-cell word-legality signal in both orientations.
+        self.lexicon_module = lexicon_module
         self.blocks = nn.Sequential(*[make_block(trunk_channels, i) for i in range(num_blocks)])
         self.trunk_bn = nn.BatchNorm2d(trunk_channels)
+
+    def _lexicon_residual(self, x: torch.Tensor, letters: torch.Tensor) -> torch.Tensor:
+        """Run the per-lane lexicon module over rows and columns and lay its per-cell
+        residuals back onto the (B, C, 15, 15) board feature map. `x` is the current
+        feature map (queried features); `letters` is the (B, N_LETTERS, 15, 15) one-hot."""
+        b, c, s, _ = x.shape
+        # Rows: each (batch, row) is a lane of `s` cells running along the columns.
+        rows = x.permute(0, 2, 3, 1).reshape(b * s, s, c)
+        row_letters = letters.permute(0, 2, 3, 1).reshape(b * s, s, N_LETTERS)
+        row_res = self.lexicon_module(rows, row_letters).cell_residual
+        # Columns: each (batch, col) is a lane of `s` cells running along the rows.
+        cols = x.permute(0, 3, 2, 1).reshape(b * s, s, c)
+        col_letters = letters.permute(0, 3, 2, 1).reshape(b * s, s, N_LETTERS)
+        col_res = self.lexicon_module(cols, col_letters).cell_residual
+        res = x.new_zeros(b, c, s, s)
+        if row_res is not None:
+            res = res + row_res.reshape(b, s, s, c).permute(0, 3, 1, 2)
+        if col_res is not None:
+            res = res + col_res.reshape(b, s, s, c).permute(0, 3, 2, 1)
+        return res
 
     def forward(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
@@ -112,6 +149,8 @@ class SpatialTrunk(nn.Module):
         x = self.stem(input_spatial)
         s = self.scalar_proj(input_scalar)  # (B, C)
         x = x + s[:, :, None, None]  # broadcast-add over spatial dims
+        if self.lexicon_module is not None:
+            x = x + self._lexicon_residual(x, input_spatial[:, :N_LETTERS])
         x = self.blocks(x)
         x = F.relu(self.trunk_bn(x))
         return x, s

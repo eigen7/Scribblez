@@ -9,7 +9,59 @@ so the same file serves single-position and batched inference.
 import warnings
 from pathlib import Path
 
+import numpy as np
+import onnx
 import torch
+from onnx import TensorProto, numpy_helper
+
+# Frozen compiled-lexicon buffers are identical across every checkpoint, so rather
+# than bake ~24 MB into each per-generation ONNX they are shared: moved into one blob
+# beside the models that all generations reference via ONNX external data.
+_LEXICON_BLOB = "lexicon_frozen.bin"
+
+
+def _frozen_lexicon_names(model: torch.nn.Module) -> set[str]:
+    """The ONNX initializer names of the trunk's frozen lexicon-tool buffers (empty
+    if the model has no lexicon module)."""
+    lex = getattr(getattr(model, "trunk", None), "lexicon_module", None)
+    if lex is None:
+        return set()
+    return {f"trunk.lexicon_module.{name}" for name, _ in lex.named_buffers()}
+
+
+def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]) -> None:
+    """Move the frozen lexicon initializers out of the just-written ONNX into a shared
+    `lexicon_frozen.bin` beside it (ONNX external data). Every generation lays the same
+    (frozen) tensors out identically, so the blob is written once and later generations
+    only re-point at it; onnxruntime resolves it transparently at load."""
+    if not frozen_names:
+        return
+    model = onnx.load(str(path))
+    inits = {i.name: i for i in model.graph.initializer}
+    frozen = [inits[n] for n in sorted(frozen_names) if n in inits]
+    if not frozen:
+        return
+
+    # Deterministic sorted-name layout with cumulative offsets -- identical across
+    # generations because the compiled DAWG never changes, so the blob is write-once.
+    blob, chunks, layout, offset = path.parent / _LEXICON_BLOB, [], [], 0
+    for init in frozen:
+        raw = np.ascontiguousarray(numpy_helper.to_array(init)).tobytes()
+        layout.append((init, offset, len(raw)))
+        chunks.append(raw)
+        offset += len(raw)
+    if not blob.exists() or blob.stat().st_size != offset:
+        blob.write_bytes(b"".join(chunks))
+
+    for init, off, length in layout:
+        init.ClearField("raw_data")
+        init.data_location = TensorProto.EXTERNAL
+        del init.external_data[:]
+        refs = (("location", _LEXICON_BLOB), ("offset", str(off)), ("length", str(length)))
+        for key, val in refs:
+            entry = init.external_data.add()
+            entry.key, entry.value = key, val
+    onnx.save(model, str(path))
 
 
 def export_onnx(
@@ -53,5 +105,8 @@ def export_onnx(
             opset_version=opset,
             dynamo=False,
         )
+    # Share the frozen compiled-lexicon buffers across generations instead of baking
+    # them into every export (no-op when the model has no lexicon module).
+    _externalize_frozen_lexicon(path, _frozen_lexicon_names(model))
     if was_training:
         model.train()

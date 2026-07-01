@@ -43,12 +43,16 @@ class PostMoveValueModel(nn.Module):
         trunk_channels: int = 192,
         num_blocks: int = 10,
         board_size: int = 15,
+        lexicon_module: nn.Module | None = None,
     ):
         super().__init__()
         self.board_size = board_size
 
-        # Shared conv trunk: stem + scalar injection + residual tower.
-        self.trunk = SpatialTrunk(spatial_planes, scalar_size, trunk_channels, num_blocks)
+        # Shared conv trunk: stem + scalar injection + residual tower. An optional
+        # compiled-lexicon tool is fused per-cell inside the trunk (both orientations).
+        self.trunk = SpatialTrunk(
+            spatial_planes, scalar_size, trunk_channels, num_blocks, lexicon_module=lexicon_module
+        )
 
         # --- Heads ---
         # TODO: make the set of heads modular so experimenting with additional

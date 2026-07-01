@@ -27,6 +27,12 @@ import torch
 from scribblez.dashboard import db, react_server
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
+from scribblez.max_move_per_lane.lexicon_compiler import default_kwg_path
+from scribblez.max_move_per_lane.lexicon_modules import (
+    available_modules,
+    build_lexicon_module,
+    parse_module_opts,
+)
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
@@ -56,6 +62,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     p.add_argument("--num-blocks", type=int, default=8, help="Residual blocks.")
     p.add_argument("--trunk-channels", type=int, default=128, help="Trunk width.")
+    p.add_argument(
+        "--lexicon-module",
+        type=str,
+        default="none",
+        choices=available_modules(),
+        help="Frozen compiled-lexicon tool fused per-cell (rows + columns) into the "
+        "conv trunk. 'none' disables it. See scribblez.max_move_per_lane.lexicon_modules.",
+    )
+    p.add_argument(
+        "--lexicon-path",
+        type=str,
+        default=default_kwg_path(),
+        help="KWG the lexicon module is compiled from. MUST match the lexicon the "
+        "self-play games use, or the frozen tool and the board words disagree.",
+    )
+    p.add_argument(
+        "--lexicon-opt",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Per-module option, repeatable (e.g. --lexicon-opt topk=32).",
+    )
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     p.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
     p.add_argument(
@@ -373,11 +401,20 @@ def main() -> int:
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
+    lexicon_module = build_lexicon_module(
+        args.lexicon_module,
+        channels=args.trunk_channels,
+        kwg_path=args.lexicon_path,
+        **parse_module_opts(args.lexicon_opt),
+    )
+    if lexicon_module is not None:
+        print(f"Lexicon module: {args.lexicon_module} (from {args.lexicon_path})")
     model = PostMoveValueModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
         num_blocks=args.num_blocks,
         trunk_channels=args.trunk_channels,
+        lexicon_module=lexicon_module,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
