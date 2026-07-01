@@ -105,12 +105,12 @@ commands run inside the container.
    2 layers, 4 heads, FFN mult 4, batch 512, lr 1e-3, weight decay 1e-4, held-out 10%).
 
    ```
-   ./py/scripts.word_validity.train --lexicon-module none                     # baseline
-   ./py/scripts.word_validity.train --lexicon-module none --lexicon-starve-ffn # control
-   ./py/scripts.word_validity.train --lexicon-module soft_traversal
-   ./py/scripts.word_validity.train --lexicon-module straight_through
-   ./py/scripts.word_validity.train --lexicon-module oracle_crosscheck
-   ./py/scripts.word_validity.train --lexicon-module kv_memory
+   ./py/scripts/word_validity/train.py --lexicon-module none                       # baseline
+   ./py/scripts/word_validity/train.py --lexicon-module none --lexicon-starve-ffn  # control
+   ./py/scripts/word_validity/train.py --lexicon-module soft_traversal
+   ./py/scripts/word_validity/train.py --lexicon-module straight_through
+   ./py/scripts/word_validity/train.py --lexicon-module oracle_crosscheck
+   ./py/scripts/word_validity/train.py --lexicon-module kv_memory
    ```
 
    Each run prints, per epoch, `train` and `holdout` accuracy with the held-out figure
