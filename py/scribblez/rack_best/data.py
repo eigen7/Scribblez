@@ -1,9 +1,9 @@
-"""Racks and their longest-word labels for the rack-best toy.
+"""Racks and longest-word (spelling) labels for ordered generation.
 
-A rack is 7 tiles drawn from the standard Scrabble bag (no blanks). The label is
-the length of the longest word formable from any *subset* of the rack -- which
-requires anagram search, not a single word lookup. Labels come from an exact
-sub-bag check against the real lexicon's per-length word-bag sets.
+The task is to emit a valid word *spelling* of maximal length from a 7-tile rack
+(no blanks). A rack may have several longest words; the training target is the
+lexicographically-smallest one (evaluation credits any valid longest word).
+Racks with no formable word are dropped -- the task is undefined for them.
 """
 
 import random
@@ -50,29 +50,27 @@ def bag_tiles(bag: dict = STANDARD_BAG) -> list[str]:
     return [letter for letter, count in bag.items() for _ in range(count)]
 
 
-def build_wordbags(real_kwg: str, min_len: int = 2, max_len: int = RACK_SIZE) -> dict[int, set]:
-    """length -> set of sorted-letter tuples of real words of that length."""
-    bags: dict[int, set] = {}
+def build_anagram_index(real_kwg: str, min_len: int = 2, max_len: int = RACK_SIZE) -> dict:
+    """sorted-letter tuple -> list of real word spellings with that anagram."""
+    index: dict[tuple, list[str]] = {}
     for word in compile_kwg(real_kwg).words():
         if min_len <= len(word) <= max_len:
-            bags.setdefault(len(word), set()).add(tuple(sorted(word)))
-    return bags
+            index.setdefault(tuple(sorted(word)), []).append(word)
+    return index
 
 
-def longest_word_length(rack: tuple, wordbags: dict[int, set], min_len: int = 2) -> int:
-    """Longest word formable from a subset of `rack` (a sorted letter tuple), or 0.
-
-    Because the rack is sorted, each `combinations` subset is already sorted and
-    matches the sorted-letter keys in `wordbags` directly."""
+def longest_words(rack: tuple, index: dict, min_len: int = 2) -> tuple[int, list[str]]:
+    """(max length, sorted list of all longest word spellings) for a sorted rack."""
     for k in range(len(rack), min_len - 1, -1):
-        bags = wordbags.get(k)
-        if bags and any(combo in bags for combo in combinations(rack, k)):
-            return k
-    return 0
+        words: set[str] = set()
+        for combo in set(combinations(rack, k)):  # rack is sorted -> combos are sorted keys
+            words.update(index.get(combo, ()))
+        if words:
+            return k, sorted(words)
+    return 0, []
 
 
 def sample_racks(n_unique: int, rng: random.Random, rack_size: int = RACK_SIZE) -> list[tuple]:
-    """`n_unique` distinct sorted racks drawn (without replacement) from the bag."""
     tiles = bag_tiles()
     seen, racks = set(), []
     while len(racks) < n_unique:
@@ -84,9 +82,15 @@ def sample_racks(n_unique: int, rng: random.Random, rack_size: int = RACK_SIZE) 
 
 
 def make_dataset(real_kwg: str, n_unique: int, seed: int, rack_size: int = RACK_SIZE):
-    """`(racks, labels)` -- distinct sorted racks and their longest-word lengths."""
+    """(racks, canonical-target words, max lengths) for racks that form a word."""
     rng = random.Random(seed)
-    wordbags = build_wordbags(real_kwg, max_len=rack_size)
-    racks = sample_racks(n_unique, rng, rack_size)
-    labels = np.array([longest_word_length(r, wordbags) for r in racks], dtype=np.int64)
-    return racks, labels
+    index = build_anagram_index(real_kwg, max_len=rack_size)
+    racks, targets, max_lens = [], [], []
+    for rack in sample_racks(n_unique, rng, rack_size):
+        ml, words = longest_words(rack, index)
+        if ml == 0:
+            continue  # no formable word: task undefined, drop it
+        racks.append(rack)
+        targets.append(words[0])  # canonical = lexicographically smallest longest word
+        max_lens.append(ml)
+    return racks, targets, np.array(max_lens, dtype=np.int64)
