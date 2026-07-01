@@ -29,6 +29,7 @@ sharing), matching the lane transformer: a word is a word along either axis.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -457,3 +458,104 @@ class KvMemoryLexicon(LexiconModule):
         retrieved = (weights * self.value_mem[slots]).sum(1)  # (M, 26)
         tokens = self.readout(retrieved).view(m, self.n_tokens, self.channels)
         return LexiconOutput(tokens=tokens)
+
+
+def _node_depths(compiled: CompiledLexicon) -> np.ndarray:
+    """Depth (path length from the root) of every state in a trie-shaped lexicon.
+    A `from_words` lexicon is a trie, so each state has a unique depth."""
+    depth = np.zeros(compiled.num_states, dtype=np.int64)
+    seen = np.zeros(compiled.num_states, dtype=bool)
+    seen[compiled.root] = True
+    queue = deque([compiled.root])
+    nxt = compiled.next
+    while queue:
+        s = queue.popleft()
+        for letter in range(N_LETTERS):
+            t = int(nxt[s, letter])
+            if t != compiled.dead_state and not seen[t]:
+                seen[t] = True
+                depth[t] = depth[s] + 1
+                queue.append(t)
+    return depth
+
+
+@register_module("anagram")
+class AnagramLexicon(_DawgLexicon):
+    """A differentiable anagram-search tool: longest word formable from a rack.
+
+    Built for tasks where the input is an unordered multiset of tiles (a rack)
+    rather than an ordered word -- the walk modules don't apply because there is
+    no canonical order to walk. Two ideas make it work:
+
+    Canonicalize by sorting. The lexicon is compiled over each word's letters
+    *sorted* (``CAT`` -> ``ACT``), so a multiset has a single canonical key and
+    anagrams collapse. The rack is fed sorted, so a used subset's letters are read
+    in the same sorted order the lexicon expects.
+
+    Search subsets by a soft skip/use walk. Over the sorted rack, at each position
+    the state can either skip the tile (carry mass) or use it (advance the
+    sorted-anagram DAWG by that letter). Summing both over all positions explores
+    every subset; the state is a sparse top-K node distribution. A word completing
+    on a "use" transition is binned by the node's depth, giving ``accept`` -- a
+    per-length vector of how reachable a word of each length is from this rack.
+    The longest length with mass is the answer; ``accept`` becomes lane tokens.
+
+    Frozen: the sorted-anagram DAWG and node depths (buffers). Trainable: the
+    readout. As with the walk tools, the rack is fully given, so the module
+    surfaces achievability and the network learns to read it. Bingo (use all
+    tiles) is just the top length bin, so this also covers the all-tiles case.
+
+    Requires the rack fed in sorted order. Options: ``topk`` (tracked nodes,
+    default 128 -- enough to be exact for a 7-tile rack), ``max_word_len`` (cap
+    the compiled words; default all).
+    """
+
+    def __init__(
+        self,
+        *,
+        channels: int,
+        compiled: CompiledLexicon,
+        topk: int = 128,
+        max_word_len: int | None = None,
+    ):
+        words = compiled.words()
+        if max_word_len is not None:
+            words = [w for w in words if len(w) <= max_word_len]
+        sorted_lexicon = CompiledLexicon.from_words(["".join(sorted(w)) for w in words])
+        super().__init__(sorted_lexicon)
+        self.n_tokens = 2
+        self.channels = channels
+        self.topk = int(topk)
+
+        depth = _node_depths(sorted_lexicon)
+        self.n_bins = int(depth.max()) + 2  # word lengths 0 .. max, with headroom
+        self.register_buffer("depth", torch.from_numpy(depth))
+        self.readout = nn.Linear(self.n_bins, self.n_tokens * channels)
+
+    def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
+        m, seqlen, _ = lane_feats.shape
+        device = lane_feats.device
+        letters = lane_letters.argmax(-1)  # (M, seqlen) -- the sorted rack letters
+        k = self.topk
+
+        idx = torch.full((m, k), self.dead, dtype=torch.long, device=device)
+        idx[:, 0] = self.root
+        val = lane_feats.new_zeros(m, k)
+        val[:, 0] = 1.0
+        accept = lane_feats.new_zeros(m, self.n_bins)
+
+        for j in range(seqlen):
+            ell = letters[:, j : j + 1].expand(m, k)
+            adv_next = self.next_tbl[idx, ell]  # (M, K) state after using this tile
+            adv_acc = self.accept_tbl[idx, ell]  # (M, K) does that complete a word?
+            done_len = (self.depth[idx] + 1).clamp(max=self.n_bins - 1)  # word length if so
+            accept = accept.scatter_add(1, done_len, val * adv_acc)
+
+            # New state: skip (keep idx, val) plus use (advance, valid moves only).
+            cand_idx = torch.cat([idx, adv_next], dim=1)  # (M, 2K)
+            cand_val = torch.cat([val, val * (adv_next != self.dead).float()], dim=1)
+            val, pos = cand_val.topk(k, dim=1)
+            idx = cand_idx.gather(1, pos)
+
+        tokens = self.readout(accept).view(m, self.n_tokens, self.channels)
+        return LexiconOutput(tokens=tokens, cell_signals=accept.unsqueeze(1))
