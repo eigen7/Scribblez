@@ -4,7 +4,7 @@ The premise: instead of forcing the network to grow an internal copy of the
 lexicon, compile the lexicon into a module whose lexical weights are *frozen*
 and *plug it in* as an input the network learns to query -- like handing a USB
 drive to a computer. The compiled lexicon (a DAWG transition table, see
-:mod:`lexicon_compiler`) is held in non-trainable buffers; the thin query/read
+:mod:`compiler`) is held in non-trainable buffers; the thin query/read
 adapters around it are ordinary parameters. Those adapters *are* "the network
 learning to operate the tool": gradients teach it what to ask and how to read
 the answer, while the lexicon itself never changes.
@@ -38,7 +38,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from scribblez.max_move_per_lane.lexicon_compiler import (
+from scribblez.lexical_tool.compiler import (
     N_LETTERS,
     CompiledLexicon,
     compile_kwg,
@@ -129,7 +129,7 @@ class LexiconArgs:
             "tool the network learns to query: its lexical weights never train, while thin "
             "adapters learn what to ask and how to read the answer -- so the model can use "
             "the lexicon without memorizing it. Compiled from NWL23 under the mount. See the "
-            "module docstring in scribblez/max_move_per_lane/lexicon_modules.py and "
+            "module docstring in scribblez/lexical_tool/modules.py and "
             "docs/word_validity_experiments.md.",
         )
         module_help = "; ".join(
@@ -141,7 +141,7 @@ class LexiconArgs:
             default="none",
             choices=available_modules(),
             help=f"Which compiled-lexicon tool to plug in (each is a frozen nn.Module; see "
-            f"its class in lexicon_modules.py). {module_help}.",
+            f"its class in modules.py). {module_help}.",
         )
         g.add_argument(
             "--lexicon-opt",
@@ -150,7 +150,7 @@ class LexiconArgs:
             metavar="KEY=VALUE",
             help="Module-specific hyperparameter as KEY=VALUE, repeatable; forwarded to the "
             "selected module's constructor. E.g. --lexicon-opt topk=32 sets soft_traversal's "
-            "beam width. See each module's __init__ in lexicon_modules.py for its options.",
+            "beam width. See each module's __init__ in modules.py for its options.",
         )
         g.add_argument(
             "--lexicon-mode",

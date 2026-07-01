@@ -115,7 +115,7 @@ class SpatialTrunk(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, trunk_channels),
         )
-        # Optional compiled-lexicon tool (see scribblez.max_move_per_lane.lexicon_modules).
+        # Optional compiled-lexicon tool (see scribblez.lexical_tool.modules).
         # It is a per-lane DAWG walker, so it is queried once per row and once per column
         # and its per-cell residual is summed into the board feature map after the stem,
         # giving the tower per-cell word-legality signal in both orientations.

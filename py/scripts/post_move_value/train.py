@@ -27,7 +27,7 @@ import torch
 from scribblez.dashboard import db, react_server
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
-from scribblez.max_move_per_lane.lexicon_modules import LexiconArgs
+from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
 from scribblez.post_move_value.model import PostMoveValueModel, compute_loss

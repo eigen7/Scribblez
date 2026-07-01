@@ -30,7 +30,7 @@ from scribblez.ffi import (
     get_max_move_per_lane_input_shapes,
     get_max_move_per_lane_target_shapes,
 )
-from scribblez.max_move_per_lane.lexicon_modules import LexiconArgs
+from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 from scribblez.train_common import (

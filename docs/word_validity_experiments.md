@@ -65,9 +65,9 @@ chance and makes the tool's advantage starker; order 3 is the default used here.
   short lengths (whole space small enough to score every candidate, so the short tail
   fills exactly) and *samples with a give-up bound* the long lengths. Rejects real words
   and duplicates. Writes a word list and a real `.kwg` (via `write_kwg`, the DAWG-only
-  inverse of `compile_kwg` in `scribblez/max_move_per_lane/lexicon_compiler.py`). The
+  inverse of `compile_kwg` in `scribblez/lexical_tool/compiler.py`). The
   committed artifact is `phonies/PHONY-NWL23.kwg` (155,660 words, 0 overlap with NWL23).
-- **Lexicon modules** — `scribblez/max_move_per_lane/lexicon_modules.py`. Frozen,
+- **Lexicon modules** — `scribblez/lexical_tool/modules.py`. Frozen,
   compiled-lexicon `nn.Module`s selected by name (`soft_traversal`, `straight_through`,
   `oracle_crosscheck`, `kv_memory`); each documents its mechanism and trade-offs. The same
   registry serves the per-lane task.

@@ -19,8 +19,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.max_move_per_lane.lexicon_compiler import N_LETTERS
-from scribblez.max_move_per_lane.lexicon_modules import LexiconModule
+from scribblez.lexical_tool.compiler import N_LETTERS
+from scribblez.lexical_tool.modules import LexiconModule
 from scribblez.spatial_trunk import SpatialTrunk
 
 # Label dimensions -- must match the C++ lane-target layout (lane_targets.h).
@@ -122,7 +122,7 @@ class MaxMovePerLaneModel(nn.Module):
 
         # Optional frozen compiled-lexicon tool. It is queried per lane with the
         # network's own features (never the ground-truth answer) and contributes
-        # a per-cell residual plus a few prepended tokens. See lexicon_modules.
+        # a per-cell residual plus a few prepended tokens. See lexical_tool.modules.
         self.lexicon_module = lexicon_module
         n_lex_tokens = lexicon_module.n_tokens if lexicon_module is not None else 0
 
@@ -132,7 +132,7 @@ class MaxMovePerLaneModel(nn.Module):
         # shrunk when a compiled-lexicon tool supplies the lexicon instead;
         # attention is left intact, since that is the capacity needed to USE the
         # tool. None keeps the default width. The replace-vs-add policy that
-        # picks this value lives in the trainer (lexicon_modules.resolve_lane_ffn_mult).
+        # picks this value lives in the trainer (lexical_tool.modules.resolve_lane_ffn_mult).
         effective_ffn_mult = ffn_mult if lane_ffn_mult is None else lane_ffn_mult
 
         self.lane = LaneModel(

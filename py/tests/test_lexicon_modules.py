@@ -3,8 +3,8 @@ module's contract and semantics, and its integration into the lane model."""
 
 import pytest
 import torch
-from scribblez.max_move_per_lane.lexicon_compiler import N_LETTERS, CompiledLexicon
-from scribblez.max_move_per_lane.lexicon_modules import (
+from scribblez.lexical_tool.compiler import N_LETTERS, CompiledLexicon
+from scribblez.lexical_tool.modules import (
     KvMemoryLexicon,
     OracleCrosscheckLexicon,
     SoftTraversalLexicon,

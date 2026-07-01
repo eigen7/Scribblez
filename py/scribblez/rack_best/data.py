@@ -11,7 +11,7 @@ from itertools import combinations
 
 import numpy as np
 
-from scribblez.max_move_per_lane.lexicon_compiler import compile_kwg
+from scribblez.lexical_tool.compiler import compile_kwg
 
 RACK_SIZE = 7
 

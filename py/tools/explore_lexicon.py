@@ -21,7 +21,7 @@ import random
 import re
 from collections import Counter
 
-from scribblez.max_move_per_lane.lexicon_compiler import compile_kwg
+from scribblez.lexical_tool.compiler import compile_kwg
 
 
 def load_words(path: str) -> list[str]:

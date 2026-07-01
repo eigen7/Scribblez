@@ -7,7 +7,7 @@ file -- including via the GADDAG half, a wholly separate path."""
 import os
 
 import pytest
-from scribblez.max_move_per_lane.lexicon_compiler import (
+from scribblez.lexical_tool.compiler import (
     CompiledLexicon,
     RawKwg,
     compile_kwg,

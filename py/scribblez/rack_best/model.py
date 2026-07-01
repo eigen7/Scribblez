@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.max_move_per_lane.lexicon_compiler import CompiledLexicon
+from scribblez.lexical_tool.compiler import CompiledLexicon
 
 RACK_SIZE = 7
 MAX_WORD = 7

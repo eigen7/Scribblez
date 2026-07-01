@@ -68,7 +68,7 @@ fits, measure the recovery.
 
 ## Components
 
-- **`anagram` module** — `scribblez/max_move_per_lane/lexicon_modules.py`. Two
+- **`anagram` module** — `scribblez/lexical_tool/modules.py`. Two
   ideas: (1) **canonicalize by sorting** — compile the lexicon over each word's
   letters *sorted* (`CAT` → `ACT`), so a multiset has one key and anagrams
   collapse; the rack is fed sorted. (2) **search subsets by a soft skip/use

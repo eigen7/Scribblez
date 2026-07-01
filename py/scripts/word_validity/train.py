@@ -19,8 +19,8 @@ import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scribblez.max_move_per_lane.lexicon_compiler import compile_kwg, default_kwg_path
-from scribblez.max_move_per_lane.lexicon_modules import LexiconArgs
+from scribblez.lexical_tool.compiler import compile_kwg, default_kwg_path
+from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.word_validity.model import WordValidityModel, encode_words, onehot_batch
 
 

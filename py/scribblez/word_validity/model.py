@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.max_move_per_lane.lexicon_modules import LexiconModule
+from scribblez.lexical_tool.modules import LexiconModule
 
 MAX_LEN = 15
 N_LETTERS = 26

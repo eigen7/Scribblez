@@ -31,7 +31,7 @@ import string
 from collections import Counter, defaultdict
 from itertools import product
 
-from scribblez.max_move_per_lane.lexicon_compiler import (
+from scribblez.lexical_tool.compiler import (
     CompiledLexicon,
     compile_kwg,
     default_kwg_path,

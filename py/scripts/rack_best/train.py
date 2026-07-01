@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scribblez.max_move_per_lane.lexicon_compiler import compile_kwg, default_kwg_path
+from scribblez.lexical_tool.compiler import compile_kwg, default_kwg_path
 from scribblez.rack_best.data import make_dataset
 from scribblez.rack_best.model import PAD, RackWordModel, encode_racks, encode_targets
 

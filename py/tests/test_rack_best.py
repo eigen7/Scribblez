@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn.functional as F
-from scribblez.max_move_per_lane.lexicon_compiler import CompiledLexicon
+from scribblez.lexical_tool.compiler import CompiledLexicon
 from scribblez.rack_best.data import longest_words
 from scribblez.rack_best.model import END, PAD, RackWordModel, encode_racks, encode_targets
 
