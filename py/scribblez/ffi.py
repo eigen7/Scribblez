@@ -111,6 +111,15 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # out_cap
     ]
 
+    lib.scribblez_post_move_value_analyze_gcg_leave.restype = ctypes.c_int
+    lib.scribblez_post_move_value_analyze_gcg_leave.argtypes = [
+        ctypes.c_char_p,  # gcg_text
+        ctypes.c_char_p,  # leave_str
+        ctypes.POINTER(ctypes.c_float),  # out_input
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
         ctypes.c_char_p,
@@ -403,6 +412,26 @@ def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     if lib.scribblez_post_move_value_analyze_gcg(gcg_text.encode("utf-8"), inp_ptr) < 0:
         raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
+    return inp
+
+
+def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
+    """Encode the post-move analysis position with an explicit alternate `leave` ('?' =
+    a blank) instead of the GCG's recorded one -- a dashboard what-if.
+
+    Board, scores, and moves are unchanged; only the rack and unseen-pool features
+    reflect the new leave. Raises ValueError with a human-readable reason on a size
+    mismatch or unavailable tiles, OSError on a GCG parse error.
+    """
+    lib = _lib()
+    inp = np.zeros(lib.scribblez_input_floats(), dtype=np.float32)
+    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    err = ctypes.create_string_buffer(256)
+    n = lib.scribblez_post_move_value_analyze_gcg_leave(
+        gcg_text.encode("utf-8"), leave.encode("utf-8"), inp_ptr, err, len(err)
+    )
+    if n < 0:
+        raise ValueError(err.value.decode("utf-8") or "invalid alternate leave")
     return inp
 
 

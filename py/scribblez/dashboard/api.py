@@ -20,6 +20,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+import onnxruntime as ort
 import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
@@ -27,7 +28,7 @@ from bokeh.layouts import column
 
 from scribblez import lane_analysis
 from scribblez.dashboard import db, plots
-from scribblez.ffi import analyze_gcg, post_move_board_json
+from scribblez.ffi import analyze_gcg, analyze_post_move_gcg_leave, post_move_board_json
 from scribblez.paths import TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
 
@@ -295,6 +296,48 @@ def post_move_position_payload(conn, position: int, generation) -> dict:
     }
 
 
+def _resolve_post_move_generation(conn, arg: str):
+    """Resolve a generation query arg: a specific index, or the newest recorded one for
+    '', 'latest', or None (or None when nothing is recorded)."""
+    if conn is not None and arg in ("", "latest"):
+        gens = db.read_post_move_generations(conn)
+        return gens[-1]["generation"] if gens else None
+    return int(arg) if arg not in ("", "latest") else None
+
+
+# Per-(file, mtime) ONNX session cache. The alternate-leave what-if runs the selected
+# generation's exported model on demand; fp32 onnxruntime reproduces the torch model
+# the stored predictions came from, so the two are directly comparable.
+_ONNX_SESSIONS: dict = {}
+
+
+def _post_move_onnx_session(onnx_path: Path):
+    key = (str(onnx_path), onnx_path.stat().st_mtime)
+    sess = _ONNX_SESSIONS.get(key)
+    if sess is None:
+        sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        _ONNX_SESSIONS[key] = sess
+    return sess
+
+
+def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
+    """Run the exported post-move model on one flat input tensor and decode the value
+    outputs: W/L/D probabilities and the score-delta mean/std."""
+    sess = _post_move_onnx_session(onnx_path)
+    planes = int({i.name: i.shape for i in sess.get_inputs()}["input_spatial"][1])
+    cells = post_move_analysis.BOARD_SIZE**2
+    spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
+    scalar = flat_input[planes * cells :].reshape(1, -1).astype(np.float32)
+    wld, sd = sess.run(["wld", "score_diff"], {"input_spatial": spatial, "input_scalar": scalar})
+    probs = np.exp(wld[0] - wld[0].max())
+    probs /= probs.sum()
+    return {
+        "wld": {"win": float(probs[0]), "draw": float(probs[1]), "loss": float(probs[2])},
+        "sd_mean": float(sd[0, 0]),
+        "sd_std": float(sd[0, 1]),
+    }
+
+
 class _Base(tornado.web.RequestHandler):
     @property
     def mount_root(self) -> str:
@@ -489,7 +532,9 @@ class PostMovePositionHandler(_Base):
             return
         conn = self._open_conn()
         try:
-            generation = self._resolve_generation(conn)
+            generation = _resolve_post_move_generation(
+                conn, self.get_query_argument("generation", "latest")
+            )
             self.write(post_move_position_payload(conn, position, generation))
         except OSError:  # engine unavailable -> can't build the board
             self.set_status(503)
@@ -498,12 +543,52 @@ class PostMovePositionHandler(_Base):
             if conn is not None:
                 conn.close()
 
-    def _resolve_generation(self, conn):
-        arg = self.get_query_argument("generation", "latest")
-        if conn is not None and arg in ("", "latest"):
-            gens = db.read_post_move_generations(conn)
-            return gens[-1]["generation"] if gens else None
-        return int(arg) if arg not in ("", "latest") else None
+
+class PostMoveAltLeaveHandler(_Base):
+    """Evaluate the selected generation's model on a position with an alternate leave (a
+    what-if). Query: position, generation, leave. Returns the model's W/L/D + score-delta
+    mean/std, or a 400 with a human-readable reason for an invalid/unavailable leave."""
+
+    def get(self):
+        files = _post_move_dataset_files()
+        position = int(self.get_query_argument("position", "0"))
+        if not 0 <= position < len(files):
+            self.set_status(404)
+            self.write({"error": "position out of range"})
+            return
+        leave = self.get_query_argument("leave", "").strip()
+        conn = self._open_conn()
+        try:
+            generation = _resolve_post_move_generation(
+                conn, self.get_query_argument("generation", "latest")
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+        if generation is None:
+            self.set_status(404)
+            self.write({"error": "no model generations recorded yet"})
+            return
+        try:
+            inp = analyze_post_move_gcg_leave(files[position].read_text(), leave)
+        except ValueError as e:  # bad size / unavailable tiles -> show the reason
+            self.set_status(400)
+            self.write({"error": str(e)})
+            return
+        except OSError:
+            self.set_status(503)
+            self.write({"error": "engine unavailable; cannot encode position"})
+            return
+        onnx_path = TagPaths(
+            self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
+        ).onnx_path(generation)
+        if not onnx_path.exists():
+            self.set_status(404)
+            self.write({"error": f"model for generation {generation} is not available"})
+            return
+        self.write(
+            {"leave": leave, "generation": generation, "model": _run_post_move_onnx(onnx_path, inp)}
+        )
 
 
 def make_app(mount_root: str) -> tornado.web.Application:
@@ -520,6 +605,7 @@ def make_app(mount_root: str) -> tornado.web.Application:
             (r"/api/post_move/positions", PostMovePositionsHandler),
             (r"/api/post_move/generations", PostMoveGenerationsHandler),
             (r"/api/post_move/position", PostMovePositionHandler),
+            (r"/api/post_move/alt_leave", PostMoveAltLeaveHandler),
         ],
         mount_root=mount_root,
     )

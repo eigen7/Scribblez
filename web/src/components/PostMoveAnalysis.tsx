@@ -31,6 +31,33 @@ interface Model {
   sd_std: number;
 }
 
+interface AltResult {
+  leave: string;
+  generation: number;
+  model: Model;
+}
+
+// The model's evaluation of a hypothetical alternate leave (model only -- there is no
+// Monte-Carlo ground truth for an arbitrary leave).
+function AltLeaveResult({ result }: { result: AltResult }) {
+  const m = result.model;
+  return (
+    <div style={{ marginTop: 8, padding: '8px 11px', background: '#eef3f8', borderRadius: 6, fontSize: 13, maxWidth: 360 }}>
+      <div>
+        Alternate leave <b>{result.leave.toUpperCase()}</b>{' '}
+        <span style={{ color: '#667', fontSize: 12 }}>(model only — gen {result.generation})</span>
+      </div>
+      <div style={{ marginTop: 4 }}>
+        Win <b style={{ color: MODEL_COLOR }}>{(m.wld.win * 100).toFixed(1)}%</b> · Loss{' '}
+        <b>{(m.wld.loss * 100).toFixed(1)}%</b> · Draw <b>{(m.wld.draw * 100).toFixed(1)}%</b>
+      </div>
+      <div>
+        Score-delta μ <b>{m.sd_mean.toFixed(1)}</b> (σ {m.sd_std.toFixed(1)})
+      </div>
+    </div>
+  );
+}
+
 interface Payload {
   name: string;
   start_player: number;
@@ -190,6 +217,11 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
   const [genIdx, setGenIdx] = useState(0);
   const [latest, setLatest] = useState(true);
   const [payload, setPayload] = useState<Payload | null>(null);
+  const [altOpen, setAltOpen] = useState(false);
+  const [altLeave, setAltLeave] = useState('');
+  const [altResult, setAltResult] = useState<AltResult | null>(null);
+  const [altError, setAltError] = useState<string | null>(null);
+  const [altBusy, setAltBusy] = useState(false);
 
   // The dataset's positions (fixed). Retry until they load: at startup the data API
   // can take ~10s to bind (it imports torch + the engine FFI).
@@ -250,6 +282,37 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
       .then(setPayload)
       .catch(() => setPayload(null));
   }, [task, tag, positions.length, posIdx, effGen]);
+
+  // An alternate-leave result is tied to a specific position + generation, so drop it
+  // when either changes (the entered text is kept so it can be re-submitted).
+  useEffect(() => {
+    setAltResult(null);
+    setAltError(null);
+  }, [posIdx, effGen]);
+
+  // Evaluate the selected model on the entered alternate leave. Uses a raw fetch (not
+  // getJSON) so a 400's validation message reaches the UI instead of being swallowed.
+  const submitAlt = async () => {
+    const leave = altLeave.trim();
+    if (!leave || !tag) return;
+    setAltBusy(true);
+    setAltError(null);
+    setAltResult(null);
+    try {
+      const g = effGen == null ? 'latest' : String(effGen);
+      const r = await fetch(
+        `/api/post_move/alt_leave?task=${task}&tag=${tag}&position=${posIdx}` +
+          `&generation=${g}&leave=${encodeURIComponent(leave)}`,
+      );
+      const d = await r.json();
+      if (!r.ok || d.error) setAltError(d.error || `request failed (${r.status})`);
+      else setAltResult(d);
+    } catch {
+      setAltError('request failed');
+    } finally {
+      setAltBusy(false);
+    }
+  };
 
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
@@ -344,6 +407,35 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
               label={`Leave (Player ${payload.start_player + 1})`}
               interactive={false}
             />
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {!altOpen ? (
+                <button className="arrow" style={{ padding: '4px 10px', width: 'auto' }} onClick={() => setAltOpen(true)}>
+                  Alternate Leave
+                </button>
+              ) : (
+                <>
+                  <input
+                    autoFocus
+                    value={altLeave}
+                    spellCheck={false}
+                    placeholder={`${payload.rack.length} tiles, e.g. ZQU?`}
+                    onChange={(e) => setAltLeave(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitAlt();
+                      if (e.key === 'Escape') setAltOpen(false);
+                    }}
+                    style={{ fontFamily: 'monospace', fontSize: 14, padding: '4px 8px', width: 150, textTransform: 'uppercase' }}
+                  />
+                  <button className="arrow" style={{ padding: '4px 10px', width: 'auto' }} disabled={altBusy} onClick={submitAlt}>
+                    {altBusy ? '…' : 'Evaluate'}
+                  </button>
+                </>
+              )}
+            </div>
+            {altError && (
+              <div style={{ marginTop: 6, color: '#c0392b', fontSize: 13 }}>{altError}</div>
+            )}
+            {altResult && <AltLeaveResult result={altResult} />}
           </div>
 
           <div className="lane-detail">

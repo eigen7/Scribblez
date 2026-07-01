@@ -118,6 +118,15 @@ int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input
 // on a parse error / non-PLAY final move.
 int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, int out_cap);
 
+// Like scribblez_post_move_value_analyze_gcg, but encodes from an explicit alternate
+// `leave_str` ('?' = a blank) -- a dashboard what-if -- instead of the GCG's recorded
+// leave. The alternate leave must match the recorded leave's tile count and use only
+// tiles available off the board. Returns scribblez_input_floats() on success; on
+// failure returns -1 and writes a human-readable reason into `out_err` (NUL-
+// terminated, truncated to err_cap).
+int scribblez_post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
+                                                float* out_input, char* out_err, int err_cap);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied

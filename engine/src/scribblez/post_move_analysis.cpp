@@ -1,13 +1,18 @@
 #include "scribblez/post_move_analysis.h"
 
+#include "scribblez/board.h"
 #include "scribblez/game_state_encoder.h"
 #include "scribblez/gcg_reader.h"
+#include "scribblez/glyph.h"
 #include "scribblez/move.h"
 #include "scribblez/position_json.h"
 #include "scribblez/rack.h"
+#include "scribblez/tile.h"
 
 #include <boost/json.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <string>
 
@@ -47,21 +52,103 @@ bool parse_final_position(const std::string& gcg_text, ParsedGcgGame* game, Fina
   return true;
 }
 
+// Replay every recorded move into a fresh encoder, then encode the input from
+// `start_player`'s POV holding `leave`. apply_move needs only the moves (not racks),
+// so this reproduces the board / scores / last-two-moves state the training replay
+// builds; only the rack and the unseen-pool feature depend on `leave`.
+void replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave, float* out) {
+  GameStateEncoder enc;
+  for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
+  assert(enc.active_player() == game.snapshots.back().turn_player);
+  enc.encode_input(start_player, leave, /*apply_flip=*/false, out);
+}
+
+// Parse a leave string into a Rack: A-Z (any case) are letters, '?' is a blank,
+// spaces are ignored. Fails on any other character or more than RACK_SIZE tiles.
+bool parse_leave(const std::string& s, Rack* out, std::string* error) {
+  for (char c : s) {
+    if (c == ' ') continue;
+    if (out->size() >= RACK_SIZE) {
+      if (error) *error = "a leave holds at most " + std::to_string(RACK_SIZE) + " tiles";
+      return false;
+    }
+    if (c == '?') {
+      out->add(BLANK);
+    } else if (c >= 'A' && c <= 'Z') {
+      out->add(Tile::of(c - 'A'));
+    } else if (c >= 'a' && c <= 'z') {
+      out->add(Tile::of(c - 'a'));
+    } else {
+      if (error) *error = std::string("invalid tile '") + c + "' (use A-Z, or ? for a blank)";
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string tile_name(int idx) {
+  return idx == BLANK.index() ? "?" : std::string(1, static_cast<char>('A' + idx));
+}
+
+// Per-tile counts available off the board: the full distribution minus the played
+// tiles (a designated blank on the board counts as a blank).
+std::array<int, 27> off_board_counts(const Board& board) {
+  std::array<int, 27> avail = TILE_COUNTS;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) {
+      const Glyph g = board.at(r, c);
+      if (!g.is_empty()) --avail[g.is_blank() ? BLANK.index() : g.letter().index()];
+    }
+  return avail;
+}
+
+// True iff every tile in `leave` is available off the board (each tile's count does
+// not exceed the full distribution minus what is already on the board).
+bool leave_available(const Rack& leave, const Board& board, std::string* error) {
+  const std::array<int, 27> avail = off_board_counts(board);
+  std::array<int, 27> want{};
+  for (int i = 0; i < leave.size(); ++i) ++want[leave.tiles()[i].index()];
+  for (int t = 0; t < 27; ++t) {
+    if (want[t] > avail[t]) {
+      if (error) {
+        *error = "only " + std::to_string(std::max(0, avail[t])) + " '" + tile_name(t) +
+                 "' available off the board";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 bool encode_post_move_analysis_input(const std::string& gcg_text, float* out, std::string* error) {
   ParsedGcgGame game;
   FinalPosition pos;
   if (!parse_final_position(gcg_text, &game, &pos, error)) return false;
+  replay_and_encode(game, pos.start_player, pos.leave, out);
+  return true;
+}
 
-  // Replay every recorded move into a fresh encoder; apply_move needs only the moves
-  // (not racks), so this reproduces the board / scores / last-two-moves state the
-  // training replay builds, without any rack bookkeeping.
-  GameStateEncoder enc;
-  for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
-  assert(enc.active_player() == game.snapshots.back().turn_player);
+bool encode_post_move_analysis_input_with_leave(const std::string& gcg_text,
+                                                const std::string& leave_str, float* out,
+                                                std::string* error) {
+  ParsedGcgGame game;
+  FinalPosition pos;
+  if (!parse_final_position(gcg_text, &game, &pos, error)) return false;
 
-  enc.encode_input(pos.start_player, pos.leave, /*apply_flip=*/false, out);
+  Rack leave;
+  if (!parse_leave(leave_str, &leave, error)) return false;
+  if (leave.size() != pos.leave.size()) {
+    if (error) {
+      *error = "leave must have " + std::to_string(pos.leave.size()) +
+               " tile(s) to match the original leave";
+    }
+    return false;
+  }
+  if (!leave_available(leave, game.snapshots.back().board, error)) return false;
+
+  replay_and_encode(game, pos.start_player, leave, out);
   return true;
 }
 

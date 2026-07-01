@@ -244,6 +244,24 @@ int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, i
   }
 }
 
+int scribblez_post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
+                                                float* out_input, char* out_err, int err_cap) {
+  if (out_err && err_cap > 0) out_err[0] = '\0';
+  if (!gcg_text || !leave_str || !out_input) return -1;
+  try {
+    std::string error;
+    if (!scribblez::encode_post_move_analysis_input_with_leave(gcg_text, leave_str, out_input,
+                                                               &error)) {
+      emit_string(error, out_err, err_cap);
+      return -1;
+    }
+    return scribblez::kInputFloats;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
                           const int64_t* game_indices, int num_picks) {
   if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;
