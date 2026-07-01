@@ -30,13 +30,7 @@ from scribblez.ffi import (
     get_max_move_per_lane_input_shapes,
     get_max_move_per_lane_target_shapes,
 )
-from scribblez.max_move_per_lane.lexicon_compiler import default_kwg_path
-from scribblez.max_move_per_lane.lexicon_modules import (
-    available_modules,
-    build_lexicon_module,
-    parse_module_opts,
-    resolve_lane_ffn_mult,
-)
+from scribblez.max_move_per_lane.lexicon_modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 from scribblez.train_common import (
@@ -69,52 +63,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--lane-heads", type=int, default=4, help="Lane transformer attention heads.")
     p.add_argument("--ffn-mult", type=int, default=4, help="Lane transformer FFN width multiple.")
     p.add_argument("--rack-tokens", type=int, default=4, help="Rack tokens prepended per lane.")
-    p.add_argument(
-        "--lexicon-module",
-        type=str,
-        default="none",
-        choices=available_modules(),
-        help="Frozen compiled-lexicon tool plugged into the lane encoder.",
-    )
-    p.add_argument(
-        "--lexicon-path",
-        type=str,
-        default=default_kwg_path(),
-        help="KWG the lexicon module is compiled from. MUST match the lexicon the "
-        "self-play labels use, or the frozen tool and the targets disagree.",
-    )
-    p.add_argument(
-        "--lexicon-opt",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="Per-module option, repeatable (e.g. --lexicon-opt topk=32).",
-    )
-    p.add_argument(
-        "--lexicon-mode",
-        type=str,
-        default="replace",
-        choices=["add", "replace"],
-        help="How the lexicon tool relates to the lane transformer (only applies "
-        "when --lexicon-module is set). 'add': tool augments the internal lexical "
-        "store. 'replace': shrink the lane FFN so word knowledge must come from "
-        "the tool (attention is kept so the network can still use it).",
-    )
-    p.add_argument(
-        "--lexicon-replace-ffn-mult",
-        type=int,
-        default=1,
-        help="Lane transformer FFN width multiple under --lexicon-mode replace "
-        "(0 ~ attention-only). Sweep down until a tool-off model can no longer "
-        "learn the lexicon -- that is where internal memorization is starved.",
-    )
-    p.add_argument(
-        "--lexicon-starve-ffn",
-        action="store_true",
-        help="Apply the replace-mode FFN shrink even with --lexicon-module none "
-        "(the starved-no-tool control): a shrunk backbone with no tool, which "
-        "should then fail to learn the lexicon. The experiment command minus the tool.",
-    )
+    LexiconArgs.add_arguments(p)
     p.add_argument("--lambda-cdf", type=float, default=1.0, help="Score-CDF (CRPS) loss weight.")
     p.add_argument("--lambda-occ", type=float, default=100.0, help="Occupancy (move) loss weight.")
     p.add_argument("--lambda-has-move", type=float, default=1.0, help="Has-move loss weight.")
@@ -319,20 +268,11 @@ def main() -> int:
     in_shapes = {s.name: s.dims for s in get_max_move_per_lane_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
-    lexicon_module = build_lexicon_module(
-        args.lexicon_module,
-        channels=args.trunk_channels,
-        kwg_path=args.lexicon_path,
-        **parse_module_opts(args.lexicon_opt),
-    )
+    lex = LexiconArgs.from_args(args)
+    lexicon_module = lex.build(channels=args.trunk_channels)
     if lexicon_module is not None:
-        print(f"Lexicon module: {args.lexicon_module} (from {args.lexicon_path})")
-    lane_ffn_mult = resolve_lane_ffn_mult(
-        args.lexicon_mode,
-        has_module=lexicon_module is not None,
-        starve_ffn=args.lexicon_starve_ffn,
-        replace_ffn_mult=args.lexicon_replace_ffn_mult,
-    )
+        print(f"Lexicon module: {lex.module}")
+    lane_ffn_mult = lex.lane_ffn_mult(lexicon_module is not None)
     if lane_ffn_mult is not None:
         print(f"Lane FFN width multiple shrunk to {lane_ffn_mult} (replace mode).")
     model = MaxMovePerLaneModel(

@@ -9,9 +9,9 @@ test: a model with no tool can only memorize and sits near chance on held-out
 words, while one that learns to use the tool generalizes.
 
 Usage:
-    python -m scripts.word_validity.train --lexicon-module soft_traversal
-    python -m scripts.word_validity.train --lexicon-module none        # baseline
-    python -m scripts.word_validity.train --lexicon-module none --lexicon-starve-ffn
+    python -m scripts.word_validity.train              # baseline (no tool)
+See --help for the compiled-lexicon-tool flags, and docs/word_validity_experiments.md
+for the tool-vs-starve protocol.
 """
 
 import argparse
@@ -20,12 +20,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scribblez.max_move_per_lane.lexicon_compiler import compile_kwg, default_kwg_path
-from scribblez.max_move_per_lane.lexicon_modules import (
-    available_modules,
-    build_lexicon_module,
-    parse_module_opts,
-    resolve_lane_ffn_mult,
-)
+from scribblez.max_move_per_lane.lexicon_modules import LexiconArgs
 from scribblez.word_validity.model import WordValidityModel, encode_words, onehot_batch
 
 
@@ -53,16 +48,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--max-steps", type=int, default=0, help="Stop after this many steps (0=off).")
     p.add_argument("--eval-every", type=int, default=0, help="Eval every N steps (0=per epoch).")
-    p.add_argument(
-        "--lexicon-module",
-        default="none",
-        choices=available_modules(),
-        help="Frozen compiled-lexicon tool (compiled from --real-lexicon).",
-    )
-    p.add_argument("--lexicon-opt", action="append", default=[], metavar="KEY=VALUE")
-    p.add_argument("--lexicon-mode", default="replace", choices=["add", "replace"])
-    p.add_argument("--lexicon-replace-ffn-mult", type=int, default=1)
-    p.add_argument("--lexicon-starve-ffn", action="store_true")
+    LexiconArgs.add_arguments(p)
     return p
 
 
@@ -117,18 +103,9 @@ def main() -> int:
 
     enc, lengths, labels, train_idx, hold_idx = load_split(args, rng)
 
-    lexicon_module = build_lexicon_module(
-        args.lexicon_module,
-        channels=args.channels,
-        kwg_path=args.real_lexicon,
-        **parse_module_opts(args.lexicon_opt),
-    )
-    lane_ffn_mult = resolve_lane_ffn_mult(
-        args.lexicon_mode,
-        lexicon_module is not None,
-        args.lexicon_starve_ffn,
-        args.lexicon_replace_ffn_mult,
-    )
+    lex = LexiconArgs.from_args(args)
+    lexicon_module = lex.build(channels=args.channels, kwg_path=args.real_lexicon)
+    lane_ffn_mult = lex.lane_ffn_mult(lexicon_module is not None)
     model = WordValidityModel(
         channels=args.channels,
         n_layers=args.layers,

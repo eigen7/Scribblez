@@ -29,9 +29,10 @@ sharing), matching the lane transformer: a word is a word along either axis.
 
 from __future__ import annotations
 
+import argparse
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -41,6 +42,7 @@ from scribblez.max_move_per_lane.lexicon_compiler import (
     N_LETTERS,
     CompiledLexicon,
     compile_kwg,
+    default_kwg_path,
 )
 
 
@@ -70,13 +72,14 @@ class LexiconModule(nn.Module):
     n_tokens: int = 0
 
 
-LEXICON_MODULE_REGISTRY: dict[str, Callable[..., LexiconModule]] = {}
+LexiconModuleGenerator = Callable[..., LexiconModule]
+LEXICON_MODULE_REGISTRY: dict[str, LexiconModuleGenerator] = {}
 
 
 def register_module(
     name: str,
-) -> Callable[[Callable[..., LexiconModule]], Callable[..., LexiconModule]]:
-    def deco(factory: Callable[..., LexiconModule]) -> Callable[..., LexiconModule]:
+) -> Callable[[LexiconModuleGenerator], LexiconModuleGenerator]:
+    def deco(factory: LexiconModuleGenerator) -> LexiconModuleGenerator:
         LEXICON_MODULE_REGISTRY[name] = factory
         return factory
 
@@ -86,6 +89,118 @@ def register_module(
 def available_modules() -> list[str]:
     """All selectable ``--lexicon-module`` names, including the ``none`` no-op."""
     return ["none"] + sorted(LEXICON_MODULE_REGISTRY)
+
+
+# One-line summary of each registered module, shown in --lexicon-module's help so the
+# choice is legible without opening the file.
+_MODULE_BLURBS = {
+    "none": "no tool (baseline)",
+    "soft_traversal": "soft left-to-right DAWG walk (word membership)",
+    "straight_through": "DAWG walk with straight-through argmax (crisp, biased grad)",
+    "kv_memory": "attention over lexicon letter-bags (anagram-lossy)",
+    "anagram": "subset/anagram lookup (rack -> formable words)",
+    "oracle_crosscheck": "exact board-derived legality (cheating diagnostic ceiling)",
+}
+
+
+@dataclass
+class LexiconArgs:
+    """The chosen compiled-lexicon-tool options, in one place: `add_arguments` registers
+    the CLI flags, `from_args` reads the chosen values back off a parsed namespace, and
+    `build` / `lane_ffn_mult` turn them into the frozen module and the transformer-FFN
+    width the model wants -- so no trainer copies the flag definitions or the wiring.
+
+    The lexicon the tool is compiled from is `default_kwg_path()` (NWL23 under the mount)
+    unless a trainer whose lexicon lives on another flag overrides `build(kwg_path=...)`.
+    """
+
+    module: str = "none"
+    opt: list[str] = field(default_factory=list)
+    mode: str = "replace"
+    replace_ffn_mult: int = 1
+    starve_ffn: bool = False
+
+    @staticmethod
+    def add_arguments(parser: argparse.ArgumentParser) -> None:
+        """Register the tool's CLI options under a "compiled-lexicon tool" group."""
+        g = parser.add_argument_group(
+            "compiled-lexicon tool",
+            description="A frozen, compiled lexicon (a DAWG) plugged into the model as a "
+            "tool the network learns to query: its lexical weights never train, while thin "
+            "adapters learn what to ask and how to read the answer -- so the model can use "
+            "the lexicon without memorizing it. Compiled from NWL23 under the mount. See the "
+            "module docstring in scribblez/max_move_per_lane/lexicon_modules.py and "
+            "docs/word_validity_experiments.md.",
+        )
+        module_help = "; ".join(
+            f"{n}: {b}" for n, b in _MODULE_BLURBS.items() if n in available_modules()
+        )
+        g.add_argument(
+            "--lexicon-module",
+            type=str,
+            default="none",
+            choices=available_modules(),
+            help=f"Which compiled-lexicon tool to plug in (each is a frozen nn.Module; see "
+            f"its class in lexicon_modules.py). {module_help}.",
+        )
+        g.add_argument(
+            "--lexicon-opt",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help="Module-specific hyperparameter as KEY=VALUE, repeatable; forwarded to the "
+            "selected module's constructor. E.g. --lexicon-opt topk=32 sets soft_traversal's "
+            "beam width. See each module's __init__ in lexicon_modules.py for its options.",
+        )
+        g.add_argument(
+            "--lexicon-mode",
+            type=str,
+            default="replace",
+            choices=["add", "replace"],
+            help="How the tool relates to a transformer host (ignored by conv-trunk models). "
+            "'add': tool augments the internal lexical store. 'replace': shrink the FFN so "
+            "word knowledge must come from the tool (attention kept).",
+        )
+        g.add_argument(
+            "--lexicon-replace-ffn-mult",
+            type=int,
+            default=1,
+            help="Transformer FFN width multiple under --lexicon-mode replace (0 ~ "
+            "attention-only). Sweep down until a tool-off model can no longer learn the "
+            "lexicon -- that is where internal memorization is starved.",
+        )
+        g.add_argument(
+            "--lexicon-starve-ffn",
+            action="store_true",
+            help="Apply the replace-mode FFN shrink even with --lexicon-module none "
+            "(the experiment command minus the tool).",
+        )
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> LexiconArgs:
+        """Gather the chosen values off a parsed namespace."""
+        return cls(
+            module=args.lexicon_module,
+            opt=args.lexicon_opt,
+            mode=args.lexicon_mode,
+            replace_ffn_mult=args.lexicon_replace_ffn_mult,
+            starve_ffn=args.lexicon_starve_ffn,
+        )
+
+    def build(self, channels: int, kwg_path: str | None = None):
+        """The frozen lexicon module for these options (None for ``module='none'``). The
+        lexicon is `default_kwg_path()` unless `kwg_path` overrides it (for trainers whose
+        KWG is a separate flag, e.g. word-validity's --real-lexicon)."""
+        return build_lexicon_module(
+            self.module,
+            channels=channels,
+            kwg_path=kwg_path or default_kwg_path(),
+            **parse_module_opts(self.opt),
+        )
+
+    def lane_ffn_mult(self, has_module: bool) -> int | None:
+        """The transformer FFN width multiple these options imply (None to keep full)."""
+        return resolve_lane_ffn_mult(self.mode, has_module, self.starve_ffn, self.replace_ffn_mult)
 
 
 def parse_module_opts(items: list[str]) -> dict[str, object]:
