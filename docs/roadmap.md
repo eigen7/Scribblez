@@ -331,35 +331,42 @@ encoder — no move input needed. M_pre thus provides both move-level
 evaluations ($Q$) and a position-level summary ($V$) from a single board
 encoding.
 
-### The blank explosion problem
+### The variable-size move set
 
-The variable-size move set creates a practical compute problem. With no blanks
-on the rack, a typical position has a few hundred legal moves. With one blank,
-that can balloon to 2,000–3,000. With two blanks, it can exceed 10,000.
-Running full cross-attention M_pre on 10,000 moves per position is
-prohibitively expensive, both at inference time and during training (where
-millions of positions require M_pre evaluation to generate targets).
+The number of legal moves varies wildly per position. With no blanks on the
+rack, a typical position has a few hundred; with one blank it can reach
+2,000–3,000; with two blanks it can exceed 10,000. The bulk of that growth is
+blank designations of the same word placement: holding `ABCDE??`, one 7-letter
+word on one set of squares may have dozens of legal blank designations that use
+the same rack tiles, occupy the same squares, and leave the same tiles behind,
+differing only in immediate score (crosswords formed) and board texture (which
+hooks they leave for future play).
 
-The core observation is that blank-induced moves are often **strategically
-near-identical**. If a player holds `ABCDE??` and can play a 7-letter word on
-a particular set of board squares, there might be 50 different blank
-designations that produce legal words — but they all use the same rack tiles,
-occupy the same board squares, and leave the same tiles behind. The only
-differences are immediate score (which varies due to crosswords formed) and
-board texture (which hooks exist for future play).
+A natural instinct is to collapse those near-duplicates with an upfront grouping
+or filtering stage before scoring. This is **unnecessary**: M_pre scores the
+whole candidate set in a single linear pass (see the inference pipeline below),
+so a large `N` is not a compute problem at inference. Two considerations remain,
+but neither warrants an upfront filter:
 
-### Footprint grouping
+- **The near-duplicates are often not duplicates.** Differing blank letters
+  produce different crosswords and different hooks, so the variants are
+  frequently genuinely distinct moves — and M_pre, especially with the post-move
+  cross-check features (see
+  [lexical_features_for_value.md](lexical_features_for_value.md)), scores them
+  differently. Truly strategically-equivalent instantiations are less common
+  than the raw count suggests.
+- **Diversity of the simulation set.** In principle the top-$K$ chosen for
+  Monte Carlo could be crowded by variants of one footprint. A cheap
+  footprint-level dedup applied to the *ranked* set at selection time is an
+  optional safeguard — grouping applied after scoring to a handful of moves, not
+  an upfront reduction of the full set.
 
-Group moves by **(rack-subset-used, board-squares-occupied)**. Within each
-group, moves differ only in the tile ordering and in which letters the blanks
-designate.
-
-Within each group, keep only the highest-scoring move as the representative.
-If a physical footprint is strategically interesting — right location, good
-leave — then the highest-scoring version is likely either the best version,
-or is close to the best version.
-The case where a lower-scoring designation is better is real but second-order, and can be recovered
-later in the pipeline when surviving groups are expanded (see step 5 below).
+An upfront filter that discards candidates before scoring would risk dropping a
+strategically critical move (e.g. a modest-scoring play that blocks an
+opponent's triple-word access), and it is unclear how to do such filtering
+safely without a learned component that reintroduces exactly that risk. Such
+filtering is therefore deferred unless profiling shows M_pre scoring to be a
+bottleneck (see the rollout note below).
 
 ### Exchange and pass moves
 
@@ -378,46 +385,33 @@ value to determine whether exchanging is the right choice.
 
 ### Inference pipeline
 
-At inference time, M_pre operates through a multi-stage pipeline that
-reduces the candidate set at each stage:
+M_pre scores all candidates in a single pass, so the pipeline is short:
 
-1. **GADDAG generates all legal moves.** Exhaustive enumeration of every legal
-   word placement, exchange, and pass.
+1. **GADDAG generates all legal moves** — every legal word placement, exchange,
+   and pass.
 
-2. **Footprint grouping.** Group by (rack-subset, board-squares); keep only
-   the max-scoring representative per group. Exchange/pass moves are routed to the exchange head
-   and removed from the main pipeline.
+2. **Encode the board once.** The CNN trunk produces the spatial map
+   $\mathbf{H}$ and global vector $\mathbf{g}$ for the position. This is the
+   expensive step, and it is paid once regardless of the number of candidates.
 
-3. **Lightweight scoring.** Score all group representatives using a cheap
-   function — a bilinear interaction between the move embedding and the
-   global board vector $\mathbf{g}$, without cross-attention. Fast enough to
-   run on thousands of candidates.
+3. **Score every word-play candidate in one cross-attention pass.** Each move
+   embedding cross-attends into the shared $\mathbf{H}$; moves do **not** attend
+   to one another, so the cost is $O(N)$ — linear in the candidate count, with
+   the board encode amortized across all of them. Even $N$ in the thousands is a
+   single linear pass, which is why no candidate-set reduction is needed before
+   scoring. Exchange and pass moves are routed to the exchange head (above)
+   rather than the move encoder.
 
-4. **Top-$K_1$ groups survive** (e.g., $K_1 = 50$–100).
-
-5. **Expand surviving groups.** Each surviving group is expanded back to its
-   full set of within-group moves (all blank designations collapsed in step
-   2).
-
-6. **Full M_pre with cross-attention** on the expanded set. This is the
-   expensive, high-quality evaluation that can distinguish board textures
-   and defensive implications of specific letter placements.
-
-7. **Top-$K_2$ for simulation** (e.g., $K_2 = 5$–10). These candidates enter
+4. **Take the top-$K$ for simulation** (e.g. $K = 5$–10), optionally after a
+   cheap footprint-level dedup to keep the set diverse. These candidates enter
    Monte Carlo rollouts or final selection.
 
-The grouping is purely structural — no learned filter, no risk of discarding
-strategically distinct moves. A subtle low-scoring defensive play has its own
-unique footprint and survives as its own group. The reduction comes entirely
-from collapsing blank-induced near-duplicates. The rare case where the best
-move in a group isn't the max-scoring one gets caught at step 6 when
-surviving groups are expanded and scored with full cross-attention.
-
-The remaining risk is that a strategically critical group gets eliminated at
-step 4 because its max-scoring representative wasn't impressive enough. The
-lightweight scoring in step 3 should catch most such cases (e.g., a
-modest-scoring footprint that blocks an opponent's triple-word access), and
-$K_1$ can be tuned to control this tradeoff between compute and safety.
+**Rollout note.** The $O(N)$ argument assumes M_pre is evaluated over the full
+candidate set roughly once per decision — at the root. If a search or rollout
+policy instead invokes M_pre over all $N$ at every ply, the constant factor of a
+large $N$ re-enters and a pre-scoring filter becomes worth revisiting. Keeping
+the inner rollout policy cheap, or restricting full M_pre-over-all-$N$ to the
+root, avoids this.
 
 ### Training M_pre
 
@@ -432,18 +426,23 @@ a policy to define M_pre's targets. M_pre training should begin only after
 M_post has reached reasonable quality (see Phase 3 for how to measure this) —
 a poorly calibrated M_post would produce noisy targets, compounding errors.
 
-Generating targets is expensive: each training position requires running
-M_post on potentially hundreds of candidate moves. Strategies to manage this:
+The expensive operation is **M_post evaluation** — a full board re-encode per
+candidate move — not M_pre's forward pass. So target generation, not M_pre
+inference, is where compute is spent. Strategies to manage it:
 
-- **Top-K only**: Generate M_pre targets only for the top-K moves by static
-  equity, not all legal moves. Over many positions, every frequently
-  occurring move receives training signal.
-- **Offline target generation**: Pre-compute M_post values for top-K moves
-  at every sampled position and store them alongside the `.slog` data,
-  amortizing inference cost across training epochs.
-- **Bootstrapping**: Once M_pre is partially trained, use it to generate its
-  own targets via self-play (the standard RL loop), reducing dependence on
-  M_post inference.
+- **Label a subset, mask the loss.** A target need not be computed for every
+  legal move. Label an unbiased subset of moves per position with M_post (e.g.
+  a uniform sample) and compute M_pre's loss only over the labeled moves,
+  masking the rest. This decouples target-generation cost from $N$ entirely —
+  the number of targets is a free parameter — while keeping the training signal
+  unbiased. Over many positions, every frequently occurring move still receives
+  signal.
+- **Offline target generation.** Pre-compute the M_post targets at every sampled
+  position and store them alongside the `.slog` data, amortizing inference cost
+  across training epochs.
+- **Bootstrapping.** Once M_pre is partially trained, use it to generate its own
+  targets via self-play (the standard RL loop), reducing dependence on M_post
+  inference.
 
 ---
 
@@ -454,7 +453,7 @@ M_post on potentially hundreds of candidate moves. Strategies to manage this:
 | 1 | Train M_post on HastyBot self-play | Working model + training pipeline | *(done)* |
 | 2 | Diversify training data | Randomized self-play with backtracking | Phase 1 |
 | 3 | Validate M_post quality | Eval harness (monotonicity + agent + calibration) | Phase 1 |
-| 4 | Pre-move model (M_pre) | Board/move encoder, cross-attention scoring, exchange head, filtering pipeline | Phase 3 quality bar |
+| 4 | Pre-move model (M_pre) | Board/move encoder, single-pass cross-attention scoring, exchange head | Phase 3 quality bar |
 
 Phases 2 and 3 should be developed in parallel — evaluation machinery is
 needed to know when M_post is good enough to support Phase 4.

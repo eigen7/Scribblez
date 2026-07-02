@@ -21,9 +21,10 @@ tradeoffs and the optimizations that keep them affordable.
   before drawing replacements. It already sees the post-play **leave**, so
   evaluating the leave is squarely its job.
 - **`M_pre`** predicts what `M_post` would say for each of `N` candidate moves in
-  one pass, and acts as a **filter**: a cheap lightweight score picks the top
-  `K_1` groups, which are expanded and re-scored with full cross-attention, and
-  only the top `K_2` reach Monte Carlo rollouts (see roadmap Phase 4 pipeline).
+  a single cross-attention pass (the board is encoded once and each move attends
+  into it, so scoring is `O(N)` — no candidate-set reduction is needed before
+  scoring). It acts as a **filter**: the top `K` moves by predicted value reach
+  Monte Carlo rollouts (see roadmap Phase 4 pipeline).
 - **Move generation is classical GADDAG.** The network is never asked to *find*
   legal words — it is handed only legal candidates and asked for their *value*.
 - **Monte Carlo** does the deep, honest evaluation of the few survivors.
@@ -74,9 +75,9 @@ A natural objection: Monte Carlo rollouts of the four-tile play would reveal the
 
 Because **Monte Carlo only runs on candidates that survive the `M_pre` filter.**
 If the pre-move model cannot value the four-tile play's leave upside, that play
-is dropped at the top-`K_1` (or top-`K_2`) stage and never reaches simulation.
-The lexical signal therefore has to live **upstream, in the features the cheap
-filter sees** — not only in the deep search.
+falls outside the top-`K` and never reaches simulation. The lexical signal
+therefore has to live **upstream, in the features `M_pre` sees** — not only in
+the deep search.
 
 Framed as a recall/precision split:
 
@@ -112,10 +113,10 @@ which board and which rack the hypothetical generation runs against:
    current rack, shared across all candidate moves. Cheapest. Most approximate:
    uses the full rack (not any specific leave), and is blind to how the candidate
    move changes the board (both self-block and self-created opportunities).
-2. **Per-leave, current board** — computed per distinct surviving leave.
-   Moderate cost (footprint grouping keys on the rack-subset used, i.e. the
-   leave, so distinct leaves are few). Correct about leave-sufficiency; still
-   blind to self-block and self-created opportunities.
+2. **Per-leave, current board** — computed per distinct leave. Moderate cost: a
+   leave is a rack-subset, so the position has at most a couple hundred distinct
+   leaves regardless of how many moves share each. Correct about
+   leave-sufficiency; still blind to self-block and self-created opportunities.
 3. **Per-move, post-move board** — the technically correct version: the
    contingent play is generated on the board *as it will be after the candidate
    move*, so it accounts for the move blocking (or opening) the very lane the
@@ -184,9 +185,8 @@ own.
   depends on the movegen internals (the anchor / cross-set walk); prototype
   before accepting a 27× constant factor.
 - **Amortize and cache.** Precompute at self-play data-generation time and store
-  alongside the `.slog` data, or compute in `M_pre`'s lightweight-scoring stage
-  (which is designed to run cheap functions over thousands of candidates). Cache
-  per `(board, rack/leave)`. Restrict `X` to tiles actually remaining in the bag.
+  alongside the `.slog` data. Cache per `(board, rack/leave)`. Restrict `X` to
+  tiles actually remaining in the bag.
 
 ## Newly created opportunities (the hook subtlety)
 
@@ -241,8 +241,8 @@ square along the perpendicular axis), rather than the full cross-check planes.
 
 ## Pointers
 
-- [roadmap.md](roadmap.md) — `M_post`/`M_pre`, the filtering pipeline, the two
-  weaknesses.
+- [roadmap.md](roadmap.md) — `M_post`/`M_pre`, the candidate-scoring/selection
+  pipeline, the two weaknesses.
 - [architecture.md](architecture.md) — the input encoder and the `.slog`
   data-generation pipeline (where precomputed features would be stored).
 - [lexical_tools.md](lexical_tools.md), [lexical_nn.md](lexical_nn.md),
