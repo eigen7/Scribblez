@@ -1,131 +1,132 @@
-# Rack-best: a frozen lexicon tool only helps if its structure fits the task
+# Rack-best: finding the best word in a 7-tile rack
 
-This is the second experiment in the lexical-NN track, one rung harder than
-word-validity (`word_validity_experiments.md`) and a step toward
-max-move-per-lane (`lexical_nn.md`). Read together, the two experiments make a
-single point: **plugging a frozen, compiled lexicon into a network helps only
-when the tool's structure matches the shape of the task.**
+The second experiment in the lexical-NN track, between word-validity
+(`word_validity_experiments.md`) and max-move-per-lane (`lexical_nn.md`). It has
+been studied in two versions of increasing difficulty:
 
-**Task.** Given a 7-tile rack (an unordered multiset of letters, no blanks),
-predict the **length of the longest word formable from a subset** of the rack
-(classes 0, 2…7; length 1 never occurs).
+1. **Score-only** — predict the *length* of the longest word formable from the
+   rack. An unordered-multiset classification task.
+2. **Score + word** — emit an actual longest *word spelling*. Ordered generation.
 
-**Why it is harder than word-validity.** Word-validity handed the network a word
-*in order* — one DAWG walk validates it, which is why the walk tools aced it. A
-rack has no order, and the answer requires searching *subsets* and *orderings*
-(anagram search). A plain walk of "the given string" no longer applies. That is
-the specific new capability this task isolates, with no board geometry.
+Both take a 7-tile rack (no blanks) drawn from the standard Scrabble bag; the
+lexicon tools they use are catalogued in `lexical_tools.md`. Together they refine
+the track's thesis: a frozen lexicon tool helps only when its structure matches
+the task, and the *ordering* requirement in version 2 is what makes it genuinely
+harder than version 1.
 
-## Result
+---
 
-Single GPU, ~1 minute per run after the dataset is cached, identical protocol
-(below), seed 0. 300k distinct racks, 10% held out. Held-out accuracy is exact
-match on the longest length.
+## 1. Score-only: longest length
 
-| `--lexicon-module` | tool kind | params | held-out exact | within-1 |
+**Task.** Given a 7-tile rack (an unordered multiset), predict the length of the
+longest word formable from a subset (classes 0, 2…7; length 1 never occurs).
+
+**Why it needs anagram search.** Word-validity handed the network a word *in
+order* — one DAWG walk validates it. A rack has no order, and the answer requires
+searching *subsets*. A plain walk of "the given string" no longer applies; that
+is the specific new capability this version isolates, with no board geometry.
+
+**Result** (300k racks, 10% held out, seed 0; held-out exact match on the longest
+length):
+
+| tool | kind | params | held-out exact | within-1 |
 | --- | --- | --- | --- | --- |
-| `none` | — (full FFN baseline) | 418,696 | 0.656 | 0.985 |
-| `none --lexicon-starve-ffn` | — (shrunk FFN, no tool) | 221,320 | 0.655 | 0.988 |
-| `soft_traversal` | DAWG **walk** (ordered) | 243,363 | 0.652 | 0.988 |
-| `anagram` | subset search (order-invariant) | 227,720 | **1.000** | 1.000 |
+| `none` | full-FFN baseline | 418,696 | 0.656 | 0.985 |
+| `none --lexicon-starve-ffn` | shrunk FFN, no tool | 221,320 | 0.655 | 0.988 |
+| `soft_traversal` | ordered DAWG walk | 243,363 | 0.652 | 0.988 |
+| `anagram` | order-invariant subset search | 227,720 | **1.000** | 1.000 |
 
 Reference points: the label is concentrated (length 5 is 43% of racks, 4–6 is
-91%), so a majority-class guess scores ~0.43 and everyone's within-1 is ~0.98.
-The no-tool baseline reaches ~0.66 from surface features (letter balance
-correlates with having a long word) but cannot be exact.
+91%), so a majority guess scores ~0.43 and everyone's within-1 is ~0.98. The
+no-tool baseline reaches ~0.66 from surface features but cannot be exact.
 
-What to read off this table:
+Three readings:
 
 1. **The order-invariant tool nails it.** `anagram` reaches ~100% exact on
-   held-out racks — with *fewer* parameters than the baseline — because it
-   searches subsets of the rack against the lexicon and the network learns to
-   read the achievable-lengths signal.
-2. **The wrong-shaped tool does nothing.** `soft_traversal`, the DAWG walk that
-   scored 1.000 on word-validity, is no better than the baseline here (0.652):
-   a rack has no order to walk, so validating "the sorted rack as a word" tells
-   the network almost nothing. This is the predicted failure, and it is the
-   whole point.
-3. **The win is structure, not capacity.** The starved control
-   (`none --lexicon-starve-ffn`, same FFN shrink as the tool runs, no tool)
-   matches the full baseline (0.655 vs 0.656). Shrinking the FFN is neutral; the
-   jump to exactness comes only from a *structurally matched* tool.
+   held-out racks — with *fewer* parameters than the baseline — by searching
+   subsets of the rack against the lexicon (see `lexical_tools.md`).
+2. **The wrong-shaped tool does nothing.** `soft_traversal`, which scored 1.000
+   on word-validity, is no better than the baseline here: a rack has no order to
+   walk. The predicted failure, and the whole point.
+3. **The win is structure, not capacity.** The starved control (same FFN shrink,
+   no tool) matches the full baseline (0.655 vs 0.656).
 
-## The pair (why both experiments together matter)
+**The pair with word-validity.** The two tools trade places:
 
 |  | word-validity (ordered word) | rack-best (unordered rack) |
 | --- | --- | --- |
-| `soft_traversal` (DAWG walk) | **1.000** | 0.652 |
+| `soft_traversal` (ordered walk) | **1.000** | 0.652 |
 | `anagram` (subset search) | — | **1.000** |
 | `none` baseline | ~0.78 | 0.656 |
 
-The two tools trade places. `soft_traversal` wins the ordered task and loses the
-unordered one; `anagram` is built for the unordered one. So a differentiable
-lexicon module is not a generic "give the network the dictionary" — it is a
-*specific search primitive*, and the engineering question for a new task is
-which primitive its structure calls for. This is the cheap loop the toy tasks
-are for: find a task the existing tools fumble, build the tool whose structure
-fits, measure the recovery.
+A lexicon tool is not "the dictionary in a box" — it is a *specific search
+primitive*, and the engineering question for a task is which primitive its shape
+calls for.
 
-## Components
+*Note on reproduction: this result is from rack-best's initial longest-length
+implementation. The code was subsequently repurposed for version 2 below, so
+reproducing these exact numbers requires that earlier revision; the finding is
+what carries forward.*
 
-- **`anagram` module** — `scribblez/lexical_tool/modules.py`. Two
-  ideas: (1) **canonicalize by sorting** — compile the lexicon over each word's
-  letters *sorted* (`CAT` → `ACT`), so a multiset has one key and anagrams
-  collapse; the rack is fed sorted. (2) **search subsets by a soft skip/use
-  walk** — over the sorted rack, each position either skips the tile (carry
-  mass) or uses it (advance the sorted-anagram DAWG by that letter); summed over
-  positions this explores every subset, with a sparse top-K node state. A word
-  completing on a "use" transition is binned by node depth (= word length,
-  unique because the sorted lexicon is a trie), giving a per-length
-  achievability vector that becomes lane tokens. Frozen: the sorted-anagram DAWG
-  and node depths; trainable: the readout. Bingo (use all seven tiles) is just
-  the top length bin.
-- **Data + labels** — `scribblez/rack_best/data.py`. Racks are 7 tiles drawn
-  without replacement from the standard Scrabble bag (blanks excluded). The
-  label is computed exactly: for k from 7 down, test every k-subset's sorted
-  tuple against the real lexicon's set of sorted k-letter word-bags; the first
-  hit is the longest length. Racks are deduplicated so held-out racks are
-  genuinely unseen.
-- **Model + trainer** — `scribblez/rack_best/model.py` and
-  `scripts/rack_best/train.py`. The host is a small transformer over the
-  length-7 sorted rack with a prepended CLS token driving an 8-class head; the
-  optional lexicon tool (compiled from the real lexicon) feeds tokens.
-  `--lexicon-mode replace` shrinks the host FFN so word knowledge must come from
-  the tool. The labeled dataset is cached on disk (label generation is the slow
-  part), so a sweep across modules is cheap to repeat.
+---
 
-## Reproduce
+## 2. Score + word: ordered generation
 
-Prerequisites: `NWL23.kwg` in `<mount>/lexica/` (installed by
-`setup_wizard.py`). The real lexicon is used both for the labels and, when a
-tool is attached, for the frozen module. All commands run inside the container.
+**Task.** Emit a valid *word spelling* (`CAT`, not `ACT`) of maximal length from
+the rack. The training target is the lexicographically-smallest longest word;
+racks with no formable word are dropped.
 
-The first run builds and caches the labeled dataset (~1 minute for 300k racks,
-under `<mount>/cache/rack_best/`); later runs load it instantly.
+**Why ordering is the real step up.** The length (and the tile multiset) is
+essentially the version-1 problem in disguise; producing a valid *spelling*
+requires order, which lives in the **forward DAWG** — the sorted-anagram structure
+`anagram` uses deliberately threw order away. So this version shifts the tool back
+to the forward DAWG, now as a per-step **constraint** inside an autoregressive
+decoder (see `lexical_tools.md` → "The forward-DAWG constraint", and
+`scribblez/rack_best/model.py`).
 
-Protocol used for the table: `--max-steps 2000 --eval-every 1000 --seed 0`, all
-other hyperparameters at their defaults (300k racks, channels 128, 2 layers, 4
-heads, FFN mult 4, batch 512, lr 1e-3, weight decay 1e-4, held-out 10%).
+A decoder-only transformer reads the rack, then generates letters; at each step
+the forward DAWG masks the logits to valid word prefixes and the rack masks them
+to available tiles. With the constraint **on**, every complete decode is a valid
+rack-word, so the network only has to learn to reach the maximal length; **off**
+(`--no-dawg`), the decoder must have learned the lexicon itself.
+
+**Result** (300k racks, 10% held out, seed 0, 5000 steps — not converged, both
+still climbing). Greedy decode; `valid` = a real formable word of any length (the
+tool's clean guarantee), `valid-longest` = also of maximal length, `exact` =
+equals the canonical target.
+
+| config | valid | valid-longest | exact |
+| --- | --- | --- | --- |
+| forward-DAWG constraint | **0.65** | **0.40** | 0.32 |
+| `--no-dawg` baseline | 0.48 | 0.32 | 0.26 |
+
+Readings (this is a **more nuanced** result than version 1):
+
+1. **The tool helps, but modestly.** Unlike the discriminative tasks — where the
+   no-tool model was stuck at chance — a *generation* model partially learns word
+   structure from the 265k training examples, so the baseline reaches 0.48
+   validity / 0.32 valid-longest on held-out racks on its own. The tool's gap is
+   real but smaller.
+2. **Greedy caps the tool's validity below 100%** (0.65, not ~1.0): greedy can
+   walk into a dead-end prefix that cannot complete with the remaining tiles. The
+   tool guarantees validity only *if the decode completes*. Beam search should
+   push this toward 1.0 by exploring completable paths.
+
+**Reproduce** (current code). `NWL23.kwg` must be in `<mount>/lexica/`. The first
+run caches the labeled dataset (under `<mount>/cache/rack_best/`).
 
 ```
-./py/scripts/rack_best/train.py --lexicon-module none                       # baseline
-./py/scripts/rack_best/train.py --lexicon-module none --lexicon-starve-ffn  # control
-./py/scripts/rack_best/train.py --lexicon-module soft_traversal             # walk tool (weak here)
-./py/scripts/rack_best/train.py --lexicon-module anagram                    # the matched tool
+./py/scripts/rack_best/train.py                # forward-DAWG constrained
+./py/scripts/rack_best/train.py --no-dawg      # baseline (no lexicon tool)
 ```
 
-Each run prints the label distribution, the parameter count, and per-epoch
-`train` / `holdout` exact and within-1 accuracy. Drop `--max-steps`/`--eval-every`
-to train the full `--epochs` (default 10).
+Each run prints the max-length distribution, parameter count, and per-epoch
+holdout `valid` / `valid-longest` / `exact`. Defaults: 300k racks, channels 128,
+3 layers, 4 heads, FFN mult 4, batch 512, lr 1e-3, 10 epochs, 10% held out.
 
-## Notes
+**Notes.**
 
-- **No blanks (yet).** Blanks make a tile a wildcard, which adds a second skill —
-  deciding what each blank represents — and breaks the sorted-walk `anagram`
-  module (a wildcard has no fixed place in the sort). They are deferred to a
-  focused follow-on with a letter-type-DP module; the label pipeline already has
-  the pieces (a reduced-bag index) to support them.
-- **`oracle_crosscheck`** is a board-derived cheat for the lane task and does not
-  apply here. `kv_memory` (letter-bag retrieval) is order-invariant and could be
-  run, but its bag is lossy; it is expected to sit near the baseline, as on
-  word-validity.
+- **No blanks yet.** A blank is a wildcard; with the forward-DAWG constraint it
+  is "any letter available this step, at the cost of one blank." Deferred.
+- **Beam search / recall.** Greedy is myopic; beam decoding would raise validity
+  and give the multi-answer view (recall over *all* longest words). Deferred.
