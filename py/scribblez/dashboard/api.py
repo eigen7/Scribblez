@@ -49,7 +49,15 @@ VERSION_TABLES = (
 
 
 def _train_step(conn, params, image_dir):
-    return plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
+    """The Loss tab: the streaming loss/accuracy curves, with the aggregate
+    model-vs-Monte-Carlo quality curves (large dataset) stacked beneath them when
+    recorded."""
+    steps = plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
+    quality = plots.eval_quality_grid(conn)
+    parts = [p for p in (steps, quality) if p is not None]
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else column(*parts)
 
 
 def _throughput(conn, params, image_dir):

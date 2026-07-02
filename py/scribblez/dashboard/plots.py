@@ -100,6 +100,17 @@ CALIB_CURVES = [
         ["calib_scorediff_mae", "calib_scorediff_bias", "calib_scorediff_sharpness"],
     ),
 ]
+# Aggregate model-vs-Monte-Carlo quality curves over the large penultimate-bingo
+# dataset, shown on the Loss tab beneath the training curves. Lower is better for all:
+# how far the model's predicted value is from the Monte-Carlo ground truth, split by
+# head (win/draw/loss vs. score-differential mean/std).
+POST_MOVE_QUALITY = [
+    ("Value quality vs Monte-Carlo — WLD", ["eval_win_mae", "eval_wld_brier"]),
+    (
+        "Value quality vs Monte-Carlo — score diff (points)",
+        ["eval_sd_mean_mae", "eval_sd_std_mae"],
+    ),
+]
 
 
 def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
@@ -109,6 +120,16 @@ def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
         return Div(text="<i>No scalar metrics recorded yet.</i>")
     rows = [row(*figs[i : i + ncols]) for i in range(0, len(figs), ncols)]
     return column(*rows)
+
+
+def eval_quality_grid(conn):
+    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, or None
+    when no quality metric has been recorded yet (so the Loss tab can omit the panel
+    rather than show an empty placeholder)."""
+    names = [name for _title, group in POST_MOVE_QUALITY for name in group]
+    if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
+        return None
+    return series_grid(conn, POST_MOVE_QUALITY, ncols=2)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +371,11 @@ def _board_uri(path: Path) -> str:
 
 
 def probes_view(
-    conn, image_dir: Path, init_pos: int = 0, init_gen: int | None = None, follow: bool = True,
+    conn,
+    image_dir: Path,
+    init_pos: int = 0,
+    init_gen: int | None = None,
+    follow: bool = True,
     external_gen: bool = False,
 ) -> View | None:
     # external_gen: drop the in-figure generation slider + latest checkbox (the React

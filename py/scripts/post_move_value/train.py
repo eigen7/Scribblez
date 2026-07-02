@@ -102,6 +102,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the per-checkpoint post-move-value dataset evaluation.",
     )
+    p.add_argument(
+        "--post-move-quality-dataset",
+        type=str,
+        default=str(post_move_analysis.LARGE_DATASET),
+        help="Large penultimate-bingo dataset the Loss tab's aggregate model-vs-Monte-Carlo "
+        "quality curves are measured over each checkpoint.",
+    )
+    p.add_argument(
+        "--no-post-move-quality",
+        action="store_true",
+        help="Disable the per-checkpoint aggregate quality evaluation on the large dataset.",
+    )
     p.add_argument("--restart", action="store_true", help="Clear prior checkpoints/onnx/DB.")
     p.add_argument("--no-dashboard", action="store_true", help="Do not launch the dashboard.")
     p.add_argument(
@@ -147,6 +159,42 @@ def eval_post_move(model, post_move_eval: dict, device, conn, generation: int, p
         model, post_move_eval["inputs"], post_move_eval["spatial_planes"], device
     )
     db.write_post_move_preds(conn, generation, positions, preds)
+
+
+def load_post_move_quality(args, spatial_planes: int) -> dict | None:
+    """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth once
+    (or None if disabled / the dataset or its ground truth is unavailable). At each
+    checkpoint the model is run over it and aggregate quality scalars are recorded for
+    the Loss tab."""
+    if args.no_post_move_quality:
+        return None
+    try:
+        names, inputs = post_move_analysis.load_inputs(args.post_move_quality_dataset)
+        gt = post_move_analysis.load_ground_truth(args.post_move_quality_dataset, names)
+    except Exception as e:  # missing lexicon / dataset / ground truth
+        timed_print(f"post-move-value quality eval disabled: {e}")
+        return None
+    if not names:
+        timed_print(
+            f"post-move-value quality eval disabled: no positions in "
+            f"{args.post_move_quality_dataset}"
+        )
+        return None
+    timed_print(
+        f"post-move-value quality eval: {len(names)} positions from "
+        f"{args.post_move_quality_dataset}"
+    )
+    return {"inputs": inputs, "spatial_planes": spatial_planes, "gt": gt}
+
+
+def eval_post_move_quality(model, quality_eval: dict, device) -> dict:
+    """Run the model over the large quality set and return the aggregate
+    model-vs-Monte-Carlo quality scalars (win-equity/WLD + score-delta mean/std MAE)."""
+    model.eval()
+    preds = post_move_analysis.predict(
+        model, quality_eval["inputs"], quality_eval["spatial_planes"], device
+    )
+    return post_move_analysis.quality_metrics(preds, quality_eval["gt"])
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +251,7 @@ def run_streaming_training(
     args,
     *,
     post_move_eval,
+    post_move_quality,
     start_ckpt,
     start_positions,
     start_step,
@@ -306,6 +355,7 @@ def run_streaming_training(
                     step,
                     interval,
                     post_move_eval=post_move_eval,
+                    post_move_quality=post_move_quality,
                     spatial_planes=spatial_planes,
                     scalar_size=scalar_size,
                 )
@@ -335,19 +385,29 @@ def _checkpoint_and_eval(
     interval,
     *,
     post_move_eval,
+    post_move_quality,
     spatial_planes,
     scalar_size,
 ):
-    """Persist this checkpoint's train metrics + the post-move-value dataset eval,
+    """Persist this checkpoint's train metrics + the post-move-value dataset evals,
     then save the rolling .pt and export ONNX.
 
     The dashboard DB is keyed on an integer `epoch`; here it is the monotonic
-    checkpoint index (one per `--checkpoint-every` positions).
+    checkpoint index (one per `--checkpoint-every` positions). The aggregate
+    model-vs-Monte-Carlo quality scalars (large dataset) are folded into the same
+    metrics record, so the Loss tab plots them alongside the training curves.
     """
     record = {"epoch": ckpt_idx, "positions": positions, **interval.record()}
+    if post_move_quality is not None:
+        record.update(eval_post_move_quality(model, post_move_quality, device))
+    quality = (
+        f" win_mae={record['eval_win_mae']:.4f} sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
+        if post_move_quality is not None
+        else ""
+    )
     timed_print(
         f"[checkpoint {ckpt_idx}] pos={positions} loss={record['loss']:.4f} "
-        f"wld_acc={record['wld_acc']:.5f}"
+        f"wld_acc={record['wld_acc']:.5f}{quality}"
     )
     db.write_metrics(conn, ckpt_idx, record)
     if post_move_eval is not None:
@@ -404,6 +464,7 @@ def main() -> int:
     )
 
     post_move_eval = load_post_move_eval(args, spatial_planes)
+    post_move_quality = load_post_move_quality(args, spatial_planes)
 
     if not args.no_dashboard:
         for proc in react_server.spawn(
@@ -435,6 +496,7 @@ def main() -> int:
         device,
         args,
         post_move_eval=post_move_eval,
+        post_move_quality=post_move_quality,
         start_ckpt=start_ckpt,
         start_positions=start_positions,
         start_step=start_step,
