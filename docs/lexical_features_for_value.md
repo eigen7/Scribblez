@@ -206,10 +206,6 @@ square along the perpendicular axis), rather than the full cross-check planes.
   handful of `(square, axis, changed-letters)` entries is far smaller than the
   full `26×15×15×2` cross-check representation, and it belongs in `M_pre`'s
   **per-move** embedding (it is a property of the specific move).
-- **Cross-checks give legality, not value.** An opened hook that scores 8 and one
-  on a triple-word square are equally "legal." The delta alone cannot rank them;
-  combined with the existing premium/board planes and the leave, the network can.
-  Do not expect the delta by itself to carry the hook's value.
 - **Complementary to the potential map.** The 27×30 map captures exploiting
   *existing* board structure; the cross-check delta captures exploiting structure
   the move *creates*. Neither subsumes the other, and they attach to different
