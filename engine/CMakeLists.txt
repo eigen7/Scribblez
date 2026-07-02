@@ -173,6 +173,15 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+add_executable(harvest_bingo_positions_tool apps/harvest_bingo_positions_tool.cpp)
+target_link_libraries(harvest_bingo_positions_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 add_executable(scribblez_tests
   tests/tests_main.cpp
   src/scribblez/hasty_equity.cpp
