@@ -110,7 +110,7 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
     pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(sampled), post_move, flips[i] != 0,
-                                       output + (output_row_start + i) * kRowFloats);
+                                       output + (output_row_start + i) * row_floats_);
   }
 }
 
@@ -129,7 +129,7 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   }
   const GameLog g = game_view(buf, game_idx, nullptr);
   pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(turn_idx), post_move, flip,
-                                     output + output_row * kRowFloats);
+                                     output + output_row * row_floats_);
 }
 
 void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,

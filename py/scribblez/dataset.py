@@ -8,7 +8,6 @@ import torch
 
 from .ffi import (
     NativeDataLoader,
-    contingent_feature_layout,
     get_input_shapes,
     get_target_shapes,
     read_file_header,
@@ -57,27 +56,6 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
         arr = batch_2d[:, start:end]
         result[name] = torch.from_numpy(arr.reshape(-1, *dims).copy())
     return result
-
-
-def model_input_sizes(contingent_features: bool) -> tuple[int, int]:
-    """(spatial_planes, scalar_floats) the model consumes for the given
-    experiment arm: the full row layout with the features on, or the layout
-    minus the trailing contingent-draw blocks with them off (the baseline's
-    smaller model)."""
-    shapes = {s.name: s.dims for s in get_input_shapes()}
-    planes, scalars = shapes["input_spatial"][0], shapes["input_scalar"][0]
-    if contingent_features:
-        return planes, scalars
-    _, num_planes, _, num_scalars = contingent_feature_layout()
-    return planes - num_planes, scalars - num_scalars
-
-
-def strip_contingent_features(input_spatial, input_scalar):
-    """The baseline model's inputs: views of `input_spatial` (B, planes, 15, 15)
-    and `input_scalar` (B, scalars) -- torch tensors or numpy arrays -- without
-    the trailing contingent-draw blocks (which the engine left zero)."""
-    plane0, _, scalar_offset, _ = contingent_feature_layout()
-    return input_spatial[:, :plane0], input_scalar[:, :scalar_offset]
 
 
 class SlogDataset:

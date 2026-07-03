@@ -60,6 +60,31 @@
 
 using namespace scribblez;
 
+// Layout shorthands for the FULL input layout, which is what these tests
+// encode; derived from the block registry (the spec's dict is irrelevant to
+// layout math). Blocks the registry does not name individually (the board
+// sub-planes, the two cross-check families, the per-move metadata halves) are
+// located relative to their block starts.
+static const InputEncodingSpec kFullLayout{nullptr, true};
+static const int kInputFloats = input_floats(kFullLayout);
+static const int kSpatialFloats = spatial_floats(kFullLayout);
+static const int kSpatialPlanes = spatial_planes(kFullLayout);
+static const int kRowFloats = kInputFloats + kLabelFloats;
+static const int kBlankMarkerPlane = BoardPlanes::kBlankMarkerPlane;
+static const int kPremiumPlane0 = BoardPlanes::kPremiumPlane0;
+static const int kSelfPlacementPlane =
+  spatial_block_plane0(kFullLayout, SpatialBlockId::kSelfPlacement);
+static const int kOppPlacementPlane =
+  spatial_block_plane0(kFullLayout, SpatialBlockId::kOppPlacement);
+static const int kHorizontalCrossCheckPlane0 =
+  spatial_block_plane0(kFullLayout, SpatialBlockId::kCrossChecks);
+static const int kVerticalCrossCheckPlane0 =
+  kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;
+static const int kRackCountOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kRackCounts);
+static const int kUnseenPoolOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kUnseenPool);
+static const int kScoreDiffOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kScoreDiff);
+static const int kMoveMetaOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kMoveMeta);
+
 static Dictionary tiny_dict() {
   return Dictionary::build_from_words({"CAT", "CATS", "AT",     "AS",     "BAT", "BATS", "HE",
                                        "TO",  "ON",   "NO",     "IT",     "IS",  "OAT",  "OATS",
@@ -435,7 +460,8 @@ static void test_encoder_basic_layout() {
   Move p1_play = make_play_full(3, 3, /*horizontal=*/true, 0b1, 30,
                                 {Glyph::played(Tile::from_char('D'), /*is_blank=*/true)});
 
-  GameStateEncoder enc;
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(p0_play);
   enc.apply_move(p1_play);
 
@@ -444,9 +470,8 @@ static void test_encoder_basic_layout() {
   active_rack.add(Tile::from_char('Z'));
   active_rack.add(BLANK);
 
-  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -538,14 +563,14 @@ static void test_encoder_last_opp_plane_mask() {
     make_play_full(7, 6, /*horizontal=*/true, 0b101, 5,
                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('T'))});
 
-  GameStateEncoder enc;
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(p0_play);
   enc.apply_move(opp_play);
 
   Rack active_rack;
-  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   const float* plane = out.data() + kOppPlacementPlane * 225;
   for (int r = 0; r < 15; ++r) {
@@ -570,18 +595,18 @@ static void test_encoder_flip_symmetry() {
     make_play_full(0, 4, /*horizontal=*/false, 0b11, 12,
                    {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))});
 
-  GameStateEncoder enc;
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(p0_play);
   enc.apply_move(opp_play);
 
   Rack active_rack;
   active_rack.add(Tile::from_char('Q'));
 
-  Dictionary d = medium_dict();
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, normal.data());
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/true, flipped.data());
 
   // Scalars are flip-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
@@ -637,13 +662,12 @@ static void test_encoder_cross_check_planes_qi() {
   Move qi_play = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
                                 {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
 
-  GameStateEncoder enc;
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(qi_play);
-  enc.board().ensure_movegen_caches(d);
 
   Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   auto plane_value = [&out](int plane, int r, int c) { return out[plane * 225 + r * 15 + c]; };
   auto h_cross_check = [&plane_value](Tile letter, int r, int c) {
@@ -724,8 +748,8 @@ static void test_position_encoder_cross_check_planes_lexical() {
                             {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
   storage.turns.push_back(rec);
 
-  PositionEncoder enc(d);
-  std::vector<float> row(PostMoveValueTask::kRowFloats, 0.0f);
+  PositionEncoder enc(InputEncodingSpec{&d, true});
+  std::vector<float> row(kRowFloats, 0.0f);
   enc.encode_row<PostMoveValueTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
                                     /*flip=*/false, row.data());
 
@@ -748,7 +772,8 @@ static void test_encoder_forced_score_diff_isolation() {
   Move p1_play =
     make_play_full(7, 8, /*horizontal=*/true, 0b1, 9, {Glyph::of(Tile::from_char('T'))});
 
-  GameStateEncoder enc;
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(p0_play);
   enc.apply_move(p1_play);
 
@@ -756,12 +781,11 @@ static void test_encoder_forced_score_diff_isolation() {
   active_rack.add(Tile::from_char('E'));
   active_rack.add(Tile::from_char('R'));
 
-  Dictionary d = medium_dict();
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> forced(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
   enc.encode_input_with_score_diff(enc.active_player(), active_rack,
-                                   /*score_diff=*/123, d, /*apply_flip=*/false, forced.data());
+                                   /*score_diff=*/123, /*apply_flip=*/false, forced.data());
 
   const int score_lo = kSpatialFloats + kScoreDiffOffset;
   const int score_hi = score_lo + kScoreDiffThermoFloats;
@@ -787,14 +811,14 @@ static void test_encoder_nonplay_last_move_metadata() {
   ex_tiles.add(Tile::from_char('A'));
   Move p1_exchange = Move::exchange(ex_tiles);
 
-  GameStateEncoder enc;
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
   enc.apply_move(p0_pass);
   enc.apply_move(p1_exchange);
 
   Rack active_rack;
-  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
 
   const float* scalars = out.data() + kSpatialFloats;
   const float* self_meta = scalars + kMoveMetaOffset;
@@ -1085,6 +1109,46 @@ static void test_contingent_map_matches_per_tile_generation() {
             << " full racks, " << columns << " letter columns)\n";
 }
 
+// The base layout is the full layout with the contingent tails spliced out of
+// both sections: encoding the same position under both specs must agree
+// float-for-float on every shared block. Serving consumers rely on this prefix
+// property when running a base-layout model against full-layout rows.
+static void test_base_layout_is_full_minus_contingent_tails() {
+  Dictionary d = medium_dict();
+  const InputEncodingSpec full{&d, true};
+  const InputEncodingSpec base{&d, false};
+
+  Move cat = make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
+                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                             Glyph::of(Tile::from_char('T'))});
+  GameStateEncoder full_enc{full};
+  GameStateEncoder base_enc{base};
+  full_enc.apply_move(cat);
+  base_enc.apply_move(cat);
+  Rack rack = rack_from("RSE");
+
+  std::vector<float> full_row(input_floats(full), -1.0f);
+  std::vector<float> base_row(input_floats(base), -1.0f);
+  full_enc.encode_input(full_enc.active_player(), rack, /*apply_flip=*/false, full_row.data());
+  base_enc.encode_input(base_enc.active_player(), rack, /*apply_flip=*/false, base_row.data());
+
+  // Shared spatial prefix, then shared scalar prefix (the full row's scalar
+  // block starts after its extra contingent planes).
+  CHECK(std::memcmp(base_row.data(), full_row.data(),
+                    sizeof(float) * static_cast<size_t>(spatial_floats(base))) == 0);
+  CHECK(std::memcmp(base_row.data() + spatial_floats(base), full_row.data() + spatial_floats(full),
+                    sizeof(float) * static_cast<size_t>(scalar_floats(base))) == 0);
+
+  // The splice is not vacuous: the full row's contingent tails carry content.
+  float tail_sum = 0.0f;
+  for (int i = spatial_floats(base); i < spatial_floats(full); ++i)
+    tail_sum += std::abs(full_row[i]);
+  for (int i = spatial_floats(full) + scalar_floats(base); i < input_floats(full); ++i)
+    tail_sum += std::abs(full_row[i]);
+  CHECK(tail_sum > 0.0f);
+  std::cout << "test_base_layout_is_full_minus_contingent_tails passed\n";
+}
+
 // A hand-checked position: horizontal CAT at (7,7..9), rack {R}. Verifies the
 // specific contingent entries, the phantom-blank rescoring, and the encoded
 // planes' footprint painting and flip symmetry.
@@ -1156,7 +1220,7 @@ static void test_extract_positions_movegen_roundtrip() {
 
     auto live_snaps = live_replay_all_snapshots(log);
 
-    scribblez::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict, true}};
     // The encoder no longer tracks racks (an outside observer cannot see
     // opponent draws). The test, however, has full information, so we
     // maintain a parallel rack pair alongside the encoder.
@@ -1285,14 +1349,14 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   // Register with DataLoader and drain rows via epoch_start/load_batch
   // for both pre-move and post-move phases.
   scribblez::binlog::DataLoader::Params dl_params;
-  dl_params.dict = &dict;
+  dl_params.spec = {&dict, true};
   dl_params.num_worker_threads = 2;
   dl_params.num_prefetch_threads = 1;
   scribblez::binlog::DataLoader loader(dl_params);
   loader.add_file(slog.string(), total_positions, fsize);
   CHECK(loader.num_positions() == total_positions);
 
-  const int row_size = scribblez::binlog::DataLoader::row_size_floats();
+  const int row_size = kRowFloats;
 
   // Helper: drain one full epoch into a vector.
   auto drain_epoch = [&](bool post_move) {
@@ -1336,7 +1400,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   }
 
   // Every decoded row's label tail must match a valid (game, POV).
-  const int label_off = scribblez::binlog::DataLoader::input_size_floats();
+  const int label_off = kInputFloats;
   for (int i = 0; i < n_samples; ++i) {
     const float* row = rows.data() + static_cast<int64_t>(i) * row_size;
     const int w = static_cast<int>(row[label_off + 0]);
@@ -1373,7 +1437,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
     CHECK(racks_equal(r1_init, logs[gi].initial_racks[1]));
 
     auto live_snaps = live_replay_all_snapshots(logs[gi]);
-    scribblez::GameStateEncoder enc;
+    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict, true}};
     std::array<scribblez::Rack, 2> racks = {r0_init, r1_init};
 
     size_t snap_idx = 0;
@@ -2085,12 +2149,11 @@ static void test_dataloader_per_row_symmetry() {
     // Apply the q_play so the encoder lands in the turn-0 post-move state:
     // board has Q at (3,5), p0 (the mover) scored 42, last_move_by_p0 = q_play.
     // The POV is the mover (p0), encoded with its post-play leave (6 As).
-    GameStateEncoder ref_enc;
+    GameStateEncoder ref_enc{InputEncodingSpec{&dict, true}};
     ref_enc.apply_move(fix.self_move);
-    ref_enc.board().ensure_movegen_caches(dict);
-    ref_enc.encode_input(fix.active_player, fix.active_rack, dict, /*apply_flip=*/false,
+    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
                          ref_normal.data());
-    ref_enc.encode_input(fix.active_player, fix.active_rack, dict, /*apply_flip=*/true,
+    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/true,
                          ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
@@ -2106,7 +2169,7 @@ static void test_dataloader_per_row_symmetry() {
     ref_labels);
 
   DataLoader::Params params;
-  params.dict = &dict;
+  params.spec = {&dict, true};
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2123,7 +2186,7 @@ static void test_dataloader_per_row_symmetry() {
     cfg.apply_symmetry = false;
     cfg.seed = 1;
     loader.epoch_start(cfg);
-    std::vector<float> rows(DataLoader::row_size_floats(), 0.0f);
+    std::vector<float> rows(kRowFloats, 0.0f);
     CHECK(loader.load_batch(rows.data()) == 1);
     CHECK(std::memcmp(rows.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0);
     CHECK(std::memcmp(rows.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
@@ -2133,7 +2196,7 @@ static void test_dataloader_per_row_symmetry() {
   // different flip decision. Over many seeds we expect both buckets.
   {
     constexpr int n = 200;
-    std::vector<float> row(DataLoader::row_size_floats(), 0.0f);
+    std::vector<float> row(kRowFloats, 0.0f);
     int normal_count = 0, flipped_count = 0;
     for (int i = 0; i < n; ++i) {
       DataLoader::EpochConfig cfg;
@@ -2215,7 +2278,7 @@ static void test_epoch_determinism() {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.dict = &dict;
+  params.spec = {&dict, true};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
 
@@ -2232,12 +2295,12 @@ static void test_epoch_determinism() {
     loader.epoch_start(cfg);
 
     std::vector<float> all_data;
-    std::vector<float> batch(batch_size * DataLoader::row_size_floats());
+    std::vector<float> batch(batch_size * kRowFloats);
     while (true) {
       int n = loader.load_batch(batch.data());
       if (n == 0) break;
       all_data.insert(all_data.end(), batch.begin(),
-                      batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+                      batch.begin() + static_cast<size_t>(n) * kRowFloats);
     }
     return all_data;
   };
@@ -2282,19 +2345,17 @@ static void test_epoch_determinism() {
     cfg.seed = 99999;
     loader1.epoch_start(cfg);
     std::vector<float> data4;
-    std::vector<float> batch(batch_size * DataLoader::row_size_floats());
+    std::vector<float> batch(batch_size * kRowFloats);
     while (true) {
       int n = loader1.load_batch(batch.data());
       if (n == 0) break;
-      data4.insert(data4.end(), batch.begin(),
-                   batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+      data4.insert(data4.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
     }
     CHECK(data4.size() == data1.size());
     CHECK(std::memcmp(data1.data(), data4.data(), data1.size() * sizeof(float)) != 0);
   }
 
-  std::cout << "  epoch determinism OK (" << data1.size() / DataLoader::row_size_floats()
-            << " rows)\n";
+  std::cout << "  epoch determinism OK (" << data1.size() / kRowFloats << " rows)\n";
 }
 
 static void test_epoch_coverage() {
@@ -2315,7 +2376,7 @@ static void test_epoch_coverage() {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.dict = &dict;
+  params.spec = {&dict, true};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2332,7 +2393,7 @@ static void test_epoch_coverage() {
   CHECK(total_positions > fix.total_games);  // strictly more rows than games
 
   // Helper: drain a full epoch into a flat float vector.
-  const int row_sz = DataLoader::row_size_floats();
+  const int row_sz = kRowFloats;
   auto drain_epoch = [&](uint64_t seed) {
     DataLoader::EpochConfig cfg;
     cfg.batch_size = 3;  // doesn't evenly divide 12 -> tests partial batch
@@ -2413,7 +2474,7 @@ static void test_epoch_memory_budget_stress() {
   // Budget = just one file (largest). This forces eviction on every file switch.
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.dict = &dict;
+  params.spec = {&dict, true};
   params.memory_budget = max_fsize + 1;  // allow exactly one file at a time
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
@@ -2433,7 +2494,7 @@ static void test_epoch_memory_budget_stress() {
   loader.epoch_start(cfg);
 
   int rows_decoded = 0;
-  std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
+  std::vector<float> batch(cfg.batch_size * kRowFloats);
   while (true) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
@@ -2450,8 +2511,7 @@ static void test_epoch_memory_budget_stress() {
   while (true) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
-    run1.insert(run1.end(), batch.begin(),
-                batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    run1.insert(run1.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
   }
 
   loader.epoch_start(cfg);
@@ -2459,8 +2519,7 @@ static void test_epoch_memory_budget_stress() {
   while (true) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
-    run2.insert(run2.end(), batch.begin(),
-                batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+    run2.insert(run2.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
   }
   CHECK(run1.size() == run2.size());
   CHECK(std::memcmp(run1.data(), run2.data(), run1.size() * sizeof(float)) == 0);
@@ -2486,7 +2545,7 @@ static void test_epoch_shuffles_across_seeds() {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.dict = &dict;
+  params.spec = {&dict, true};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2507,12 +2566,11 @@ static void test_epoch_shuffles_across_seeds() {
     cfg.seed = seed;
     loader.epoch_start(cfg);
     std::vector<float> data;
-    std::vector<float> batch(cfg.batch_size * DataLoader::row_size_floats());
+    std::vector<float> batch(cfg.batch_size * kRowFloats);
     while (true) {
       int n = loader.load_batch(batch.data());
       if (n == 0) break;
-      data.insert(data.end(), batch.begin(),
-                  batch.begin() + static_cast<size_t>(n) * DataLoader::row_size_floats());
+      data.insert(data.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
     }
     return data;
   };
@@ -2794,7 +2852,7 @@ static void test_streaming_disk_encode_equivalence() {
     }
   } cleanup{dir};
 
-  const int row_floats = DataLoader::row_size_floats();
+  const int row_floats = kRowFloats;
   int compared = 0;
   for (uint64_t seed : std::vector<uint64_t>{7, 99, 12345}) {
     GameLogStorage storage = play_test_game(dict, seed);
@@ -2823,12 +2881,12 @@ static void test_streaming_disk_encode_equivalence() {
     for (bool post_move : {false, true}) {
       const uint8_t flip = 0;
       std::vector<float> row_disk(row_floats, 0.0f);
-      BlockDecoder decoder(dict);
+      BlockDecoder decoder(InputEncodingSpec{&dict, true});
       decoder.decode(raw.data(), "eq", /*local_start=*/0, /*n_rows=*/1, &flip, post_move,
                      /*output_row_start=*/0, row_disk.data());
 
       std::vector<float> row_stream(row_floats, 0.0f);
-      PositionEncoder enc(dict);
+      PositionEncoder enc(InputEncodingSpec{&dict, true});
       enc.encode_row<PostMoveValueTask>(storage.view(), sampled, post_move, /*flip=*/false,
                                         row_stream.data());
 
@@ -3348,7 +3406,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   std::vector<float> output(kRowFloats, 0.0f);
   uint8_t flip = 0;
   Dictionary dict = medium_dict();
-  BlockDecoder dec(dict);
+  BlockDecoder dec(InputEncodingSpec{&dict, true});
   dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
              /*post_move=*/false, /*output_row_start=*/0, output.data());
 
@@ -3683,7 +3741,7 @@ static void test_max_move_per_lane_task_row() {
   const Dictionary d = tiny_dict();
 
   // CAT on the board (the context exposes the board via its GameStateEncoder).
-  GameStateEncoder gse;
+  GameStateEncoder gse{InputEncodingSpec{&d, true}};
   gse.apply_move(make_play(CENTER, CENTER, /*horizontal=*/true,
                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                             Glyph::of(Tile::from_char('T'))}));
@@ -3694,7 +3752,7 @@ static void test_max_move_per_lane_task_row() {
     ctx.enc = &gse;
     ctx.pov_rack = &rack;
     ctx.apply_flip = flip;
-    ctx.dict = &d;
+    ctx.spec = {&d, true};
 
     std::vector<float> row(MaxMovePerLaneTask::kRowFloats, -1.0f);
     MaxMovePerLaneTask::encode_row(ctx, row.data());
@@ -3738,6 +3796,7 @@ int main() {
   test_position_encoder_cross_check_planes_lexical();
   test_contingent_map_matches_per_tile_generation();
   test_contingent_map_cat_board();
+  test_base_layout_is_full_minus_contingent_tails();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();

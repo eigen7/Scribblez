@@ -14,6 +14,8 @@ import onnx
 import torch
 from onnx import TensorProto, numpy_helper
 
+from scribblez.ffi import DEFAULT_LEXICON
+
 # Frozen compiled-lexicon buffers are identical across every checkpoint, so rather
 # than bake ~24 MB into each per-generation ONNX they are shared: moved into one blob
 # beside the models that all generations reference via ONNX external data.
@@ -64,15 +66,33 @@ def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
     onnx.save(model, str(path))
 
 
+def _write_model_metadata(path: Path, contingent_features: bool):
+    """Record the model's input-encoding arm and lexicon in the ONNX
+    metadata_props -- the explicit contract serving consumers (the dashboard's
+    what-if runner; C++ agents cross-check it against the declared input dims)
+    recover the InputEncodingSpec from."""
+    m = onnx.load(str(path), load_external_data=False)
+    for key, value in (
+        ("contingent_features", "true" if contingent_features else "false"),
+        ("lexicon", DEFAULT_LEXICON),
+    ):
+        entry = m.metadata_props.add()
+        entry.key, entry.value = key, value
+    onnx.save(m, str(path))
+
+
 def export_onnx(
     model: torch.nn.Module,
     path: str | Path,
     spatial_planes: int,
     scalar_size: int,
+    *,
+    contingent_features: bool,
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Trace `model` and write an ONNX graph to `path` (eval mode, dynamic batch)."""
+    """Trace `model` and write an ONNX graph to `path` (eval mode, dynamic batch),
+    stamping the input-encoding arm into its metadata_props."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -108,5 +128,6 @@ def export_onnx(
     # Share the frozen compiled-lexicon buffers across generations instead of baking
     # them into every export (no-op when the model has no lexicon module).
     _externalize_frozen_lexicon(path, _frozen_lexicon_names(model))
+    _write_model_metadata(path, contingent_features)
     if was_training:
         model.train()

@@ -32,6 +32,7 @@
 // flips active_player and increments turn_index in lock-step with normal play.
 
 #include "scribblez/board.h"
+#include "scribblez/input_encoder.h"
 #include "scribblez/move.h"
 #include "scribblez/rack.h"
 
@@ -48,16 +49,6 @@ class Dictionary;
 // (A..Z, then blank).
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// Process-wide switch for the contingent-draw potential input features (see
-// contingent_map.h). When disabled, encode_input skips their move generation
-// entirely and leaves the feature blocks zero; the row layout is unchanged,
-// and consumers drop the zero tail so the model consumes the smaller base
-// layout. Configured once at FFI-session creation, before any encoding --
-// like the Lexicon, it is a per-process experiment arm that every encode
-// path must agree on.
-void set_contingent_features_enabled(bool enabled);
-bool contingent_features_enabled();
-
 // Sample kinds within a single game turn. Used by the DataLoader's replay
 // decoder to label which of the two per-PLAY-turn samples is which.
 enum class PositionKind : uint8_t {
@@ -69,10 +60,14 @@ enum class PositionKind : uint8_t {
 
 class GameStateEncoder {
  public:
-  GameStateEncoder() = default;
+  // `spec` chooses how encode_input writes the model input: the lexicon its
+  // lexical features derive from and whether the contingent-draw blocks are
+  // included (see input_encoder.h).
+  explicit GameStateEncoder(const InputEncodingSpec& spec) : spec_(spec) {}
 
-  // Seed the score accumulator with a per-player starting handicap.
-  explicit GameStateEncoder(std::array<int, 2> initial_scores) : scores_(initial_scores) {}
+  // Additionally seed the score accumulator with a per-player starting handicap.
+  GameStateEncoder(const InputEncodingSpec& spec, std::array<int, 2> initial_scores)
+      : spec_(spec), scores_(initial_scores) {}
 
   // Advance one turn: the *current* active player made `move`. PLAY also
   // updates the board and the active player's cumulative score. The active
@@ -85,6 +80,7 @@ class GameStateEncoder {
   void apply_move(const Move& move);
 
   // --- inspectors ---------------------------------------------------------
+  const InputEncodingSpec& spec() const { return spec_; }
   int active_player() const { return active_; }
   int turn_index() const { return turn_index_; }
   const Board& board() const { return board_; }
@@ -92,11 +88,9 @@ class GameStateEncoder {
   const Move& last_move_by(int p) const { return last_move_by_[p]; }
 
   // --- encoders -----------------------------------------------------------
-  // Encode the current state into `out` (kInputFloats long) from `player`'s
-  // POV. `my_rack` is `player`'s own rack right now. `dict` is the lexicon:
-  // the cross-check planes read the board's lexicon-derived move-generation
-  // caches, and the contingent-draw potential features run a move generation
-  // over `my_rack` plus a hypothetical drawn tile (see contingent_map.h).
+  // Encode the current state into `out` (input_floats(spec()) long, the
+  // spec's blocks in registry order) from `player`'s POV. `my_rack` is
+  // `player`'s own rack right now.
   //
   // For a pre-move sample, callers pass player == active_player(). For a
   // post-PLAY sample (the player who just moved, before any draw and before
@@ -107,8 +101,7 @@ class GameStateEncoder {
   // The encoder's own active_player() is now the opponent; passing the
   // pre-flip player here keeps the encode anchored to their POV (so labels
   // and last_opp_move both attach correctly to that player).
-  void encode_input(int player, const Rack& my_rack, const Dictionary& dict, bool apply_flip,
-                    float* out) const;
+  void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
 
   // Encode as encode_input(), but force the score differential
   // (score(player) - score(opp)) to `score_diff`, leaving every other
@@ -116,15 +109,16 @@ class GameStateEncoder {
   // so this isolates it for structural monotonicity probes that sweep the
   // active player's score advantage across an otherwise-fixed position.
   void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                    const Dictionary& dict, bool apply_flip, float* out) const;
+                                    bool apply_flip, float* out) const;
 
   // Rewrite the score-differential thermometer of an already-encoded input
   // row in place, leaving every other feature untouched. Score-diff sweeps
   // encode a position once and stamp each swept differential into a copy,
   // instead of re-running the full (move-generating) encode per step.
-  static void overwrite_score_diff(int score_diff, float* input_row);
+  void overwrite_score_diff(int score_diff, float* input_row) const;
 
  private:
+  InputEncodingSpec spec_;
   Board board_{};
   std::array<int, 2> scores_{0, 0};
   std::array<Move, 2> last_move_by_{};  // default-constructed = PASS

@@ -72,6 +72,7 @@ def test_pytorch_matches_onnxruntime(tmp_path, batch):
         onnx_path,
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
+        contingent_features=True,
         board_size=BOARD_SIZE,
     )
 
@@ -106,6 +107,7 @@ def test_dynamic_batch_axis(tmp_path):
         onnx_path,
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
+        contingent_features=True,
         board_size=BOARD_SIZE,
     )
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])

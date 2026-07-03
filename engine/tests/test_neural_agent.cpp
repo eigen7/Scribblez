@@ -184,6 +184,8 @@ static std::filesystem::path init_equity() {
 class StubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
+  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   void evaluate(const float* /*inputs*/, int count, nn::Eval* out) override {
     for (int i = 0; i < count; ++i) {
       out[i] = (i < static_cast<int>(scripted.size())) ? scripted[i] : nn::Eval{};
@@ -198,6 +200,8 @@ class StubEvalService : public nn::EvalService {
 class CountingStubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
+  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   int total_rows = 0;
   int max_chunk = 0;
   int calls = 0;
@@ -212,6 +216,10 @@ class CountingStubEvalService : public nn::EvalService {
     total_rows += count;
   }
 };
+
+// Layout shorthands for the full input layout these tests encode.
+static const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
+static const int kRowFloats = kInputFloats + kLabelFloats;
 
 static nn::Eval eval_with(float score_diff_mean, float win_prob) {
   nn::Eval e;
@@ -242,6 +250,7 @@ static void test_topk_selection_uses_objective() {
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub",
+                       .dict = &pos.dict,
                        .top_k = top_k,
                        .objective = NeuralAgent::Objective::kScoreDiff},
                       std::move(stub));
@@ -256,6 +265,7 @@ static void test_topk_selection_uses_objective() {
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub",
+                       .dict = &pos.dict,
                        .top_k = top_k,
                        .objective = NeuralAgent::Objective::kScoreDiff},
                       std::move(stub));
@@ -270,6 +280,7 @@ static void test_topk_selection_uses_objective() {
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub-wp",
+                       .dict = &pos.dict,
                        .top_k = top_k,
                        .objective = NeuralAgent::Objective::kWinProb},
                       std::move(stub));
@@ -299,6 +310,7 @@ static void test_topk_excludes_low_equity_play() {
   sp->scripted = {sd(1.0f), sd(5.0f)};  // among the two survivors, processing-pos 1 wins
   NeuralAgent agent({.thread_id = 0,
                      .name = "topk",
+                     .dict = &pos.dict,
                      .top_k = top_k,
                      .objective = NeuralAgent::Objective::kScoreDiff},
                     std::move(stub));
@@ -334,9 +346,12 @@ static void test_all_moves_evaluated() {
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
   sp->scripted[static_cast<size_t>(lo)] = sd(9.0f);  // generation index == processing index
-  NeuralAgent agent(
-    {.thread_id = 0, .name = "full", .top_k = 0, .objective = NeuralAgent::Objective::kScoreDiff},
-    std::move(stub));
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "full",
+                     .dict = &pos.dict,
+                     .top_k = 0,
+                     .objective = NeuralAgent::Objective::kScoreDiff},
+                    std::move(stub));
   agent.begin_game();
 
   Move got = agent.make_move(req);
@@ -363,9 +378,12 @@ static void test_chunked_evaluation() {
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
   sp->scripted[static_cast<size_t>(target)] = sd(9.0f);
-  NeuralAgent agent(
-    {.thread_id = 0, .name = "chunk", .top_k = 0, .objective = NeuralAgent::Objective::kScoreDiff},
-    std::move(stub), /*max_batch=*/2);
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "chunk",
+                     .dict = &pos.dict,
+                     .top_k = 0,
+                     .objective = NeuralAgent::Objective::kScoreDiff},
+                    std::move(stub), /*max_batch=*/2);
   agent.begin_game();
 
   Move got = agent.make_move(req);
@@ -396,14 +414,17 @@ static void test_encode_candidate_matches_replay() {
 
   // encode_candidate uses only the tracked encoder, so no model/service is run.
   Dictionary dict = medium_dict();
-  NeuralAgent agent(
-    {.thread_id = 0, .name = "stub", .top_k = 4, .objective = NeuralAgent::Objective::kScoreDiff},
-    std::make_unique<StubEvalService>());
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "stub",
+                     .dict = &dict,
+                     .top_k = 4,
+                     .objective = NeuralAgent::Objective::kScoreDiff},
+                    std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move_a);
   agent.observe_move(move_b);
 
-  GameStateEncoder ref;
+  GameStateEncoder ref{InputEncodingSpec{&dict, true}};
   ref.apply_move(move_a);
   ref.apply_move(move_b);
   const int my_seat = ref.active_player();
@@ -415,14 +436,13 @@ static void test_encode_candidate_matches_replay() {
   Rack my_rack = rack_from("DONERST");
 
   std::vector<float> agent_row(kInputFloats);
-  agent.encode_candidate(candidate, my_rack, my_seat, dict, agent_row.data());
+  agent.encode_candidate(candidate, my_rack, my_seat, agent_row.data());
 
   std::vector<float> ref_row(kInputFloats);
   ref.board().ensure_movegen_caches(dict);
   GameStateEncoder post = ref;
   post.apply_move(candidate);
-  post.encode_input(my_seat, leave_after(my_rack, candidate), dict, /*apply_flip=*/false,
-                    ref_row.data());
+  post.encode_input(my_seat, leave_after(my_rack, candidate), /*apply_flip=*/false, ref_row.data());
 
   for (size_t i = 0; i < agent_row.size(); ++i) CHECK(agent_row[i] == ref_row[i]);
   std::cout << "test_encode_candidate_matches_replay passed (" << kInputFloats << " floats)\n";
@@ -461,8 +481,6 @@ static std::vector<char> build_slog(const binlog::InitialRacks& ir,
 }
 
 static void test_encode_candidate_matches_training_decoder() {
-  using binlog::kRowFloats;
-
   // A three-turn game. The sampled turn (2, post-move) is player 0's, so the
   // decoded POV is player 0 and both players already have a prior move, which
   // exercises the last-self / last-opp placement-plane features.
@@ -495,7 +513,7 @@ static void test_encode_candidate_matches_training_decoder() {
   // Training path: decode the post-move sampled row (no symmetry flip). The
   // same dictionary drives both paths' cross-check planes.
   Dictionary dict = medium_dict();
-  binlog::BlockDecoder dec(dict);
+  binlog::BlockDecoder dec(InputEncodingSpec{&dict, true});
   const uint8_t flips[1] = {0};
   std::vector<float> dec_row(kRowFloats, 0.0f);
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,
@@ -503,15 +521,18 @@ static void test_encode_candidate_matches_training_decoder() {
 
   // Inference path: the agent observes turns 0..1, then encodes the move played
   // at the sampled turn from the rack it holds there (CATERST -> ... -> DONERST).
-  NeuralAgent agent(
-    {.thread_id = 0, .name = "stub", .top_k = 4, .objective = NeuralAgent::Objective::kScoreDiff},
-    std::make_unique<StubEvalService>());
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "stub",
+                     .dict = &dict,
+                     .top_k = 4,
+                     .objective = NeuralAgent::Objective::kScoreDiff},
+                    std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move0);
   agent.observe_move(move1);
 
   std::vector<float> agent_row(kInputFloats, 0.0f);
-  agent.encode_candidate(move2, rack_from("DONERST"), mover, dict, agent_row.data());
+  agent.encode_candidate(move2, rack_from("DONERST"), mover, agent_row.data());
 
   bool any_nonzero = false;
   for (int i = 0; i < kInputFloats; ++i) {
@@ -540,6 +561,7 @@ static void test_temperature_sampling_spreads() {
     StubEvalService* gp = stub.get();
     NeuralAgent greedy({.thread_id = 0,
                         .name = "greedy",
+                        .dict = &pos.dict,
                         .top_k = top_k,
                         .objective = NeuralAgent::Objective::kScoreDiff,
                         .temperature = 0.0},
@@ -556,6 +578,7 @@ static void test_temperature_sampling_spreads() {
     StubEvalService* sp = stub.get();
     NeuralAgent sampler({.thread_id = 0,
                          .name = "sampler",
+                         .dict = &pos.dict,
                          .top_k = top_k,
                          .objective = NeuralAgent::Objective::kScoreDiff,
                          .temperature = 5.0,

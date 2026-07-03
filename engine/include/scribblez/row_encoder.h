@@ -1,15 +1,13 @@
 #pragma once
 
 #include "scribblez/game.h"
+#include "scribblez/input_encoding_spec.h"
 
 #include <functional>
 #include <memory>
 #include <random>
 
 namespace scribblez {
-
-class Dictionary;
-
 namespace binlog {
 
 // Per-worker policy that turns a finished self-play game into one training row:
@@ -38,15 +36,15 @@ class RowEncoder {
 // thread.
 using RowEncoderFactory = std::function<std::unique_ptr<RowEncoder>()>;
 
-// Built-in row encoders. Both need `dict`: the input encoding's cross-check
-// planes are lexicon-derived.
+// Built-in row encoders. Both take the run's input-encoding spec (lexicon +
+// feature blocks).
 //   * post-move: the win-probability task; samples bag-nonempty turns; the
 //     `post_move` flag picks the pre-move vs post-move snapshot.
 //   * max-move-per-lane: the per-lane best-move task; samples any turn (incl. endgames)
-//     pre-move, and additionally enumerates legal moves with `dict`.
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const Dictionary& dict,
+//     pre-move, and additionally enumerates legal moves with the spec's lexicon.
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const InputEncodingSpec& spec,
                                                              bool post_move);
-std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict);
+std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const InputEncodingSpec& spec);
 
 }  // namespace binlog
 }  // namespace scribblez

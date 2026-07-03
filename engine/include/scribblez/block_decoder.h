@@ -10,7 +10,9 @@
 // encoder and the scratch turn buffer need not be reallocated between calls.
 
 #include "scribblez/game.h"
+#include "scribblez/input_encoder.h"
 #include "scribblez/position_encoder.h"
+#include "scribblez/training_targets.h"
 
 #include <cstdint>
 #include <string>
@@ -21,9 +23,10 @@ namespace binlog {
 
 class BlockDecoder {
  public:
-  // `dict` is the lexicon the encoder needs (cross-check planes, and move
-  // enumeration for tasks that require it).
-  explicit BlockDecoder(const Dictionary& dict) : pos_(dict) {}
+  // `spec` configures the input encoding (lexicon + feature blocks) and thus
+  // the width of the rows the decoder emits.
+  explicit BlockDecoder(const InputEncodingSpec& spec)
+      : row_floats_(input_floats(spec) + kLabelFloats), pos_(spec) {}
 
   // Decode games [local_start, local_start + n_rows) of the .slog file
   // pointed to by `buf`, emitting each game's eval-only `sampled_turn` into
@@ -68,6 +71,7 @@ class BlockDecoder {
   // returned view is valid until scratch_ is next reused.
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 
+  int row_floats_;
   PositionEncoder pos_;
   std::vector<TurnRecord> scratch_;
 };

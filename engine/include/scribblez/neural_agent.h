@@ -55,6 +55,8 @@ class NeuralAgent : public Agent {
   // Agent identity plus move-selection configuration, shared by both
   // constructors.
   //   thread_id, name -- the base Agent identity.
+  //   dict        -- the lexicon the agent generates moves and encodes with
+  //                  (required; must outlive the agent).
   //   top_k       -- candidate set: 0 evaluates every legal play; K > 0 keeps
   //                  the top-K plays by HastyBot static equity.
   //   objective   -- which model head ranks the candidates.
@@ -63,6 +65,7 @@ class NeuralAgent : public Agent {
   struct Params {
     int thread_id = 0;
     std::string name;
+    const Dictionary* dict = nullptr;
     int top_k = 0;
     Objective objective = Objective::kWinProb;
     double temperature = 0.0;
@@ -95,18 +98,22 @@ class NeuralAgent : public Agent {
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
 
-  // Encode the post-move position for candidate `mv` into `dst` (kInputFloats
-  // floats), exactly as make_move() does it: it copies the agent's tracked
-  // encoder, applies `mv`, and encodes from `my_seat`'s POV with the rack that
-  // remains after playing `mv` (no diagonal flip). `dict` supplies the
-  // lexicon-derived cross-check planes. Public so the encoding the model
-  // actually sees can be checked against an independent replay.
-  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, const Dictionary& dict,
-                        float* dst) const;
+  // Encode the post-move position for candidate `mv` into `dst` (the model's
+  // input floats), exactly as make_move() does it: it copies the agent's
+  // tracked encoder, applies `mv`, and encodes from `my_seat`'s POV with the
+  // rack that remains after playing `mv` (no diagonal flip). Public so the
+  // encoding the model actually sees can be checked against an independent
+  // replay.
+  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, float* dst) const;
 
  private:
   // Build an NNEvaluationService from `net_params` and load its model into it.
   static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params);
+
+  // The input-encoding spec matching the loaded model's declared input widths
+  // (full or base layout, per input_encoder.h's registry); throws when the
+  // widths match neither.
+  static InputEncodingSpec derive_spec(const Dictionary& dict, const nn::EvalService& service);
 
   // Validate parameters and size the input scratch buffer. Shared by both ctors.
   void init();
@@ -141,12 +148,13 @@ class NeuralAgent : public Agent {
   double temperature_;
   int max_batch_;
   std::unique_ptr<nn::EvalService> service_;
+  InputEncodingSpec spec_;  // derived from the model service_ serves
   GameStateEncoder encoder_;
   std::mt19937_64 rng_;  // drives softmax sampling when temperature_ > 0
 
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<int> cand_idx_;       // candidate indices into legal_plays
-  std::vector<float> input_buf_;    // max_batch_ rows x kInputFloats
+  std::vector<float> input_buf_;    // max_batch_ rows x the model's input floats
   std::vector<nn::Eval> eval_buf_;  // per-candidate evals (grows as needed)
   std::vector<double> obj_values_;  // per-candidate objective values for sampling
   util::SoftmaxSampler sampler_;    // draws a candidate when temperature_ > 0

@@ -23,7 +23,7 @@
 //
 // Output row layout (row_size_floats() floats per row)
 // ----------------------------------------------------
-//   [ input_floats:    kInputFloats              ]
+//   [ input_floats:    input_floats(spec)          ]
 //   [ wld onehot:      kWldFloats              3   ]  // [win, draw, loss] (POV)
 //   [ score_diff:      kScoreDiffFloats        1   ]  // observed final diff (clipped)
 //   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
@@ -66,11 +66,9 @@
 namespace scribblez {
 namespace binlog {
 
-// `kInputFloats` is owned by input_encoder.h; the label constants
-// (kWldFloats / kScoreDiffFloats / kLabelFloats) are owned by
+// The input width is spec-dependent (input_encoder.h's layout registry); the
+// label constants (kWldFloats / kScoreDiffFloats / kLabelFloats) are owned by
 // training_targets.h and re-included above.
-
-inline constexpr int kRowFloats = kInputFloats + kLabelFloats;
 
 // A (game, turn) sample location within a single .slog file: the expansion of a
 // flat position index back into the game it belongs to and the turn within it.
@@ -82,9 +80,9 @@ struct GameTurn {
 class DataLoader {
  public:
   struct Params {
-    // Lexicon the decoders encode with (cross-check planes are
-    // lexicon-derived). Required; must outlive the loader.
-    const Dictionary* dict = nullptr;
+    // Input-encoding configuration the decoders encode with (lexicon +
+    // feature blocks). The dict is required and must outlive the loader.
+    InputEncodingSpec spec{nullptr, false};
     int64_t memory_budget = 256LL * 1024 * 1024;  // 256 MB resident buffers
     int num_worker_threads = 4;                   // decoder pool size
     int num_prefetch_threads = 2;                 // disk-I/O pool size
@@ -145,8 +143,8 @@ class DataLoader {
   // at least batch_size * row_size_floats() floats.
   int load_batch(float* output);
 
-  static constexpr int row_size_floats() { return kRowFloats; }
-  static constexpr int input_size_floats() { return kInputFloats; }
+  int row_size_floats() const { return input_floats(params_.spec) + kLabelFloats; }
+  int input_size_floats() const { return input_floats(params_.spec); }
   static constexpr int label_size_floats() { return kLabelFloats; }
 
   // =========================================================================
@@ -313,7 +311,8 @@ class DataLoader {
   // A persistent thread that decodes WorkUnits using a BlockDecoder.
   class WorkerThread {
    public:
-    WorkerThread(FileManager* file_manager, ThreadTable* table, int id, const Dictionary& dict);
+    WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
+                 const InputEncodingSpec& spec);
     ~WorkerThread();
 
     void quit();
@@ -342,7 +341,7 @@ class DataLoader {
   // Distributes WorkUnits to a pool of WorkerThreads.
   class WorkManager {
    public:
-    WorkManager(FileManager* file_manager, int num_threads, const Dictionary& dict);
+    WorkManager(FileManager* file_manager, int num_threads, const InputEncodingSpec& spec);
     ~WorkManager();
 
     // Processes all work units. Blocks until all are complete.

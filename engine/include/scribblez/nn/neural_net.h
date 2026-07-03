@@ -8,7 +8,8 @@
 
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
 // Scribblez post-move value model: two inputs ("input_spatial"
-// (N,kSpatialPlanes=85,15,15), "input_scalar" (N,kScalarFloats=936)) and three
+// (N,spatial_planes,15,15), "input_scalar" (N,scalar_floats) -- widths declared
+// by the model itself) and three
 // outputs ("wld" (N,3), "score_diff" (N,2 = [mean, std]), "opp_next_placement"
 // (N,15,15)). The input shapes mirror the constants in input_encoder.h, which
 // is the single source of truth for the encoding layout.
@@ -60,10 +61,17 @@ class NeuralNet {
 
   int max_batch_size() const;
 
+  // The loaded model's declared input widths (read off the engine's tensor
+  // shapes): the spatial plane count and the scalar float count of one row.
+  // Valid after load(). Together they say which input layout (full or base;
+  // see input_encoder.h's registry) the model consumes.
+  int spatial_planes() const;
+  int scalar_floats() const;
+
   // Host input staging buffers, row-major and sized for max_batch_size rows.
   // The caller writes the first num_rows rows before calling predict(num_rows).
-  float* input_spatial_host();  // num_rows x kSpatialFloats
-  float* input_scalar_host();   // num_rows x kScalarFloats
+  float* input_spatial_host();  // num_rows x (spatial_planes() * 225)
+  float* input_scalar_host();   // num_rows x scalar_floats()
 
   // Run inference on the first num_rows rows of the host input buffers. Blocks
   // until the outputs have been copied back. Requires 1 <= num_rows <= max.

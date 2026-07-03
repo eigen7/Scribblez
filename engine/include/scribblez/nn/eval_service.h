@@ -29,8 +29,14 @@ class EvalService {
  public:
   virtual ~EvalService() = default;
 
-  // Evaluate `count` rows (`inputs` is count * kInputFloats floats) and write
-  // `count` results into `out`.
+  // The input widths the served model consumes -- the spatial plane count and
+  // the scalar float count of one row. A row is their combined float count,
+  // and agents derive their InputEncodingSpec (full vs base layout) from them.
+  virtual int spatial_planes() const = 0;
+  virtual int scalar_floats() const = 0;
+
+  // Evaluate `count` rows (`inputs` is count * the model's row float count)
+  // and write `count` results into `out`.
   virtual void evaluate(const float* inputs, int count, Eval* out) = 0;
 };
 

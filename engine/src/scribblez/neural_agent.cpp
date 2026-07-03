@@ -24,18 +24,32 @@ NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> 
       temperature_(params.temperature),
       max_batch_(max_batch),
       service_(std::move(service)),
+      spec_(derive_spec(*params.dict, *service_)),
+      encoder_(spec_),
       rng_(params.seed) {
   init();
+}
+
+InputEncodingSpec NeuralAgent::derive_spec(const Dictionary& dict, const nn::EvalService& service) {
+  const InputEncodingSpec candidates[] = {{&dict, true}, {&dict, false}};
+  for (const InputEncodingSpec& spec : candidates) {
+    if (service.spatial_planes() == spatial_planes(spec) &&
+        service.scalar_floats() == scalar_floats(spec)) {
+      return spec;
+    }
+  }
+  throw std::runtime_error(
+    "neural agent: the model's input widths match neither the full nor the base input layout");
 }
 
 void NeuralAgent::init() {
   if (top_k_ < 0) throw std::runtime_error("neural agent: --top-k must be >= 0 (0 = all moves)");
   if (max_batch_ < 1) throw std::runtime_error("neural agent: max batch must be >= 1");
   if (temperature_ < 0.0) throw std::runtime_error("neural agent: --temperature must be >= 0");
-  input_buf_.resize(static_cast<size_t>(max_batch_) * kInputFloats);
+  input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
 }
 
-void NeuralAgent::begin_game() { encoder_ = GameStateEncoder(); }
+void NeuralAgent::begin_game() { encoder_ = GameStateEncoder(spec_); }
 
 void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
 
@@ -82,17 +96,17 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
 }
 
 void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
-                                   const Dictionary& dict, float* dst) const {
+                                   float* dst) const {
   Rack leave = my_rack;
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
 
   // The cross-check input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate on the
   // copy, which then updates them incrementally when the candidate is applied.
-  encoder_.board().ensure_movegen_caches(dict);
+  encoder_.board().ensure_movegen_caches(*spec_.dict);
   GameStateEncoder post = encoder_;
   post.apply_move(mv);
-  post.encode_input(my_seat, leave, dict, /*apply_flip=*/false, dst);
+  post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
 }
 
 void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays,
@@ -108,8 +122,8 @@ void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<
     const int chunk = std::min(max_batch_, k - done);
     for (int j = 0; j < chunk; ++j) {
       const Move& mv = plays[static_cast<size_t>(cand_idx_[done + j])];
-      encode_candidate(mv, req.my_rack, my_seat, req.dict,
-                       input_buf_.data() + static_cast<size_t>(j) * kInputFloats);
+      encode_candidate(mv, req.my_rack, my_seat,
+                       input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
     }
     service_->evaluate(input_buf_.data(), chunk, eval_buf_.data() + done);
     done += chunk;

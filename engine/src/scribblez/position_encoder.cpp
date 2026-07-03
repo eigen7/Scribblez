@@ -24,7 +24,7 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
 }  // namespace
 
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {
-  enc_ = GameStateEncoder{g.initial_scores};
+  enc_ = GameStateEncoder{spec_, g.initial_scores};
   racks_[0] = g.initial_racks[0];
   racks_[1] = g.initial_racks[1];
 
@@ -64,7 +64,7 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   ctx.pov_rack = &racks_[mover];
   ctx.active_player = mover;
   ctx.apply_flip = flip;
-  ctx.dict = dict_;
+  ctx.spec = spec_;
 
   // The "opponent next move" -- whichever upcoming turn was played by
   // (1 - mover). Pre-move: that's turn sampled_turn+1. Post-move: enc_ has
@@ -86,12 +86,12 @@ void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn
   // Only the score-diff thermometer varies across the sweep, so the position
   // is fully encoded once (the expensive, move-generating part) and each
   // swept differential is stamped into a copy of that row.
-  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, *dict_, /*apply_flip=*/false,
-                                    out);
+  const int64_t row_floats = input_floats(spec_);
+  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, /*apply_flip=*/false, out);
   for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
-    float* row = out + i * kInputFloats;
-    std::memcpy(row, out, sizeof(float) * static_cast<size_t>(kInputFloats));
-    GameStateEncoder::overwrite_score_diff(diff_lo + static_cast<int>(i), row);
+    float* row = out + i * row_floats;
+    std::memcpy(row, out, sizeof(float) * static_cast<size_t>(row_floats));
+    enc_.overwrite_score_diff(diff_lo + static_cast<int>(i), row);
   }
 }
 

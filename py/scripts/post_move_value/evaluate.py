@@ -18,7 +18,7 @@ from pathlib import Path
 import torch
 from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import get_input_shapes, set_contingent_features
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
@@ -33,8 +33,11 @@ def latest_checkpoint(paths: TagPaths) -> Path:
 
 
 def build_model_from_checkpoint(ckpt: dict, device: torch.device) -> PostMoveValueModel:
-    shapes = {s.name: s.dims for s in get_input_shapes()}
     targs = ckpt.get("args", {})
+    # The checkpoint records the run's experiment arm; configuring the session
+    # from it makes every FFI shape/encode in this process match the model.
+    set_contingent_features(targs["contingent_features"])
+    shapes = {s.name: s.dims for s in get_input_shapes()}
     model = PostMoveValueModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],

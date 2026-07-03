@@ -37,9 +37,11 @@ void NNEvaluationService::load() { net_.load(); }
 
 void NNEvaluationService::evaluate(const float* inputs, int count, Eval* out) {
   const int batch = net_.max_batch_size();
+  const size_t row_floats =
+    static_cast<size_t>(net_.spatial_planes()) * kBoardCells + net_.scalar_floats();
   for (int start = 0; start < count; start += batch) {
     int chunk = std::min(batch, count - start);
-    evaluate_chunk(inputs + static_cast<size_t>(start) * kInputFloats, chunk, out + start);
+    evaluate_chunk(inputs + static_cast<size_t>(start) * row_floats, chunk, out + start);
   }
 }
 
@@ -48,13 +50,15 @@ void NNEvaluationService::evaluate_chunk(const float* inputs, int chunk, Eval* o
   float* scalar = net_.input_scalar_host();
 
   // De-interleave each row's [spatial | scalar] block into the engine's two
-  // separate, densely packed input buffers.
+  // separate, densely packed input buffers, at the model's own widths.
+  const size_t spatial_floats = static_cast<size_t>(net_.spatial_planes()) * kBoardCells;
+  const size_t scalar_floats = net_.scalar_floats();
   for (int r = 0; r < chunk; ++r) {
-    const float* row = inputs + static_cast<size_t>(r) * kInputFloats;
-    std::memcpy(spatial + static_cast<size_t>(r) * kSpatialFloats, row,
-                sizeof(float) * kSpatialFloats);
-    std::memcpy(scalar + static_cast<size_t>(r) * kScalarFloats, row + kSpatialFloats,
-                sizeof(float) * kScalarFloats);
+    const float* row = inputs + static_cast<size_t>(r) * (spatial_floats + scalar_floats);
+    std::memcpy(spatial + static_cast<size_t>(r) * spatial_floats, row,
+                sizeof(float) * spatial_floats);
+    std::memcpy(scalar + static_cast<size_t>(r) * scalar_floats, row + spatial_floats,
+                sizeof(float) * scalar_floats);
   }
 
   net_.predict(chunk);

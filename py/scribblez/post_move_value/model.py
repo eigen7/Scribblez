@@ -1,8 +1,8 @@
 """Post-move value model for Scrabble position evaluation.
 
 Architecture:
-    - Spatial trunk: (88, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
-  - Scalar injection: (992,) -> FC -> 128 -> broadcast-add to spatial features
+  - Spatial trunk: (planes, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
+  - Scalar injection: (scalars,) -> FC -> 128 -> broadcast-add to spatial features
   - Pooling: global average pool -> 128-d trunk vector
   - Three heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
@@ -14,9 +14,11 @@ Architecture:
       exported second value is the std directly.
     * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
 
-The two model inputs (88 spatial planes, 992 scalars) and the three head output
-shapes are fixed by the training pipeline and the C++ inference contract; the
-trunk between them is free to change.
+The two model input widths come from the engine session's input-encoding spec
+(full layout 88 planes / 992 scalars with contingent features, base layout
+85 / 936 without) and, with the three head output shapes, are fixed by the
+training pipeline and the C++ inference contract; the trunk between them is
+free to change.
 """
 
 import math
@@ -105,8 +107,8 @@ class PostMoveValueModel(nn.Module):
         """Forward pass.
 
         Args:
-            input_spatial: (B, 88, 15, 15)
-            input_scalar:  (B, 992)
+            input_spatial: (B, spatial_planes, 15, 15)
+            input_scalar:  (B, scalar_size)
 
         Returns:
             Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),

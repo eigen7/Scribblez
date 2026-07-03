@@ -10,8 +10,8 @@
 // win-probability evaluations.
 //
 // Callers hand it a contiguous block of `count` rows, each laid out exactly as
-// GameStateEncoder::encode_input() writes them (kInputFloats = kSpatialFloats
-// spatial floats followed by kScalarFloats scalar floats). The service
+// GameStateEncoder::encode_input() writes them (the model's spatial floats
+// followed by its scalar floats; widths per the loaded model). The service
 // de-interleaves each row into the engine's separate spatial / scalar input
 // buffers, runs the model (splitting into max_batch_size chunks as needed),
 // applies a softmax to the WLD logits, and returns one Eval per row.
@@ -34,8 +34,12 @@ class NNEvaluationService : public EvalService {
   // evaluate().
   void load();
 
-  // Evaluate `count` rows (`inputs` is count * kInputFloats floats) and write
-  // `count` results into `out`. Blocks until inference completes.
+  // The loaded model's declared input widths. Valid after load().
+  int spatial_planes() const override { return net_.spatial_planes(); }
+  int scalar_floats() const override { return net_.scalar_floats(); }
+
+  // Evaluate `count` rows (`inputs` is count * the model's row float count)
+  // and write `count` results into `out`. Blocks until inference completes.
   void evaluate(const float* inputs, int count, Eval* out) override;
 
   // Convenience overload returning a freshly allocated vector.

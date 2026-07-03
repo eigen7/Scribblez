@@ -75,25 +75,16 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
 
     lib.scribblez_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_input_shapes.argtypes = []
+    lib.scribblez_input_shapes.argtypes = [ctypes.c_void_p]  # session
 
     lib.scribblez_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
     lib.scribblez_target_shapes.argtypes = []
 
     lib.scribblez_row_size_floats.restype = ctypes.c_int
-    lib.scribblez_row_size_floats.argtypes = []
+    lib.scribblez_row_size_floats.argtypes = [ctypes.c_void_p]  # session
 
     lib.scribblez_input_floats.restype = ctypes.c_int
-    lib.scribblez_input_floats.argtypes = []
-
-    for fn in (
-        lib.scribblez_contingent_plane0,
-        lib.scribblez_contingent_planes,
-        lib.scribblez_contingent_scalar_offset,
-        lib.scribblez_contingent_scalar_floats,
-    ):
-        fn.restype = ctypes.c_int
-        fn.argtypes = []
+    lib.scribblez_input_floats.argtypes = [ctypes.c_void_p]  # session
 
     # Max-move-per-lane task: sibling shape/size queries.
     lib.scribblez_max_move_per_lane_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
@@ -298,10 +289,12 @@ _CONTINGENT_FEATURES = True
 
 def set_contingent_features(enabled: bool):
     """Choose the process's experiment arm before any dictionary-dependent FFI
-    call: whether the engine computes the contingent-draw potential input
-    features (True, the full layout) or skips their move generation and leaves
-    the blocks zero (False, the baseline). The flag is baked into the
-    process-wide session at creation, so flipping it afterwards is an error.
+    call: whether the engine encodes the full input layout including the
+    contingent-draw potential features (True), or skips their move generation
+    and encodes the smaller base layout (False). The session's shape/size
+    queries report whichever layout it encodes, so no downstream code branches
+    on this. The flag is baked into the process-wide session at creation, so
+    flipping it afterwards is an error.
     """
     global _CONTINGENT_FEATURES
     if _SESSION_HANDLE is not None and _CONTINGENT_FEATURES != enabled:
@@ -342,7 +335,7 @@ def _read_shapes(ptr) -> list[ShapeInfo]:
 
 
 def get_input_shapes() -> list[ShapeInfo]:
-    return _read_shapes(_lib().scribblez_input_shapes())
+    return _read_shapes(_lib().scribblez_input_shapes(_session()))
 
 
 def get_target_shapes() -> list[ShapeInfo]:
@@ -350,24 +343,12 @@ def get_target_shapes() -> list[ShapeInfo]:
 
 
 def row_size_floats() -> int:
-    return _lib().scribblez_row_size_floats()
+    return _lib().scribblez_row_size_floats(_session())
 
 
 def input_floats() -> int:
     """Floats in a single input tensor (spatial + scalar)."""
-    return _lib().scribblez_input_floats()
-
-
-def contingent_feature_layout() -> tuple[int, int, int, int]:
-    """Location of the contingent-draw potential blocks within the input:
-    (first plane, plane count, scalar offset, scalar count)."""
-    lib = _lib()
-    return (
-        lib.scribblez_contingent_plane0(),
-        lib.scribblez_contingent_planes(),
-        lib.scribblez_contingent_scalar_offset(),
-        lib.scribblez_contingent_scalar_floats(),
-    )
+    return _lib().scribblez_input_floats(_session())
 
 
 def get_max_move_per_lane_input_shapes() -> list[ShapeInfo]:
@@ -481,7 +462,7 @@ def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
     final move.
     """
     lib = _lib()
-    inp = np.zeros(lib.scribblez_input_floats(), dtype=np.float32)
+    inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     if lib.scribblez_post_move_value_analyze_gcg(_session(), gcg_text.encode("utf-8"), inp_ptr) < 0:
         raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
@@ -497,7 +478,7 @@ def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
     mismatch or unavailable tiles, OSError on a GCG parse error.
     """
     lib = _lib()
-    inp = np.zeros(lib.scribblez_input_floats(), dtype=np.float32)
+    inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     err = ctypes.create_string_buffer(256)
     n = lib.scribblez_post_move_value_analyze_gcg_leave(
@@ -578,7 +559,7 @@ class NativeDataLoader:
         self._handle = self._lib.scribblez_dl_new(
             _session(), memory_budget, num_workers, num_prefetch
         )
-        self._row_floats = self._lib.scribblez_row_size_floats()
+        self._row_floats = self._lib.scribblez_row_size_floats(_session())
 
     def __del__(self):
         if hasattr(self, "_handle") and self._handle:

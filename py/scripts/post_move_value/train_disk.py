@@ -144,6 +144,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "and model share a tag (the original behavior). Use a separate data tag to "
         "train many model variants over one dataset without copying it.",
     )
+    parser.add_argument(
+        "--contingent-features",
+        action="store_true",
+        help="Encode the full input layout including the contingent-draw potential features. "
+        "Off skips their move generation entirely and encodes/trains the smaller base layout "
+        "-- the ablation baseline.",
+    )
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs.")
     parser.add_argument(
         "--turns-per-game",
@@ -382,7 +389,13 @@ def main() -> int:
         ckpt_path = paths.checkpoint_path(epoch)
         save_checkpoint(model, optimizer, scheduler, epoch, avg["total"], wld_acc, args, ckpt_path)
         onnx_path = paths.onnx_path(epoch)
-        export_onnx(model, onnx_path, spatial_planes, scalar_size)
+        export_onnx(
+            model,
+            onnx_path,
+            spatial_planes,
+            scalar_size,
+            contingent_features=args.contingent_features,
+        )
         print(f"  -> Saved {ckpt_path} and {onnx_path}")
 
     print("Training complete.")

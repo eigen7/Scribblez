@@ -342,15 +342,20 @@ def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     """Run the exported post-move model on one flat input tensor and decode the value
     outputs: W/L/D probabilities and the score-delta mean/std.
 
-    `flat_input` is always the encoder's full row layout; the model may consume
-    either the full layout or the baseline base layout (no contingent-draw
-    blocks). Both the base spatial planes and base scalars are prefixes of the
-    full blocks, so the model's own input widths select the right slices."""
+    `flat_input` is the dashboard session's full row layout; the model declares
+    its own arm in its ONNX metadata_props ("contingent_features", stamped at
+    export). A baseline model consumes the base layout, whose spatial planes and
+    scalars are prefixes of the full blocks, so its declared input widths select
+    the right slices."""
     sess = _post_move_onnx_session(onnx_path)
+    meta = sess.get_modelmeta().custom_metadata_map
+    contingent = meta["contingent_features"] == "true"
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
     planes = int(model_inputs["input_spatial"][1])
     scalars = int(model_inputs["input_scalar"][1])
     full_planes = {s.name: s.dims for s in get_input_shapes()}["input_spatial"][0]
+    if contingent != (planes == full_planes):
+        raise ValueError(f"{onnx_path}: metadata arm disagrees with the declared input widths")
     cells = post_move_analysis.BOARD_SIZE**2
     spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
     scalar = flat_input[full_planes * cells :][:scalars].reshape(1, -1).astype(np.float32)

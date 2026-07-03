@@ -35,12 +35,18 @@ using scribblez::binlog::FileHeader;
 using scribblez::binlog::kMagic;
 using scribblez::binlog::kVersion;
 
-// The lexicon-bound session behind the C ABI (see scribblez_ffi.h). Holds the
-// loaded Dictionary that every encoding / analysis / loader entry point needs.
-// A constructed session is proof the lexicon is loaded, so the methods do no
+// The session behind the C ABI (see scribblez_ffi.h). Owns the process's
+// InputEncodingSpec -- the loaded Dictionary plus the feature-block choice --
+// that every encoding / analysis / loader entry point derives from, and the
+// spec's input tensor shapes, which the shape/size queries report. A
+// constructed session is proof the lexicon is loaded, so the methods do no
 // load-failure checking.
 struct ScribblezSession {
   ScribblezSession(const char* lexicon_name, bool contingent_features);
+
+  const ScribblezShape* input_shapes() const { return input_shapes_; }
+  int input_floats() const { return scribblez::input_floats(spec); }
+  int row_size_floats() const { return input_floats() + scribblez::kLabelFloats; }
 
   int encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move, int diff_lo,
                               int diff_hi, float* out_inputs) const;
@@ -63,7 +69,14 @@ struct ScribblezSession {
                                              bool apply_symmetry, uint64_t seed, int handicap_max,
                                              const char* const* player_specs, int num_specs) const;
 
-  const scribblez::Dictionary& dict;
+  scribblez::InputEncodingSpec spec;
+
+ private:
+  // The spec's input tensor shapes, advertised through input_shapes(). The dim
+  // arrays live in the session so the pointers stay valid for its lifetime.
+  int spatial_dims_[3];
+  int scalar_dims_[1];
+  ScribblezShape input_shapes_[3];
 };
 
 namespace {
@@ -80,9 +93,12 @@ const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
 }  // namespace
 
 ScribblezSession::ScribblezSession(const char* lexicon_name, bool contingent_features)
-    : dict(load_session_dictionary(lexicon_name)) {
-  scribblez::set_contingent_features_enabled(contingent_features);
-}
+    : spec{&load_session_dictionary(lexicon_name), contingent_features},
+      spatial_dims_{scribblez::spatial_planes(spec), scribblez::kBoardSide, scribblez::kBoardSide},
+      scalar_dims_{scribblez::scalar_floats(spec)},
+      input_shapes_{{"input_spatial", spatial_dims_, 3, -1},
+                    {"input_scalar", scalar_dims_, 1, -1},
+                    {nullptr, nullptr, 0, 0}} {}
 
 ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features) {
   return new ScribblezSession(lexicon_name, contingent_features != 0);
@@ -91,19 +107,6 @@ ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent
 void scribblez_session_delete(ScribblezSession* s) { delete s; }
 
 namespace {
-
-// Static dim arrays referenced by the ScribblezShape entries below. These
-// have static storage duration; the addresses returned to the caller stay
-// valid for the lifetime of the process.
-constexpr int kInputSpatialDims[3] = {scribblez::kSpatialPlanes, scribblez::kBoardSide,
-                                      scribblez::kBoardSide};
-constexpr int kInputScalarDims[1] = {scribblez::kScalarFloats};
-
-const ScribblezShape kInputShapes[] = {
-  {"input_spatial", kInputSpatialDims, 3, -1},
-  {"input_scalar", kInputScalarDims, 1, -1},
-  {nullptr, nullptr, 0, 0},
-};
 
 // Build the (null-terminated) target shape table at compile time directly
 // from scribblez::AllTargets, so adding/removing a target struct
@@ -160,17 +163,12 @@ const ScribblezShape kMaxMovePerLaneTargetShapes[] = {
 
 extern "C" {
 
-const ScribblezShape* scribblez_input_shapes(void) { return kInputShapes; }
+const ScribblezShape* scribblez_input_shapes(ScribblezSession* s) { return s->input_shapes(); }
 const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.data(); }
 
-int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
+int scribblez_row_size_floats(ScribblezSession* s) { return s->row_size_floats(); }
 
-int scribblez_input_floats(void) { return scribblez::kInputFloats; }
-
-int scribblez_contingent_plane0(void) { return scribblez::kContingentPlane0; }
-int scribblez_contingent_planes(void) { return scribblez::kContingentPlanes; }
-int scribblez_contingent_scalar_offset(void) { return scribblez::kContingentScalarOffset; }
-int scribblez_contingent_scalar_floats(void) { return scribblez::kContingentScalarFloats; }
+int scribblez_input_floats(ScribblezSession* s) { return s->input_floats(); }
 
 const ScribblezShape* scribblez_max_move_per_lane_input_shapes(void) {
   return kMaxMovePerLaneInputShapes;
@@ -214,8 +212,8 @@ int ScribblezSession::encode_score_diff_sweep(const char* path, int64_t game_idx
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
 
-  const int64_t sweep = static_cast<int64_t>(diff_hi - diff_lo + 1) * scribblez::kInputFloats;
-  scribblez::binlog::BlockDecoder decoder(dict);
+  const int64_t sweep = static_cast<int64_t>(diff_hi - diff_lo + 1) * input_floats();
+  scribblez::binlog::BlockDecoder decoder(spec);
   if (game_idx >= 0) {
     // A single position.
     decoder.encode_score_diff_sweep(buf.data(), static_cast<uint32_t>(game_idx), post_move, diff_lo,
@@ -255,7 +253,7 @@ int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool pos
                                     int out_cap) const {
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(dict);
+  scribblez::binlog::BlockDecoder decoder(spec);
   return emit_string(decoder.dump_position(buf.data(), static_cast<uint32_t>(game_idx), post_move),
                      out, out_cap);
 }
@@ -269,7 +267,7 @@ int ScribblezSession::dump_position_json(const char* path, int64_t game_idx, boo
                                          char* out, int out_cap) const {
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(dict);
+  scribblez::binlog::BlockDecoder decoder(spec);
   return emit_string(
     decoder.dump_position_json(buf.data(), static_cast<uint32_t>(game_idx), post_move), out,
     out_cap);
@@ -289,7 +287,7 @@ int ScribblezSession::max_move_per_lane_analyze_gcg(const char* gcg_text, char* 
     if (!scribblez::parse_gcg_analysis_position(gcg_text, &pos, &error)) return -1;
     if (out_input)
       scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, /*flip=*/false, out_input);
-    return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, dict),
+    return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, *spec.dict),
                        out_json, out_cap);
   } catch (const std::exception&) {
     return -1;
@@ -305,8 +303,10 @@ int ScribblezSession::post_move_value_analyze_gcg(const char* gcg_text, float* o
   if (!gcg_text || !out_input) return -1;
   try {
     std::string error;
-    if (!scribblez::encode_post_move_analysis_input(gcg_text, dict, out_input, &error)) return -1;
-    return scribblez::kInputFloats;
+    if (!scribblez::encode_post_move_analysis_input(gcg_text, spec, out_input, &error)) {
+      return -1;
+    }
+    return input_floats();
   } catch (const std::exception&) {
     return -1;
   }
@@ -336,12 +336,12 @@ int ScribblezSession::post_move_value_analyze_gcg_leave(const char* gcg_text, co
   if (!gcg_text || !leave_str || !out_input) return -1;
   try {
     std::string error;
-    if (!scribblez::encode_post_move_analysis_input_with_leave(gcg_text, leave_str, dict, out_input,
+    if (!scribblez::encode_post_move_analysis_input_with_leave(gcg_text, leave_str, spec, out_input,
                                                                &error)) {
       emit_string(error, out_err, err_cap);
       return -1;
     }
-    return scribblez::kInputFloats;
+    return input_floats();
   } catch (const std::exception& e) {
     emit_string(e.what(), out_err, err_cap);
     return -1;
@@ -393,7 +393,7 @@ struct DataLoaderHandle {
 DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker_threads,
                                            int num_prefetch_threads) const {
   DataLoader::Params p;
-  p.dict = &dict;
+  p.spec = spec;
   p.memory_budget = memory_budget;
   p.num_worker_threads = num_worker_threads;
   p.num_prefetch_threads = num_prefetch_threads;
@@ -498,12 +498,12 @@ StreamHandle* ScribblezSession::stream_new(float* const* slot_ptrs, int num_slot
                                            int rows_per_slot, int num_threads, bool post_move,
                                            bool apply_symmetry, uint64_t seed, int handicap_max,
                                            const char* const* player_specs, int num_specs) const {
-  const scribblez::Dictionary* d = &dict;
-  return ::new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
-                      handicap_max, player_specs, num_specs,
-                      scribblez::binlog::DataLoader::row_size_floats(), [d, post_move]() {
-                        return scribblez::binlog::make_post_move_value_row_encoder(*d, post_move);
-                      });
+  const scribblez::InputEncodingSpec enc_spec = spec;
+  return ::new_stream(
+    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
+    player_specs, num_specs, row_size_floats(), [enc_spec, post_move]() {
+      return scribblez::binlog::make_post_move_value_row_encoder(enc_spec, post_move);
+    });
 }
 
 StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs, int num_slots,
@@ -517,11 +517,11 @@ StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs,
 StreamHandle* ScribblezSession::max_move_per_lane_stream_new(
   float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads, bool apply_symmetry,
   uint64_t seed, int handicap_max, const char* const* player_specs, int num_specs) const {
-  const scribblez::Dictionary* d = &dict;
-  return ::new_stream(slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed,
-                      handicap_max, player_specs, num_specs,
-                      scribblez::MaxMovePerLaneTask::kRowFloats,
-                      [d]() { return scribblez::binlog::make_max_move_per_lane_row_encoder(*d); });
+  const scribblez::InputEncodingSpec enc_spec = spec;
+  return ::new_stream(
+    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
+    player_specs, num_specs, scribblez::MaxMovePerLaneTask::kRowFloats,
+    [enc_spec]() { return scribblez::binlog::make_max_move_per_lane_row_encoder(enc_spec); });
 }
 
 StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float* const* slot_ptrs,

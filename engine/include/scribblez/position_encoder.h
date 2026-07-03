@@ -25,11 +25,10 @@ namespace binlog {
 
 class PositionEncoder {
  public:
-  // `dict` is the lexicon. Every task needs it: the input encoding's
-  // cross-check and contingent-draw features are lexicon-derived, and tasks
+  // `spec` configures the input encoding (lexicon + feature blocks); tasks
   // that enumerate moves at the position (the max-move-per-lane task)
-  // additionally generate with it.
-  explicit PositionEncoder(const Dictionary& dict) : dict_(&dict) {}
+  // additionally generate with its lexicon.
+  explicit PositionEncoder(const InputEncodingSpec& spec) : spec_(spec), enc_(spec) {}
 
   // Replay `g` from its initial state up to (and, when post_move, including)
   // turn `sampled_turn`. Leaves the internal encoder/racks at that position and
@@ -61,9 +60,9 @@ class PositionEncoder {
   // only the fields it needs.
   EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool flip) const;
 
+  InputEncodingSpec spec_;
   GameStateEncoder enc_;
   std::array<Rack, 2> racks_{};
-  const Dictionary* dict_;
 };
 
 }  // namespace binlog

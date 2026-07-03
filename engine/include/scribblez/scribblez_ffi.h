@@ -24,23 +24,17 @@ typedef struct ScribblezShape {
   int target_index;  // -1 for inputs; 0..N-1 for targets, in row layout order
 } ScribblezShape;
 
-// Static description of the input tensor(s). Layout is fixed by the C++
-// engine: a single (32, 15, 15) spatial-plane tensor followed by an extra
-// flat vector of scalar features (which here is concatenated into the
-// "input" name as a 1D fallback -- callers that want the structured
-// view can split using kInputSpatialFloats + kInputScalarFloats from a
-// downstream Python constants file).
-const ScribblezShape* scribblez_input_shapes(void);
+// Description of the session's input tensor(s): a spatial-plane tensor
+// followed by a flat vector of scalar features. The shapes depend on the
+// session's input-encoding spec (a contingent-features session reports the
+// full layout; a baseline session the smaller base layout), so they hang off
+// the session. Declared below the session typedef; see there.
 
 // Static description of the target tensor(s) in row order:
 //   target_index=0  "wld"                (3,)
 //   target_index=1  "score_diff"         (1,)
 //   target_index=2  "opp_next_placement" (15, 15)
 const ScribblezShape* scribblez_target_shapes(void);
-
-// Total floats per output row -- sum of input + all target sizes. Useful
-// to size the output buffer without iterating the shape arrays in Python.
-int scribblez_row_size_floats(void);
 
 // Shapes / sizes for the max-move-per-lane task (the "highest-scoring move per lane"
 // model), a sibling layout to the post-move shapes above. Input: a (31, 15, 15)
@@ -65,15 +59,23 @@ int scribblez_max_move_per_lane_input_floats(void);
 // There is deliberately no failure signaling past that point: nothing useful
 // can be done without a dictionary, so a live session pointer is proof the
 // lexicon is loaded.
-// `contingent_features` selects the process's experiment arm: nonzero computes
-// the contingent-draw potential input features; zero skips their move
-// generation entirely, leaving the feature blocks zero (the row layout is
-// unchanged -- callers drop the zero tail so the model consumes the smaller
-// base layout).
+// `contingent_features` selects the process's experiment arm: nonzero encodes
+// the full layout including the contingent-draw potential blocks; zero skips
+// their move generation entirely and encodes the smaller base layout. The
+// session's shape/size queries below report whichever layout it encodes, so
+// callers never branch on the arm.
 typedef struct ScribblezSession ScribblezSession;
 
 ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features);
 void scribblez_session_delete(ScribblezSession* s);
+
+// The session's input tensor shapes (see scribblez_target_shapes for the
+// shape-entry conventions), total input floats, and total floats per training
+// row (input + all target sizes -- sizes the output buffer without iterating
+// the shape arrays in Python).
+const ScribblezShape* scribblez_input_shapes(ScribblezSession* s);
+int scribblez_input_floats(ScribblezSession* s);
+int scribblez_row_size_floats(ScribblezSession* s);
 
 // Score-differential sweep encoder -- a sister to the DataLoader that reads a
 // .slog and materializes input tensors with NO sampling or shuffling. It
@@ -87,26 +89,12 @@ void scribblez_session_delete(ScribblezSession* s);
 //                EVERY game in the file -> num_games * R tensors, position-
 //                major (game g occupies rows [g*R, (g+1)*R)).
 // `post_move`  : encode the post-move snapshot (1) or pre-move (0).
-// `out_inputs` : receives the input tensors, each scribblez_input_floats()
+// `out_inputs` : receives the input tensors, each scribblez_input_floats(s)
 //                floats long, contiguous.
 //
 // Returns 0 on success, -1 on I/O error / bad header / out-of-range index.
 int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
                                       int post_move, int diff_lo, int diff_hi, float* out_inputs);
-
-// Floats in a single input tensor (spatial + scalar), i.e. the per-position
-// stride of scribblez_encode_score_diff_sweep's output.
-int scribblez_input_floats(void);
-
-// Location of the contingent-draw potential feature blocks within the input
-// tensor (see contingent_map.h): the first plane index and plane count within
-// the spatial block, and the first float offset and float count within the
-// scalar block. Lets Python zero the blocks for ablation runs without
-// duplicating the layout constants.
-int scribblez_contingent_plane0(void);
-int scribblez_contingent_planes(void);
-int scribblez_contingent_scalar_offset(void);
-int scribblez_contingent_scalar_floats(void);
 
 // Render an ASCII description of a sampled position (POV, scores, leave, last
 // moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns

@@ -65,21 +65,21 @@ void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::rename(tmp, p);
 }
 
-nvinfer1::Dims spatial_dims(int rows) {
+nvinfer1::Dims spatial_dims(int rows, int planes) {
   nvinfer1::Dims d;
   d.nbDims = 4;
   d.d[0] = rows;
-  d.d[1] = kSpatialPlanes;
+  d.d[1] = planes;
   d.d[2] = kBoardSide;
   d.d[3] = kBoardSide;
   return d;
 }
 
-nvinfer1::Dims scalar_dims(int rows) {
+nvinfer1::Dims scalar_dims(int rows, int floats) {
   nvinfer1::Dims d;
   d.nbDims = 2;
   d.d[0] = rows;
-  d.d[1] = kScalarFloats;
+  d.d[1] = floats;
   return d;
 }
 
@@ -87,6 +87,14 @@ nvinfer1::Dims scalar_dims(int rows) {
 
 struct NeuralNet::Impl {
   explicit Impl(const NeuralNetParams& p) : params(p) {}
+
+  int spatial_floats(int rows) const { return rows * spatial_planes * kBoardCells; }
+  int scalar_size(int rows) const { return rows * scalar_floats; }
+
+  // Input widths read off the deserialized engine's declared tensor shapes --
+  // the model file states which input layout (full or base) it consumes.
+  int spatial_planes = 0;
+  int scalar_floats = 0;
   ~Impl();
 
   // Set engine from a serialized plan blob.
@@ -177,14 +185,21 @@ std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_byte
   // tactic set, trading inference speed for a far shorter build.
   if (params.fast_build) config->setBuilderOptimizationLevel(0);
 
+  // The model's own declared input widths drive the profile: the ONNX file
+  // says whether it consumes the full or the base input layout.
+  const int planes = network->getInput(0)->getDimensions().d[1];
+  const int scalars = network->getInput(1)->getDimensions().d[1];
   nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
   int b = params.max_batch_size;
-  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kMIN, spatial_dims(1));
-  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kOPT, spatial_dims(b));
-  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kMAX, spatial_dims(b));
-  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kMIN, scalar_dims(1));
-  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kOPT, scalar_dims(b));
-  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kMAX, scalar_dims(b));
+  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kMIN,
+                         spatial_dims(1, planes));
+  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kOPT,
+                         spatial_dims(b, planes));
+  profile->setDimensions(kInputSpatial, nvinfer1::OptProfileSelector::kMAX,
+                         spatial_dims(b, planes));
+  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kMIN, scalar_dims(1, scalars));
+  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kOPT, scalar_dims(b, scalars));
+  profile->setDimensions(kInputScalar, nvinfer1::OptProfileSelector::kMAX, scalar_dims(b, scalars));
   config->addOptimizationProfile(profile);
 
   std::unique_ptr<nvinfer1::IHostMemory> plan(builder->buildSerializedNetwork(*network, *config));
@@ -198,18 +213,21 @@ void NeuralNet::Impl::allocate_buffers() {
   if (!context) throw std::runtime_error("Failed to create TensorRT execution context");
   stream = create_stream();
 
+  spatial_planes = engine->getTensorShape(kInputSpatial).d[1];
+  scalar_floats = engine->getTensorShape(kInputScalar).d[1];
+
   int b = params.max_batch_size;
   auto dev = [](int floats) { return device_malloc(sizeof(float) * floats); };
   auto host = [](int floats) { return static_cast<float*>(host_malloc(sizeof(float) * floats)); };
 
-  d_input_spatial = dev(b * kSpatialFloats);
-  d_input_scalar = dev(b * kScalarFloats);
+  d_input_spatial = dev(spatial_floats(b));
+  d_input_scalar = dev(scalar_size(b));
   d_wld = dev(b * kWldFloats);
   d_score_diff = dev(b * kScoreDiffOutputFloats);
   d_opp = dev(b * kOppNextPlacementFloats);
 
-  h_input_spatial = host(b * kSpatialFloats);
-  h_input_scalar = host(b * kScalarFloats);
+  h_input_spatial = host(spatial_floats(b));
+  h_input_scalar = host(scalar_size(b));
   h_wld = host(b * kWldFloats);
   h_score_diff = host(b * kScoreDiffOutputFloats);
 
@@ -248,6 +266,8 @@ void NeuralNet::load() {
 }
 
 int NeuralNet::max_batch_size() const { return impl_->params.max_batch_size; }
+int NeuralNet::spatial_planes() const { return impl_->spatial_planes; }
+int NeuralNet::scalar_floats() const { return impl_->scalar_floats; }
 
 float* NeuralNet::input_spatial_host() { return impl_->h_input_spatial; }
 float* NeuralNet::input_scalar_host() { return impl_->h_input_scalar; }
@@ -261,15 +281,15 @@ void NeuralNet::predict(int num_rows) {
   }
 
   if (num_rows != m.last_rows) {
-    m.context->setInputShape(kInputSpatial, spatial_dims(num_rows));
-    m.context->setInputShape(kInputScalar, scalar_dims(num_rows));
+    m.context->setInputShape(kInputSpatial, spatial_dims(num_rows, m.spatial_planes));
+    m.context->setInputShape(kInputScalar, scalar_dims(num_rows, m.scalar_floats));
     m.last_rows = num_rows;
   }
 
   host_to_device_async(m.stream, m.d_input_spatial, m.h_input_spatial,
-                       sizeof(float) * num_rows * kSpatialFloats);
+                       sizeof(float) * m.spatial_floats(num_rows));
   host_to_device_async(m.stream, m.d_input_scalar, m.h_input_scalar,
-                       sizeof(float) * num_rows * kScalarFloats);
+                       sizeof(float) * m.scalar_size(num_rows));
 
   if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
 

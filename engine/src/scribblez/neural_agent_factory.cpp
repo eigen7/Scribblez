@@ -85,6 +85,8 @@ NeuralAgent::NeuralAgent(const Params& params, const nn::NeuralNetParams& net_pa
       temperature_(params.temperature),
       max_batch_(net_params.max_batch_size),
       service_(make_service(net_params)),
+      spec_(derive_spec(*params.dict, *service_)),
+      encoder_(spec_),
       rng_(params.seed) {
   init();
 }
@@ -129,6 +131,7 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
   const uint64_t resolved_seed = have_seed ? opts.seed : SeedProducer::instance().next();
   return std::make_unique<NeuralAgent>(NeuralAgent::Params{.thread_id = thread_id,
                                                            .name = name,
+                                                           .dict = &Lexicon::instance().dict(),
                                                            .top_k = opts.top_k,
                                                            .objective = obj,
                                                            .temperature = opts.temperature,

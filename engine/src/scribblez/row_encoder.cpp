@@ -13,10 +13,10 @@ namespace {
 // Win-probability rows: bag-nonempty turn sampling + PostMoveValueTask encoding.
 class PostMoveValueRowEncoder : public RowEncoder {
  public:
-  PostMoveValueRowEncoder(const Dictionary& dict, bool post_move)
-      : post_move_(post_move), pos_(dict) {}
+  PostMoveValueRowEncoder(const InputEncodingSpec& spec, bool post_move)
+      : post_move_(post_move), row_floats_(PostMoveValueTask::row_floats(spec)), pos_(spec) {}
 
-  int row_floats() const override { return PostMoveValueTask::kRowFloats; }
+  int row_floats() const override { return row_floats_; }
 
   int pick_turn(const GameLog& view, std::mt19937_64& rng) override {
     return pick_sampled_turn(view, rng);
@@ -28,6 +28,7 @@ class PostMoveValueRowEncoder : public RowEncoder {
 
  private:
   bool post_move_;
+  int row_floats_;
   PositionEncoder pos_;
 };
 
@@ -35,7 +36,7 @@ class PostMoveValueRowEncoder : public RowEncoder {
 // pre-move; the lexicon drives the per-lane move enumeration).
 class MaxMovePerLaneRowEncoder : public RowEncoder {
  public:
-  explicit MaxMovePerLaneRowEncoder(const Dictionary& dict) : pos_(dict) {}
+  explicit MaxMovePerLaneRowEncoder(const InputEncodingSpec& spec) : pos_(spec) {}
 
   int row_floats() const override { return MaxMovePerLaneTask::kRowFloats; }
 
@@ -53,13 +54,13 @@ class MaxMovePerLaneRowEncoder : public RowEncoder {
 
 }  // namespace
 
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const Dictionary& dict,
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const InputEncodingSpec& spec,
                                                              bool post_move) {
-  return std::make_unique<PostMoveValueRowEncoder>(dict, post_move);
+  return std::make_unique<PostMoveValueRowEncoder>(spec, post_move);
 }
 
-std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict) {
-  return std::make_unique<MaxMovePerLaneRowEncoder>(dict);
+std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const InputEncodingSpec& spec) {
+  return std::make_unique<MaxMovePerLaneRowEncoder>(spec);
 }
 
 }  // namespace binlog

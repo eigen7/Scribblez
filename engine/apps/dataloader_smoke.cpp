@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   int n_samples = 64;
   DataLoader::Params params;
-  params.dict = &scribblez::GameRunner::load_dictionary_or_throw();
+  params.spec = {&scribblez::GameRunner::load_dictionary_or_throw(), true};
   bool post_move = false;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 
   const int64_t total = loader.num_positions();
   const int64_t n_load = std::min<int64_t>(n_samples, total);
-  std::vector<float> out(static_cast<size_t>(n_load) * DataLoader::row_size_floats());
+  std::vector<float> out(static_cast<size_t>(n_load) * loader.row_size_floats());
 
   auto t0 = std::chrono::steady_clock::now();
 
@@ -131,10 +131,10 @@ int main(int argc, char** argv) {
   // Summary: per-row WLD distribution and score-diff stats.
   int w = 0, d = 0, l = 0;
   double sd_sum = 0.0, sd_min = 1e9, sd_max = -1e9;
-  const int RS = DataLoader::row_size_floats();
+  const int RS = loader.row_size_floats();
   for (int64_t i = 0; i < n_load; ++i) {
     const float* row = out.data() + i * RS;
-    const float* wld = row + DataLoader::input_size_floats();
+    const float* wld = row + loader.input_size_floats();
     if (wld[0] > 0.5f)
       ++w;
     else if (wld[1] > 0.5f)
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
 
   // Show the label tail (last 4 floats) of the first 2 rows; the full 7000+
   // input floats are too noisy to dump.
-  const int IS = DataLoader::input_size_floats();
+  const int IS = loader.input_size_floats();
   for (int64_t i = 0; i < std::min<int64_t>(2, n_load); ++i) {
     const float* row = out.data() + i * RS;
     std::cout << "row[" << i << "] labels:";

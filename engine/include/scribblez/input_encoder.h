@@ -1,105 +1,60 @@
 #pragma once
 
-// Feature-vector layout constants for the win-probability model's input
+// Input-encoding configuration and row layout for the value models' input
 // tensor. The encoding itself is performed by GameStateEncoder (see
-// scribblez/game_state_encoder.h); this header is just the layout
-// description -- the single source of truth for input width and offsets,
-// shared between the engine and the Python side (re-exported through
-// data_loader.h).
+// scribblez/game_state_encoder.h); this header owns the layout: an
+// InputEncodingSpec picks the blocks a run encodes, and the block registry
+// below (the input-side analog of training_targets.h's AllTargets) is the
+// single source of truth for their order and sizes. The encoder writes the
+// blocks by walking the registry, the FFI advertises shapes computed from it,
+// and every consumer that needs a block's location asks it -- so an offset
+// cannot drift from the write order.
 //
-// Layout (in order, contiguous floats):
+// Layout: `spatial_planes(spec)` 15x15 planes (channel-major, PyTorch
+// (C, H, W) via a zero-copy reshape), then `scalar_floats(spec)` scalars.
+// Block contents:
 //
-//   Spatial features -- 88 planes, channel-major, each 15x15. Shape-compatible
-//   with PyTorch (C=88, H=15, W=15) via a zero-copy reshape on the Python
-//   side.
+//   Spatial blocks
+//     kBoard          31 planes: letter A..Z presence (including designated
+//                     blanks), the blank marker, and the DLS/TLS/DWS/TWS
+//                     premium masks (the trunk's only absolute-position
+//                     anchor). See board_planes.h.
+//     kSelfPlacement   1 plane: squares the POV player covered in their most
+//                     recent turn.
+//     kOppPlacement    1 plane: the same for the opponent. Together the two
+//                     placement planes encode the last two plies.
+//     kCrossChecks    52 planes: horizontal then vertical cross-check letters
+//                     A..Z -- plane L marks empty squares where placing L
+//                     fuses with a neighbor along that axis and satisfies the
+//                     lexicon's cross-check mask.
+//     kContingent      3 planes (contingent runs only): the contingent-draw
+//                     potential maps -- best / draw-weighted / rack-alone
+//                     next-turn plays painted onto their placed cells (see
+//                     contingent_map.h).
 //
-//     planes  [0..25]   letter A..Z presence on the board (1.0 where that
-//                       letter is played, including as a designated blank).
-//     plane    26       blank-marker: 1.0 where the board square holds a
-//                       designated blank (regardless of which letter).
-//     planes  [27..30]  premium-square mask: DLS, TLS, DWS, TWS. Although the
-//                       premium pattern is board-static for vanilla Scrabble,
-//                       the trunk is fully convolutional + global pool with NO
-//                       positional encoding, so these planes are the model's
-//                       only absolute-position anchor (a weight-shared conv
-//                       cannot synthesize a per-cell constant on its own).
-//                       Always emitted from the canonical Board::PREMIUM table
-//                       -- i.e. the premium under a played tile is still
-//                       reported (the model can subtract the letter planes to
-//                       know which premiums have already been consumed).
-//     plane    31       self last-placement: 1.0 on each square the POV player
-//                       placed a tile on in THEIR most recent turn.
-//     plane    32       opponent last-placement: 1.0 on each square the
-//                       opponent placed a tile on in their most recent turn.
-//                       The two placement planes encode the last K=2 plies;
-//                       together they let the model reconstruct the board as it
-//                       stood when the opponent moved (needed to reason about
-//                       the opponent's leave, and to interpret a candidate move
-//                       whose leave is the POV rack). A placement plane is
-//                       all-zero for an EXCHANGE / PASS / game-start move.
-//     planes  [33..58]  horizontal cross-check letters A..Z: plane L marks empty
-//                       squares where placing letter L would fuse with an
-//                       existing left and/or right neighbor and satisfy the
-//                       horizontal-pass cross-check mask.
-//     planes  [59..84]  vertical cross-check letters A..Z: plane L marks empty
-//                       squares where placing letter L would fuse with an
-//                       existing above and/or below neighbor and satisfy the
-//                       vertical-pass cross-check mask.
-//     planes  [85..87]  contingent-draw potential (see contingent_map.h): the
-//                       per-lane best next-turn plays for the POV rack, painted
-//                       onto each best play's placed cells (per-cell max of the
-//                       clipped score). Plane 85: best over every drawable tile
-//                       (rack ∪ {X} plays needing X); plane 86: the same
-//                       weighted by the unseen-pool draw probability of X;
-//                       plane 87: best with the rack alone (no draw needed).
+//   Scalar blocks (every value in [0, 1]; POV-visible information only)
+//     kRackCounts     27: the POV rack's raw per-tile counts (A..Z, blank).
+//     kUnseenPool    100: unseen-pool thermometer, one slot per physical tile
+//                     grouped per letter (TILE_COUNTS regions).
+//     kScoreDiff     801: score_active - score_opp thermometer over the
+//                     clipped range [-kScoreDiffClip, +kScoreDiffClip].
+//     kMoveMeta        8: last-2-move metadata (self then opponent): a 3-way
+//                     PLAY/EXCHANGE/PASS one-hot + num_glyphs each.
+//     kContingent     56 (contingent runs only): per drawable tile kind the
+//                     best contingent score over all lanes (27), the same
+//                     draw-weighted (27), the expected best, the rack-alone
+//                     best.
 //
-//   Scalar features -- 992 floats. All values reflect ONLY information the
-//   active player would have at the table -- in particular, the opponent's
-//   rack CONTENTS are not encoded. Every scalar feature is in [0, 1] (counts
-//   are unary/thermometer-encoded), so no input normalization is required.
+// The contingent blocks sit at the TAILS of their sections, so a base-layout
+// row is the full-layout row with the tails spliced out; consumers that serve
+// both arms (e.g. the dashboard running a base model on full-layout rows)
+// rely on that prefix property.
 //
-//     [0..26]      active player's rack: per-tile RAW counts (A..Z, blank).
-//                  Kept raw (not unary) because rack counts are tiny (0..2)
-//                  and a 7-tile rack would waste a 100-wide unary block.
-//     [27..126]    "unseen pool" per-tile UNARY (thermometer) counts: a fixed
-//                  100-slot vector, one slot per physical tile, grouped into
-//                  per-letter regions of width TILE_COUNTS[i] (A..Z, blank,
-//                  concatenated in that order). Within a letter's region the
-//                  first `count` slots are 1.0 and the holes sit at the tail.
-//                  The unseen pool is TILE_COUNTS - board - active_rack: the
-//                  tiles the active player has not observed -- the union of the
-//                  bag and the opponent's rack, indistinguishable from the
-//                  active player's POV. Scrabble's refill-to-7 rule pins the
-//                  partition: opp_rack_size == min(unseen_pool_size, 7) and
-//                  bag_size == unseen_pool_size - opp_rack_size, and
-//                  unseen_pool_size == sum of this block, so neither size is
-//                  emitted as a separate scalar. Unary (vs raw counts) lets the
-//                  model key sharply on the presence of scarce critical tiles
-//                  (blanks, S, J/Q/X/Z).
-//     [127..927]   score_active - score_opp, UNARY (thermometer) over the
-//                  clipped range [-kScoreDiffClip, +kScoreDiffClip]
-//                  (kScoreDiffThermoBins slots): slot i is 1.0 iff the clipped
-//                  diff >= (i - kScoreDiffClip). Thermometer (not one-hot)
-//                  preserves ordinality; unary (not a raw int) bounds the
-//                  feature to [0,1] and lets the model fit the sharply
-//                  nonlinear win-prob / score-diff relationship.
-//     [928..935]   last-2-move metadata, self-move first then opponent-move,
-//                  4 floats each: a 3-way move-type one-hot
-//                  (PLAY / EXCHANGE / PASS, indexed by MoveType) followed by
-//                  num_glyphs (raw 0..7). The type one-hot removes the need to
-//                  derive the move type from the placement plane.
-//     [936..991]   contingent-draw potential scalars (see contingent_map.h):
-//                  per drawable tile kind (A..Z, blank) the best contingent
-//                  score over all lanes, clipped-scaled to [0,1] (27); the
-//                  same weighted by the kind's unseen-pool draw probability
-//                  (27); the expected best contingent score under the draw
-//                  distribution; and the rack-alone best (2).
-//
-// Symmetry: Scrabble boards (and the standard premium pattern) are invariant
-// under the diagonal flip (r,c) -> (c,r). When the encoder is asked to
-// `apply_flip`, each spatial plane (including both placement planes) is
-// transposed. All scalar features are flip-invariant under this layout.
+// Symmetry: the board is invariant under the diagonal flip (r,c) -> (c,r);
+// `apply_flip` transposes every spatial plane, and all scalars are
+// flip-invariant.
 
+#include "scribblez/input_encoding_spec.h"
 #include "scribblez/training_targets.h"  // kScoreDiffClip
 
 namespace scribblez {
@@ -107,55 +62,67 @@ namespace scribblez {
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
 
-inline constexpr int kLetterPlanes = 26;
-inline constexpr int kBlankMarkerPlanes = 1;
-inline constexpr int kPremiumPlanes = 4;
-inline constexpr int kPlacementPlanes = 2;  // self + opponent most-recent placements
+// Block-content sizes (referenced by the registry and the block writers).
+inline constexpr int kBoardBlockPlanes = 31;  // == BoardPlanes::kPlanes (asserted at the writer)
 inline constexpr int kHorizontalCrossCheckPlanes = 26;
 inline constexpr int kVerticalCrossCheckPlanes = 26;
+inline constexpr int kCrossCheckPlanes = kHorizontalCrossCheckPlanes + kVerticalCrossCheckPlanes;
 inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone potential
-inline constexpr int kSpatialPlanes = kLetterPlanes + kBlankMarkerPlanes + kPremiumPlanes +
-                                      kPlacementPlanes + kHorizontalCrossCheckPlanes +
-                                      kVerticalCrossCheckPlanes + kContingentPlanes;  // 88
-inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;                   // 19800
-
-// Plane offsets within the spatial block (single source of truth).
-inline constexpr int kBlankMarkerPlane = kLetterPlanes;                        // 26
-inline constexpr int kPremiumPlane0 = kBlankMarkerPlane + kBlankMarkerPlanes;  // 27
-inline constexpr int kSelfPlacementPlane = kPremiumPlane0 + kPremiumPlanes;    // 31
-inline constexpr int kOppPlacementPlane = kSelfPlacementPlane + 1;             // 32
-inline constexpr int kHorizontalCrossCheckPlane0 = kOppPlacementPlane + 1;     // 33
-inline constexpr int kVerticalCrossCheckPlane0 =
-  kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;  // 59
-inline constexpr int kContingentPlane0 =
-  kVerticalCrossCheckPlane0 + kVerticalCrossCheckPlanes;  // 85
-
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
-// The input score-diff thermometer spans the same clipped differential range as
-// the regression target (kScoreDiffClip), one unary slot per integer
-// differential. Owned here: the value head predicts a Gaussian (mean/std), not
-// bins, so the input feature no longer borrows the head's binning.
+// One unary slot per integer differential across the same clipped range as the
+// regression target.
 inline constexpr int kScoreDiffThermoBins = 2 * kScoreDiffClip + 1;  // 801
-inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;  // 801
+inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;
 inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
-// Contingent-draw potential scalars: per-kind best + per-kind draw-weighted
-// best, then the expected best and the rack-alone best.
+// Per-kind best + per-kind draw-weighted best, then expected best + rack-alone best.
 inline constexpr int kContingentScalarFloats = 27 + 27 + 2;  // 56
 
-inline constexpr int kScalarFloats = kRackCountFloats + kUnseenPoolThermoFloats +
-                                     kScoreDiffThermoFloats + kMoveMetaFloats +
-                                     kContingentScalarFloats;  // 992
+// ---- Block registry ---------------------------------------------------------
 
-// Scalar-block offsets (relative to the start of the scalar block).
-inline constexpr int kRackCountOffset = 0;
-inline constexpr int kUnseenPoolOffset = kRackCountOffset + kRackCountFloats;         // 27
-inline constexpr int kScoreDiffOffset = kUnseenPoolOffset + kUnseenPoolThermoFloats;  // 127
-inline constexpr int kMoveMetaOffset = kScoreDiffOffset + kScoreDiffThermoFloats;     // 928
-inline constexpr int kContingentScalarOffset = kMoveMetaOffset + kMoveMetaFloats;     // 936
+enum class SpatialBlockId { kBoard, kSelfPlacement, kOppPlacement, kCrossChecks, kContingent };
+enum class ScalarBlockId { kRackCounts, kUnseenPool, kScoreDiff, kMoveMeta, kContingent };
 
-inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 20792
+struct SpatialBlockDef {
+  SpatialBlockId id;
+  int planes;
+  bool contingent_only;  // included iff spec.contingent_features
+};
+struct ScalarBlockDef {
+  ScalarBlockId id;
+  int floats;
+  bool contingent_only;
+};
+
+// The row's blocks in encode order. GameStateEncoder writes by walking these
+// tables, so a block's offset is definitionally where the walk puts it.
+inline constexpr SpatialBlockDef kSpatialBlocks[] = {
+  {SpatialBlockId::kBoard, kBoardBlockPlanes, false},
+  {SpatialBlockId::kSelfPlacement, 1, false},
+  {SpatialBlockId::kOppPlacement, 1, false},
+  {SpatialBlockId::kCrossChecks, kCrossCheckPlanes, false},
+  {SpatialBlockId::kContingent, kContingentPlanes, true},
+};
+inline constexpr ScalarBlockDef kScalarBlocks[] = {
+  {ScalarBlockId::kRackCounts, kRackCountFloats, false},
+  {ScalarBlockId::kUnseenPool, kUnseenPoolThermoFloats, false},
+  {ScalarBlockId::kScoreDiff, kScoreDiffThermoFloats, false},
+  {ScalarBlockId::kMoveMeta, kMoveMetaFloats, false},
+  {ScalarBlockId::kContingent, kContingentScalarFloats, true},
+};
+
+// ---- Layout queries (walk the registry under `spec`) ------------------------
+
+int spatial_planes(const InputEncodingSpec& spec);  // 88 full / 85 base
+int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base
+int spatial_floats(const InputEncodingSpec& spec);  // spatial_planes * kBoardCells
+int input_floats(const InputEncodingSpec& spec);    // spatial + scalar
+
+// First plane / first scalar offset of a block under `spec`. The block must be
+// included by the spec (asking for an excluded block aborts).
+int spatial_block_plane0(const InputEncodingSpec& spec, SpatialBlockId id);
+int scalar_block_offset(const InputEncodingSpec& spec, ScalarBlockId id);
 
 }  // namespace scribblez
