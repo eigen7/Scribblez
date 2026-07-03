@@ -110,9 +110,9 @@ class NeuralAgent : public Agent {
   // Build an NNEvaluationService from `net_params` and load its model into it.
   static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params);
 
-  // The input-encoding spec matching the loaded model's declared input widths
-  // (full or base layout, per input_encoder.h's registry); throws when the
-  // widths match neither.
+  // The input-encoding spec for the loaded model: the arm its ONNX
+  // metadata_props declare, validated against its input widths through
+  // input_encoder.h's layout registry (a disagreement throws).
   static InputEncodingSpec derive_spec(const Dictionary& dict, const nn::EvalService& service);
 
   // Validate parameters and size the input scratch buffer. Shared by both ctors.

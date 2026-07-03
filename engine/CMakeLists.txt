@@ -128,6 +128,13 @@ target_include_directories(scribblez_nn
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
 target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen)
+# Reading the exported model's metadata_props (the input-encoding arm) parses
+# the ONNX protobuf directly. The system onnx package ships the ML variant of
+# the generated headers, selected via ONNX_ML.
+find_package(Protobuf REQUIRED)
+find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
+target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
+target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
 # The NeuralAgent TUs are the only agent sources not already in scribblez_core;
 # they are kept out of the core library so it carries no CUDA/TensorRT

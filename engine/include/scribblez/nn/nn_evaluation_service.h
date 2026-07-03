@@ -34,7 +34,8 @@ class NNEvaluationService : public EvalService {
   // evaluate().
   void load();
 
-  // The loaded model's declared input widths. Valid after load().
+  // The loaded model's declared arm and input widths. Valid after load().
+  bool contingent_features() const override { return net_.contingent_features(); }
   int spatial_planes() const override { return net_.spatial_planes(); }
   int scalar_floats() const override { return net_.scalar_floats(); }
 

@@ -29,9 +29,12 @@ class EvalService {
  public:
   virtual ~EvalService() = default;
 
-  // The input widths the served model consumes -- the spatial plane count and
-  // the scalar float count of one row. A row is their combined float count,
-  // and agents derive their InputEncodingSpec (full vs base layout) from them.
+  // The served model's input-encoding arm (its ONNX metadata_props
+  // declaration) and the input widths it consumes -- the spatial plane count
+  // and the scalar float count of one row. Agents build their
+  // InputEncodingSpec from the arm and validate the widths against it through
+  // the layout registry.
+  virtual bool contingent_features() const = 0;
   virtual int spatial_planes() const = 0;
   virtual int scalar_floats() const = 0;
 

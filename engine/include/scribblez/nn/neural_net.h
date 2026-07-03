@@ -63,10 +63,15 @@ class NeuralNet {
 
   // The loaded model's declared input widths (read off the engine's tensor
   // shapes): the spatial plane count and the scalar float count of one row.
-  // Valid after load(). Together they say which input layout (full or base;
-  // see input_encoder.h's registry) the model consumes.
+  // Valid after load().
   int spatial_planes() const;
   int scalar_floats() const;
+
+  // The model's input-encoding arm, from the "contingent_features" entry the
+  // exporter stamps into the ONNX metadata_props (see onnx_export.py). Valid
+  // after load(); consumers cross-check it against the input widths through
+  // input_encoder.h's layout registry.
+  bool contingent_features() const;
 
   // Host input staging buffers, row-major and sized for max_batch_size rows.
   // The caller writes the first num_rows rows before calling predict(num_rows).

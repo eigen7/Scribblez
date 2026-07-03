@@ -4,6 +4,8 @@
 #include "scribblez/nn/cuda_util.h"
 #include "scribblez/training_targets.h"
 
+#include <onnx/onnx_pb.h>
+
 #include <NvInfer.h>
 #include <NvInferRuntime.h>
 #include <NvOnnxParser.h>
@@ -65,6 +67,21 @@ void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::rename(tmp, p);
 }
 
+// The model's input-encoding arm, read from the "contingent_features" entry
+// the exporter stamps into the ONNX metadata_props. Every served model must
+// declare its arm; a missing entry (or unparseable model) throws.
+bool parse_contingent_features(const std::vector<char>& onnx_bytes) {
+  onnx::ModelProto model;
+  if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
+    throw std::runtime_error("Failed to parse ONNX model bytes");
+  }
+  for (int i = 0; i < model.metadata_props_size(); ++i) {
+    const auto& kv = model.metadata_props(i);
+    if (kv.key() == "contingent_features") return kv.value() == "true";
+  }
+  throw std::runtime_error("ONNX model missing the contingent_features metadata entry");
+}
+
 nvinfer1::Dims spatial_dims(int rows, int planes) {
   nvinfer1::Dims d;
   d.nbDims = 4;
@@ -92,9 +109,11 @@ struct NeuralNet::Impl {
   int scalar_size(int rows) const { return rows * scalar_floats; }
 
   // Input widths read off the deserialized engine's declared tensor shapes --
-  // the model file states which input layout (full or base) it consumes.
+  // the model file states which input layout (full or base) it consumes -- and
+  // the arm the model declares in its ONNX metadata_props.
   int spatial_planes = 0;
   int scalar_floats = 0;
+  bool contingent_features = false;
   ~Impl();
 
   // Set engine from a serialized plan blob.
@@ -250,6 +269,7 @@ void NeuralNet::load() {
   set_device(impl_->params.cuda_device_id);
 
   std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
+  impl_->contingent_features = parse_contingent_features(onnx_bytes);
   std::string hash = content_hash(onnx_bytes);
   std::string cache_path =
     engine_plan_cache_path(hash, impl_->params.precision, impl_->params.max_batch_size,
@@ -268,6 +288,7 @@ void NeuralNet::load() {
 int NeuralNet::max_batch_size() const { return impl_->params.max_batch_size; }
 int NeuralNet::spatial_planes() const { return impl_->spatial_planes; }
 int NeuralNet::scalar_floats() const { return impl_->scalar_floats; }
+bool NeuralNet::contingent_features() const { return impl_->contingent_features; }
 
 float* NeuralNet::input_spatial_host() { return impl_->h_input_spatial; }
 float* NeuralNet::input_scalar_host() { return impl_->h_input_scalar; }
