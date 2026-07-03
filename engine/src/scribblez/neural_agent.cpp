@@ -92,7 +92,7 @@ void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_s
   encoder_.board().ensure_movegen_caches(dict);
   GameStateEncoder post = encoder_;
   post.apply_move(mv);
-  post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
+  post.encode_input(my_seat, leave, dict, /*apply_flip=*/false, dst);
 }
 
 void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays,

@@ -40,6 +40,14 @@
 
 namespace scribblez {
 
+class Dictionary;
+
+// The active player's "unseen pool" composition: TILE_COUNTS minus the tiles
+// on `board` minus `my_rack` -- the union of the bag and the opponent's rack,
+// indistinguishable from the active player's POV. Indexed by tile kind
+// (A..Z, then blank).
+void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
+
 // Sample kinds within a single game turn. Used by the DataLoader's replay
 // decoder to label which of the two per-PLAY-turn samples is which.
 enum class PositionKind : uint8_t {
@@ -75,7 +83,10 @@ class GameStateEncoder {
 
   // --- encoders -----------------------------------------------------------
   // Encode the current state into `out` (kInputFloats long) from `player`'s
-  // POV. `my_rack` is `player`'s own rack right now.
+  // POV. `my_rack` is `player`'s own rack right now. `dict` is the lexicon:
+  // the cross-check planes read the board's lexicon-derived move-generation
+  // caches, and the contingent-draw potential features run a move generation
+  // over `my_rack` plus a hypothetical drawn tile (see contingent_map.h).
   //
   // For a pre-move sample, callers pass player == active_player(). For a
   // post-PLAY sample (the player who just moved, before any draw and before
@@ -86,7 +97,8 @@ class GameStateEncoder {
   // The encoder's own active_player() is now the opponent; passing the
   // pre-flip player here keeps the encode anchored to their POV (so labels
   // and last_opp_move both attach correctly to that player).
-  void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
+  void encode_input(int player, const Rack& my_rack, const Dictionary& dict, bool apply_flip,
+                    float* out) const;
 
   // Encode as encode_input(), but force the score differential
   // (score(player) - score(opp)) to `score_diff`, leaving every other
@@ -94,7 +106,13 @@ class GameStateEncoder {
   // so this isolates it for structural monotonicity probes that sweep the
   // active player's score advantage across an otherwise-fixed position.
   void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                    bool apply_flip, float* out) const;
+                                    const Dictionary& dict, bool apply_flip, float* out) const;
+
+  // Rewrite the score-differential thermometer of an already-encoded input
+  // row in place, leaving every other feature untouched. Score-diff sweeps
+  // encode a position once and stamp each swept differential into a copy,
+  // instead of re-running the full (move-generating) encode per step.
+  static void overwrite_score_diff(int score_diff, float* input_row);
 
  private:
   Board board_{};

@@ -268,7 +268,7 @@ def test_streaming_loop_one_step(tmp_path):
             "-t", "looptest", "--device", "cpu", "--batch-size", "8",
             "--checkpoint-every", "8", "--log-every", "8", "--max-positions", "16",
             "--num-blocks", "1", "--trunk-channels", "8",
-            "--no-dashboard", "--no-probe", "--no-calibration",
+            "--no-dashboard", "--no-post-move-eval", "--no-post-move-quality",
         ]
     )
     # fmt: on
@@ -288,8 +288,8 @@ def test_streaming_loop_one_step(tmp_path):
         paths,
         device,
         args,
-        probe_enabled=False,
-        test_ds=None,
+        post_move_eval=None,
+        post_move_quality=None,
         start_ckpt=0,
         start_positions=0,
         start_step=0,

@@ -42,7 +42,7 @@ context, M_post predicts:
    pre-move) input features on the fly. Diagonal symmetry augmentation (the
    board is invariant under `(r,c) → (c,r)`) is applied stochastically per-row.
 
-3. **Model**: A ResNet trunk (85 spatial input planes × 15×15, plus 936 scalar
+3. **Model**: A ResNet trunk (88 spatial input planes × 15×15, plus 992 scalar
    features) branches into the three heads above. Training uses AdamW with
    cosine annealing.
 

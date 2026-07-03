@@ -9,8 +9,8 @@
 //
 // Layout (in order, contiguous floats):
 //
-//   Spatial features -- 85 planes, channel-major, each 15x15. Shape-compatible
-//   with PyTorch (C=85, H=15, W=15) via a zero-copy reshape on the Python
+//   Spatial features -- 88 planes, channel-major, each 15x15. Shape-compatible
+//   with PyTorch (C=88, H=15, W=15) via a zero-copy reshape on the Python
 //   side.
 //
 //     planes  [0..25]   letter A..Z presence on the board (1.0 where that
@@ -45,8 +45,15 @@
 //                       squares where placing letter L would fuse with an
 //                       existing above and/or below neighbor and satisfy the
 //                       vertical-pass cross-check mask.
+//     planes  [85..87]  contingent-draw potential (see contingent_map.h): the
+//                       per-lane best next-turn plays for the POV rack, painted
+//                       onto each best play's placed cells (per-cell max of the
+//                       clipped score). Plane 85: best over every drawable tile
+//                       (rack ∪ {X} plays needing X); plane 86: the same
+//                       weighted by the unseen-pool draw probability of X;
+//                       plane 87: best with the rack alone (no draw needed).
 //
-//   Scalar features -- 936 floats. All values reflect ONLY information the
+//   Scalar features -- 992 floats. All values reflect ONLY information the
 //   active player would have at the table -- in particular, the opponent's
 //   rack CONTENTS are not encoded. Every scalar feature is in [0, 1] (counts
 //   are unary/thermometer-encoded), so no input normalization is required.
@@ -81,6 +88,12 @@
 //                  (PLAY / EXCHANGE / PASS, indexed by MoveType) followed by
 //                  num_glyphs (raw 0..7). The type one-hot removes the need to
 //                  derive the move type from the placement plane.
+//     [936..991]   contingent-draw potential scalars (see contingent_map.h):
+//                  per drawable tile kind (A..Z, blank) the best contingent
+//                  score over all lanes, clipped-scaled to [0,1] (27); the
+//                  same weighted by the kind's unseen-pool draw probability
+//                  (27); the expected best contingent score under the draw
+//                  distribution; and the rack-alone best (2).
 //
 // Symmetry: Scrabble boards (and the standard premium pattern) are invariant
 // under the diagonal flip (r,c) -> (c,r). When the encoder is asked to
@@ -100,10 +113,11 @@ inline constexpr int kPremiumPlanes = 4;
 inline constexpr int kPlacementPlanes = 2;  // self + opponent most-recent placements
 inline constexpr int kHorizontalCrossCheckPlanes = 26;
 inline constexpr int kVerticalCrossCheckPlanes = 26;
+inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone potential
 inline constexpr int kSpatialPlanes = kLetterPlanes + kBlankMarkerPlanes + kPremiumPlanes +
                                       kPlacementPlanes + kHorizontalCrossCheckPlanes +
-                                      kVerticalCrossCheckPlanes;     // 85
-inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;  // 19125
+                                      kVerticalCrossCheckPlanes + kContingentPlanes;  // 88
+inline constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;                   // 19800
 
 // Plane offsets within the spatial block (single source of truth).
 inline constexpr int kBlankMarkerPlane = kLetterPlanes;                        // 26
@@ -113,6 +127,8 @@ inline constexpr int kOppPlacementPlane = kSelfPlacementPlane + 1;             /
 inline constexpr int kHorizontalCrossCheckPlane0 = kOppPlacementPlane + 1;     // 33
 inline constexpr int kVerticalCrossCheckPlane0 =
   kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;  // 59
+inline constexpr int kContingentPlane0 =
+  kVerticalCrossCheckPlane0 + kVerticalCrossCheckPlanes;  // 85
 
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
@@ -125,16 +141,21 @@ inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;  // 801
 inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
+// Contingent-draw potential scalars: per-kind best + per-kind draw-weighted
+// best, then the expected best and the rack-alone best.
+inline constexpr int kContingentScalarFloats = 27 + 27 + 2;  // 56
 
-inline constexpr int kScalarFloats =
-  kRackCountFloats + kUnseenPoolThermoFloats + kScoreDiffThermoFloats + kMoveMetaFloats;  // 936
+inline constexpr int kScalarFloats = kRackCountFloats + kUnseenPoolThermoFloats +
+                                     kScoreDiffThermoFloats + kMoveMetaFloats +
+                                     kContingentScalarFloats;  // 992
 
 // Scalar-block offsets (relative to the start of the scalar block).
 inline constexpr int kRackCountOffset = 0;
 inline constexpr int kUnseenPoolOffset = kRackCountOffset + kRackCountFloats;         // 27
 inline constexpr int kScoreDiffOffset = kUnseenPoolOffset + kUnseenPoolThermoFloats;  // 127
 inline constexpr int kMoveMetaOffset = kScoreDiffOffset + kScoreDiffThermoFloats;     // 928
+inline constexpr int kContingentScalarOffset = kMoveMetaOffset + kMoveMetaFloats;     // 936
 
-inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 20061
+inline constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 20792
 
 }  // namespace scribblez

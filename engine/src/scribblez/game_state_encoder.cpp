@@ -1,6 +1,7 @@
 #include "scribblez/game_state_encoder.h"
 
 #include "scribblez/board_planes.h"
+#include "scribblez/contingent_map.h"
 #include "scribblez/glyph.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/tile.h"
@@ -83,12 +84,12 @@ void encode_cross_check_planes(const Board& board, bool flip, float* planes_out)
   }
 }
 
-// Fill `out` with the active player's "unseen pool" composition:
-//   unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack)
-// Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the
-// active player has no way to distinguish the bag from the opponent's
-// rack, so the two are lumped together as the "unseen pool". This
-// depends only on data the active player observes.
+}  // namespace
+
+// Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the active
+// player has no way to distinguish the bag from the opponent's rack, so
+// unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack).
+// This depends only on data the active player observes.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
   for (int i = 0; i < 27; ++i) out[i] = static_cast<uint8_t>(TILE_COUNTS[i]);
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -106,6 +107,8 @@ void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rac
     --out[t];
   }
 }
+
+namespace {
 
 // Active player's rack as raw per-tile counts (27 floats).
 void encode_rack_counts(const Rack& my_rack, float* out) {
@@ -158,7 +161,8 @@ void encode_scalars(const Rack& my_rack, const uint8_t unseen_pool[27], const Mo
 // Shared back-end for both pre-move and post-PLAY encoding. Takes only
 // POV-visible inputs; `score_diff` is the active player's score advantage.
 void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
-                const Move& opp_move, int score_diff, bool apply_flip, float* out) {
+                const Move& opp_move, int score_diff, const Dictionary& dict, bool apply_flip,
+                float* out) {
   // The shared board-content block sits at the front of the spatial features,
   // with the placement/cross-check planes following it.
   static_assert(BoardPlanes::kBlankMarkerPlane == kBlankMarkerPlane &&
@@ -170,10 +174,17 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
   BoardPlanes::encode(board, apply_flip, out);
   encode_placement_plane(self_move, apply_flip, kSelfPlacementPlane, out);
   encode_placement_plane(opp_move, apply_flip, kOppPlacementPlane, out);
+  // The cross-check planes read the board's move-generation caches; build
+  // them before encoding (a no-op when already valid) so they are
+  // lexicon-accurate regardless of the board's prior cache state.
+  board.ensure_movegen_caches(dict);
   encode_cross_check_planes(board, apply_flip, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
+  const ContingentMap contingent = ContingentMap::compute(board, my_rack, unseen, dict);
+  contingent.encode_planes(apply_flip, out + kContingentPlane0 * kBoardCells);
   encode_scalars(my_rack, unseen, self_move, opp_move, score_diff, out + kSpatialFloats);
+  contingent.encode_scalars(out + kSpatialFloats + kContingentScalarOffset);
 }
 
 }  // namespace
@@ -189,20 +200,27 @@ void GameStateEncoder::apply_move(const Move& move) {
   ++turn_index_;
 }
 
-void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_flip,
-                                    float* out) const {
+void GameStateEncoder::encode_input(int player, const Rack& my_rack, const Dictionary& dict,
+                                    bool apply_flip, float* out) const {
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp],
-             scores_[player] - scores_[opp], apply_flip, out);
+             scores_[player] - scores_[opp], dict, apply_flip, out);
 }
 
 void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                                    bool apply_flip, float* out) const {
+                                                    const Dictionary& dict, bool apply_flip,
+                                                    float* out) const {
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
-  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff, apply_flip,
-             out);
+  encode_pov(board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff, dict,
+             apply_flip, out);
+}
+
+void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) {
+  float* block = input_row + kSpatialFloats + kScoreDiffOffset;
+  std::memset(block, 0, sizeof(float) * static_cast<size_t>(kScoreDiffThermoFloats));
+  encode_score_diff_thermometer(score_diff, block);
 }
 
 }  // namespace scribblez

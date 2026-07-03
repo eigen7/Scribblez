@@ -6,6 +6,7 @@
 #include "scribblez/block_decoder.h"
 #include "scribblez/board.h"
 #include "scribblez/board_planes.h"
+#include "scribblez/contingent_map.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
@@ -443,8 +444,9 @@ static void test_encoder_basic_layout() {
   active_rack.add(Tile::from_char('Z'));
   active_rack.add(BLANK);
 
+  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -541,8 +543,9 @@ static void test_encoder_last_opp_plane_mask() {
   enc.apply_move(opp_play);
 
   Rack active_rack;
+  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
 
   const float* plane = out.data() + kOppPlacementPlane * 225;
   for (int r = 0; r < 15; ++r) {
@@ -574,10 +577,11 @@ static void test_encoder_flip_symmetry() {
   Rack active_rack;
   active_rack.add(Tile::from_char('Q'));
 
+  Dictionary d = medium_dict();
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/true, flipped.data());
 
   // Scalars are flip-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
@@ -611,7 +615,7 @@ static void test_encoder_cross_check_planes_qi() {
 
   Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
 
   auto plane_value = [&out](int plane, int r, int c) { return out[plane * 225 + r * 15 + c]; };
   auto h_cross_check = [&plane_value](Tile letter, int r, int c) {
@@ -724,11 +728,12 @@ static void test_encoder_forced_score_diff_isolation() {
   active_rack.add(Tile::from_char('E'));
   active_rack.add(Tile::from_char('R'));
 
+  Dictionary d = medium_dict();
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> forced(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, normal.data());
   enc.encode_input_with_score_diff(enc.active_player(), active_rack,
-                                   /*score_diff=*/123, /*apply_flip=*/false, forced.data());
+                                   /*score_diff=*/123, d, /*apply_flip=*/false, forced.data());
 
   const int score_lo = kSpatialFloats + kScoreDiffOffset;
   const int score_hi = score_lo + kScoreDiffThermoFloats;
@@ -759,8 +764,9 @@ static void test_encoder_nonplay_last_move_metadata() {
   enc.apply_move(p1_exchange);
 
   Rack active_rack;
+  Dictionary d = medium_dict();
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, d, /*apply_flip=*/false, out.data());
 
   const float* scalars = out.data() + kSpatialFloats;
   const float* self_meta = scalars + kMoveMetaOffset;
@@ -955,6 +961,157 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
   }
 }
 }  // anonymous namespace
+
+// Count of `letter` placed as a natural tile (not a designated blank) by `m`.
+static int natural_letter_count(const Move& m, int letter_index) {
+  int n = 0;
+  for (int i = 0; i < m.num_glyphs(); ++i) {
+    const Glyph g = m.glyph(i);
+    if (!g.is_blank() && g.letter().index() == letter_index) ++n;
+  }
+  return n;
+}
+
+// The ContingentMap's single phantom-blank generation must reproduce, per
+// (drawn letter, lane), the best score a real generation over rack ∪ {letter}
+// finds among plays that consume the added copy -- including the rescoring of
+// the phantom at the letter's face value -- and, for the rack-alone lanes, the
+// plain lane-target reduction.
+static void test_contingent_map_matches_per_tile_generation() {
+  Dictionary dict = medium_dict();
+
+  int leave_positions = 0, full_positions = 0;
+  long columns = 0;
+  for (uint64_t seed : std::vector<uint64_t>{11, 77}) {
+    GameLogStorage log = play_test_game(dict, seed);
+    Board board;
+    for (size_t t = 0; t < log.turns.size(); ++t) {
+      const TurnRecord& rec = log.turns[t];
+
+      // The full pre-move rack: no replenishment draw is possible, so every
+      // contingent column must be empty while the rack-alone lanes still
+      // match the plain lane-target reduction.
+      if (rec.rack_before.size() == RACK_SIZE && t % 4 == 0 && !board.empty_board()) {
+        uint8_t unseen[27];
+        compute_unseen_pool(unseen, board, rec.rack_before);
+        const ContingentMap cm = ContingentMap::compute(board, rec.rack_before, unseen, dict);
+        const LaneTargets lt = compute_lane_targets(board, rec.rack_before, dict);
+        for (int lane = 0; lane < kNumLanes; ++lane) {
+          const LaneBest& ref =
+            lane < kLanesPerAxis ? lt.rows[lane] : lt.cols[lane - kLanesPerAxis];
+          CHECK(cm.rack_best(lane).score == (ref.has_move ? ref.max_score : -1));
+          for (int kind = 0; kind < kLaneTileKinds; ++kind) {
+            CHECK(cm.best(kind, lane).score == -1);
+          }
+        }
+        ++full_positions;
+      }
+
+      if (rec.move.type() != MoveType::PLAY) continue;
+      board.apply(rec.move);
+
+      // The post-move snapshot -- the training case: rack = the mover's leave,
+      // board = after the move.
+      Rack leave = rec.rack_before;
+      for (int i = 0; i < rec.move.num_glyphs(); ++i) leave.remove(rec.move.glyph(i).rack_tile());
+      uint8_t unseen[27];
+      compute_unseen_pool(unseen, board, leave);
+      const ContingentMap cm = ContingentMap::compute(board, leave, unseen, dict);
+
+      // Rack-alone lanes == the lane-target reduction of a plain generation.
+      const LaneTargets lt = compute_lane_targets(board, leave, dict);
+      for (int lane = 0; lane < kNumLanes; ++lane) {
+        const LaneBest& ref = lane < kLanesPerAxis ? lt.rows[lane] : lt.cols[lane - kLanesPerAxis];
+        CHECK(cm.rack_best(lane).score == (ref.has_move ? ref.max_score : -1));
+      }
+
+      // Every drawable letter column == a real generation over leave ∪ {L},
+      // restricted to plays that consume the added copy.
+      for (int L = 0; L < 26; ++L) {
+        if (unseen[L] == 0) continue;
+        Rack aug = leave;
+        aug.add(Tile::of(L));
+        MoveGenerator gen(board, dict);
+        const std::vector<Move> moves = gen.generate(aug);
+        std::array<int, kNumLanes> ref;
+        ref.fill(-1);
+        PlacedTile placed[RACK_SIZE];
+        for (const Move& m : moves) {
+          if (natural_letter_count(m, L) <= leave.count(Tile::of(L))) continue;
+          const int p = decode_placements(m, placed);
+          const LaneAssignments la = compute_lane_assignments(board, m, placed, p);
+          for (int i = 0; i < la.count; ++i) {
+            const int lane = (la.items[i].horizontal ? 0 : kLanesPerAxis) + la.items[i].lane_index;
+            ref[lane] = std::max(ref[lane], static_cast<int>(m.score()));
+          }
+        }
+        for (int lane = 0; lane < kNumLanes; ++lane) {
+          CHECK(static_cast<int>(cm.best(L, lane).score) == ref[lane]);
+        }
+        ++columns;
+      }
+      ++leave_positions;
+    }
+  }
+  std::cout << "  contingent map parity OK (" << leave_positions << " leaves, " << full_positions
+            << " full racks, " << columns << " letter columns)\n";
+}
+
+// A hand-checked position: horizontal CAT at (7,7..9), rack {R}. Verifies the
+// specific contingent entries, the phantom-blank rescoring, and the encoded
+// planes' footprint painting and flip symmetry.
+static void test_contingent_map_cat_board() {
+  Dictionary dict = medium_dict();
+  Board board;
+  board.apply(make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
+                             {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                              Glyph::of(Tile::from_char('T'))}));
+  Rack rack;
+  rack.add(Tile::from_char('R'));
+  uint8_t unseen[27];
+  compute_unseen_pool(unseen, board, rack);
+  const ContingentMap cm = ContingentMap::compute(board, rack, unseen, dict);
+
+  const int kS = Tile::from_char('S').index();
+  const int kE = Tile::from_char('E').index();
+  const int row7 = 7;                  // row lane 7
+  const int col8 = kLanesPerAxis + 8;  // column lane 8
+
+  // Drew S -> CATS along row 7: S placed at (7,10), a plain square, so the
+  // score is the four face values (C3 A1 T1 S1).
+  CHECK(cm.best(kS, row7).score == 6);
+  CHECK(cm.best(kS, row7).placed_mask == (1u << 10));
+  // Drew a blank -> CATER along row 7 (blank designated E at (7,10), rack R
+  // on the (7,11) DLS): 3 + 1 + 1 + 0 + 2.
+  CHECK(cm.best(kLaneBlankKind, row7).score == 7);
+  // Drew a real E -> the same CATER with the E's face value restored: 8.
+  CHECK(cm.best(kE, row7).score == 8);
+  // Drew E -> EAR down column 8 (E at (6,8) DLS, board A, rack R at (8,8)
+  // DLS): 2 + 1 + 2, with the phantom-E rescoring supplying the doubled E.
+  CHECK(cm.best(kE, col8).score == 5);
+  CHECK(cm.best(kE, col8).placed_mask == ((1u << 6) | (1u << 8)));
+  // Rack alone: the R's only placement would be the one-tile vertical hook AR
+  // below the A, which the move generator canonicalizes away (single-tile
+  // plays are emitted from the horizontal pass only; see GaddagGen::record),
+  // so no lane holds a rack-alone play.
+  CHECK(cm.rack_best(col8).score == -1);
+  CHECK(cm.rack_best(row7).score == -1);
+
+  // Painted planes: the max plane's value at (7,10) is the best entry through
+  // that cell -- the drew-E CATER (8); a flip moves it to (10,7). Every value
+  // stays in [0,1].
+  std::vector<float> planes(kContingentPlanes * kBoardCells, 0.0f);
+  cm.encode_planes(/*flip=*/false, planes.data());
+  CHECK(planes[7 * BOARD_SIZE + 10] == 8.0f / kContingentScoreClip);
+  std::vector<float> flipped(kContingentPlanes * kBoardCells, 0.0f);
+  cm.encode_planes(/*flip=*/true, flipped.data());
+  CHECK(flipped[10 * BOARD_SIZE + 7] == 8.0f / kContingentScoreClip);
+  std::vector<float> scalars(kContingentScalarFloats, -1.0f);
+  cm.encode_scalars(scalars.data());
+  for (float v : scalars) CHECK(v >= 0.0f && v <= 1.0f);
+  CHECK(scalars[kS] == 6.0f / kContingentScoreClip);
+  std::cout << "test_contingent_map_cat_board passed\n";
+}
 
 // GameStateEncoder, replayed against a live in-memory replay, faithfully
 // reproduces every eligible position -- proven by running movegen on both and
@@ -1905,9 +2062,9 @@ static void test_dataloader_per_row_symmetry() {
     GameStateEncoder ref_enc;
     ref_enc.apply_move(fix.self_move);
     ref_enc.board().ensure_movegen_caches(dict);
-    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
+    ref_enc.encode_input(fix.active_player, fix.active_rack, dict, /*apply_flip=*/false,
                          ref_normal.data());
-    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/true,
+    ref_enc.encode_input(fix.active_player, fix.active_rack, dict, /*apply_flip=*/true,
                          ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
@@ -3552,6 +3709,8 @@ int main() {
   test_encoder_flip_symmetry();
   test_encoder_cross_check_planes_qi();
   test_position_encoder_cross_check_planes_lexical();
+  test_contingent_map_matches_per_tile_generation();
+  test_contingent_map_cat_board();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();

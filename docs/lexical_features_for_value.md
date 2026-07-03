@@ -237,6 +237,15 @@ square along the perpendicular axis), rather than the full cross-check planes.
 
 ## Pointers
 
+- [contingent_map.h](../engine/include/scribblez/contingent_map.h) — the
+  `M_post` implementation of the potential map. For `M_post` the cost/accuracy
+  ladder collapses: the input state is already post-move (rack = leave, board
+  includes the move), so one generation per position yields the tier-3-correct
+  feature. The 27 per-tile passes collapse into a single generation over
+  rack ∪ {blank} (a play consuming the extra blank designated as `L`,
+  rescored at `L`'s face value, is the "drew `L`" play). Encoded as input
+  planes 85–87 plus 56 scalars (see
+  [input_encoder.h](../engine/include/scribblez/input_encoder.h)).
 - [roadmap.md](roadmap.md) — `M_post`/`M_pre`, the candidate-scoring/selection
   pipeline, the two weaknesses.
 - [architecture.md](architecture.md) — the input encoder and the `.slog`

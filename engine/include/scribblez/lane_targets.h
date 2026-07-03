@@ -26,6 +26,40 @@ inline constexpr int kLaneLen = BOARD_SIZE;       // cells along one lane
 inline constexpr int kLanesPerAxis = BOARD_SIZE;  // 15 rows, 15 cols
 inline constexpr int kNumLanes = 2 * BOARD_SIZE;  // 30 sub-tasks
 
+// ---- Play decomposition (shared by every lane-reduction consumer) ----------
+
+// A single newly placed tile of a PLAY, in absolute board coordinates. `kind`
+// is the lane tile kind: letters by index, designated blanks collapsed to
+// kLaneBlankKind.
+struct PlacedTile {
+  int r;
+  int c;
+  int kind;
+};
+
+// Decode a PLAY into its newly placed tiles (in word order). Returns the
+// count; `out` must hold RACK_SIZE entries.
+int decode_placements(const Move& m, PlacedTile* out);
+
+// Whether placing a tile at (r, c) forms a word of length >= 2 along the given
+// axis on `board` (the board as it stood before the play) -- i.e. the square
+// has an occupied neighbor along that axis.
+bool forms_word_along_axis(const Board& board, int r, int c, bool horizontal);
+
+// Which lane(s) a play contributes to: the single lane a multi-tile play lies
+// along; for a single tile, each axis in which it forms a word (so a crossing
+// tile contributes to both its row and its column, with the same score).
+struct LaneAssignment {
+  bool horizontal;
+  int lane_index;
+};
+struct LaneAssignments {
+  int count = 0;
+  std::array<LaneAssignment, 2> items{};
+};
+LaneAssignments compute_lane_assignments(const Board& board, const Move& m,
+                                         const PlacedTile* placed, int num_placed);
+
 // The maximal-move target for one lane.
 struct LaneBest {
   bool has_move = false;  // true iff at least one legal play lies in this lane

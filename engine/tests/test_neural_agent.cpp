@@ -421,7 +421,8 @@ static void test_encode_candidate_matches_replay() {
   ref.board().ensure_movegen_caches(dict);
   GameStateEncoder post = ref;
   post.apply_move(candidate);
-  post.encode_input(my_seat, leave_after(my_rack, candidate), /*apply_flip=*/false, ref_row.data());
+  post.encode_input(my_seat, leave_after(my_rack, candidate), dict, /*apply_flip=*/false,
+                    ref_row.data());
 
   for (size_t i = 0; i < agent_row.size(); ++i) CHECK(agent_row[i] == ref_row[i]);
   std::cout << "test_encode_candidate_matches_replay passed (" << kInputFloats << " floats)\n";

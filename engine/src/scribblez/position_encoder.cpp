@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 
 namespace scribblez {
 namespace binlog {
@@ -53,11 +54,6 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
     // racks_[mover] is now the pre-draw rack; do NOT add records[sampled_turn].drawn.
   }
 
-  // The input encoding's cross-check planes read the board's move-generation
-  // caches, which are only lexicon-accurate once built against the dictionary.
-  // Building them after the replay does one full pass over the final board
-  // (the replay itself applies moves cache-less).
-  enc_.board().ensure_movegen_caches(*dict_);
   return mover;
 }
 
@@ -87,10 +83,15 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
 void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move,
                                               int diff_lo, int diff_hi, float* out) {
   const int mover = replay_to_sampled(g, sampled_turn, post_move);
-  int64_t i = 0;
-  for (int d = diff_lo; d <= diff_hi; ++d, ++i) {
-    enc_.encode_input_with_score_diff(mover, racks_[mover], d, /*apply_flip=*/false,
-                                      out + i * kInputFloats);
+  // Only the score-diff thermometer varies across the sweep, so the position
+  // is fully encoded once (the expensive, move-generating part) and each
+  // swept differential is stamped into a copy of that row.
+  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, *dict_, /*apply_flip=*/false,
+                                    out);
+  for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
+    float* row = out + i * kInputFloats;
+    std::memcpy(row, out, sizeof(float) * static_cast<size_t>(kInputFloats));
+    GameStateEncoder::overwrite_score_diff(diff_lo + static_cast<int>(i), row);
   }
 }
 

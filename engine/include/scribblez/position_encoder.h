@@ -26,9 +26,9 @@ namespace binlog {
 class PositionEncoder {
  public:
   // `dict` is the lexicon. Every task needs it: the input encoding's
-  // cross-check planes are lexicon-derived (the replay seeds the board's
-  // move-generation caches from it), and tasks that enumerate moves at the
-  // position (the max-move-per-lane task) additionally generate with it.
+  // cross-check and contingent-draw features are lexicon-derived, and tasks
+  // that enumerate moves at the position (the max-move-per-lane task)
+  // additionally generate with it.
   explicit PositionEncoder(const Dictionary& dict) : dict_(&dict) {}
 
   // Replay `g` from its initial state up to (and, when post_move, including)

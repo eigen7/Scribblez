@@ -16,70 +16,8 @@ namespace {
 // single blank kind, every other tile maps to its letter index.
 int tile_kind(Glyph g) { return g.is_blank() ? kLaneBlankKind : g.letter().index(); }
 
-// A single newly placed tile, in absolute board coordinates.
-struct Placed {
-  int r;
-  int c;
-  int kind;
-};
-
 bool occupied(const Board& board, int r, int c) {
   return board.in_bounds(r, c) && !board.at(r, c).is_empty();
-}
-
-// Whether placing a tile at (r, c) forms a word of length >= 2 along the given
-// axis -- i.e. whether the play "scores in that direction". True iff the square
-// has an occupied neighbor along that axis; for a legal play any such run is a
-// valid word.
-bool forms_word(const Board& board, int r, int c, bool horizontal) {
-  const int dr = horizontal ? 0 : 1;
-  const int dc = horizontal ? 1 : 0;
-  return occupied(board, r - dr, c - dc) || occupied(board, r + dr, c + dc);
-}
-
-// Decode a PLAY into its newly placed tiles. `start()` is the lane's cross-axis
-// coordinate and `square_mask()` marks the placed cells along the lane; the
-// stored glyphs are in ascending lane-cell order.
-int generate_placements(const Move& m, Placed* out) {
-  const bool horiz = m.horizontal();
-  uint16_t mask = m.square_mask();
-  int gi = 0;
-  for (int pos = 0; mask; ++pos, mask >>= 1) {
-    if ((mask & 1u) == 0) continue;
-    const int r = horiz ? m.start() : pos;
-    const int c = horiz ? pos : m.start();
-    out[gi] = {r, c, tile_kind(m.glyph(gi))};
-    ++gi;
-  }
-  return gi;
-}
-
-// Which lane(s) a play contributes to under the assignment rule. `horizontal`
-// selects rows vs cols; `lane_index` is the row (horizontal) or column (vertical).
-struct LaneAssignment {
-  bool horizontal;
-  int lane_index;
-};
-
-// The 0-2 lane assignments for one play: one lane for a multi-tile play (the lane
-// it lies along), and -- for a single tile -- each axis in which it forms a word.
-struct LaneAssignments {
-  int count = 0;
-  std::array<LaneAssignment, 2> items{};
-  void add(bool horizontal, int lane_index) { items[count++] = {horizontal, lane_index}; }
-};
-
-LaneAssignments lane_assignments(const Board& board, const Move& m, const Placed* placed, int p) {
-  LaneAssignments out;
-  if (p >= 2) {
-    const bool horiz = m.horizontal();
-    out.add(horiz, horiz ? placed[0].r : placed[0].c);
-  } else if (p == 1) {
-    const Placed& q = placed[0];
-    if (forms_word(board, q.r, q.c, /*horizontal=*/true)) out.add(true, q.r);
-    if (forms_word(board, q.r, q.c, /*horizontal=*/false)) out.add(false, q.c);
-  }
-  return out;
 }
 
 // Outcome of offering a play of `score` to a lane holding its current best.
@@ -104,15 +42,56 @@ AdmitResult admit_score(bool& has_move, int& max_score, int score) {
 
 }  // namespace
 
+// Decode a PLAY into its newly placed tiles. `start()` is the lane's cross-axis
+// coordinate and `square_mask()` marks the placed cells along the lane; the
+// stored glyphs are in ascending lane-cell order.
+int decode_placements(const Move& m, PlacedTile* out) {
+  const bool horiz = m.horizontal();
+  uint16_t mask = m.square_mask();
+  int gi = 0;
+  for (int pos = 0; mask; ++pos, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horiz ? m.start() : pos;
+    const int c = horiz ? pos : m.start();
+    out[gi] = {r, c, tile_kind(m.glyph(gi))};
+    ++gi;
+  }
+  return gi;
+}
+
+bool forms_word_along_axis(const Board& board, int r, int c, bool horizontal) {
+  const int dr = horizontal ? 0 : 1;
+  const int dc = horizontal ? 1 : 0;
+  return occupied(board, r - dr, c - dc) || occupied(board, r + dr, c + dc);
+}
+
+LaneAssignments compute_lane_assignments(const Board& board, const Move& m,
+                                         const PlacedTile* placed, int num_placed) {
+  LaneAssignments out;
+  if (num_placed >= 2) {
+    const bool horiz = m.horizontal();
+    out.items[out.count++] = {horiz, horiz ? placed[0].r : placed[0].c};
+  } else if (num_placed == 1) {
+    const PlacedTile& q = placed[0];
+    if (forms_word_along_axis(board, q.r, q.c, /*horizontal=*/true)) {
+      out.items[out.count++] = {true, q.r};
+    }
+    if (forms_word_along_axis(board, q.r, q.c, /*horizontal=*/false)) {
+      out.items[out.count++] = {false, q.c};
+    }
+  }
+  return out;
+}
+
 LaneTargets compute_lane_targets(const Board& board, const Rack& rack, const Dictionary& dict) {
   MoveGenerator gen(board, dict);
   const std::vector<Move> moves = gen.generate(rack);
 
   LaneTargets targets;
-  Placed placed[RACK_SIZE];
+  PlacedTile placed[RACK_SIZE];
   for (const Move& m : moves) {
-    const int p = generate_placements(m, placed);
-    const LaneAssignments la = lane_assignments(board, m, placed, p);
+    const int p = decode_placements(m, placed);
+    const LaneAssignments la = compute_lane_assignments(board, m, placed, p);
     for (int i = 0; i < la.count; ++i) {
       const LaneAssignment& a = la.items[i];
       LaneBest& lane = a.horizontal ? targets.rows[a.lane_index] : targets.cols[a.lane_index];
@@ -132,10 +111,10 @@ LaneBestMovesSet compute_lane_best_moves(const Board& board, const Rack& rack,
   const std::vector<Move> moves = gen.generate(rack);
 
   LaneBestMovesSet out;
-  Placed placed[RACK_SIZE];
+  PlacedTile placed[RACK_SIZE];
   for (const Move& m : moves) {
-    const int p = generate_placements(m, placed);
-    const LaneAssignments la = lane_assignments(board, m, placed, p);
+    const int p = decode_placements(m, placed);
+    const LaneAssignments la = compute_lane_assignments(board, m, placed, p);
     for (int i = 0; i < la.count; ++i) {
       const LaneAssignment& a = la.items[i];
       LaneBestMoves& lane = a.horizontal ? out.rows[a.lane_index] : out.cols[a.lane_index];
