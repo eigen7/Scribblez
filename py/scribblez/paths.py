@@ -54,6 +54,17 @@ class TagPaths:
         return self.data_dir / "test"
 
     @property
+    def generations_dir(self) -> Path:
+        """Parent of the per-generation game directories for the generational
+        training pipeline. Each child `gen_<NNNNNN>/` holds one generation's
+        .slog files plus a manifest; the trainer trains over a sliding window of
+        the most recent complete generations."""
+        return self.data_dir / "generations"
+
+    def generation_dir(self, index: int) -> Path:
+        return self.generations_dir / f"gen_{index:06d}"
+
+    @property
     def checkpoints_dir(self) -> Path:
         return self.root / "checkpoints"
 
