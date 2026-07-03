@@ -14,6 +14,7 @@ dashboard is launched alongside unless disabled.
 
 import argparse
 import atexit
+import functools
 import math
 import shutil
 import sys
@@ -26,8 +27,9 @@ from scribblez.dataset import SlogDataset
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
-from scribblez.post_move_value.model import PostMoveValueModel, compute_loss
+from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.post_move_value.onnx_export import export_onnx
+from scribblez.post_move_value.train_loop import LossConfig, run_epoch
 from scribblez.util import fmt_duration
 
 
@@ -48,6 +50,15 @@ def print_epoch_progress(
     )
     sys.stdout.write("\n" if final else "")
     sys.stdout.flush()
+
+
+def _epoch_progress_cb(
+    epoch, total_epochs, num_batches_est, t0, done_batches, samples, elapsed, rows
+):
+    """Adapt run_epoch's on_batch(done, samples, elapsed, rows) callback to the
+    in-place epoch progress line. `elapsed` and `rows` are unused -- the progress
+    line derives its own timing from `t0`."""
+    print_epoch_progress(epoch, total_epochs, done_batches, num_batches_est, samples, t0)
 
 
 def ensure_test_subset(paths: TagPaths, source_test_dir: Path, num_positions: int) -> bool:
@@ -313,75 +324,28 @@ def main() -> int:
         epoch_samples = ds.num_samples
     num_batches_est = max(1, math.ceil(epoch_samples / args.batch_size))
 
-    for epoch in range(start_epoch, args.epochs + 1):
-        model.train()
-        t0 = time.time()
-        last_progress = 0.0
-        losses_accum = {
-            "total": 0.0,
-            "wld": 0.0,
-            "score_diff": 0.0,
-            "score_diff_mean": 0.0,
-            "score_diff_std": 0.0,
-            "opp_next_placement": 0.0,
-        }
-        n_batches = 0
-        correct_wld = 0
-        total_samples = 0
+    loss_cfg = LossConfig.from_args(args)
 
+    for epoch in range(start_epoch, args.epochs + 1):
+        t0 = time.time()
         # Each epoch gets a unique deterministic seed. epoch_index selects which
         # per-game turns are drawn when --turns-per-game > 0, so successive epochs
         # cover distinct turns.
-        epoch_seed = epoch * 1000003
-        for batch in ds.iter_batches(
+        batches = ds.iter_batches(
             args.batch_size,
-            seed=epoch_seed,
+            seed=epoch * 1000003,
             turns_per_game=args.turns_per_game,
             epoch_index=epoch,
-        ):
-            input_spatial = batch["input_spatial"].to(device)
-            input_scalar = batch["input_scalar"].to(device)
-            targets = {
-                "wld": batch["wld"].to(device),
-                "score_diff": batch["score_diff"].to(device),
-                "opp_next_placement": batch["opp_next_placement"].to(device),
-            }
-
-            outputs = model(input_spatial, input_scalar)
-            losses = compute_loss(
-                outputs,
-                targets,
-                lambda_sd=args.lambda_sd,
-                lambda_opp=args.lambda_opp,
-                huber_delta_mean=args.huber_delta_mean,
-                huber_delta_std=args.huber_delta_std,
-            )
-
-            optimizer.zero_grad()
-            losses["total"].backward()
-            optimizer.step()
-
-            bs = input_spatial.shape[0]
-            n_batches += 1
-            total_samples += bs
-            for k in losses_accum:
-                losses_accum[k] += losses[k].item()
-
-            # Throttled in-place progress line (~1 Hz) so long epochs show life.
-            if time.time() - last_progress > 1.0:
-                print_epoch_progress(
-                    epoch, args.epochs, n_batches, num_batches_est, total_samples, t0
-                )
-                last_progress = time.time()
-
-            pred = outputs["wld"].argmax(dim=1)
-            target_idx = targets["wld"].argmax(dim=1)
-            correct_wld += (pred == target_idx).sum().item()
+        )
+        on_batch = functools.partial(_epoch_progress_cb, epoch, args.epochs, num_batches_est, t0)
+        # Disk training owns its learning rate via the per-epoch cosine scheduler
+        # (below), so no per-step lr_fn is passed.
+        result = run_epoch(model, optimizer, batches, device, loss_cfg, on_batch=on_batch)
 
         # Finalize the in-place progress line (true batch count) before the
         # epoch summary so they don't collide on the same terminal line.
         print_epoch_progress(
-            epoch, args.epochs, n_batches, n_batches, total_samples, t0, final=True
+            epoch, args.epochs, result.n_batches, result.n_batches, result.samples, t0, final=True
         )
 
         # Read the LR that was actually in effect for the epoch just finished
@@ -393,8 +357,8 @@ def main() -> int:
         scheduler.step()
         elapsed = time.time() - t0
 
-        avg = {k: v / max(n_batches, 1) for k, v in losses_accum.items()}
-        wld_acc = correct_wld / max(total_samples, 1)
+        avg = result.losses
+        wld_acc = result.wld_acc
         print(
             f"Epoch {epoch:3d}/{args.epochs} | "
             f"loss={avg['total']:.4f} (wld={avg['wld']:.4f} "

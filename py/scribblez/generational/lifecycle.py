@@ -61,7 +61,7 @@ def read_manifest(gen_dir: Path) -> dict | None:
         return None
 
 
-def write_manifest(gen_dir: Path, manifest: dict) -> None:
+def write_manifest(gen_dir: Path, manifest: dict):
     """Write the manifest atomically (tmp file + os.replace) so a crash never
     leaves a half-written manifest that would misclassify the generation."""
     gen_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +96,7 @@ def open_generation(
     return gen_dir
 
 
-def mark_complete(gen_dir: Path, committed_games: int) -> None:
+def mark_complete(gen_dir: Path, committed_games: int):
     """Flip the generation's manifest to `complete`, recording the authoritative
     committed game count. Raises if there is no manifest to update."""
     manifest = read_manifest(gen_dir)
