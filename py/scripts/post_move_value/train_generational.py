@@ -40,6 +40,7 @@ from scribblez.ffi import get_input_shapes, read_file_header
 from scribblez.generational import checkpoint, generation, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.lr import effective_lr, make_lr_fn
+from scribblez.generational.reuse import effective_reuse, epochs_for_reuse
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
 from scribblez.post_move_value.model import PostMoveValueModel
@@ -61,11 +62,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--games-per-generation", type=int, default=20000, help="Self-play games per generation."
     )
     p.add_argument(
+        "--reuse-per-position",
+        type=float,
+        default=2.0,
+        help="Target gradient passes per unique eligible position over a generation's "
+        "lifetime in the window. Epochs-per-generation is derived from this and the "
+        "generation's measured average eligible turns/game (num_samples/num_games).",
+    )
+    p.add_argument(
         "--epochs-per-generation",
         type=int,
-        default=4,
-        help="Training passes over the window before advancing to the next generation. "
-        "Total reuse per position is roughly this times --turns-per-game.",
+        default=0,
+        help="Explicit epochs-per-generation, overriding --reuse-per-position. "
+        "0 (default) derives it from --reuse-per-position.",
     )
     p.add_argument(
         "--window",
@@ -241,20 +250,40 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, state, res
     export_onnx(model, onnx_path, ctx["spatial_planes"], ctx["scalar_size"])
 
 
-def train_one_generation(model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx):
-    """Train up to --epochs-per-generation passes over the current window, resuming
-    at state.epoch_in_generation, checkpointing after each epoch."""
+def epochs_this_generation(args, ds) -> int:
+    """The epoch count to run over the current window: --epochs-per-generation when
+    set explicitly, otherwise derived from --reuse-per-position and the window's
+    measured average eligible turns per game."""
+    if args.epochs_per_generation > 0:
+        return args.epochs_per_generation
+    avg_eligible = ds.num_samples / max(ds.num_games, 1)
+    return epochs_for_reuse(args.reuse_per_position, args.window, args.turns_per_game, avg_eligible)
+
+
+def train_one_generation(
+    model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
+) -> int:
+    """Train `epochs` passes over the current window, resuming at
+    state.epoch_in_generation and checkpointing after each epoch. Returns the
+    target epoch count (so the caller can tell a --max-rows early stop from a
+    completed generation)."""
     window = lifecycle.window_dirs(paths, state.generation_index, args.window)
     ds = SlogDataset(window, post_move=True, apply_symmetry=True)
+    epochs = epochs_this_generation(args, ds)
+    avg_eligible = ds.num_samples / max(ds.num_games, 1)
+    reuse = effective_reuse(epochs, args.window, args.turns_per_game, avg_eligible)
     timed_print(
         f"generation {state.generation_index}: window {[d.name for d in window]} "
-        f"({ds.num_games} games, {ds.num_samples} rows)"
+        f"({ds.num_games} games, {ds.num_samples} rows, {avg_eligible:.1f} eligible turns/game); "
+        f"{epochs} epochs/gen -> ~{reuse:.2f} passes/position (turns/game {args.turns_per_game})"
     )
-    while state.epoch_in_generation < args.epochs_per_generation and _rows_left(args, state):
+    while state.epoch_in_generation < epochs and _rows_left(args, state):
         e = state.epoch_in_generation
-        # A distinct deterministic seed/epoch_index per (generation, epoch) so
-        # successive passes shuffle differently and draw distinct per-game turns.
-        global_epoch = state.generation_index * args.epochs_per_generation + e
+        # The global epoch index (monotonic across the whole run) seeds the epoch
+        # shuffle and the per-game turn rotation, so every pass shuffles differently
+        # and draws distinct turns. checkpoint_index counts completed epochs, so it
+        # is exactly that index and survives restarts.
+        global_epoch = state.checkpoint_index
         batches = ds.iter_batches(
             args.batch_size,
             seed=global_epoch * 1000003,
@@ -278,6 +307,7 @@ def train_one_generation(model, optimizer, conn, paths, device, args, state, los
         _checkpoint_and_eval(
             model, optimizer, conn, paths, device, args, state, result, time.time() - t0, ctx
         )
+    return epochs
 
 
 def run_generational_training(model, optimizer, conn, paths, device, args, state, ctx):
@@ -296,10 +326,10 @@ def run_generational_training(model, optimizer, conn, paths, device, args, state
                 generate_fn=generate_fn,
                 count_fn=count_games,
             )
-            train_one_generation(
+            epochs = train_one_generation(
                 model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
             )
-            if state.epoch_in_generation < args.epochs_per_generation:
+            if state.epoch_in_generation < epochs:
                 break  # stopped mid-generation by --max-rows; resume here next run
             evicted = lifecycle.evict_beyond_window(paths, state.generation_index, args.window)
             if evicted:
