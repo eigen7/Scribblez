@@ -93,6 +93,16 @@ int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int
 // stride of scribblez_encode_score_diff_sweep's output.
 int scribblez_input_floats(void);
 
+// Location of the contingent-draw potential feature blocks within the input
+// tensor (see contingent_map.h): the first plane index and plane count within
+// the spatial block, and the first float offset and float count within the
+// scalar block. Lets Python zero the blocks for ablation runs without
+// duplicating the layout constants.
+int scribblez_contingent_plane0(void);
+int scribblez_contingent_planes(void);
+int scribblez_contingent_scalar_offset(void);
+int scribblez_contingent_scalar_floats(void);
+
 // Render an ASCII description of a sampled position (POV, scores, leave, last
 // moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
 // the full string length on success (which may exceed out_cap - 1, signaling

@@ -25,7 +25,12 @@ import time
 
 import torch
 from scribblez.dashboard import db, react_server
-from scribblez.dataset import row_layout, slice_row_batch
+from scribblez.dataset import (
+    row_layout,
+    slice_row_batch,
+    zero_contingent_features,
+    zero_contingent_features_flat,
+)
 from scribblez.ffi import StreamingTrainSource, get_input_shapes
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
@@ -71,6 +76,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=10.0,
         help="Huber transition point (points) for the score-diff std head.",
+    )
+    p.add_argument(
+        "--contingent-features",
+        action="store_true",
+        help="Feed the contingent-draw potential input features (spatial planes + scalars) to "
+        "the model. Off zeroes those blocks -- in training batches and in the checkpoint eval "
+        "inputs alike -- giving the ablation baseline over the identical row layout.",
     )
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
@@ -147,6 +159,8 @@ def load_post_move_eval(args, spatial_planes: int) -> dict | None:
             f"post-move-value eval disabled: no GCG positions in {args.post_move_eval_dataset}"
         )
         return None
+    if not args.contingent_features:
+        zero_contingent_features_flat(inputs, spatial_planes)
     timed_print(f"post-move-value eval: {len(names)} positions from {args.post_move_eval_dataset}")
     return {"inputs": inputs, "spatial_planes": spatial_planes}
 
@@ -180,6 +194,8 @@ def load_post_move_quality(args, spatial_planes: int) -> dict | None:
             f"{args.post_move_quality_dataset}"
         )
         return None
+    if not args.contingent_features:
+        zero_contingent_features_flat(inputs, spatial_planes)
     timed_print(
         f"post-move-value quality eval: {len(names)} positions from "
         f"{args.post_move_quality_dataset}"
@@ -288,6 +304,8 @@ def run_streaming_training(
             # Copy rows out of the slot (slice_row_batch copies), then release so
             # producers can refill it while we run forward/backward on the GPU.
             batch = slice_row_batch(cpu_tensor.numpy(), input_layout, targets)
+            if not args.contingent_features:
+                zero_contingent_features(batch["input_spatial"], batch["input_scalar"])
             input_spatial = batch["input_spatial"].to(device, non_blocking=True)
             input_scalar = batch["input_scalar"].to(device, non_blocking=True)
             tgt = {

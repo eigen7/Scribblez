@@ -86,6 +86,15 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_input_floats.restype = ctypes.c_int
     lib.scribblez_input_floats.argtypes = []
 
+    for fn in (
+        lib.scribblez_contingent_plane0,
+        lib.scribblez_contingent_planes,
+        lib.scribblez_contingent_scalar_offset,
+        lib.scribblez_contingent_scalar_floats,
+    ):
+        fn.restype = ctypes.c_int
+        fn.argtypes = []
+
     # Max-move-per-lane task: sibling shape/size queries.
     lib.scribblez_max_move_per_lane_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
     lib.scribblez_max_move_per_lane_input_shapes.argtypes = []
@@ -331,6 +340,18 @@ def row_size_floats() -> int:
 def input_floats() -> int:
     """Floats in a single input tensor (spatial + scalar)."""
     return _lib().scribblez_input_floats()
+
+
+def contingent_feature_layout() -> tuple[int, int, int, int]:
+    """Location of the contingent-draw potential blocks within the input:
+    (first plane, plane count, scalar offset, scalar count)."""
+    lib = _lib()
+    return (
+        lib.scribblez_contingent_plane0(),
+        lib.scribblez_contingent_planes(),
+        lib.scribblez_contingent_scalar_offset(),
+        lib.scribblez_contingent_scalar_floats(),
+    )
 
 
 def get_max_move_per_lane_input_shapes() -> list[ShapeInfo]:

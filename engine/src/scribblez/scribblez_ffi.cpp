@@ -164,6 +164,11 @@ int scribblez_row_size_floats(void) { return DataLoader::row_size_floats(); }
 
 int scribblez_input_floats(void) { return scribblez::kInputFloats; }
 
+int scribblez_contingent_plane0(void) { return scribblez::kContingentPlane0; }
+int scribblez_contingent_planes(void) { return scribblez::kContingentPlanes; }
+int scribblez_contingent_scalar_offset(void) { return scribblez::kContingentScalarOffset; }
+int scribblez_contingent_scalar_floats(void) { return scribblez::kContingentScalarFloats; }
+
 const ScribblezShape* scribblez_max_move_per_lane_input_shapes(void) {
   return kMaxMovePerLaneInputShapes;
 }

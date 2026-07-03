@@ -8,6 +8,7 @@ import torch
 
 from .ffi import (
     NativeDataLoader,
+    contingent_feature_layout,
     get_input_shapes,
     get_target_shapes,
     read_file_header,
@@ -56,6 +57,28 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
         arr = batch_2d[:, start:end]
         result[name] = torch.from_numpy(arr.reshape(-1, *dims).copy())
     return result
+
+
+def zero_contingent_features(input_spatial, input_scalar) -> None:
+    """Zero the contingent-draw potential blocks of a split input batch in place.
+
+    `input_spatial` is (B, planes, 15, 15) and `input_scalar` is (B, scalars) --
+    torch tensors or numpy arrays. With the blocks zeroed the model sees the
+    pre-contingent input over the identical row layout, which is the ablation
+    baseline against a run that keeps the features.
+    """
+    plane0, num_planes, scalar_offset, num_scalars = contingent_feature_layout()
+    input_spatial[:, plane0 : plane0 + num_planes] = 0.0
+    input_scalar[:, scalar_offset : scalar_offset + num_scalars] = 0.0
+
+
+def zero_contingent_features_flat(inputs: np.ndarray, spatial_planes: int) -> None:
+    """Like zero_contingent_features, for flat (N, input_floats) rows in place."""
+    plane0, num_planes, scalar_offset, num_scalars = contingent_feature_layout()
+    cells = 15 * 15
+    inputs[:, plane0 * cells : (plane0 + num_planes) * cells] = 0.0
+    scalar_base = spatial_planes * cells
+    inputs[:, scalar_base + scalar_offset : scalar_base + scalar_offset + num_scalars] = 0.0
 
 
 class SlogDataset:
