@@ -29,7 +29,7 @@ def _frozen_lexicon_names(model: torch.nn.Module) -> set[str]:
     return {f"trunk.lexicon_module.{name}" for name, _ in lex.named_buffers()}
 
 
-def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]) -> None:
+def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
     """Move the frozen lexicon initializers out of the just-written ONNX into a shared
     `lexicon_frozen.bin` beside it (ONNX external data). Every generation lays the same
     (frozen) tensors out identically, so the blob is written once and later generations

@@ -113,7 +113,7 @@ def maybe_resume(paths: TagPaths, model, optimizer, scheduler, device) -> int:
     return start
 
 
-def load_init_weights(path: Path, model, device) -> None:
+def load_init_weights(path: Path, model, device):
     """Warm-start: copy ONLY the model weights from another run's checkpoint into
     `model`, for policy iteration (seed iter N+1 from iter N's model).
 

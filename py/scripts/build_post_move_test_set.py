@@ -44,7 +44,7 @@ def dataset_dir(lexicon: str, dataset_name: str) -> Path:
     return REPO_ROOT / "positions" / lexicon / dataset_name
 
 
-def run(cmd: list[str]) -> None:
+def run(cmd: list[str]):
     print("+ " + " ".join(cmd), flush=True)
     rc = subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
     if rc != 0:
@@ -77,7 +77,7 @@ def explode_bundles(dataset: Path) -> int:
     return idx
 
 
-def clear_loose_gcgs(dataset: Path) -> None:
+def clear_loose_gcgs(dataset: Path):
     for gcg in dataset.glob("pos-*.gcg"):
         gcg.unlink()
 

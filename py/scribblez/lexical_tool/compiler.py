@@ -219,7 +219,7 @@ def compile_kwg(path: str) -> CompiledLexicon:
     )
 
 
-def write_kwg(compiled: CompiledLexicon, path: str) -> None:
+def write_kwg(compiled: CompiledLexicon, path: str):
     """Serialize a compiled DAWG to a ``.kwg`` file -- the inverse of
     :func:`compile_kwg` for the forward-trie half.
 

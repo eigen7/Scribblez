@@ -121,7 +121,7 @@ class LexiconArgs:
     starve_ffn: bool = False
 
     @staticmethod
-    def add_arguments(parser: argparse.ArgumentParser) -> None:
+    def add_arguments(parser: argparse.ArgumentParser):
         """Register the tool's CLI options under a "compiled-lexicon tool" group."""
         g = parser.add_argument_group(
             "compiled-lexicon tool",

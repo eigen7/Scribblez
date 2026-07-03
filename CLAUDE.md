@@ -58,6 +58,9 @@ Note that the Docker image adds `/workspace/repo/py/` to `PYTHONPATH`.
 Do not add `import` statements inside of functions without good reason. By default, they should go
 atop the file.
 
+Minor style note: if a function's return type is `None`, don't bother with the ` -> None`
+type annotation.
+
 ## Ruff
 
 After editing any file, make sure to sanitize it with ruff. Alternatively, you can run
