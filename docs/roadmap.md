@@ -46,6 +46,13 @@ context, M_post predicts:
    features) branches into the three heads above. Training uses AdamW with
    cosine annealing.
 
+The two trainers that consume this data — the in-process streaming trainer and
+the disk-based epoch trainer — and the generational pipeline that unifies them
+(data reuse with stop-and-resume ergonomics, a game-pool producer, resource
+contention management, and a path to remote workers) are laid out in
+[docs/generational_training.md](generational_training.md). It becomes central in
+Phase 2, where more expensive data generation makes reusing each game matter.
+
 ### Why start here
 
 M_post is the natural first target because it directly provides the signal
