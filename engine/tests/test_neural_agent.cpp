@@ -395,6 +395,7 @@ static void test_encode_candidate_matches_replay() {
     make_play_full(9, 7, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
 
   // encode_candidate uses only the tracked encoder, so no model/service is run.
+  Dictionary dict = medium_dict();
   NeuralAgent agent(
     {.thread_id = 0, .name = "stub", .top_k = 4, .objective = NeuralAgent::Objective::kScoreDiff},
     std::make_unique<StubEvalService>());
@@ -414,9 +415,10 @@ static void test_encode_candidate_matches_replay() {
   Rack my_rack = rack_from("DONERST");
 
   std::vector<float> agent_row(kInputFloats);
-  agent.encode_candidate(candidate, my_rack, my_seat, agent_row.data());
+  agent.encode_candidate(candidate, my_rack, my_seat, dict, agent_row.data());
 
   std::vector<float> ref_row(kInputFloats);
+  ref.board().ensure_movegen_caches(dict);
   GameStateEncoder post = ref;
   post.apply_move(candidate);
   post.encode_input(my_seat, leave_after(my_rack, candidate), /*apply_flip=*/false, ref_row.data());
@@ -489,8 +491,10 @@ static void test_encode_candidate_matches_training_decoder() {
 
   std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn);
 
-  // Training path: decode the post-move sampled row (no symmetry flip).
-  binlog::BlockDecoder dec;
+  // Training path: decode the post-move sampled row (no symmetry flip). The
+  // same dictionary drives both paths' cross-check planes.
+  Dictionary dict = medium_dict();
+  binlog::BlockDecoder dec(dict);
   const uint8_t flips[1] = {0};
   std::vector<float> dec_row(kRowFloats, 0.0f);
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,
@@ -506,7 +510,7 @@ static void test_encode_candidate_matches_training_decoder() {
   agent.observe_move(move1);
 
   std::vector<float> agent_row(kInputFloats, 0.0f);
-  agent.encode_candidate(move2, rack_from("DONERST"), mover, agent_row.data());
+  agent.encode_candidate(move2, rack_from("DONERST"), mover, dict, agent_row.data());
 
   bool any_nonzero = false;
   for (int i = 0; i < kInputFloats; ++i) {

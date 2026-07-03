@@ -82,10 +82,14 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
 }
 
 void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
-                                   float* dst) const {
+                                   const Dictionary& dict, float* dst) const {
   Rack leave = my_rack;
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
 
+  // The cross-check input planes read the board's move-generation caches;
+  // building them here (a no-op once valid) keeps them lexicon-accurate on the
+  // copy, which then updates them incrementally when the candidate is applied.
+  encoder_.board().ensure_movegen_caches(dict);
   GameStateEncoder post = encoder_;
   post.apply_move(mv);
   post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
@@ -104,7 +108,7 @@ void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<
     const int chunk = std::min(max_batch_, k - done);
     for (int j = 0; j < chunk; ++j) {
       const Move& mv = plays[static_cast<size_t>(cand_idx_[done + j])];
-      encode_candidate(mv, req.my_rack, my_seat,
+      encode_candidate(mv, req.my_rack, my_seat, req.dict,
                        input_buf_.data() + static_cast<size_t>(j) * kInputFloats);
     }
     service_->evaluate(input_buf_.data(), chunk, eval_buf_.data() + done);

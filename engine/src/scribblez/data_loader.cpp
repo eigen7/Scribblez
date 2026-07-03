@@ -370,8 +370,9 @@ void DataLoader::FileManager::exit_prefetch_loop() {
 // WorkerThread
 // ===========================================================================
 
-DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table, int id)
-    : file_manager_(file_manager), table_(table), id_(id) {
+DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
+                                       const Dictionary& dict)
+    : file_manager_(file_manager), table_(table), id_(id), decoder_(dict) {
   thread_ = std::thread(&WorkerThread::loop, this);
 }
 
@@ -433,10 +434,11 @@ void DataLoader::WorkerThread::do_work() {
 // WorkManager
 // ===========================================================================
 
-DataLoader::WorkManager::WorkManager(FileManager* file_manager, int num_threads)
+DataLoader::WorkManager::WorkManager(FileManager* file_manager, int num_threads,
+                                     const Dictionary& dict)
     : thread_table_(num_threads) {
   for (int i = 0; i < num_threads; ++i) {
-    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i));
+    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i, dict));
   }
 }
 
@@ -600,7 +602,7 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
 DataLoader::DataLoader(const Params& params)
     : params_(params),
       file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1)),
-      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1)) {}
+      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1), *params.dict) {}
 
 DataLoader::~DataLoader() = default;
 

@@ -68,6 +68,12 @@ class ShapeInfo:
 
 def _setup_lib(lib: ctypes.CDLL):
     """Declare argtypes/restypes for every FFI entry point."""
+    lib.scribblez_session_new.restype = ctypes.c_void_p
+    lib.scribblez_session_new.argtypes = [ctypes.c_char_p]  # lexicon_name
+
+    lib.scribblez_session_delete.restype = None
+    lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
+
     lib.scribblez_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
     lib.scribblez_input_shapes.argtypes = []
 
@@ -92,6 +98,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_max_move_per_lane_analyze_gcg.restype = ctypes.c_int
     lib.scribblez_max_move_per_lane_analyze_gcg.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # out_json
         ctypes.c_int,  # out_cap
@@ -100,6 +107,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_post_move_value_analyze_gcg.restype = ctypes.c_int
     lib.scribblez_post_move_value_analyze_gcg.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.POINTER(ctypes.c_float),  # out_input
     ]
@@ -113,6 +121,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_post_move_value_analyze_gcg_leave.restype = ctypes.c_int
     lib.scribblez_post_move_value_analyze_gcg_leave.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # leave_str
         ctypes.POINTER(ctypes.c_float),  # out_input
@@ -122,6 +131,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
     lib.scribblez_encode_score_diff_sweep.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,
         ctypes.c_int64,
         ctypes.c_int,
@@ -132,6 +142,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_dump_position.restype = ctypes.c_int
     lib.scribblez_dump_position.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,
         ctypes.c_int64,
         ctypes.c_int,
@@ -141,6 +152,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_dump_position_json.restype = ctypes.c_int
     lib.scribblez_dump_position_json.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.c_char_p,
         ctypes.c_int64,
         ctypes.c_int,
@@ -164,7 +176,7 @@ def _setup_lib(lib: ctypes.CDLL):
     ]
 
     lib.scribblez_dl_new.restype = ctypes.c_void_p
-    lib.scribblez_dl_new.argtypes = [ctypes.c_int64, ctypes.c_int, ctypes.c_int]
+    lib.scribblez_dl_new.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_int, ctypes.c_int]
 
     lib.scribblez_dl_delete.restype = None
     lib.scribblez_dl_delete.argtypes = [ctypes.c_void_p]
@@ -202,6 +214,7 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_stream_new.restype = ctypes.c_void_p
     lib.scribblez_stream_new.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),  # slot_ptrs
         ctypes.c_int,  # num_slots
         ctypes.c_int,  # rows_per_slot
@@ -219,6 +232,7 @@ def _setup_lib(lib: ctypes.CDLL):
     # same opaque StreamHandle, so it shares the rest of the streaming API.
     lib.scribblez_max_move_per_lane_stream_new.restype = ctypes.c_void_p
     lib.scribblez_max_move_per_lane_stream_new.argtypes = [
+        ctypes.c_void_p,  # session
         ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),  # slot_ptrs
         ctypes.c_int,  # num_slots
         ctypes.c_int,  # rows_per_slot
@@ -262,6 +276,27 @@ def _lib() -> ctypes.CDLL:
         _setup_lib(lib)
         _SETUP_DONE = True
     return lib
+
+
+# The lexicon this process's FFI session binds to. Every dictionary-dependent
+# entry point (encoding, GCG analysis, DataLoader / stream construction) is a
+# method of one C++ ScribblezSession, created lazily on first use.
+DEFAULT_LEXICON = "NWL23"
+
+_SESSION_HANDLE = None
+
+
+def _session() -> int:
+    """The process-wide ScribblezSession handle, created on first use.
+
+    Constructing the session loads the lexicon's .kwg; a missing lexicon throws
+    out of the C++ constructor, which terminates the process (nothing useful can
+    be done without a dictionary).
+    """
+    global _SESSION_HANDLE
+    if _SESSION_HANDLE is None:
+        _SESSION_HANDLE = _lib().scribblez_session_new(DEFAULT_LEXICON.encode("utf-8"))
+    return _SESSION_HANDLE
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +372,7 @@ def encode_score_diff_sweep(
     width = input_floats()
     out = np.empty((num_games * r, width), dtype=np.float32)
     rc = _lib().scribblez_encode_score_diff_sweep(
+        _session(),
         str(path).encode("utf-8"),
         int(game_idx),
         int(post_move),
@@ -350,17 +386,17 @@ def encode_score_diff_sweep(
 
 
 def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what: str) -> str:
-    """Call a (path, game_idx, post_move, out, cap)->len FFI, growing the buffer once."""
+    """Call a (session, path, game_idx, post_move, out, cap)->len FFI, growing the buffer once."""
     encoded = str(path).encode("utf-8")
     cap = 4096
     out = ctypes.create_string_buffer(cap)
-    n = fn(encoded, int(game_idx), int(post_move), out, cap)
+    n = fn(_session(), encoded, int(game_idx), int(post_move), out, cap)
     if n < 0:
         raise OSError(f"{what} failed for {path} game {game_idx}")
     if n >= cap:  # buffer was too small; retry once with the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
-        n = fn(encoded, int(game_idx), int(post_move), out, cap)
+        n = fn(_session(), encoded, int(game_idx), int(post_move), out, cap)
     return out.value.decode("utf-8", errors="replace")
 
 
@@ -378,7 +414,7 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
     dict (the web board/bonuses/rack the dashboard renders, plus per-lane ground
     truth and maximal plays); `model_input` is the flat float32 model-input tensor
     for the analysis position (board after all recorded moves, on-move player's
-    rack). Requires the lexicon. Raises IOError on a parse error / missing lexicon.
+    rack). Raises IOError on a parse error.
     """
     lib = _lib()
     fn = lib.scribblez_max_move_per_lane_analyze_gcg
@@ -388,13 +424,13 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
 
     cap = 1 << 16
     out = ctypes.create_string_buffer(cap)
-    n = fn(encoded, out, cap, inp_ptr)
+    n = fn(_session(), encoded, out, cap, inp_ptr)
     if n < 0:
-        raise OSError("analyze_gcg failed (GCG parse error or missing lexicon)")
+        raise OSError("analyze_gcg failed (GCG parse error)")
     if n >= cap:  # JSON was truncated; retry once at the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
-        n = fn(encoded, out, cap, inp_ptr)
+        n = fn(_session(), encoded, out, cap, inp_ptr)
     return json.loads(out.value.decode("utf-8")), inp
 
 
@@ -410,7 +446,7 @@ def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
     lib = _lib()
     inp = np.zeros(lib.scribblez_input_floats(), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    if lib.scribblez_post_move_value_analyze_gcg(gcg_text.encode("utf-8"), inp_ptr) < 0:
+    if lib.scribblez_post_move_value_analyze_gcg(_session(), gcg_text.encode("utf-8"), inp_ptr) < 0:
         raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
     return inp
 
@@ -428,7 +464,7 @@ def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     err = ctypes.create_string_buffer(256)
     n = lib.scribblez_post_move_value_analyze_gcg_leave(
-        gcg_text.encode("utf-8"), leave.encode("utf-8"), inp_ptr, err, len(err)
+        _session(), gcg_text.encode("utf-8"), leave.encode("utf-8"), inp_ptr, err, len(err)
     )
     if n < 0:
         raise ValueError(err.value.decode("utf-8") or "invalid alternate leave")
@@ -502,9 +538,9 @@ class NativeDataLoader:
         num_prefetch: int = 2,
     ):
         self._lib = _lib()
-        self._handle = self._lib.scribblez_dl_new(memory_budget, num_workers, num_prefetch)
-        if not self._handle:
-            raise RuntimeError("scribblez_dl_new returned NULL")
+        self._handle = self._lib.scribblez_dl_new(
+            _session(), memory_budget, num_workers, num_prefetch
+        )
         self._row_floats = self._lib.scribblez_row_size_floats()
 
     def __del__(self):
@@ -622,6 +658,7 @@ class StreamingTrainSource:
         # differs (the max-move-per-lane task has no pre/post-move snapshot).
         if task == "post_move":
             self._handle = self._lib.scribblez_stream_new(
+                _session(),
                 ptr_arr,
                 num_slots,
                 batch_size,
@@ -635,6 +672,7 @@ class StreamingTrainSource:
             )
         else:
             self._handle = self._lib.scribblez_max_move_per_lane_stream_new(
+                _session(),
                 ptr_arr,
                 num_slots,
                 batch_size,
@@ -646,7 +684,7 @@ class StreamingTrainSource:
                 len(player_specs),
             )
         if not self._handle:
-            raise RuntimeError(f"{task} stream_new returned NULL (lexicon/agent setup failed)")
+            raise RuntimeError(f"{task} stream_new returned NULL (agent setup failed)")
         self._started = False
 
     def start(self):

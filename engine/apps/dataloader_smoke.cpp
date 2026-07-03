@@ -10,6 +10,7 @@
 
 #include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
+#include "scribblez/game_runner.h"
 
 #include <algorithm>
 #include <chrono>
@@ -41,6 +42,7 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   int n_samples = 64;
   DataLoader::Params params;
+  params.dict = &scribblez::GameRunner::load_dictionary_or_throw();
   bool post_move = false;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];

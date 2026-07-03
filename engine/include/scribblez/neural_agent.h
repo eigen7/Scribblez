@@ -98,9 +98,11 @@ class NeuralAgent : public Agent {
   // Encode the post-move position for candidate `mv` into `dst` (kInputFloats
   // floats), exactly as make_move() does it: it copies the agent's tracked
   // encoder, applies `mv`, and encodes from `my_seat`'s POV with the rack that
-  // remains after playing `mv` (no diagonal flip). Public so the encoding the
-  // model actually sees can be checked against an independent replay.
-  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, float* dst) const;
+  // remains after playing `mv` (no diagonal flip). `dict` supplies the
+  // lexicon-derived cross-check planes. Public so the encoding the model
+  // actually sees can be checked against an independent replay.
+  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, const Dictionary& dict,
+                        float* dst) const;
 
  private:
   // Build an NNEvaluationService from `net_params` and load its model into it.

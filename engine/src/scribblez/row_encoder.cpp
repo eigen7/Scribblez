@@ -13,7 +13,8 @@ namespace {
 // Win-probability rows: bag-nonempty turn sampling + PostMoveValueTask encoding.
 class PostMoveValueRowEncoder : public RowEncoder {
  public:
-  explicit PostMoveValueRowEncoder(bool post_move) : post_move_(post_move) {}
+  PostMoveValueRowEncoder(const Dictionary& dict, bool post_move)
+      : post_move_(post_move), pos_(dict) {}
 
   int row_floats() const override { return PostMoveValueTask::kRowFloats; }
 
@@ -34,7 +35,7 @@ class PostMoveValueRowEncoder : public RowEncoder {
 // pre-move; the lexicon drives the per-lane move enumeration).
 class MaxMovePerLaneRowEncoder : public RowEncoder {
  public:
-  explicit MaxMovePerLaneRowEncoder(const Dictionary& dict) : pos_(&dict) {}
+  explicit MaxMovePerLaneRowEncoder(const Dictionary& dict) : pos_(dict) {}
 
   int row_floats() const override { return MaxMovePerLaneTask::kRowFloats; }
 
@@ -52,8 +53,9 @@ class MaxMovePerLaneRowEncoder : public RowEncoder {
 
 }  // namespace
 
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(bool post_move) {
-  return std::make_unique<PostMoveValueRowEncoder>(post_move);
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const Dictionary& dict,
+                                                             bool post_move) {
+  return std::make_unique<PostMoveValueRowEncoder>(dict, post_move);
 }
 
 std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict) {

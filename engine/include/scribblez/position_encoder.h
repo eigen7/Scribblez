@@ -25,10 +25,11 @@ namespace binlog {
 
 class PositionEncoder {
  public:
-  PositionEncoder() = default;
-  // `dict` is the lexicon for tasks that enumerate moves at the position (the
-  // max-move-per-lane task). The post-move task does not use it, so it may be left null.
-  explicit PositionEncoder(const Dictionary* dict) : dict_(dict) {}
+  // `dict` is the lexicon. Every task needs it: the input encoding's
+  // cross-check planes are lexicon-derived (the replay seeds the board's
+  // move-generation caches from it), and tasks that enumerate moves at the
+  // position (the max-move-per-lane task) additionally generate with it.
+  explicit PositionEncoder(const Dictionary& dict) : dict_(&dict) {}
 
   // Replay `g` from its initial state up to (and, when post_move, including)
   // turn `sampled_turn`. Leaves the internal encoder/racks at that position and
@@ -62,7 +63,7 @@ class PositionEncoder {
 
   GameStateEncoder enc_;
   std::array<Rack, 2> racks_{};
-  const Dictionary* dict_ = nullptr;
+  const Dictionary* dict_;
 };
 
 }  // namespace binlog

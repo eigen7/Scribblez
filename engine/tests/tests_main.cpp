@@ -672,6 +672,42 @@ static void test_encoder_cross_check_planes_qi() {
   CHECK(v_cross_check(z, 14, 14) == 0.0f);
 }
 
+// The production replay path (PositionEncoder, used by both the streaming and
+// disk pipelines) must emit lexicon-true cross-check planes: it seeds the
+// board's move-generation caches from its dictionary. Without that seeding the
+// planes degrade silently to all-26-letters adjacency masks, so this checks a
+// square whose legal hook set is a strict subset.
+static void test_position_encoder_cross_check_planes_lexical() {
+  using namespace scribblez::binlog;
+
+  Dictionary d = medium_dict();
+
+  // p0 opens with horizontal "QI" at (7,7)..(7,8); the post-move row at turn 0
+  // is encoded from p0's POV.
+  GameLogStorage storage;
+  storage.initial_racks[0] = rack_from("QIAAAAA");
+  storage.initial_racks[1] = rack_from("SAINTED");
+  TurnRecord rec{};
+  rec.move = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
+                            {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
+  storage.turns.push_back(rec);
+
+  PositionEncoder enc(d);
+  std::vector<float> row(PostMoveValueTask::kRowFloats, 0.0f);
+  enc.encode_row<PostMoveValueTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
+                                    /*flip=*/false, row.data());
+
+  auto h_cross_check = [&row](char ch, int r, int c) {
+    return row[(kHorizontalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
+  };
+  // Right of the I, only QIS extends horizontally (per the fixture dictionary):
+  // 'S' is set and every other letter is clear.
+  for (char ch = 'A'; ch <= 'Z'; ++ch) {
+    CHECK(h_cross_check(ch, 7, 9) == (ch == 'S' ? 1.0f : 0.0f));
+  }
+  std::cout << "test_position_encoder_cross_check_planes_lexical passed\n";
+}
+
 static void test_encoder_forced_score_diff_isolation() {
   using namespace scribblez::binlog;
 
@@ -1066,6 +1102,7 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
   // Register with DataLoader and drain rows via epoch_start/load_batch
   // for both pre-move and post-move phases.
   scribblez::binlog::DataLoader::Params dl_params;
+  dl_params.dict = &dict;
   dl_params.num_worker_threads = 2;
   dl_params.num_prefetch_threads = 1;
   scribblez::binlog::DataLoader loader(dl_params);
@@ -1855,6 +1892,7 @@ static void test_dataloader_per_row_symmetry() {
   } cleanup{dir};
 
   SymFixture fix = write_one_position_slog(dir);
+  Dictionary dict = medium_dict();
 
   // Build the two reference input encodings (canonical + flipped) for the
   // sampled position (turn 0 post-move).
@@ -1866,6 +1904,7 @@ static void test_dataloader_per_row_symmetry() {
     // The POV is the mover (p0), encoded with its post-play leave (6 As).
     GameStateEncoder ref_enc;
     ref_enc.apply_move(fix.self_move);
+    ref_enc.board().ensure_movegen_caches(dict);
     ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
                          ref_normal.data());
     ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/true,
@@ -1884,6 +1923,7 @@ static void test_dataloader_per_row_symmetry() {
     ref_labels);
 
   DataLoader::Params params;
+  params.dict = &dict;
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -1990,7 +2030,9 @@ static void test_epoch_determinism() {
     }
   } cleanup{fix.dir};
 
+  Dictionary dict = medium_dict();
   DataLoader::Params params;
+  params.dict = &dict;
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
 
@@ -2088,7 +2130,9 @@ static void test_epoch_coverage() {
     }
   } cleanup{fix.dir};
 
+  Dictionary dict = medium_dict();
   DataLoader::Params params;
+  params.dict = &dict;
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2184,7 +2228,9 @@ static void test_epoch_memory_budget_stress() {
   }
 
   // Budget = just one file (largest). This forces eviction on every file switch.
+  Dictionary dict = medium_dict();
   DataLoader::Params params;
+  params.dict = &dict;
   params.memory_budget = max_fsize + 1;  // allow exactly one file at a time
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
@@ -2255,7 +2301,9 @@ static void test_epoch_shuffles_across_seeds() {
     }
   } cleanup{fix.dir};
 
+  Dictionary dict = medium_dict();
   DataLoader::Params params;
+  params.dict = &dict;
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2592,12 +2640,12 @@ static void test_streaming_disk_encode_equivalence() {
     for (bool post_move : {false, true}) {
       const uint8_t flip = 0;
       std::vector<float> row_disk(row_floats, 0.0f);
-      BlockDecoder decoder;
+      BlockDecoder decoder(dict);
       decoder.decode(raw.data(), "eq", /*local_start=*/0, /*n_rows=*/1, &flip, post_move,
                      /*output_row_start=*/0, row_disk.data());
 
       std::vector<float> row_stream(row_floats, 0.0f);
-      PositionEncoder enc;
+      PositionEncoder enc(dict);
       enc.encode_row<PostMoveValueTask>(storage.view(), sampled, post_move, /*flip=*/false,
                                         row_stream.data());
 
@@ -3116,7 +3164,8 @@ static int decode_handicap_score_diff(int initial_score_p0) {
 
   std::vector<float> output(kRowFloats, 0.0f);
   uint8_t flip = 0;
-  BlockDecoder dec;
+  Dictionary dict = medium_dict();
+  BlockDecoder dec(dict);
   dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
              /*post_move=*/false, /*output_row_start=*/0, output.data());
 
@@ -3502,6 +3551,7 @@ int main() {
   test_encoder_last_opp_plane_mask();
   test_encoder_flip_symmetry();
   test_encoder_cross_check_planes_qi();
+  test_position_encoder_cross_check_planes_lexical();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();

@@ -52,6 +52,12 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
     enc_.apply_move(move);
     // racks_[mover] is now the pre-draw rack; do NOT add records[sampled_turn].drawn.
   }
+
+  // The input encoding's cross-check planes read the board's move-generation
+  // caches, which are only lexicon-accurate once built against the dictionary.
+  // Building them after the replay does one full pass over the final board
+  // (the replay itself applies moves cache-less).
+  enc_.board().ensure_movegen_caches(*dict_);
   return mover;
 }
 

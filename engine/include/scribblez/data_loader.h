@@ -61,7 +61,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -83,6 +82,9 @@ struct GameTurn {
 class DataLoader {
  public:
   struct Params {
+    // Lexicon the decoders encode with (cross-check planes are
+    // lexicon-derived). Required; must outlive the loader.
+    const Dictionary* dict = nullptr;
     int64_t memory_budget = 256LL * 1024 * 1024;  // 256 MB resident buffers
     int num_worker_threads = 4;                   // decoder pool size
     int num_prefetch_threads = 2;                 // disk-I/O pool size
@@ -311,7 +313,7 @@ class DataLoader {
   // A persistent thread that decodes WorkUnits using a BlockDecoder.
   class WorkerThread {
    public:
-    WorkerThread(FileManager* file_manager, ThreadTable* table, int id);
+    WorkerThread(FileManager* file_manager, ThreadTable* table, int id, const Dictionary& dict);
     ~WorkerThread();
 
     void quit();
@@ -340,7 +342,7 @@ class DataLoader {
   // Distributes WorkUnits to a pool of WorkerThreads.
   class WorkManager {
    public:
-    WorkManager(FileManager* file_manager, int num_threads);
+    WorkManager(FileManager* file_manager, int num_threads, const Dictionary& dict);
     ~WorkManager();
 
     // Processes all work units. Blocks until all are complete.

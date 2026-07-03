@@ -21,7 +21,9 @@ namespace binlog {
 
 class BlockDecoder {
  public:
-  BlockDecoder() = default;
+  // `dict` is the lexicon the encoder needs (cross-check planes, and move
+  // enumeration for tasks that require it).
+  explicit BlockDecoder(const Dictionary& dict) : pos_(dict) {}
 
   // Decode games [local_start, local_start + n_rows) of the .slog file
   // pointed to by `buf`, emitting each game's eval-only `sampled_turn` into

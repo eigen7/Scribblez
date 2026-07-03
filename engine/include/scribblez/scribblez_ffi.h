@@ -53,6 +53,23 @@ const ScribblezShape* scribblez_max_move_per_lane_target_shapes(void);
 int scribblez_max_move_per_lane_row_size_floats(void);
 int scribblez_max_move_per_lane_input_floats(void);
 
+// ===========================================================================
+// Lexicon-bound session
+// ===========================================================================
+//
+// Every entry point that needs the dictionary -- position encoding, GCG
+// analysis, and DataLoader / stream construction -- is a method of a session,
+// created once per process. Constructing the session loads
+// <lexica-dir>/<lexicon_name>.kwg; a missing lexicon throws out of the
+// constructor, which (uncaught across the C ABI) terminates the process.
+// There is deliberately no failure signaling past that point: nothing useful
+// can be done without a dictionary, so a live session pointer is proof the
+// lexicon is loaded.
+typedef struct ScribblezSession ScribblezSession;
+
+ScribblezSession* scribblez_session_new(const char* lexicon_name);
+void scribblez_session_delete(ScribblezSession* s);
+
 // Score-differential sweep encoder -- a sister to the DataLoader that reads a
 // .slog and materializes input tensors with NO sampling or shuffling. It
 // replays a sampled position and re-encodes it once per integer score
@@ -69,8 +86,8 @@ int scribblez_max_move_per_lane_input_floats(void);
 //                floats long, contiguous.
 //
 // Returns 0 on success, -1 on I/O error / bad header / out-of-range index.
-int scribblez_encode_score_diff_sweep(const char* path, int64_t game_idx, int post_move,
-                                      int diff_lo, int diff_hi, float* out_inputs);
+int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
+                                      int post_move, int diff_lo, int diff_hi, float* out_inputs);
 
 // Floats in a single input tensor (spatial + scalar), i.e. the per-position
 // stride of scribblez_encode_score_diff_sweep's output.
@@ -80,14 +97,14 @@ int scribblez_input_floats(void);
 // moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
 // the full string length on success (which may exceed out_cap - 1, signaling
 // the caller to retry with a larger buffer), or -1 on I/O / header error.
-int scribblez_dump_position(const char* path, int64_t game_idx, int post_move, char* out,
-                            int out_cap);
+int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
+                            char* out, int out_cap);
 
 // Like scribblez_dump_position, but emits the web UI's GameState JSON (board,
 // bonuses, rack, scores, tile_scores, ...) for the sampled position, suitable
 // for driving the web-style image renderer. Same return/truncation contract.
-int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_move, char* out,
-                                 int out_cap);
+int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
+                                 int post_move, char* out, int out_cap);
 
 // Parse a GCG file's text into its max-move-per-lane analysis position (the board
 // after all recorded moves, the on-move player, and that player's #Rack), then:
@@ -97,10 +114,9 @@ int scribblez_dump_position_json(const char* path, int64_t game_idx, int post_mo
 //   - emit the lane-analysis JSON (board + ground-truth per-lane targets and
 //     maximal plays) into `out_json` (NUL-terminated, truncated to out_cap).
 // Returns the full JSON length (same retry/truncation contract as the dump
-// functions), or -1 on a parse error or missing lexicon. Requires the lexicon
-// (the ground truth enumerates legal moves).
-int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
-                                            float* out_input);
+// functions), or -1 on a parse error.
+int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg_text,
+                                            char* out_json, int out_cap, float* out_input);
 
 // Parse a penultimate-bingo GCG's text into its post-move analysis position and fill
 // `out_input` with the post-move value model's input tensor (scribblez_input_floats()
@@ -108,7 +124,8 @@ int scribblez_max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json
 // (whose leave is the encode-time rack). The encoding replays the recorded moves, so
 // it is byte-identical to a training row's input for the same position. Returns
 // scribblez_input_floats() on success, or -1 on a parse error / non-PLAY final move.
-int scribblez_post_move_value_analyze_gcg(const char* gcg_text, float* out_input);
+int scribblez_post_move_value_analyze_gcg(ScribblezSession* s, const char* gcg_text,
+                                          float* out_input);
 
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus a "start_player" field) for a penultimate-bingo GCG's post-move
@@ -124,8 +141,9 @@ int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, i
 // tiles available off the board. Returns scribblez_input_floats() on success; on
 // failure returns -1 and writes a human-readable reason into `out_err` (NUL-
 // terminated, truncated to err_cap).
-int scribblez_post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                                float* out_input, char* out_err, int err_cap);
+int scribblez_post_move_value_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
+                                                const char* leave_str, float* out_input,
+                                                char* out_err, int err_cap);
 
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
@@ -144,8 +162,8 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
 // Opaque DataLoader handle.
 typedef struct DataLoaderHandle DataLoaderHandle;
 
-DataLoaderHandle* scribblez_dl_new(int64_t memory_budget, int num_worker_threads,
-                                   int num_prefetch_threads);
+DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
+                                   int num_worker_threads, int num_prefetch_threads);
 
 void scribblez_dl_delete(DataLoaderHandle* h);
 
@@ -208,20 +226,23 @@ typedef struct StreamHandle StreamHandle;
 // rows_per_slot * scribblez_row_size_floats() floats). `player_specs` is an
 // array of `num_specs` NUL-terminated `--player` spec strings (typically two
 // "--type=hastybot"). Does NOT start producing until scribblez_stream_start.
-// Returns NULL on bad config / lexicon load failure.
-StreamHandle* scribblez_stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
-                                   int num_threads, int post_move, int apply_symmetry,
-                                   uint64_t seed, int handicap_max, const char* const* player_specs,
-                                   int num_specs);
+// Returns NULL on bad config.
+StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs, int num_slots,
+                                   int rows_per_slot, int num_threads, int post_move,
+                                   int apply_symmetry, uint64_t seed, int handicap_max,
+                                   const char* const* player_specs, int num_specs);
 
 // Like scribblez_stream_new, but streams max-move-per-lane-task rows
 // (scribblez_max_move_per_lane_row_size_floats() floats each): every slot row is a
 // max-move-per-lane input + per-lane labels, sampled uniformly over all turns (there is no
 // post_move snapshot choice). Shares the rest of the streaming API
 // (start/wait/release/stats/stop/delete) with the post-move streamer.
-StreamHandle* scribblez_max_move_per_lane_stream_new(
-  float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads, int apply_symmetry,
-  uint64_t seed, int handicap_max, const char* const* player_specs, int num_specs);
+StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float* const* slot_ptrs,
+                                                     int num_slots, int rows_per_slot,
+                                                     int num_threads, int apply_symmetry,
+                                                     uint64_t seed, int handicap_max,
+                                                     const char* const* player_specs,
+                                                     int num_specs);
 
 // Spawn the producer threads. Idempotent.
 void scribblez_stream_start(StreamHandle* h);

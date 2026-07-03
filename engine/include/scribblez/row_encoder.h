@@ -38,12 +38,14 @@ class RowEncoder {
 // thread.
 using RowEncoderFactory = std::function<std::unique_ptr<RowEncoder>()>;
 
-// Built-in row encoders.
+// Built-in row encoders. Both need `dict`: the input encoding's cross-check
+// planes are lexicon-derived.
 //   * post-move: the win-probability task; samples bag-nonempty turns; the
 //     `post_move` flag picks the pre-move vs post-move snapshot.
 //   * max-move-per-lane: the per-lane best-move task; samples any turn (incl. endgames)
-//     pre-move, and reads `dict` to enumerate legal moves.
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(bool post_move);
+//     pre-move, and additionally enumerates legal moves with `dict`.
+std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const Dictionary& dict,
+                                                             bool post_move);
 std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const Dictionary& dict);
 
 }  // namespace binlog

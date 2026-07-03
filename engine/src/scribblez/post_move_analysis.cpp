@@ -55,11 +55,15 @@ bool parse_final_position(const std::string& gcg_text, ParsedGcgGame* game, Fina
 // Replay every recorded move into a fresh encoder, then encode the input from
 // `start_player`'s POV holding `leave`. apply_move needs only the moves (not racks),
 // so this reproduces the board / scores / last-two-moves state the training replay
-// builds; only the rack and the unseen-pool feature depend on `leave`.
-void replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave, float* out) {
+// builds; only the rack and the unseen-pool feature depend on `leave`. Building the
+// board's move-generation caches from `dict` before encoding makes the cross-check
+// planes lexicon-accurate, matching the training replay path.
+void replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave,
+                       const Dictionary& dict, float* out) {
   GameStateEncoder enc;
   for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
   assert(enc.active_player() == game.snapshots.back().turn_player);
+  enc.board().ensure_movegen_caches(dict);
   enc.encode_input(start_player, leave, /*apply_flip=*/false, out);
 }
 
@@ -122,16 +126,18 @@ bool leave_available(const Rack& leave, const Board& board, std::string* error) 
 
 }  // namespace
 
-bool encode_post_move_analysis_input(const std::string& gcg_text, float* out, std::string* error) {
+bool encode_post_move_analysis_input(const std::string& gcg_text, const Dictionary& dict,
+                                     float* out, std::string* error) {
   ParsedGcgGame game;
   FinalPosition pos;
   if (!parse_final_position(gcg_text, &game, &pos, error)) return false;
-  replay_and_encode(game, pos.start_player, pos.leave, out);
+  replay_and_encode(game, pos.start_player, pos.leave, dict, out);
   return true;
 }
 
 bool encode_post_move_analysis_input_with_leave(const std::string& gcg_text,
-                                                const std::string& leave_str, float* out,
+                                                const std::string& leave_str,
+                                                const Dictionary& dict, float* out,
                                                 std::string* error) {
   ParsedGcgGame game;
   FinalPosition pos;
@@ -148,7 +154,7 @@ bool encode_post_move_analysis_input_with_leave(const std::string& gcg_text,
   }
   if (!leave_available(leave, game.snapshots.back().board, error)) return false;
 
-  replay_and_encode(game, pos.start_player, leave, out);
+  replay_and_encode(game, pos.start_player, leave, dict, out);
   return true;
 }
 
