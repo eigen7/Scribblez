@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS post_move_pred (
   sd_std     REAL,              -- predicted final-score-delta std (points, Gaussian)
   PRIMARY KEY (generation, position)
 );
+CREATE TABLE IF NOT EXISTS control (
+  name       TEXT PRIMARY KEY,  -- live operator knob (e.g. 'base_lr')
+  value      REAL,              -- its current value
+  updated_at REAL               -- wall-clock of the last write
+);
+CREATE TABLE IF NOT EXISTS control_event (
+  positions INTEGER,            -- rows-clock at which the trainer adopted the change
+  name      TEXT,               -- which control changed
+  value     REAL,               -- the new value
+  t         REAL                -- wall-clock of the change
+);
 """
 
 
@@ -184,6 +195,60 @@ def read_loss_weights(conn: sqlite3.Connection) -> dict:
         r["name"]: r["weight"]
         for r in conn.execute("SELECT name, weight FROM loss_weights ORDER BY rowid")
     }
+
+
+def init_control(conn: sqlite3.Connection, defaults: dict):
+    """Seed control values that are not already present, so a restart keeps the
+    operator's last-set values while a fresh run gets the configured defaults.
+    Idempotent."""
+    now = time.time()
+    conn.executemany(
+        "INSERT OR IGNORE INTO control (name, value, updated_at) VALUES (?, ?, ?)",
+        [(name, float(v), now) for name, v in defaults.items()],
+    )
+    conn.commit()
+
+
+def write_control(conn: sqlite3.Connection, name: str, value: float):
+    """Upsert a live control value (the operator/dashboard write path)."""
+    conn.execute(
+        "INSERT INTO control (name, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (name, float(value), time.time()),
+    )
+    conn.commit()
+
+
+def read_control(conn: sqlite3.Connection, name: str, default: float | None = None):
+    """The current value of one control, or `default` if it has never been set."""
+    row = conn.execute("SELECT value FROM control WHERE name = ?", (name,)).fetchone()
+    return row["value"] if row is not None else default
+
+
+def read_controls(conn: sqlite3.Connection) -> dict:
+    """Every control's current value, name -> value."""
+    return {r["name"]: r["value"] for r in conn.execute("SELECT name, value FROM control")}
+
+
+def write_control_event(conn: sqlite3.Connection, positions: int, name: str, value: float):
+    """Record that a control changed to `value` at `positions` rows trained, so the
+    dashboard can annotate the metric curves where the operator intervened."""
+    conn.execute(
+        "INSERT INTO control_event (positions, name, value, t) VALUES (?, ?, ?, ?)",
+        (int(positions), name, float(value), time.time()),
+    )
+    conn.commit()
+
+
+def read_control_events(conn: sqlite3.Connection, name: str | None = None) -> list[dict]:
+    """Control-change events (all, or for one control), oldest first."""
+    sql = "SELECT positions, name, value, t FROM control_event"
+    params: tuple = ()
+    if name is not None:
+        sql += " WHERE name = ?"
+        params = (name,)
+    sql += " ORDER BY positions"
+    return [dict(r) for r in conn.execute(sql, params)]
 
 
 def write_lane_preds(conn: sqlite3.Connection, generation: int, positions: int, preds: dict):

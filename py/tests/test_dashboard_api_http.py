@@ -68,6 +68,29 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_version_unknown_tag_404(self):
         assert self.fetch(f"/api/version?task={MAX_MOVE_PER_LANE}&tag=nope").code == 404
 
+    def test_controls_empty_then_post_roundtrip(self):
+        q = f"?task={MAX_MOVE_PER_LANE}&tag=run1"
+        assert json.loads(self.fetch("/api/controls" + q).body)["controls"] == {}
+        r = self.fetch(
+            "/api/controls" + q,
+            method="POST",
+            body=json.dumps({"name": "base_lr", "value": 2.5e-4}),
+        )
+        assert r.code == 200
+        assert json.loads(r.body)["controls"]["base_lr"] == 2.5e-4
+        assert json.loads(self.fetch("/api/controls" + q).body)["controls"]["base_lr"] == 2.5e-4
+
+    def test_controls_post_rejects_bad_body(self):
+        q = f"?task={MAX_MOVE_PER_LANE}&tag=run1"
+        missing_value = self.fetch(
+            "/api/controls" + q, method="POST", body=json.dumps({"name": "base_lr"})
+        )
+        assert missing_value.code == 400
+        empty_name = self.fetch(
+            "/api/controls" + q, method="POST", body=json.dumps({"name": "", "value": 1.0})
+        )
+        assert empty_name.code == 400
+
     def test_figure_returns_embeddable_item(self):
         r = self.fetch(f"/api/figure/train_step?task={MAX_MOVE_PER_LANE}&tag=run1")
         assert r.code == 200

@@ -15,15 +15,16 @@ pre-generated corpus, this script runs an open-ended generate->train loop:
 Everything is keyed on cumulative rows trained (the rows-clock): the dashboard
 x-axis, the warmup learning rate, and the restart cursor. A single rolling
 model.pt holds resume state, so stopping and restarting the script continues
-exactly where it left off. The learning rate is a fixed base rate with a
-rows-clock warmup; it is intended to be stepped down by hand (a live dashboard
-control is a later addition).
+exactly where it left off. The base learning rate and the CPU-thread pools
+(game-generation threads, DataLoader workers, torch intra-op threads) are live
+controls in the per-tag dashboard.db: the dashboard Controls tab retunes them,
+and the trainer adopts changes at its next epoch / generation.
 
 Self-play here is HastyBot vs. HastyBot (no GPU contention with training).
 
 Usage:
     python -m scripts.post_move_value.train_generational -t mytag \
-        --games-per-generation 20000 --epochs-per-generation 4 --window 4
+        --games-per-generation 20000 --reuse-per-position 2 --window 4
 """
 
 import argparse
@@ -91,7 +92,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "eligible turn; K>1 = K distinct turns/game/epoch.",
     )
     p.add_argument("--games-per-file", type=int, default=1000, help="Games per .slog file.")
-    p.add_argument("--gen-threads", type=int, default=8, help="Parallel game-generation threads.")
+    p.add_argument(
+        "--gen-threads",
+        type=int,
+        default=8,
+        help="Initial parallel game-generation threads (a live control retuned per generation).",
+    )
+    p.add_argument(
+        "--dataloader-workers",
+        type=int,
+        default=4,
+        help="Initial C++ DataLoader decode/shuffle workers (a live control, retuned per gen).",
+    )
+    p.add_argument(
+        "--torch-threads",
+        type=int,
+        default=0,
+        help="Initial PyTorch intra-op threads (a live control); 0 seeds torch's own default.",
+    )
     p.add_argument(
         "--seed",
         type=int,
@@ -106,7 +124,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # Optimization.
     p.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
-    p.add_argument("--lr", type=float, default=1e-3, help="Base learning rate (stepped by hand).")
+    p.add_argument(
+        "--lr",
+        type=float,
+        default=1e-3,
+        help="Initial base learning rate. Becomes a live control kept across restarts "
+        "and stepped down by hand from the dashboard Controls tab; --restart resets it.",
+    )
     p.add_argument(
         "--warmup-rows",
         type=int,
@@ -174,12 +198,13 @@ def gen_seed(args, index: int) -> int:
     return args.seed + index if args.seed else 0
 
 
-def make_generate_fn(args, player_spec: str):
-    """Production generate_fn for ensure_generation: shell out to play_game."""
+def make_generate_fn(args, player_spec: str, cpu):
+    """Production generate_fn for ensure_generation: shell out to play_game with
+    the live game-generation thread count."""
 
     def generate_fn(gen_dir, num_games: int, seed: int) -> int:
         return run_games(
-            gen_dir, num_games, args.games_per_file, args.gen_threads, player_spec, seed
+            gen_dir, num_games, args.games_per_file, cpu.gen_threads, player_spec, seed
         )
 
     return generate_fn
@@ -200,6 +225,78 @@ def restart_run(paths: TagPaths):
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+
+# Names of the live controls (dashboard Controls tab / DB). The base learning rate
+# plus the three CPU-thread pools the operator can retune between generations.
+CONTROL_BASE_LR = "base_lr"
+CONTROL_GEN_THREADS = "gen_threads"
+CONTROL_DATALOADER_WORKERS = "dataloader_workers"
+CONTROL_TORCH_THREADS = "torch_threads"
+
+
+class LrController:
+    """Serves the per-step learning rate from the live base rate in the control
+    table, so the operator can step it down mid-run from the dashboard. The base
+    is read once per epoch (cheap; the rate only needs to change at epoch
+    granularity) and scaled by the rows-clock warmup. When the operator has moved
+    the base since the last epoch, a rows-clock control event is recorded so the
+    metric plots can annotate where it changed."""
+
+    def __init__(self, conn, args):
+        self._conn = conn
+        self._warmup_rows = args.warmup_rows
+        self._default = args.lr
+        self.base = db.read_control(conn, CONTROL_BASE_LR, default=args.lr)
+
+    def epoch_lr_fn(self, rows_trained: int):
+        """The per-step lr_fn for the upcoming epoch, from the current base rate."""
+        base = db.read_control(self._conn, CONTROL_BASE_LR, default=self._default)
+        if base != self.base:
+            db.write_control_event(self._conn, rows_trained, CONTROL_BASE_LR, base)
+            timed_print(f"base LR {self.base:.2e} -> {base:.2e} at {rows_trained} rows")
+            self.base = base
+        return make_lr_fn(base, self._warmup_rows)
+
+
+class CpuController:
+    """Serves the live CPU-thread controls -- game-generation threads, C++
+    DataLoader workers, and PyTorch intra-op threads -- from the control table,
+    refreshed once per generation (the natural point to retune, since the
+    generation subprocess and the dataset are rebuilt there). torch's thread count
+    is applied here; the other two are read by the generation and dataset builders
+    via the properties. Changes are recorded as rows-clock control events."""
+
+    def __init__(self, conn, args):
+        self._conn = conn
+        self._defaults = {
+            CONTROL_GEN_THREADS: args.gen_threads,
+            CONTROL_DATALOADER_WORKERS: args.dataloader_workers,
+            CONTROL_TORCH_THREADS: args.torch_threads or torch.get_num_threads(),
+        }
+        self._vals: dict = {}
+        self.refresh(0)
+
+    def refresh(self, rows_trained: int):
+        """Re-read the thread controls, apply torch's count, and log any changes.
+        Call once per generation."""
+        vals = {
+            name: max(1, int(db.read_control(self._conn, name, default=default)))
+            for name, default in self._defaults.items()
+        }
+        for name, v in vals.items():
+            if self._vals and self._vals.get(name) != v:
+                db.write_control_event(self._conn, rows_trained, name, v)
+                timed_print(f"{name} {self._vals[name]} -> {v} at {rows_trained} rows")
+        self._vals = vals
+        torch.set_num_threads(vals[CONTROL_TORCH_THREADS])
+
+    @property
+    def gen_threads(self) -> int:
+        return self._vals[CONTROL_GEN_THREADS]
+
+    @property
+    def dataloader_workers(self) -> int:
+        return self._vals[CONTROL_DATALOADER_WORKERS]
 
 
 def _progress_line(generation_index, epoch, done_batches, samples, elapsed, rows):
@@ -222,7 +319,8 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, state, res
     sys.stdout.write("\n")
     avg = result.losses
     ci = state.checkpoint_index
-    lr_now = effective_lr(args.lr, state.rows_trained, args.warmup_rows)
+    base_lr = db.read_control(conn, CONTROL_BASE_LR, default=args.lr)
+    lr_now = effective_lr(base_lr, state.rows_trained, args.warmup_rows)
     timed_print(
         f"[gen {state.generation_index} epoch {state.epoch_in_generation}] ckpt {ci} "
         f"rows={state.rows_trained} loss={avg['total']:.4f} wld_acc={result.wld_acc:.4f} "
@@ -261,14 +359,16 @@ def epochs_this_generation(args, ds) -> int:
 
 
 def train_one_generation(
-    model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
+    model, optimizer, conn, paths, device, args, state, loss_cfg, lr_controller, cpu, ctx
 ) -> int:
     """Train `epochs` passes over the current window, resuming at
     state.epoch_in_generation and checkpointing after each epoch. Returns the
     target epoch count (so the caller can tell a --max-rows early stop from a
     completed generation)."""
     window = lifecycle.window_dirs(paths, state.generation_index, args.window)
-    ds = SlogDataset(window, post_move=True, apply_symmetry=True)
+    ds = SlogDataset(
+        window, post_move=True, apply_symmetry=True, num_workers=cpu.dataloader_workers
+    )
     epochs = epochs_this_generation(args, ds)
     avg_eligible = ds.num_samples / max(ds.num_games, 1)
     reuse = effective_reuse(epochs, args.window, args.turns_per_game, avg_eligible)
@@ -297,7 +397,7 @@ def train_one_generation(
             batches,
             device,
             loss_cfg,
-            lr_fn=lr_fn,
+            lr_fn=lr_controller.epoch_lr_fn(state.rows_trained),
             rows_trained=state.rows_trained,
             on_batch=functools.partial(_progress_line, state.generation_index, e),
         )
@@ -313,10 +413,12 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, args, state, ctx):
     """The generate->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(args)
-    lr_fn = make_lr_fn(args.lr, args.warmup_rows)
-    generate_fn = make_generate_fn(args, ctx["player_spec"])
+    lr_controller = LrController(conn, args)
+    cpu = CpuController(conn, args)
+    generate_fn = make_generate_fn(args, ctx["player_spec"], cpu)
     try:
         while _rows_left(args, state):
+            cpu.refresh(state.rows_trained)
             generation.ensure_generation(
                 paths,
                 state.generation_index,
@@ -327,7 +429,17 @@ def run_generational_training(model, optimizer, conn, paths, device, args, state
                 count_fn=count_games,
             )
             epochs = train_one_generation(
-                model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
+                model,
+                optimizer,
+                conn,
+                paths,
+                device,
+                args,
+                state,
+                loss_cfg,
+                lr_controller,
+                cpu,
+                ctx,
             )
             if state.epoch_in_generation < epochs:
                 break  # stopped mid-generation by --max-rows; resume here next run
@@ -409,6 +521,17 @@ def main() -> int:
             "loss_wld": 1.0,
             "loss_score_diff": args.lambda_sd,
             "loss_opp_next_placement": args.lambda_opp,
+        },
+    )
+    # Seed the live controls (kept across restarts; retuned from the Controls tab).
+    # The --lr / --*-threads flags only set the initial values.
+    db.init_control(
+        conn,
+        {
+            CONTROL_BASE_LR: args.lr,
+            CONTROL_GEN_THREADS: args.gen_threads,
+            CONTROL_DATALOADER_WORKERS: args.dataloader_workers,
+            CONTROL_TORCH_THREADS: args.torch_threads or torch.get_num_threads(),
         },
     )
 

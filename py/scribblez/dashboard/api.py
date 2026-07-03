@@ -45,14 +45,19 @@ VERSION_TABLES = (
     "monotonicity",
     "calibration",
     "score_belief",
+    "control_event",
 )
 
 
 def _train_step(conn, params, image_dir):
-    """The Loss tab: the streaming loss/accuracy curves, with the aggregate
+    """The Loss tab: the loss/accuracy curves, with the aggregate
     model-vs-Monte-Carlo quality curves (large dataset) stacked beneath them when
-    recorded."""
+    recorded. Uses the streaming per-minibatch train_step curve when present, else
+    falls back to the per-epoch loss from the metrics table (the generational
+    trainer). Both carry control-change markers."""
     steps = plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
+    if steps is None:
+        steps = plots.metrics_loss_grid(conn)
     quality = plots.eval_quality_grid(conn)
     parts = [p for p in (steps, quality) if p is not None]
     if not parts:
@@ -413,6 +418,47 @@ class MetaHandler(_Base):
         self.write({"meta": _meta_payload(meta) if meta else None})
 
 
+class ControlsHandler(_Base):
+    """Live operator controls (e.g. base_lr). GET returns the current values and
+    the rows-clock change events; POST {name, value} sets one, which the trainer
+    adopts at its next epoch. Values persist in the tag's dashboard.db."""
+
+    def get(self):
+        conn = self._open_conn()
+        if conn is None:
+            self.write({"controls": {}, "events": []})
+            return
+        try:
+            self.write({"controls": db.read_controls(conn), "events": db.read_control_events(conn)})
+        finally:
+            conn.close()
+
+    def post(self):
+        body = json.loads(self.request.body or b"{}")
+        name, value = body.get("name"), body.get("value")
+        if not isinstance(name, str) or not name or isinstance(value, bool):
+            self.set_status(400)
+            self.write({"error": "expected {name: non-empty str, value: number}"})
+            return
+        if not isinstance(value, (int, float)):
+            self.set_status(400)
+            self.write({"error": "value must be a number"})
+            return
+        # Open (creating if needed) directly rather than via the exists-gated
+        # _open_conn, so a control can be set before the first training run.
+        path = Path(
+            TagPaths(
+                self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
+            ).dashboard_db
+        )
+        conn = db.connect(path)
+        try:
+            db.write_control(conn, name, float(value))
+            self.write({"controls": db.read_controls(conn)})
+        finally:
+            conn.close()
+
+
 class GenerationsHandler(_Base):
     """The generations (epochs) recorded in a table -- drives a tab's GenerationSlider."""
 
@@ -605,6 +651,7 @@ def make_app(mount_root: str) -> tornado.web.Application:
             (r"/api/tags", TagsHandler),
             (r"/api/version", VersionHandler),
             (r"/api/meta", MetaHandler),
+            (r"/api/controls", ControlsHandler),
             (r"/api/generations", GenerationsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
             (r"/api/lane/positions", LanePositionsHandler),
