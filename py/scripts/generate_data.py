@@ -52,12 +52,19 @@ def build_player_spec(args) -> str:
 
 
 def run_games(
-    out_dir: Path, num_games: int, games_per_file: int, threads: int, player_spec: str
+    out_dir: Path,
+    num_games: int,
+    games_per_file: int,
+    threads: int,
+    player_spec: str,
+    seed: int = 0,
 ) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
     Both seats use `player_spec` (the value of a `--player` flag); each seat is a
-    fresh agent, so two neural seats draw independent sampling seeds.
+    fresh agent, so two neural seats draw independent sampling seeds. `seed` is
+    the PRNG seed passed to play_game; 0 (the default) lets the binary pick one
+    from std::random_device, so successive default-seeded runs differ.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off
@@ -69,6 +76,7 @@ def run_games(
         "--games-per-file", str(games_per_file),
         "--games", str(num_games),
         "--threads", str(threads),
+        "--seed", str(seed),
     ]
     # fmt: on
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)

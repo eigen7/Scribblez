@@ -25,8 +25,7 @@ import torch
 from scribblez.dashboard import db, react_server
 from scribblez.dataset import SlogDataset
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
-from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
-from scribblez.post_move_value.eval.sampling import build_test_subset
+from scribblez.post_move_value.eval.runner import ensure_test_subset, run_calibration, run_probes
 from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.post_move_value.onnx_export import export_onnx
 from scribblez.post_move_value.train_loop import LossConfig, run_epoch
@@ -59,30 +58,6 @@ def _epoch_progress_cb(
     in-place epoch progress line. `elapsed` and `rows` are unused -- the progress
     line derives its own timing from `t0`."""
     print_epoch_progress(epoch, total_epochs, done_batches, num_batches_est, samples, t0)
-
-
-def ensure_test_subset(paths: TagPaths, source_test_dir: Path, num_positions: int) -> bool:
-    """Build the frozen evaluation subset + board images if missing. The subset is
-    sampled from `source_test_dir` (which may belong to a different tag when data
-    is decoupled from the output tag) and written under the output tag's `paths`.
-    Returns availability."""
-    if paths.test_subset_slog.exists():
-        print(f"Using evaluation subset {paths.test_subset_slog}")
-    elif not source_test_dir.exists() or not any(source_test_dir.glob("*.slog")):
-        print(
-            f"WARNING: no test split at {source_test_dir}; skipping structural probes. "
-            "Regenerate data with a non-zero --test-ratio to enable them.",
-            file=sys.stderr,
-        )
-        return False
-    else:
-        print(f"Sampling {num_positions} positions from {source_test_dir} ...")
-        n = build_test_subset(source_test_dir, paths.test_subset_slog, num_positions=num_positions)
-        print(f"  Wrote {n} positions to {paths.test_subset_slog}")
-    # Board images are static; render once (when the first one is missing).
-    if not paths.position_dump_path(0).with_suffix(".png").exists():
-        render_boards(paths.test_subset_slog, paths.test_subset_dir)
-    return True
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, wld_acc, args, path: Path):

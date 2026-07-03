@@ -14,6 +14,8 @@ See docs/generational_training.md, "Learning rate: a persisted manual control".
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 
 def warmup_factor(rows_trained: int, warmup_rows: int) -> float:
     """Linear warmup multiplier in [0, 1]: ramps 0 -> 1 over the first
@@ -28,3 +30,17 @@ def effective_lr(base_lr: float, rows_trained: int, warmup_rows: int) -> float:
     rows-clock warmup ramp. `base_lr` is the manual control value; warmup only
     attenuates it during the first `warmup_rows` of the whole run."""
     return base_lr * warmup_factor(rows_trained, warmup_rows)
+
+
+def make_lr_fn(base_lr: float, warmup_rows: int) -> Callable[[int], float]:
+    """Build the per-step learning-rate callable run_epoch expects: it maps the
+    running rows count to `effective_lr(base_lr, rows, warmup_rows)`.
+
+    `base_lr` is captured at build time. A later increment that makes the base
+    rate a live dashboard control rebuilds this (or reads the control inside)
+    when the operator changes it; for now it is the fixed configured rate."""
+
+    def lr_fn(rows_trained: int) -> float:
+        return effective_lr(base_lr, rows_trained, warmup_rows)
+
+    return lr_fn
