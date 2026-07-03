@@ -39,6 +39,22 @@ using Anchors = std::array<bool, BOARD_SIZE * BOARD_SIZE>;
 
 constexpr int idx(int r, int c) { return r * BOARD_SIZE + c; }
 
+// Duplicate test for single-tile plays. A single placed tile that also forms a
+// word along the other axis is reachable by both orientation passes (each pass
+// sees one of the words as its main word), and the horizontal pass is
+// canonical for it. A single tile whose ONLY word lies along the current pass
+// has no counterpart in the other pass and must be kept. The play's word spans
+// [start_col, end_col_excl) on view row `row`; its placed square is the span's
+// unique empty cell, and it forms a perpendicular word iff a perpendicular run
+// touches that square.
+bool single_tile_duplicates_horizontal_pass(const View& view, const CrossChecks& cross, int row,
+                                            int start_col, int end_col_excl) {
+  for (int c = start_col; c < end_col_excl; ++c) {
+    if (view.at(row, c).is_empty()) return cross[idx(row, c)].has_neighbor;
+  }
+  return false;  // a play always places a tile; not reached
+}
+
 // Compute anchor squares for this view. An anchor is an empty square adjacent
 // (in any of the 4 directions) to a filled square. Special case: if the board
 // is completely empty, the single anchor is the center square.
@@ -187,17 +203,17 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
   bool stop_here = off_board || view.at(current_row, col).is_empty();
   if (stop_here) {
     int total_placed = (int)left_letters.size() + (int)right_placed.size();
-    // Single-tile plays are produced by both orientations; treat horizontal as
-    // canonical and never emit them from the transposed (vertical) pass.
-    bool suppress = view.transposed && total_placed == 1;
-    if (accepts_here && col > current_anchor_col && total_placed > 0 && !suppress) {
+    if (accepts_here && col > current_anchor_col && total_placed > 0) {
       int start_col;
       if (case_b_start_col >= 0) {
         start_col = case_b_start_col;
       } else {
         start_col = current_anchor_col - (int)left_letters.size();
       }
-      emit_move(start_col, col);
+      const bool suppress =
+        view.transposed && total_placed == 1 &&
+        single_tile_duplicates_horizontal_pass(view, cross, current_row, start_col, col);
+      if (!suppress) emit_move(start_col, col);
     }
     if (off_board) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
@@ -303,8 +319,9 @@ void GenState::generate_for_row(int row) {
 // (following reversed-prefix arcs), then "shift direction" through the
 // separator token to place tiles rightward. Cross-checks (computed from the
 // forward DAWG, identical to the reference generator) gate perpendicular-word
-// validity, and build_play() does the scoring. Single-tile plays are only
-// emitted from the horizontal pass to avoid duplicates.
+// validity, and build_play() does the scoring. Single-tile plays that form
+// words along both axes are emitted from the horizontal pass only (see
+// single_tile_duplicates_horizontal_pass).
 // ---------------------------------------------------------------------------
 struct GaddagGen {
   GaddagGen(const View& view, const Dictionary& dict, const CrossChecks& cross,
@@ -329,9 +346,11 @@ struct GaddagGen {
   std::array<Glyph, BOARD_SIZE> row_cells{};
 
   void record(int leftstrip, int rightstrip) {
-    // Single-tile plays are produced by both orientations; treat horizontal as
-    // canonical and never emit them from the transposed (vertical) pass.
-    if (view.transposed && tiles_played == 1) return;
+    if (view.transposed && tiles_played == 1 &&
+        single_tile_duplicates_horizontal_pass(view, cross, current_row, leftstrip,
+                                               rightstrip + 1)) {
+      return;
+    }
     out.push_back(
       build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
   }
@@ -683,18 +702,26 @@ std::array<bool, BOARD_SIZE> wmp_placeable_squares(const WmpLane& lane, uint32_t
 
 // Verify candidate `word` (L tiles) against the lane's span starting at column
 // `wl`: playthrough letters must match the board, placed letters must satisfy
-// their cross-checks. On success build the play and append it to `out`.
+// their cross-checks. On success build the play and append it to `out`. The
+// single funnel for every WordMap play, so the single-tile duplicate rule
+// (matching GaddagGen::record) lives here.
 void wmp_try_word(const WmpLane& lane, int wl, int L, const Tile* word, std::vector<Move>& out) {
   std::array<Tile, BOARD_SIZE> placed_letter{};
+  int placed = 0;
   for (int i = 0; i < L; ++i) {
     const int c = wl + i;
     if (lane.filled[c]) {
       if (word[i].index() != lane.letter[c].index()) return;
     } else if (lane.cross[idx(lane.row, c)].mask & (1u << word[i].index())) {
       placed_letter[c] = word[i];
+      ++placed;
     } else {
       return;
     }
+  }
+  if (lane.view.transposed && placed == 1 &&
+      single_tile_duplicates_horizontal_pass(lane.view, lane.cross, lane.row, wl, wl + L)) {
+    return;
   }
   const std::array<bool, BOARD_SIZE> no_blanks{};  // blank-free
   out.push_back(build_play(lane.view, lane.cross, lane.row, wl, wl + L, placed_letter, no_blanks));
@@ -742,8 +769,6 @@ void wmp_emit_leftmost_anchor(const WmpLane& lane, const WordMap& wm, const WmpS
     const bool connected = empty_board ? (lane.row == CENTER && A <= CENTER && wr >= CENTER)
                                        : (any_playthrough || any_cross);
     if (!connected) continue;
-    // Single-tile plays are canonical in the horizontal pass only.
-    if (lane.view.transposed && placed == 1) continue;
     wmp_emit_span(lane, wm, wl, L, playthrough, subracks[placed], out);
   }
 }
@@ -848,8 +873,7 @@ void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubrack
       if (placed > rack_tiles) break;
       if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
       const int L = wr - wl + 1;
-      if (L < 2 || placed < 1) continue;          // a play must place at least one tile
-      if (a.transposed && placed == 1) continue;  // single-tile: horizontal pass only
+      if (L < 2 || placed < 1) continue;  // a play must place at least one tile
       wmp_emit_span(lane, wm, wl, L, playthrough, subracks[placed], out);
     }
   }
@@ -1203,12 +1227,6 @@ struct ShadowGen {
   }
 
   void shadow_record() {
-    // The rest of the engine (GaddagGen::record) treats single-placed-tile plays
-    // as canonical in the horizontal pass only -- it suppresses every transposed
-    // play that lays down exactly one tile, even a perpendicular hook MAGPIE's
-    // is_unique logic would keep. Match that dedup so the WordMap path produces
-    // the same move set the GADDAG generator does.
-    if (transposed && tiles_played == 1) return;
     const int word_length = num_tiles_played_through + tiles_played;
 
     // Word-existence prunes (MAGPIE shadow_record): skip recording a slot the
@@ -1392,10 +1410,13 @@ struct ShadowGen {
     if (!try_restrict_tile(possible, letter_mult, this_word_mult, current_left_col))
       insert_unrestricted_multipliers(current_left_col);
     ++tiles_played;
-    if (!transposed) shadow_record();
+    // MAGPIE's is_unique: a single tile is a cross-pass duplicate unless its
+    // square has a trivial cross set (no perpendicular word forms there).
+    const bool is_unique = !transposed || cross_set == kTrivialCrossSet;
+    if (is_unique) shadow_record();
     shadow_word_multiplier = this_word_mult;
     maybe_recalculate_effective_multipliers();
-    nonplaythrough_shadow_play_left(!transposed);
+    nonplaythrough_shadow_play_left(is_unique);
   }
 
   void shadow_start_playthrough(int current_letter) {

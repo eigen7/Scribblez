@@ -598,6 +598,34 @@ static void test_encoder_flip_symmetry() {
   }
 }
 
+// Single-tile plays whose only word is perpendicular to the placement axis
+// (hooking S onto the I of QI to form vertical IS / SI) come from the
+// transposed pass; a single tile that also forms a word along the horizontal
+// axis (the S of QIS) is emitted exactly once, from the horizontal pass.
+static void test_movegen_single_tile_vertical_hooks() {
+  Dictionary d = medium_dict();
+  Board b;
+  b.apply(make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
+                         {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))}));
+  Rack r;
+  r.add(Tile::from_char('S'));
+  MoveGenerator gen(b, d);
+  const std::vector<Move> plays = gen.generate(r);
+  int qis = 0, is_below = 0, si_above = 0;
+  for (const Move& m : plays) {
+    if (m.horizontal() && m.start() == 7 && m.square_mask() == (1u << 9)) ++qis;
+    if (!m.horizontal() && m.start() == 8 && m.square_mask() == (1u << 8)) ++is_below;
+    if (!m.horizontal() && m.start() == 8 && m.square_mask() == (1u << 6)) ++si_above;
+  }
+  CHECK(qis == 1);       // QIS: S at (7,9), horizontal pass
+  CHECK(is_below == 1);  // IS: S at (8,8), vertical-only hook
+  CHECK(si_above == 1);  // SI: S at (6,8), vertical-only hook
+  CHECK(static_cast<int>(plays.size()) == 3);
+  const std::vector<Move> dawg = gen.generate(r, GenAlgo::DAWG);
+  CHECK(dawg.size() == plays.size());
+  std::cout << "test_movegen_single_tile_vertical_hooks passed\n";
+}
+
 static void test_encoder_cross_check_planes_qi() {
   using namespace scribblez::binlog;
 
@@ -1090,11 +1118,9 @@ static void test_contingent_map_cat_board() {
   // DLS): 2 + 1 + 2, with the phantom-E rescoring supplying the doubled E.
   CHECK(cm.best(kE, col8).score == 5);
   CHECK(cm.best(kE, col8).placed_mask == ((1u << 6) | (1u << 8)));
-  // Rack alone: the R's only placement would be the one-tile vertical hook AR
-  // below the A, which the move generator canonicalizes away (single-tile
-  // plays are emitted from the horizontal pass only; see GaddagGen::record),
-  // so no lane holds a rack-alone play.
-  CHECK(cm.rack_best(col8).score == -1);
+  // Rack alone -> the one-tile vertical hook AR below the A (R at (8,8) DLS):
+  // 1 + 2.
+  CHECK(cm.rack_best(col8).score == 3);
   CHECK(cm.rack_best(row7).score == -1);
 
   // Painted planes: the max plane's value at (7,10) is the best entry through
@@ -3707,6 +3733,7 @@ int main() {
   test_encoder_basic_layout();
   test_encoder_last_opp_plane_mask();
   test_encoder_flip_symmetry();
+  test_movegen_single_tile_vertical_hooks();
   test_encoder_cross_check_planes_qi();
   test_position_encoder_cross_check_planes_lexical();
   test_contingent_map_matches_per_tile_generation();
