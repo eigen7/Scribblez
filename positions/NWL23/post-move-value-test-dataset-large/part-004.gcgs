@@ -2,6 +2,24 @@
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
+#note Harvested penultimate-bingo position (game seed 1000428)
+>Hasty_1: BHNNSTU H4 BHUTS +26 26
+>Hasty_2: EEIOTTU 5E OUT.IT +18 18
+>Hasty_1: DIINNNO 4A IODIN +16 42
+>Hasty_2: EEGLOPX 3A PLEX +47 65
+>Hasty_1: AENNNVY A3 ..NNAE +24 66
+>Hasty_2: AEEGOR? B6 AEROGEl +71 136
+>Hasty_1: ADEINVY A12 ENVY +35 101
+>Hasty_2: ADEINRS K5 SANDIER +102 238
+>Hasty_1: ADFIIMO J8 OAF +32 133
+>Hasty_2: AEGQRSV F4 S.Q +39 277
+>Hasty_1: DEIIMSY J2 MIS.Y +37 170
+>Hasty_2: AEGIRTV 11B .RGATIVE +74 351
+>Hasty_1: DEFGILR D8 FRI.GED +34 204
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
 #note Harvested penultimate-bingo position (game seed 1000429)
 >Hasty_1: BIKRRSS H8 BRISKS +34 34
 >Hasty_2: EGHOPUX 11D EXPO. +28 28
@@ -1265,19 +1283,20 @@
 >Hasty_1: FHLNPPX 6F FL.X +22 22
 >Hasty_2: DDDKOVW 9G WOK +26 38
 >Hasty_1: AHNNPPT 5H .APH +31 53
->Hasty_2: DDDRSSV 5H ....S +12 50
->Hasty_1: FINNPTV L1 PINT. +20 73
->Hasty_2: DDDRSTV 2K V.DS +16 66
->Hasty_1: AEFNNUV 5B FAUVE +27 100
->Hasty_2: DDEIRTW B2 DRI.TED +28 94
->Hasty_1: GNNNORY A8 ORGY +33 133
->Hasty_2: AAEILMW A1 WEAL +32 126
->Hasty_1: INNNOS? D2 NON.SINg +66 199
->Hasty_2: AAEEIMM J8 MEME +25 151
->Hasty_1: ABLLNOT 11D BALLON.T +90 289
->Hasty_2: AAEIIRT 8J .ATIER +27 178
->Hasty_1: CIOORR? O5 COR.IdOR +60 349
->Hasty_2: AABDIIT 12C TIBIA +30 208
+>Hasty_2: DDDRSSV I4 V.. +13 51
+>Hasty_1: FINNPTV 10I IF +19 72
+>Hasty_2: DDDRSST 10H S..TS +16 67
+>Hasty_1: AENNPTV 11I PEA +28 100
+>Hasty_2: DDDENRU 12J DURNED +30 97
+>Hasty_1: INNOTVW 6F ....ION +30 130
+>Hasty_2: ADGMNRY 4K MANGY +38 135
+>Hasty_1: EILNTVW N10 WE.VIL +40 170
+>Hasty_2: ADIORS? 15H cORDIA.S +131 266
+>Hasty_1: AEEMNTT O8 AMEN. +31 201
+>Hasty_2: ABELLNO 8A BALLONE. +88 354
+>Hasty_1: CEIRTTT O1 CIT. +27 228
+>Hasty_2: AIOORR? E8 .RAtORIO +64 418
+>Hasty_1: BDERTTT D12 DEBT +31 259
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -1462,12 +1481,3 @@
 >Hasty_2: BFFINTT K8 BIFF.N +28 60
 >Hasty_1: AEINRY? G5 INlAYER +81 166
 >Hasty_2: EOOSTTX N8 SEXT +56 116
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000539)
->Hasty_1: AACERRU H4 CURARA +22 22
->Hasty_2: BIMOPTZ G7 ZOMBI +61 61
->Hasty_1: AEENOST 4D NOTE.ASE +70 92
->Hasty_2: ILNPTTV E1 PIV.T +20 81

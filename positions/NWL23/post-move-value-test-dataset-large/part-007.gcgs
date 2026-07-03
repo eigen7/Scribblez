@@ -2,6 +2,20 @@
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
+#note Harvested penultimate-bingo position (game seed 1000756)
+>Hasty_1: EMNNOOZ H5 MOZO +30 30
+>Hasty_2: AEEFRU? I8 FEAtURE +66 66
+>Hasty_1: AEENNRT 5F RE.ANENT +70 100
+>Hasty_2: AAMNPUW H12 MAWN +50 116
+>Hasty_1: EEHIIPV G12 EVE +31 131
+>Hasty_2: AAINOPU 4J APIAN +26 142
+>Hasty_1: GHIIIPT 3L PHI +35 166
+>Hasty_2: DGHOTU? 4A OUGHTeD +78 220
+>Hasty_1: GIILSTT 6F GL.ST +30 196
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
 #note Harvested penultimate-bingo position (game seed 1000757)
 >Hasty_1: AIMOQRV H7 QI +22 22
 >Hasty_2: DLPRTU? 8D PUTR.DLy +63 63
@@ -746,23 +760,6 @@
 >Hasty_1: CEEIPRS H4 PIECERS +78 78
 >Hasty_2: IINOOT? 4H .OsITION +70 70
 >Hasty_1: OORSTVW N2 VR.WS +26 104
->Hasty_2: AAEIIKU 10E UKA.E +19 89
->Hasty_1: ABOOOTX 11E TAX +39 143
->Hasty_2: AEEIIIS 12D EASE +28 117
->Hasty_1: BFIMOOO C10 MOFO +26 169
->Hasty_2: ADIIINN 13G DAN +21 138
->Hasty_1: BEIJOOQ 3I JIBE +45 214
->Hasty_2: CIIINST H12 S.IN +25 163
->Hasty_1: AGIOOQR 9F OR.A +31 245
->Hasty_2: ACFIITU J2 F..TIC +20 183
->Hasty_1: AGINOQT K1 GA..ON +29 274
->Hasty_2: AHINTUY B9 THY +37 220
->Hasty_1: DEILQTY A8 QI +35 309
->Hasty_2: AGIINNU O6 INIA +14 234
->Hasty_1: DEGLOTY J11 DOGY +23 332
->Hasty_2: GLNRRUV B13 GUV +17 251
->Hasty_1: EELTTU? N9 LETTUcE +68 400
->Hasty_2: ALLNORR 15A O.AL +24 275
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -1465,18 +1462,3 @@
 >Hasty_2: BEEOPSU A3 BOU.EE +48 276
 >Hasty_1: EHILMO? B9 HEMIOLa +81 302
 >Hasty_2: ADOPRST 15B .DAPTORS +83 359
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000861)
->Hasty_1: AAEEIOO H7 AA +4 4
->Hasty_2: IILMQRW I7 MIRI +19 19
->Hasty_1: DEEGIOO H10 GOODIE +30 34
->Hasty_2: ALNOQTW J6 QAT +40 59
->Hasty_1: EIIJNS? 13H .JINnI +42 76
->Hasty_2: ELNOTVW G3 VOWEL +23 82
->Hasty_1: AAEEOST 14J TEASE +23 99
->Hasty_2: EFFINPT 11G P.NTIFF +37 119
->Hasty_1: ADEORST O8 ROASTED +84 183
->Hasty_2: ABEEGNV F4 GAB +30 149

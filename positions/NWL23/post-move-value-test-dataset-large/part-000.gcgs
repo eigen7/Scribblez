@@ -56,7 +56,7 @@
 >Hasty_1: AEEERRR L10 REARER +26 256
 >Hasty_2: ELNNNTU 8A NE.N +18 220
 >Hasty_1: DEEFIIT A4 DEFI.ITE +64 320
->Hasty_2: ELNSTUU N1 LEST +21 241
+>Hasty_2: ELNSTUU K3 ..S +24 244
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -75,30 +75,6 @@
 >Hasty_1: ELLNTTU O11 UTE +14 125
 >Hasty_2: ADEORW? 9B REDOWAs +67 223
 >Hasty_1: ADLLNTT 8A LAD +17 142
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000005)
->Hasty_1: AEEKOST H4 KETOSE +30 30
->Hasty_2: DENUUX? 5E UNs.XED +56 56
->Hasty_1: AILORUV 4H .ORAI +32 62
->Hasty_2: EHLRTUY G7 HEY +37 93
->Hasty_1: EGLLRUV 3I VEG +36 98
->Hasty_2: IJLRRTU 6B JILT +29 122
->Hasty_1: LLOPRRU F7 POLL +25 123
->Hasty_2: AFRRSUW 10H SAW +25 147
->Hasty_1: DRRRUVW 4B DURR +13 136
->Hasty_2: AFIORRU 7B OF +27 174
->Hasty_1: EIIRTVW 2J WEIR +36 172
->Hasty_2: AEIORRU A7 OURARI +27 201
->Hasty_1: AAEITTV F1 AVIA. +22 194
->Hasty_2: AEGHNOS N2 SANGH +50 251
->Hasty_1: AEEGQTT 7M QAT +32 226
->Hasty_2: ADEEOST B10 SEDATE +27 278
->Hasty_1: DEEGIOT O7 .OITED +27 253
->Hasty_2: EIMNNO? 1A NOMIN.tE +140 418
->Hasty_1: CEGLOYZ 15A G.EZ +72 325
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -265,7 +241,7 @@
 >Hasty_1: BLNNOTU 10H .UB +26 58
 >Hasty_2: AELORS? 8H .RESAOLa +80 190
 >Hasty_1: ILNNOST O8 .NTLIONS +74 132
->Hasty_2: AEIOOQV 12D QI +26 216
+>Hasty_2: AEIOOQV F10 Q. +31 221
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -327,6 +303,32 @@
 >Hasty_1: FGHNOOW J6 NOHOW +41 131
 >Hasty_2: EEINPTT 6D PENITE.T +62 186
 >Hasty_1: FGLOSSV N10 FLOSS +41 172
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested penultimate-bingo position (game seed 1000023)
+>Hasty_1: IINOORW H5 WINO +14 14
+>Hasty_2: AABEKMV 5H .AKAME +30 30
+>Hasty_1: EFINORT 4K FETOR +33 47
+>Hasty_2: ABBEEEV O2 BE.EAVE +36 66
+>Hasty_1: AGINOXZ 6J AXON +42 89
+>Hasty_2: BCLLNOS 9K BLOCS +23 89
+>Hasty_1: CEGGIRZ M8 C.ZIER +34 123
+>Hasty_2: ELLNORY L11 ONERY +32 121
+>Hasty_1: EEEGGIT 15L .EGG +27 150
+>Hasty_2: GLLLNRV 11J GR..N +12 133
+>Hasty_1: AEEFIRT N9 .A.ER +28 178
+>Hasty_2: DIJLLLV 2M JI. +24 157
+>Hasty_1: EFISTUU 14F FUSTIE. +20 198
+>Hasty_2: DLLLRSV H5 ....S +8 165
+>Hasty_1: AHHIMTU 15E HATH +52 250
+>Hasty_2: ADLLLRV 10I VAR +18 183
+>Hasty_1: EIIMUUW G6 MEW +21 271
+>Hasty_2: DILLLOY 9C IDYLL. +22 205
+>Hasty_1: AIITTUU 8A TITI +21 292
+>Hasty_2: ELNNOO? C3 NONmO..LE +68 273
+>Hasty_1: AADIPUU 13G PAUA +29 321
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -563,9 +565,9 @@
 >Hasty_2: AEEEIRW 5K WAIR +26 55
 >Hasty_1: AACEILO 4L ALEC +28 141
 >Hasty_2: EEEIIKR 3B REEKIE. +24 79
->Hasty_1: AEEIMOQ 2E OMA +29 170
+>Hasty_1: AEEIMOQ F2 Q. +31 172
 >Hasty_2: ADEIIT? N1 DIA..ETIc +72 151
->Hasty_1: AEEGINQ 1L QA.I +72 242
+>Hasty_1: AAEEIMO 1K AMI.E +33 205
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -617,16 +619,12 @@
 >Hasty_1: EGIIRTV 4F RI.E +31 146
 >Hasty_2: BDHNNOV M1 DOH +33 154
 >Hasty_1: DEGILTV N2 TILED +46 192
->Hasty_2: BNNPRRV D3 .NN +6 160
+>Hasty_2: BNNPRRV B1 .P +8 162
 >Hasty_1: AEGKMNV O5 MAKE +37 229
->Hasty_2: BIOPRRV 2B PO +19 179
->Hasty_1: AGMNRUV O1 MA +23 252
->Hasty_2: BEEIRRV N8 BREVIER +82 261
->Hasty_1: GGNRTUV 13I GRUNG. +20 272
->Hasty_2: ABENNOS 15L BASE +40 301
->Hasty_1: CEELTVX E5 EXCEL +32 304
->Hasty_2: DNNOOY? F8 NONbODY +74 375
->Hasty_1: GLOPTUV 8A LOUP.. +33 337
+>Hasty_2: BNNORRV 9M BRR +19 181
+>Hasty_1: AGIMNUV 4A VAIN +28 257
+>Hasty_2: EENNORV J5 .ONVENER +67 248
+>Hasty_1: GGMNOTU I9 MUTON +24 281
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
@@ -1314,12 +1312,16 @@
 >Hasty_2: AAEOOT? 4D TOpA. +30 260
 >Hasty_1: FFILMNR I5 .IF +29 271
 >Hasty_2: AAEINOX 5C NIX +40 300
->Hasty_1: DFLMNRS 8E FR..S +19 290
+>Hasty_1: DFLMNRS O8 .......S +27 298
 >Hasty_2: AAEGOOV 3E VOG +31 331
->Hasty_1: ADLMNPW N1 PWN +28 318
->Hasty_2: AAAEOOY 4K YE. +27 358
->Hasty_1: ADEILMY 12F MEDIAL.Y +66 384
->Hasty_2: AAAAOOR 11K A.OR. +21 379
+>Hasty_1: ADFLMNR 2H LANDF.RM +82 380
+>Hasty_2: AAAEOPW 1G WAP +34 365
+>Hasty_1: AEIORYY 3I YEA +27 407
+>Hasty_2: AAEEORS L4 A.S +23 388
+>Hasty_1: EGIORRY F8 GYRE +23 430
+>Hasty_2: AAEEIOR 1N AA +20 408
+>Hasty_1: CINORRT J7 TRICORN +73 503
+>Hasty_2: CEEIORT 14D COTERIE +75 483
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1

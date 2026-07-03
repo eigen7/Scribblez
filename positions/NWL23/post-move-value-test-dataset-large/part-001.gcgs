@@ -790,17 +790,17 @@
 #note Harvested penultimate-bingo position (game seed 1000160)
 >Hasty_1: BEGLTV? H4 BEVeL +24 24
 >Hasty_2: EEEEEIM G7 ME +15 15
->Hasty_1: BFGLRTT G7 ..LT +7 31
+>Hasty_1: BFGLRTT G7 ..G +8 32
 >Hasty_2: CEEEEII F6 CEE +18 33
->Hasty_1: BFGNRTW 5G W.FT +10 41
->Hasty_2: EEIIIRY 4H .EERY +27 60
->Hasty_1: ABEGNOR 3J GOBAN +29 70
->Hasty_2: AIIINTU 2L ANI +20 80
->Hasty_1: DEEIKOR E7 DROKE +30 100
->Hasty_2: IILORTU D9 TORII +20 100
->Hasty_1: AEGINX? 1H AXING +57 157
->Hasty_2: AELORUU 2C ROULEAU +70 170
->Hasty_1: EEHNOU? 1A fOEHN +46 203
+>Hasty_1: BFLNRTT 7E F... +8 40
+>Hasty_2: EEIIIRW I2 EWER +17 50
+>Hasty_1: BLNRTTY H1 BY +26 66
+>Hasty_2: AAEIIIO J2 AE +17 67
+>Hasty_1: LNNRTTU K1 URN +16 82
+>Hasty_2: AIIIKOT L3 TAIKO +25 92
+>Hasty_1: DILNOTT K5 TONDI +24 106
+>Hasty_2: EIILOR? M7 RILIEvO +70 162
+>Hasty_1: AGLNRTX J9 AX +27 133
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
