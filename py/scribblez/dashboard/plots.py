@@ -27,10 +27,12 @@ from bokeh.models import (
     Div,
     HoverTool,
     InlineStyleSheet,
+    Label,
     LinearAxis,
     Range1d,
     Select,
     Slider,
+    Span,
 )
 from bokeh.palettes import Category10
 from bokeh.plotting import figure
@@ -281,6 +283,78 @@ def _loss_bands(ts, idx, weights, normalized):
     return bands
 
 
+def add_control_markers(fig, conn):
+    """Overlay dashed vertical markers on a positions-axis figure at each base-LR
+    change (from the control_event table), labeled with the new value, so the loss
+    curve shows where the operator stepped the learning rate. A no-op when the run
+    recorded no control changes."""
+    for e in db.read_control_events(conn, "base_lr"):
+        fig.add_layout(
+            Span(
+                location=e["positions"],
+                dimension="height",
+                line_color="#a05a00",
+                line_dash="dashed",
+                line_width=1,
+            )
+        )
+        fig.add_layout(
+            Label(
+                x=e["positions"],
+                y=6,
+                y_units="screen",
+                text=f"{e['value']:.0e}",
+                text_font_size="8pt",
+                text_color="#a05a00",
+                x_offset=2,
+            )
+        )
+
+
+def _metric_vs_positions(conn, name: str):
+    """(positions, values) for a metric, using the per-epoch 'positions' series as
+    the x-axis (both are columns of the metrics table keyed by epoch)."""
+    pos_by_epoch = dict(zip(*db.read_metric_series(conn, "positions"), strict=True))
+    epochs, values = db.read_metric_series(conn, name)
+    xy = [(pos_by_epoch[e], v) for e, v in zip(epochs, values, strict=True) if e in pos_by_epoch]
+    return [x for x, _ in xy], [y for _, y in xy]
+
+
+def metrics_loss_grid(conn):
+    """Per-checkpoint loss curves from the `metrics` table vs positions trained,
+    with control-change markers. This is the loss view for trainers that record
+    per-epoch metrics rather than the streaming per-minibatch train_step curve
+    (e.g. the generational trainer). None when no loss metric was recorded."""
+    names = [
+        n
+        for n in ("loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement")
+        if len(db.read_metric_series(conn, n)[0])
+    ]
+    if not names:
+        return None
+    fig = figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title="Train loss",
+        x_axis_label="positions trained",
+        y_axis_label="loss",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0000}")], mode="vline"))
+    palette = Category10[10]
+    for i, name in enumerate(names):
+        xs, ys = _metric_vs_positions(conn, name)
+        src = ColumnDataSource(dict(x=xs, y=ys))
+        color = palette[i % len(palette)]
+        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=name)
+        fig.scatter("x", "y", source=src, color=color, size=4)
+    add_control_markers(fig, conn)
+    fig.legend.label_text_font_size = "8pt"
+    fig.legend.location = "top_right"
+    fig.legend.click_policy = "hide"
+    return fig
+
+
 def train_step_grid(conn, normalized: bool = False):
     """Streaming loss + accuracy curves vs. positions trained.
 
@@ -321,6 +395,7 @@ def train_step_grid(conn, normalized: bool = False):
         )
         loss_fig = _step_figure("Train loss", x, [(ts[k][idx], k) for k in loss_names], "loss")
 
+    add_control_markers(loss_fig, conn)
     acc_names = sorted(k for k in ts if k.endswith("_acc"))
     figs = [loss_fig]
     if acc_names:

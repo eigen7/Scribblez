@@ -45,14 +45,19 @@ VERSION_TABLES = (
     "monotonicity",
     "calibration",
     "score_belief",
+    "control_event",
 )
 
 
 def _train_step(conn, params, image_dir):
-    """The Loss tab: the streaming loss/accuracy curves, with the aggregate
+    """The Loss tab: the loss/accuracy curves, with the aggregate
     model-vs-Monte-Carlo quality curves (large dataset) stacked beneath them when
-    recorded."""
+    recorded. Uses the streaming per-minibatch train_step curve when present, else
+    falls back to the per-epoch loss from the metrics table (the generational
+    trainer). Both carry control-change markers."""
     steps = plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
+    if steps is None:
+        steps = plots.metrics_loss_grid(conn)
     quality = plots.eval_quality_grid(conn)
     parts = [p for p in (steps, quality) if p is not None]
     if not parts:

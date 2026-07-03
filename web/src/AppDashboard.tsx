@@ -55,7 +55,7 @@ function requestedTag(): string | null {
 function FigureTab({
   task, tag, figure, versionKey, toggle, emptyText,
 }: {
-  task: string; tag: string | null; figure: string; versionKey: string;
+  task: string; tag: string | null; figure: string; versionKey: string | string[];
   toggle: boolean; emptyText: string;
 }) {
   const [normalized, setNormalized] = useState(false);
@@ -82,8 +82,10 @@ function FigureTab({
     const id = setInterval(async () => {
       try {
         const v = await getJSON(`/api/version?task=${task}&tag=${encodeURIComponent(tag)}`);
-        if (v[versionKey] !== lastVersion.current) {
-          lastVersion.current = v[versionKey];
+        const keys = Array.isArray(versionKey) ? versionKey : [versionKey];
+        const combined = keys.reduce((sum, k) => sum + (v[k] ?? 0), 0);
+        if (combined !== lastVersion.current) {
+          lastVersion.current = combined;
           refetch().catch(() => {});
         }
       } catch {
@@ -128,9 +130,9 @@ function FigureTab({
 // message. ("Lane analysis" is native React, handled separately.)
 const FIGURE_TABS: Record<
   string,
-  { figure: string; versionKey: string; toggle: boolean; emptyText: string }
+  { figure: string; versionKey: string | string[]; toggle: boolean; emptyText: string }
 > = {
-  Loss: { figure: 'train_step', versionKey: 'train_step', toggle: true,
+  Loss: { figure: 'train_step', versionKey: ['train_step', 'metrics', 'control_event'], toggle: true,
     emptyText: 'No loss / accuracy metrics recorded yet.' },
   Performance: { figure: 'throughput', versionKey: 'throughput', toggle: false,
     emptyText: 'No throughput data yet — start a streaming run.' },
