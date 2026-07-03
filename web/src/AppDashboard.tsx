@@ -1,5 +1,6 @@
 import { Component, ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import BokehFigure from './components/BokehFigure';
+import ControlsTab from './components/ControlsTab';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import PostMoveAnalysis from './components/PostMoveAnalysis';
@@ -139,6 +140,7 @@ const FIGURE_TABS: Record<
 
 function renderTab(name: string, task: string, tag: string | null) {
   if (name === 'Info') return <InfoTab task={task} tag={tag} />;
+  if (name === 'Controls') return <ControlsTab task={task} tag={tag} />;
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
   if (name === 'Positions') return <PostMoveAnalysis task={task} tag={tag} />;
   const cfg = FIGURE_TABS[name];
@@ -155,7 +157,7 @@ export default function AppDashboard() {
   const tabs =
     task === MAX_MOVE_PER_LANE
       ? ['Loss', 'Performance', 'Lane analysis', 'Info']
-      : ['Loss', 'Positions', 'Training', 'Performance', 'Info'];
+      : ['Loss', 'Positions', 'Training', 'Performance', 'Controls', 'Info'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(requestedTag());
   const [tab, setTab] = useState(0);

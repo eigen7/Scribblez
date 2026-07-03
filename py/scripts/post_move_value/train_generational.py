@@ -106,7 +106,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # Optimization.
     p.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
-    p.add_argument("--lr", type=float, default=1e-3, help="Base learning rate (stepped by hand).")
+    p.add_argument(
+        "--lr",
+        type=float,
+        default=1e-3,
+        help="Initial base learning rate. Becomes a live control kept across restarts "
+        "and stepped down by hand from the dashboard Controls tab; --restart resets it.",
+    )
     p.add_argument(
         "--warmup-rows",
         type=int,
@@ -201,6 +207,33 @@ def restart_run(paths: TagPaths):
 # Training loop
 # ---------------------------------------------------------------------------
 
+# Name of the live base-learning-rate control (dashboard Controls tab / DB).
+CONTROL_BASE_LR = "base_lr"
+
+
+class LrController:
+    """Serves the per-step learning rate from the live base rate in the control
+    table, so the operator can step it down mid-run from the dashboard. The base
+    is read once per epoch (cheap; the rate only needs to change at epoch
+    granularity) and scaled by the rows-clock warmup. When the operator has moved
+    the base since the last epoch, a rows-clock control event is recorded so the
+    metric plots can annotate where it changed."""
+
+    def __init__(self, conn, args):
+        self._conn = conn
+        self._warmup_rows = args.warmup_rows
+        self._default = args.lr
+        self.base = db.read_control(conn, CONTROL_BASE_LR, default=args.lr)
+
+    def epoch_lr_fn(self, rows_trained: int):
+        """The per-step lr_fn for the upcoming epoch, from the current base rate."""
+        base = db.read_control(self._conn, CONTROL_BASE_LR, default=self._default)
+        if base != self.base:
+            db.write_control_event(self._conn, rows_trained, CONTROL_BASE_LR, base)
+            timed_print(f"base LR {self.base:.2e} -> {base:.2e} at {rows_trained} rows")
+            self.base = base
+        return make_lr_fn(base, self._warmup_rows)
+
 
 def _progress_line(generation_index, epoch, done_batches, samples, elapsed, rows):
     """run_epoch on_batch callback: an in-place per-epoch throughput line."""
@@ -222,7 +255,8 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, state, res
     sys.stdout.write("\n")
     avg = result.losses
     ci = state.checkpoint_index
-    lr_now = effective_lr(args.lr, state.rows_trained, args.warmup_rows)
+    base_lr = db.read_control(conn, CONTROL_BASE_LR, default=args.lr)
+    lr_now = effective_lr(base_lr, state.rows_trained, args.warmup_rows)
     timed_print(
         f"[gen {state.generation_index} epoch {state.epoch_in_generation}] ckpt {ci} "
         f"rows={state.rows_trained} loss={avg['total']:.4f} wld_acc={result.wld_acc:.4f} "
@@ -261,7 +295,7 @@ def epochs_this_generation(args, ds) -> int:
 
 
 def train_one_generation(
-    model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
+    model, optimizer, conn, paths, device, args, state, loss_cfg, lr_controller, ctx
 ) -> int:
     """Train `epochs` passes over the current window, resuming at
     state.epoch_in_generation and checkpointing after each epoch. Returns the
@@ -297,7 +331,7 @@ def train_one_generation(
             batches,
             device,
             loss_cfg,
-            lr_fn=lr_fn,
+            lr_fn=lr_controller.epoch_lr_fn(state.rows_trained),
             rows_trained=state.rows_trained,
             on_batch=functools.partial(_progress_line, state.generation_index, e),
         )
@@ -313,7 +347,7 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, args, state, ctx):
     """The generate->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(args)
-    lr_fn = make_lr_fn(args.lr, args.warmup_rows)
+    lr_controller = LrController(conn, args)
     generate_fn = make_generate_fn(args, ctx["player_spec"])
     try:
         while _rows_left(args, state):
@@ -327,7 +361,7 @@ def run_generational_training(model, optimizer, conn, paths, device, args, state
                 count_fn=count_games,
             )
             epochs = train_one_generation(
-                model, optimizer, conn, paths, device, args, state, loss_cfg, lr_fn, ctx
+                model, optimizer, conn, paths, device, args, state, loss_cfg, lr_controller, ctx
             )
             if state.epoch_in_generation < epochs:
                 break  # stopped mid-generation by --max-rows; resume here next run
@@ -411,6 +445,9 @@ def main() -> int:
             "loss_opp_next_placement": args.lambda_opp,
         },
     )
+    # Seed the live base learning rate (kept across restarts; the Controls tab
+    # steps it down by hand). --lr only sets the initial value.
+    db.init_control(conn, {CONTROL_BASE_LR: args.lr})
 
     ctx = {
         "player_spec": build_player_spec(args),
