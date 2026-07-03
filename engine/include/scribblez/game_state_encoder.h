@@ -48,6 +48,16 @@ class Dictionary;
 // (A..Z, then blank).
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
+// Process-wide switch for the contingent-draw potential input features (see
+// contingent_map.h). When disabled, encode_input skips their move generation
+// entirely and leaves the feature blocks zero; the row layout is unchanged,
+// and consumers drop the zero tail so the model consumes the smaller base
+// layout. Configured once at FFI-session creation, before any encoding --
+// like the Lexicon, it is a per-process experiment arm that every encode
+// path must agree on.
+void set_contingent_features_enabled(bool enabled);
+bool contingent_features_enabled();
+
 // Sample kinds within a single game turn. Used by the DataLoader's replay
 // decoder to label which of the two per-PLAY-turn samples is which.
 enum class PositionKind : uint8_t {

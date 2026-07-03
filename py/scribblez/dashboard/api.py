@@ -28,7 +28,12 @@ from bokeh.layouts import column
 
 from scribblez import lane_analysis
 from scribblez.dashboard import db, plots
-from scribblez.ffi import analyze_gcg, analyze_post_move_gcg_leave, post_move_board_json
+from scribblez.ffi import (
+    analyze_gcg,
+    analyze_post_move_gcg_leave,
+    get_input_shapes,
+    post_move_board_json,
+)
 from scribblez.paths import TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
 
@@ -335,12 +340,20 @@ def _post_move_onnx_session(onnx_path: Path):
 
 def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     """Run the exported post-move model on one flat input tensor and decode the value
-    outputs: W/L/D probabilities and the score-delta mean/std."""
+    outputs: W/L/D probabilities and the score-delta mean/std.
+
+    `flat_input` is always the encoder's full row layout; the model may consume
+    either the full layout or the baseline base layout (no contingent-draw
+    blocks). Both the base spatial planes and base scalars are prefixes of the
+    full blocks, so the model's own input widths select the right slices."""
     sess = _post_move_onnx_session(onnx_path)
-    planes = int({i.name: i.shape for i in sess.get_inputs()}["input_spatial"][1])
+    model_inputs = {i.name: i.shape for i in sess.get_inputs()}
+    planes = int(model_inputs["input_spatial"][1])
+    scalars = int(model_inputs["input_scalar"][1])
+    full_planes = {s.name: s.dims for s in get_input_shapes()}["input_spatial"][0]
     cells = post_move_analysis.BOARD_SIZE**2
     spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
-    scalar = flat_input[planes * cells :].reshape(1, -1).astype(np.float32)
+    scalar = flat_input[full_planes * cells :][:scalars].reshape(1, -1).astype(np.float32)
     wld, sd = sess.run(["wld", "score_diff"], {"input_spatial": spatial, "input_scalar": scalar})
     probs = np.exp(wld[0] - wld[0].max())
     probs /= probs.sum()

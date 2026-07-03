@@ -69,7 +69,7 @@ class ShapeInfo:
 def _setup_lib(lib: ctypes.CDLL):
     """Declare argtypes/restypes for every FFI entry point."""
     lib.scribblez_session_new.restype = ctypes.c_void_p
-    lib.scribblez_session_new.argtypes = [ctypes.c_char_p]  # lexicon_name
+    lib.scribblez_session_new.argtypes = [ctypes.c_char_p, ctypes.c_int]  # lexicon, contingent
 
     lib.scribblez_session_delete.restype = None
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
@@ -293,6 +293,20 @@ def _lib() -> ctypes.CDLL:
 DEFAULT_LEXICON = "NWL23"
 
 _SESSION_HANDLE = None
+_CONTINGENT_FEATURES = True
+
+
+def set_contingent_features(enabled: bool):
+    """Choose the process's experiment arm before any dictionary-dependent FFI
+    call: whether the engine computes the contingent-draw potential input
+    features (True, the full layout) or skips their move generation and leaves
+    the blocks zero (False, the baseline). The flag is baked into the
+    process-wide session at creation, so flipping it afterwards is an error.
+    """
+    global _CONTINGENT_FEATURES
+    if _SESSION_HANDLE is not None and _CONTINGENT_FEATURES != enabled:
+        raise RuntimeError("set_contingent_features called after the FFI session was created")
+    _CONTINGENT_FEATURES = enabled
 
 
 def _session() -> int:
@@ -304,7 +318,9 @@ def _session() -> int:
     """
     global _SESSION_HANDLE
     if _SESSION_HANDLE is None:
-        _SESSION_HANDLE = _lib().scribblez_session_new(DEFAULT_LEXICON.encode("utf-8"))
+        _SESSION_HANDLE = _lib().scribblez_session_new(
+            DEFAULT_LEXICON.encode("utf-8"), int(_CONTINGENT_FEATURES)
+        )
     return _SESSION_HANDLE
 
 

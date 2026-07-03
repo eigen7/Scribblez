@@ -59,26 +59,25 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
     return result
 
 
-def zero_contingent_features(input_spatial, input_scalar) -> None:
-    """Zero the contingent-draw potential blocks of a split input batch in place.
+def model_input_sizes(contingent_features: bool) -> tuple[int, int]:
+    """(spatial_planes, scalar_floats) the model consumes for the given
+    experiment arm: the full row layout with the features on, or the layout
+    minus the trailing contingent-draw blocks with them off (the baseline's
+    smaller model)."""
+    shapes = {s.name: s.dims for s in get_input_shapes()}
+    planes, scalars = shapes["input_spatial"][0], shapes["input_scalar"][0]
+    if contingent_features:
+        return planes, scalars
+    _, num_planes, _, num_scalars = contingent_feature_layout()
+    return planes - num_planes, scalars - num_scalars
 
-    `input_spatial` is (B, planes, 15, 15) and `input_scalar` is (B, scalars) --
-    torch tensors or numpy arrays. With the blocks zeroed the model sees the
-    pre-contingent input over the identical row layout, which is the ablation
-    baseline against a run that keeps the features.
-    """
-    plane0, num_planes, scalar_offset, num_scalars = contingent_feature_layout()
-    input_spatial[:, plane0 : plane0 + num_planes] = 0.0
-    input_scalar[:, scalar_offset : scalar_offset + num_scalars] = 0.0
 
-
-def zero_contingent_features_flat(inputs: np.ndarray, spatial_planes: int) -> None:
-    """Like zero_contingent_features, for flat (N, input_floats) rows in place."""
-    plane0, num_planes, scalar_offset, num_scalars = contingent_feature_layout()
-    cells = 15 * 15
-    inputs[:, plane0 * cells : (plane0 + num_planes) * cells] = 0.0
-    scalar_base = spatial_planes * cells
-    inputs[:, scalar_base + scalar_offset : scalar_base + scalar_offset + num_scalars] = 0.0
+def strip_contingent_features(input_spatial, input_scalar):
+    """The baseline model's inputs: views of `input_spatial` (B, planes, 15, 15)
+    and `input_scalar` (B, scalars) -- torch tensors or numpy arrays -- without
+    the trailing contingent-draw blocks (which the engine left zero)."""
+    plane0, _, scalar_offset, _ = contingent_feature_layout()
+    return input_spatial[:, :plane0], input_scalar[:, :scalar_offset]
 
 
 class SlogDataset:

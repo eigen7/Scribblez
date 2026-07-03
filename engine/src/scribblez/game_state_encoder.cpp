@@ -181,13 +181,22 @@ void encode_pov(const Board& board, const Rack& my_rack, const Move& self_move,
   encode_cross_check_planes(board, apply_flip, out);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  const ContingentMap contingent = ContingentMap::compute(board, my_rack, unseen, dict);
-  contingent.encode_planes(apply_flip, out + kContingentPlane0 * kBoardCells);
+  if (contingent_features_enabled()) {
+    const ContingentMap contingent = ContingentMap::compute(board, my_rack, unseen, dict);
+    contingent.encode_planes(apply_flip, out + kContingentPlane0 * kBoardCells);
+    contingent.encode_scalars(out + kSpatialFloats + kContingentScalarOffset);
+  }
   encode_scalars(my_rack, unseen, self_move, opp_move, score_diff, out + kSpatialFloats);
-  contingent.encode_scalars(out + kSpatialFloats + kContingentScalarOffset);
 }
 
 }  // namespace
+
+namespace {
+bool g_contingent_features_enabled = true;
+}  // namespace
+
+void set_contingent_features_enabled(bool enabled) { g_contingent_features_enabled = enabled; }
+bool contingent_features_enabled() { return g_contingent_features_enabled; }
 
 void GameStateEncoder::apply_move(const Move& move) {
   if (move.type() == MoveType::PLAY) {

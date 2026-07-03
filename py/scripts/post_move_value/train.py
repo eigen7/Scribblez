@@ -26,12 +26,12 @@ import time
 import torch
 from scribblez.dashboard import db, react_server
 from scribblez.dataset import (
+    model_input_sizes,
     row_layout,
     slice_row_batch,
-    zero_contingent_features,
-    zero_contingent_features_flat,
+    strip_contingent_features,
 )
-from scribblez.ffi import StreamingTrainSource, get_input_shapes
+from scribblez.ffi import StreamingTrainSource, get_input_shapes, set_contingent_features
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value import analysis as post_move_analysis
@@ -80,9 +80,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--contingent-features",
         action="store_true",
-        help="Feed the contingent-draw potential input features (spatial planes + scalars) to "
-        "the model. Off zeroes those blocks -- in training batches and in the checkpoint eval "
-        "inputs alike -- giving the ablation baseline over the identical row layout.",
+        help="Compute the contingent-draw potential input features and feed them to the model "
+        "(the full 88-plane/992-scalar input). Off skips their move generation entirely and "
+        "trains the smaller base-layout model (85/936) -- the ablation baseline.",
     )
     p.add_argument("--seed", type=int, default=0, help="Base seed for game generation.")
     p.add_argument("--handicap-max", type=int, default=100, help="Random head-start max (0=off).")
@@ -142,11 +142,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def load_post_move_eval(args, spatial_planes: int) -> dict | None:
+def load_post_move_eval(args, full_spatial_planes: int) -> dict | None:
     """Build the frozen post-move-value input batch once (or None if disabled / the
     dataset is empty / the lexicon is unavailable). At each checkpoint the model is
     run over it and the predictions are written to the dashboard DB, where the
-    Positions tab pairs them with the Monte-Carlo ground truth."""
+    Positions tab pairs them with the Monte-Carlo ground truth. The inputs are
+    full-layout rows; predict() drops the contingent blocks for a baseline model."""
     if args.no_post_move_eval:
         return None
     try:
@@ -159,10 +160,12 @@ def load_post_move_eval(args, spatial_planes: int) -> dict | None:
             f"post-move-value eval disabled: no GCG positions in {args.post_move_eval_dataset}"
         )
         return None
-    if not args.contingent_features:
-        zero_contingent_features_flat(inputs, spatial_planes)
     timed_print(f"post-move-value eval: {len(names)} positions from {args.post_move_eval_dataset}")
-    return {"inputs": inputs, "spatial_planes": spatial_planes}
+    return {
+        "inputs": inputs,
+        "spatial_planes": full_spatial_planes,
+        "contingent_features": args.contingent_features,
+    }
 
 
 def eval_post_move(model, post_move_eval: dict, device, conn, generation: int, positions: int):
@@ -170,12 +173,16 @@ def eval_post_move(model, post_move_eval: dict, device, conn, generation: int, p
     per-position predictions (WLD probabilities + score-delta mean/std)."""
     model.eval()
     preds = post_move_analysis.predict(
-        model, post_move_eval["inputs"], post_move_eval["spatial_planes"], device
+        model,
+        post_move_eval["inputs"],
+        post_move_eval["spatial_planes"],
+        device,
+        post_move_eval["contingent_features"],
     )
     db.write_post_move_preds(conn, generation, positions, preds)
 
 
-def load_post_move_quality(args, spatial_planes: int) -> dict | None:
+def load_post_move_quality(args, full_spatial_planes: int) -> dict | None:
     """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth once
     (or None if disabled / the dataset or its ground truth is unavailable). At each
     checkpoint the model is run over it and aggregate quality scalars are recorded for
@@ -194,13 +201,16 @@ def load_post_move_quality(args, spatial_planes: int) -> dict | None:
             f"{args.post_move_quality_dataset}"
         )
         return None
-    if not args.contingent_features:
-        zero_contingent_features_flat(inputs, spatial_planes)
     timed_print(
         f"post-move-value quality eval: {len(names)} positions from "
         f"{args.post_move_quality_dataset}"
     )
-    return {"inputs": inputs, "spatial_planes": spatial_planes, "gt": gt}
+    return {
+        "inputs": inputs,
+        "spatial_planes": full_spatial_planes,
+        "contingent_features": args.contingent_features,
+        "gt": gt,
+    }
 
 
 def eval_post_move_quality(model, quality_eval: dict, device) -> dict:
@@ -208,7 +218,11 @@ def eval_post_move_quality(model, quality_eval: dict, device) -> dict:
     model-vs-Monte-Carlo quality scalars (win-equity/WLD + score-delta mean/std MAE)."""
     model.eval()
     preds = post_move_analysis.predict(
-        model, quality_eval["inputs"], quality_eval["spatial_planes"], device
+        model,
+        quality_eval["inputs"],
+        quality_eval["spatial_planes"],
+        device,
+        quality_eval["contingent_features"],
     )
     return post_move_analysis.quality_metrics(preds, quality_eval["gt"])
 
@@ -304,10 +318,13 @@ def run_streaming_training(
             # Copy rows out of the slot (slice_row_batch copies), then release so
             # producers can refill it while we run forward/backward on the GPU.
             batch = slice_row_batch(cpu_tensor.numpy(), input_layout, targets)
+            input_spatial, input_scalar = batch["input_spatial"], batch["input_scalar"]
             if not args.contingent_features:
-                zero_contingent_features(batch["input_spatial"], batch["input_scalar"])
-            input_spatial = batch["input_spatial"].to(device, non_blocking=True)
-            input_scalar = batch["input_scalar"].to(device, non_blocking=True)
+                # The engine left the contingent blocks zero; drop them so the
+                # baseline model sees its smaller base-layout input.
+                input_spatial, input_scalar = strip_contingent_features(input_spatial, input_scalar)
+            input_spatial = input_spatial.to(device, non_blocking=True)
+            input_scalar = input_scalar.to(device, non_blocking=True)
             tgt = {
                 "wld": batch["wld"].to(device, non_blocking=True),
                 "score_diff": batch["score_diff"].to(device, non_blocking=True),
@@ -441,6 +458,10 @@ def _checkpoint_and_eval(
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    # Pick the experiment arm before any engine call: it is baked into the
+    # process-wide FFI session (the baseline arm skips the contingent-map move
+    # generation entirely).
+    set_contingent_features(args.contingent_features)
 
     paths = TagPaths(args.tag, POST_MOVE_VALUE)
     paths.root.mkdir(parents=True, exist_ok=True)
@@ -451,8 +472,11 @@ def main() -> int:
         reset_tag(paths)
 
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
-    spatial_planes = in_shapes["input_spatial"][0]
-    scalar_size = in_shapes["input_scalar"][0]
+    full_spatial_planes = in_shapes["input_spatial"][0]
+    # The row layout is fixed; the baseline model consumes it minus the
+    # (all-zero) contingent blocks, so its input width -- and parameter count --
+    # is smaller than the full-feature model's.
+    spatial_planes, scalar_size = model_input_sizes(args.contingent_features)
     lex = LexiconArgs.from_args(args)
     lexicon_module = lex.build(channels=args.trunk_channels)
     if lexicon_module is not None:
@@ -481,8 +505,8 @@ def main() -> int:
         },
     )
 
-    post_move_eval = load_post_move_eval(args, spatial_planes)
-    post_move_quality = load_post_move_quality(args, spatial_planes)
+    post_move_eval = load_post_move_eval(args, full_spatial_planes)
+    post_move_quality = load_post_move_quality(args, full_spatial_planes)
 
     if not args.no_dashboard:
         for proc in react_server.spawn(

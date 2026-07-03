@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 from scribblez.dashboard import db, plots
-from scribblez.dataset import row_layout, slice_row_batch
+from scribblez.dataset import model_input_sizes, row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes, get_target_shapes, row_size_floats
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.model import PostMoveValueModel
@@ -259,8 +259,9 @@ def test_streaming_loop_one_step(tmp_path):
     """The training loop writes a checkpoint, an ONNX export, and a throughput row."""
     _require_engine()
 
-    in_shapes = {s.name: s.dims for s in get_input_shapes()}
-    sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]
+    # No --contingent-features below, so the loop strips the feature blocks and
+    # the model must be sized to the base layout.
+    sp, sc = model_input_sizes(contingent_features=False)
 
     # fmt: off
     args = build_arg_parser().parse_args(

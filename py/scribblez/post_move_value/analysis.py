@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from natsort import natsorted
 
+from scribblez.dataset import strip_contingent_features
 from scribblez.ffi import analyze_post_move_gcg
 
 # The frozen evaluation sets: penultimate-bingo positions whose Monte-Carlo ground
@@ -102,7 +103,9 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
 
 
 @torch.no_grad()
-def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
+def predict(
+    model, inputs: np.ndarray, spatial_planes: int, device, contingent_features: bool
+) -> dict:
     """Run `model` over the dataset inputs and decode each position's value outputs:
 
         wld      (N, 3) float32   softmax win/draw/loss probabilities (in that order)
@@ -111,8 +114,14 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
 
     These are exactly what the dashboard pairs against the Monte-Carlo ground truth:
     the WLD bars and the score-delta Gaussian overlaid on the MC histogram.
+
+    `inputs` are full-layout rows split by the full `spatial_planes`; with
+    `contingent_features` off, the trailing contingent-draw blocks are dropped
+    to match the baseline model's smaller input.
     """
     spatial, scalar = split_input(inputs, spatial_planes)
+    if not contingent_features:
+        spatial, scalar = strip_contingent_features(spatial, scalar)
     sp = torch.from_numpy(np.ascontiguousarray(spatial)).to(device)
     sc = torch.from_numpy(np.ascontiguousarray(scalar)).to(device)
     out = model(sp, sc)

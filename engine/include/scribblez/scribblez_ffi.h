@@ -65,9 +65,14 @@ int scribblez_max_move_per_lane_input_floats(void);
 // There is deliberately no failure signaling past that point: nothing useful
 // can be done without a dictionary, so a live session pointer is proof the
 // lexicon is loaded.
+// `contingent_features` selects the process's experiment arm: nonzero computes
+// the contingent-draw potential input features; zero skips their move
+// generation entirely, leaving the feature blocks zero (the row layout is
+// unchanged -- callers drop the zero tail so the model consumes the smaller
+// base layout).
 typedef struct ScribblezSession ScribblezSession;
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features);
 void scribblez_session_delete(ScribblezSession* s);
 
 // Score-differential sweep encoder -- a sister to the DataLoader that reads a

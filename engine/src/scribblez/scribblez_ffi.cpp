@@ -4,6 +4,7 @@
 #include "scribblez/block_decoder.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/game_runner.h"
+#include "scribblez/game_state_encoder.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/lane_analysis.h"
 #include "scribblez/lane_targets.h"
@@ -39,7 +40,7 @@ using scribblez::binlog::kVersion;
 // A constructed session is proof the lexicon is loaded, so the methods do no
 // load-failure checking.
 struct ScribblezSession {
-  explicit ScribblezSession(const char* lexicon_name);
+  ScribblezSession(const char* lexicon_name, bool contingent_features);
 
   int encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move, int diff_lo,
                               int diff_hi, float* out_inputs) const;
@@ -78,11 +79,13 @@ const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
 
 }  // namespace
 
-ScribblezSession::ScribblezSession(const char* lexicon_name)
-    : dict(load_session_dictionary(lexicon_name)) {}
+ScribblezSession::ScribblezSession(const char* lexicon_name, bool contingent_features)
+    : dict(load_session_dictionary(lexicon_name)) {
+  scribblez::set_contingent_features_enabled(contingent_features);
+}
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name) {
-  return new ScribblezSession(lexicon_name);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features) {
+  return new ScribblezSession(lexicon_name, contingent_features != 0);
 }
 
 void scribblez_session_delete(ScribblezSession* s) { delete s; }
