@@ -92,6 +92,14 @@ RUN apt-get update && \
 # 6d) ruff (python formatting)
 RUN pip3 install --no-cache-dir ruff
 
+# 6e) Protobuf headers, for reading ONNX metadata_props from C++: scribblez_nn
+#     parses the exported model's input-encoding arm out of the model file via
+#     the system ONNX protobuf (libonnx-dev in section 2 supplies the generated
+#     message headers; this supplies google/protobuf and libprotobuf.so).
+RUN apt-get update && \
+    apt-get install -y libprotobuf-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
@@ -110,7 +118,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.3.0"
+ARG VERSION="3.4.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 
