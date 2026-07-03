@@ -148,6 +148,92 @@ For the HastyBot (GPU-free) case a "unit of work" can be an entire game — the
 pool structure is identical; only the eval-batching layer differs. The disk
 `GameRunner` path and the streaming ring-buffer path both ride the same pool.
 
+## Producer process model: relaunch-per-generation vs. run-forever
+
+The generational trainer currently **relaunches the `play_game` subprocess once
+per generation** ([train_generational.py](../py/scripts/post_move_value/train_generational.py)
+via [generate_data.run_games](../py/scripts/generate_data.py)): each generation
+opens its directory, runs `play_game --games N --threads T` into it, and the
+process exits at N games. The thread count is a live control (`CpuController`),
+but it only takes effect at the next launch — **generation-boundary granularity**.
+
+A **run-forever** producer — one long-lived process (or in-process game-pool)
+that never exits, is told which generation directory to write to, and is retuned
+live — is the alternative, and the shape AlphaZeroArcade uses. It exists there for
+reasons that are **specifically neural**:
+
+- **Game length.** Neural self-play games are long (MCTS runs many GPU
+  evaluations per move). A fixed-game-count-then-exit batch leaves the GPU
+  underutilized at the tail, while the last few long games finish and the rest of
+  the pool sits idle.
+- **Weight refresh beats reload.** Updating the weights of an already-loaded
+  TensorRT engine is far cheaper than loading a fresh ONNX on a restart. A
+  run-forever process swaps weights in place; a relaunch pays the full load each
+  generation.
+- **Straddling boundaries.** Because games are long and weight-refresh is cheap,
+  AZA lets a game **start under model N and finish under model N+1 (or later)**:
+  when a new model is ready, the C++ pauses all in-flight games, refreshes the
+  weights, and unpauses. No game is discarded at a boundary, so there is no tail
+  to waste.
+
+**For HastyBot self-play none of this applies.** Games are ~milliseconds, there is
+no model to load or refresh, and there is no GPU tail. Relaunch-per-generation
+costs only a process spawn plus agent construction per generation — negligible
+against a 20k-game generation. So the run-forever machinery buys essentially
+nothing in the current regime; its value arrives with neural agents.
+
+### What a run-forever producer needs beyond the game-pool
+
+The [game-pool](#the-game-pool-producer-c) (G ≫ T, live `target_threads_`) is the
+prerequisite — without it "live threads" and "run-forever" are the same problem.
+But it is not sufficient; a forever producer also needs:
+
+- **Flow control (pause/resume).** A forever producer outruns a slower trainer and
+  floods disk. It must produce ~a generation ahead, then park until the window
+  slides — the same pause/resume AZA drives on its workers. This is the largest
+  functional gap beyond the pool.
+- **Drain-and-flush at boundaries.** Rolling from gen N to N+1, in-flight games
+  must be resolved and the current `.slog` file **flushed and closed** so that
+  every file belongs to exactly one generation. The DataLoader trusts each file's
+  header (`num_sample_positions`, game count) and the lifecycle counts committed
+  games per directory, so a file straddling N/N+1 corrupts both. (This is distinct
+  from AZA's *game*-level straddling above: a single game may span model versions,
+  but a single *file* must not span generation directories.) Relaunch gets this
+  free — process exit flushes everything.
+- **Crash supervision.** Relaunch-per-generation makes a crashed producer a
+  self-healing partial generation (manifest still `generating`, count < target →
+  regenerate). A forever process must be supervised for liveness and, on death,
+  relaunched and re-pointed at the current generation with its already-committed
+  count. You trade *routine* restarts for *crash* restarts, not zero restarts.
+- **A control path.** Relaunch needs none. Forever needs Python→C++ messages
+  (switch-directory, set-threads, pause/resume, and later refresh-weights). The
+  simplest local form removes the problem entirely: run the producer **in-process
+  via FFI** (as the streaming trainer already does), so these become direct calls
+  rather than a wire protocol. A **subprocess + socket** is warranted only for
+  process isolation (a C++ crash not taking the trainer down) or the path to
+  remote workers; if taken, design the channel to also carry the weight-refresh
+  message the neural phase will need.
+
+### Sequencing: capture now, implement with the neural work
+
+The neural-specific pieces — straddling, in-place weight refresh, and the
+GPU-tail motivation — **cannot be designed correctly before the TensorRT neural
+agent exists**, because their interfaces (the eval-batching hook on the pool, the
+weight-refresh API, GPU contention) are defined by that agent. Building them now
+against HastyBot means writing stubs against guessed APIs that cannot be exercised
+(no tail, no weights) and will likely be re-cut when the real agent lands. Even
+the game-pool's reusable *skeleton* (circular buffer, CV-parked workers,
+round-robin) has one neural-dependent seam — the "unit of work / yield-for-eval"
+granularity — best cut once the MCTS structure is known.
+
+The durable move is therefore to **record this design now** (this section) and
+implement the run-forever mechanics as part of [Roadmap](#roadmap) step 3, when
+the neural agent makes those interfaces concrete. The one present-value exception
+is mid-generation live-T for a HastyBot auto-balancer (see
+[Resource contention](#two-regimes)): if that is built, the game-pool pays for
+itself independent of neural — but the balancer is itself deferred, and
+boundary-granularity thread tuning already covers most of the need.
+
 ## The lifecycle orchestrator (Python)
 
 Keep the three single-responsibility scripts and add a thin orchestrator plus one
