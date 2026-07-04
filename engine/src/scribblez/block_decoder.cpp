@@ -2,6 +2,7 @@
 
 #include "scribblez/binary_log.h"
 #include "scribblez/data_loader.h"
+#include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/position_json.h"
 #include "scribblez/training_task.h"
 
@@ -67,6 +68,11 @@ boost::json::array move_squares(const Move& m) {
 
 }  // namespace
 
+int BlockDecoder::row_floats_for(DecodeTask task, const InputEncodingSpec& spec) {
+  if (task == DecodeTask::kMaxMovePerLane) return MaxMovePerLaneTask::kRowFloats;
+  return input_floats(spec) + kLabelFloats;
+}
+
 GameLog BlockDecoder::game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn) {
   const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
   const GameMetadata& gm = metas[game_idx];
@@ -128,8 +134,15 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
     return;
   }
   const GameLog g = game_view(buf, game_idx, nullptr);
-  pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(turn_idx), post_move, flip,
-                                     output + output_row * row_floats_);
+  float* out = output + output_row * row_floats_;
+  // The lane task encodes the pre-move position (its labels come from enumerating
+  // legal moves at the position), so it ignores the caller's post_move flag.
+  if (task_ == DecodeTask::kMaxMovePerLane) {
+    pos_.encode_row<MaxMovePerLaneTask>(g, static_cast<int>(turn_idx), /*post_move=*/false, flip,
+                                        out);
+  } else {
+    pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(turn_idx), post_move, flip, out);
+  }
 }
 
 void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,

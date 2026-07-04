@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from scribblez.dashboard import db
-from scripts.post_move_value.train_generational import CONTROL_BASE_LR, LrController
+from scribblez.generational.controls import CONTROL_BASE_LR, LrController
 
 
 def test_lr_controller_serves_base_and_logs_changes(tmp_path):

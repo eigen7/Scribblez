@@ -10,14 +10,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 from scribblez.dashboard import db, plots
 from scribblez.dataset import row_layout, slice_row_batch
 from scribblez.ffi import StreamingTrainSource, get_input_shapes, get_target_shapes, row_size_floats
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
-from scribblez.post_move_value.model import PostMoveValueModel
 from scribblez.train_common import TrainStepWriter
-from scripts.post_move_value.train import build_arg_parser, run_streaming_training
 
 _FFI_LIB = Path("/workspace/repo/target/engine/libscribblez_ffi.so")
 
@@ -221,90 +217,3 @@ def test_train_step_writer_gradient_storage_uniform_read(tmp_path):
     w.close()
     n_rows = conn.execute("SELECT COUNT(DISTINCT step) AS c FROM train_step").fetchone()["c"]
     assert n_rows <= 12
-
-
-class _FakeSource:
-    """Stands in for StreamingTrainSource: yields a fixed random batch each call."""
-
-    def __init__(self, batch_size, row_floats):
-        self.bs = batch_size
-        self._tensor = torch.rand(batch_size, row_floats)
-        self._n = 0
-
-    def start(self):
-        pass
-
-    def next_slot(self):
-        self._n += 1
-        return 0, self._tensor
-
-    def release(self, slot_index):
-        pass
-
-    def stats(self):
-        return {
-            "games_played": self._n * self.bs,
-            "games_dropped": 0,
-            "rows_committed": self._n * self.bs,
-            "slots_published": self._n,
-            "producer_blocked_ns": 0,
-            "consumer_blocked_ns": self._n,
-        }
-
-    def stop(self):
-        pass
-
-
-def test_streaming_loop_one_step(tmp_path):
-    """The training loop writes a checkpoint, an ONNX export, and a throughput row."""
-    _require_engine()
-
-    in_shapes = {s.name: s.dims for s in get_input_shapes()}
-    sp, sc = in_shapes["input_spatial"][0], in_shapes["input_scalar"][0]
-
-    # fmt: off
-    args = build_arg_parser().parse_args(
-        [
-            "-t", "looptest", "--device", "cpu", "--batch-size", "8",
-            "--checkpoint-every", "8", "--log-every", "8", "--max-positions", "16",
-            "--num-blocks", "1", "--trunk-channels", "8",
-            "--no-dashboard", "--no-post-move-eval", "--no-post-move-quality",
-            "--contingent-features",
-        ]
-    )
-    # fmt: on
-    paths = TagPaths("looptest", POST_MOVE_VALUE, mount_root=tmp_path)
-    paths.root.mkdir(parents=True, exist_ok=True)
-    device = torch.device("cpu")
-    model = PostMoveValueModel(spatial_planes=sp, scalar_size=sc, num_blocks=1, trunk_channels=8)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-    conn = db.connect(paths.dashboard_db)
-
-    source = _FakeSource(args.batch_size, row_size_floats())
-    final = run_streaming_training(
-        model,
-        optimizer,
-        source,
-        conn,
-        paths,
-        device,
-        args,
-        post_move_eval=None,
-        post_move_quality=None,
-        start_ckpt=0,
-        start_positions=0,
-        start_step=0,
-        spatial_planes=sp,
-        scalar_size=sc,
-    )
-
-    assert final == 16
-    assert paths.rolling_checkpoint.exists()
-    assert paths.onnx_path(1).exists()  # first checkpoint exported
-    assert len(db.read_throughput(conn)) >= 1
-    # One train_step row per minibatch (16 positions / batch 8 == 2 steps).
-    ts = db.read_train_steps(conn)
-    assert list(ts["step"]) == [1, 2]
-    # Resume state is recoverable (including the minibatch step counter).
-    ckpt = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
-    assert ckpt["positions"] == 16 and ckpt["ckpt_idx"] == 2 and ckpt["step"] == 2

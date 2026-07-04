@@ -53,6 +53,7 @@
 
 #include "scribblez/block_decoder.h"
 #include "scribblez/input_encoder.h"
+#include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/training_targets.h"
 
 #include <condition_variable>
@@ -83,6 +84,9 @@ class DataLoader {
     // Input-encoding configuration the decoders encode with (lexicon +
     // feature blocks). The dict is required and must outlive the loader.
     InputEncodingSpec spec{nullptr, false};
+    // Which training row the loader decodes, and (for the lane task) that a game
+    // expands over all its turns rather than only the eligible prefix.
+    DecodeTask task = DecodeTask::kPostMoveValue;
     int64_t memory_budget = 256LL * 1024 * 1024;  // 256 MB resident buffers
     int num_worker_threads = 4;                   // decoder pool size
     int num_prefetch_threads = 2;                 // disk-I/O pool size
@@ -143,9 +147,18 @@ class DataLoader {
   // at least batch_size * row_size_floats() floats.
   int load_batch(float* output);
 
-  int row_size_floats() const { return input_floats(params_.spec) + kLabelFloats; }
-  int input_size_floats() const { return input_floats(params_.spec); }
-  static constexpr int label_size_floats() { return kLabelFloats; }
+  int row_size_floats() const {
+    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kRowFloats
+                                                       : input_floats(params_.spec) + kLabelFloats;
+  }
+  int input_size_floats() const {
+    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kInputFloats
+                                                       : input_floats(params_.spec);
+  }
+  int label_size_floats() const {
+    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kLabelFloats
+                                                       : kLabelFloats;
+  }
 
   // =========================================================================
   // Inner classes
@@ -153,13 +166,16 @@ class DataLoader {
 
   // One registered .slog file. Owns the in-memory buffer once loaded.
   //
-  // A file's "positions" are its expanded training rows: one per eligible turn
-  // across all games (the sum of every GameMetadata::eligible_turns, read from
-  // the file header at construction). sample_to_game_turn() maps a flat
-  // position index back to the (game, turn) pair it stands for.
+  // A file's "positions" are its expanded training rows: one per included turn
+  // across all games, read from the file header at construction.
+  // `expand_all_turns` chooses which turns count -- every turn (the lane task)
+  // or only each game's bag-non-empty eligible prefix (GameMetadata::eligible_turns,
+  // the value task). sample_to_game_turn() maps a flat position index back to
+  // the (game, turn) pair it stands for.
   class DataFile {
    public:
-    DataFile(const std::string& path, int64_t num_positions, int64_t file_size);
+    DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
+             bool expand_all_turns);
     ~DataFile();
 
     const std::string& path() const { return path_; }
@@ -183,10 +199,12 @@ class DataLoader {
     // Per-game index, read from the file header + metadata table at
     // construction (no resident body required).
     int64_t num_games() const { return num_games_; }
-    int eligible_turns(int64_t game) const {
-      return static_cast<int>(cumulative_eligible_[game + 1] - cumulative_eligible_[game]);
+    // Number of turns game `game` expands into (all turns or the eligible
+    // prefix, per the file's expand_all_turns), i.e. its count of flat rows.
+    int turns_in_game(int64_t game) const {
+      return static_cast<int>(cumulative_turns_[game + 1] - cumulative_turns_[game]);
     }
-    int64_t game_base(int64_t game) const { return cumulative_eligible_[game]; }
+    int64_t game_base(int64_t game) const { return cumulative_turns_[game]; }
 
    private:
     std::string path_;
@@ -194,10 +212,11 @@ class DataLoader {
     int64_t file_size_;
     int64_t num_games_ = 0;
 
-    // Per-game prefix sums of eligible_turns (size num_games_ + 1), read from the
-    // file's metadata table at construction; cumulative_eligible_[g] is the first flat
-    // position index of game g and cumulative_eligible_.back() is num_positions_.
-    std::vector<int64_t> cumulative_eligible_;
+    // Per-game prefix sums of included-turn counts (size num_games_ + 1), read
+    // from the file's metadata table at construction; cumulative_turns_[g] is the
+    // first flat position index of game g and cumulative_turns_.back() is
+    // num_positions_.
+    std::vector<int64_t> cumulative_turns_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
@@ -260,7 +279,7 @@ class DataLoader {
   // Owns all DataFiles, manages LRU eviction and prefetch orchestration.
   class FileManager {
    public:
-    FileManager(int64_t memory_budget, int num_prefetch_threads);
+    FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns);
     ~FileManager();
 
     void append(const std::string& path, int64_t num_positions, int64_t file_size);
@@ -290,6 +309,7 @@ class DataLoader {
     void exit_prefetch_loop();
 
     int64_t memory_budget_;
+    bool expand_all_turns_;  // passed to each DataFile: expand all turns vs the eligible prefix
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
@@ -312,7 +332,7 @@ class DataLoader {
   class WorkerThread {
    public:
     WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
-                 const InputEncodingSpec& spec);
+                 const InputEncodingSpec& spec, DecodeTask task);
     ~WorkerThread();
 
     void quit();
@@ -341,7 +361,8 @@ class DataLoader {
   // Distributes WorkUnits to a pool of WorkerThreads.
   class WorkManager {
    public:
-    WorkManager(FileManager* file_manager, int num_threads, const InputEncodingSpec& spec);
+    WorkManager(FileManager* file_manager, int num_threads, const InputEncodingSpec& spec,
+                DecodeTask task);
     ~WorkManager();
 
     // Processes all work units. Blocks until all are complete.

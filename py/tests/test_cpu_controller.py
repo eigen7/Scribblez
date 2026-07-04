@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import torch
 from scribblez.dashboard import db
-from scripts.post_move_value.train_generational import (
+from scribblez.generational.controls import (
     CONTROL_DATALOADER_WORKERS,
     CONTROL_GEN_THREADS,
     CONTROL_TORCH_THREADS,

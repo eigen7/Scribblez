@@ -165,8 +165,13 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
 // Opaque DataLoader handle.
 typedef struct DataLoaderHandle DataLoaderHandle;
 
+// Create a loader over the session's lexicon. `task` selects the training row it
+// decodes: 0 = the post-move value row (expands each game over its bag-non-empty
+// eligible-turn prefix), 1 = the max-move-per-lane row (expands over every turn).
+// A task-1 loader emits scribblez_max_move_per_lane_row_size_floats() per row; a
+// task-0 loader emits scribblez_row_size_floats().
 DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
-                                   int num_worker_threads, int num_prefetch_threads);
+                                   int num_worker_threads, int num_prefetch_threads, int task);
 
 void scribblez_dl_delete(DataLoaderHandle* h);
 

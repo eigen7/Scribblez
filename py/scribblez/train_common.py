@@ -1,10 +1,16 @@
-"""Shared scaffolding for the streaming trainers.
+"""Task-independent training scaffolding shared across the codebase.
 
-Both streaming trainers (post-move value, max-move-per-lane) drive the same
-in-process self-play ring buffer and write to the same per-tag dashboard DB, so
-the task-independent plumbing -- checkpoint save/resume, run-artifact reset,
-throughput/backpressure accounting, and interval averaging -- lives here. Each
-trainer keeps only its task-specific model, loss, and eval.
+Two groups of helpers live here:
+
+- Used by the generational trainers (post-move value, max-move-per-lane):
+  `reset_tag` (run-artifact reset) and `timed_print` (progress lines).
+- The in-process streaming self-play plumbing -- `ThroughputMeter` /
+  `TrainStepWriter` / `IntervalStats`, `add_train_log_args`, and the rolling
+  checkpoint save/resume -- which drive the `StreamingTrainSource` ring buffer
+  and write throughput/backpressure and per-minibatch series to the per-tag
+  dashboard DB. The generational trainers generate to disk instead, but the
+  streaming source and this plumbing are retained as the substrate the batched
+  neural-self-play game pool will reuse (see docs/generational_training.md).
 """
 
 import shutil

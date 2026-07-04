@@ -1,41 +1,45 @@
 # Generational training
 
-This is a design proposal for a third training pipeline that sits between the two
-that exist today, plus the C++ and coordination machinery it needs. It is
-forward-looking: it describes a system to be built, not current code. For the
-current pipelines it references, see [docs/architecture.md](architecture.md)
-(the data pipeline) and [docs/streaming-pipeline.md](streaming-pipeline.md) (the
-in-process streaming trainer).
+This is the training pipeline — implemented as
+[scripts/post_move_value/train.py](../py/scripts/post_move_value/train.py) and
+[scripts/max_move_per_lane/train.py](../py/scripts/max_move_per_lane/train.py) —
+plus the C++ and coordination machinery it grows into. The core lifecycle
+(rows-clock, generations, the sliding window, reuse-driven epochs, restart
+reconciliation, and the live dashboard controls) is built; the game-pool
+producer, the resource-contention manager, and distributed workers described
+below are forward-looking. For the data pipeline it builds on, see
+[docs/architecture.md](architecture.md).
 
 ## Motivation
 
-We have two training pipelines today, at opposite extremes:
+Generational training replaced two earlier pipelines that sat at opposite
+extremes:
 
-- **Streaming** ([train.py](../py/scripts/post_move_value/train.py)): C++
-  self-play feeds sampled rows straight into the GPU loop through an in-process
-  ring buffer. One position per game, no shuffle, no disk. Each position is used
-  once and dropped. Ideal when generation is cheap and abundant (HastyBot
-  self-play), but it wastes the expensive part of every game — the game was
-  played to completion to yield a single training row.
+- **Streaming**: C++ self-play fed sampled rows straight into the GPU loop
+  through an in-process ring buffer. One position per game, no shuffle, no disk.
+  Each position was used once and dropped. Ideal when generation is cheap and
+  abundant (HastyBot self-play), but it wasted the expensive part of every game —
+  the game was played to completion to yield a single training row. (The C++ ring
+  buffer, `StreamingTrainSource`, is retained as the substrate the neural game
+  pool will reuse; see [The game-pool producer](#the-game-pool-producer-c).)
 
-- **Disk** ([train_disk.py](../py/scripts/post_move_value/train_disk.py) +
-  [generate_data.py](../py/scripts/generate_data.py)): generate all `.slog` data
-  up front, then epoch over it. Reuses every position across epochs and samples
-  many turns per game, but the lifecycle is rigid — generate everything, then
-  train everything — with none of the streaming trainer's stop-and-resume-any-time
+- **Disk** ([generate_data.py](../py/scripts/generate_data.py) + a fixed-epoch
+  trainer): generate all `.slog` data up front, then epoch over it. Reused every
+  position across epochs and sampled many turns per game, but the lifecycle was
+  rigid — generate everything, then train everything — with no stop-and-resume
   ergonomics.
 
-The dashboard shows the streaming trainer is heavily CPU-bound: the GPU is
-starved waiting for game generation. The obvious lever is to extract more
-gradient signal from each generated position — sample more turns per game, and
-reuse each position across several passes — which the disk pipeline can do but
-the streaming pipeline cannot. The motivation sharpens when self-play graduates
-from HastyBot to a neural agent: generating a game becomes far more expensive, so
-squeezing maximum training value out of each one stops being optional.
+The streaming trainer was heavily CPU-bound: the GPU starved waiting for game
+generation. The obvious lever is to extract more gradient signal from each
+generated position — sample more turns per game, and reuse each position across
+several passes — which the disk pipeline could do but the streaming pipeline
+could not. The motivation sharpens when self-play graduates from HastyBot to a
+neural agent: generating a game becomes far more expensive, so squeezing maximum
+training value out of each one stops being optional.
 
-**Generational training** is the pipeline that gets the disk pipeline's data
-reuse with the streaming pipeline's ergonomics, and whose structure extends
-cleanly to neural self-play and, eventually, remote game-generation workers.
+**Generational training** gets the disk pipeline's data reuse with the streaming
+pipeline's stop-and-resume ergonomics, and its structure extends cleanly to
+neural self-play and, eventually, remote game-generation workers.
 
 ## Core concepts
 
@@ -151,7 +155,7 @@ pool structure is identical; only the eval-batching layer differs. The disk
 ## Producer process model: relaunch-per-generation vs. run-forever
 
 The generational trainer currently **relaunches the `play_game` subprocess once
-per generation** ([train_generational.py](../py/scripts/post_move_value/train_generational.py)
+per generation** ([train.py](../py/scripts/post_move_value/train.py)
 via [generate_data.run_games](../py/scripts/generate_data.py)): each generation
 opens its directory, runs `play_game --games N --threads T` into it, and the
 process exits at N games. The thread count is a live control (`CpuController`),
@@ -208,7 +212,7 @@ But it is not sufficient; a forever producer also needs:
 - **A control path.** Relaunch needs none. Forever needs Python→C++ messages
   (switch-directory, set-threads, pause/resume, and later refresh-weights). The
   simplest local form removes the problem entirely: run the producer **in-process
-  via FFI** (as the streaming trainer already does), so these become direct calls
+  via FFI** (as the `StreamingTrainSource` ring buffer already does), so these become direct calls
   rather than a wire protocol. A **subprocess + socket** is warranted only for
   process isolation (a C++ crash not taking the trainer down) or the path to
   remote workers; if taken, design the channel to also carry the weight-refresh
@@ -236,15 +240,15 @@ boundary-granularity thread tuning already covers most of the need.
 
 ## The lifecycle orchestrator (Python)
 
-Keep the three single-responsibility scripts and add a thin orchestrator plus one
-shared epoch function. The per-epoch training body currently inlined in
-[train_disk.py](../py/scripts/post_move_value/train_disk.py) is lifted into
-`train_common.run_epoch`, which both the fixed-dataset trainer and the
-generational orchestrator call. The learning rate is set per step from a pure
-function of the rows-clock (see below).
+The orchestrator lives in the trainer script and drives its per-minibatch step
+through a shared per-task `run_epoch`
+([post_move_value/train_loop.py](../py/scribblez/post_move_value/train_loop.py),
+[max_move_per_lane/train_loop.py](../py/scribblez/max_move_per_lane/train_loop.py)),
+so the gradient step is isolated from the lifecycle. The learning rate is set per
+step from a pure function of the rows-clock (see below).
 
 ```python
-# train_generational.py (skeleton)
+# train.py (skeleton)
 state = resume_generational(paths, model, optimizer)   # rows_trained, gen_idx, epoch_in_gen
 lr_fn = make_lr_fn(args.lr, args.warmup_rows)
 ensure_frozen_test_split(paths, args)                  # generate ONCE if absent
@@ -288,10 +292,10 @@ exactly what the resource manager arbitrates.
 
 ### Learning rate: a persisted manual control
 
-`CosineAnnealingLR(T_max=epochs)` (used by `train_disk.py`) is incompatible with
-an open-ended, stop-and-resume loop: it assumes a known total epoch count and
-anneals to ~0 at the end, but an open-ended, moving-target run has no fixed
-annealing horizon. Rather than compute the rate from a schedule, the **base
+A per-epoch cosine annealing schedule (`CosineAnnealingLR(T_max=epochs)`) is
+incompatible with an open-ended, stop-and-resume loop: it assumes a known total
+epoch count and anneals to ~0 at the end, but an open-ended, moving-target run has
+no fixed annealing horizon. Rather than compute the rate from a schedule, the **base
 learning rate is a live control value** managed from the dashboard's
 [Controls tab](#the-controls-tab), persisted to the control table and restored on
 restart. This follows KataGo and LeelaChessZero, which run a fixed learning rate

@@ -176,7 +176,13 @@ def _setup_lib(lib: ctypes.CDLL):
     ]
 
     lib.scribblez_dl_new.restype = ctypes.c_void_p
-    lib.scribblez_dl_new.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.c_int, ctypes.c_int]
+    lib.scribblez_dl_new.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int64,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
 
     lib.scribblez_dl_delete.restype = None
     lib.scribblez_dl_delete.argtypes = [ctypes.c_void_p]
@@ -547,19 +553,34 @@ def read_file_header(path: str | Path) -> tuple[int, int]:
 
 
 class NativeDataLoader:
-    """Python wrapper around the C++ DataLoader via FFI."""
+    """Python wrapper around the C++ DataLoader via FFI.
+
+    `task` selects which training row the loader decodes from each .slog game:
+    "post_move" (the post-move value row, over each game's eligible-turn prefix)
+    or "max_move_per_lane" (the per-lane row, over every turn). It fixes the row
+    width and is baked into the handle at construction.
+    """
+
+    _TASK_CODES = {"post_move": 0, "max_move_per_lane": 1}
 
     def __init__(
         self,
         memory_budget: int = 256 * 1024 * 1024,
         num_workers: int = 4,
         num_prefetch: int = 2,
+        task: str = "post_move",
     ):
+        if task not in self._TASK_CODES:
+            raise ValueError(f"unknown dataloader task {task!r}")
         self._lib = _lib()
         self._handle = self._lib.scribblez_dl_new(
-            _session(), memory_budget, num_workers, num_prefetch
+            _session(), memory_budget, num_workers, num_prefetch, self._TASK_CODES[task]
         )
-        self._row_floats = self._lib.scribblez_row_size_floats(_session())
+        self._row_floats = (
+            max_move_per_lane_row_size_floats()
+            if task == "max_move_per_lane"
+            else self._lib.scribblez_row_size_floats(_session())
+        )
 
     def __del__(self):
         if hasattr(self, "_handle") and self._handle:

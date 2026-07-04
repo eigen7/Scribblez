@@ -59,8 +59,8 @@ struct ScribblezSession {
   int post_move_value_analyze_gcg(const char* gcg_text, float* out_input) const;
   int post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
                                         float* out_input, char* out_err, int err_cap) const;
-  DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads,
-                           int num_prefetch_threads) const;
+  DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
+                           int task) const;
   StreamHandle* stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
                            int num_threads, bool post_move, bool apply_symmetry, uint64_t seed,
                            int handicap_max, const char* const* player_specs, int num_specs) const;
@@ -391,9 +391,11 @@ struct DataLoaderHandle {
 };
 
 DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker_threads,
-                                           int num_prefetch_threads) const {
+                                           int num_prefetch_threads, int task) const {
   DataLoader::Params p;
   p.spec = spec;
+  p.task = task == 1 ? scribblez::binlog::DecodeTask::kMaxMovePerLane
+                     : scribblez::binlog::DecodeTask::kPostMoveValue;
   p.memory_budget = memory_budget;
   p.num_worker_threads = num_worker_threads;
   p.num_prefetch_threads = num_prefetch_threads;
@@ -401,8 +403,8 @@ DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker
 }
 
 DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
-                                   int num_worker_threads, int num_prefetch_threads) {
-  return s->dl_new(memory_budget, num_worker_threads, num_prefetch_threads);
+                                   int num_worker_threads, int num_prefetch_threads, int task) {
+  return s->dl_new(memory_budget, num_worker_threads, num_prefetch_threads, task);
 }
 
 void scribblez_dl_delete(DataLoaderHandle* h) { delete h; }

@@ -21,12 +21,23 @@
 namespace scribblez {
 namespace binlog {
 
+// Which training task a decoder emits. This fixes both the row width and, one
+// level up in the DataLoader, which of a game's turns expand into rows:
+//   kPostMoveValue    -- input + wld/score-diff/opp-placement labels; a game
+//                        expands over its bag-non-empty eligible-turn prefix,
+//                        encoded post-move.
+//   kMaxMovePerLane   -- the lean board/rack input + per-lane occupancy/score/
+//                        mask labels; a game expands over every turn, encoded
+//                        pre-move (the labels come from legal-move enumeration
+//                        at the position, so the outcome/score fields are unused).
+enum class DecodeTask { kPostMoveValue, kMaxMovePerLane };
+
 class BlockDecoder {
  public:
-  // `spec` configures the input encoding (lexicon + feature blocks) and thus
-  // the width of the rows the decoder emits.
-  explicit BlockDecoder(const InputEncodingSpec& spec)
-      : row_floats_(input_floats(spec) + kLabelFloats), pos_(spec) {}
+  // `spec` configures the input encoding (lexicon + feature blocks); `task`
+  // selects which training row is emitted and thus its width.
+  explicit BlockDecoder(const InputEncodingSpec& spec, DecodeTask task = DecodeTask::kPostMoveValue)
+      : task_(task), row_floats_(row_floats_for(task, spec)), pos_(spec) {}
 
   // Decode games [local_start, local_start + n_rows) of the .slog file
   // pointed to by `buf`, emitting each game's eval-only `sampled_turn` into
@@ -71,6 +82,11 @@ class BlockDecoder {
   // returned view is valid until scratch_ is next reused.
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 
+  // Floats per emitted row for `task`: the lane task's fixed row, else the
+  // spec-dependent post-move input plus the post-move label block.
+  static int row_floats_for(DecodeTask task, const InputEncodingSpec& spec);
+
+  DecodeTask task_;
   int row_floats_;
   PositionEncoder pos_;
   std::vector<TurnRecord> scratch_;

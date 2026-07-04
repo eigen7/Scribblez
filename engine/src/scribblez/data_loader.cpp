@@ -37,12 +37,14 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
-// Read the per-game prefix sums of eligible_turns from a .slog file's header and
-// metadata table without resident body (cum[g] = first flat row index of game g,
-// cum.back() = total expanded rows). Sets `num_games`. On any read failure,
-// returns a one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
-std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& num_games,
-                                              int64_t num_games_fallback) {
+// Read the per-game prefix sums of included-turn counts from a .slog file's
+// header and metadata table without resident body (cum[g] = first flat row index
+// of game g, cum.back() = total expanded rows). `all_turns` counts every turn
+// of each game (the lane task); otherwise only the bag-non-empty eligible prefix
+// (the value task). Sets `num_games`. On any read failure, returns a
+// one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
+std::vector<int64_t> read_cumulative_turns(const std::string& path, int64_t& num_games,
+                                           int64_t num_games_fallback, bool all_turns) {
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
@@ -53,7 +55,8 @@ std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& 
       std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
       cum[0] = 0;
       for (int64_t g = 0; g < num_games; ++g) {
-        cum[g + 1] = cum[g] + static_cast<int64_t>(metas[g].eligible_turns);
+        const uint32_t turns = all_turns ? metas[g].num_turns : metas[g].eligible_turns;
+        cum[g + 1] = cum[g] + static_cast<int64_t>(turns);
       }
       return cum;
     }
@@ -73,25 +76,25 @@ std::vector<int64_t> read_cumulative_eligible(const std::string& path, int64_t& 
 // DataFile
 // ===========================================================================
 
-DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size)
+DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
+                               bool expand_all_turns)
     : path_(path), num_positions_(num_positions), file_size_(file_size) {
-  // Read the per-game eligible-turn index from the header + metadata table (no
+  // Read the per-game included-turn index from the header + metadata table (no
   // resident body needed), so an epoch can be sized and subsampled before the
-  // file body is loaded. num_positions_ is the expanded row count (== the
-  // header's num_sample_positions); the caller-passed value is only a fallback.
-  cumulative_eligible_ = read_cumulative_eligible(path_, num_games_, num_positions);
-  num_positions_ = cumulative_eligible_.back();
+  // file body is loaded. num_positions_ is the expanded row count; the
+  // caller-passed value is only a fallback.
+  cumulative_turns_ = read_cumulative_turns(path_, num_games_, num_positions, expand_all_turns);
+  num_positions_ = cumulative_turns_.back();
 }
 
 DataLoader::DataFile::~DataFile() { unload(); }
 
 GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
-  // cumulative_eligible_[g] <= sample_index.
-  auto it =
-    std::upper_bound(cumulative_eligible_.begin(), cumulative_eligible_.end(), sample_index);
-  int64_t g = (it - cumulative_eligible_.begin()) - 1;
-  int64_t turn = sample_index - cumulative_eligible_[g];
+  // cumulative_turns_[g] <= sample_index.
+  auto it = std::upper_bound(cumulative_turns_.begin(), cumulative_turns_.end(), sample_index);
+  int64_t g = (it - cumulative_turns_.begin()) - 1;
+  int64_t turn = sample_index - cumulative_turns_[g];
   return GameTurn{static_cast<uint32_t>(g), static_cast<uint16_t>(turn)};
 }
 
@@ -209,8 +212,11 @@ void DataLoader::PrefetchThread::loop() {
 // FileManager
 // ===========================================================================
 
-DataLoader::FileManager::FileManager(int64_t memory_budget, int num_prefetch_threads)
-    : memory_budget_(memory_budget), thread_table_(num_prefetch_threads) {
+DataLoader::FileManager::FileManager(int64_t memory_budget, int num_prefetch_threads,
+                                     bool expand_all_turns)
+    : memory_budget_(memory_budget),
+      expand_all_turns_(expand_all_turns),
+      thread_table_(num_prefetch_threads) {
   for (int i = 0; i < num_prefetch_threads; ++i) {
     prefetch_threads_.push_back(new PrefetchThread(&thread_table_, i));
   }
@@ -230,7 +236,7 @@ void DataLoader::FileManager::append(const std::string& path, int64_t num_positi
                                      int64_t file_size) {
   // DataFile derives its true (expanded) position count from the file header;
   // tally that, not the caller-passed value (which is the game count).
-  auto* f = new DataFile(path, num_positions, file_size);
+  auto* f = new DataFile(path, num_positions, file_size, expand_all_turns_);
   std::lock_guard<std::mutex> lock(mutex_);
   num_positions_ += f->num_positions();
   all_files_.push_back(f);
@@ -371,8 +377,8 @@ void DataLoader::FileManager::exit_prefetch_loop() {
 // ===========================================================================
 
 DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
-                                       const InputEncodingSpec& spec)
-    : file_manager_(file_manager), table_(table), id_(id), decoder_(spec) {
+                                       const InputEncodingSpec& spec, DecodeTask task)
+    : file_manager_(file_manager), table_(table), id_(id), decoder_(spec, task) {
   thread_ = std::thread(&WorkerThread::loop, this);
 }
 
@@ -435,10 +441,10 @@ void DataLoader::WorkerThread::do_work() {
 // ===========================================================================
 
 DataLoader::WorkManager::WorkManager(FileManager* file_manager, int num_threads,
-                                     const InputEncodingSpec& spec)
+                                     const InputEncodingSpec& spec, DecodeTask task)
     : thread_table_(num_threads) {
   for (int i = 0; i < num_threads; ++i) {
-    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i, spec));
+    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i, spec, task));
   }
 }
 
@@ -511,7 +517,7 @@ void DataLoader::SamplingManager::collect_sampled_order(const std::vector<DataFi
     DataFile* f = files[fi];
     const uint64_t file_key = std::hash<std::string>{}(f->path());
     for (int64_t g = 0; g < f->num_games(); ++g) {
-      append_game_turns(fi, g, f->eligible_turns(g), f->game_base(g), file_key,
+      append_game_turns(fi, g, f->turns_in_game(g), f->game_base(g), file_key,
                         config.turns_per_game, config.epoch_index);
     }
   }
@@ -601,8 +607,10 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
 
 DataLoader::DataLoader(const Params& params)
     : params_(params),
-      file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1)),
-      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1), params.spec) {}
+      file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1),
+                    params.task == DecodeTask::kMaxMovePerLane),
+      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1), params.spec,
+                    params.task) {}
 
 DataLoader::~DataLoader() = default;
 

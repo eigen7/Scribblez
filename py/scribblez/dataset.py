@@ -9,9 +9,10 @@ import torch
 from .ffi import (
     NativeDataLoader,
     get_input_shapes,
+    get_max_move_per_lane_input_shapes,
+    get_max_move_per_lane_target_shapes,
     get_target_shapes,
     read_file_header,
-    row_size_floats,
 )
 
 
@@ -69,6 +70,7 @@ class SlogDataset:
     def __init__(
         self,
         data_dir: str | Path | Iterable[str | Path],
+        task: str = "post_move",
         post_move: bool = True,
         apply_symmetry: bool = True,
         memory_budget: int = 512 * 1024 * 1024,
@@ -83,6 +85,7 @@ class SlogDataset:
             self.data_dirs = [Path(data_dir)]
         else:
             self.data_dirs = [Path(d) for d in data_dir]
+        self.task = task
         self.post_move = post_move
         self.apply_symmetry = apply_symmetry
 
@@ -92,19 +95,27 @@ class SlogDataset:
             dirs = ", ".join(str(d) for d in self.data_dirs)
             raise FileNotFoundError(f"No .slog files in {dirs}")
 
-        self._loader = NativeDataLoader(memory_budget, num_workers, num_prefetch)
+        self._loader = NativeDataLoader(memory_budget, num_workers, num_prefetch, task=task)
         self._num_games = 0
         for path in slog_files:
             num_games, file_size = read_file_header(path)
             self._loader.add_file(path, num_games, file_size)
             self._num_games += num_games
 
-        # num_samples is the loader's EXPANDED row count (one per eligible turn
+        # num_samples is the loader's EXPANDED row count (one per included turn
         # across every game), not the game count -- read it back from the loader,
         # which derives it from each file's header.
         self._total = self._loader.num_positions
-        self._row_floats = row_size_floats()
-        self._input_layout, self._targets = row_layout()
+        self._row_floats = self._loader.row_floats
+        # The row layout mirrors the loader's task: the post-move input/target
+        # shapes, or the max-move-per-lane ones.
+        if task == "max_move_per_lane":
+            self._input_shapes = get_max_move_per_lane_input_shapes()
+            target_shapes = get_max_move_per_lane_target_shapes()
+        else:
+            self._input_shapes = get_input_shapes()
+            target_shapes = get_target_shapes()
+        self._input_layout, self._targets = row_layout(self._input_shapes, target_shapes)
 
     @property
     def num_samples(self) -> int:
@@ -118,8 +129,9 @@ class SlogDataset:
 
     @property
     def input_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Per-input tensor shapes (channel/feature dims), keyed by name."""
-        return {s.name: s.dims for s in get_input_shapes()}
+        """Per-input tensor shapes (channel/feature dims), keyed by name, for the
+        dataset's task."""
+        return {s.name: s.dims for s in self._input_shapes}
 
     def iter_batches(
         self,

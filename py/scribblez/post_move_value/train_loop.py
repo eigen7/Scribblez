@@ -1,12 +1,11 @@
-"""Shared training-epoch loop for the post-move value model.
+"""Training-epoch loop for the post-move value model.
 
-Both the disk-based epoch trainer (train_disk.py) and the generational
-orchestrator (train_generational.py) drive the same per-minibatch step: move a
-batch to the device, forward, combined-loss backward, optimizer step, and
-accumulate the per-head losses plus WLD accuracy. Keeping the step here means
-the two trainers cannot drift in how a gradient update is taken; each script
-owns only its own data lifecycle, learning-rate policy, evaluation, and
-checkpointing.
+The generational trainer (scripts/post_move_value/train.py) drives its
+per-minibatch step through run_epoch: move a batch to the device, forward,
+combined-loss backward, optimizer step, and accumulate the per-head losses plus
+WLD accuracy. Keeping the step here (a sibling to the max-move-per-lane
+train_loop) isolates the gradient update from the orchestrator, which owns only
+the data lifecycle, learning-rate policy, evaluation, and checkpointing.
 """
 
 from __future__ import annotations
