@@ -60,9 +60,10 @@ def _train_step(conn, params, image_dir):
     recorded. Uses the streaming per-minibatch train_step curve when present, else
     falls back to the per-epoch loss from the metrics table (the generational
     trainer). Both carry control-change markers."""
-    steps = plots.train_step_grid(conn, normalized=_truthy(params.get("normalized")))
+    normalized = _truthy(params.get("normalized"))
+    steps = plots.train_step_grid(conn, normalized=normalized)
     if steps is None:
-        steps = plots.metrics_loss_grid(conn)
+        steps = plots.metrics_loss_grid(conn, normalized=normalized)
     quality = plots.eval_quality_grid(conn)
     parts = [p for p in (steps, quality) if p is not None]
     if not parts:

@@ -267,20 +267,51 @@ def _stacked_loss_figure(x, bands, title="Train loss (stacked, weighted)", y_lab
     return fig
 
 
-def _loss_bands(ts, idx, weights, normalized):
-    """Weighted per-component loss bands [(label, y), ...] bottom-to-top. When
-    `normalized`, each point is divided by that point's stack total, so every
-    column sums to 1 and band heights read as a share of the loss."""
+def _loss_bands(series, weights, normalized):
+    """Weighted per-component loss bands [(label, y), ...] bottom-to-top, drawn
+    from the aligned `series` dict (name -> y-array). When `normalized`, each point
+    is divided by that point's stack total, so every column sums to 1 and band
+    heights read as a share of the loss."""
     bands = [
-        (name if w == 1 else f"{w:g} x {name}", ts[name][idx] * w)
+        (name if w == 1 else f"{w:g} x {name}", np.asarray(series[name], dtype=np.float64) * w)
         for name, w in weights.items()
-        if name in ts
+        if name in series
     ]
     if normalized and bands:
         total = sum(y for _, y in bands)
         total = np.where(total == 0.0, 1.0, total)  # leave all-zero columns at 0
         bands = [(label, y / total) for label, y in bands]
     return bands
+
+
+def _loss_accuracy_grid(x, series, weights, normalized, conn):
+    """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
+    and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
+    heights show each term's share of the optimized total, and `normalized`
+    rescales every column to sum to 1 -- when loss coefficients (`weights`) were
+    recorded, else overlaid loss lines; plus an Accuracy panel for every '<x>_acc'
+    series. LR-change markers overlay the loss panel. Shared by the streaming
+    per-minibatch view and the per-checkpoint metrics view."""
+    if weights:
+        title, y_label = (
+            ("Train loss (stacked, % of total)", "fraction of total loss")
+            if normalized
+            else ("Train loss (stacked, weighted)", "loss")
+        )
+        loss_fig = _stacked_loss_figure(
+            x, _loss_bands(series, weights, normalized), title=title, y_label=y_label
+        )
+    else:
+        loss_names = [k for k in ("loss",) if k in series] + sorted(
+            k for k in series if k.startswith("loss_")
+        )
+        loss_fig = _step_figure("Train loss", x, [(series[k], k) for k in loss_names], "loss")
+    add_control_markers(loss_fig, conn)
+    figs = [loss_fig]
+    acc_names = sorted(k for k in series if k.endswith("_acc"))
+    if acc_names:
+        figs.append(_step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy"))
+    return column(row(*figs))
 
 
 def add_control_markers(fig, conn):
@@ -320,39 +351,36 @@ def _metric_vs_positions(conn, name: str):
     return [x for x, _ in xy], [y for _, y in xy]
 
 
-def metrics_loss_grid(conn):
-    """Per-checkpoint loss curves from the `metrics` table vs positions trained,
-    with control-change markers. This is the loss view for trainers that record
+def _metrics_series(conn):
+    """The metrics table's loss and accuracy series as an aligned {name: y-array}
+    dict over a shared positions x-axis. Only 'loss', 'loss_<head>', and '<x>_acc'
+    metrics are collected; they are co-written per checkpoint, so all share the
+    metrics table's epoch index. Returns (x, series) -- (None, {}) when nothing is
+    recorded, and NaN for any epoch a series happens to miss."""
+    pos_by_epoch = dict(zip(*db.read_metric_series(conn, "positions"), strict=True))
+    if not pos_by_epoch:
+        return None, {}
+    epochs = sorted(pos_by_epoch)
+    x = np.array([pos_by_epoch[e] for e in epochs], dtype=np.float64)
+    series = {}
+    for name in db.read_metric_names(conn):
+        if name == "loss" or name.startswith("loss_") or name.endswith("_acc"):
+            by_epoch = dict(zip(*db.read_metric_series(conn, name), strict=True))
+            series[name] = np.array([by_epoch.get(e, np.nan) for e in epochs], dtype=np.float64)
+    return x, series
+
+
+def metrics_loss_grid(conn, normalized: bool = False):
+    """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
+    `metrics` table vs positions trained: the loss view for trainers that record
     per-epoch metrics rather than the streaming per-minibatch train_step curve
-    (e.g. the generational trainer). None when no loss metric was recorded."""
-    names = [
-        n
-        for n in ("loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement")
-        if len(db.read_metric_series(conn, n)[0])
-    ]
-    if not names:
+    (e.g. the generational trainer). Renders identically to train_step_grid --
+    stacked weighted per-component losses (`normalized` -> per-column fractions),
+    an accuracy panel, control-change markers. None when no loss metric exists."""
+    x, series = _metrics_series(conn)
+    if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
-    fig = figure(
-        width=SERIES_SIZE,
-        height=SERIES_SIZE,
-        title="Train loss",
-        x_axis_label="positions trained",
-        y_axis_label="loss",
-        tools="pan,box_zoom,wheel_zoom,reset,save",
-    )
-    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0000}")], mode="vline"))
-    palette = Category10[10]
-    for i, name in enumerate(names):
-        xs, ys = _metric_vs_positions(conn, name)
-        src = ColumnDataSource(dict(x=xs, y=ys))
-        color = palette[i % len(palette)]
-        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=name)
-        fig.scatter("x", "y", source=src, color=color, size=4)
-    add_control_markers(fig, conn)
-    fig.legend.label_text_font_size = "8pt"
-    fig.legend.location = "top_right"
-    fig.legend.click_policy = "hide"
-    return fig
+    return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, conn)
 
 
 def train_step_grid(conn, normalized: bool = False):
@@ -378,29 +406,10 @@ def train_step_grid(conn, normalized: bool = False):
     if len(x_all) == 0:
         return None
     idx = _stride_idx(len(x_all), 4000)
-    x = x_all[idx]
-
-    weights = db.read_loss_weights(conn)
-    if weights:
-        bands = _loss_bands(ts, idx, weights, normalized)
-        if normalized:
-            loss_fig = _stacked_loss_figure(
-                x, bands, title="Train loss (stacked, % of total)", y_label="fraction of total loss"
-            )
-        else:
-            loss_fig = _stacked_loss_figure(x, bands)
-    else:
-        loss_names = [k for k in ("loss",) if k in ts] + sorted(
-            k for k in ts if k.startswith("loss_")
-        )
-        loss_fig = _step_figure("Train loss", x, [(ts[k][idx], k) for k in loss_names], "loss")
-
-    add_control_markers(loss_fig, conn)
-    acc_names = sorted(k for k in ts if k.endswith("_acc"))
-    figs = [loss_fig]
-    if acc_names:
-        figs.append(_step_figure("Accuracy", x, [(ts[k][idx], k) for k in acc_names], "accuracy"))
-    return column(row(*figs))
+    series = {k: v[idx] for k, v in ts.items()}
+    return _loss_accuracy_grid(
+        series["positions"], series, db.read_loss_weights(conn), normalized, conn
+    )
 
 
 # ---------------------------------------------------------------------------

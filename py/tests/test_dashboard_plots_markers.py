@@ -28,9 +28,11 @@ def test_metrics_loss_grid_adds_control_markers(tmp_path):
     db.write_control_event(conn, 150, "base_lr", 2.5e-4)
     db.write_control_event(conn, 250, "base_lr", 1e-4)
 
-    fig = plots.metrics_loss_grid(conn)
-    assert fig is not None
-    spans = [a for a in fig.center if isinstance(a, Span)]
-    labels = [a for a in fig.center if isinstance(a, Label)]
+    grid = plots.metrics_loss_grid(conn)
+    assert grid is not None
+    # The grid is a column(row(loss_fig, ...)); the markers live on the nested loss
+    # figure, so select recursively across the layout.
+    spans = list(grid.select({"type": Span}))
+    labels = list(grid.select({"type": Label}))
     assert {int(s.location) for s in spans} == {150, 250}
     assert len(labels) == 2
