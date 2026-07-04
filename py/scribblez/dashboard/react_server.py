@@ -56,6 +56,16 @@ def reclaim_port(port: int):
             pass
 
 
+def _dashboard_banner(url: str) -> str:
+    """A prominent, blank-line-padded banner pointing at the dashboard URL, so it
+    stands out from the surrounding training and npm output. Bold cyan on a
+    terminal; plain text when stderr is redirected to a file (no stray escapes)."""
+    line = f"Dashboard: {url}"
+    if sys.stderr.isatty():
+        line = f"\033[1;36m{line}\033[0m"
+    return f"\n{line}\n"
+
+
 def spawn(
     task: str,
     mount_root: str = "/workspace/mount",
@@ -90,11 +100,21 @@ def spawn(
         "VITE_DEV_PORT": str(dev_port),
         "VITE_API_PORT": str(api_port),
     }
-    vite = subprocess.Popen(["npm", "run", "dev"], cwd=WEB_DIR, env=env)
+    # Vite's own startup chatter (the npm "> dev" lines, the ready banner, and a
+    # transient "/api proxy ECONNREFUSED" while the API port is still binding) is
+    # discarded: it's noise, and its bare "Local: http://.../" URL tempts a click
+    # on a tag-less page. The one URL worth clicking is printed below instead.
+    vite = subprocess.Popen(
+        ["npm", "run", "dev"],
+        cwd=WEB_DIR,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     url = f"http://localhost:{dev_port}"
     if tag:
         url += f"/?tag={quote(tag)}"
-    print(f"React dashboard ({task}) at {url}", file=sys.stderr)
+    print(_dashboard_banner(url), file=sys.stderr)
     return [api, vite]
 
 

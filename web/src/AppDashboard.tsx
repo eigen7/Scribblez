@@ -178,6 +178,18 @@ export default function AppDashboard() {
     return () => clearInterval(id);
   }, [refreshTags]);
 
+  // Keep the `?tag=<tag>` query param in sync with the selected tag (whether the
+  // user picked it from the dropdown or it defaulted to the first run), so the URL
+  // is shareable and reload-stable. replaceState (not pushState) avoids stacking a
+  // history entry per selection; other params (e.g. `task`) are preserved.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (tag) params.set('tag', tag);
+    else params.delete('tag');
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+  }, [tag]);
+
   return (
     <div style={{
       fontFamily: 'system-ui, sans-serif', padding: '14px 18px', color: '#1a1f28', fontSize: 15,
