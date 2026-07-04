@@ -57,28 +57,97 @@ class View:
 # ---------------------------------------------------------------------------
 
 
-def _series_figure(conn, title: str, names: list[str]):
+# Below this many points an EMA is more misleading than helpful (its debiased head
+# just traces the raw points), so smoothing is a no-op until a curve has at least
+# this many samples -- the raw series is drawn as-is.
+_SMOOTH_MIN_POINTS = 10
+
+
+def _ema(values, weight: float = 0.85):
+    """TensorBoard-style debiased exponential moving average of a 1-D array, for
+    reading the trend of a noisy per-checkpoint curve. `weight` in [0, 1) sets the
+    smoothing (higher = smoother); the debias term cancels the zero-initialization
+    bias so the early points aren't dragged toward zero."""
+    out = np.empty(len(values), dtype=np.float64)
+    smoothed = 0.0
+    debias = 0.0
+    for i, v in enumerate(values):
+        smoothed = smoothed * weight + (1.0 - weight) * float(v)
+        debias = debias * weight + (1.0 - weight)
+        out[i] = smoothed / debias if debias else float(v)
+    return out
+
+
+def _plot_series(fig, x, y, color, label, smooth):
+    """Draw one metric series. With smoothing (once the series has at least
+    `_SMOOTH_MIN_POINTS` points) the plotted line is a debiased exponential moving
+    average, so the trend reads clearly; without it, the raw points are drawn as a
+    line plus markers. A single line is drawn either way -- no faint raw underlay --
+    so a smoothed curve reads as unambiguously smooth."""
+    if smooth and len(y) >= _SMOOTH_MIN_POINTS:
+        src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))))
+        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
+    else:
+        src = ColumnDataSource(dict(x=x, y=y))
+        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
+        fig.scatter("x", "y", source=src, color=color, size=4)
+
+
+def _set_y_range(fig, values, log):
+    """Give the figure an explicit padded y-range, so a (near-)constant series is
+    not drawn against Bokeh's degenerate default (which spans roughly value +/- 1,
+    burying e.g. a flat 1e-3 learning rate in a [-1, 1] band). Log axes pad
+    multiplicatively and clamp to positive data; linear axes pad additively."""
+    finite = values[np.isfinite(values)]
+    if log:
+        finite = finite[finite > 0.0]
+    if len(finite) == 0:
+        return
+    lo, hi = float(finite.min()), float(finite.max())
+    if log:
+        lo, hi = (
+            (lo / 3.0, hi * 3.0) if lo == hi else (lo / (hi / lo) ** 0.1, hi * (hi / lo) ** 0.1)
+        )
+    elif lo == hi:
+        span = abs(lo) or 1.0
+        lo, hi = lo - 0.5 * span, hi + 0.5 * span
+    else:
+        pad = 0.08 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+    fig.y_range = Range1d(lo, hi)
+
+
+def _series_figure(
+    sources, title: str, names: list[str], *, log: bool = False, smooth: bool = False
+):
+    """A square learning-curve figure of the metric `names`, each drawn once per
+    entry in `sources` -- a list of (conn, label_suffix). Every (source, metric)
+    pair gets its own color, and the legend suffix (e.g. ' [tagB]') names the
+    source, so a second tag's curves overlay the first as distinctly colored,
+    distinctly labeled lines for comparison. None when no source has any of the
+    metrics."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
         title=title,
         x_axis_label="epoch",
+        y_axis_type="log" if log else "linear",
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
     fig.add_tools(HoverTool(tooltips=[("epoch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
-    plotted = 0
-    for i, name in enumerate(names):
-        epochs, values = db.read_metric_series(conn, name)
-        if len(epochs) == 0:
-            continue
-        src = ColumnDataSource(dict(x=epochs, y=values))
-        color = palette[i % len(palette)]
-        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=name)
-        fig.scatter("x", "y", source=src, color=color, size=4)
-        plotted += 1
-    if plotted == 0:
+    all_values = []
+    for s, (conn, suffix) in enumerate(sources):
+        for i, name in enumerate(names):
+            epochs, values = db.read_metric_series(conn, name)
+            if len(epochs) == 0:
+                continue
+            color = palette[(s * len(names) + i) % len(palette)]
+            _plot_series(fig, epochs, values, color, name + suffix, smooth)
+            all_values.append(values)
+    if not all_values:
         return None
+    _set_y_range(fig, np.concatenate(all_values), log)
     fig.legend.label_text_font_size = "8pt"
     fig.legend.location = "top_left"
     fig.legend.click_policy = "hide"
@@ -89,7 +158,9 @@ def _series_figure(conn, title: str, names: list[str]):
 # metric-series names) and feeds series_grid(). Shared by the dashboard's tab
 # builders (Bokeh shell and the React data API).
 LOSS = [("Loss", ["loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement"])]
-TRAINING = [("Learning rate", ["lr"]), ("Epoch time (s)", ["elapsed_s"])]
+# The learning rate is stepped down multiplicatively (by hand from the Controls
+# tab) and spans orders of magnitude, so it reads best on a log y-axis.
+TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elapsed_s"])]
 PROBE_CURVES = [
     ("Structural probe", ["probe_mean_structural_score", "probe_mean_sigmoid_r2"]),
     ("Monotonicity violations", ["probe_total_violations"]),
@@ -115,23 +186,45 @@ POST_MOVE_QUALITY = [
 ]
 
 
-def series_grid(conn, groups: list[tuple[str, list[str]]], ncols: int = 3):
-    """A grid of square learning-curve figures for the given (title, metric-names) groups."""
-    figs = [f for title, names in groups if (f := _series_figure(conn, title, names))]
+def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
+    """A grid of square learning-curve figures for a single tag. Each group is
+    (title, metric-names) or (title, metric-names, opts), where opts may set
+    {"log": True} for a log y-axis. `smooth` overlays a debiased-EMA trend line on
+    each noisy curve."""
+    sources = [(conn, "")]
+    figs = []
+    for title, names, *rest in groups:
+        opts = rest[0] if rest else {}
+        f = _series_figure(sources, title, names, log=opts.get("log", False), smooth=smooth)
+        if f is not None:
+            figs.append(f)
     if not figs:
         return Div(text="<i>No scalar metrics recorded yet.</i>")
     rows = [row(*figs[i : i + ncols]) for i in range(0, len(figs), ncols)]
     return column(*rows)
 
 
-def eval_quality_grid(conn):
+def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
     """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, or None
-    when no quality metric has been recorded yet (so the Loss tab can omit the panel
-    rather than show an empty placeholder)."""
+    when the primary tag has recorded no quality metric yet (so the Loss tab can
+    omit the panel rather than show an empty placeholder). `smooth` overlays an EMA
+    trend on each curve (they are noisy checkpoint-to-checkpoint). `secondary`, when
+    given as (conn, tag), overlays that tag's curves in their own colors for
+    comparison; the legend labels are then suffixed with each tag."""
     names = [name for _title, group in POST_MOVE_QUALITY for name in group]
     if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
         return None
-    return series_grid(conn, POST_MOVE_QUALITY, ncols=2)
+    if secondary is not None:
+        sec_conn, sec_tag = secondary
+        sources = [(conn, f" [{tag}]"), (sec_conn, f" [{sec_tag}]")]
+    else:
+        sources = [(conn, "")]
+    figs = [
+        f
+        for title, group in POST_MOVE_QUALITY
+        if (f := _series_figure(sources, title, group, smooth=smooth))
+    ]
+    return column(row(*figs)) if figs else None
 
 
 # ---------------------------------------------------------------------------

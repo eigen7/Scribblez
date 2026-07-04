@@ -54,28 +54,40 @@ VERSION_TABLES = (
 )
 
 
-def _train_step(conn, params, image_dir):
-    """The Loss tab: the loss/accuracy curves, with the aggregate
-    model-vs-Monte-Carlo quality curves (large dataset) stacked beneath them when
-    recorded. Uses the streaming per-minibatch train_step curve when present, else
-    falls back to the per-epoch loss from the metrics table (the generational
-    trainer). Both carry control-change markers."""
+def _train_step(conn, params, image_dir, mount_root):
+    """The Loss tab's top panel: the loss/accuracy curves. Uses the streaming
+    per-minibatch train_step curve when present, else falls back to the per-epoch
+    loss from the metrics table (the generational trainer). Carries control-change
+    markers. The value-quality curves are a separate figure (`eval_quality`), so the
+    client can place its own controls between the two."""
     normalized = _truthy(params.get("normalized"))
     steps = plots.train_step_grid(conn, normalized=normalized)
     if steps is None:
         steps = plots.metrics_loss_grid(conn, normalized=normalized)
-    quality = plots.eval_quality_grid(conn)
-    parts = [p for p in (steps, quality) if p is not None]
-    if not parts:
-        return None
-    return parts[0] if len(parts) == 1 else column(*parts)
+    return steps
 
 
-def _throughput(conn, params, image_dir):
+def _eval_quality(conn, params, image_dir, mount_root):
+    """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves. `smooth`
+    overlays an EMA trend; `secondary`, a second tag, overlays that tag's curves
+    dashed for comparison."""
+    secondary_tag = params.get("secondary") or None
+    sec_conn = _open(mount_root, params.get("task"), secondary_tag) if secondary_tag else None
+    try:
+        secondary = (sec_conn, secondary_tag) if sec_conn is not None else None
+        return plots.eval_quality_grid(
+            conn, params.get("tag"), smooth=_truthy(params.get("smooth")), secondary=secondary
+        )
+    finally:
+        if sec_conn is not None:
+            sec_conn.close()
+
+
+def _throughput(conn, params, image_dir, mount_root):
     return plots.throughput_grid(conn)
 
 
-def _training_metrics(conn, params, image_dir):
+def _training_metrics(conn, params, image_dir, mount_root):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
@@ -85,23 +97,26 @@ def _gen_idx(params) -> int | None:
     return int(v) if v not in (None, "", "latest") else None
 
 
-def _positions(conn, params, image_dir):
+def _positions(conn, params, image_dir, mount_root):
     view = plots.probes_view(
         conn, image_dir, init_gen=_gen_idx(params), follow=False, external_gen=True
     )
     return column(view.layout, plots.series_grid(conn, plots.PROBE_CURVES)) if view else None
 
 
-def _calibration(conn, params, image_dir):
+def _calibration(conn, params, image_dir, mount_root):
     view = plots.calibration_view(conn, init_gen=_gen_idx(params), follow=False, external_gen=True)
     return column(view.layout, plots.series_grid(conn, plots.CALIB_CURVES)) if view else None
 
 
-# Figure name -> builder(conn, params, image_dir) -> Bokeh model | None. Reuses the
-# plots.py builders; the model is serialized with json_item for client-side
-# embedding. `image_dir` is the tag's board-image dir (only the probes view uses it).
+# Figure name -> builder(conn, params, image_dir, mount_root) -> Bokeh model | None.
+# Reuses the plots.py builders; the model is serialized with json_item for client-
+# side embedding. `image_dir` is the tag's board-image dir (only the probes view
+# uses it); `mount_root` lets a builder open a second tag's DB (eval_quality's
+# secondary-tag overlay).
 FIGURES = {
     "train_step": _train_step,
+    "eval_quality": _eval_quality,
     "throughput": _throughput,
     "training_metrics": _training_metrics,
     "positions": _positions,
@@ -137,13 +152,15 @@ def _table_generations(conn: sqlite3.Connection, table: str) -> list:
         return []
 
 
-def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, image_dir):
+def build_figure_item(
+    conn: sqlite3.Connection, name: str, params: dict, image_dir, mount_root: str
+):
     """The Bokeh ``json_item`` dict for figure `name`, or None when there's no data
     (or no such figure). The handler turns None into ``{"item": null}``."""
     builder = FIGURES.get(name)
     if builder is None:
         return None
-    model = builder(conn, params, image_dir)
+    model = builder(conn, params, image_dir, mount_root)
     return json_item(model) if model is not None else None
 
 
@@ -509,7 +526,8 @@ class FigureHandler(_Base):
             self.write({"error": "unknown tag"})
             return
         try:
-            self.write({"item": build_figure_item(conn, name, self._params(), self._image_dir())})
+            item = build_figure_item(conn, name, self._params(), self._image_dir(), self.mount_root)
+            self.write({"item": item})
         finally:
             conn.close()
 

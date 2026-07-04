@@ -184,7 +184,7 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
 
     # Normalized bands are each point's share of the weighted column total.
     ts = db.read_train_steps(conn)
-    bands = plots._loss_bands(ts, slice(None), db.read_loss_weights(conn), normalized=True)
+    bands = plots._loss_bands(ts, db.read_loss_weights(conn), normalized=True)
     assert [lbl for lbl, _ in bands] == ["loss_a", "0.5 x loss_b"]  # weight-1 label omits factor
     total = sum(y for _, y in bands)  # 0.6*1 + 0.4*0.5 = 0.8 -> shares 0.75, 0.25
     assert np.allclose(total, 1.0)

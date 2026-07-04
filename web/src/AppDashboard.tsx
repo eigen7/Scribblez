@@ -49,16 +49,37 @@ function requestedTag(): string | null {
   return new URLSearchParams(window.location.search).get('tag');
 }
 
-// A tab that embeds one Bokeh figure (fetched as a json_item from the data API)
-// and re-fetches it whenever the run advances (polling a cheap version token). The
-// loss figure adds an Absolute/% toggle; others (throughput) pass `toggle={false}`.
-function FigureTab({
-  task, tag, figure, versionKey, toggle, emptyText,
-}: {
-  task: string; tag: string | null; figure: string; versionKey: string | string[];
-  toggle: boolean; emptyText: string;
+// A segmented single-select control (connected buttons, exactly one active) --
+// the Loss tab's Absolute/% selector.
+function RadioButtonGroup({ options, value, onChange }: {
+  options: readonly string[]; value: number; onChange: (i: number) => void;
 }) {
-  const [normalized, setNormalized] = useState(false);
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid #1f77b4', borderRadius: 4, overflow: 'hidden' }}>
+      {options.map((label, i) => (
+        <button
+          key={label}
+          onClick={() => onChange(i)}
+          style={{
+            fontSize: 12, padding: '3px 12px', border: 'none',
+            borderLeft: i === 0 ? 'none' : '1px solid #1f77b4', cursor: 'pointer',
+            background: i === value ? '#1f77b4' : 'white', color: i === value ? 'white' : '#1f77b4',
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Fetch one Bokeh figure (a json_item) for the given tag and re-fetch it whenever
+// the run advances (polling a cheap version token) or `query` changes (a control
+// was toggled). `query` is extra query string appended to the figure request.
+function useFigureItem(
+  task: string, tag: string | null, figure: string,
+  versionKey: string | string[], query: string,
+): unknown | null {
   const [item, setItem] = useState<unknown | null>(null);
   const lastVersion = useRef<number>(-1);
 
@@ -67,10 +88,11 @@ function FigureTab({
       setItem(null);
       return;
     }
-    const q = toggle ? `&normalized=${normalized ? 1 : 0}` : '';
-    const d = await getJSON(`/api/figure/${figure}?task=${task}&tag=${encodeURIComponent(tag)}${q}`);
+    const d = await getJSON(
+      `/api/figure/${figure}?task=${task}&tag=${encodeURIComponent(tag)}${query}`,
+    );
     setItem(d.item ?? null);
-  }, [task, tag, figure, toggle, normalized]);
+  }, [task, tag, figure, query]);
 
   useEffect(() => {
     lastVersion.current = -1;
@@ -95,61 +117,109 @@ function FigureTab({
     return () => clearInterval(id);
   }, [task, tag, versionKey, refetch]);
 
+  return item;
+}
+
+// The embedded figure, or an italic placeholder when the API has no data for it.
+function FigureBody({ item, emptyText }: { item: unknown | null; emptyText: string }) {
+  return item ? (
+    <BokehFigure item={item} />
+  ) : (
+    <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
+  );
+}
+
+// A tab that embeds a single Bokeh figure with no controls (Performance, Training).
+function FigureTab({
+  task, tag, figure, versionKey, emptyText,
+}: {
+  task: string; tag: string | null; figure: string; versionKey: string | string[]; emptyText: string;
+}) {
+  const item = useFigureItem(task, tag, figure, versionKey, '');
+  return <div className="card"><FigureBody item={item} emptyText={emptyText} /></div>;
+}
+
+// The Loss tab: the loss/accuracy figure on top (with an Absolute/% selector), then
+// the value-quality figure below, with the controls that govern it -- Smooth and a
+// Secondary tag to overlay -- sitting between the two. The two figures are fetched
+// separately so those controls can live between them.
+const LOSS_VERSION = ['train_step', 'metrics', 'control_event'];
+const QUALITY_VERSION = ['metrics'];
+
+function LossTab({ task, tag, tags }: { task: string; tag: string | null; tags: string[] }) {
+  const [normalized, setNormalized] = useState(false);
+  const [smoothed, setSmoothed] = useState(true); // smoothing on by default
+  const [secondary, setSecondary] = useState(''); // '' = none
+
+  const stepItem = useFigureItem(
+    task, tag, 'train_step', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
+  );
+  const qualityItem = useFigureItem(
+    task, tag, 'eval_quality', QUALITY_VERSION,
+    `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
+  );
+  const otherTags = tags.filter((t) => t !== tag);
+
   return (
     <div className="card">
-      {toggle && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-          {(['Absolute', '%'] as const).map((label, i) => {
-            const active = (i === 1) === normalized;
-            return (
-              <button
-                key={label}
-                onClick={() => setNormalized(i === 1)}
-                style={{
-                  fontSize: 12, padding: '3px 10px', border: '1px solid #1f77b4', borderRadius: 4,
-                  cursor: 'pointer', background: active ? '#1f77b4' : 'white', color: active ? 'white' : '#1f77b4',
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {item ? (
-        <BokehFigure item={item} />
-      ) : (
-        <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
+      <div style={{ marginBottom: 8 }}>
+        <RadioButtonGroup
+          options={['Absolute', '%']}
+          value={normalized ? 1 : 0}
+          onChange={(i) => setNormalized(i === 1)}
+        />
+      </div>
+      <FigureBody item={stepItem} emptyText="No loss / accuracy metrics recorded yet." />
+
+      {/* Controls + figure appear only once value-quality curves exist (they are
+          absent for tasks/runs without a Monte-Carlo quality eval). */}
+      {qualityItem != null && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 18, margin: '16px 0 8px' }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={smoothed} onChange={(e) => setSmoothed(e.target.checked)} />
+              Smooth
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              Secondary tag:
+              <select value={secondary} onChange={(e) => setSecondary(e.target.value)}>
+                <option value="">(none)</option>
+                {otherTags.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <FigureBody item={qualityItem} emptyText="" />
+        </>
       )}
     </div>
   );
 }
 
-// Each embedded-figure tab: which API figure to fetch, which version-token table
-// to poll for changes, whether to show the loss Absolute/% toggle, and its empty
-// message. ("Lane analysis" is native React, handled separately.)
+// Non-Loss embedded-figure tabs: which API figure to fetch, which version-token
+// table to poll for changes, and the empty message. ("Lane analysis" and the Loss
+// tab are handled separately.)
 const FIGURE_TABS: Record<
   string,
-  { figure: string; versionKey: string | string[]; toggle: boolean; emptyText: string }
+  { figure: string; versionKey: string | string[]; emptyText: string }
 > = {
-  Loss: { figure: 'train_step', versionKey: ['train_step', 'metrics', 'control_event'], toggle: true,
-    emptyText: 'No loss / accuracy metrics recorded yet.' },
-  Performance: { figure: 'throughput', versionKey: 'throughput', toggle: false,
+  Performance: { figure: 'throughput', versionKey: 'throughput',
     emptyText: 'No throughput data yet — start a streaming run.' },
-  Training: { figure: 'training_metrics', versionKey: 'metrics', toggle: false,
+  Training: { figure: 'training_metrics', versionKey: 'metrics',
     emptyText: 'No per-epoch training metrics yet.' },
 };
 
-function renderTab(name: string, task: string, tag: string | null) {
+function renderTab(name: string, task: string, tag: string | null, tags: string[]) {
   if (name === 'Info') return <InfoTab task={task} tag={tag} />;
   if (name === 'Controls') return <ControlsTab task={task} tag={tag} />;
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
   if (name === 'Positions') return <PostMoveAnalysis task={task} tag={tag} />;
+  if (name === 'Loss') return <LossTab task={task} tag={tag} tags={tags} />;
   const cfg = FIGURE_TABS[name];
   return (
     <FigureTab
-      task={task} tag={tag} figure={cfg.figure} versionKey={cfg.versionKey}
-      toggle={cfg.toggle} emptyText={cfg.emptyText}
+      task={task} tag={tag} figure={cfg.figure} versionKey={cfg.versionKey} emptyText={cfg.emptyText}
     />
   );
 }
@@ -226,7 +296,7 @@ export default function AppDashboard() {
         ))}
       </div>
 
-      <TabErrorBoundary key={tabs[tab]}>{renderTab(tabs[tab], task, tag)}</TabErrorBoundary>
+      <TabErrorBoundary key={tabs[tab]}>{renderTab(tabs[tab], task, tag, tags)}</TabErrorBoundary>
     </div>
   );
 }
