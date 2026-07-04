@@ -14,14 +14,6 @@ def test_metrics_loss_grid_none_without_loss(tmp_path):
     assert plots.metrics_loss_grid(conn) is None
 
 
-def test_metric_vs_positions_maps_values_by_epoch(tmp_path):
-    conn = db.connect(tmp_path / "d.db")
-    _seed_metrics(conn)
-    xs, ys = plots._metric_vs_positions(conn, "loss")
-    assert [int(x) for x in xs] == [100, 200, 300]
-    assert [float(y) for y in ys] == [2.0, 1.5, 1.2]
-
-
 def test_metrics_loss_grid_adds_control_markers(tmp_path):
     conn = db.connect(tmp_path / "d.db")
     _seed_metrics(conn)

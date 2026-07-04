@@ -435,15 +435,6 @@ def add_control_markers(fig, conn):
         )
 
 
-def _metric_vs_positions(conn, name: str):
-    """(positions, values) for a metric, using the per-epoch 'positions' series as
-    the x-axis (both are columns of the metrics table keyed by epoch)."""
-    pos_by_epoch = dict(zip(*db.read_metric_series(conn, "positions"), strict=True))
-    epochs, values = db.read_metric_series(conn, name)
-    xy = [(pos_by_epoch[e], v) for e, v in zip(epochs, values, strict=True) if e in pos_by_epoch]
-    return [x for x, _ in xy], [y for _, y in xy]
-
-
 def _metrics_series(conn):
     """The metrics table's loss and accuracy series as an aligned {name: y-array}
     dict over a shared positions x-axis. Only 'loss', 'loss_<head>', and '<x>_acc'
