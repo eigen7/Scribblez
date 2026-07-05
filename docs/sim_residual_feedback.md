@@ -3,48 +3,57 @@
 ## Purpose
 
 Move selection (roadmap Phase 4) runs `M_pre` over all legal moves, sends the
-top-`K` to Monte Carlo simulation, and picks the best simmed move. This document
-proposes a **second evaluation round**: aggregate the simulation results,
-compute the *difference* between what the sims observed and what the network
-predicted (a **residual**), feed that residual back into the network, and
-re-evaluate the full move set with it. The re-evaluation yields a new top-`K`,
-which is simmed to make the final pick.
+top-`K` to Monte Carlo simulation, and picks the best simmed move. This
+document proposes making that a **loop**: the simulation results for each
+simmed candidate are fed back into `M_pre` as *evidence*, and the full move
+set is re-evaluated conditioned on that evidence, yielding a new set of
+candidates to sim before the final pick.
 
-The intuition: each position has nuances driven by lexical facts — which words
-are makeable where, with which unseen tiles — that the network cannot fully
-derive, because doing so would require searching the lexicon over tiles not on
-the current rack, especially for future turns. This is the network's primary
-blind spot (established by the lexical-NN track; see
+The informative signal in the evidence is the **residual** — the gap between
+what the sims observed and what the network predicted. The intuition: each
+position has nuances driven by lexical facts — which words are makeable where,
+with which unseen tiles — that the network cannot fully derive, because doing
+so would require searching the lexicon over tiles not on the current rack,
+especially for future turns. This is the network's primary blind spot
+(established by the lexical-NN track; see
 [lexical_features_for_value.md](lexical_features_for_value.md)). Monte Carlo
 rollouts *do* consider those possibilities, honestly, via the GADDAG. When the
 sims reveal that a board region is hotter or more dangerous than the network
-believed, the residual encodes exactly that surprise — an indirect but
-grounded clue about lexical structure. A network trained to condition on these
-residuals can produce a runtime-sim-informed re-evaluation that no amount of
-static input engineering can match, because the evidence comes from deep,
-position-specific search.
+believed, that surprise is an indirect but grounded clue about lexical
+structure. A network trained to condition on sim evidence can produce a
+runtime-search-informed re-evaluation that no amount of static input
+engineering can match, because the evidence comes from deep, position-specific
+search.
+
+In the design below the residual is computed *inside* the network — the raw
+sim observations are fed in, paired with the network's own predictions — rather
+than precomputed as an input. The reasons are architectural and are covered in
+[Evidence-set conditioning](#evidence-set-conditioning-the-architecture).
 
 ## Where this sits
 
 - **Roadmap Phase 4** ([roadmap.md](roadmap.md)): the one-round pipeline —
   GADDAG generates all moves, `M_pre` scores them in one cross-attention pass,
-  top-`K` go to simulation. This proposal wraps that pipeline in a second
-  iteration.
+  top-`K` go to simulation. This proposal wraps that pipeline in an iteration.
 - **Scribblez.pdf §8.1 (Search-Derived Knowledge Buffers)**: the design doc
   envisions a buffer where truths discovered during search are recorded for the
-  network to read. The residual planes are a concrete instantiation of that
-  buffer, with a spatial encoding and a natural training story.
+  network to read. The evidence set below is a concrete instantiation of that
+  buffer, with a natural training story.
 - **The belief system's iterative particle generation** (Scribblez.pdf §3.5)
   follows the same idiom: propose, gather evidence, condition on the evidence,
-  re-propose. Here the proposer is `M_pre`, the evidence is sim aggregates, and
-  the re-proposal is the second top-`K`.
+  re-propose. Here the proposer is `M_pre`, the evidence is sim results, and
+  the re-proposal is the next candidate set. At its sequential extreme (see
+  [the schedule spectrum](#the-schedule-spectrum)) the loop is a learned,
+  amortized root search — candidate expansion informed by accumulated rollout
+  evidence, MCTS-at-the-root in spirit.
 - **Engineered lexical features**
   ([lexical_features_for_value.md](lexical_features_for_value.md)) are
   complementary, not redundant. The features attack *recall* — getting
-  lexically promising moves into the first top-`K` at all. The residual loop
-  attacks a different failure: the first-pass evaluation misjudged the board,
-  the sims exposed it, and the re-evaluation corrects the ranking. Neither
-  mechanism subsumes the other (see [Limitations](#limitations-and-caveats)).
+  lexically promising moves into the first candidate set at all. The evidence
+  loop attacks a different failure: the first-pass evaluation misjudged the
+  board, the sims exposed it, and the re-evaluation corrects the ranking.
+  Neither mechanism subsumes the other (see
+  [Limitations](#limitations-and-caveats)).
 - **`M_post`'s `OppNextPlacement` head**
   ([training_targets.h](../engine/include/scribblez/training_targets.h))
   already predicts a 15×15 mask of where the opponent's next move will place
@@ -72,192 +81,262 @@ so its plane is all zeros — the heads are per-square probabilities, not a
 distribution over squares, and need not sum to anything.
 
 Note what the conjunction mixes: a square can score high because the opponent
-*plays* there often, or because playing there *wins* often. Feeding the
-marginal occupancy prediction (the existing `OppNextPlacement` head) alongside
-the conjunction lets the network disentangle the two.
+*plays* there often, or because playing there *wins* often. The marginal
+occupancy prediction (the existing `OppNextPlacement` head) sits alongside the
+conjunction so the network can disentangle the two.
 
-## The residual
+## Sim evidence
 
 The Monte Carlo sim of candidate move `M` runs `S` rollouts from `M`'s
 post-move state (opponent racks sampled, play continued by the rollout
 policy). Each rollout observes an actual opponent reply (its placed squares)
-and an outcome, so the sim yields an **empirical map** for each head — the
+and an outcome, so the sim yields, per head, an **empirical map** — the
 fraction of rollouts in which the opponent's reply occupied `S` and the
 opponent went on to win — directly comparable to the network's prediction for
-`M`. The residual for candidate `M` is:
+`M`. It also yields a **sim value estimate** (empirical WLD over the rollouts)
+and the **rollout counts** (a confidence signal; empirical maps from a few
+hundred rollouts are noisy, and the network needs to know how much to trust
+them).
 
-```
-residual_M[S] = empirical_M[S] − predicted_M[S]        (one 15×15 plane per head)
-```
+### Evidence must stay paired with its move
 
-A large positive opponent-danger residual at `H12` means "this spot is more
-dangerous than you think" — which tends to happen precisely because of lexical
-possibilities the network could not consider.
+It is tempting to compress the per-candidate evidence into shared board-level
+planes (say, an element-wise mean or max of the candidates' danger maps) so it
+can be fed through the input encoder like any other feature. This loses the
+part of the signal that matters most. Suppose candidate `A` leaves a hot spot
+open and the opponent capitalizes on it in `A`'s rollouts, while candidate `B`
+neutralizes it. An aggregate map shows danger at the hot spot but not *which
+moves suffer it* — and the mapping from a move to "does the danger persist" is
+itself lexical. `B` can kill the threat without occupying the hot squares at
+all: by consuming the anchor the threat needed, by changing a cross-check
+adjacent to the lane, by using up a hook. Asking the network to reconstruct
+that conditionality from an aggregate re-introduces exactly the blind spot the
+mechanism exists to fix. The paired evidence *demonstrates* the conditionality
+instead — "`A` was simmed, danger at `H12`; `B` was simmed, danger gone" — and
+the network only has to interpolate from demonstrated contrasts, not derive
+blocking from first principles.
 
-### From per-candidate residuals to a re-evaluation input
+So the unit of evidence is the **pair**: (move encoding, sim observations for
+that move). Aggregation across pairs is left to the network, where it can be
+learned.
 
-The residuals are per-simmed-candidate, but the second pass must score **all
-`N` legal moves** off one shared board encoding. The signal fortunately
-transfers: a hot spot is mostly a lexical fact about *existing* board structure
-plus the unseen pool, which is common across candidates. So the residual input
-is split into a shared part and a per-move part:
+## Evidence-set conditioning: the architecture
 
-- **Board-level planes** (shared): an element-wise aggregate (mean, max, or
-  both) of the `K` simmed candidates' residual planes, per head. These enter
-  the board encoder as extra input planes, so every one of the `N` candidates'
-  cross-attention sees them. What aggregation discards — "`H12` is only
-  dangerous if our move fails to block it" — the network can recover in the
-  second pass, because it sees each candidate's footprint and whether it
-  overlaps the hot region.
-- **Per-move features** (only for the `K` simmed candidates, riding in the
-  per-move embedding):
-  - the candidate's own exact residual summary,
-  - the **scalar value residual** — sim WLD minus predicted WLD. This is the
-    most direct "the sim disagrees with you, by this much" signal; the spatial
-    planes are the *where/why*, the scalar is the *how much*,
-  - a simmed/not-simmed flag.
-- **Confidence side-channel**: the rollout count (and per-square reply-visit
-  counts if cheap). Empirical maps from a few hundred rollouts are noisy, and
-  the network needs to know how much to trust a residual.
+The re-evaluation is a set-conditioned scoring:
+`score(M′ | board, {(Mᵢ, sim-resultᵢ)})` for every legal move `M′`, given the
+evidence pairs of whatever candidates have been simmed so far. (In ML terms
+this is an attentive-neural-process shape: context pairs of input = move,
+observation = sim outcome, queried at new inputs.) Concretely:
 
-## The two-round decision procedure
+- **Evidence tokens.** Each simmed candidate becomes one token: its move
+  encoding (`M_pre`'s move encoder, reused) fused with an encoding of its sim
+  observations — the empirical maps, the sim value, the rollout counts — plus
+  the network's own first-pass predictions for that move (already computed, so
+  free to include; this hands the network the residual contrast directly
+  rather than requiring it to recompute its earlier output).
+- **Evidence self-attention.** The tokens attend to one another. Contrasts
+  between pairs are the point — "these two moves differ *here*, and their
+  danger maps differ correspondingly" is a pairwise computation.
+- **Fusion into the board encoding.** The evidence tokens cross-attend with
+  the board's spatial map `H`, producing an evidence-conditioned `H′`. The
+  per-move scoring machinery is untouched: all `N` candidates cross-attend
+  into `H′` exactly as they attend into `H` in the evidence-free pass. The
+  network can write "danger at `H12` unless the lane is disturbed" into the
+  spatial features in whatever learned form it finds useful — this is the
+  learned replacement for any hand-crafted aggregation.
+
+An **empty evidence set** must degrade gracefully to the plain one-pass
+`M_pre` (the fusion stage becomes a no-op or near-no-op); training covers this
+case explicitly (see [Training](#training)).
+
+Because the fusion stage sits between the shared trunk and the heads, `M_post`
+can take the same evidence input through the same stage — needed for the
+distillation story below.
+
+## The decision procedure
+
+One generic loop, parameterized by a schedule (`B` candidates proposed per
+round, `R` rounds):
 
 1. GADDAG generates all `N` legal moves.
-2. `M_pre` first pass: residual inputs zeroed (with the not-simmed flag set
-   everywhere). Take the top-`K` → Monte Carlo sim each, recording the
-   empirical maps and value estimates.
-3. Compute residuals; build the board-level aggregate and per-move features.
-4. `M_pre` second pass over **all `N` moves** with the residual inputs
-   populated. Take the new top-`K`.
-5. Sim any newly promoted candidates (candidates retained from round 1 reuse
-   their round-1 rollouts, or top them up).
-6. Final pick: best move by simulation value over the union of simmed
-   candidates.
+2. Evaluate all `N` with the current evidence set (initially empty) and
+   propose the top `B` unsimmed candidates.
+3. Sim the proposed candidates; append their (move, sim-result) pairs to the
+   evidence set.
+4. Repeat from 2 until `R` rounds have run (or the sim budget is spent).
+5. Final pick: best move by simulation value over all simmed candidates.
 
-**Why the payoff is promotion, not re-scoring.** For the `K` moves already
-simmed, the sims themselves provide the ranking — a re-evaluation adds little.
-The value of the second pass is that it can **promote moves that were not in
-the original top-`K`**: e.g. a modest-scoring play that blocks the
+**Why the payoff is promotion, not re-scoring.** For moves already simmed, the
+sims themselves provide the ranking — a re-evaluation adds little. The value
+of conditioning is that the next proposal round can **promote moves that no
+earlier round selected**: e.g. a modest-scoring play that blocks the
 newly-discovered hot spot at `H12`. A one-round pipeline can never select such
 a move, no matter how many rollouts it spends.
 
 A helpful robustness property: opponent hot spots are discovered by simming
 *any* candidate that fails to block them — the opponent's rollout replies land
 there regardless of which of our candidates was simmed. So coverage of
-opponent danger is not sensitive to the exact composition of the first top-`K`.
+opponent danger is not sensitive to the exact composition of the first
+proposal batch.
+
+### The schedule spectrum
+
+The architecture conditions on an evidence set of arbitrary size, so the
+schedule is a tunable policy, not an architectural fork:
+
+- **(B = K, R = 2)** — two batched rounds: sim the top-`K`, condition, sim the
+  newly promoted moves, pick. Simplest data generation and training
+  distribution; sims within a round parallelize; the top-`K` batch provides
+  candidate diversity for free.
+- **(B = 1, R = K)** — fully sequential: propose one, sim it, condition,
+  propose the next. Every sim is maximally informed by all prior evidence, so
+  the budget is better targeted — after simming `A` and seeing the `H12`
+  danger, the network can propose the blocker `B` *as its next candidate*,
+  which a batch selected up-front can never do.
+- Intermediate (`B` small, a few rounds) interpolates.
+
+Sequential trade-offs to weigh:
+
+- **Latency, not throughput.** `R` sequential sim-then-infer round trips
+  serialize the decision. For self-play data generation this matters less than
+  it appears: the game-pool design
+  ([generational_training.md](generational_training.md)) keeps many games in
+  flight and batches their GPU evaluations, so per-game serialization does not
+  starve the hardware. Per-move *latency* does suffer, which matters for
+  interactive or competitive play.
+- **Exploration becomes an explicit problem at small `B`.** A batch top-`K`
+  is diverse by construction. A greedy `B = 1` proposer may propose
+  near-duplicates of the current best — exploitation, when what later sims
+  should buy is *information* — and nothing in distillation-style training
+  incentivizes information-seeking proposals. A small acquisition mechanism on
+  top of the learned score (a footprint/lane-overlap novelty penalty against
+  already-simmed moves, or softmax sampling) is cheap but load-bearing at
+  small `B`.
+- **Training must cover every prefix.** The network sees evidence sets of size
+  `0, 1, …` at inference, so training rows must span those sizes, and data
+  generation must record the sequential trajectory that produced each set.
+
+The recommended starting point is **(B = K, R = 2)**, moving toward smaller
+`B` only if measurement shows targeted sims beat batch diversity.
 
 ## Training
 
-### `M_post` with residual inputs
+### Evidence semantics
 
-The second pass needs a network trained to *use* residual inputs, which means
-training rows must carry them. The semantics chosen for the residual input is
-**"the evidence gathered at the decision point"**: the aggregate over the `K`
-sims run from the pre-move position. This definition is uniform across all
-candidates — simmed or not — which keeps the `M_pre` distillation targets
-well-defined for the whole move set (a per-its-own-move residual would be
-undefined for the unsimmed majority).
+The evidence input for a training row is **the set of (move, sim-result) pairs
+gathered at the decision point** — uniform for every candidate being scored,
+whether or not that candidate is itself in the set. This uniformity is what
+keeps `M_pre` distillation targets well-defined across the whole move set (an
+"own-sim" input would be undefined for the unsimmed majority).
+
+### `M_post` with evidence
 
 Data generation, per labeled position:
 
-1. Run the round-1 pipeline at the position (top-`K` by the current model,
-   `S` rollouts each).
-2. Store the **empirical maps and sim value estimates** — *not* the residuals —
-   alongside the `.slog` data.
-3. Training targets are unchanged: final game outcome (WLD, ScoreDiff), plus
+1. Run the proposal/sim schedule at the position with the current model,
+   recording the evidence trajectory.
+2. Store the **raw sim observations** — empirical maps, sim values, counts —
+   alongside the `.slog` data. Raw observations are model-independent, so they
+   never go stale as the model trains; the network's own predictions (the
+   other half of each evidence token) are recomputed live at train time by the
+   same forward machinery inference uses.
+3. Training targets are unchanged: final game outcome (WLD, ScoreDiff) plus
    the per-square conjunction heads from the log.
 
-**Store empiricals, subtract fresh.** The residual depends on the current
-model's own prediction, so a stored residual goes stale the moment the model
-trains. The empirical maps are model-independent. At train time (and exactly
-mirroring inference), the row is evaluated in two passes: a zero-residual first
-pass produces the baseline prediction, the residual is formed by subtracting it
-from the stored empirical map (with a stop-gradient on the subtraction), and
-the second pass consumes it. Train both passes jointly with shared weights —
-the zero-residual rows double as training signal that keeps the first pass from
-degrading. This keeps train and inference byte-consistent, in the same spirit
-as the replay-reconstruction invariant
-([architecture.md](architecture.md)).
+Rows are trained at multiple evidence-prefix sizes, including **size zero** —
+the zero-evidence rows are what keep the evidence-free first pass from
+degrading, and they are free (every unlabeled position is one).
 
-### `M_pre` with residual inputs
+### `M_pre` with evidence
 
-`M_pre`'s training story is unchanged in shape: it distills `M_post`
-(roadmap Phase 4), now with the residual inputs present on both sides. For a
-labeled position, the target for candidate `M` is residual-conditioned
-`M_post` evaluated on `M`'s post-move state, with the same decision-point
-evidence as input. The "label a subset, mask the loss" strategy from Phase 4
-applies unchanged.
+`M_pre`'s training story is unchanged in shape: it distills `M_post` (roadmap
+Phase 4), now with the evidence set present on both sides through the shared
+fusion stage. For a labeled position, the target for candidate `M` is
+evidence-conditioned `M_post` evaluated on `M`'s post-move state, given the
+same decision-point evidence. The "label a subset, mask the loss" strategy
+from Phase 4 applies unchanged. (An alternative for later-round scoring —
+training directly against sim values for simmed moves plus game outcome,
+bypassing `M_post` — is coherent but departs further from the Phase 4
+pipeline; it is noted as an open question.)
 
 ### The cost elephant
 
-Residual-conditioned training rows require running `K` sims at data-generation
+Evidence-conditioned training rows require running the sims at data-generation
 time. At `K ≈ 10` and a few hundred rollouts per candidate, that is thousands
 of rollout-games per labeled position — even at HastyBot speeds (~ms/game),
 minutes per game of self-play, a ~10³–10⁴× slowdown over plain generation.
 Mitigations, all compatible:
 
-- **Label a sparse subset of positions.** Only rows carrying residual evidence
-  need the sims; the rest train with zeroed residuals (which are needed anyway
-  for the first pass). The labeled fraction is a free parameter, exactly as in
-  Phase 4 target generation.
-- **Cheap sims for labeling.** HastyBot rollouts with modest `S`; the
-  confidence side-channel tells the network the noise level, so small `S` is a
-  soft degradation, not a correctness problem.
+- **Label a sparse subset of positions.** Only rows carrying evidence need the
+  sims; the rest train with empty evidence (needed anyway, per above). The
+  labeled fraction is a free parameter, exactly as in Phase 4 target
+  generation.
+- **Cheap sims for labeling.** HastyBot rollouts with modest `S`; the rollout
+  counts tell the network the noise level, so small `S` is a soft degradation,
+  not a correctness problem.
 - **The generational pipeline is built for this.**
   [generational_training.md](generational_training.md) exists precisely
-  because expensive generation makes per-game reuse mandatory; residual
-  labeling is a (heavy) instance of the pattern, and the empirical maps are
-  stored per generation like any other precomputed feature.
+  because expensive generation makes per-game reuse mandatory; evidence
+  labeling is a (heavy) instance of the pattern, and the stored observations
+  are per-generation artifacts like any other precomputed feature.
 
 ## Limitations and caveats
 
 - **The sim is not unbiased ground truth.** Its "truth" is filtered through
   the opponent-rack sampling scheme (uniform over unseen tiles until the
-  belief system lands) and the rollout policy (HastyBot initially). Residuals
-  therefore encode a mixture of lexical blindness, rack-inference mismatch,
-  rollout-policy weakness, and Monte Carlo noise. Lexical blindness is
-  expected to dominate — it is the one *systematic* gap between the network
+  belief system lands) and the rollout policy (HastyBot initially). The
+  evidence therefore encodes a mixture of lexical blindness, rack-inference
+  mismatch, rollout-policy weakness, and Monte Carlo noise. Lexical blindness
+  is expected to dominate — it is the one *systematic* gap between the network
   and the GADDAG-driven rollouts — but the conflation is real and worth
   remembering when interpreting results.
 - **Self-created opportunities stay out of reach.** Sim evidence covers only
-  the `K` simmed post-move boards. A move whose value exists *only* because of
-  structure it creates (an `S`-hook it opens), and which missed the first
-  top-`K`, is never simmed — no residual can rescue it. That recall gap
+  the simmed post-move boards. A move whose value exists *only* because of
+  structure it creates (an `S`-hook it opens), and which no proposal round
+  selected, is never simmed — no evidence can rescue it. That recall gap
   belongs to the cross-check-delta feature
   ([lexical_features_for_value.md](lexical_features_for_value.md)); the two
-  mechanisms genuinely need each other.
-- **Correlation with self-play rollout policy.** In HastyBot-generated
+  mechanisms genuinely need each other. (A sequential schedule softens this —
+  a later round *can* propose an opportunity-creating move if earlier evidence
+  hints at the region's value — but only the move's own sim reveals value that
+  exists solely post-move.)
+- **Correlation with the self-play rollout policy.** In HastyBot-generated
   training data, the actual opponent reply and the sim rollouts follow the
-  same policy, so the empirical map is highly predictive of the logged reply.
-  The conjunction-head loss will improve for that shallow reason; the metric
-  that matters is **WLD / calibration improvement**, not the spatial-head
-  loss.
+  same policy, so the empirical maps are highly predictive of the logged
+  reply. The conjunction-head loss will improve for that shallow reason; the
+  metric that matters is **WLD / calibration improvement**, not the
+  spatial-head loss.
 - **Per-square SNR.** Reply footprints are ~2–7 squares of 225, so most
-  squares' empirical probabilities are small and residuals there are
-  variance-dominated at practical `S`. Genuine hot spots concentrate mass
-  (they recur across rollouts), which is what makes them detectable; the
-  confidence inputs exist so the network can discount the rest.
-- **One extra round, not a fixed point.** The loop could iterate (re-sim,
-  re-residual, re-evaluate), but each round costs a sim budget and the
-  evidence gain shrinks. Two rounds is the design point; more only if
-  measurement demands it.
+  squares' empirical probabilities are small and variance-dominated at
+  practical `S`. Genuine hot spots concentrate mass (they recur across
+  rollouts), which is what makes them detectable; the count inputs exist so
+  the network can discount the rest.
+- **Evidence-map encoding is an open design point.** Each evidence token must
+  encode a spatial observation (the 15×15 maps). Options range from a small
+  conv encoder pooling each map to a vector, to keeping the maps spatial and
+  letting the fusion cross-attention consume them per-square. The pooled form
+  is cheaper; the spatial form preserves the *where*. Start pooled + let the
+  fusion stage also see the maps as planes tagged per-token if the kill-test
+  says location detail is being lost.
 
 ## De-risking: the kill-test
 
-The load-bearing hypothesis is narrow: *conditioning on sim-derived residuals
-improves the value model's outcome prediction.* That is testable offline,
-cheaply, before any agent or `M_pre` work:
+The load-bearing hypothesis is narrow: *conditioning on sim evidence improves
+the value model's outcome prediction.* That is testable offline, cheaply,
+before any agent or `M_pre` work:
 
-1. Take a modest set of self-play positions; for each, generate residual
-   labels (top-`K` by the current `M_post` over candidate post-move states,
-   HastyBot rollouts, empirical maps).
-2. Train `M_post`-with-residual-inputs vs. the plain baseline on identical
-   data.
+1. Take a modest set of self-play positions; for each, generate evidence
+   (top-`K` by the current `M_post` over candidate post-move states, HastyBot
+   rollouts, empirical maps + values + counts).
+2. Train evidence-conditioned `M_post` (evidence encoder + fusion stage) vs.
+   the plain baseline on identical data.
 3. Compare held-out WLD loss and calibration (the Phase 3 machinery).
 
-If the residual-conditioned model shows no WLD improvement, the whole loop is
-moot — and that is learned without touching `M_pre`, the two-round agent, or
-any selection-time plumbing.
+If the evidence-conditioned model shows no WLD improvement, the whole loop is
+moot — and that is learned without touching `M_pre`, the multi-round agent, or
+any selection-time plumbing. The same experiment de-risks the fusion
+architecture itself (evidence tokens, self-attention, board fusion), which is
+the main new network component.
 [monte_carlo_sim_tool](../engine/apps/monte_carlo_sim_tool.cpp) (the
 Positions-tab ground-truth generator, see
 [react_dashboard.md](react_dashboard.md)) already contains most of the rollout
@@ -268,25 +347,30 @@ machinery this experiment needs.
 | Step | Build | Depends on |
 |------|-------|-----------|
 | 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — |
-| 2 | Sim machinery emits per-square empirical maps + value estimates (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); storage format for empirical maps alongside `.slog`. | 1 |
-| 3 | **Kill-test** (above): offline residual-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery |
-| 4 | Input-encoder extension (residual planes, scalars, confidence, flags); two-pass training loop (zero-residual first pass, stop-gradient subtraction); residual labeling integrated into generational data generation at a sparse position fraction. | 3 |
-| 5 | `M_pre` inherits the heads and residual inputs; distillation from residual-conditioned `M_post`. | 4, roadmap Phase 4 |
-| 6 | Two-round agent (the decision procedure above, with round-1 sim reuse); match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); storage format for sim observations alongside `.slog`. | 1 |
+| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery |
+| 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 |
+| 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 |
+| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`), acquisition mechanism if small `B`; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 |
 
 Steps 1–3 are cheap relative to what they de-risk and are worth doing early;
 steps 4–6 ride the Phase 4 timeline.
 
 ## Open questions
 
-- **Aggregation function** for the board-level planes: mean, max, or both
-  stacked. Max preserves "some candidate exposed this danger"; mean preserves
-  magnitude. Cheap to ablate in the kill-test.
-- **Budget split**: `K` and `S` per round, and whether round 2 should sim a
-  smaller promoted set. Round-1 sim reuse makes the marginal round-2 cost
-  proportional to the number of *newly promoted* candidates only.
-- **Whether the scalar value residual alone captures most of the win.** If the
-  per-move scalar residuals (no spatial planes) already deliver the WLD
-  improvement, the spatial machinery can be deferred — the cheap-before-rich
-  sequencing of [lexical_features_for_value.md](lexical_features_for_value.md)
-  applies here too.
+- **Schedule (`B`, `R`) and budget split** — including whether later rounds
+  should use smaller `S`, and whether an acquisition mechanism (novelty
+  penalty, softmax proposals) is needed even at moderate `B`.
+- **Evidence-map encoding** — pooled-vector vs. spatial (see caveats); cheap
+  to ablate inside the kill-test.
+- **Whether scalar evidence alone captures most of the win.** If evidence
+  tokens carrying only the sim value residual (no spatial maps) already
+  deliver the WLD improvement, the spatial machinery can be deferred — the
+  cheap-before-rich sequencing of
+  [lexical_features_for_value.md](lexical_features_for_value.md) applies here
+  too.
+- **Later-round training targets** — evidence-conditioned `M_post`
+  distillation (the default above) vs. training directly against sim values
+  for simmed candidates.
+- **Sim reuse across rounds** — candidates retained across rounds keep their
+  rollouts; whether to top up counts as the evidence set grows.
