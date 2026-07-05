@@ -100,6 +100,9 @@ RUN apt-get update && \
     apt-get install -y libprotobuf-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# 6f) pypdf (pdf reading)
+RUN pip3 install --no-cache-dir pypdf
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
@@ -118,7 +121,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.4.0"
+ARG VERSION="3.4.1"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 
