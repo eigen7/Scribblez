@@ -157,7 +157,20 @@ def _series_figure(
 # Per-epoch scalar-curve groups, by dashboard tab. Each entry is (figure title,
 # metric-series names) and feeds series_grid(). Shared by the dashboard's tab
 # builders (Bokeh shell and the React data API).
-LOSS = [("Loss", ["loss", "loss_wld", "loss_score_diff", "loss_opp_next_placement"])]
+LOSS = [
+    (
+        "Loss",
+        [
+            "loss",
+            "loss_wld",
+            "loss_score_diff",
+            "loss_opp_next_placement",
+            "loss_self_next_placement",
+            "loss_opp_win_placement",
+            "loss_self_win_placement",
+        ],
+    )
+]
 # The learning rate is stepped down multiplicatively (by hand from the Controls
 # tab) and spans orders of magnitude, so it reads best on a log y-axis.
 TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elapsed_s"])]

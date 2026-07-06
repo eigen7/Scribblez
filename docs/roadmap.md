@@ -24,8 +24,11 @@ context, M_post predicts:
 - **Score differential** (ScoreDiff head) — a Gaussian (mean and standard
   deviation) over the clipped final score differential [-400, +400], trained by
   Gaussian negative log-likelihood against the observed differential.
-- **Opponent's next tile placement** (OppNextPlacement head) — a 15×15 binary
-  mask predicting where the opponent will place tiles on their next turn.
+- **Placement masks** (four auxiliary 15×15 heads) — where each player's next
+  move will place tiles (`opp_next_placement`, `self_next_placement`) and the
+  per-square win conjunctions Pr[places there AND wins] (`opp_win_placement`,
+  `self_win_placement`) that feed the sim-evidence loop
+  ([sim_residual_feedback.md](sim_residual_feedback.md)).
 
 ### Current data pipeline
 

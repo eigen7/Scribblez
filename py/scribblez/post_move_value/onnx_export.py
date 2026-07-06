@@ -2,7 +2,9 @@
 
 The exported graph takes the same two inputs as the PyTorch model
 (`input_spatial`, `input_scalar`) and produces all three head outputs
-(`wld`, `score_diff`, `opp_next_placement`). The batch dimension is dynamic
+(`wld`, `score_diff`, then one mask output per
+`scribblez.post_move_value.model.MASK_HEAD_NAMES` entry). The batch dimension
+is dynamic
 so the same file serves single-position and batched inference.
 """
 
@@ -15,6 +17,8 @@ import torch
 from onnx import TensorProto, numpy_helper
 
 from scribblez.ffi import DEFAULT_LEXICON
+
+from .model import MASK_HEAD_NAMES
 
 # Frozen compiled-lexicon buffers are identical across every checkpoint, so rather
 # than bake ~24 MB into each per-generation ONNX they are shared: moved into one blob
@@ -114,13 +118,10 @@ def export_onnx(
             (dummy_spatial, dummy_scalar),
             str(path),
             input_names=["input_spatial", "input_scalar"],
-            output_names=["wld", "score_diff", "opp_next_placement"],
+            output_names=["wld", "score_diff", *MASK_HEAD_NAMES],
             dynamic_axes={
-                "input_spatial": {0: "batch"},
-                "input_scalar": {0: "batch"},
-                "wld": {0: "batch"},
-                "score_diff": {0: "batch"},
-                "opp_next_placement": {0: "batch"},
+                name: {0: "batch"}
+                for name in ("input_spatial", "input_scalar", "wld", "score_diff", *MASK_HEAD_NAMES)
             },
             opset_version=opset,
             dynamo=False,

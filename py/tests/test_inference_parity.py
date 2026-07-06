@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import torch
 from scribblez.ffi import get_input_shapes
-from scribblez.post_move_value.model import PostMoveValueModel
+from scribblez.post_move_value.model import MASK_HEAD_NAMES, PostMoveValueModel
 from scribblez.post_move_value.onnx_export import export_onnx
 
 # Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
@@ -35,7 +35,7 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 
 # Exported graph output order (onnx_export.export_onnx output_names). A silent
 # reordering here would scramble which head the agent reads -- assert it.
-OUTPUT_NAMES = ["wld", "score_diff", "opp_next_placement"]
+OUTPUT_NAMES = ["wld", "score_diff", *MASK_HEAD_NAMES]
 
 
 def _random_model(seed: int = 0) -> PostMoveValueModel:
@@ -114,12 +114,14 @@ def test_dynamic_batch_axis(tmp_path):
 
     for batch in (1, 3, 8):
         spatial, scalar = _random_inputs(batch, seed=batch)
-        wld, score_diff, opp = sess.run(
+        wld, score_diff, *mask_outs = sess.run(
             OUTPUT_NAMES, {"input_spatial": spatial, "input_scalar": scalar}
         )
         assert wld.shape == (batch, 3)
         assert score_diff.shape == (batch, 2)  # [mean, std]
-        assert opp.shape == (batch, BOARD_SIZE, BOARD_SIZE)
+        assert len(mask_outs) == len(MASK_HEAD_NAMES)
+        for mask in mask_outs:
+            assert mask.shape == (batch, BOARD_SIZE, BOARD_SIZE)
 
 
 if __name__ == "__main__":

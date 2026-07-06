@@ -175,7 +175,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     LexiconArgs.add_arguments(p)
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
-    p.add_argument("--lambda-opp", type=float, default=0.5, help="Opp-placement loss weight.")
+    p.add_argument(
+        "--lambda-next-placement",
+        type=float,
+        default=0.5,
+        help="Weight applied to each marginal placement loss (opp and self).",
+    )
+    p.add_argument(
+        "--lambda-win-placement",
+        type=float,
+        default=0.5,
+        help="Weight applied to each win-placement conjunction loss (opp and self).",
+    )
     p.add_argument("--huber-delta-mean", type=float, default=10.0, help="Huber delta, mean head.")
     p.add_argument("--huber-delta-std", type=float, default=10.0, help="Huber delta, std head.")
     p.add_argument(
@@ -305,6 +316,9 @@ def _checkpoint_and_eval(model, optimizer, conn, paths, device, args, state, res
         "loss_score_diff_mean": avg["score_diff_mean"],
         "loss_score_diff_std": avg["score_diff_std"],
         "loss_opp_next_placement": avg["opp_next_placement"],
+        "loss_self_next_placement": avg["self_next_placement"],
+        "loss_opp_win_placement": avg["opp_win_placement"],
+        "loss_self_win_placement": avg["self_win_placement"],
         "wld_acc": result.wld_acc,
         "lr": lr_now,
         "elapsed_s": elapsed,
@@ -550,7 +564,10 @@ def main() -> int:
         {
             "loss_wld": 1.0,
             "loss_score_diff": args.lambda_sd,
-            "loss_opp_next_placement": args.lambda_opp,
+            "loss_opp_next_placement": args.lambda_next_placement,
+            "loss_self_next_placement": args.lambda_next_placement,
+            "loss_opp_win_placement": args.lambda_win_placement,
+            "loss_self_win_placement": args.lambda_win_placement,
         },
     )
     init_controls(conn, args)

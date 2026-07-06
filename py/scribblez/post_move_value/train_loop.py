@@ -25,6 +25,9 @@ LOSS_KEYS = (
     "score_diff_mean",
     "score_diff_std",
     "opp_next_placement",
+    "self_next_placement",
+    "opp_win_placement",
+    "self_win_placement",
 )
 
 
@@ -33,13 +36,20 @@ class LossConfig:
     """Weights and Huber transition points for the combined post-move loss."""
 
     lambda_sd: float
-    lambda_opp: float
+    lambda_next_placement: float
+    lambda_win_placement: float
     huber_delta_mean: float
     huber_delta_std: float
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
-        return cls(args.lambda_sd, args.lambda_opp, args.huber_delta_mean, args.huber_delta_std)
+        return cls(
+            args.lambda_sd,
+            args.lambda_next_placement,
+            args.lambda_win_placement,
+            args.huber_delta_mean,
+            args.huber_delta_std,
+        )
 
 
 @dataclass
@@ -53,15 +63,22 @@ class EpochResult:
     rows_trained: int
 
 
+# Target tensors compute_loss consumes, pulled from the batch dict by name.
+TARGET_KEYS = (
+    "wld",
+    "score_diff",
+    "opp_next_placement",
+    "self_next_placement",
+    "opp_win_placement",
+    "self_win_placement",
+)
+
+
 def _to_device(batch: dict, device):
-    """Split a batch dict into (spatial, scalar) inputs and the three target
+    """Split a batch dict into (spatial, scalar) inputs and the target
     tensors, each moved to `device`."""
     inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
-    targets = {
-        "wld": batch["wld"].to(device),
-        "score_diff": batch["score_diff"].to(device),
-        "opp_next_placement": batch["opp_next_placement"].to(device),
-    }
+    targets = {k: batch[k].to(device) for k in TARGET_KEYS}
     return inputs, targets
 
 
@@ -107,7 +124,8 @@ def run_epoch(
             outputs,
             targets,
             lambda_sd=loss_cfg.lambda_sd,
-            lambda_opp=loss_cfg.lambda_opp,
+            lambda_next_placement=loss_cfg.lambda_next_placement,
+            lambda_win_placement=loss_cfg.lambda_win_placement,
             huber_delta_mean=loss_cfg.huber_delta_mean,
             huber_delta_std=loss_cfg.huber_delta_std,
         )

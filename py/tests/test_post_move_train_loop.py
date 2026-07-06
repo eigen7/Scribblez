@@ -1,32 +1,43 @@
 """Unit tests for the shared post-move training-epoch loop.
 
-A tiny 3-head stub model over small inputs exercises run_epoch's
-forward/backward/accumulate and its learning-rate handling without the real
-trunk or the C++ data layout.
+A tiny stub model producing every post-move head over small inputs exercises
+run_epoch's forward/backward/accumulate and its learning-rate handling without
+the real trunk or the C++ data layout.
 """
 
 import torch
+from scribblez.post_move_value.model import MASK_HEAD_NAMES
 from scribblez.post_move_value.train_loop import EpochResult, LossConfig, run_epoch
 
-_LOSS_CFG = LossConfig(lambda_sd=0.004, lambda_opp=0.5, huber_delta_mean=10.0, huber_delta_std=10.0)
+_LOSS_CFG = LossConfig(
+    lambda_sd=0.004,
+    lambda_next_placement=0.5,
+    lambda_win_placement=0.5,
+    huber_delta_mean=10.0,
+    huber_delta_std=10.0,
+)
 _CPU = torch.device("cpu")
 
 
 class _StubModel(torch.nn.Module):
-    """Minimal model producing the three post-move heads from the scalar input."""
+    """Minimal model producing every post-move head from the scalar input."""
 
     def __init__(self, scalar_size: int = 8):
         super().__init__()
         self.wld = torch.nn.Linear(scalar_size, 3)
         self.score = torch.nn.Linear(scalar_size, 2)
-        self.opp = torch.nn.Linear(scalar_size, 15 * 15)
+        self.masks = torch.nn.ModuleDict(
+            {name: torch.nn.Linear(scalar_size, 15 * 15) for name in MASK_HEAD_NAMES}
+        )
 
     def forward(self, input_spatial, input_scalar):
-        return {
+        out = {
             "wld": self.wld(input_scalar),
             "score_diff": self.score(input_scalar),
-            "opp_next_placement": self.opp(input_scalar).view(-1, 15, 15),
         }
+        for name, fc in self.masks.items():
+            out[name] = fc(input_scalar).view(-1, 15, 15)
+        return out
 
 
 def _batch(bs: int = 4, scalar_size: int = 8) -> dict:
@@ -37,7 +48,7 @@ def _batch(bs: int = 4, scalar_size: int = 8) -> dict:
         "input_scalar": torch.randn(bs, scalar_size),
         "wld": wld,
         "score_diff": torch.randn(bs, 1) * 20,
-        "opp_next_placement": (torch.rand(bs, 15, 15) > 0.8).float(),
+        **{name: (torch.rand(bs, 15, 15) > 0.85).float() for name in MASK_HEAD_NAMES},
     }
 
 
@@ -51,7 +62,7 @@ def test_run_epoch_accumulates_and_counts():
     assert result.samples == 12
     assert result.rows_trained == 112  # 100 + 3 * 4
     assert 0.0 <= result.wld_acc <= 1.0
-    assert set(result.losses) >= {"total", "wld", "score_diff", "opp_next_placement"}
+    assert set(result.losses) >= {"total", "wld", "score_diff", *MASK_HEAD_NAMES}
     assert result.losses["total"] > 0.0
 
 

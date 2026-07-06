@@ -57,6 +57,47 @@ struct OppNextPlacementTarget {
   static void encode(const EncodeContext& v, float* out);
 };
 
+struct SelfNextPlacementTarget {
+  // The mover-side sibling of OppNextPlacementTarget: cell (r,c) is 1.0 iff
+  // the mover placed a tile on (r,c) on their own next move from the sampled
+  // snapshot. All zeros if that move is missing, EXCHANGE, or PASS. Transposed
+  // when apply_flip is true. Serves as the marginal-occupancy partner of
+  // SelfWinPlacementTarget, letting the network separate "plays there often"
+  // from "wins when playing there" (see docs/sim_residual_feedback.md).
+  static constexpr int kSide = 15;
+  static constexpr const char* kName = "self_next_placement";
+  static constexpr int kDims[] = {kSide, kSide};
+  static void encode(const EncodeContext& v, float* out);
+};
+
+struct OppWinPlacementTarget {
+  // 15x15 conjunction mask: cell (r,c) is 1.0 iff the opponent placed a tile
+  // on (r,c) on their next move AND the opponent went on to win the game
+  // (draws count as not winning). The head trained against it predicts, per
+  // square, Pr[opponent-next-move-occupies AND opponent-wins] -- an
+  // "opponent danger" map marking spots whose occupation by the opponent is
+  // associated with losing (see docs/sim_residual_feedback.md). All zeros when
+  // the next move is missing, EXCHANGE, or PASS, or when the opponent did not
+  // win. Transposed when apply_flip is true.
+  static constexpr int kSide = 15;
+  static constexpr const char* kName = "opp_win_placement";
+  static constexpr int kDims[] = {kSide, kSide};
+  static void encode(const EncodeContext& v, float* out);
+};
+
+struct SelfWinPlacementTarget {
+  // The mover-side sibling of OppWinPlacementTarget: cell (r,c) is 1.0 iff the
+  // mover placed a tile on (r,c) on their own next move from the sampled
+  // snapshot AND went on to win the game -- a "self opportunity" map of hot
+  // spots for the mover's follow-up (see docs/sim_residual_feedback.md). All
+  // zeros when that move is missing, EXCHANGE, or PASS, or when the mover did
+  // not win. Transposed when apply_flip is true.
+  static constexpr int kSide = 15;
+  static constexpr const char* kName = "self_win_placement";
+  static constexpr int kDims[] = {kSide, kSide};
+  static void encode(const EncodeContext& v, float* out);
+};
+
 // ---------- TargetList: derives everything else from the pack ----------
 
 namespace detail {
@@ -83,7 +124,9 @@ struct TargetList {
 
 // ---------- The single source of truth ---------------------------------
 
-using AllTargets = TargetList<WldTarget, ScoreDiffTarget, OppNextPlacementTarget>;
+using AllTargets =
+  TargetList<WldTarget, ScoreDiffTarget, OppNextPlacementTarget, SelfNextPlacementTarget,
+             OppWinPlacementTarget, SelfWinPlacementTarget>;
 
 // Convenience constants derived from AllTargets. These exist so code that
 // just wants "how many label floats in a row?" doesn't have to mention the
@@ -102,6 +145,9 @@ inline constexpr int kScoreDiffClip = ScoreDiffTarget::kClip;
 inline constexpr int kScoreDiffOutputFloats = 2;
 inline constexpr int kOppNextPlacementFloats = detail::target_floats<OppNextPlacementTarget>();
 inline constexpr int kOppNextPlacementSide = OppNextPlacementTarget::kSide;
+inline constexpr int kSelfNextPlacementFloats = detail::target_floats<SelfNextPlacementTarget>();
+inline constexpr int kOppWinPlacementFloats = detail::target_floats<OppWinPlacementTarget>();
+inline constexpr int kSelfWinPlacementFloats = detail::target_floats<SelfWinPlacementTarget>();
 
 }  // namespace scribblez
 

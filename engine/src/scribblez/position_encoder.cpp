@@ -58,7 +58,7 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
 }
 
 EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, int mover,
-                                            bool flip) const {
+                                            bool post_move, bool flip) const {
   EncodeContext ctx{};
   ctx.enc = &enc_;
   ctx.pov_rack = &racks_[mover];
@@ -66,14 +66,21 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   ctx.apply_flip = flip;
   ctx.spec = spec_;
 
-  // The "opponent next move" -- whichever upcoming turn was played by
-  // (1 - mover). Pre-move: that's turn sampled_turn+1. Post-move: enc_ has
-  // advanced past sampled_turn (active is now opp), whose next move is also at
-  // sampled_turn+1.
-  const int next_idx = sampled_turn + 1;
-  if (next_idx < g.num_records) {
-    ctx.next_move = g.records[next_idx].move;
-    ctx.has_next_move = true;
+  // Each player's next move from the sampled snapshot. The opponent's is turn
+  // sampled_turn+1 in both snapshot kinds (pre-move: the mover plays
+  // sampled_turn and the opponent answers at +1; post-move: enc_ has advanced
+  // past sampled_turn, and the opponent's reply is still at +1). The mover's
+  // own next move is the sampled turn itself for a pre-move snapshot, and the
+  // turn after the opponent's reply for a post-move one.
+  const int opp_idx = sampled_turn + 1;
+  if (opp_idx < g.num_records) {
+    ctx.opp_next_move = g.records[opp_idx].move;
+    ctx.has_opp_next_move = true;
+  }
+  const int self_idx = post_move ? sampled_turn + 2 : sampled_turn;
+  if (self_idx < g.num_records) {
+    ctx.self_next_move = g.records[self_idx].move;
+    ctx.has_self_next_move = true;
   }
   ctx.final_score_p0 = g.final_scores[0];
   ctx.final_score_p1 = g.final_scores[1];

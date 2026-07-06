@@ -26,7 +26,10 @@
 //   [ input_floats:    input_floats(spec)          ]
 //   [ wld onehot:      kWldFloats              3   ]  // [win, draw, loss] (POV)
 //   [ score_diff:      kScoreDiffFloats        1   ]  // observed final diff (clipped)
-//   [ opp_next_place:  kOppNextPlacementFloats 225 ]  // 15x15 binary mask
+//   [ opp_next_place:  kOppNextPlacementFloats  225 ]  // 15x15 binary mask
+//   [ self_next_place: kSelfNextPlacementFloats 225 ]  // mover's next placement
+//   [ opp_win_place:   kOppWinPlacementFloats   225 ]  // opp_next_place x opp-won
+//   [ self_win_place:  kSelfWinPlacementFloats  225 ]  // self_next_place x mover-won
 //
 // (Label layout is owned by training_targets.h; the constants are
 // re-exported from this header for downstream convenience.)

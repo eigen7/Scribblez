@@ -56,9 +56,11 @@ class PositionEncoder {
 
  private:
   // Build the EncodeContext for the sampled position after a replay: the
-  // replayed state plus the game-outcome fields and the lexicon. A task reads
-  // only the fields it needs.
-  EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool flip) const;
+  // replayed state plus the game-outcome fields and the lexicon. `post_move`
+  // must match the replay's snapshot kind (it selects which upcoming turn is
+  // the mover's own next move). A task reads only the fields it needs.
+  EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move,
+                             bool flip) const;
 
   InputEncodingSpec spec_;
   GameStateEncoder enc_;

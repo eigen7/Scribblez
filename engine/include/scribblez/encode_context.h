@@ -27,10 +27,15 @@ struct EncodeContext {
   // which feature blocks the input row carries.
   InputEncodingSpec spec{nullptr, false};
 
-  // Game-outcome context for the post-move labels: the opponent's response to
-  // the sampled position and the game's final scores.
-  Move next_move{};
-  bool has_next_move = false;
+  // Game-outcome context for the post-move labels: each player's next move
+  // played from the sampled snapshot onward (opp_next_move: the opponent's
+  // upcoming move; self_next_move: the mover's own upcoming move) and the
+  // game's final scores. A move past the end of the game leaves the
+  // corresponding has_* flag false.
+  Move opp_next_move{};
+  bool has_opp_next_move = false;
+  Move self_next_move{};
+  bool has_self_next_move = false;
   int final_score_p0 = 0;
   int final_score_p1 = 0;
 

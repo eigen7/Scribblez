@@ -4,7 +4,7 @@ Architecture:
   - Spatial trunk: (planes, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
   - Scalar injection: (scalars,) -> FC -> 128 -> broadcast-add to spatial features
   - Pooling: global average pool -> 128-d trunk vector
-  - Three heads:
+  - Six heads:
     * WLD (inference): FC -> 3 logits (win/draw/loss)
     * ScoreDiff (aux): FC -> 2 = [mean, std] of the final score differential.
       The mean is regressed against the observed differential and the std
@@ -12,11 +12,19 @@ Architecture:
       points. The std stack reads a detached copy of the trunk summary, so its
       loss trains only that stack and never perturbs the trunk or the mean. The
       exported second value is the std directly.
-    * OppNextPlacement (aux): 1x1 conv -> (1, 15, 15) -> sigmoid mask
+    * Placement masks (aux): one shared 1x1-conv reduction -> (4, 15, 15), the
+      four channels split into named (15, 15) sigmoid masks. The marginals
+      OppNextPlacement / SelfNextPlacement predict where each player's next
+      move places tiles; the conjunctions OppWinPlacement / SelfWinPlacement
+      predict Pr[player's next move occupies the cell AND that player wins] --
+      the per-square "opponent danger" / "self opportunity" maps of
+      docs/sim_residual_feedback.md. Pairing each conjunction with its marginal
+      lets consumers separate "plays there often" from "wins when playing
+      there".
 
 The two model input widths come from the engine session's input-encoding spec
 (full layout 88 planes / 992 scalars with contingent features, base layout
-85 / 936 without) and, with the three head output shapes, are fixed by the
+85 / 936 without) and, with the six head output shapes, are fixed by the
 training pipeline and the C++ inference contract; the trunk between them is
 free to change.
 """
@@ -35,8 +43,18 @@ from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
 
 
+# The placement-mask heads, in the channel order mask_conv emits them (also
+# the order they appear in forward()'s output dict and the ONNX export).
+MASK_HEAD_NAMES = (
+    "opp_next_placement",
+    "self_next_placement",
+    "opp_win_placement",
+    "self_win_placement",
+)
+
+
 class PostMoveValueModel(nn.Module):
-    """Post-move value network with 3 heads."""
+    """Post-move value network with 6 heads."""
 
     def __init__(
         self,
@@ -93,12 +111,15 @@ class PostMoveValueModel(nn.Module):
             nn.Linear(256, 1),
         )
 
-        # Opp-next-placement head (aux): 1x1 conv -> (1, 15, 15).
-        self.opp_conv = nn.Sequential(
+        # Placement-mask heads (aux): one shared 1x1-conv reduction emitting a
+        # (len(MASK_HEAD_NAMES), 15, 15) logit stack, split per head in
+        # forward(). The masks read closely related board structure, so they
+        # share the reduction rather than each owning one.
+        self.mask_conv = nn.Sequential(
             nn.Conv2d(trunk_channels, 32, 1, bias=False),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, 1, 1),
+            nn.Conv2d(32, len(MASK_HEAD_NAMES), 1),
         )
 
     def forward(
@@ -112,7 +133,7 @@ class PostMoveValueModel(nn.Module):
 
         Returns:
             Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),
-            "opp_next_placement" (B,15,15 logits).
+            and one (B,15,15) logit mask per MASK_HEAD_NAMES entry.
         """
         # Shared conv trunk (s, the scalar projection, is reused by the value
         # heads below).
@@ -123,7 +144,7 @@ class PostMoveValueModel(nn.Module):
         value_in = torch.cat([mean_max_pool(x), s], dim=1)  # (B, 3C)
 
         wld = self.wld_fc(value_in)
-        opp = self.opp_conv(x).squeeze(1)  # (B, 15, 15)
+        masks = self.mask_conv(x)  # (B, len(MASK_HEAD_NAMES), 15, 15)
 
         # Score-diff head: [mean, std] in score points. The std stack reads a
         # detached copy of the value summary, so its loss never flows into the
@@ -133,14 +154,18 @@ class PostMoveValueModel(nn.Module):
         sd_std = F.softplus(self.sd_std_fc(value_in.detach())) + 1e-3  # (B, 1)
         sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
-        return {"wld": wld, "score_diff": sd, "opp_next_placement": opp}
+        out = {"wld": wld, "score_diff": sd}
+        for i, name in enumerate(MASK_HEAD_NAMES):
+            out[name] = masks[:, i]  # (B, 15, 15)
+        return out
 
 
 def compute_loss(
     outputs: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
     lambda_sd: float = 1.0,
-    lambda_opp: float = 0.5,
+    lambda_next_placement: float = 0.5,
+    lambda_win_placement: float = 0.5,
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
 ) -> dict[str, torch.Tensor]:
@@ -148,14 +173,20 @@ def compute_loss(
 
     Args:
         outputs: model forward() result. "wld" (B,3 logits), "score_diff"
-                 (B,2 = [mean, std]), "opp_next_placement" (B,15,15 logits).
+                 (B,2 = [mean, std]), and one (B,15,15) logit mask per
+                 MASK_HEAD_NAMES entry.
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
-                 final differential, "opp_next_placement" (B,15,15) binary mask.
+                 final differential, and a (B,15,15) binary mask per
+                 MASK_HEAD_NAMES entry.
+        lambda_next_placement: weight applied to each of the two marginal
+                 placement losses (opp and self).
+        lambda_win_placement: weight applied to each of the two win-placement
+                 conjunction losses (opp and self).
         huber_delta_mean: Huber transition point (points) for the mean.
         huber_delta_std: Huber transition point (points) for the std.
 
     Returns:
-        Dict with "total", "wld", "score_diff", "opp_next_placement" losses.
+        Dict with "total" plus one entry per head loss.
     """
     # WLD: cross-entropy against one-hot target.
     wld_target_idx = targets["wld"].argmax(dim=1)
@@ -174,12 +205,22 @@ def compute_loss(
     loss_sd_std = F.huber_loss(sd_std, std_target, delta=huber_delta_std)
     loss_sd = loss_sd_mean + loss_sd_std
 
-    # Opp-next-placement: binary cross-entropy per cell.
-    loss_opp = F.binary_cross_entropy_with_logits(
-        outputs["opp_next_placement"], targets["opp_next_placement"]
-    )
+    # Placement-mask heads: binary cross-entropy per cell, the marginals
+    # weighted by lambda_next_placement and the conjunctions by
+    # lambda_win_placement.
+    mask_losses = {
+        name: F.binary_cross_entropy_with_logits(outputs[name], targets[name])
+        for name in MASK_HEAD_NAMES
+    }
 
-    total = loss_wld + lambda_sd * loss_sd + lambda_opp * loss_opp
+    total = (
+        loss_wld
+        + lambda_sd * loss_sd
+        + lambda_next_placement
+        * (mask_losses["opp_next_placement"] + mask_losses["self_next_placement"])
+        + lambda_win_placement
+        * (mask_losses["opp_win_placement"] + mask_losses["self_win_placement"])
+    )
 
     return {
         "total": total,
@@ -187,5 +228,5 @@ def compute_loss(
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,
-        "opp_next_placement": loss_opp,
+        **mask_losses,
     }

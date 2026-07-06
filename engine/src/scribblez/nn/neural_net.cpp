@@ -30,6 +30,9 @@ constexpr const char* kInputScalar = "input_scalar";
 constexpr const char* kOutputWld = "wld";
 constexpr const char* kOutputScoreDiff = "score_diff";
 constexpr const char* kOutputOpp = "opp_next_placement";
+constexpr const char* kOutputSelfNext = "self_next_placement";
+constexpr const char* kOutputOppWin = "opp_win_placement";
+constexpr const char* kOutputSelfWin = "self_win_placement";
 
 // Routes TensorRT's internal diagnostics to stderr, dropping anything below a
 // warning so the build logs stay readable.
@@ -153,14 +156,19 @@ struct NeuralNet::Impl {
   void* d_wld = nullptr;
   void* d_score_diff = nullptr;
   void* d_opp = nullptr;
+  void* d_self_next = nullptr;
+  void* d_opp_win = nullptr;
+  void* d_self_win = nullptr;
 
   float* h_input_spatial = nullptr;
   float* h_input_scalar = nullptr;
   float* h_wld = nullptr;
   float* h_score_diff = nullptr;
-  // No host buffer for the opp_next_placement output: the engine still produces
-  // it (d_opp must stay bound for enqueueV3), but no inference consumer reads
-  // it, so it is never copied back to the host.
+  // No host buffers for the auxiliary mask outputs (opp_next_placement,
+  // self_next_placement, opp_win_placement, self_win_placement): the engine
+  // still produces them
+  // (their device buffers must stay bound for enqueueV3), but no inference
+  // consumer reads them, so they are never copied back to the host.
 
   int last_rows = -1;
 };
@@ -172,6 +180,9 @@ NeuralNet::Impl::~Impl() {
     if (d_wld) device_free(d_wld);
     if (d_score_diff) device_free(d_score_diff);
     if (d_opp) device_free(d_opp);
+    if (d_self_next) device_free(d_self_next);
+    if (d_opp_win) device_free(d_opp_win);
+    if (d_self_win) device_free(d_self_win);
     if (h_input_spatial) host_free(h_input_spatial);
     if (h_input_scalar) host_free(h_input_scalar);
     if (h_wld) host_free(h_wld);
@@ -244,6 +255,9 @@ void NeuralNet::Impl::allocate_buffers() {
   d_wld = dev(b * kWldFloats);
   d_score_diff = dev(b * kScoreDiffOutputFloats);
   d_opp = dev(b * kOppNextPlacementFloats);
+  d_self_next = dev(b * kSelfNextPlacementFloats);
+  d_opp_win = dev(b * kOppWinPlacementFloats);
+  d_self_win = dev(b * kSelfWinPlacementFloats);
 
   h_input_spatial = host(spatial_floats(b));
   h_input_scalar = host(scalar_size(b));
@@ -255,6 +269,9 @@ void NeuralNet::Impl::allocate_buffers() {
   context->setTensorAddress(kOutputWld, d_wld);
   context->setTensorAddress(kOutputScoreDiff, d_score_diff);
   context->setTensorAddress(kOutputOpp, d_opp);
+  context->setTensorAddress(kOutputSelfNext, d_self_next);
+  context->setTensorAddress(kOutputOppWin, d_opp_win);
+  context->setTensorAddress(kOutputSelfWin, d_self_win);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,8 +331,9 @@ void NeuralNet::predict(int num_rows) {
 
   if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
 
-  // Only the wld and score_diff outputs are copied back; opp_next_placement is
-  // produced into d_opp but has no inference consumer, so it stays on the GPU.
+  // Only the wld and score_diff outputs are copied back; the auxiliary mask
+  // outputs are produced into their device buffers but have no inference
+  // consumer, so they stay on the GPU.
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
                        sizeof(float) * num_rows * kScoreDiffOutputFloats);

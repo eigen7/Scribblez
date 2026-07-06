@@ -63,8 +63,11 @@ than precomputed as an input. The reasons are architectural and are covered in
 
 ## The per-square outcome heads
 
-Two new 15×15 heads on the value models, each a per-square Bernoulli
-probability:
+Two 15×15 heads on the value models, each a per-square Bernoulli probability
+(implemented: `OppWinPlacementTarget` / `SelfWinPlacementTarget` in
+[training_targets.h](../engine/include/scribblez/training_targets.h), served
+with the marginal placement heads by the shared `mask_conv` stack in
+[model.py](../py/scribblez/post_move_value/model.py)):
 
 - **Opponent danger**: for square `S`,
   `Pr[opponent's next move occupies S  AND  opponent wins the game]`.
@@ -80,10 +83,10 @@ the win indicator. Loss is per-square BCE. An exchange or pass places no tiles,
 so its plane is all zeros — the heads are per-square probabilities, not a
 distribution over squares, and need not sum to anything.
 
-Note what the conjunction mixes: a square can score high because the opponent
-*plays* there often, or because playing there *wins* often. The marginal
-occupancy prediction (the existing `OppNextPlacement` head) sits alongside the
-conjunction so the network can disentangle the two.
+Note what the conjunction mixes: a square can score high because the player
+*plays* there often, or because playing there *wins* often. Each conjunction
+is therefore paired with a marginal occupancy head (`opp_next_placement` /
+`self_next_placement`) so the network can disentangle the two.
 
 ## Sim evidence
 
@@ -531,14 +534,14 @@ machinery this experiment needs.
 
 ## Implementation roadmap
 
-| Step | Build | Depends on |
-|------|-------|-----------|
-| 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — |
-| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 |
-| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery |
-| 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 |
-| 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 |
-| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the covariance head + root posterior if the small-`B` schedule shows value; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 |
+| Step | Build | Depends on | Status |
+|------|-------|-----------|--------|
+| 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 | — |
+| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | — |
+| 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
+| 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 | — |
+| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the covariance head + root posterior if the small-`B` schedule shows value; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 | — |
 
 Steps 1–3 are cheap relative to what they de-risk and are worth doing early;
 steps 4–6 ride the Phase 4 timeline.

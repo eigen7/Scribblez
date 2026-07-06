@@ -9,8 +9,9 @@
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
 // Scribblez post-move value model: two inputs ("input_spatial"
 // (N,spatial_planes,15,15), "input_scalar" (N,scalar_floats) -- widths declared
-// by the model itself) and three
-// outputs ("wld" (N,3), "score_diff" (N,2 = [mean, std]), "opp_next_placement"
+// by the model itself) and six outputs ("wld" (N,3), "score_diff"
+// (N,2 = [mean, std]), plus the auxiliary masks "opp_next_placement",
+// "self_next_placement", "opp_win_placement", and "self_win_placement", each
 // (N,15,15)). The input shapes mirror the constants in input_encoder.h, which
 // is the single source of truth for the encoding layout.
 //
@@ -22,10 +23,10 @@
 //
 // predict() is blocking: it copies the host input rows to the GPU, runs the
 // engine, copies the wld and score_diff outputs back, and synchronizes the
-// stream before returning. The third engine output, opp_next_placement, is
-// produced on the GPU (its device buffer must stay bound) but has no inference
-// consumer, so it is not copied back. There is no batching across threads and
-// no async pipeline -- one NeuralNet drives one engine from one thread.
+// stream before returning. The auxiliary mask outputs are produced on the GPU
+// (their device buffers must stay bound) but have no inference consumer, so
+// they are not copied back. There is no batching across threads and no async
+// pipeline -- one NeuralNet drives one engine from one thread.
 
 namespace scribblez {
 namespace nn {
@@ -85,7 +86,7 @@ class NeuralNet {
   // Host output buffers, valid after predict() returns. Row-major; only the
   // first num_rows rows are meaningful. wld is raw logits; score_diff is the
   // [mean, std] of the final-differential Gaussian (std already positive). The
-  // opp_next_placement output is not exposed here -- it is not copied back.
+  // auxiliary mask outputs are not exposed here -- they are not copied back.
   const float* wld_host() const;         // num_rows x kWldFloats
   const float* score_diff_host() const;  // num_rows x kScoreDiffOutputFloats ([mean, std])
 

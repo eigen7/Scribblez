@@ -33,7 +33,10 @@ typedef struct ScribblezShape {
 // Static description of the target tensor(s) in row order:
 //   target_index=0  "wld"                (3,)
 //   target_index=1  "score_diff"         (1,)
-//   target_index=2  "opp_next_placement" (15, 15)
+//   target_index=2  "opp_next_placement"  (15, 15)
+//   target_index=3  "self_next_placement" (15, 15)
+//   target_index=4  "opp_win_placement"   (15, 15)
+//   target_index=5  "self_win_placement"  (15, 15)
 const ScribblezShape* scribblez_target_shapes(void);
 
 // Shapes / sizes for the max-move-per-lane task (the "highest-scoring move per lane"

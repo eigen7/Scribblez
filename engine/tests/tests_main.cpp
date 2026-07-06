@@ -2050,12 +2050,13 @@ static void test_game_play_from() {
 namespace {
 
 // Helper: build an EncodeContext with just the fields encode_labels reads for
-// heads 0 and 1 (no next move set -> head 2 emits all zeros).
+// heads 0 and 1 (no next moves set -> the placement heads emit all zeros).
 scribblez::EncodeContext make_scores_view(int fs_active, int fs_opp, int active_player,
                                           bool apply_flip = false) {
   using namespace scribblez::binlog;
   EncodeContext v{};
-  v.has_next_move = false;
+  v.has_opp_next_move = false;
+  v.has_self_next_move = false;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
   v.final_score_p1 = active_player == 0 ? fs_opp : fs_active;
@@ -2064,7 +2065,8 @@ scribblez::EncodeContext make_scores_view(int fs_active, int fs_opp, int active_
 }
 
 // Convenience: call AllTargets::encode_all into one contiguous buffer of
-// size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225)].
+// size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225),
+// self_next(225), opp_win(225), self_win(225)].
 void encode_labels_flat(const scribblez::EncodeContext& view, float* flat) {
   scribblez::AllTargets::encode_all(view, flat);
 }
@@ -2137,8 +2139,8 @@ static void test_encode_labels() {
                                    Glyph::of(Tile::from_char('C'))});
 
   EncodeContext v_with_next{};
-  v_with_next.next_move = next_play;
-  v_with_next.has_next_move = true;
+  v_with_next.opp_next_move = next_play;
+  v_with_next.has_opp_next_move = true;
   v_with_next.active_player = 0;
   v_with_next.final_score_p0 = 100;
   v_with_next.final_score_p1 = 80;
@@ -2170,10 +2172,69 @@ static void test_encode_labels() {
   // EXCHANGE / PASS next move -> all zeros.
   TileCounts xch_tiles;
   xch_tiles.add(Tile::from_char('A'));
-  v_with_next.next_move = Move::exchange(xch_tiles);
+  v_with_next.opp_next_move = Move::exchange(xch_tiles);
   v_with_next.apply_flip = false;
   encode_labels_flat(v_with_next, flat);
   for (int i = 0; i < kOppNextPlacementFloats; ++i) CHECK(plane[i] == 0.0f);
+
+  // --- Self marginal + win-placement conjunction heads ---
+  const float* self_next = plane + kOppNextPlacementFloats;
+  const float* opp_win = self_next + kSelfNextPlacementFloats;
+  const float* self_win = opp_win + kOppWinPlacementFloats;
+
+  // Restore the opponent PLAY. The active player is winning (100 > 80), so the
+  // opp-win conjunction stays all zeros even though the placement mask is set.
+  v_with_next.opp_next_move = next_play;
+  encode_labels_flat(v_with_next, flat);
+  CHECK(plane[4 * 15 + 2] == 1.0f);
+  for (int i = 0; i < kOppWinPlacementFloats; ++i) CHECK(opp_win[i] == 0.0f);
+
+  // With the opponent winning, the opp-win plane equals the placement plane.
+  v_with_next.final_score_p0 = 80;
+  v_with_next.final_score_p1 = 100;
+  encode_labels_flat(v_with_next, flat);
+  CHECK(std::memcmp(plane, opp_win, sizeof(float) * kOppNextPlacementFloats) == 0);
+  CHECK(opp_win[4 * 15 + 2] == 1.0f);
+  // No mover next move -> self-win stays all zeros regardless of outcome.
+  for (int i = 0; i < kSelfWinPlacementFloats; ++i) CHECK(self_win[i] == 0.0f);
+
+  // A mover next move (vertical PLAY on (7,3) and (8,3)) lights self-win on
+  // exactly its cells when the mover wins, and not while the mover is losing.
+  Move self_play =
+    make_play_full(7, 3, /*horizontal=*/false, 0b11, 0,
+                   {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('E'))});
+  v_with_next.self_next_move = self_play;
+  v_with_next.has_self_next_move = true;
+  encode_labels_flat(v_with_next, flat);  // opponent still winning
+  for (int i = 0; i < kSelfWinPlacementFloats; ++i) CHECK(self_win[i] == 0.0f);
+
+  v_with_next.final_score_p0 = 100;
+  v_with_next.final_score_p1 = 80;  // the mover wins again
+  encode_labels_flat(v_with_next, flat);
+  // The self marginal lights the mover's placement regardless of outcome, and
+  // the winning case makes self_win identical to it.
+  CHECK(self_next[7 * 15 + 3] == 1.0f);
+  CHECK(self_next[8 * 15 + 3] == 1.0f);
+  CHECK(std::memcmp(self_next, self_win, sizeof(float) * kSelfNextPlacementFloats) == 0);
+  int self_cells = 0;
+  for (int i = 0; i < kSelfWinPlacementFloats; ++i) {
+    if (self_win[i] == 1.0f) ++self_cells;
+  }
+  CHECK(self_cells == 2);
+  CHECK(self_win[7 * 15 + 3] == 1.0f);
+  CHECK(self_win[8 * 15 + 3] == 1.0f);
+  // The mover winning zeroes the opp-win plane.
+  for (int i = 0; i < kOppWinPlacementFloats; ++i) CHECK(opp_win[i] == 0.0f);
+
+  // A draw counts as not winning for both conjunctions; the marginals are
+  // outcome-independent and stay lit.
+  v_with_next.final_score_p0 = 90;
+  v_with_next.final_score_p1 = 90;
+  encode_labels_flat(v_with_next, flat);
+  for (int i = 0; i < kOppWinPlacementFloats; ++i) CHECK(opp_win[i] == 0.0f);
+  for (int i = 0; i < kSelfWinPlacementFloats; ++i) CHECK(self_win[i] == 0.0f);
+  CHECK(plane[4 * 15 + 2] == 1.0f);
+  CHECK(self_next[7 * 15 + 3] == 1.0f);
 }
 
 // ===========================================================================
@@ -2304,7 +2365,8 @@ static void test_dataloader_per_row_symmetry() {
   CHECK(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)) != 0);
 
   // Expected labels for active=p0 (final p0=350 vs p1=200 -> active wins by
-  // 150). The move after turn 0 is p1's PASS, so the opp-next-placement head is
+  // 150). The move after turn 0 is p1's PASS and the game has no turn 2, so
+  // every placement head (the two marginals and the two conjunctions) is
   // all-zero, making the whole label tail flip-invariant.
   float ref_labels[kLabelFloats];
   encode_labels_flat(
