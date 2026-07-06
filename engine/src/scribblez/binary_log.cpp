@@ -39,6 +39,31 @@ std::mt19937_64& sampler_rng() {
 
 }  // namespace
 
+GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecord>& scratch,
+                       uint32_t* sampled_turn) {
+  const GameMetadata* metas = reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader));
+  const GameMetadata& gm = metas[game_idx];
+  const InitialRacks* ir = reinterpret_cast<const InitialRacks*>(buf + gm.start_offset);
+  const TurnBlob* turns =
+    reinterpret_cast<const TurnBlob*>(buf + gm.start_offset + sizeof(InitialRacks));
+
+  scratch.resize(gm.num_turns);
+  for (uint32_t k = 0; k < gm.num_turns; ++k) {
+    scratch[k].move = turns[k].move;
+    scratch[k].drawn = turns[k].drawn;
+  }
+
+  GameLog g;
+  g.initial_racks[0] = ir->p0;
+  g.initial_racks[1] = ir->p1;
+  g.initial_scores = {gm.initial_score_p0, gm.initial_score_p1};
+  g.final_scores = {gm.final_score_p0, gm.final_score_p1};
+  g.records = scratch.data();
+  g.num_records = static_cast<int>(gm.num_turns);
+  if (sampled_turn) *sampled_turn = gm.sampled_turn;
+  return g;
+}
+
 EligibleSpan eligible_span(const GameLog& log) {
   int end = 0;
   for (int k = 0; k < log.num_records; ++k) {

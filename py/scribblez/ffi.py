@@ -128,6 +128,17 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    lib.scribblez_decode_rows.restype = ctypes.c_int
+    lib.scribblez_decode_rows.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_int64),
+        ctypes.POINTER(ctypes.c_int64),
+        ctypes.c_int64,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_float),
+    ]
+
     lib.scribblez_dump_position.restype = ctypes.c_int
     lib.scribblez_dump_position.argtypes = [
         ctypes.c_void_p,  # session
@@ -337,6 +348,40 @@ def encode_score_diff_sweep(
     )
     if rc != 0:
         raise OSError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
+    return out
+
+
+def decode_rows(
+    path: str | Path,
+    game_idx: np.ndarray,
+    turn_idx: np.ndarray,
+    post_move: bool = True,
+) -> np.ndarray:
+    """Decode explicit training rows of one .slog file by position identity.
+
+    Row j is the position at (game_idx[j], turn_idx[j]), encoded exactly like a
+    DataLoader training row (input floats followed by the label block) with no
+    symmetry flip. Returns a (n, row_size_floats()) float32 array. Serves
+    consumers that pair rows with per-position sidecar data (the .sobs sim
+    observations) and so must address positions by identity rather than stream
+    them shuffled.
+    """
+    games = np.ascontiguousarray(game_idx, dtype=np.int64)
+    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
+    if games.shape != turns.shape or games.ndim != 1:
+        raise ValueError(f"game/turn index shapes differ: {games.shape} vs {turns.shape}")
+    out = np.empty((len(games), row_size_floats()), dtype=np.float32)
+    rc = _lib().scribblez_decode_rows(
+        _session(),
+        str(path).encode("utf-8"),
+        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        len(games),
+        int(post_move),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+    )
+    if rc != 0:
+        raise OSError(f"decode_rows failed (rc={rc}) for {path}")
     return out
 
 

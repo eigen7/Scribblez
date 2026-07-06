@@ -99,6 +99,17 @@ int scribblez_row_size_floats(ScribblezSession* s);
 int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
                                       int post_move, int diff_lo, int diff_hi, float* out_inputs);
 
+// Decode explicit training rows of one .slog file: row j is the position at
+// (game_idx[j], turn_idx[j]), encoded exactly like a DataLoader training row
+// (input floats followed by the label block) but with no symmetry flip.
+// `post_move` selects the snapshot for every row. Writes n rows of
+// scribblez_row_size_floats() floats to `out`. Returns 0 on success, -1 on an
+// I/O / header error. Serves consumers that pair rows with per-position
+// sidecar data (the .sobs sim observations) and so must address positions by
+// identity rather than stream them shuffled.
+int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                          const int64_t* turn_idx, int64_t n, int post_move, float* out);
+
 // Render an ASCII description of a sampled position (POV, scores, leave, last
 // moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
 // the full string length on success (which may exceed out_cap - 1, signaling

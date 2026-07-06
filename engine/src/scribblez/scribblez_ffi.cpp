@@ -50,6 +50,8 @@ struct ScribblezSession {
 
   int encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move, int diff_lo,
                               int diff_hi, float* out_inputs) const;
+  int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
+                  bool post_move, float* out) const;
   int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                     int out_cap) const;
   int dump_position_json(const char* path, int64_t game_idx, bool post_move, char* out,
@@ -248,6 +250,27 @@ int emit_string(const std::string& s, char* out, int out_cap) {
 }
 
 }  // namespace
+
+int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
+                                  const int64_t* turn_idx, int64_t n, bool post_move,
+                                  float* out) const {
+  if (!game_idx || !turn_idx || !out || n < 0) return -1;
+  std::vector<char> buf;
+  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  scribblez::binlog::BlockDecoder decoder(spec);
+  const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
+  for (int64_t j = 0; j < n; ++j) {
+    decoder.decode_one(buf.data(), path, static_cast<uint32_t>(game_idx[j]),
+                       static_cast<uint32_t>(turn_idx[j]), /*flip=*/false, post_move,
+                       /*output_row=*/0, out + j * row_floats);
+  }
+  return 0;
+}
+
+int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                          const int64_t* turn_idx, int64_t n, int post_move, float* out) {
+  return s->decode_rows(path, game_idx, turn_idx, n, post_move != 0, out);
+}
 
 int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                                     int out_cap) const {

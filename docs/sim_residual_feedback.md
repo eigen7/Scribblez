@@ -527,10 +527,68 @@ moot — and that is learned without touching `M_pre`, the multi-round agent, or
 any selection-time plumbing. The same experiment de-risks the fusion
 architecture itself (evidence tokens, self-attention, board fusion), which is
 the main new network component.
-[monte_carlo_sim_tool](../engine/apps/monte_carlo_sim_tool.cpp) (the
-Positions-tab ground-truth generator, see
-[react_dashboard.md](react_dashboard.md)) already contains most of the rollout
-machinery this experiment needs.
+
+### Runbook
+
+The pipeline is [sim_obs_tool](../engine/apps/sim_obs_tool.cpp) (candidates =
+HastyBot-equity top-K — a deliberate simplification over top-K-by-`M_post`,
+avoiding C++-side model inference; on HastyBot self-play data the equity
+argmax is also the move actually played, so each position's evidence contains
+the played move's own sim) feeding
+[kill_test.py](../py/scripts/sim_evidence/kill_test.py) (row decoding by
+position identity, evidence encoding, and the training arms). The
+evidence-conditioned model is
+[sim_evidence/model.py](../py/scribblez/sim_evidence/model.py): a
+zero-initialized fusion stage on top of the regular post-move model, so the
+`none` arm and the evidence arms are parameter-identical and differ only in
+their inputs.
+
+```
+# 1. Self-play data (~20k games; skip if reusing an existing generation dir)
+./target/engine/play_game --player "--type=hastybot" --player "--type=hastybot" \
+    --games 20000 --threads 32 --games-per-file 500 --seed 1 \
+    --binary-log-dir /workspace/mount/sim_evidence/slogs
+
+# 2. Sim observations (the expensive step; reruns resume past finished files)
+./target/engine/sim_obs_tool --slog-dir /workspace/mount/sim_evidence/slogs \
+    --rollouts 200 --top-k 10 --positions-per-game 1 --threads 32 --seed 1
+
+# 3. Decode rows + encode evidence into training shards
+./py/scripts/sim_evidence/kill_test.py build \
+    --slog-dir /workspace/mount/sim_evidence/slogs \
+    --cache-dir /workspace/mount/sim_evidence/cache
+
+# 4. The arms (same seed and architecture; only the evidence input differs)
+./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
+    --evidence none --tag baseline
+./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
+    --evidence full --tag full
+./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
+    --evidence scalar --tag scalar
+./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
+    --evidence shuffled --tag shuffled
+```
+
+**Reading the results** (per-arm history in `<cache-dir>/results/<tag>.json`;
+the decision metric is best held-out `wld_ce`):
+
+- **`full` < `none` by a clear margin** → the hypothesis survives; proceed to
+  step 4. "Clear" means the gap dwarfs seed noise — rerun a pair of arms at a
+  second `--seed` if the gap is within a few thousandths.
+- **`shuffled` ≈ `none`** is the validity check: shuffled evidence carries the
+  same marginal statistics but is position-mismatched, so any gain it shows is
+  leakage/artifact, and `full`'s gain should be measured against `shuffled`,
+  not `none`.
+- **`scalar` vs `full`** locates the win: if `scalar` captures most of it, the
+  spatial fusion machinery can be deferred (the cheap-before-rich ladder).
+- `brier` and `wld_acc` should move with `wld_ce`; `sd_mae` is a sanity
+  side-channel. A `full` arm whose *train* loss drops while holdout `wld_ce`
+  does not is memorizing evidence noise — more positions (or fewer epochs)
+  beats more capacity.
+
+The nominal sizes above (~20k positions, 10×200 rollouts each) cost a few
+hours of `sim_obs_tool` on a 32-thread box and ~2 GB of cache; scale
+`--positions-per-game` up if the arms' gap looks real but noisy.
 
 ## Implementation roadmap
 
@@ -538,7 +596,7 @@ machinery this experiment needs.
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/scribblez/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/scribblez/sim_observation_log.h) (the versioned `.sobs` sidecar). |
-| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | — |
+| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Code ready** — `sim_obs_tool`, the `.sobs`→row data path, and the four `kill_test.py` arms (see the runbook); awaiting the run's verdict. |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
 | 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 | — |
 | 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the covariance head + root posterior if the small-`B` schedule shows value; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 | — |

@@ -184,6 +184,17 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# Sim-observation (.sobs) generator for .slog data: HastyBot-equity top-K
+# candidates per sampled position, simmed by SimRunner (docs/sim_residual_feedback.md).
+add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
+target_link_libraries(sim_obs_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 add_executable(harvest_bingo_positions_tool apps/harvest_bingo_positions_tool.cpp)
 target_link_libraries(harvest_bingo_positions_tool PRIVATE
   scribblez_core

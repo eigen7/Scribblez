@@ -49,6 +49,7 @@ namespace scribblez {
 
 struct GameLog;         // forward (defined in game.h)
 struct GameLogStorage;  // forward (defined in game.h)
+struct TurnRecord;      // forward (defined in game.h)
 
 namespace binlog {
 
@@ -118,6 +119,14 @@ struct TurnBlob {
 static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
+
+// Build a non-owning GameLog view over game `game_idx` of a loaded .slog
+// buffer, filling `scratch` with that game's turns (only `move` and `drawn`
+// -- the fields replay consumes). Sets *sampled_turn to the game's eval-only
+// sampled turn when non-null. The returned view is valid until `scratch` is
+// next reused. The caller must have validated the file's magic and version.
+GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecord>& scratch,
+                       uint32_t* sampled_turn);
 
 // The training-eligible turn region of a game, [begin, end). May be empty
 // (begin >= end) for degenerate games, which must then be excluded from any
