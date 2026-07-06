@@ -10,8 +10,6 @@ Tables:
   monotonicity    per-epoch win-rate curves: score_diffs, win_rate, per-curve scores
   score_belief    per-epoch score-diff percentile bands
   calibration     per-epoch reliability binning (WLD + score-diff)
-  throughput      streaming throughput/backpressure time series (one row per sample)
-  train_step      per-minibatch loss/accuracy time series (streaming pipeline)
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved). The
 frozen test-subset board images are NOT in the DB -- they are static PNGs
@@ -70,22 +68,6 @@ CREATE TABLE IF NOT EXISTS calibration (
   rel_edges BLOB, rel_pred BLOB, rel_actual BLOB, rel_count BLOB,
   sd_edges BLOB, sd_pred BLOB, sd_actual BLOB, sd_count BLOB
 );
-CREATE TABLE IF NOT EXISTS throughput (
-  t REAL,                       -- wall-clock sample time (epoch seconds)
-  positions INTEGER,            -- cumulative positions trained
-  games INTEGER,                -- cumulative games produced (== positions; 1 sample/game)
-  positions_per_s REAL,         -- throughput over the last interval
-  producer_blocked_ns INTEGER,  -- cumulative producer wait (GPU-bound when rising)
-  consumer_blocked_ns INTEGER,  -- cumulative consumer wait (CPU-bound when rising)
-  bottleneck TEXT               -- 'cpu' or 'gpu', from the interval's wait deltas
-);
-CREATE TABLE IF NOT EXISTS train_step (
-  step INTEGER,                 -- cumulative minibatch index at this point's end
-  positions INTEGER,            -- cumulative positions trained at this point's end
-  name TEXT,                    -- metric name: 'loss', 'loss_<head>', '<x>_acc'
-  value REAL,                   -- mean of the metric over the point's `n` minibatches
-  n INTEGER                     -- minibatches this point aggregates (its weight/resolution)
-);
 CREATE TABLE IF NOT EXISTS loss_weights (
   name TEXT PRIMARY KEY,        -- a per-component loss series ('loss_<head>')
   weight REAL                   -- its coefficient in the optimized total loss
@@ -131,14 +113,6 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
-    # The train_step read index references the current columns; create it
-    # separately so a pre-schema train_step table (missing them) doesn't abort the
-    # whole connect -- such a stale table is simply not read (read_train_steps
-    # returns empty for it).
-    try:
-        conn.execute("CREATE INDEX IF NOT EXISTS train_step_step ON train_step(name, step)")
-    except sqlite3.OperationalError:
-        pass
     conn.commit()
     return conn
 
@@ -396,53 +370,6 @@ def write_calibration(conn: sqlite3.Connection, epoch: int, report):
     conn.commit()
 
 
-_THROUGHPUT_COLS = (
-    "t",
-    "positions",
-    "games",
-    "positions_per_s",
-    "producer_blocked_ns",
-    "consumer_blocked_ns",
-    "bottleneck",
-)
-
-
-def write_throughput(conn: sqlite3.Connection, sample: dict):
-    """Append one throughput/backpressure time-series sample."""
-    conn.execute(
-        "INSERT INTO throughput "
-        "(t, positions, games, positions_per_s, producer_blocked_ns, "
-        "consumer_blocked_ns, bottleneck) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        tuple(sample[c] for c in _THROUGHPUT_COLS),
-    )
-    conn.commit()
-
-
-def _train_step_long_rows(rows: list[dict]) -> list[tuple]:
-    """Expand `{step, positions, n, <metric>: value, ...}` point dicts into
-    long-format `(step, positions, name, value, n)` tuples (one per metric). `n`
-    is the point's weight (minibatches it aggregates); it defaults to 1. New
-    loss/accuracy series need no schema change -- a metric is a present key."""
-    return [
-        (r["step"], r["positions"], name, float(value), int(r.get("n", 1)))
-        for r in rows
-        for name, value in r.items()
-        if name not in ("step", "positions", "n")
-    ]
-
-
-def write_train_steps(conn: sqlite3.Connection, rows: list[dict]):
-    """Append training-stat points (batched insert; no-op if empty). Append-only:
-    points are never rewritten; the read aggregates them to a uniform resolution."""
-    if not rows:
-        return
-    conn.executemany(
-        "INSERT INTO train_step (step, positions, name, value, n) VALUES (?, ?, ?, ?, ?)",
-        _train_step_long_rows(rows),
-    )
-    conn.commit()
-
-
 # --------------------------------------------------------------------------
 # Readers
 # --------------------------------------------------------------------------
@@ -473,14 +400,6 @@ def read_metric_series(conn: sqlite3.Connection, name: str):
     return np.array([r["epoch"] for r in rows]), np.array([r["value"] for r in rows])
 
 
-def _epochs_in(conn: sqlite3.Connection, table: str) -> list[int]:
-    return [r["epoch"] for r in conn.execute(f"SELECT epoch FROM {table} ORDER BY epoch")]
-
-
-def read_monotonicity_epochs(conn: sqlite3.Connection) -> list[int]:
-    return _epochs_in(conn, "monotonicity")
-
-
 def read_all_monotonicity(conn: sqlite3.Connection):
     """All epochs stacked: (epochs, score_diffs (R,), win_rate (G,N,R), curve_scores (G,N,3))."""
     rows = conn.execute(
@@ -507,74 +426,6 @@ def read_all_score_belief(conn: sqlite3.Connection):
     quantiles = from_blob(rows[0]["quantiles"])
     bands = np.stack([from_blob(r["bands"]) for r in rows])
     return epochs, score_diffs, quantiles, bands
-
-
-def read_throughput(conn: sqlite3.Connection) -> list[dict]:
-    """All throughput samples in insertion order, each as a column->value dict."""
-    rows = conn.execute(
-        "SELECT t, positions, games, positions_per_s, producer_blocked_ns, "
-        "consumer_blocked_ns, bottleneck FROM throughput ORDER BY rowid"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def read_train_steps(conn: sqlite3.Connection, max_points: int = 1024) -> dict:
-    """Training stats rolled up to a single UNIFORM resolution for plotting.
-
-    Points are stored append-only at a *gradient* of resolutions (older data finer,
-    newer coarser; see TrainStepWriter). This rolls them all up to one uniform
-    display resolution -- the smallest power-of-two block of `R` minibatches per
-    point that yields <= max_points points (and never finer than the coarsest
-    stored point) -- via a weight (`n`)-aware average, so the plot looks as if the
-    data were stored uniformly. Returns a dict of aligned arrays: always 'step' and
-    'positions', plus one series per metric (missing values NaN); empty when there
-    is no data."""
-    try:
-        agg = conn.execute("SELECT MAX(step) AS hi, MAX(n) AS coarsest FROM train_step").fetchone()
-    except sqlite3.OperationalError:
-        # A dashboard.db written before this train_step schema; treat as no data.
-        return {"step": np.array([]), "positions": np.array([])}
-    if agg["hi"] is None:
-        return {"step": np.array([]), "positions": np.array([])}
-
-    # Display block size R: a power of two, large enough to fit in max_points and
-    # at least the coarsest stored point (we can roll fine data up, not refine
-    # coarse data down). Blocks align to multiples of R, and R is a multiple of
-    # every (power-of-two) stored resolution, so no point straddles a block.
-    need = max(agg["hi"] / max(max_points, 1), agg["coarsest"] or 1)
-    r = 1
-    while r < need:
-        r *= 2
-
-    rows = conn.execute(
-        "SELECT name, (step - 1) / :r AS block, "
-        "       SUM(value * n) / SUM(n) AS value, "  # weight-aware mean == true R-mean
-        "       MAX(positions) AS positions, MAX(step) AS step "
-        "FROM train_step GROUP BY name, block ORDER BY block",
-        {"r": int(r)},
-    ).fetchall()
-
-    blocks: list[int] = []
-    pos_by: dict[int, int] = {}
-    step_by: dict[int, int] = {}
-    series: dict[str, dict[int, float]] = {}
-    for row in rows:
-        b = row["block"]
-        if b not in pos_by:
-            blocks.append(b)
-            pos_by[b], step_by[b] = row["positions"], row["step"]
-        else:
-            pos_by[b] = max(pos_by[b], row["positions"])
-            step_by[b] = max(step_by[b], row["step"])
-        series.setdefault(row["name"], {})[b] = row["value"]
-
-    out = {
-        "step": np.array([step_by[b] for b in blocks], dtype=np.float64),
-        "positions": np.array([pos_by[b] for b in blocks], dtype=np.float64),
-    }
-    for name, by_block in series.items():
-        out[name] = np.array([by_block.get(b, np.nan) for b in blocks], dtype=np.float64)
-    return out
 
 
 def read_all_calibration(conn: sqlite3.Connection):

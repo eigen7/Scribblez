@@ -4,17 +4,16 @@ A *generation* is one batch of self-play games written to its own directory unde
 a tag's data/generations/. The trainer trains over a sliding window of the most
 recent complete generations; older ones are evicted. This module owns creating a
 generation directory and its manifest, marking it complete, selecting the
-training window, evicting stale generations, and reconciling disk state on
-restart -- so the orchestrator is indifferent to how a generation got filled
-(in-process producer, local worker, or remote worker).
+training window, and evicting stale generations -- so the orchestrator is
+indifferent to how a generation got filled (in-process producer, local worker,
+or remote worker).
 
 The manifest is the authority for a generation's status: completeness is a
 recorded fact (status + committed game count), never inferred from a file glob.
 A crash mid-generation therefore leaves an incomplete manifest -- detected as a
-partial to finish or regenerate -- rather than a directory that looks finished.
-The core here reads manifests only (no .slog header I/O), so it stays cheap and
-free of the C++ loader; measuring how far a partial got is a separate,
-dependency-injected helper (`count_games_on_disk`).
+partial to regenerate -- rather than a directory that looks finished. Everything
+here reads manifests only (no .slog header I/O), so it stays cheap and free of
+the C++ loader.
 
 See docs/generational_training.md, "Generations and the sliding window" and
 "Restart and state".
@@ -25,8 +24,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from ..paths import TagPaths
@@ -142,14 +139,6 @@ def complete_indices_upto(paths: TagPaths, latest_index: int) -> list[int]:
     ]
 
 
-def latest_complete_index(paths: TagPaths) -> int | None:
-    """Highest generation index whose manifest is marked complete, or None."""
-    for idx in reversed(list_generation_indices(paths)):
-        if is_complete(paths.generation_dir(idx)):
-            return idx
-    return None
-
-
 def window_dirs(paths: TagPaths, latest_index: int, window: int) -> list[Path]:
     """Directories of the up-to-`window` most recent complete generations at or
     before `latest_index`, oldest first. `window <= 0` means all complete
@@ -175,49 +164,3 @@ def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list
             shutil.rmtree(paths.generation_dir(idx), ignore_errors=True)
             evicted.append(idx)
     return evicted
-
-
-def count_games_on_disk(gen_dir: Path, count_file_games: Callable[[Path], int]) -> int:
-    """Sum game counts across the generation's .slog files, using the injected
-    `count_file_games(path) -> int` (the ffi header reader in production, a fake
-    in tests). Used to measure how far a partial generation got before a crash,
-    without pulling the C++ loader into this module's import graph."""
-    return sum(count_file_games(f) for f in sorted(gen_dir.glob("*.slog")))
-
-
-# ---------------------------------------------------------------------------
-# Restart reconciliation
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ReconcileResult:
-    """A classification of on-disk generations for restart.
-
-    `complete` and `partials` are disjoint, sorted index lists over every
-    generation directory present. `next_index` is the index to open for a
-    brand-new generation once any partials are resolved.
-    """
-
-    complete: list[int]
-    partials: list[int]
-    next_index: int
-
-    @property
-    def latest_complete(self) -> int | None:
-        return self.complete[-1] if self.complete else None
-
-
-def reconcile(paths: TagPaths) -> ReconcileResult:
-    """Classify on-disk generations for restart. Reads manifests only, so it is
-    cheap and free of .slog header I/O.
-
-    A generation is complete iff its manifest says so; anything else (missing or
-    `generating` manifest) is a partial that the orchestrator must finish or
-    regenerate before training over the window."""
-    indices = list_generation_indices(paths)
-    complete = [i for i in indices if is_complete(paths.generation_dir(i))]
-    complete_set = set(complete)
-    partials = [i for i in indices if i not in complete_set]
-    next_index = (indices[-1] + 1) if indices else 0
-    return ReconcileResult(complete=complete, partials=partials, next_index=next_index)

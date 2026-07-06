@@ -20,8 +20,10 @@ extremes:
   Each position was used once and dropped. Ideal when generation is cheap and
   abundant (HastyBot self-play), but it wasted the expensive part of every game —
   the game was played to completion to yield a single training row. (The C++ ring
-  buffer, `StreamingTrainSource`, is retained as the substrate the neural game
-  pool will reuse; see [The game-pool producer](#the-game-pool-producer-c).)
+  buffer -- `StreamingGameProducer` / `StreamingRowBuffer` -- is retained as the
+  substrate the neural game pool will reuse; see
+  [The game-pool producer](#the-game-pool-producer-c). Its Python wrapper has
+  been removed.)
 
 - **Disk** ([generate_data.py](../py/scripts/generate_data.py) + a fixed-epoch
   trainer): generate all `.slog` data up front, then epoch over it. Reused every
@@ -212,8 +214,8 @@ But it is not sufficient; a forever producer also needs:
 - **A control path.** Relaunch needs none. Forever needs Python→C++ messages
   (switch-directory, set-threads, pause/resume, and later refresh-weights). The
   simplest local form removes the problem entirely: run the producer **in-process
-  via FFI** (as the `StreamingTrainSource` ring buffer already does), so these become direct calls
-  rather than a wire protocol. A **subprocess + socket** is warranted only for
+  via FFI** (as the C++ streaming ring buffer already supports), so these become
+  direct calls rather than a wire protocol. A **subprocess + socket** is warranted only for
   process isolation (a C++ crash not taking the trainer down) or the path to
   remote workers; if taken, design the channel to also carry the weight-refresh
   message the neural phase will need.
@@ -372,9 +374,9 @@ per-GPU lock awarded by priority.
 - **GPU-free generation (HastyBot).** Generation never requests the GPU lock, so
   only the CPU split matters. A feedback controller partitions a core budget
   `C = gen + dataloader + torch` using the signals already emitted:
-  `producer_blocked_ns` / `consumer_blocked_ns` from the streaming source
-  ([ffi.py](../py/scribblez/ffi.py) `StreamingTrainSource.stats`), an analogous
-  `loader_stats()` to be surfaced from the C++ DataLoader, and the GPU-busy
+  `producer_blocked_ns` / `consumer_blocked_ns` from the C++ streaming ring
+  buffer ([streaming_row_buffer.h](../engine/include/scribblez/streaming_row_buffer.h)),
+  an analogous `loader_stats()` to be surfaced from the C++ DataLoader, and the GPU-busy
   fraction as the north star. Consumer-blocked → shift cores toward data;
   producer-blocked → reclaim them for generation; GPU busy > ~90% → hold. The
   game-pool's live `target_threads_` is precisely the actuator this controller

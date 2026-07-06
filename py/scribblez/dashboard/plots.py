@@ -241,74 +241,8 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
 
 
 # ---------------------------------------------------------------------------
-# Streaming throughput + backpressure (time series over positions trained)
+# Loss / accuracy (per-checkpoint metrics over positions trained)
 # ---------------------------------------------------------------------------
-
-
-def _throughput_figure(rows, title, series, y_label, scale=1.0):
-    """A line figure of the named throughput columns vs positions trained."""
-    fig = figure(
-        width=SERIES_SIZE,
-        height=SERIES_SIZE,
-        title=title,
-        x_axis_label="positions trained",
-        y_axis_label=y_label,
-        tools="pan,box_zoom,wheel_zoom,reset,save",
-    )
-    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0}")], mode="vline"))
-    palette = Category10[10]
-    x = [r["positions"] for r in rows]
-    for i, (key, label) in enumerate(series):
-        src = ColumnDataSource(dict(x=x, y=[r[key] * scale for r in rows]))
-        color = palette[i % len(palette)]
-        fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
-    fig.y_range.start = 0  # rates / cumulative waits are non-negative
-    fig.legend.location = "top_left"
-    fig.legend.label_text_font_size = "9pt"
-    fig.legend.click_policy = "hide"
-    return fig
-
-
-def throughput_grid(conn):
-    """Throughput rate + cumulative backpressure figures for the streaming run.
-
-    The two backpressure curves are the C++/Python wait times: when the consumer
-    (training) curve climbs faster, game generation is the bottleneck (CPU-bound);
-    when the producer curve climbs faster, training is the bottleneck (GPU-bound).
-    """
-    rows = db.read_throughput(conn)
-    if not rows:
-        return Div(text="<i>No throughput data yet — start a streaming run.</i>")
-    # positions/s == games/s (one position sampled per game), so a single curve.
-    rate = _throughput_figure(
-        rows,
-        "Throughput",
-        [("positions_per_s", "positions/s")],
-        "positions per second",
-    )
-    backpressure = _throughput_figure(
-        rows,
-        "Backpressure — cumulative wait (s)",
-        [
-            ("consumer_blocked_ns", "training waits (CPU-bound ↑)"),
-            ("producer_blocked_ns", "gen waits (GPU-bound ↑)"),
-        ],
-        "blocked time (s)",
-        scale=1e-9,
-    )
-    return column(row(rate, backpressure))
-
-
-# ---------------------------------------------------------------------------
-# Per-minibatch loss / accuracy (streaming pipeline)
-# ---------------------------------------------------------------------------
-
-
-def _stride_idx(n: int, max_points: int):
-    """A slice/index that thins `n` points down to at most `max_points` (keeps plots light)."""
-    if n <= max_points:
-        return slice(None)
-    return np.arange(0, n, (n + max_points - 1) // max_points)
 
 
 def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"):
@@ -396,8 +330,7 @@ def _loss_accuracy_grid(x, series, weights, normalized, conn):
     heights show each term's share of the optimized total, and `normalized`
     rescales every column to sum to 1 -- when loss coefficients (`weights`) were
     recorded, else overlaid loss lines; plus an Accuracy panel for every '<x>_acc'
-    series. LR-change markers overlay the loss panel. Shared by the streaming
-    per-minibatch view and the per-checkpoint metrics view."""
+    series. LR-change markers overlay the loss panel."""
     if weights:
         title, y_label = (
             ("Train loss (stacked, % of total)", "fraction of total loss")
@@ -469,44 +402,13 @@ def _metrics_series(conn):
 
 def metrics_loss_grid(conn, normalized: bool = False):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained: the loss view for trainers that record
-    per-epoch metrics rather than the streaming per-minibatch train_step curve
-    (e.g. the generational trainer). Renders identically to train_step_grid --
-    stacked weighted per-component losses (`normalized` -> per-column fractions),
-    an accuracy panel, control-change markers. None when no loss metric exists."""
+    `metrics` table vs positions trained: stacked weighted per-component losses
+    (`normalized` -> per-column fractions), an accuracy panel, control-change
+    markers. None when no loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
     return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, conn)
-
-
-def train_step_grid(conn, normalized: bool = False):
-    """Streaming loss + accuracy curves vs. positions trained.
-
-    Task-agnostic: it discovers the series recorded by whichever trainer wrote the
-    DB. The loss panel is a stacked area of the WEIGHTED per-component losses when
-    the trainer recorded their coefficients (see db.write_loss_weights) -- band
-    heights then show each term's share of the optimized total -- and falls back
-    to overlaid lines otherwise. `normalized` switches the stack to per-column
-    fractions (each band = share of the total, regardless of overall scale). Every
-    '<x>_acc' name goes on the accuracy panel. Returns None when no streaming data
-    exists, so the caller can fall back to the per-checkpoint loss view (the disk
-    pipeline records only the latter).
-
-    Points are logged at an adaptive resolution (dense early, then aggregated;
-    see TrainStepWriter), so the x-axis is positions trained -- the dense and
-    aggregated regions then line up by true progress -- and a stride caps the
-    rendered count.
-    """
-    ts = db.read_train_steps(conn)
-    x_all = ts["positions"]
-    if len(x_all) == 0:
-        return None
-    idx = _stride_idx(len(x_all), 4000)
-    series = {k: v[idx] for k, v in ts.items()}
-    return _loss_accuracy_grid(
-        series["positions"], series, db.read_loss_weights(conn), normalized, conn
-    )
 
 
 # ---------------------------------------------------------------------------

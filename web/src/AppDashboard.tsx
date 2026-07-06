@@ -129,7 +129,7 @@ function FigureBody({ item, emptyText }: { item: unknown | null; emptyText: stri
   );
 }
 
-// A tab that embeds a single Bokeh figure with no controls (Performance, Training).
+// A tab that embeds a single Bokeh figure with no controls (Training).
 function FigureTab({
   task, tag, figure, versionKey, emptyText,
 }: {
@@ -143,7 +143,7 @@ function FigureTab({
 // the value-quality figure below, with the controls that govern it -- Smooth and a
 // Secondary tag to overlay -- sitting between the two. The two figures are fetched
 // separately so those controls can live between them.
-const LOSS_VERSION = ['train_step', 'metrics', 'control_event'];
+const LOSS_VERSION = ['metrics', 'control_event'];
 const QUALITY_VERSION = ['metrics'];
 
 function LossTab({ task, tag, tags }: { task: string; tag: string | null; tags: string[] }) {
@@ -152,7 +152,7 @@ function LossTab({ task, tag, tags }: { task: string; tag: string | null; tags: 
   const [secondary, setSecondary] = useState(''); // '' = none
 
   const stepItem = useFigureItem(
-    task, tag, 'train_step', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
+    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
   );
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
@@ -204,8 +204,6 @@ const FIGURE_TABS: Record<
   string,
   { figure: string; versionKey: string | string[]; emptyText: string }
 > = {
-  Performance: { figure: 'throughput', versionKey: 'throughput',
-    emptyText: 'No throughput data yet — start a streaming run.' },
   Training: { figure: 'training_metrics', versionKey: 'metrics',
     emptyText: 'No per-epoch training metrics yet.' },
 };
@@ -228,8 +226,8 @@ export default function AppDashboard() {
   const task = requestedTask();
   const tabs =
     task === MAX_MOVE_PER_LANE
-      ? ['Loss', 'Performance', 'Lane analysis', 'Info']
-      : ['Loss', 'Positions', 'Training', 'Performance', 'Controls', 'Info'];
+      ? ['Loss', 'Lane analysis', 'Info']
+      : ['Loss', 'Positions', 'Training', 'Controls', 'Info'];
   const [tags, setTags] = useState<string[]>([]);
   const [tag, setTag] = useState<string | null>(requestedTag());
   const [tab, setTab] = useState(0);

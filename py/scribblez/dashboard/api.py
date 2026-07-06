@@ -44,9 +44,7 @@ _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 # (a change in any count means that tab's data advanced). Mirrors the Bokeh shell's
 # per-tab ``watch()``.
 VERSION_TABLES = (
-    "train_step",
     "metrics",
-    "throughput",
     "monotonicity",
     "calibration",
     "score_belief",
@@ -54,17 +52,12 @@ VERSION_TABLES = (
 )
 
 
-def _train_step(conn, params, image_dir, mount_root):
-    """The Loss tab's top panel: the loss/accuracy curves. Uses the streaming
-    per-minibatch train_step curve when present, else falls back to the per-epoch
-    loss from the metrics table (the generational trainer). Carries control-change
-    markers. The value-quality curves are a separate figure (`eval_quality`), so the
-    client can place its own controls between the two."""
-    normalized = _truthy(params.get("normalized"))
-    steps = plots.train_step_grid(conn, normalized=normalized)
-    if steps is None:
-        steps = plots.metrics_loss_grid(conn, normalized=normalized)
-    return steps
+def _loss(conn, params, image_dir, mount_root):
+    """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
+    metrics table, with control-change markers. The value-quality curves are a
+    separate figure (`eval_quality`), so the client can place its own controls
+    between the two."""
+    return plots.metrics_loss_grid(conn, normalized=_truthy(params.get("normalized")))
 
 
 def _eval_quality(conn, params, image_dir, mount_root):
@@ -81,10 +74,6 @@ def _eval_quality(conn, params, image_dir, mount_root):
     finally:
         if sec_conn is not None:
             sec_conn.close()
-
-
-def _throughput(conn, params, image_dir, mount_root):
-    return plots.throughput_grid(conn)
 
 
 def _training_metrics(conn, params, image_dir, mount_root):
@@ -115,9 +104,8 @@ def _calibration(conn, params, image_dir, mount_root):
 # uses it); `mount_root` lets a builder open a second tag's DB (eval_quality's
 # secondary-tag overlay).
 FIGURES = {
-    "train_step": _train_step,
+    "loss": _loss,
     "eval_quality": _eval_quality,
-    "throughput": _throughput,
     "training_metrics": _training_metrics,
     "positions": _positions,
     "calibration": _calibration,

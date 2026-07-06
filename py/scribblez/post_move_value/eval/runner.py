@@ -1,8 +1,8 @@
 """Run the evaluation suites and persist their results to the dashboard DB.
 
-Shared by train.py (per-epoch) and evaluate.py (one-off on a checkpoint): each
-helper computes an eval and writes its data to the per-tag SQLite store, returning
-the scalar metrics for the caller to fold into the `metrics` table.
+Used by evaluate.py (one-off on a checkpoint): each helper computes an eval and
+writes its data to the per-tag SQLite store, returning the scalar metrics for
+the caller to fold into the `metrics` table.
 """
 
 import sys
@@ -11,12 +11,10 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.dashboard import db
-from scribblez.paths import TagPaths
 
 from .calibration import evaluate_calibration
 from .monotonicity import score_monotonicity
 from .probe_eval import evaluate_subset
-from .sampling import build_test_subset
 from .score_belief import DEFAULT_QUANTILES, gaussian_bands
 from .web_render import render_position_images
 
@@ -35,30 +33,6 @@ def render_boards(slog_path: str | Path, image_dir: str | Path):
             f"WARNING: board image render failed ({e}); dashboard will show no boards.",
             file=sys.stderr,
         )
-
-
-def ensure_test_subset(paths: TagPaths, source_test_dir: Path, num_positions: int) -> bool:
-    """Build the frozen evaluation subset + board images if missing. The subset is
-    sampled from `source_test_dir` (which may belong to a different tag when data
-    is decoupled from the output tag) and written under the output tag's `paths`.
-    Returns availability."""
-    if paths.test_subset_slog.exists():
-        print(f"Using evaluation subset {paths.test_subset_slog}")
-    elif not source_test_dir.exists() or not any(source_test_dir.glob("*.slog")):
-        print(
-            f"WARNING: no test split at {source_test_dir}; skipping structural probes. "
-            "Regenerate data with a non-zero --test-ratio to enable them.",
-            file=sys.stderr,
-        )
-        return False
-    else:
-        print(f"Sampling {num_positions} positions from {source_test_dir} ...")
-        n = build_test_subset(source_test_dir, paths.test_subset_slog, num_positions=num_positions)
-        print(f"  Wrote {n} positions to {paths.test_subset_slog}")
-    # Board images are static; render once (when the first one is missing).
-    if not paths.position_dump_path(0).with_suffix(".png").exists():
-        render_boards(paths.test_subset_slog, paths.test_subset_dir)
-    return True
 
 
 def run_probes(model, slog_path, device, conn, epoch: int, diff_lo: int, diff_hi: int) -> dict:

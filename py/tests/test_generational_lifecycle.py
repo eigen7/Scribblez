@@ -1,7 +1,6 @@
 """Unit tests for the generation lifecycle bookkeeping.
 
-Pure filesystem logic -- no C++ loader, no real .slog content -- so game files
-are empty touch files and game counts come from an injected fake counter.
+Pure filesystem logic -- no C++ loader, no real .slog content.
 """
 
 from pathlib import Path
@@ -67,13 +66,6 @@ def test_list_generation_indices_empty_when_no_dir(paths):
     assert lc.list_generation_indices(paths) == []
 
 
-def test_latest_complete_ignores_partials(paths):
-    lc.mark_complete(_open(paths, 0), 100)
-    lc.mark_complete(_open(paths, 1), 100)
-    _open(paths, 2)  # partial (still generating)
-    assert lc.latest_complete_index(paths) == 1
-
-
 def test_window_dirs_returns_recent_complete_oldest_first(paths):
     for i in range(5):
         lc.mark_complete(_open(paths, i), 100)
@@ -107,32 +99,3 @@ def test_evict_window_nonpositive_is_noop(paths):
         lc.mark_complete(_open(paths, i), 100)
     assert lc.evict_beyond_window(paths, latest_index=2, window=0) == []
     assert lc.list_generation_indices(paths) == [0, 1, 2]
-
-
-def test_count_games_on_disk_uses_injected_counter(paths):
-    gen_dir = _open(paths, 0)
-    for name in ("a.slog", "b.slog"):
-        (gen_dir / name).touch()
-    (gen_dir / "notes.txt").touch()  # non-.slog ignored
-    counts = {"a.slog": 40, "b.slog": 57}
-    total = lc.count_games_on_disk(gen_dir, lambda p: counts[p.name])
-    assert total == 97
-
-
-def test_reconcile_classifies_complete_and_partials(paths):
-    lc.mark_complete(_open(paths, 0), 100)
-    lc.mark_complete(_open(paths, 1), 100)
-    _open(paths, 2)  # partial (crash mid-generation)
-    result = lc.reconcile(paths)
-    assert result.complete == [0, 1]
-    assert result.partials == [2]
-    assert result.latest_complete == 1
-    assert result.next_index == 3
-
-
-def test_reconcile_empty(paths):
-    result = lc.reconcile(paths)
-    assert result.complete == []
-    assert result.partials == []
-    assert result.latest_complete is None
-    assert result.next_index == 0

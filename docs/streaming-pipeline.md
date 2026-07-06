@@ -3,10 +3,12 @@
 > **Status: historical.** The standalone streaming trainer this note proposed has
 > been folded into the generational pipeline
 > ([docs/generational_training.md](generational_training.md)), which reuses each
-> generated game across epochs while keeping the run restartable. The in-process
-> streaming self-play source described here (`StreamingTrainSource`) is retained
-> as the substrate the batched neural-self-play game pool will reuse. This
-> document is kept for that design rationale.
+> generated game across epochs while keeping the run restartable. The Python side
+> of the streaming source has been removed; the C++ ring buffer
+> ([streaming_game_producer.h](../engine/include/scribblez/streaming_game_producer.h),
+> [streaming_row_buffer.h](../engine/include/scribblez/streaming_row_buffer.h)) is
+> retained as the substrate the batched neural-self-play game pool will reuse.
+> This document is kept for that design rationale.
 
 I'd like to do a major overhaul of how the model generation/training pipeline works.
 

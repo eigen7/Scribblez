@@ -62,7 +62,7 @@ the `json_item`s.
 | `GET /api/figure/<name>?task=<t>&tag=<g>&<params>` | a Bokeh `json_item` dict, or `{"item": null}` when there's no data |
 
 `figure/<name>` dispatches to the existing builders in `plots.py` (e.g.
-`train_step` → `train_step_grid(conn, normalized)`), serialized with `json_item`.
+`loss` → `metrics_loss_grid(conn, normalized)`), serialized with `json_item`.
 The builders are reused unchanged.
 
 ## Status
@@ -70,12 +70,12 @@ The builders are reused unchanged.
 The migration is **complete** — the dashboard is the React app; there is no longer
 a Bokeh-served dashboard. It was done in three phases:
 
-- **Phase A — foundation (done).** Python API (tags, version, `train_step` figure) +
+- **Phase A — foundation (done).** Python API (tags, version, the loss figure) +
   React shell (tag select, polling, `<BokehFigure>`).
 - **Phase B — lane analysis (done).** The interactive board tab (below).
 - **Phase C — migrate the rest (done).** The post-move tabs (Loss, Positions,
-  Calibration, Training, Performance) are React tabs that embed `json_item`s built
-  by the `plots.py` builders; both post-move trainers and the standalone launcher
+  Calibration, Training) are React tabs that embed `json_item`s built by the
+  `plots.py` builders; both post-move trainers and the standalone launcher
   (`scripts/dashboard.py`) launch the React dashboard. The Bokeh-serving modules
   (`server.py`, `shell.py`, `post_move_tabs.py`, the `app_*.py`) were deleted;
   `plots.py` and `db.py` remain (the API reuses them).
@@ -84,13 +84,13 @@ a Bokeh-served dashboard. It was done in three phases:
 
 | Task | Tabs |
 |---|---|
-| post_move_value | Loss · Positions · Training · Performance |
-| max_move_per_lane | Loss · Performance · Lane analysis |
+| post_move_value | Loss · Positions · Training |
+| max_move_per_lane | Loss · Lane analysis |
 
-`Loss`, `Training`, and `Performance` are `<FigureTab>`s that embed an API figure
-(`train_step`, `training_metrics`, `throughput`) and re-fetch when their
-version-token table advances. `Positions` (post-move-value) and `Lane analysis`
-(max-move-per-lane) are native-React interactive tabs (see below).
+`Loss` and `Training` embed an API figure (`loss`, `training_metrics`) and
+re-fetch when their version-token table advances. `Positions` (post-move-value)
+and `Lane analysis` (max-move-per-lane) are native-React interactive tabs (see
+below).
 
 ## Phase B — lane-analysis tab
 

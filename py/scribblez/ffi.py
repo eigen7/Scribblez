@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch
 
 # ---------------------------------------------------------------------------
 # Library discovery
@@ -35,17 +34,6 @@ class _ScribblezShape(ctypes.Structure):
         ("dims", ctypes.POINTER(ctypes.c_int)),
         ("num_dims", ctypes.c_int),
         ("target_index", ctypes.c_int),
-    ]
-
-
-class _ScribblezStreamStats(ctypes.Structure):
-    _fields_ = [
-        ("games_played", ctypes.c_int64),
-        ("games_dropped", ctypes.c_int64),
-        ("rows_committed", ctypes.c_int64),
-        ("slots_published", ctypes.c_int64),
-        ("producer_blocked_ns", ctypes.c_int64),
-        ("consumer_blocked_ns", ctypes.c_int64),
     ]
 
 
@@ -218,59 +206,6 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_dl_resident_bytes.restype = ctypes.c_int64
     lib.scribblez_dl_resident_bytes.argtypes = [ctypes.c_void_p]
 
-    lib.scribblez_stream_new.restype = ctypes.c_void_p
-    lib.scribblez_stream_new.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),  # slot_ptrs
-        ctypes.c_int,  # num_slots
-        ctypes.c_int,  # rows_per_slot
-        ctypes.c_int,  # num_threads
-        ctypes.c_int,  # post_move
-        ctypes.c_int,  # apply_symmetry
-        ctypes.c_uint64,  # seed
-        ctypes.c_int,  # handicap_max
-        ctypes.POINTER(ctypes.c_char_p),  # player_specs
-        ctypes.c_int,  # num_specs
-    ]
-
-    # Max-move-per-lane streamer: same shape as scribblez_stream_new, minus the
-    # post_move flag (the task always samples the pre-move snapshot). Returns the
-    # same opaque StreamHandle, so it shares the rest of the streaming API.
-    lib.scribblez_max_move_per_lane_stream_new.restype = ctypes.c_void_p
-    lib.scribblez_max_move_per_lane_stream_new.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),  # slot_ptrs
-        ctypes.c_int,  # num_slots
-        ctypes.c_int,  # rows_per_slot
-        ctypes.c_int,  # num_threads
-        ctypes.c_int,  # apply_symmetry
-        ctypes.c_uint64,  # seed
-        ctypes.c_int,  # handicap_max
-        ctypes.POINTER(ctypes.c_char_p),  # player_specs
-        ctypes.c_int,  # num_specs
-    ]
-
-    lib.scribblez_stream_start.restype = None
-    lib.scribblez_stream_start.argtypes = [ctypes.c_void_p]
-
-    lib.scribblez_stream_wait_full_slot.restype = ctypes.c_int
-    lib.scribblez_stream_wait_full_slot.argtypes = [ctypes.c_void_p]
-
-    lib.scribblez_stream_release_slot.restype = None
-    lib.scribblez_stream_release_slot.argtypes = [ctypes.c_void_p, ctypes.c_int]
-
-    lib.scribblez_stream_get_stats.restype = None
-    lib.scribblez_stream_get_stats.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(_ScribblezStreamStats),
-    ]
-
-    lib.scribblez_stream_stop.restype = None
-    lib.scribblez_stream_stop.argtypes = [ctypes.c_void_p]
-
-    lib.scribblez_stream_delete.restype = None
-    lib.scribblez_stream_delete.argtypes = [ctypes.c_void_p]
-
 
 _SETUP_DONE = False
 
@@ -285,8 +220,8 @@ def _lib() -> ctypes.CDLL:
 
 
 # The lexicon this process's FFI session binds to. Every dictionary-dependent
-# entry point (encoding, GCG analysis, DataLoader / stream construction) is a
-# method of one C++ ScribblezSession, created lazily on first use.
+# entry point (encoding, GCG analysis, DataLoader construction) is a method of
+# one C++ ScribblezSession, created lazily on first use.
 DEFAULT_LEXICON = "NWL23"
 
 _SESSION_HANDLE = None
@@ -367,10 +302,6 @@ def get_max_move_per_lane_target_shapes() -> list[ShapeInfo]:
 
 def max_move_per_lane_row_size_floats() -> int:
     return _lib().scribblez_max_move_per_lane_row_size_floats()
-
-
-def max_move_per_lane_input_floats() -> int:
-    return _lib().scribblez_max_move_per_lane_input_floats()
 
 
 def encode_score_diff_sweep(
@@ -640,129 +571,3 @@ class NativeDataLoader:
     @property
     def resident_bytes(self) -> int:
         return int(self._lib.scribblez_dl_resident_bytes(self._handle))
-
-
-# ---------------------------------------------------------------------------
-# Streaming self-play training source
-# ---------------------------------------------------------------------------
-
-
-class StreamingTrainSource:
-    """In-process producer of training batches via C++ self-play.
-
-    Allocates `num_slots` CPU float32 buffers of shape (batch_size, row_floats)
-    and hands their addresses to the C++ streamer, which plays HastyBot games on
-    `num_threads` native threads and writes each game's sampled training row
-    directly into the current slot. The training loop calls next_slot() to get a
-    full slot (blocking, GIL released), copies/moves the data out, then calls
-    release() so the producers can refill it. With num_slots=2 this overlaps
-    CPU game generation with GPU training.
-    """
-
-    def __init__(
-        self,
-        batch_size: int,
-        task: str = "post_move",
-        num_slots: int = 2,
-        num_threads: int = 4,
-        post_move: bool = True,
-        apply_symmetry: bool = True,
-        seed: int = 0,
-        handicap_max: int = 0,
-        player_specs: tuple[str, ...] = ("--type=hastybot", "--type=hastybot"),
-        pin_memory: bool = True,
-    ):
-        if task not in ("post_move", "max_move_per_lane"):
-            raise ValueError(f"unknown streaming task {task!r}")
-        self._lib = _lib()
-        self.task = task
-        self.batch_size = batch_size
-        self.num_slots = num_slots
-        self._row_floats = (
-            row_size_floats() if task == "post_move" else max_move_per_lane_row_size_floats()
-        )
-
-        # Pin only when CUDA is present (pinned alloc requires it); pinning lets
-        # the trainer's host->device copy overlap with production.
-        pin = pin_memory and torch.cuda.is_available()
-        self._slots = [
-            torch.empty((batch_size, self._row_floats), dtype=torch.float32, pin_memory=pin)
-            for _ in range(num_slots)
-        ]
-        ptr_arr = (ctypes.POINTER(ctypes.c_float) * num_slots)(
-            *[ctypes.cast(t.data_ptr(), ctypes.POINTER(ctypes.c_float)) for t in self._slots]
-        )
-        spec_arr = (ctypes.c_char_p * len(player_specs))(*[s.encode("utf-8") for s in player_specs])
-        # The two tasks share the rest of the streaming API; only the constructor
-        # differs (the max-move-per-lane task has no pre/post-move snapshot).
-        if task == "post_move":
-            self._handle = self._lib.scribblez_stream_new(
-                _session(),
-                ptr_arr,
-                num_slots,
-                batch_size,
-                num_threads,
-                int(post_move),
-                int(apply_symmetry),
-                ctypes.c_uint64(seed),
-                handicap_max,
-                spec_arr,
-                len(player_specs),
-            )
-        else:
-            self._handle = self._lib.scribblez_max_move_per_lane_stream_new(
-                _session(),
-                ptr_arr,
-                num_slots,
-                batch_size,
-                num_threads,
-                int(apply_symmetry),
-                ctypes.c_uint64(seed),
-                handicap_max,
-                spec_arr,
-                len(player_specs),
-            )
-        if not self._handle:
-            raise RuntimeError(f"{task} stream_new returned NULL (agent setup failed)")
-        self._started = False
-
-    def start(self):
-        if not self._started:
-            self._lib.scribblez_stream_start(self._handle)
-            self._started = True
-
-    def next_slot(self):
-        """Block until a slot is full; return (slot_index, cpu_tensor), or None if stopped.
-
-        The returned tensor is valid only until release(slot_index) is called --
-        the producers overwrite it afterward, so copy/move the data out first.
-        """
-        idx = self._lib.scribblez_stream_wait_full_slot(self._handle)
-        if idx < 0:
-            return None
-        return idx, self._slots[idx]
-
-    def release(self, slot_index: int):
-        self._lib.scribblez_stream_release_slot(self._handle, slot_index)
-
-    def stats(self) -> dict:
-        s = _ScribblezStreamStats()
-        self._lib.scribblez_stream_get_stats(self._handle, ctypes.byref(s))
-        return {
-            "games_played": int(s.games_played),
-            "games_dropped": int(s.games_dropped),
-            "rows_committed": int(s.rows_committed),
-            "slots_published": int(s.slots_published),
-            "producer_blocked_ns": int(s.producer_blocked_ns),
-            "consumer_blocked_ns": int(s.consumer_blocked_ns),
-        }
-
-    def stop(self):
-        if getattr(self, "_handle", None):
-            self._lib.scribblez_stream_stop(self._handle)
-
-    def __del__(self):
-        if getattr(self, "_handle", None):
-            self._lib.scribblez_stream_stop(self._handle)
-            self._lib.scribblez_stream_delete(self._handle)
-            self._handle = None

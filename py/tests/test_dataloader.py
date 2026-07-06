@@ -13,8 +13,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scribblez.dataset import SlogDataset
-from scribblez.ffi import NativeDataLoader, read_file_header
+from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
+from scribblez.ffi import (
+    NativeDataLoader,
+    get_input_shapes,
+    get_target_shapes,
+    read_file_header,
+    row_size_floats,
+)
 
 # ---------------------------------------------------------------------------
 # Fixture: generate .slog files using the test_slog_writer binary.
@@ -207,6 +213,34 @@ class TestStreamingDataset:
         for b1, b2 in zip(batches, batches2, strict=True):
             for key in b1:
                 np.testing.assert_array_equal(b1[key].numpy(), b2[key].numpy())
+
+
+def test_slice_row_batch_matches_dataset():
+    """slice_row_batch reproduces the named tensors with correct shapes/values
+    (guards the row-slicing SlogDataset applies to every loaded batch)."""
+    if not Path("/workspace/repo/target/engine/libscribblez_ffi.so").is_file():
+        pytest.skip("libscribblez_ffi.so not built -- run py/build.py first")
+    rf = row_size_floats()
+    rng = np.random.default_rng(0)
+    batch = rng.standard_normal((5, rf)).astype(np.float32)
+
+    input_shapes, targets = row_layout()
+    out = slice_row_batch(batch, input_shapes, targets)
+
+    # Every input + target tensor is present with the advertised shape.
+    expected = {s.name: (5, *s.dims) for s in get_input_shapes()}
+    expected.update({s.name: (5, *s.dims) for s in get_target_shapes()})
+    assert set(out) == set(expected)
+    for name, shape in expected.items():
+        assert tuple(out[name].shape) == shape
+
+    # The flat concatenation of all regions reconstructs the original row.
+    flat = np.concatenate(
+        [out[s.name].numpy().reshape(5, -1) for s in get_input_shapes()]
+        + [out[name].numpy().reshape(5, -1) for name, *_ in targets],
+        axis=1,
+    )
+    assert np.array_equal(flat, batch)
 
 
 if __name__ == "__main__":

@@ -144,12 +144,13 @@ the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and t
   and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the accuracy
   panel.
 
-**Resolution.** Recording every minibatch forever bloats the SQLite store. Storage and display are
-decoupled: `TrainStepWriter` *appends* points at a coarsening **gradient** of resolutions -- each
-point is the mean (+ a weight `n`) of `r` consecutive minibatches, where `r` is the power of two that
-keeps the newest data at ~`--max-log-points` points (`r` doubles as the run grows). Nothing is ever
-rewritten, and storage grows only logarithmically (~`max-log-points` rows per doubling). The read
-(`db.read_train_steps`) then rolls the whole gradient up to one *uniform* resolution with a
-weight-aware average (`SUM(value·n)/SUM(n)` grouped into power-of-two blocks), so the plot looks as
-if the data were stored uniformly -- a single smooth series, ~`max-log-points` points, no
-dense-early/sparse-late seam. The Bokeh panels plot against *positions trained*.
+**Resolution.** Recording every minibatch forever bloats the SQLite store. The streaming trainer's
+storage and display were decoupled: the writer *appended* points at a coarsening **gradient** of
+resolutions -- each point the mean (+ a weight `n`) of `r` consecutive minibatches, where `r` was the
+power of two that kept the newest data at ~`--max-log-points` points (`r` doubling as the run grew).
+Nothing was ever rewritten, and storage grew only logarithmically (~`max-log-points` rows per
+doubling). The read then rolled the whole gradient up to one *uniform* resolution with a weight-aware
+average (`SUM(value·n)/SUM(n)` grouped into power-of-two blocks), so the plot looked as if the data
+were stored uniformly -- a single smooth series, ~`max-log-points` points, no dense-early/sparse-late
+seam. The Bokeh panels plot against *positions trained*. (This per-minibatch machinery was removed
+along with the streaming trainer; the generational trainer records per-epoch metrics instead.)

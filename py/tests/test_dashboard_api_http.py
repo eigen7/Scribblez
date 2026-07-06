@@ -29,20 +29,17 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
         paths = TagPaths("run1", MAX_MOVE_PER_LANE, mount_root=self.mount_root)
         conn = db.connect(paths.dashboard_db)
         db.write_loss_weights(conn, {"loss_score_pdf": 1.0})
-        db.write_train_steps(
-            conn,
-            [
+        for epoch in range(1, 4):
+            db.write_metrics(
+                conn,
+                epoch,
                 {
-                    "step": s,
-                    "positions": 10 * s,
-                    "n": 1,
-                    "loss": 1.0 / s,
-                    "loss_score_pdf": 1.0 / s,
+                    "positions": 10 * epoch,
+                    "loss": 1.0 / epoch,
+                    "loss_score_pdf": 1.0 / epoch,
                     "score_acc": 0.5,
-                }
-                for s in range(1, 4)
-            ],
-        )
+                },
+            )
         db.write_lane_preds(
             conn, generation=0, positions=204800, preds=_fake_lane_preds(_N_POSITIONS)
         )
@@ -63,7 +60,8 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_version_counts_rows(self):
         r = self.fetch(f"/api/version?task={MAX_MOVE_PER_LANE}&tag=run1")
         assert r.code == 200
-        assert json.loads(r.body)["train_step"] == 9  # 3 points x 3 series
+        # 3 epochs x 4 metrics (positions, loss, loss_score_pdf, score_acc).
+        assert json.loads(r.body)["metrics"] == 12
 
     def test_version_unknown_tag_404(self):
         assert self.fetch(f"/api/version?task={MAX_MOVE_PER_LANE}&tag=nope").code == 404
@@ -92,7 +90,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
         assert empty_name.code == 400
 
     def test_figure_returns_embeddable_item(self):
-        r = self.fetch(f"/api/figure/train_step?task={MAX_MOVE_PER_LANE}&tag=run1")
+        r = self.fetch(f"/api/figure/loss?task={MAX_MOVE_PER_LANE}&tag=run1")
         assert r.code == 200
         item = json.loads(r.body)["item"]
         assert {"doc", "root_id", "target_id"} <= set(item)
@@ -103,9 +101,8 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_all_figures_routable(self):
         # Every registered figure resolves (item may be null when its data isn't seeded).
         for fig in (
-            "train_step",
+            "loss",
             "eval_quality",
-            "throughput",
             "training_metrics",
             "positions",
             "calibration",
