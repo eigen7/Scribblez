@@ -9,11 +9,11 @@ likely lacks the capability to learn the thousands of commonly occurring Scrabbl
 
 ## Learning Setup
 
-Similarly to `scripts/post_move_value/train.py`, play fast hasty-vs-hasty games in c++ and stream training
-data, one-sample-per-game, to the python side.
+Similarly to `scripts/post_move_value/train.py`, play fast hasty-vs-hasty games in c++ and train over
+the resulting `.slog` games in a generational generate->train loop.
 
-Unlike `scripts/post_move_value/train.py`, we will sample any position from the game, including endgame
-positions (sample uniformly over all turns).
+Unlike `scripts/post_move_value/train.py`, every turn of a game is a training row, including endgame
+positions.
 
 The learning problem is to take a pre-move rack and a board, and to predict the highest-scoring
 move, along with the point-value of that move. The expectation is that this task will require the NN
@@ -131,26 +131,16 @@ over all 30 lanes.
 ## Dashboard
 
 `scripts/max_move_per_lane/train.py` writes to the same per-tag dashboard the post-move trainer uses;
-the two share the streaming-loop scaffolding (`scribblez/train_common.py`) and the entire dashboard
-(`scribblez/dashboard/`). The shared streaming metrics are task-agnostic:
+the two share the trainer scaffolding (`scribblez/train_common.py`) and the entire dashboard
+(`scribblez/dashboard/`). One metrics record is written per epoch (keyed on positions trained, the
+loss plots' x-axis), and the shared panels are task-agnostic:
 
 - **Train loss** -- the total plus every per-component loss (here: score-PDF, score-CDF, move
   occupancy, has-move) overlaid on one panel. The dashboard stores metrics in a long format
-  (`train_step(step, positions, name, value)`) and the loss panel discovers every `loss`/`loss_<x>`
-  series automatically, so adding an auxiliary loss term needs no schema or front-end change.
+  (`metrics(epoch, name, value)`) and the loss panel discovers every `loss`/`loss_<x>` series
+  automatically, so adding an auxiliary loss term needs no schema or front-end change.
 
-- **Train accuracy** -- per-minibatch over the 30 lanes that have a legal move: `move_acc` (the
-  thresholded occupancy union matches the target exactly), `score_acc` (argmax score bin matches),
-  and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the accuracy
-  panel.
-
-**Resolution.** Recording every minibatch forever bloats the SQLite store. The streaming trainer's
-storage and display were decoupled: the writer *appended* points at a coarsening **gradient** of
-resolutions -- each point the mean (+ a weight `n`) of `r` consecutive minibatches, where `r` was the
-power of two that kept the newest data at ~`--max-log-points` points (`r` doubling as the run grew).
-Nothing was ever rewritten, and storage grew only logarithmically (~`max-log-points` rows per
-doubling). The read then rolled the whole gradient up to one *uniform* resolution with a weight-aware
-average (`SUM(value·n)/SUM(n)` grouped into power-of-two blocks), so the plot looked as if the data
-were stored uniformly -- a single smooth series, ~`max-log-points` points, no dense-early/sparse-late
-seam. The Bokeh panels plot against *positions trained*. (This per-minibatch machinery was removed
-along with the streaming trainer; the generational trainer records per-epoch metrics instead.)
+- **Train accuracy** -- averaged over each epoch, on the 30 lanes that have a legal move: `move_acc`
+  (the thresholded occupancy union matches the target exactly), `score_acc` (argmax score bin
+  matches), and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the
+  accuracy panel.

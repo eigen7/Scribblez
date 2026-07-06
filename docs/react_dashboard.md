@@ -1,28 +1,26 @@
 # React dashboard + lane-analysis tool
 
-This document specifies the migration of the training dashboard from a Bokeh-server
-app to a **React app with a Python data API**, and the **max-move-per-lane lane
-analysis** tab that this migration enables. The lane-analysis tab needs a genuinely
-interactive board (click a square, highlight its lane), which a Bokeh-served page
-cannot provide; a React shell that *embeds* the existing Bokeh plots removes that
-limitation without rewriting the plots.
+The training dashboard is a **React app with a Python data API**: a React shell
+(tabs, tag select, polling) that embeds the Bokeh metric figures and hosts the
+genuinely interactive tabs — the **max-move-per-lane lane analysis** board
+(click a square, highlight its lane) and the **post-move-value Positions**
+board — as native React components.
 
 ## Why React + embedded Bokeh
 
-The interactive Scrabble board already exists as a React component (`web/src/components/Board.tsx`),
+The interactive Scrabble board is a React component (`web/src/components/Board.tsx`),
 served by the C++ tools (`play_game`, `manual_gcg_tool`, `board_tool`) over a
-WebSocket. The metrics dashboard, by contrast, is a Bokeh-server app. Those two
-stacks cannot share a page, so an interactive board cannot live in the Bokeh
-dashboard.
+WebSocket. A Bokeh-served page cannot host it, so the page structure is React,
+and the metric plots are embedded into it.
 
 Bokeh 3.9 supports **standalone embedding**: `bokeh.embed.json_item(model)`
 serializes any figure/layout to a JSON dict, and BokehJS renders it client-side
 with `Bokeh.embed.embed_item(item, divId)`. A small React `<BokehFigure item={…}/>`
-(mount a div, call `embed_item` in an effect) hosts the *existing* Bokeh plots
-inside React. The interactive plots (position scrubber, generation slider, stacked
-loss) are already built with **CustomJS** callbacks, which serialize into the
-standalone embed and keep working. Only the few *server-side* `on_change` callbacks
-(tag select, %/abs toggle, follow-latest, tab switch) move into React state.
+(mount a div, call `embed_item` in an effect) hosts the Bokeh plots inside React.
+The interactive plots (position scrubber, generation slider, stacked loss) are
+built with **CustomJS** callbacks, which serialize into the standalone embed and
+work client-side; page-level state (tag select, %/abs toggle, follow-latest, tab
+switch) lives in React.
 
 BokehJS in `web/` is pinned to **3.9.1** to match the Python `bokeh` that produces
 the `json_item`s.
@@ -53,46 +51,32 @@ the `json_item`s.
 - The C++ web tools are unchanged. The dashboard is a separate React app with a
   Python backend; it only *shares* the `web/src/components` library.
 
-### API endpoints (Phase A)
+### API endpoints
 
 | Endpoint | Returns |
 |---|---|
 | `GET /api/tags?task=<t>` | `{"tags": [...]}` — `db.list_tags(mount_root, task)` |
-| `GET /api/version?task=<t>&tag=<g>` | `{"<table>": <row_count>, ...}` — cheap change token for polling (mirrors the Bokeh shell's `watch()`) |
+| `GET /api/version?task=<t>&tag=<g>` | `{"<table>": <row_count>, ...}` — cheap change token for polling |
 | `GET /api/figure/<name>?task=<t>&tag=<g>&<params>` | a Bokeh `json_item` dict, or `{"item": null}` when there's no data |
 
-`figure/<name>` dispatches to the existing builders in `plots.py` (e.g.
+`figure/<name>` dispatches to the builders in `plots.py` (e.g.
 `loss` → `metrics_loss_grid(conn, normalized)`), serialized with `json_item`.
-The builders are reused unchanged.
-
-## Status
-
-The migration is **complete** — the dashboard is the React app; there is no longer
-a Bokeh-served dashboard. It was done in three phases:
-
-- **Phase A — foundation (done).** Python API (tags, version, the loss figure) +
-  React shell (tag select, polling, `<BokehFigure>`).
-- **Phase B — lane analysis (done).** The interactive board tab (below).
-- **Phase C — migrate the rest (done).** The post-move tabs (Loss, Positions,
-  Calibration, Training) are React tabs that embed `json_item`s built by the
-  `plots.py` builders; both post-move trainers and the standalone launcher
-  (`scripts/dashboard.py`) launch the React dashboard. The Bokeh-serving modules
-  (`server.py`, `shell.py`, `post_move_tabs.py`, the `app_*.py`) were deleted;
-  `plots.py` and `db.py` remain (the API reuses them).
+Both trainers and the standalone launcher (`scripts/dashboard.py`) launch the
+React dashboard.
 
 ### Tabs (task-conditional, all in `web/src/AppDashboard.tsx`)
 
 | Task | Tabs |
 |---|---|
-| post_move_value | Loss · Positions · Training |
-| max_move_per_lane | Loss · Lane analysis |
+| post_move_value | Loss · Positions · Training · Controls · Info |
+| max_move_per_lane | Loss · Lane analysis · Info |
 
 `Loss` and `Training` embed an API figure (`loss`, `training_metrics`) and
 re-fetch when their version-token table advances. `Positions` (post-move-value)
 and `Lane analysis` (max-move-per-lane) are native-React interactive tabs (see
 below).
 
-## Phase B — lane-analysis tab
+## The lane-analysis tab
 
 A native-React tab that visualizes how each model generation evaluates each
 position in a GCG dataset (default `positions/NWL23/max-move-per-lane-test-dataset/`).
@@ -109,15 +93,14 @@ the full 7-tile rack and the opponent's is partial. So each file defines exactly
 ### Ground truth (C++ engine)
 
 Per position: replay the GCG to the final board; take the on-move rack; then
-`compute_lane_targets` (per-lane union / max score / has-move) **plus a new per-lane
+`compute_lane_targets` (per-lane union / max score / has-move) **plus a per-lane
 best-move enumeration** — re-run `MoveGenerator`, keep the moves tied for the
-lane max, and return their word / coordinates / direction / score.
-`compute_lane_targets` alone discards the moves (it keeps only the union), so the
-enumeration is new.
+lane max, and return their word / coordinates / direction / score
+(`compute_lane_targets` alone keeps only the union, not the moves).
 
 ### Model predictions (Python, in-process at each checkpoint)
 
-- One new FFI: encode a GCG final-position (board + rack) into the model input
+- One FFI: encode a GCG final-position (board + rack) into the model input
   tensor (`MaxMovePerLaneInputEncoder`). A one-time builder caches the dataset's
   input-tensor batch under the tag.
 - The trainer's checkpoint hook runs the in-memory model on that batch, decodes per
@@ -139,13 +122,11 @@ enumeration is new.
 - Score histogram: the selected lane's predicted 100-bin score PMF with the true
   score bin highlighted.
 
-## Phase D — post-move-value Positions tab
+## The post-move-value Positions tab
 
 A native-React tab that compares each model generation's post-move-value
 prediction against a Monte-Carlo ground truth, over a GCG dataset
-(`positions/NWL23/post-move-value-test-dataset/`). It replaces the old Bokeh
-probe/calibration `Positions`+`Calibration` tabs (whose builders remain in
-`plots.py`, unused).
+(`positions/NWL23/post-move-value-test-dataset/`).
 
 ### The analysis position (per `pos-N.gcg`)
 

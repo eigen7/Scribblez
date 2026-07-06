@@ -12,36 +12,34 @@ below are forward-looking. For the data pipeline it builds on, see
 
 ## Motivation
 
-Generational training replaced two earlier pipelines that sat at opposite
-extremes:
+Two simpler pipeline shapes sit at opposite extremes of the design space:
 
-- **Streaming**: C++ self-play fed sampled rows straight into the GPU loop
-  through an in-process ring buffer. One position per game, no shuffle, no disk.
-  Each position was used once and dropped. Ideal when generation is cheap and
-  abundant (HastyBot self-play), but it wasted the expensive part of every game —
-  the game was played to completion to yield a single training row. (The C++ ring
-  buffer -- `StreamingGameProducer` / `StreamingRowBuffer` -- is retained as the
-  substrate the neural game pool will reuse; see
-  [The game-pool producer](#the-game-pool-producer-c). Its Python wrapper has
-  been removed.)
+- **Streaming**: C++ self-play feeds sampled rows straight into the GPU loop
+  through an in-process ring buffer (`StreamingGameProducer` /
+  `StreamingRowBuffer` — the substrate the neural game pool will reuse; see
+  [The game-pool producer](#the-game-pool-producer-c)). One position per game,
+  no shuffle, no disk; each position is used once and dropped. Attractive when
+  generation is cheap and abundant (HastyBot self-play), but it wastes the
+  expensive part of every game — a game is played to completion to yield a
+  single training row — and is heavily CPU-bound: the GPU starves waiting for
+  game generation.
 
-- **Disk** ([generate_data.py](../py/scripts/generate_data.py) + a fixed-epoch
-  trainer): generate all `.slog` data up front, then epoch over it. Reused every
-  position across epochs and sampled many turns per game, but the lifecycle was
-  rigid — generate everything, then train everything — with no stop-and-resume
-  ergonomics.
+- **One-shot disk** ([generate_data.py](../py/scripts/generate_data.py) + a
+  fixed-epoch trainer): generate all `.slog` data up front, then epoch over it.
+  Every position is reused across epochs and many turns are sampled per game,
+  but the lifecycle is rigid — generate everything, then train everything —
+  with no stop-and-resume ergonomics.
 
-The streaming trainer was heavily CPU-bound: the GPU starved waiting for game
-generation. The obvious lever is to extract more gradient signal from each
-generated position — sample more turns per game, and reuse each position across
-several passes — which the disk pipeline could do but the streaming pipeline
-could not. The motivation sharpens when self-play graduates from HastyBot to a
-neural agent: generating a game becomes far more expensive, so squeezing maximum
-training value out of each one stops being optional.
+The lever that matters is extracting more gradient signal from each generated
+position — sample more turns per game, and reuse each position across several
+passes — which the disk shape allows and the streaming shape cannot. It matters
+even more once self-play graduates from HastyBot to a neural agent: generating
+a game becomes far more expensive, so squeezing maximum training value out of
+each one stops being optional.
 
-**Generational training** gets the disk pipeline's data reuse with the streaming
-pipeline's stop-and-resume ergonomics, and its structure extends cleanly to
-neural self-play and, eventually, remote game-generation workers.
+**Generational training** combines the disk shape's data reuse with
+stop-and-resume ergonomics, and its structure extends cleanly to neural
+self-play and, eventually, remote game-generation workers.
 
 ## Core concepts
 
@@ -84,9 +82,9 @@ the train generations churn. This keeps the probe and calibration metrics
 comparable across the entire run — regenerating the eval set each generation
 would make every metric curve non-comparable and risks train/test leakage.
 
-### Decorrelation and overfitting are already handled
+### Decorrelation and overfitting come from the data pipeline
 
-Two mechanisms the pipeline needs already exist:
+Two mechanisms the pipeline needs are supplied by the data pipeline:
 
 - **Decorrelation within a generation** is free: `SlogDataset.iter_batches`
   shuffles the whole loaded set each epoch via the C++ loader's `epoch_start`.
@@ -98,9 +96,9 @@ Two mechanisms the pipeline needs already exist:
   epochs over one generation yield up to `E*K` *distinct* positions per game —
   not the same K rows hammered E times.
 
-So the genuinely new work is the **lifecycle** (generate → train a few passes →
-slide the window → repeat, restartable at any point) and the **producer and
-resource-management** machinery below. The sampling and shuffling are done.
+So what this pipeline itself owns is the **lifecycle** (generate → train a few
+passes → slide the window → repeat, restartable at any point) and the **producer
+and resource-management** machinery below; the sampling and shuffling come free.
 
 ### The overfitting knob is reuse, not epochs
 
@@ -288,7 +286,7 @@ generation — the exact resource waste we are trying to escape. `BackgroundRefi
 runs generation of `gen_{N+1}` (an out-of-process game-pool producer, or a
 worker; see [Distributed](#distributed-game-generation)) while the trainer reuses
 the current window. When the trainer finishes its passes, the next generation is
-already on disk. This recovers the streaming trainer's CPU/GPU overlap *and* keeps
+already on disk. This gets the streaming shape's CPU/GPU overlap *and* keeps
 the reuse benefit. How many cores the refiller gets versus the DataLoader is
 exactly what the resource manager arbitrates.
 
@@ -413,8 +411,8 @@ was left. The tab holds:
   and the producer/consumer block-ratio); off, sliders pin it manually.
 - Later, **per-domain GPU priorities** for the neural regime's contention lock.
 
-This rides the same throughput/metrics tables already written during streaming
-training.
+This rides the per-tag dashboard DB the metrics already live in (the `control`
+and `control_event` tables).
 
 ## Distributed game generation
 
