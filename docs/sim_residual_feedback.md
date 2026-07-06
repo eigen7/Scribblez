@@ -535,42 +535,31 @@ HastyBot-equity top-K — a deliberate simplification over top-K-by-`M_post`,
 avoiding C++-side model inference; on HastyBot self-play data the equity
 argmax is also the move actually played, so each position's evidence contains
 the played move's own sim) feeding
-[kill_test.py](../py/scripts/sim_evidence/kill_test.py) (row decoding by
-position identity, evidence encoding, and the training arms). The
-evidence-conditioned model is
-[sim_evidence/model.py](../py/scribblez/sim_evidence/model.py): a
+[kill_test.py](../py/scripts/kill_test.py) (row decoding by position
+identity, evidence encoding, and the training arms). The evidence-conditioned
+model is [sim_evidence/model.py](../py/scribblez/sim_evidence/model.py): a
 zero-initialized fusion stage on top of the regular post-move model, so the
 `none` arm and the evidence arms are parameter-identical and differ only in
 their inputs.
 
 ```
-# 1. Self-play data (~20k games; skip if reusing an existing generation dir)
-./target/engine/play_game --player "--type=hastybot" --player "--type=hastybot" \
-    --games 20000 --threads 32 --games-per-file 500 --seed 1 \
-    --binary-log-dir /workspace/mount/sim_evidence/slogs
+# 1. Generates self-play data + sim-observations, defaulting to 8 threads.
+# Keeps generating data with sim observations until stopped, can be stopped and restarted arbitrarily.
+./py/scripts/generate_kill_test_data.py -t apple
 
-# 2. Sim observations (the expensive step; reruns resume past finished files)
-./target/engine/sim_obs_tool --slog-dir /workspace/mount/sim_evidence/slogs \
-    --rollouts 200 --top-k 10 --positions-per-game 1 --threads 32 --seed 1
-
-# 3. Decode rows + encode evidence into training shards
-./py/scripts/sim_evidence/kill_test.py build \
-    --slog-dir /workspace/mount/sim_evidence/slogs \
-    --cache-dir /workspace/mount/sim_evidence/cache
-
-# 4. The arms (same seed and architecture; only the evidence input differs)
-./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
-    --evidence none --tag baseline
-./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
-    --evidence full --tag full
-./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
-    --evidence scalar --tag scalar
-./py/scripts/sim_evidence/kill_test.py train --cache-dir /workspace/mount/sim_evidence/cache \
-    --evidence shuffled --tag shuffled
+# 2. Performs 4-armed test
+./py/scripts/kill_test.py -t apple
 ```
 
-**Reading the results** (per-arm history in `<cache-dir>/results/<tag>.json`;
-the decision metric is best held-out `wld_ce`):
+Data accumulates under `<mount>/kill_test/<tag>/slogs` (`.slog` batches plus
+their `.sobs` sidecars, both written atomically — a Ctrl-C loses at most the
+in-flight cycle, and a rerun resumes). `kill_test.py` snapshots whatever
+complete pairs exist, so it can run while generation continues, and rerunning
+it after more data has accumulated only decodes the new files.
+
+**Reading the results** (summary table at the end; per-arm history in
+`<mount>/kill_test/<tag>/cache/results/<arm>.json`; the decision metric is
+best held-out `wld_ce`):
 
 - **`full` < `none` by a clear margin** → the hypothesis survives; proceed to
   step 4. "Clear" means the gap dwarfs seed noise — rerun a pair of arms at a
@@ -586,9 +575,12 @@ the decision metric is best held-out `wld_ce`):
   does not is memorizing evidence noise — more positions (or fewer epochs)
   beats more capacity.
 
-The nominal sizes above (~20k positions, 10×200 rollouts each) cost a few
-hours of `sim_obs_tool` on a 32-thread box and ~2 GB of cache; scale
-`--positions-per-game` up if the arms' gap looks real but noisy.
+At the generator's defaults (10 candidates × 200 rollouts, 1 position/game,
+8 threads) each position costs roughly a second of sim time, so ~20k
+positions — a sensible first experiment — is a day of background generation
+(or a few hours with `--threads` raised on an idle box) and ~2 GB of cache.
+If the arms' gap looks real but noisy, let the generator run longer and rerun
+`kill_test.py`.
 
 ## Implementation roadmap
 

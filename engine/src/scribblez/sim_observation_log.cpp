@@ -2,8 +2,10 @@
 
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <unistd.h>
 
 namespace scribblez {
 
@@ -55,9 +57,16 @@ void SimObsWriter::close() {
   closed_ = true;
   SimObsFileHeader* hdr = reinterpret_cast<SimObsFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
-  std::ofstream f(path_, std::ios::binary);
-  if (!f) throw std::runtime_error("SimObsWriter: cannot open " + path_);
-  f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+  // Temp-file + rename so the .sobs appears atomically: an interrupted run
+  // never leaves a truncated file that a resume (which skips existing
+  // sidecars) would silently keep.
+  const std::string tmp = path_ + ".tmp." + std::to_string(::getpid());
+  {
+    std::ofstream f(tmp, std::ios::binary);
+    if (!f) throw std::runtime_error("SimObsWriter: cannot open " + tmp);
+    f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+  }
+  std::filesystem::rename(tmp, path_);
 }
 
 SimObsReader::SimObsReader(const std::string& path) {

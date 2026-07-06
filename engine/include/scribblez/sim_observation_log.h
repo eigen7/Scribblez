@@ -64,8 +64,9 @@ static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
 #pragma pack(pop)
 
 // Streams positions to a .sobs file as they are generated. The header's
-// num_positions is patched when the writer closes, so a file is well-formed
-// only after close() (or destruction) completes.
+// num_positions is patched and the file written (temp + rename, so it appears
+// atomically) when the writer closes; nothing exists on disk before close()
+// (or destruction) completes.
 class SimObsWriter {
  public:
   explicit SimObsWriter(const std::string& path);

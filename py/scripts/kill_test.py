@@ -1,35 +1,37 @@
 #!/usr/bin/env python3
-"""Sim-evidence kill-test (docs/sim_residual_feedback.md, roadmap step 3).
+"""The 4-armed sim-evidence kill-test (docs/sim_residual_feedback.md, step 3).
 
 Tests the load-bearing hypothesis of the sim-evidence loop in isolation: does
 conditioning M_post on Monte-Carlo sim evidence improve its outcome
-prediction? Two subcommands:
+prediction? One invocation runs the whole experiment against the data
+accumulated by scripts/generate_kill_test_data.py under the same tag:
 
-  build   Pair each .slog file in --slog-dir with its .sobs sidecar (produced
-          by target/engine/sim_obs_tool), decode every evidence position's
-          post-move training row by identity, encode the evidence set, and
-          write one .npz shard per file into --cache-dir. Files are assigned
-          round-robin to train/holdout (--holdout-every), so the split is by
-          game and cannot leak.
+  1. Cache build: every complete .slog/.sobs pair under
+     <mount>/kill_test/<tag>/slogs is decoded (each evidence position's
+     post-move training row, addressed by identity) and its evidence set
+     encoded, into one .npz shard per file under <mount>/kill_test/<tag>/cache.
+     Shards are cached across invocations; only new files are processed.
+     Files alternate into train/holdout round-robin (--holdout-every), so the
+     split is by game and cannot leak.
 
-  train   Train one arm on the cached shards and report held-out metrics per
-          epoch. --evidence selects the arm:
-            full      spatial planes + scalar summaries (the real thing)
-            scalar    scalar summaries only (the cheap rung of the ladder)
-            none      evidence zeroed -- the baseline; same architecture and
-                      parameter count, so the comparison isolates the input
-            shuffled  real evidence, permuted across positions -- a
-                      falsification control: its gain over `none` measures
-                      what the model extracts from evidence *marginals*
-                      rather than from position-matched evidence
+  2. Four training arms, identical seed and architecture (the fusion stage is
+     zero-initialized and parameter counts match across arms; only the
+     evidence input differs):
+       none      evidence zeroed -- the baseline
+       shuffled  real evidence permuted across positions -- a falsification
+                 control; any gain over `none` is what the model extracts
+                 from evidence marginals rather than position-matched
+                 evidence, and `full` should be judged against it
+       scalar    scalar sim summaries only (the cheap rung of the ladder)
+       full      spatial planes + scalar summaries (the real thing)
 
-Results are written to <cache-dir>/results/<tag>.json; the decision metric is
-held-out WLD cross-entropy (see the doc's kill-test section).
+The decision metric is best held-out WLD cross-entropy; a comparison table
+prints at the end and per-arm histories land in
+<mount>/kill_test/<tag>/cache/results/. See the doc's kill-test section for
+the decision rubric.
 
 Usage:
-    ./py/scripts/sim_evidence/kill_test.py build --slog-dir D --cache-dir C
-    ./py/scripts/sim_evidence/kill_test.py train --cache-dir C --evidence none --tag baseline
-    ./py/scripts/sim_evidence/kill_test.py train --cache-dir C --evidence full --tag full
+    ./py/scripts/kill_test.py -t apple
 """
 
 import argparse
@@ -46,11 +48,13 @@ from scribblez.post_move_value.model import MASK_HEAD_NAMES, compute_loss
 from scribblez.sim_evidence.model import EvidencePostMoveModel
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS, evidence_features, read_sobs
 
+MOUNT_ROOT = Path("/workspace/mount")
 TARGET_KEYS = ("wld", "score_diff", *MASK_HEAD_NAMES)
+ARMS = ("none", "shuffled", "scalar", "full")
 
 
 # ---------------------------------------------------------------------------
-# build
+# cache build
 # ---------------------------------------------------------------------------
 
 
@@ -85,32 +89,33 @@ def build_shard(slog: Path, sobs: Path, max_k: int) -> dict[str, np.ndarray]:
     return shard
 
 
-def cmd_build(args):
-    cache = Path(args.cache_dir)
+def build_cache(slog_dir: Path, cache: Path, holdout_every: int, max_k: int):
     (cache / "train").mkdir(parents=True, exist_ok=True)
     (cache / "holdout").mkdir(parents=True, exist_ok=True)
 
-    slogs = sorted(Path(args.slog_dir).glob("*.slog"))
+    slogs = sorted(slog_dir.glob("*.slog"))
     pairs = [(s, s.with_suffix(".sobs")) for s in slogs if s.with_suffix(".sobs").exists()]
     if not pairs:
-        raise SystemExit(f"no .slog/.sobs pairs in {args.slog_dir} (run sim_obs_tool first)")
-    print(f"{len(pairs)} .slog/.sobs pairs; holdout = every {args.holdout_every}th file")
+        raise SystemExit(
+            f"no .slog/.sobs pairs under {slog_dir} (run generate_kill_test_data.py first)"
+        )
+    print(f"{len(pairs)} .slog/.sobs pairs; holdout = every {holdout_every}th file")
 
-    counts = {"train": 0, "holdout": 0}
+    added = 0
     for i, (slog, sobs) in enumerate(pairs):
-        split = "holdout" if i % args.holdout_every == 0 else "train"
+        split = "holdout" if i % holdout_every == 0 else "train"
         out = cache / split / f"{slog.stem}.npz"
         if out.exists():
             continue
-        shard = build_shard(slog, sobs, args.max_k)
+        shard = build_shard(slog, sobs, max_k)
         np.savez_compressed(out, **shard)
-        counts[split] += len(shard["ev_mask"])
+        added += len(shard["ev_mask"])
         print(f"  [{split}] {out.name}: {len(shard['ev_mask'])} positions")
-    print(f"done: {counts['train']} train / {counts['holdout']} holdout positions added")
+    print(f"cache up to date ({added} positions added)")
 
 
 # ---------------------------------------------------------------------------
-# train
+# training arms
 # ---------------------------------------------------------------------------
 
 
@@ -118,7 +123,7 @@ def load_split(cache: Path, split: str) -> dict[str, torch.Tensor]:
     """Concatenate a split's shards into one in-memory tensor dict."""
     shards = sorted((cache / split).glob("*.npz"))
     if not shards:
-        raise SystemExit(f"no shards under {cache / split} (run `build` first)")
+        raise SystemExit(f"no shards under {cache / split}")
     columns: dict[str, list[np.ndarray]] = {}
     for path in shards:
         with np.load(path) as z:
@@ -193,15 +198,13 @@ def evaluate(model, data, device, batch_size: int) -> dict[str, float]:
     }
 
 
-def cmd_train(args):
-    cache = Path(args.cache_dir)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train_arm(arm: str, cache: Path, args, device) -> dict:
+    """Train one arm from scratch and return its result record."""
     torch.manual_seed(args.seed)
-
     train = load_split(cache, "train")
     holdout = load_split(cache, "holdout")
-    apply_evidence_mode(train, args.evidence, seed=args.seed)
-    apply_evidence_mode(holdout, args.evidence, seed=args.seed + 1)
+    apply_evidence_mode(train, arm, seed=args.seed)
+    apply_evidence_mode(holdout, arm, seed=args.seed + 1)
 
     input_shapes = {s.name: s.dims for s in get_input_shapes()}
     model = EvidencePostMoveModel(
@@ -213,8 +216,8 @@ def cmd_train(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     n_params = sum(p.numel() for p in model.parameters())
     print(
-        f"arm={args.evidence} train={len(train['wld'])} holdout={len(holdout['wld'])} "
-        f"params={n_params:,} device={device}"
+        f"\n=== arm={arm} train={len(train['wld'])} holdout={len(holdout['wld'])} "
+        f"params={n_params:,} device={device} ==="
     )
 
     generator = torch.Generator().manual_seed(args.seed)
@@ -245,49 +248,75 @@ def cmd_train(args):
         )
 
     best = min(history, key=lambda m: m["wld_ce"])
-    results_dir = cache / "results"
-    results_dir.mkdir(exist_ok=True)
-    out_path = results_dir / f"{args.tag}.json"
-    arg_record = {k: v for k, v in vars(args).items() if k not in ("fn", "command")}
-    out_path.write_text(
-        json.dumps({"args": arg_record, "history": history, "best": best}, indent=2) + "\n"
+    return {"arm": arm, "history": history, "best": best}
+
+
+def print_summary(results: list[dict]):
+    by_arm = {r["arm"]: r["best"] for r in results}
+    base_ce = by_arm["none"]["wld_ce"]
+    print("\n=== kill-test summary (best held-out epoch per arm) ===")
+    print(f"{'arm':10s} {'wld_ce':>8s} {'d_vs_none':>10s} {'brier':>8s} {'acc':>7s} {'epoch':>6s}")
+    for arm in ARMS:
+        b = by_arm[arm]
+        print(
+            f"{arm:10s} {b['wld_ce']:8.4f} {b['wld_ce'] - base_ce:+10.4f} "
+            f"{b['brier']:8.4f} {b['wld_acc']:7.4f} {b['epoch']:6d}"
+        )
+    print(
+        "\nDecision rubric (docs/sim_residual_feedback.md): the hypothesis survives if\n"
+        "`full` beats `none` by a margin that (a) dwarfs seed noise and (b) holds up\n"
+        "against `shuffled` (which bounds what evidence marginals alone provide).\n"
+        "`scalar` vs `full` locates how much of the win needs the spatial planes."
     )
-    print(f"best holdout wld_ce={best['wld_ce']:.4f} (epoch {best['epoch']}) -> {out_path}")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    sub = p.add_subparsers(dest="command", required=True)
-
-    b = sub.add_parser("build", help="decode rows + evidence into .npz shards")
-    b.add_argument("--slog-dir", required=True, help="directory of .slog + .sobs pairs")
-    b.add_argument("--cache-dir", required=True, help="output shard directory")
-    b.add_argument("--holdout-every", type=int, default=10, help="every Nth file is holdout")
-    b.add_argument("--max-k", type=int, default=10, help="evidence candidates kept per position")
-    b.set_defaults(fn=cmd_build)
-
-    t = sub.add_parser("train", help="train one arm and report holdout metrics")
-    t.add_argument("--cache-dir", required=True)
-    t.add_argument("--evidence", choices=["full", "scalar", "none", "shuffled"], required=True)
-    t.add_argument("--tag", required=True, help="results filename stem")
-    t.add_argument("--epochs", type=int, default=20)
-    t.add_argument("--batch-size", type=int, default=256)
-    t.add_argument("--lr", type=float, default=3e-4)
-    t.add_argument(
+    p.add_argument("-t", "--tag", required=True, help="tag used with generate_kill_test_data.py")
+    p.add_argument("--holdout-every", type=int, default=10, help="every Nth file is holdout")
+    p.add_argument("--max-k", type=int, default=10, help="evidence candidates kept per position")
+    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument(
         "--lambda-sd",
         type=float,
         default=0.004,
         help="Score-diff loss weight (the production trainer's default), so the "
         "WLD head -- the decision metric -- dominates the objective.",
     )
-    t.add_argument("--weight-decay", type=float, default=1e-4)
-    t.add_argument("--trunk-channels", type=int, default=96)
-    t.add_argument("--num-blocks", type=int, default=6)
-    t.add_argument("--seed", type=int, default=0)
-    t.set_defaults(fn=cmd_train)
-
+    p.add_argument("--weight-decay", type=float, default=1e-4)
+    p.add_argument("--trunk-channels", type=int, default=96)
+    p.add_argument("--num-blocks", type=int, default=6)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--arms",
+        default=",".join(ARMS),
+        help="comma-separated subset of arms to run (default: all four)",
+    )
     args = p.parse_args()
-    args.fn(args)
+
+    root = MOUNT_ROOT / "kill_test" / args.tag
+    cache = root / "cache"
+    build_cache(root / "slogs", cache, args.holdout_every, args.max_k)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    results_dir = cache / "results"
+    results_dir.mkdir(exist_ok=True)
+
+    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    results = []
+    for arm in arms:
+        record = train_arm(arm, cache, args, device)
+        arg_record = {k: v for k, v in vars(args).items() if k != "arms"}
+        (results_dir / f"{arm}.json").write_text(
+            json.dumps({"args": arg_record, **record}, indent=2) + "\n"
+        )
+        results.append(record)
+
+    if set(arms) == set(ARMS):
+        print_summary(results)
+    print(f"per-arm histories: {results_dir}")
 
 
 if __name__ == "__main__":
