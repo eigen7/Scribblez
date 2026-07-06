@@ -54,6 +54,7 @@ add_library(scribblez_core STATIC
   src/util/io.cpp
   src/util/json.cpp
   src/util/math.cpp
+  src/util/progress.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
 # in the core engine on Linux.

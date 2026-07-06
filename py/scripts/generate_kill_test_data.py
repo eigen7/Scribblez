@@ -6,11 +6,11 @@ Alternates between two phases until stopped (Ctrl-C), accumulating under
 
   1. HastyBot self-play: one batch of games into a fresh .slog file
      (timestamp-named, so batches from any number of runs coexist).
-  2. sim_obs_tool over the directory: every .slog without a .sobs sidecar gets
-     one (HastyBot-equity top-K candidates, SimRunner rollouts). Files that
-     already have their sidecar are skipped, and sidecars appear atomically,
-     so the loop -- and the whole script -- can be stopped and restarted
-     arbitrarily; a restart resumes exactly where generation left off.
+  2. sim_obs_tool over exactly the .slog files still missing a .sobs sidecar
+     (normally just the fresh batch; after an interrupted run, also the
+     backlog). Sidecars appear atomically, so the loop -- and the whole
+     script -- can be stopped and restarted arbitrarily; a restart resumes
+     exactly where generation left off.
 
 Run the 4-armed experiment on the accumulated data with
 scripts/kill_test.py -t <tag> (which may run while this keeps generating; it
@@ -36,10 +36,10 @@ def slog_dir(tag: str) -> Path:
     return MOUNT_ROOT / "kill_test" / tag / "slogs"
 
 
-def run_sim_obs_tool(out_dir: Path, args) -> int:
+def run_sim_obs_tool(pending: list[Path], args) -> int:
     cmd = [
         SIM_OBS_TOOL,
-        f"--slog-dir={out_dir}",
+        *[f"--slog-file={p}" for p in pending],
         f"--rollouts={args.rollouts}",
         f"--top-k={args.top_k}",
         f"--positions-per-game={args.positions_per_game}",
@@ -88,7 +88,14 @@ def main() -> int:
             if rc != 0:
                 print(f"play_game exited with code {rc}; stopping", file=sys.stderr)
                 return rc
-            rc = run_sim_obs_tool(out_dir, args)
+            # Sim exactly the files still missing a sidecar: the fresh batch,
+            # plus any backlog an earlier interrupted run left behind.
+            pending = sorted(
+                s for s in out_dir.glob("*.slog") if not s.with_suffix(".sobs").exists()
+            )
+            if not pending:
+                continue
+            rc = run_sim_obs_tool(pending, args)
             if rc != 0:
                 print(f"sim_obs_tool exited with code {rc}; stopping", file=sys.stderr)
                 return rc

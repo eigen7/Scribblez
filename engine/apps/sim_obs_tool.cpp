@@ -5,9 +5,14 @@
 // For a sampled subset of each game's training-eligible turns, the tool
 // replays the game to the pre-move decision point, ranks the legal candidates
 // (plays and exchanges) by HastyBot static equity, and runs SimRunner over the
-// top-K (common random numbers, HastyBot rollouts to a natural end). Every
-// .slog file in --slog-dir gets a same-stem .sobs sidecar; files whose sidecar
-// already exists are skipped, so an interrupted run resumes by rerunning.
+// top-K (common random numbers, HastyBot rollouts to a natural end). Each
+// processed .slog file gets a same-stem .sobs sidecar. The input is either
+// --slog-dir (every .slog in the directory; files whose sidecar already
+// exists are skipped, so an interrupted run resumes by rerunning) or one or
+// more explicit --slog-file arguments (what generate_kill_test_data.py
+// passes, having already selected the files missing a sidecar). Progress
+// across all positions of the invocation renders as a bar on stderr (TTY
+// only), and a timing summary prints at the end.
 //
 // Because the self-play games are HastyBot's own, the equity-argmax candidate
 // (rank 0) is the move that was actually played at the position, so each
@@ -23,6 +28,7 @@
 #include "scribblez/position_encoder.h"
 #include "scribblez/sim_observation_log.h"
 #include "scribblez/sim_runner.h"
+#include "util/progress.h"
 
 #include <boost/program_options.hpp>
 
@@ -47,6 +53,7 @@ using binlog::GameMetadata;
 
 struct Options {
   std::string slog_dir;
+  std::vector<std::string> slog_files;
   int rollouts = 200;
   int top_k = 10;
   int positions_per_game = 1;
@@ -135,7 +142,7 @@ void sample_positions(const GameMetadata& gm, uint32_t game_idx, const Options& 
 // worker count).
 void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
                      const std::vector<PositionWork>& work, std::atomic<size_t>* next,
-                     std::vector<PositionResult>* results) {
+                     std::vector<PositionResult>* results, util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict, false});
   SimRunner::Params params;
@@ -173,12 +180,13 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     res.base_seed = position_seed(opt.seed, w.game_idx, w.turn_idx);
     res.candidates = top_k_candidates(ranking_req, opt.top_k);
     res.observations = runner.run(pos, res.candidates, res.base_seed);
+    meter->add_done();
   }
 }
 
 // Generate the .sobs sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
-                  const Options& opt) {
+                  const Options& opt, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
     reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
@@ -195,7 +203,7 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
   for (int t = 0; t < threads; ++t)
     workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
-                         std::cref(work), &next, &results);
+                         std::cref(work), &next, &results, meter);
   for (auto& w : workers) w.join();
 
   // The work list is sorted by (game, turn) and results are indexed by work
@@ -207,6 +215,23 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
                         static_cast<uint32_t>(opt.rollouts), r.base_seed);
   }
   writer.close();
+}
+
+// The number of positions the tool would sample from `buf` -- the same
+// per-game arithmetic sample_positions applies, for sizing the progress bar
+// before any sims run.
+uint64_t count_positions(const std::vector<char>& buf, const Options& opt) {
+  const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
+  const GameMetadata* metas =
+    reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
+  uint32_t num_games = hdr->num_games;
+  if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
+  uint64_t total = 0;
+  for (uint32_t g = 0; g < num_games; ++g) {
+    const int eligible = metas[g].eligible_end - metas[g].eligible_begin;
+    total += static_cast<uint64_t>(std::clamp(eligible, 0, opt.positions_per_game));
+  }
+  return total;
 }
 
 std::vector<char> read_file_bytes(const fs::path& path) {
@@ -226,8 +251,10 @@ int main(int argc, char** argv) {
     Options opt;
     po::options_description desc("sim_obs_tool options");
     desc.add_options()("help,h", "show this help and exit")(
-      "slog-dir", po::value<std::string>(&opt.slog_dir)->required(),
-      "directory of .slog files; each gets a same-stem .sobs sidecar")(
+      "slog-dir", po::value<std::string>(&opt.slog_dir),
+      "directory of .slog files; each without a .sobs sidecar gets one")(
+      "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
+      "explicit .slog file to process (repeatable; overrides --slog-dir)")(
       "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
       "Monte-Carlo rollouts per candidate")(
       "top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
@@ -247,31 +274,48 @@ int main(int argc, char** argv) {
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
     std::vector<fs::path> slogs;
-    for (const auto& entry : fs::directory_iterator(opt.slog_dir))
-      if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
-    std::sort(slogs.begin(), slogs.end());
-    if (slogs.empty()) throw std::runtime_error("no .slog files in " + opt.slog_dir);
-    std::cerr << slogs.size() << " .slog files; " << opt.top_k << " candidates x " << opt.rollouts
-              << " rollouts, " << opt.positions_per_game << " position(s)/game, " << opt.threads
-              << " threads\n";
+    if (!opt.slog_files.empty()) {
+      for (const std::string& f : opt.slog_files) slogs.emplace_back(f);
+    } else if (!opt.slog_dir.empty()) {
+      for (const auto& entry : fs::directory_iterator(opt.slog_dir))
+        if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
+      std::sort(slogs.begin(), slogs.end());
+    } else {
+      throw std::runtime_error("pass --slog-dir or --slog-file");
+    }
+    if (slogs.empty()) throw std::runtime_error("no .slog files to process");
 
+    // Load every pending file's bytes up front so the progress bar's total is
+    // known before the sims start. Pending batches are a handful of files, so
+    // holding them resident is cheap next to the sim work.
+    std::vector<std::pair<fs::path, std::vector<char>>> pending;
+    uint64_t total_positions = 0;
     for (const fs::path& slog : slogs) {
       fs::path sobs = slog;
       sobs.replace_extension(".sobs");
-      if (fs::exists(sobs)) {
-        std::cerr << "  skip (exists): " << sobs.filename().string() << "\n";
-        continue;
-      }
-      const std::vector<char> buf = read_file_bytes(slog);
+      if (fs::exists(sobs)) continue;
+      std::vector<char> buf = read_file_bytes(slog);
       const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
       if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
           hdr->version != binlog::kVersion) {
         std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
         continue;
       }
-      process_file(buf, sobs, dict, opt);
-      std::cerr << "  wrote " << sobs.filename().string() << "\n";
+      total_positions += count_positions(buf, opt);
+      pending.emplace_back(slog, std::move(buf));
     }
+    if (pending.empty()) return 0;
+    std::cerr << "sim-obs: " << pending.size() << " file(s), " << total_positions << " positions; "
+              << opt.top_k << " candidates x " << opt.rollouts << " rollouts, " << opt.threads
+              << " threads\n";
+
+    util::ProgressMeter meter(total_positions, "positions");
+    for (const auto& [slog, buf] : pending) {
+      fs::path sobs = slog;
+      sobs.replace_extension(".sobs");
+      process_file(buf, sobs, dict, opt, &meter);
+    }
+    meter.finish("sim-obs");
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";

@@ -57,6 +57,30 @@ def sobs_dir(tmp_path_factory) -> Path:
     return d
 
 
+def test_slog_file_mode_matches_dir_mode(sobs_dir):
+    # Regenerating one sidecar via an explicit --slog-file must reproduce the
+    # directory-mode output byte for byte (same run seed drives both).
+    slog = sorted(sobs_dir.glob("*.slog"))[0]
+    sobs = slog.with_suffix(".sobs")
+    original = sobs.read_bytes()
+    sobs.unlink()
+    result = subprocess.run(
+        [
+            str(SIM_OBS_TOOL),
+            f"--slog-file={slog}",
+            f"--rollouts={ROLLOUTS}",
+            f"--top-k={TOP_K}",
+            "--positions-per-game=2",
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"sim_obs_tool failed: {result.stderr}"
+    assert sobs.read_bytes() == original
+
+
 def test_sobs_positions_parse_and_hold_invariants(sobs_dir):
     total_positions = 0
     for sobs in sorted(sobs_dir.glob("*.sobs")):

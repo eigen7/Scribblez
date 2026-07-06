@@ -87,7 +87,6 @@ def run_games(
     # fmt: on
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
-    print(f"Output:  {out_dir}")
     return subprocess.run(cmd, capture_output=False).returncode
 
 
