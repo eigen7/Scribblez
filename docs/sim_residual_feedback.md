@@ -272,16 +272,139 @@ Sequential trade-offs to weigh:
   is diverse by construction. A greedy `B = 1` proposer may propose
   near-duplicates of the current best — exploitation, when what later sims
   should buy is *information* — and nothing in distillation-style training
-  incentivizes information-seeking proposals. A small acquisition mechanism on
-  top of the learned score (a footprint/lane-overlap novelty penalty against
-  already-simmed moves, or softmax sampling) is cheap but load-bearing at
-  small `B`.
+  incentivizes information-seeking proposals. An acquisition mechanism on top
+  of the learned score is therefore load-bearing at small `B`: a
+  footprint/lane-overlap novelty penalty against already-simmed moves is the
+  cheap version, and
+  [covariance-guided selection](#covariance-guided-candidate-selection) is the
+  principled one.
 - **Training must cover every prefix.** The network sees evidence sets of size
   `0, 1, …` at inference, so training rows must span those sizes, and data
   generation must record the sequential trajectory that produced each set.
 
 The recommended starting point is **(B = K, R = 2)**, moving toward smaller
 `B` only if measurement shows targeted sims beat batch diversity.
+
+## Covariance-guided candidate selection
+
+Which candidate to sim next is an exploration problem the learned scores alone
+cannot answer. If the top two moves `A` and `B` are near-duplicates — say, the
+same tiles on the same squares, differing only in an inconsequential blank
+instantiation — then after simming `A`, simming `B` is wasted budget no matter
+what the evidence says, while a qualitatively different move `C` is worth
+testing. The scores rank `B` second; nothing in them says `B` is *redundant*.
+
+**Why not PUCT.** MCTS's exploration formula optimizes cumulative regret with
+an independent prior per child. Here only the final pick matters (simple
+regret — this is best-arm identification, not bandit play), and the arms are
+heavily *correlated*. Correlation is the load-bearing structure: it is what
+makes "don't sim `B` after `A`" fall out of the math rather than needing a
+hand rule. The formal home is Bayesian optimization / best-arm identification
+with correlated beliefs (the knowledge-gradient-for-correlated-normal-beliefs
+setting).
+
+### Two covariances, two jobs
+
+The construction "run `S` sims for each of `M` moves, with sim `i` sampling
+the unknown information identically across moves" produces an empirical
+`M×M` covariance matrix that mixes two correlation sources, each useful for a
+different purpose:
+
+- **Epistemic value correlation.** Near-duplicate moves have nearly *equal
+  true values* — uncertainty about `Q(A)` and `Q(B)` is shared. This is the
+  covariance that should guide candidate selection: once `A` is observed, the
+  posterior over `B` collapses with it and `B` carries no information, while a
+  weakly correlated `C` stays uncertain and becomes the right probe.
+- **Common-random-numbers (CRN) correlation of estimators.** Under shared
+  seeds, `Var(Q̂_A − Q̂_B) = Var(Q̂_A) + Var(Q̂_B) − 2·Cov`, so paired sims make
+  *comparisons* far sharper than independent sims — the dominant noise
+  (rack and draw luck) cancels in the difference. This is variance reduction
+  for the final pick and the stopping rule, not for exploration.
+
+Macondo's simmer already uses CRN — its sim loop holds the sampled opponent
+rack "constant on a per-iteration basis... the same for every play in plays"
+(`montecarlo/montecarlo.go` in the Macondo repo) — and its
+similar-plays stopping logic is best-arm identification with an
+independent-arms model. The covariance model below is the missing correlation
+structure. Two mechanical notes: candidates place different numbers of tiles,
+so "the same randomness" for bag draws means a fixed shuffled bag order
+consumed as needed; and CRN's benefit decays with rollout depth as the
+trajectories diverge (the rack sample, the largest noise source, aligns
+perfectly).
+
+The empirical CRN covariance measures redundancy directly: high covariance
+means the two moves respond identically to the same futures — decision-
+redundant — and the seeds where their outcomes *differ* are exactly the
+informative ones.
+
+### A learned low-rank covariance head
+
+Empirical covariance exists only between already-simmed moves; choosing an
+unsimmed `C` requires *predicted* covariance — a model. Two facts make this
+cheap:
+
+- **Low-rank, not `N×N`.** `M_pre` emits, per move, a small embedding
+  `φ(M) ∈ ℝʳ` alongside its score, with
+  `Cov(M, M′) ≈ φ(M)·φ(M′)` plus a per-move diagonal noise term. One more
+  per-move output head; the `O(N)` scoring pass is unchanged.
+- **Training targets are a free byproduct.** Evidence generation already sims
+  `K` candidates per labeled position; running those sims with shared seeds
+  yields a `K×K` empirical covariance — `K(K−1)/2` pairwise targets per
+  position to fit `φφᵀ` against. No new generation machinery.
+
+### The root posterior and the acquisition rule
+
+With predicted means (the `M_pre` scores), predicted covariance
+(`φφᵀ + diagonal`), and sim results as observations, maintain a Gaussian
+posterior over the value vector. The acquisition rule can then be as simple as
+**Thompson sampling**: draw `Q̃ ~ N(μ, Σ)`, sim the argmax of `Q̃`, update.
+Near-duplicates are automatically suppressed — their posteriors collapse
+together with the simmed move's — while qualitatively different moves keep
+winning draws as long as their uncertainty is unresolved. Posterior updates
+are `O(N·r + r³)` at low rank. Knowledge-gradient or entropy-search
+acquisitions are the principled upgrades within the same posterior if Thompson
+proves too blunt.
+
+The mechanism is schedule-agnostic: at `B = 1` it picks the next single
+candidate; at larger `B` a diverse batch is one that maximizes posterior
+information volume (a DPP-flavored selection over `φ`).
+
+Three further consequences:
+
+- **It generalizes footprint dedup.** The roadmap Phase 4 note about a cheap
+  footprint-level dedup of the top-`K` is the degenerate rule
+  "correlation ≈ 1 ⇒ drop one"; the posterior handles the continuum.
+- **It sharpens the final pick and the stopping rule.** What matters between
+  the top contenders is `P(Q_A > Q_B)`, governed by the variance of the
+  *difference* — which is exactly what CRN shrinks and the covariance model
+  estimates. This is the principled version of Macondo's similar-plays
+  stopping condition.
+- **It completes the division of labor.** The evidence-conditioned network is
+  the learned *mean* update — how all `N` scores shift given what the sims
+  revealed. The covariance layer supplies the *uncertainty* the network's
+  point estimates fundamentally lack. Rather than trying to train
+  information-seeking behavior into the proposer (which distillation targets
+  give no incentive for), the exploration decision lives in an explicit,
+  interpretable posterior bolted onto learned means and covariances.
+
+### Caveats and sequencing
+
+- **Gaussianity.** WLD outcomes are bounded and often near the extremes; model
+  the posterior in logit space, or accept the approximation — at the level of
+  sim aggregates (means over hundreds of rollouts) it is mild.
+- **Low-rank misses idiosyncratic tails.** Two moves identical except that one
+  leaves a hook open are mostly correlated but differ in the tail; the
+  diagonal term absorbs some of this, and whether `r` must grow is empirical.
+- **Noisy targets.** A `K×K` covariance from `S` sims is itself an estimate;
+  fine at `K ≈ 10`, `S` in the hundreds, with the fit pooling across many
+  positions.
+- **Sequencing.** This is an additional layer (covariance head + root
+  posterior), and cheap-before-rich applies: the footprint novelty penalty is
+  the v0 acquisition, this is the v1, built only if the small-`B` schedule
+  shows value. It lives inside roadmap step 6, off the kill-test's critical
+  path — with one exception: the CRN requirement on the sim machinery
+  (shared seeds across candidates at a position) must be in place from step 2,
+  or the covariance targets never exist.
 
 ## Training
 
@@ -411,11 +534,11 @@ machinery this experiment needs.
 | Step | Build | Depends on |
 |------|-------|-----------|
 | 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — |
-| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); storage format for sim observations alongside `.slog`. | 1 |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 |
 | 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 |
 | 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 |
-| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`), acquisition mechanism if small `B`; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 |
+| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the covariance head + root posterior if the small-`B` schedule shows value; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 |
 
 Steps 1–3 are cheap relative to what they de-risk and are worth doing early;
 steps 4–6 ride the Phase 4 timeline.
@@ -423,8 +546,11 @@ steps 4–6 ride the Phase 4 timeline.
 ## Open questions
 
 - **Schedule (`B`, `R`) and budget split** — including whether later rounds
-  should use smaller `S`, and whether an acquisition mechanism (novelty
-  penalty, softmax proposals) is needed even at moderate `B`.
+  should use smaller `S`, and where on the acquisition ladder (novelty
+  penalty → covariance-guided posterior) each schedule needs to sit.
+- **Covariance parameterization** — the rank `r`, whether to fit in logit
+  space, and whether `φφᵀ + diagonal` captures enough of the
+  identical-except-one-hook tail structure.
 - **Evidence-map encoding** — pooled-vector vs. spatial (see caveats); cheap
   to ablate inside the kill-test.
 - **Whether scalar evidence alone captures most of the win.** If evidence
