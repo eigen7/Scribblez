@@ -134,6 +134,27 @@ def test_move_footprint_and_features(sobs_dir):
     assert np.allclose(scalars[mask][:, :3].sum(axis=1), 1.0)
 
 
+def test_position_meta_flags(sobs_dir):
+    from scribblez.sim_evidence.slog_meta import game_metas, move_at, position_meta, read_slog_bytes
+
+    slog = sorted(sobs_dir.glob("*.slog"))[0]
+    positions = read_sobs(slog.with_suffix(".sobs"))
+    meta = position_meta(slog, positions)
+    assert len(meta["meta_turn"]) == len(positions)
+    buf = read_slog_bytes(slog)
+    metas = game_metas(buf)
+    for i, pos in enumerate(positions):
+        assert meta["meta_turn"][i] == pos.turn_index
+        num_turns = int(metas[pos.game_index]["num_turns"])
+        assert meta["meta_remaining"][i] == num_turns - pos.turn_index
+        if pos.turn_index == 0:
+            assert meta["meta_opp_unbiased"][i]
+        else:
+            prev = move_at(buf, metas[pos.game_index], pos.turn_index - 1)
+            expect = int(prev["type"]) == MOVE_PLAY and int(prev["num_played"]) == 7
+            assert meta["meta_opp_unbiased"][i] == expect
+
+
 def _tiny_model() -> EvidencePostMoveModel:
     shapes = {s.name: s.dims for s in get_input_shapes()}
     torch.manual_seed(0)

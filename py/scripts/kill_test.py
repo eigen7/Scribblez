@@ -30,12 +30,23 @@ prints at the end and per-arm histories land in
 <mount>/kill_test/<tag>/cache/results/. See the doc's kill-test section for
 the decision rubric.
 
+After the arms, a paired per-position analysis runs automatically (and can be
+rerun without retraining via --analyze): per-position CE deltas with sign
+tests, sliced by whether the sim's opponent-rack sampling is exact at the
+position (opponent just bingoed / hasn't acted) and by game phase, plus an
+evidence-only logistic yardstick measuring how predictive the raw sim scalars
+are without any board input. Caches built before these analyses existed are
+upgraded in place (meta columns are backfilled from the .slog/.sobs headers;
+no row re-decode).
+
 Usage:
     ./py/scripts/kill_test.py -t apple
+    ./py/scripts/kill_test.py -t apple --analyze   # re-print analysis only
 """
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -46,6 +57,7 @@ from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes
 from scribblez.post_move_value.model import MASK_HEAD_NAMES, compute_loss
 from scribblez.sim_evidence.model import EvidencePostMoveModel
+from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS, evidence_features, read_sobs
 
 MOUNT_ROOT = Path("/workspace/mount")
@@ -83,6 +95,7 @@ def build_shard(slog: Path, sobs: Path, max_k: int) -> dict[str, np.ndarray]:
         "ev_planes": ev_planes,
         "ev_scalars": ev_scalars,
         "ev_mask": ev_mask,
+        **position_meta(slog, positions),
     }
     for name, start, end, dims in targets:
         shard[name] = rows[:, start:end].reshape(n, *dims)
@@ -101,17 +114,31 @@ def build_cache(slog_dir: Path, cache: Path, holdout_every: int, max_k: int):
         )
     print(f"{len(pairs)} .slog/.sobs pairs; holdout = every {holdout_every}th file")
 
-    added = 0
+    added = upgraded = 0
     for i, (slog, sobs) in enumerate(pairs):
         split = "holdout" if i % holdout_every == 0 else "train"
         out = cache / split / f"{slog.stem}.npz"
         if out.exists():
+            upgraded += upgrade_shard_meta(out, slog, sobs)
             continue
         shard = build_shard(slog, sobs, max_k)
         np.savez_compressed(out, **shard)
         added += len(shard["ev_mask"])
         print(f"  [{split}] {out.name}: {len(shard['ev_mask'])} positions")
-    print(f"cache up to date ({added} positions added)")
+    print(f"cache up to date ({added} positions added, {upgraded} shards meta-upgraded)")
+
+
+def upgrade_shard_meta(shard_path: Path, slog: Path, sobs: Path) -> int:
+    """Backfill the analysis meta columns into a shard written before they
+    existed. Reads only .sobs positions and .slog headers (no row decode), so
+    upgrading a cache is cheap. Returns 1 if the shard was rewritten."""
+    with np.load(shard_path) as z:
+        if "meta_opp_unbiased" in z.files:
+            return 0
+        columns = {key: z[key] for key in z.files}
+    columns.update(position_meta(slog, read_sobs(sobs)))
+    np.savez_compressed(shard_path, **columns)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -175,27 +202,33 @@ def forward(model, batch):
 
 
 @torch.no_grad()
-def evaluate(model, data, device, batch_size: int) -> dict[str, float]:
-    """Held-out metrics; wld_ce is the kill-test's decision metric."""
+def evaluate(model, data, device, batch_size: int) -> tuple[dict[str, float], np.ndarray]:
+    """Held-out metrics plus the per-position WLD cross-entropy vector (row
+    order = the split's shard order, which the paired analysis relies on).
+    wld_ce is the kill-test's decision metric."""
     model.eval()
     n = len(data["wld"])
-    ce_sum = brier_sum = correct = sd_ae_sum = 0.0
+    per_row = np.zeros(n, dtype=np.float32)
+    brier_sum = correct = sd_ae_sum = 0.0
     for idx in batch_slices(n, batch_size, generator=None):
         batch = to_device(data, idx, device)
         out = forward(model, batch)
         target_idx = batch["wld"].argmax(dim=1)
         probs = out["wld"].softmax(dim=1)
-        ce_sum += F.cross_entropy(out["wld"], target_idx, reduction="sum").item()
+        per_row[idx.numpy()] = (
+            F.cross_entropy(out["wld"], target_idx, reduction="none").cpu().numpy()
+        )
         brier_sum += ((probs - batch["wld"]) ** 2).sum().item()
         correct += (out["wld"].argmax(1) == target_idx).sum().item()
         sd_ae_sum += (out["score_diff"][:, 0] - batch["score_diff"].squeeze(1)).abs().sum().item()
     model.train()
-    return {
-        "wld_ce": ce_sum / n,
+    metrics = {
+        "wld_ce": float(per_row.mean()),
         "brier": brier_sum / n,
         "wld_acc": correct / n,
         "sd_mae": sd_ae_sum / n,
     }
+    return metrics, per_row
 
 
 def train_arm(arm: str, cache: Path, args, device) -> dict:
@@ -222,6 +255,8 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
 
     generator = torch.Generator().manual_seed(args.seed)
     history = []
+    best_per_row: np.ndarray | None = None
+    best_ce = float("inf")
     for epoch in range(args.epochs):
         t0 = time.time()
         loss_sum = 0.0
@@ -236,19 +271,126 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
             loss_sum += losses["total"].item()
             n_batches += 1
 
-        metrics = evaluate(model, holdout, device, args.batch_size)
+        metrics, per_row = evaluate(model, holdout, device, args.batch_size)
         metrics["epoch"] = epoch
         metrics["train_loss"] = loss_sum / max(n_batches, 1)
         history.append(metrics)
+        if metrics["wld_ce"] < best_ce:
+            best_ce = metrics["wld_ce"]
+            best_per_row = per_row
         print(
             f"epoch {epoch:3d}  train_loss={metrics['train_loss']:.4f}  "
             f"holdout: wld_ce={metrics['wld_ce']:.4f} brier={metrics['brier']:.4f} "
             f"acc={metrics['wld_acc']:.4f} sd_mae={metrics['sd_mae']:.1f}  "
             f"({time.time() - t0:.0f}s)"
         )
+        best_epoch = min(history, key=lambda m: m["wld_ce"])["epoch"]
+        if epoch - best_epoch >= args.patience:
+            print(f"early stop: no holdout improvement in {args.patience} epochs")
+            break
 
     best = min(history, key=lambda m: m["wld_ce"])
-    return {"arm": arm, "history": history, "best": best}
+    return {"arm": arm, "history": history, "best": best, "per_row_ce": best_per_row}
+
+
+def paired_stats(delta: np.ndarray) -> str:
+    """Mean +/- SE of per-position CE deltas, plus the sign-test win rate and
+    its two-sided normal-approximation p-value."""
+    n = len(delta)
+    mean = float(delta.mean())
+    se = float(delta.std(ddof=1) / np.sqrt(n))
+    wins = int((delta < 0).sum())  # negative delta = first arm better
+    z = (wins - n / 2) / np.sqrt(n / 4)
+    p = 2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))
+    return f"d={mean:+.4f} +/- {se:.4f}   win%={100 * wins / n:5.1f}   sign-p={p:.2g}"
+
+
+def load_per_row(results_dir: Path, arm: str) -> np.ndarray:
+    path = results_dir / f"{arm}_holdout_ce.npy"
+    if not path.exists():
+        raise SystemExit(
+            f"{path} missing -- per-position losses are saved during training, so rerun "
+            "the arms once (a run predating this analysis has none to analyze)"
+        )
+    return np.load(path)
+
+
+def evidence_yardstick(train, holdout, device) -> dict[str, float]:
+    """Holdout WLD cross-entropy of logistic regressions over the evidence
+    scalars alone (no board, no trunk): how predictive is the raw sim output?
+    `played move` uses only candidate 0 (the move actually played, whose sim
+    estimates the target directly); `all candidates` uses every token."""
+
+    def flat(data, k):
+        m = data["ev_mask"][:, :k].float().unsqueeze(-1)
+        return (data["ev_scalars"][:, :k] * m).flatten(1).to(device)
+
+    y_tr = train["wld"].argmax(1).to(device)
+    y_ho = holdout["wld"].argmax(1).to(device)
+    out = {}
+    for label, k in (("played move", 1), ("all candidates", train["ev_scalars"].shape[1])):
+        x_tr, x_ho = flat(train, k), flat(holdout, k)
+        model = torch.nn.Linear(x_tr.shape[1], 3).to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=0.05)
+        for _ in range(300):
+            opt.zero_grad()
+            F.cross_entropy(model(x_tr), y_tr).backward()
+            opt.step()
+        with torch.no_grad():
+            out[label] = float(F.cross_entropy(model(x_ho), y_ho).item())
+    return out
+
+
+def run_analysis(cache: Path, device):
+    """Paired per-position comparison of the trained arms over the holdout
+    split, sliced by the rack-inference and game-phase metadata, plus the
+    evidence-only yardstick. Uses the per-position CE vectors saved at each
+    arm's best epoch; row order is the holdout shard order in every artifact,
+    which is what makes the pairing valid."""
+    results_dir = cache / "results"
+    ce = {arm: load_per_row(results_dir, arm) for arm in ARMS}
+    holdout = load_split(cache, "holdout")
+    if "meta_opp_unbiased" not in holdout:
+        raise SystemExit("holdout shards lack meta columns -- rerun so build_cache upgrades them")
+    n = len(ce["none"])
+    assert all(len(v) == n for v in ce.values()) and len(holdout["wld"]) == n
+
+    print("\n=== paired per-position analysis (negative d = first arm better) ===")
+    pairs = [
+        ("full", "none"),
+        ("scalar", "none"),
+        ("full", "shuffled"),
+        ("full", "scalar"),
+        ("shuffled", "none"),
+    ]
+    for a, b in pairs:
+        print(f"  {a:9s} vs {b:9s}  {paired_stats(ce[a] - ce[b])}")
+
+    unbiased = holdout["meta_opp_unbiased"].numpy().astype(bool)
+    remaining = holdout["meta_remaining"].numpy()
+    terciles = np.quantile(remaining, [1 / 3, 2 / 3])
+    slices = [
+        (f"opp rack unbiased (n={unbiased.sum()})", unbiased),
+        (f"opp rack biased   (n={(~unbiased).sum()})", ~unbiased),
+        (f"late game, <= {terciles[0]:.0f} moves left", remaining <= terciles[0]),
+        ("mid game", (remaining > terciles[0]) & (remaining <= terciles[1])),
+        (f"early game, > {terciles[1]:.0f} moves left", remaining > terciles[1]),
+    ]
+    for a, b in (("full", "none"), ("scalar", "none")):
+        print(f"\n=== {a} vs {b} by slice ===")
+        delta = ce[a] - ce[b]
+        for label, mask in slices:
+            print(f"  {label:34s} {paired_stats(delta[mask])}")
+
+    print("\n=== evidence-only yardstick (logistic on sim scalars; no board input) ===")
+    train = load_split(cache, "train")
+    for label, value in evidence_yardstick(train, holdout, device).items():
+        print(f"  {label:16s} holdout wld_ce={value:.4f}")
+    print(
+        "  (compare against the arms above: if these sit well above the trunk arms,\n"
+        "   the trunk already knows most of what a noisy S-rollout sim knows about\n"
+        "   the root value, and evidence gains are bounded by the sim's own quality)"
+    )
 
 
 def print_summary(results: list[dict]):
@@ -290,6 +432,17 @@ def main():
     p.add_argument("--num-blocks", type=int, default=6)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
+        "--patience",
+        type=int,
+        default=4,
+        help="stop an arm after this many epochs without holdout improvement",
+    )
+    p.add_argument(
+        "--analyze",
+        action="store_true",
+        help="skip training; rerun the paired/sliced analysis from saved artifacts",
+    )
+    p.add_argument(
         "--arms",
         default=",".join(ARMS),
         help="comma-separated subset of arms to run (default: all four)",
@@ -298,16 +451,21 @@ def main():
 
     root = MOUNT_ROOT / "kill_test" / args.tag
     cache = root / "cache"
-    build_cache(root / "slogs", cache, args.holdout_every, args.max_k)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results_dir = cache / "results"
+
+    if args.analyze:
+        run_analysis(cache, device)
+        return
+
+    build_cache(root / "slogs", cache, args.holdout_every, args.max_k)
     results_dir.mkdir(exist_ok=True)
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     results = []
     for arm in arms:
         record = train_arm(arm, cache, args, device)
+        np.save(results_dir / f"{arm}_holdout_ce.npy", record.pop("per_row_ce"))
         arg_record = {k: v for k, v in vars(args).items() if k != "arms"}
         (results_dir / f"{arm}.json").write_text(
             json.dumps({"args": arg_record, **record}, indent=2) + "\n"
@@ -316,6 +474,7 @@ def main():
 
     if set(arms) == set(ARMS):
         print_summary(results)
+        run_analysis(cache, device)
     print(f"per-arm histories: {results_dir}")
 
 
