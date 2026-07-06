@@ -28,6 +28,7 @@
 namespace scribblez {
 
 class Dictionary;
+struct MoveRequest;  // agent.h
 
 // The pre-move decision point candidates are simmed from, described with only
 // mover-visible information: the board, both cumulative scores, and the
@@ -91,5 +92,12 @@ class SimRunner {
 // The unseen-tile pool from a player's POV: a full bag (with draw RNG seeded
 // by `seed`) minus the tiles on the board and in the player's own rack.
 Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
+
+// The mover-POV candidate set at a decision point, ranked by HastyBot static
+// equity (best first): every legal play and exchange, capped at `k`, or a
+// lone PASS when nothing is legal. HastyEquity must be initialized. The
+// opponent rack inside `req` should be empty mid-game (their tiles are hidden
+// from the mover); it only influences equity near the endgame.
+std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
 }  // namespace scribblez

@@ -139,6 +139,18 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    lib.scribblez_gcg_sim_evidence.restype = ctypes.c_int
+    lib.scribblez_gcg_sim_evidence.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.POINTER(ctypes.c_char),
+        ctypes.POINTER(ctypes.c_int),
+    ]
+
     lib.scribblez_dump_position.restype = ctypes.c_int
     lib.scribblez_dump_position.argtypes = [
         ctypes.c_void_p,  # session
@@ -383,6 +395,45 @@ def decode_rows(
     if rc != 0:
         raise OSError(f"decode_rows failed (rc={rc}) for {path}")
     return out
+
+
+def gcg_sim_evidence(
+    gcg_text: str,
+    top_k: int = 10,
+    rollouts: int = 200,
+    threads: int = 8,
+    seed: int = 0,
+) -> tuple[np.ndarray, int]:
+    """Sim evidence for a penultimate-bingo analysis GCG's final decision point.
+
+    Replays to the state before the final recorded move, ranks the mover's
+    legal moves by HastyBot equity, and sims the top-K with common random
+    numbers. Returns (records, played_rank): `records` is a structured array
+    in the .sobs record layout (scribblez.sim_evidence.sobs.RECORD_DTYPE) and
+    `played_rank` is the GCG's final move's index within it (-1 if outside
+    the top-K). Raises on a parse error or an endgame decision point.
+    """
+    from scribblez.sim_evidence.sobs import RECORD_DTYPE
+
+    buf = ctypes.create_string_buffer(top_k * RECORD_DTYPE.itemsize)
+    played_rank = ctypes.c_int(-1)
+    n = _lib().scribblez_gcg_sim_evidence(
+        _session(),
+        gcg_text.encode("utf-8"),
+        int(top_k),
+        int(rollouts),
+        int(threads),
+        int(seed),
+        buf,
+        ctypes.byref(played_rank),
+    )
+    if n < 0:
+        raise OSError("gcg_sim_evidence failed (parse error or endgame decision point)")
+    # View over an owned bytes copy. (A structured-array .copy() would rewrite
+    # field by field and leave the dtype's padding bytes uninitialized, breaking
+    # byte-level comparisons of the records.)
+    records = np.frombuffer(bytes(buf.raw[: n * RECORD_DTYPE.itemsize]), dtype=RECORD_DTYPE)
+    return records, int(played_rank.value)
 
 
 def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what: str) -> str:

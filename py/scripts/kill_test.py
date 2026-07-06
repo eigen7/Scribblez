@@ -256,6 +256,7 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
     generator = torch.Generator().manual_seed(args.seed)
     history = []
     best_per_row: np.ndarray | None = None
+    best_state: dict | None = None
     best_ce = float("inf")
     for epoch in range(args.epochs):
         t0 = time.time()
@@ -278,6 +279,7 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
         if metrics["wld_ce"] < best_ce:
             best_ce = metrics["wld_ce"]
             best_per_row = per_row
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         print(
             f"epoch {epoch:3d}  train_loss={metrics['train_loss']:.4f}  "
             f"holdout: wld_ce={metrics['wld_ce']:.4f} brier={metrics['brier']:.4f} "
@@ -290,7 +292,13 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
             break
 
     best = min(history, key=lambda m: m["wld_ce"])
-    return {"arm": arm, "history": history, "best": best, "per_row_ce": best_per_row}
+    return {
+        "arm": arm,
+        "history": history,
+        "best": best,
+        "per_row_ce": best_per_row,
+        "state_dict": best_state,
+    }
 
 
 def paired_stats(delta: np.ndarray) -> str:
@@ -466,6 +474,7 @@ def main():
     for arm in arms:
         record = train_arm(arm, cache, args, device)
         np.save(results_dir / f"{arm}_holdout_ce.npy", record.pop("per_row_ce"))
+        torch.save(record.pop("state_dict"), results_dir / f"{arm}_model.pt")
         arg_record = {k: v for k, v in vars(args).items() if k != "arms"}
         (results_dir / f"{arm}.json").write_text(
             json.dumps({"args": arg_record, **record}, indent=2) + "\n"

@@ -1,12 +1,15 @@
 #include "scribblez/sim_runner.h"
 
+#include "scribblez/agent.h"
 #include "scribblez/dictionary.h"
 #include "scribblez/game.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/macondo_bot.h"
 
 #include <algorithm>
 #include <cassert>
 #include <functional>
+#include <numeric>
 #include <thread>
 #include <vector>
 
@@ -140,6 +143,26 @@ void merge(const SimObservation& from, SimObservation* into) {
 }
 
 }  // namespace
+
+std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
+  std::vector<Move> candidates = generate_legal_plays(req);
+  const std::vector<Move> exchanges = generate_legal_exchanges(req);
+  candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
+  if (candidates.empty()) return {Move::pass()};
+
+  const std::vector<double> vals = HastyEquity::instance().equities(
+    candidates, req.board, req.bag_size, req.opp_rack, req.my_rack);
+  const int n = static_cast<int>(candidates.size());
+  const int keep = std::min(k, n);
+  std::vector<int> idx(static_cast<size_t>(n));
+  std::iota(idx.begin(), idx.end(), 0);
+  std::partial_sort(idx.begin(), idx.begin() + keep, idx.end(),
+                    [&](int a, int b) { return vals[a] > vals[b]; });
+  std::vector<Move> top;
+  top.reserve(static_cast<size_t>(keep));
+  for (int j = 0; j < keep; ++j) top.push_back(candidates[static_cast<size_t>(idx[j])]);
+  return top;
+}
 
 Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   Bag pool(seed);

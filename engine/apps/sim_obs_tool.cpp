@@ -95,32 +95,6 @@ uint64_t position_seed(uint64_t run_seed, uint32_t game_idx, uint32_t turn_idx) 
   return mix64(run_seed ^ mix64((static_cast<uint64_t>(game_idx) << 20) | turn_idx));
 }
 
-// The mover-POV candidate set at the decision point, ranked by HastyBot static
-// equity (best first): every legal play and exchange, or a lone PASS when
-// nothing is legal. Equity is evaluated with an empty opponent rack -- the
-// opponent's tiles are hidden from the mover mid-game, and the sims run only
-// at bag-non-empty positions where the pre-endgame adjustments that read the
-// opponent rack are dormant.
-std::vector<Move> top_k_candidates(const MoveRequest& req, int k) {
-  std::vector<Move> candidates = generate_legal_plays(req);
-  const std::vector<Move> exchanges = generate_legal_exchanges(req);
-  candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
-  if (candidates.empty()) return {Move::pass()};
-
-  const std::vector<double> vals = HastyEquity::instance().equities(
-    candidates, req.board, req.bag_size, req.opp_rack, req.my_rack);
-  const int n = static_cast<int>(candidates.size());
-  const int keep = std::min(k, n);
-  std::vector<int> idx(static_cast<size_t>(n));
-  std::iota(idx.begin(), idx.end(), 0);
-  std::partial_sort(idx.begin(), idx.begin() + keep, idx.end(),
-                    [&](int a, int b) { return vals[a] > vals[b]; });
-  std::vector<Move> top;
-  top.reserve(static_cast<size_t>(keep));
-  for (int j = 0; j < keep; ++j) top.push_back(candidates[static_cast<size_t>(idx[j])]);
-  return top;
-}
-
 // Sample --positions-per-game eligible turns of game `gm` (without
 // replacement, deterministically from the run seed) into `out`.
 void sample_positions(const GameMetadata& gm, uint32_t game_idx, const Options& opt,
@@ -179,7 +153,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     res.game_idx = w.game_idx;
     res.turn_idx = w.turn_idx;
     res.base_seed = position_seed(opt.seed, w.game_idx, w.turn_idx);
-    res.candidates = top_k_candidates(ranking_req, opt.top_k);
+    res.candidates = equity_top_k(ranking_req, opt.top_k);
     res.observations = runner.run(pos, res.candidates, res.base_seed);
     meter->add_done();
   }

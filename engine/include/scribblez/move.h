@@ -84,6 +84,9 @@ class Move {
   int8_t start_ = 0;                       // 1 B; cross-axis coord (PLAY only)
   uint8_t num_played_ = 0;                 // 1 B; played/surrendered tile count
   std::array<Glyph, RACK_SIZE> glyphs_{};  // 7 B; played/surrendered tiles only
+  uint8_t reserved_ = 0;                   // 1 B; explicit (zeroed) alignment padding, so
+                                           // serialized Moves (.slog / .sobs) are
+                                           // byte-deterministic
   uint16_t square_mask_ = 0;               // 2 B; PLAY only; see class comment
   uint16_t score_ = 0;                     // 2 B
 };

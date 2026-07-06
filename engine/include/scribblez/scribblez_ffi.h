@@ -99,6 +99,20 @@ int scribblez_row_size_floats(ScribblezSession* s);
 int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
                                       int post_move, int diff_lo, int diff_hi, float* out_inputs);
 
+// Sim evidence for a penultimate-bingo analysis GCG's final decision point:
+// replays the GCG to the state BEFORE its final recorded move, ranks the
+// mover's legal moves by HastyBot static equity, and runs SimRunner over the
+// top-K (common random numbers, `rollouts` HastyBot rollouts each, opponent
+// racks sampled uniformly from the unseen pool). Writes the evidence as
+// consecutive SimObsRecord blobs (the .sobs record layout,
+// sim_observation_log.h) into `out_records`, which must hold at least top_k
+// records. Sets *played_rank to the index of the GCG's final (actually
+// played) move within the returned candidates, or -1 if it fell outside the
+// top-K. Returns the record count, or -1 on a parse error / an endgame
+// position (the sim requires a non-empty bag at the decision point).
+int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
+                               int threads, uint64_t seed, char* out_records, int* played_rank);
+
 // Decode explicit training rows of one .slog file: row j is the position at
 // (game_idx[j], turn_idx[j]), encoded exactly like a DataLoader training row
 // (input floats followed by the label block) but with no symmetry flip.

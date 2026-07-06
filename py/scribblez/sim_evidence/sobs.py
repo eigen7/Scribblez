@@ -25,6 +25,18 @@ MOVE_PLAY = 0
 MOVE_EXCHANGE = 1
 MOVE_PASS = 2
 
+
+def glyph_char(code: int) -> str:
+    """Decode one Glyph byte (engine/include/scribblez/glyph.h): codes 1-26
+    are played letters A-Z, 27 an undesignated blank, 28-52 designated blanks
+    (lowercased, matching the engine's move-description convention)."""
+    if 1 <= code <= 26:
+        return chr(ord("A") + code - 1)
+    if 28 <= code <= 52:
+        return chr(ord("a") + code - 28)
+    return "?"
+
+
 _FILE_HEADER = np.dtype(
     {
         "names": ["magic", "version", "reserved", "num_positions", "reserved2"],

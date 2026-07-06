@@ -1,10 +1,13 @@
 #include "scribblez/scribblez_ffi.h"
 
+#include "scribblez/agent.h"
 #include "scribblez/binary_log.h"
 #include "scribblez/block_decoder.h"
 #include "scribblez/data_loader.h"
 #include "scribblez/game_runner.h"
 #include "scribblez/game_state_encoder.h"
+#include "scribblez/gcg_reader.h"
+#include "scribblez/hasty_equity.h"
 #include "scribblez/input_encoder.h"
 #include "scribblez/lane_analysis.h"
 #include "scribblez/lane_targets.h"
@@ -15,6 +18,8 @@
 #include "scribblez/post_move_analysis.h"
 #include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
+#include "scribblez/sim_observation_log.h"
+#include "scribblez/sim_runner.h"
 #include "scribblez/slog_subset.h"
 #include "scribblez/streaming_game_producer.h"
 #include "scribblez/streaming_row_buffer.h"
@@ -52,6 +57,8 @@ struct ScribblezSession {
                               int diff_hi, float* out_inputs) const;
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
+  int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
+                       char* out_records, int* played_rank) const;
   int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                     int out_cap) const;
   int dump_position_json(const char* path, int64_t game_idx, bool post_move, char* out,
@@ -250,6 +257,79 @@ int emit_string(const std::string& s, char* out, int out_cap) {
 }
 
 }  // namespace
+
+namespace {
+
+// Field-wise Move equality (Move packs a padding byte, so memcmp is unsafe).
+bool same_move(const scribblez::Move& a, const scribblez::Move& b) {
+  if (a.type() != b.type() || a.num_glyphs() != b.num_glyphs()) return false;
+  if (a.type() == scribblez::MoveType::PLAY &&
+      (a.horizontal() != b.horizontal() || a.start() != b.start() ||
+       a.square_mask() != b.square_mask())) {
+    return false;
+  }
+  for (int i = 0; i < a.num_glyphs(); ++i) {
+    if (a.glyph(i).to_char() != b.glyph(i).to_char()) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
+                                       uint64_t seed, char* out_records, int* played_rank) const {
+  if (!gcg_text || !out_records || top_k < 1) return -1;
+  scribblez::ParsedGcgGame game;
+  std::string error;
+  if (!scribblez::read_gcg_text(gcg_text, &game, &error)) return -1;
+  if (game.turns.empty() || game.snapshots.size() != game.turns.size() + 1) return -1;
+
+  // The decision point: the state before the final recorded move, with the
+  // mover's full reconstructed rack.
+  const size_t last = game.turns.size() - 1;
+  const scribblez::TurnRecord& final_turn = game.turns[last].record;
+  scribblez::SimPosition pos;
+  pos.board = game.snapshots[last].board;
+  pos.scores = game.snapshots[last].scores;
+  pos.mover = final_turn.player;
+  pos.rack = final_turn.rack_before;
+
+  const int pool_size = scribblez::unseen_pool(pos.board, pos.rack, 0).size();
+  if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
+
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  // Bag size from the mover's POV: the unseen pool minus the opponent's
+  // (assumed full) rack. Only equity's endgame adjustments read it.
+  const scribblez::Rack hidden_opp;
+  scribblez::MoveRequest req{pos.board,
+                             *spec.dict,
+                             pos.rack,
+                             hidden_opp,
+                             pos.scores[pos.mover],
+                             pos.scores[1 - pos.mover],
+                             std::max(0, pool_size - scribblez::RACK_SIZE)};
+  const std::vector<scribblez::Move> candidates = scribblez::equity_top_k(req, top_k);
+
+  scribblez::SimRunner::Params params;
+  params.rollouts = rollouts;
+  params.threads = threads;
+  const scribblez::SimRunner runner(*spec.dict, params);
+  const std::vector<scribblez::SimObservation> obs = runner.run(pos, candidates, seed);
+
+  *played_rank = -1;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (same_move(candidates[i], final_turn.move)) *played_rank = static_cast<int>(i);
+    char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
+    std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
+    std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));
+  }
+  return static_cast<int>(candidates.size());
+}
+
+int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
+                               int threads, uint64_t seed, char* out_records, int* played_rank) {
+  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, threads, seed, out_records, played_rank);
+}
 
 int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
                                   const int64_t* turn_idx, int64_t n, bool post_move,
