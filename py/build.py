@@ -19,6 +19,7 @@ import subprocess
 import sys
 
 from setup_check import import_setup_common
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -134,7 +135,7 @@ def check_macondo_tag():
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--debug", action="store_true", help="debug build (default: Release)")
     parser.add_argument(

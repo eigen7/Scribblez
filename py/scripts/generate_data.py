@@ -28,6 +28,7 @@ from pathlib import Path
 
 from scribblez.ffi import read_file_header
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
@@ -106,7 +107,7 @@ def count_positions(out_dir: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate HastyBot self-play data with a train/test split.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("-g", "--num-games", type=int, default=100000, help="Total games.")

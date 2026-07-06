@@ -63,12 +63,13 @@ from scribblez.post_move_value.onnx_export import export_onnx
 from scribblez.post_move_value.train_loop import LossConfig, run_epoch
 from scribblez.train_common import reset_tag, timed_print
 from scripts.generate_data import run_games
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Generational generate->train loop for the post-move value model.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
 

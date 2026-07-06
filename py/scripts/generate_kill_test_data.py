@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 from scripts.generate_data import run_games
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 SIM_OBS_TOOL = "/workspace/repo/target/engine/sim_obs_tool"
 MOUNT_ROOT = Path("/workspace/mount")
@@ -48,8 +49,7 @@ def run_sim_obs_tool(out_dir: Path, args) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument(
         "-t",
         "--tag",

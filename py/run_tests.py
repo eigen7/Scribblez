@@ -17,6 +17,7 @@ import subprocess
 import sys
 
 from setup_check import import_setup_common
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_DIR = os.path.join(ROOT, "target")
@@ -81,7 +82,7 @@ def run_python_tests(verbose: bool) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--cpp-only", action="store_true", help="run only the C++ engine tests")

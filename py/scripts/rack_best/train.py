@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from scribblez.lexical_tool.compiler import compile_kwg, default_kwg_path
 from scribblez.rack_best.data import make_dataset
 from scribblez.rack_best.model import PAD, RackWordModel, encode_racks, encode_targets
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 CACHE_DIR = Path("/workspace/mount/cache/rack_best")
 
@@ -30,7 +31,7 @@ CACHE_DIR = Path("/workspace/mount/cache/rack_best")
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Train rack-best ordered longest-word generation.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--real-lexicon", default=default_kwg_path())
     p.add_argument("--num-racks", type=int, default=300_000)

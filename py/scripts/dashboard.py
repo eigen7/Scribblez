@@ -15,12 +15,11 @@ import sys
 
 from scribblez.dashboard import react_server
 from scribblez.paths import MAX_MOVE_PER_LANE, POST_MOVE_VALUE
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument(
         "--task",
         choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE],

@@ -30,6 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENGINE_BIN = REPO_ROOT / "target" / "engine"
 HARVESTER = ENGINE_BIN / "harvest_bingo_positions_tool"
@@ -83,9 +85,7 @@ def clear_loose_gcgs(dataset: Path):
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("--lexicon", default="NWL23", help="Lexicon name (kwg under --lexica-dir).")
     p.add_argument(
         "--dataset-name",

@@ -23,6 +23,7 @@ from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.runner import render_boards, run_calibration, run_probes
 from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.model import PostMoveValueModel
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def latest_checkpoint(paths: TagPaths) -> Path:
@@ -51,7 +52,7 @@ def build_model_from_checkpoint(ckpt: dict, device: torch.device) -> PostMoveVal
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Evaluate a Scribblez checkpoint.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument(

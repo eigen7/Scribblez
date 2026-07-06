@@ -16,12 +16,13 @@ import sys
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from scribblez.post_move_value.eval.sampling import build_test_subset
 from scribblez.post_move_value.eval.web_render import render_position_images
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Sample an evaluation subset .slog from the test split.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("-n", "--num-positions", type=int, default=12, help="Positions to sample.")

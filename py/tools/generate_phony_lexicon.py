@@ -37,6 +37,7 @@ from scribblez.lexical_tool.compiler import (
     default_kwg_path,
     write_kwg,
 )
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 LETTERS = string.ascii_uppercase
 START, END = "^", "$"
@@ -164,9 +165,7 @@ def generate(args) -> list[str]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("--real-lexicon", default=default_kwg_path(), help="Real .kwg to mimic.")
     p.add_argument("--out-txt", default="NWL23_phony.txt", help="Phony word list output.")
     p.add_argument("--out-kwg", default="NWL23_phony.kwg", help="Phony .kwg output.")

@@ -22,12 +22,13 @@ import torch.nn.functional as F
 from scribblez.lexical_tool.compiler import compile_kwg, default_kwg_path
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.word_validity.model import WordValidityModel, encode_words, onehot_batch
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Train the word-validity toy (real vs phony lexicon).",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--real-lexicon", default=default_kwg_path(), help="Real .kwg (label 1).")
     p.add_argument(

@@ -22,6 +22,7 @@ import re
 from collections import Counter
 
 from scribblez.lexical_tool.compiler import compile_kwg
+from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def load_words(path: str) -> list[str]:
@@ -61,9 +62,7 @@ def select(words, args) -> list[str]:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("lexicon", help="A .kwg or .txt lexicon.")
     p.add_argument("--pattern", action="append", default=[], help="Match pattern (repeatable; OR).")
     p.add_argument("--length", type=int, help="Keep only words of exactly this length.")
