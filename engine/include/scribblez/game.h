@@ -94,10 +94,14 @@ class Game {
   // `board`/`scores` are the post-move state; `known_racks[p]` holds each player's
   // already-known tiles (a leave, or an empty rack to deal fresh); both racks are
   // then refilled to RACK_SIZE from `pool` (the unseen tiles, drawn in the Game's
-  // seeded order), and `to_move` plays first. The turn loop, draws, and endgame
-  // scoring are identical to play().
+  // seeded order), and `to_move` plays first. `returned_to_bag` holds tiles that
+  // re-enter the bag only after both refills -- the tiles a just-made exchange
+  // surrendered, which are available to future draws but not to either player's
+  // initial refill. The turn loop, draws, and endgame scoring are identical to
+  // play().
   void play_from(const Board& board, std::array<int, 2> scores,
-                 const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move);
+                 const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move,
+                 const Rack& returned_to_bag = Rack{});
 
   // A non-owning view of this game's log. Valid for as long as the Game (and
   // its internal storage) lives and extract_log() has not been called.

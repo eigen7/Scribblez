@@ -6,6 +6,7 @@
 #include "scribblez/glyph.h"
 #include "scribblez/macondo_bot.h"
 #include "scribblez/move.h"
+#include "scribblez/sim_runner.h"
 #include "scribblez/tile.h"
 
 #include <algorithm>
@@ -17,22 +18,11 @@ namespace scribblez {
 
 namespace {
 
-// The unseen pool from start_player's POV: a full bag minus the tiles on the board
-// and in start_player's leave. The opponent's actual rack is unknown, so it stays in
+// One rollout (seed g): play to the end and return start_player_final - opp_final.
+// The unseen pool (shared helper in sim_runner.h) is built from the board and
+// start_player's leave; the opponent's actual rack is unknown, so it stays in
 // the pool (the rollout re-samples it -- a clean full draw, since the opponent
 // bingoed).
-Bag unseen_pool(const Board& board, const Rack& leave, uint64_t seed) {
-  Bag pool(seed);
-  for (int r = 0; r < BOARD_SIZE; ++r)
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const Glyph g = board.at(r, c);
-      if (!g.is_empty()) pool.remove(g.is_blank() ? BLANK : g.letter());
-    }
-  for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
-  return pool;
-}
-
-// One rollout (seed g): play to the end and return start_player_final - opp_final.
 int rollout(const MonteCarloPosition& pos, const Dictionary& dict, HastyBotAgent& a0,
             HastyBotAgent& a1, uint64_t seed) {
   const int opponent = 1 - pos.start_player;  // bingoed last turn, so plays first

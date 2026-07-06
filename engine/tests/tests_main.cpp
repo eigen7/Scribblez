@@ -23,6 +23,8 @@
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
 #include "scribblez/rack.h"
+#include "scribblez/sim_observation_log.h"
+#include "scribblez/sim_runner.h"
 #include "scribblez/streaming_row_buffer.h"
 #include "scribblez/tile_counts.h"
 #include "scribblez/training_targets.h"
@@ -3697,6 +3699,208 @@ static void test_topk1_selection_matches_hastybot() {
             << " candidates, pick=" << hasty_pick << ")\n";
 }
 
+// ===========================================================================
+// SimRunner + sim-observation log
+// ===========================================================================
+
+// Tile-conservation check for play_from's returned_to_bag: exchanged tiles
+// re-enter the bag only after both refills, and stay in circulation for the
+// rest of the game.
+static void test_play_from_returned_to_bag() {
+  const Dictionary d = medium_dict();
+  const Board board;  // empty board
+
+  // The mover (seat 0) holds AB after exchanging its Q and Z; the exchanged
+  // tiles are absent from the unseen pool (they were in the mover's hand) and
+  // re-enter the bag via returned_to_bag.
+  const Rack leave = rack_from("AB");
+  Rack returned;
+  returned.add(Tile::from_char('Q'));
+  returned.add(Tile::from_char('Z'));
+  const uint64_t seed = 11;
+  Bag pool(seed);
+  pool.remove(Tile::from_char('A'));
+  pool.remove(Tile::from_char('B'));
+  pool.remove(Tile::from_char('Q'));
+  pool.remove(Tile::from_char('Z'));
+  const int in_circulation = pool.size() + leave.size() + returned.size();
+
+  TestAgent a0(0, "A0", 1), a1(0, "A1", 2);
+  scribblez::Game g(a0, a1, d, seed);
+  g.play_from(board, {0, 0}, {leave, Rack{}}, pool, /*to_move=*/1, returned);
+
+  // The refills precede the exchanged tiles' return, so neither initial rack
+  // can contain Q or Z (each occurs once in the bag, and both were removed
+  // from the pool).
+  const GameLog log = g.log();
+  for (int p = 0; p < 2; ++p) {
+    CHECK(!rack_contains(log.initial_racks[p], Tile::from_char('Q')));
+    CHECK(!rack_contains(log.initial_racks[p], Tile::from_char('Z')));
+  }
+
+  // Conservation: every tile handed to play_from (pool + leaves + returned) is
+  // on the board, on a rack, or in the bag when the game ends -- the returned
+  // tiles rejoined circulation exactly once.
+  int on_board = 0;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c)
+      if (!g.board().at(r, c).is_empty()) ++on_board;
+  CHECK(on_board + g.rack(0).size() + g.rack(1).size() + g.bag_size() == in_circulation);
+}
+
+static void test_sim_runner() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+
+  // Candidates covering all three move types: two distinct opening plays, a
+  // pass, and a one-tile exchange.
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  CHECK(plays.size() >= 2);
+  TileCounts xchg_tiles;
+  xchg_tiles.add(Tile::from_char('Q'));
+  const std::vector<Move> candidates = {plays.front(), plays[plays.size() / 2], Move::pass(),
+                                        Move::exchange(xchg_tiles)};
+
+  SimRunner::Params params;
+  params.rollouts = 16;
+  params.threads = 3;
+  const SimRunner runner(d, params);
+  const uint64_t base_seed = 400;
+  const std::vector<SimObservation> obs = runner.run(pos, candidates, base_seed);
+  CHECK(obs.size() == candidates.size());
+
+  for (const SimObservation& o : obs) {
+    CHECK(static_cast<int>(o.n) == params.rollouts);
+    CHECK(o.wins + o.draws + o.losses == o.n);
+    // Cauchy-Schwarz on the delta moments: (sum d)^2 <= n * sum d^2.
+    CHECK(o.delta_sum * o.delta_sum <= static_cast<int64_t>(o.n) * o.delta_sq_sum);
+    for (int i = 0; i < SimObservation::kCells; ++i) {
+      CHECK(o.opp_win_count[i] <= o.opp_next_count[i]);
+      CHECK(o.self_win_count[i] <= o.self_next_count[i]);
+      CHECK(o.opp_next_count[i] <= o.n);
+      CHECK(o.self_next_count[i] <= o.n);
+    }
+  }
+
+  // The dictionary is rich in 2-letter words, so sampled opponent racks have
+  // replies on the (near-)open board: the reply plane must have fired.
+  int64_t total_opp = 0;
+  for (int i = 0; i < SimObservation::kCells; ++i) total_opp += obs[0].opp_next_count[i];
+  CHECK(total_opp > 0);
+
+  // Determinism and thread-independence: a single-threaded run is identical.
+  {
+    SimRunner::Params p1 = params;
+    p1.threads = 1;
+    const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    CHECK(obs1.size() == obs.size());
+    for (size_t c = 0; c < obs.size(); ++c)
+      CHECK(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)) == 0);
+  }
+
+  // Common random numbers: a candidate's observation depends only on the
+  // position and the base seed, never on which other candidates were simmed.
+  {
+    const std::vector<SimObservation> alone = runner.run(pos, {candidates[1]}, base_seed);
+    CHECK(alone.size() == 1);
+    CHECK(std::memcmp(&alone[0], &obs[1], sizeof(SimObservation)) == 0);
+  }
+
+  fs::remove_all(tmp);
+  std::cout << "test_sim_runner passed (" << candidates.size() << " candidates x "
+            << params.rollouts << " rollouts)\n";
+}
+
+static void test_sim_observation_log_roundtrip() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";
+  fs::create_directories(tmp);
+  const std::string path = (tmp / "test.sobs").string();
+
+  // Synthetic observations with distinct values in every field, so a layout
+  // mixup cannot round-trip cleanly.
+  SimObservation o1{};
+  o1.n = 16;
+  o1.wins = 9;
+  o1.draws = 1;
+  o1.losses = 6;
+  o1.delta_sum = 123;
+  o1.delta_sq_sum = 4567;
+  o1.opp_next_count[7 * 15 + 7] = 12;
+  o1.opp_win_count[7 * 15 + 7] = 5;
+  o1.self_next_count[3] = 2;
+  o1.self_win_count[3] = 1;
+  SimObservation o2{};
+  o2.n = 16;
+  o2.draws = 16;
+
+  const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
+                                 {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
+                                  Glyph::of(Tile::from_char('C'))});
+  TileCounts xchg_tiles;
+  xchg_tiles.add(Tile::from_char('A'));
+  const Move m2 = Move::exchange(xchg_tiles);
+
+  {
+    SimObsWriter w(path);
+    w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999);
+    w.add_position(4, 0, {m2}, {o2}, 16, 1000);
+    w.close();
+  }
+
+  SimObsReader r(path);
+  CHECK(r.num_positions() == 2);
+  const SimObsReader::Position p0 = r.position(0);
+  CHECK(p0.header->game_index == 3);
+  CHECK(p0.header->turn_index == 11);
+  CHECK(p0.header->num_candidates == 2);
+  CHECK(p0.header->rollouts == 16);
+  CHECK(p0.header->base_seed == 999);
+  SimObsRecord rec;  // copy out of the packed file view before comparing
+  std::memcpy(&rec, &p0.records[0], sizeof(rec));
+  CHECK(std::memcmp(&rec.move, &m1, sizeof(Move)) == 0);
+  CHECK(std::memcmp(&rec.obs, &o1, sizeof(SimObservation)) == 0);
+  std::memcpy(&rec, &p0.records[1], sizeof(rec));
+  CHECK(std::memcmp(&rec.move, &m2, sizeof(Move)) == 0);
+  CHECK(std::memcmp(&rec.obs, &o2, sizeof(SimObservation)) == 0);
+  const SimObsReader::Position p1 = r.position(1);
+  CHECK(p1.header->game_index == 4);
+  CHECK(p1.header->num_candidates == 1);
+  CHECK(p1.header->base_seed == 1000);
+
+  // A version mismatch fails loudly (stale files must never misparse).
+  {
+    std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+    f.seekp(4);  // SimObsFileHeader::version
+    const uint16_t bad = 0xFFFF;
+    f.write(reinterpret_cast<const char*>(&bad), sizeof(bad));
+  }
+  bool threw = false;
+  try {
+    SimObsReader r2(path);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  CHECK(threw);
+
+  fs::remove_all(tmp);
+}
+
 // Build a one-game .slog buffer whose two turns are both PASSes, with a starting
 // handicap of `initial_score_p0` points for p0, and return the score
 // differential recovered from the sampled position's input encoding. The two
@@ -4162,6 +4366,9 @@ int main() {
   test_streaming_row_buffer_shutdown();
   test_pick_sampled_turn_eligibility();
   test_topk1_selection_matches_hastybot();
+  test_play_from_returned_to_bag();
+  test_sim_runner();
+  test_sim_observation_log_roundtrip();
   std::cout << "All tests passed.\n";
   return 0;
 }

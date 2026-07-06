@@ -90,6 +90,11 @@ class Move {
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
 
+// Calls f(row, col) once per board square `m` places a tile on, in lane order.
+// EXCHANGE and PASS place nothing, so f is never called for them.
+template <typename F>
+void visit_placed_squares(const Move& m, F&& f);
+
 }  // namespace scribblez
 
 #include "inlines/scribblez/move.inl"

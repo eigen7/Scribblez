@@ -39,17 +39,8 @@ static_assert(SelfWinPlacementTarget::kSide == kPlacementSide);
 void encode_placement_plane(const Move& m, bool has_move, bool enabled, bool flip, float* out) {
   std::fill_n(out, kPlacementSide * kPlacementSide, 0.0f);
   if (!enabled || !has_move) return;
-  if (m.type() != MoveType::PLAY) return;
-  const bool horizontal = m.horizontal();
-  const int start = m.start();
-  uint16_t mask = m.square_mask();
-  for (int along = 0; mask; ++along, mask >>= 1) {
-    if ((mask & 1u) == 0) continue;
-    const int r = horizontal ? start : along;
-    const int c = horizontal ? along : start;
-    if (r < 0 || r >= kPlacementSide || c < 0 || c >= kPlacementSide) break;
-    out[util::plane_index(r, c, kPlacementSide, flip)] = 1.0f;
-  }
+  visit_placed_squares(
+    m, [&](int r, int c) { out[util::plane_index(r, c, kPlacementSide, flip)] = 1.0f; });
 }
 
 }  // namespace

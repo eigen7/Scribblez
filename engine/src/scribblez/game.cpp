@@ -70,15 +70,18 @@ void Game::play() {
 }
 
 void Game::play_from(const Board& board, std::array<int, 2> scores,
-                     const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move) {
+                     const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move,
+                     const Rack& returned_to_bag) {
   board_ = board;
   scores_ = scores;
   racks_[0] = known_racks[0];
   racks_[1] = known_racks[1];
   bag_ = pool;
-  // Refill both racks from the seeded pool in turn order.
+  // Refill both racks from the seeded pool in turn order, then return any
+  // just-exchanged tiles to the bag (they were not drawable by either refill).
   refill_rack(to_move, /*drawn_out=*/nullptr);
   refill_rack(1 - to_move, /*drawn_out=*/nullptr);
+  for (int i = 0; i < returned_to_bag.size(); ++i) bag_.put_back(returned_to_bag.tiles()[i]);
   log_.initial_racks[0] = racks_[0];
   log_.initial_racks[1] = racks_[1];
 
