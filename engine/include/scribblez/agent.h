@@ -48,6 +48,18 @@ struct MoveRequest {
 // the test bots); HastyBot bypasses it with shadow-play.
 std::vector<Move> generate_legal_plays(const MoveRequest& req);
 
+// Generate every legal EXCHANGE for the active player: one move per distinct
+// non-empty sub-multiset of req.my_rack (duplicate tiles do not multiply the
+// list). Empty when the bag has fewer than RACK_SIZE tiles, where exchanging
+// is illegal.
+std::vector<Move> generate_legal_exchanges(const MoveRequest& req);
+
+// Pick a move for the active player uniformly at random among all legal PLAYs
+// and all legal EXCHANGEs; passes only when neither exists. Used by Game's
+// random-opening mode to reach off-policy positions that agent self-play would
+// never visit.
+Move pick_uniform_random_play(const MoveRequest& req, std::mt19937_64& rng);
+
 class Agent {
  public:
   Agent(int thread_id, const std::string& name) : thread_id_(thread_id), name_(name) {}

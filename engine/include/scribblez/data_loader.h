@@ -130,7 +130,8 @@ class DataLoader {
     // ordering (seeded by file path + game index, independent of `seed`);
     // `epoch_index` selects the length-k window of that ordering, so successive
     // epochs cover distinct turns until the ordering wraps. Over E epochs each
-    // game thus contributes min(E * k, eligible_turns) distinct positions.
+    // game thus contributes min(E * k, its eligible-turn count) distinct
+    // positions.
     int turns_per_game = 0;
     int epoch_index = 0;
   };
@@ -169,9 +170,9 @@ class DataLoader {
   // A file's "positions" are its expanded training rows: one per included turn
   // across all games, read from the file header at construction.
   // `expand_all_turns` chooses which turns count -- every turn (the lane task)
-  // or only each game's bag-non-empty eligible prefix (GameMetadata::eligible_turns,
-  // the value task). sample_to_game_turn() maps a flat position index back to
-  // the (game, turn) pair it stands for.
+  // or only each game's eligible region (GameMetadata's [eligible_begin,
+  // eligible_end), the value task). sample_to_game_turn() maps a flat position
+  // index back to the (game, turn) pair it stands for.
   class DataFile {
    public:
     DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
@@ -217,6 +218,10 @@ class DataLoader {
     // first flat position index of game g and cumulative_turns_.back() is
     // num_positions_.
     std::vector<int64_t> cumulative_turns_;
+
+    // Per-game turn index that game g's first flat position stands for:
+    // eligible_begin for the value task, 0 when expanding all turns.
+    std::vector<uint8_t> first_turns_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;

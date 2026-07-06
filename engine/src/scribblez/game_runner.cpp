@@ -131,6 +131,12 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
      "if > 0, each game gifts a randomly chosen player a head-start of P "
      "points, with P drawn uniformly from [0, this value]")  //
+    ("random-opening-mean",
+     po::value<double>(&random_opening_mean)->default_value(random_opening_mean),
+     "if > 0, each game opens with K uniformly-random plies before the agents "
+     "take over, with K drawn per game from an exponential of this mean "
+     "(rounded to the nearest integer); positions before the last random ply "
+     "are excluded from the .slog training-eligible region")  //
     ("progress-secs", po::value<int>(&progress_secs)->default_value(progress_secs),
      "print a games-done/rate/ETA progress line to stderr every this many "
      "seconds during the parallel batch loop (0 disables)")  //
@@ -159,7 +165,8 @@ void GameRunner::run_progress_monitor(const std::atomic<bool>& done,
 GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params),
       seed_(SeedProducer::instance().next()),
-      engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max},
+      engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max,
+                                     params.random_opening_mean},
               player_params) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";

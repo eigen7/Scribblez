@@ -3,6 +3,7 @@
 #include "scribblez/game.h"
 #include "scribblez/unique_id.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,20 +32,6 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
-// Count the training-eligible turns of `log`: the pre-endgame turns (bag had
-// tiles when the turn began). Because the bag is non-increasing across turns,
-// the eligible turns form a leading prefix [0, count), so a single count fully
-// describes the eligible set (recorded as GameMetadata::eligible_turns and
-// expanded into one training row per eligible turn at load time).
-int eligible_turn_count(const GameLog& log) {
-  int count = 0;
-  for (int k = 0; k < log.num_records; ++k) {
-    if (log.records[k].bag_size_before <= 0) break;  // prefix ends at the first endgame turn
-    ++count;
-  }
-  return count;
-}
-
 std::mt19937_64& sampler_rng() {
   thread_local std::mt19937_64 rng(std::random_device{}());
   return rng;
@@ -52,15 +39,24 @@ std::mt19937_64& sampler_rng() {
 
 }  // namespace
 
-int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
-  std::vector<int> eligible;
-  eligible.reserve(static_cast<size_t>(log.num_records));
+EligibleSpan eligible_span(const GameLog& log) {
+  int end = 0;
   for (int k = 0; k < log.num_records; ++k) {
-    if (log.records[k].bag_size_before > 0) eligible.push_back(k);
+    if (log.records[k].bag_size_before <= 0) break;  // prefix ends at the first endgame turn
+    ++end;
   }
-  if (eligible.empty()) return -1;
-  std::uniform_int_distribution<size_t> dist(0, eligible.size() - 1);
-  return eligible[dist(rng)];
+  // GameMetadata stores the region in uint8_t fields; turns past 255 (reachable
+  // only in degenerate pass-heavy games near the 400-turn safety cap) are
+  // excluded.
+  end = std::min(end, 255);
+  return {std::max(0, log.num_random_opening_plies - 1), end};
+}
+
+int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng) {
+  const EligibleSpan span = eligible_span(log);
+  if (span.begin >= span.end) return -1;
+  std::uniform_int_distribution<int> dist(span.begin, span.end - 1);
+  return dist(rng);
 }
 
 int pick_any_turn(const GameLog& log, std::mt19937_64& rng) {
@@ -115,16 +111,15 @@ namespace {
 struct PreparedBatch {
   std::vector<InitialRacks> initial;
   std::vector<std::vector<TurnBlob>> turns;
-  std::vector<int> sampled_turn;  // eval-only representative position per game
-  std::vector<int> eligible;      // training-eligible turn count per game (prefix)
+  std::vector<int> sampled_turn;       // eval-only representative position per game
+  std::vector<EligibleSpan> eligible;  // training-eligible turn region per game
   std::vector<GameLog> games;
 };
 
-// Pre-build per-game blobs. Each kept game records its eligible-turn count (the
-// pre-endgame prefix [0, eligible) training expands over) and one eval-only
-// sampled turn drawn uniformly from that prefix. Games with no eligible turn
-// (bag empty for every turn -- shouldn't happen in practice but we guard
-// anyway) are dropped.
+// Pre-build per-game blobs. Each kept game records its eligible-turn region
+// (the [begin, end) training expands over) and one eval-only sampled turn
+// drawn uniformly from that region. Games with an empty region (bag empty for
+// every turn, or a game that ended during its random opening) are dropped.
 PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   PreparedBatch p;
   p.initial.reserve(games.size());
@@ -135,8 +130,8 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   std::mt19937_64& rng = sampler_rng();
   for (const GameLogStorage& gs : games) {
     const GameLog g = gs.view();
-    const int eligible = eligible_turn_count(g);
-    if (eligible <= 0) {
+    const EligibleSpan span = eligible_span(g);
+    if (span.begin >= span.end) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
       continue;
     }
@@ -147,7 +142,7 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
     for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
     p.turns.push_back(std::move(turns));
     p.sampled_turn.push_back(sampled);
-    p.eligible.push_back(eligible);
+    p.eligible.push_back(span);
     p.games.push_back(g);
   }
   return p;
@@ -168,7 +163,8 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
     gm.final_score_p1 = static_cast<int16_t>(p.games[i].final_scores[1]);
     gm.initial_score_p0 = static_cast<int16_t>(p.games[i].initial_scores[0]);
     gm.initial_score_p1 = static_cast<int16_t>(p.games[i].initial_scores[1]);
-    gm.eligible_turns = static_cast<uint16_t>(p.eligible[i]);
+    gm.eligible_begin = static_cast<uint8_t>(p.eligible[i].begin);
+    gm.eligible_end = static_cast<uint8_t>(p.eligible[i].end);
     cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }
@@ -190,7 +186,8 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
   hdr.reserved = 0;
   hdr.num_games = static_cast<uint32_t>(p.games.size());
   uint32_t num_sample_positions = 0;
-  for (int e : p.eligible) num_sample_positions += static_cast<uint32_t>(e);
+  for (const EligibleSpan& s : p.eligible)
+    num_sample_positions += static_cast<uint32_t>(s.end - s.begin);
   hdr.num_sample_positions = num_sample_positions;
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),

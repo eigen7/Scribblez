@@ -53,12 +53,14 @@ fail loudly rather than misparse. Treat that header as the spec — this doc doe
 not duplicate the struct fields, so they cannot drift.
 
 - **Write** — [`BinaryLogWriter::write_batch`](../engine/src/scribblez/binary_log.cpp)
-  records, per game, how many turns are training-**eligible** (`eligible_turns`:
-  the leading prefix of turns whose bag was non-empty, or every turn when
-  `--sample-endgames` is set), and tallies their sum into the `FileHeader`'s
-  `num_sample_positions`. Per file: one `FileHeader`, a `GameMetadata` for every
-  game, then each game's blobs. (`sampled_turn` is also recorded but is eval-only
-  — a single representative position per game for probes / dumps.)
+  records, per game, which turns are training-**eligible** (the region
+  `[eligible_begin, eligible_end)`: `eligible_end` is the leading prefix of
+  turns whose bag was non-empty, and `eligible_begin` is the position after the
+  game's last random-opening ply — see below), and tallies the region widths
+  into the `FileHeader`'s `num_sample_positions`. Games with an empty region
+  are dropped. Per file: one `FileHeader`, a `GameMetadata` for every game,
+  then each game's blobs. (`sampled_turn` is also recorded but is eval-only —
+  a single representative position per game for probes / dumps.)
 - **Read** — the [`DataLoader`](../engine/src/scribblez/data_loader.cpp) expands
   each game into **one training row per eligible turn** (so an epoch sees every
   position, not one per game), and
@@ -94,6 +96,27 @@ reflects it at every position; because the handicap is also baked into the
 game's final scores, the *targets* stay consistent automatically. The default
 self-play run requests no handicap (`--random-handicap-max 0`), so every game
 starts 0-0 and the feature is dormant unless handicaps are requested.
+
+## Random openings (off-policy state coverage)
+
+With `play_game --random-opening-mean M` (> 0), each game's first K plies are
+played **uniformly at random** — among all legal placements plus all legal
+exchanges (every distinct non-empty sub-multiset of the rack, bag permitting),
+passing only when neither exists — instead of by the seated agents, with K
+drawn per game as `round(Exp(mean M))` from the game seed
+([`SelfPlayEngine`](../engine/src/scribblez/self_play_engine.cpp) →
+[`Game::set_random_opening`](../engine/src/scribblez/game.cpp)). This drives
+self-play into states — especially unusual rack leaves — that agent-vs-agent
+play never visits, so the value model learns to evaluate them.
+
+Random moves pollute the final-score *targets* of every position they follow,
+so the eligible region starts at `K - 1`: the position right after the last
+random ply is the first one whose remaining game is pure agent play (and is
+itself exactly the kind of unusual state the mechanism exists to cover). The
+random moves are ordinary `TurnBlob`s, so replay reconstruction is unaffected.
+A game that terminates during its random opening (e.g. six consecutive
+pass/exchange plies) has an empty eligible region and is dropped by the writer.
+`post_move_value/train.py` generates with `--random-opening-mean 2` by default.
 
 ## Determinism and seeding
 

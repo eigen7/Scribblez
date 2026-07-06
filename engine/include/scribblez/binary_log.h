@@ -28,10 +28,10 @@
 // handicap; the replay decoder seeds its score accumulator from them so the
 // score-differential input feature reflects the handicap at every position.
 //
-// Training sampling: each game contributes ONE training row per *eligible* turn
-// (GameMetadata::eligible_turns of them -- the turns the writer deemed
-// trainable, a prefix [0, eligible_turns) of the move sequence). The DataLoader
-// expands the file into eligible_turns rows per game; FileHeader's
+// Training sampling: each game contributes ONE training row per *eligible*
+// turn -- the contiguous region [eligible_begin, eligible_end) of the move
+// sequence that the writer deemed trainable. The DataLoader expands the file
+// into (eligible_end - eligible_begin) rows per game; FileHeader's
 // num_sample_positions is their sum across the file (so the loader knows the
 // epoch size without scanning the body). The single sampled_turn is a separate,
 // eval-only convenience (probes / position dumps pick one position per game).
@@ -54,7 +54,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 9;
+inline constexpr uint16_t kVersion = 10;
 
 #pragma pack(push, 1)
 
@@ -64,9 +64,9 @@ struct FileHeader {
   uint16_t reserved;
   uint32_t num_games;             // games in this file
   uint32_t num_sample_positions;  // total training rows == sum of every game's
-                                  // GameMetadata::eligible_turns; the DataLoader
-                                  // reads this to size an epoch without scanning
-                                  // the body.
+                                  // (eligible_end - eligible_begin); the
+                                  // DataLoader reads this to size an epoch
+                                  // without scanning the body.
 };
 static_assert(sizeof(FileHeader) == 16, "FileHeader must be 16 bytes");
 
@@ -75,18 +75,27 @@ struct GameMetadata {
   uint32_t num_turns;     // length of the TurnBlob array
   uint16_t sampled_turn;  // 0-based turn index, eval-only: one representative
                           // position per game for probes / position dumps. NOT
-                          // used by training, which expands over eligible_turns.
+                          // used by training, which expands over the eligible
+                          // region below.
   int16_t final_score_p0;
   int16_t final_score_p1;
   int16_t initial_score_p0;  // per-player starting score (0 unless handicapped)
   int16_t initial_score_p1;
-  uint16_t eligible_turns;  // number of training-eligible turns: a prefix
-                            // [0, eligible_turns) of the move sequence. Training
-                            // emits one row per eligible turn. Eligibility is
-                            // fixed at write time -- the pre-endgame turns (bag
-                            // had tiles when the turn began). Because the bag is
-                            // non-increasing, eligible turns are always a leading
-                            // prefix.
+  // Training-eligible turn region [eligible_begin, eligible_end): training
+  // emits one row per turn in it, always non-empty on disk (the writer drops
+  // games whose region is empty). Eligibility is fixed at write time:
+  //   - eligible_end is the pre-endgame prefix length (turns whose bag had
+  //     tiles when the turn began; the bag is non-increasing, so these form a
+  //     leading prefix). Capped at 255 by the field width -- turns beyond that
+  //     (reachable only in degenerate pass-heavy games near the 400-turn
+  //     safety cap) are excluded.
+  //   - eligible_begin is the position after the game's last random-opening
+  //     ply (see Game::set_random_opening), i.e. max(0, plies - 1). Earlier
+  //     positions have a uniformly-random move played after them, which would
+  //     pollute their final-score training targets; the position right after
+  //     the last random ply is clean (only agent play follows it).
+  uint8_t eligible_begin;
+  uint8_t eligible_end;
 };
 static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
 
@@ -110,11 +119,24 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 #pragma pack(pop)
 
-// Pick a turn index for `log` uniformly at random among eligible turns: those
-// whose bag_size_before > 0 (pre-endgame positions). Returns -1 iff no eligible
-// turn exists (a degenerate game), in which case the game must be excluded from
-// any output. Operates on a GameLog view, so it serves both the disk writer and
-// the streaming producer.
+// The training-eligible turn region of a game, [begin, end). May be empty
+// (begin >= end) for degenerate games, which must then be excluded from any
+// training output.
+struct EligibleSpan {
+  int begin;
+  int end;
+};
+
+// Compute `log`'s training-eligible region: end is the pre-endgame prefix
+// length (turns whose bag had tiles when the turn began) and begin is the
+// position after the last random-opening ply, max(0, num_random_opening_plies
+// - 1). See GameMetadata's eligible_begin/eligible_end for the rationale.
+EligibleSpan eligible_span(const GameLog& log);
+
+// Pick a turn index for `log` uniformly at random within eligible_span(log).
+// Returns -1 iff the span is empty (a degenerate game), in which case the game
+// must be excluded from any output. Operates on a GameLog view, so it serves
+// both the disk writer and the streaming producer.
 int pick_sampled_turn(const GameLog& log, std::mt19937_64& rng);
 
 // Pick a turn index for `log` uniformly among ALL turns (including endgame

@@ -67,10 +67,11 @@ bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>&
   }
 
   // The subset's training-row count is the sum of the picked games' eligible
-  // turns (eligible_turns is carried over per game above), so the DataLoader
-  // sizes an epoch over the subset correctly.
+  // regions (eligible_begin/eligible_end are carried over per game above), so
+  // the DataLoader sizes an epoch over the subset correctly.
   uint32_t num_sample_positions = 0;
-  for (const GameMetadata& gm : out_meta) num_sample_positions += gm.eligible_turns;
+  for (const GameMetadata& gm : out_meta)
+    num_sample_positions += gm.eligible_end - gm.eligible_begin;
 
   FileHeader hdr{};
   hdr.magic = kMagic;

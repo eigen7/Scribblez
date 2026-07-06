@@ -4,6 +4,7 @@
 #include "scribblez/game.h"
 #include "scribblez/lexicon.h"
 
+#include <cmath>
 #include <iostream>
 #include <random>
 
@@ -23,6 +24,18 @@ std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
   std::array<int, 2> scores = {0, 0};
   scores[player] = points;
   return scores;
+}
+
+// Choose one game's random-opening length: an exponential draw with the given
+// mean, rounded to the nearest integer (so ~22% of games get 0 at mean 2 and
+// long openings tail off geometrically). Seeded from the game seed (salted to
+// decorrelate from pick_handicap's stream) so the choice is reproducible;
+// mean <= 0 yields 0 (no random opening).
+int pick_random_opening_plies(uint64_t game_seed, double mean) {
+  if (mean <= 0) return 0;
+  std::mt19937_64 rng(game_seed ^ 0x6C62272E07BB0142ULL);
+  const double x = std::exponential_distribution<double>(1.0 / mean)(rng);
+  return static_cast<int>(std::lround(x));
 }
 
 }  // namespace
@@ -57,6 +70,7 @@ std::pair<EndGameAction, EndGameAction> SelfPlayEngine::play(int thread_idx,
   const uint64_t game_seed = params_.seed + game_idx;
   Game game(seat0, seat1, Lexicon::instance().dict(), game_seed);
   game.set_initial_scores(pick_handicap(game_seed, params_.handicap_max));
+  game.set_random_opening(pick_random_opening_plies(game_seed, params_.random_opening_mean));
   game.play();
 
   // Hand the finished game's owning log storage to the sink (a move). The Game

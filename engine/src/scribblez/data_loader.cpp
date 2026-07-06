@@ -37,14 +37,22 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
-// Read the per-game prefix sums of included-turn counts from a .slog file's
-// header and metadata table without resident body (cum[g] = first flat row index
-// of game g, cum.back() = total expanded rows). `all_turns` counts every turn
-// of each game (the lane task); otherwise only the bag-non-empty eligible prefix
-// (the value task). Sets `num_games`. On any read failure, returns a
-// one-turn-per-game fallback (cum = 0,1,2,...) of size num_games + 1.
-std::vector<int64_t> read_cumulative_turns(const std::string& path, int64_t& num_games,
-                                           int64_t num_games_fallback, bool all_turns) {
+// Per-game turn index of one .slog file: for each game, the number of included
+// turns (as prefix sums: cum[g] = first flat row index of game g, cum.back() =
+// total expanded rows) and the turn index its first flat row stands for.
+struct TurnIndex {
+  std::vector<int64_t> cum;
+  std::vector<uint8_t> first_turn;
+};
+
+// Read a file's per-game turn index from its header and metadata table without
+// resident body. `all_turns` includes every turn of each game starting at turn
+// 0 (the lane task); otherwise the game's training-eligible region
+// [eligible_begin, eligible_end) (the value task). Sets `num_games`. On any
+// read failure, returns a one-turn-per-game fallback (cum = 0,1,2,...;
+// first_turn all 0) of num_games games.
+TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t num_games_fallback,
+                          bool all_turns) {
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
@@ -52,22 +60,28 @@ std::vector<int64_t> read_cumulative_turns(const std::string& path, int64_t& num
     std::vector<GameMetadata> metas(static_cast<size_t>(num_games));
     if (num_games == 0 || f.read(reinterpret_cast<char*>(metas.data()),
                                  static_cast<std::streamsize>(num_games) * sizeof(GameMetadata))) {
-      std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
-      cum[0] = 0;
+      TurnIndex idx;
+      idx.cum.resize(static_cast<size_t>(num_games) + 1);
+      idx.first_turn.resize(static_cast<size_t>(num_games));
+      idx.cum[0] = 0;
       for (int64_t g = 0; g < num_games; ++g) {
-        const uint32_t turns = all_turns ? metas[g].num_turns : metas[g].eligible_turns;
-        cum[g + 1] = cum[g] + static_cast<int64_t>(turns);
+        const uint32_t turns =
+          all_turns ? metas[g].num_turns : metas[g].eligible_end - metas[g].eligible_begin;
+        idx.cum[g + 1] = idx.cum[g] + static_cast<int64_t>(turns);
+        idx.first_turn[g] = all_turns ? 0 : metas[g].eligible_begin;
       }
-      return cum;
+      return idx;
     }
     std::cerr << "DataLoader: could not read metadata table of " << path << "\n";
   } else {
     std::cerr << "DataLoader: could not read header of " << path << "; using caller count\n";
     num_games = num_games_fallback;
   }
-  std::vector<int64_t> cum(static_cast<size_t>(num_games) + 1);
-  std::iota(cum.begin(), cum.end(), int64_t{0});
-  return cum;
+  TurnIndex idx;
+  idx.cum.resize(static_cast<size_t>(num_games) + 1);
+  std::iota(idx.cum.begin(), idx.cum.end(), int64_t{0});
+  idx.first_turn.assign(static_cast<size_t>(num_games), 0);
+  return idx;
 }
 
 }  // namespace
@@ -83,7 +97,9 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
   // resident body needed), so an epoch can be sized and subsampled before the
   // file body is loaded. num_positions_ is the expanded row count; the
   // caller-passed value is only a fallback.
-  cumulative_turns_ = read_cumulative_turns(path_, num_games_, num_positions, expand_all_turns);
+  TurnIndex idx = read_turn_index(path_, num_games_, num_positions, expand_all_turns);
+  cumulative_turns_ = std::move(idx.cum);
+  first_turns_ = std::move(idx.first_turn);
   num_positions_ = cumulative_turns_.back();
 }
 
@@ -91,10 +107,11 @@ DataLoader::DataFile::~DataFile() { unload(); }
 
 GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
   // Find the game whose flat-index range contains sample_index: the last g with
-  // cumulative_turns_[g] <= sample_index.
+  // cumulative_turns_[g] <= sample_index. The game's flat rows start at its
+  // first included turn (eligible_begin for the value task, 0 otherwise).
   auto it = std::upper_bound(cumulative_turns_.begin(), cumulative_turns_.end(), sample_index);
   int64_t g = (it - cumulative_turns_.begin()) - 1;
-  int64_t turn = sample_index - cumulative_turns_[g];
+  int64_t turn = first_turns_[g] + (sample_index - cumulative_turns_[g]);
   return GameTurn{static_cast<uint32_t>(g), static_cast<uint16_t>(turn)};
 }
 

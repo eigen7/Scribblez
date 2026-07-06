@@ -16,11 +16,17 @@ GameLog GameLogStorage::view() const {
   v.final_scores = final_scores;
   v.final_racks = final_racks;
   v.end_reason = end_reason.c_str();
+  v.num_random_opening_plies = num_random_opening_plies;
   return v;
 }
 
 Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
-    : dict_(dict), seed_(seed), bag_(seed) {
+    : dict_(dict),
+      seed_(seed),
+      bag_(seed),
+      // A distinct stream from the bag's so the random opening never correlates
+      // with the tile draws.
+      opening_rng_(seed ^ 0xA02F1C5D8F4E7B63ULL) {
   players_[0] = &p0;
   players_[1] = &p1;
   log_.seed = seed;
@@ -31,6 +37,11 @@ void Game::set_initial_scores(std::array<int, 2> initial_scores) {
   assert(log_.turns.empty());  // must be set before play() begins
   scores_ = initial_scores;
   log_.initial_scores = initial_scores;
+}
+
+void Game::set_random_opening(int plies) {
+  assert(log_.turns.empty());  // must be set before play() begins
+  random_opening_plies_ = plies;
 }
 
 void Game::refill_rack(int p, Rack* drawn_out) {
@@ -77,6 +88,14 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   play_loop(to_move);
 }
 
+Move Game::choose_move(int player, const MoveRequest& req) {
+  if (static_cast<int>(log_.turns.size()) < random_opening_plies_) {
+    ++log_.num_random_opening_plies;
+    return pick_uniform_random_play(req, opening_rng_);
+  }
+  return players_[player]->make_move(req);
+}
+
 void Game::play_loop(int start_player) {
   int cur = start_player;
   int consecutive_zero_turns = 0;
@@ -90,7 +109,7 @@ void Game::play_loop(int start_player) {
     // incrementally as moves are applied.
     MoveRequest ctx{board_,           dict_,      racks_[cur], racks_[1 - cur], scores_[cur],
                     scores_[1 - cur], bag_.size()};
-    Move m = players_[cur]->make_move(ctx);
+    Move m = choose_move(cur, ctx);
 
     TurnRecord rec;
     rec.player = cur;

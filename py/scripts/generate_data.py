@@ -58,6 +58,7 @@ def run_games(
     threads: int,
     player_spec: str,
     seed: int = 0,
+    random_opening_mean: float = 0.0,
 ) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
@@ -65,6 +66,9 @@ def run_games(
     fresh agent, so two neural seats draw independent sampling seeds. `seed` is
     the PRNG seed passed to play_game; 0 (the default) lets the binary pick one
     from std::random_device, so successive default-seeded runs differ.
+    `random_opening_mean` > 0 opens each game with K uniformly-random plies
+    (K ~ round(Exp(mean)) per game) before the agents take over; positions
+    before the last random ply are excluded from the training-eligible region.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off
@@ -77,6 +81,7 @@ def run_games(
         "--games", str(num_games),
         "--threads", str(threads),
         "--seed", str(seed),
+        "--random-opening-mean", str(random_opening_mean),
     ]
     # fmt: on
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
@@ -153,6 +158,14 @@ def main() -> int:
         "many tiles (greedy below it). 0 = sample the whole game; ~60 reproduces "
         "an opening-only exploratory bot.",
     )
+    parser.add_argument(
+        "--random-opening-mean",
+        type=float,
+        default=0.0,
+        help="If > 0, open each game with K uniformly-random plies (K ~ round(Exp(mean)) "
+        "per game) before the agents take over. Positions before the last random ply "
+        "are excluded from the training-eligible region.",
+    )
     parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
     args = parser.parse_args()
 
@@ -171,7 +184,14 @@ def main() -> int:
         if n <= 0:
             continue
         print(f"\n=== Generating {n} {name} games ===")
-        rc = run_games(out_dir, n, args.games_per_file, args.threads, player_spec)
+        rc = run_games(
+            out_dir,
+            n,
+            args.games_per_file,
+            args.threads,
+            player_spec,
+            random_opening_mean=args.random_opening_mean,
+        )
         if rc != 0:
             print(f"play_game exited with code {rc} for {name} split", file=sys.stderr)
             return rc

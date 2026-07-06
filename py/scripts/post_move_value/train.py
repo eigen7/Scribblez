@@ -20,7 +20,10 @@ exactly where it left off. The base learning rate and the CPU-thread pools
 controls in the per-tag dashboard.db: the dashboard Controls tab retunes them,
 and the trainer adopts changes at its next epoch / generation.
 
-Self-play here is HastyBot vs. HastyBot (no GPU contention with training). The
+Self-play here is HastyBot vs. HastyBot (no GPU contention with training), with
+each game optionally opened by a few uniformly-random plies
+(--random-opening-mean) so training reaches off-policy states -- especially
+unusual rack leaves -- that pure self-play never visits. The
 --contingent-features switch selects the input-encoding arm (full layout vs. the
 smaller ablation baseline); an optional lexicon module (--lexicon-*) attaches
 compiled-dictionary features to the trunk.
@@ -132,6 +135,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--hasty-top-k", type=int, default=10, help="HastyBot candidate count if temp>0."
     )
     p.add_argument("--hasty-temp-min-bag", type=int, default=0, help="Sample only above this bag.")
+    p.add_argument(
+        "--random-opening-mean",
+        type=float,
+        default=2.0,
+        help="Open each game with K uniformly-random plies (K ~ round(Exp(mean)) per game) "
+        "before the HastyBots take over, so the model sees unusual states -- especially "
+        "unusual rack leaves -- that pure self-play never reaches. Positions before the "
+        "last random ply are excluded from training (their targets would be polluted by "
+        "the random play that follows them). 0 disables.",
+    )
 
     # Optimization.
     p.add_argument("--batch-size", type=int, default=256, help="Minibatch size.")
@@ -236,7 +249,13 @@ def make_generate_fn(args, player_spec: str, cpu):
 
     def generate_fn(gen_dir, num_games: int, seed: int) -> int:
         return run_games(
-            gen_dir, num_games, args.games_per_file, cpu.gen_threads, player_spec, seed
+            gen_dir,
+            num_games,
+            args.games_per_file,
+            cpu.gen_threads,
+            player_spec,
+            seed,
+            random_opening_mean=args.random_opening_mean,
         )
 
     return generate_fn

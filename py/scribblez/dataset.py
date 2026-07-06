@@ -124,7 +124,8 @@ class SlogDataset:
     @property
     def num_games(self) -> int:
         """Total games across all files (the all-turns epoch expands each game
-        into eligible_turns rows; a turns_per_game=1 epoch is one row per game)."""
+        into one row per turn of its eligible region; a turns_per_game=1 epoch
+        is one row per game)."""
         return self._num_games
 
     @property

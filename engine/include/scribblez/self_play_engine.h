@@ -25,6 +25,10 @@ class SelfPlayEngine {
     int threads = 1;       // requested number of parallel game threads
     uint64_t seed = 0;     // base seed; game g is played with seed + g
     int handicap_max = 0;  // if > 0, gift a random player [0, max] head-start points
+    // If > 0, each game opens with K uniformly-random plies (Game's
+    // random-opening mode), K drawn per game as an exponential with this mean,
+    // rounded to the nearest integer.
+    double random_opening_mean = 0.0;
   };
 
   // Builds `params.threads` agent pairs (downgrading to 1, with a warning, if

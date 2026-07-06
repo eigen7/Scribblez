@@ -1480,6 +1480,149 @@ static void test_binary_log_file_and_data_loader_roundtrip() {
             << " positions, " << n_samples << " loader rows)\n";
 }
 
+// Play one game with two TestAgents and a random opening of `plies` moves;
+// return its owning log storage.
+static scribblez::GameLogStorage play_random_opening_test_game(const scribblez::Dictionary& dict,
+                                                               uint64_t seed, int plies) {
+  TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+  TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+  scribblez::Game g(a0, a1, dict, seed);
+  g.set_random_opening(plies);
+  g.play();
+  return g.extract_log();
+}
+
+// Game::set_random_opening plays exactly the first K plies at random (fewer
+// only if the game ends sooner), records the count in the log, and is
+// reproducible from the game seed.
+static void test_game_random_opening() {
+  Dictionary dict = medium_dict();
+
+  for (int plies : {0, 1, 3, 6}) {
+    scribblez::GameLogStorage log = play_random_opening_test_game(dict, /*seed=*/321, plies);
+    CHECK(!log.turns.empty());
+    CHECK(log.num_random_opening_plies == std::min<int>(plies, static_cast<int>(log.turns.size())));
+
+    // Same seed + same opening length -> the identical move sequence.
+    scribblez::GameLogStorage again = play_random_opening_test_game(dict, /*seed=*/321, plies);
+    CHECK(again.turns.size() == log.turns.size());
+    for (size_t k = 0; k < log.turns.size(); ++k)
+      CHECK(moves_equal_for_replay(again.turns[k].move, log.turns[k].move));
+  }
+  std::cout << "  Game random opening OK\n";
+}
+
+// generate_legal_exchanges enumerates every distinct non-empty sub-multiset of
+// the rack (duplicates don't multiply the list), and is empty when the bag is
+// too small to allow exchanging.
+static void test_generate_legal_exchanges() {
+  Dictionary dict = medium_dict();
+  Board board;
+  Rack rack;  // A A B ? -> types (A:2, B:1, ?:1) -> 3*2*2 - 1 = 11 exchanges
+  rack.add(Tile::from_char('A'));
+  rack.add(Tile::from_char('A'));
+  rack.add(Tile::from_char('B'));
+  rack.add(BLANK);
+  Rack opp;
+
+  MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/50};
+  const std::vector<Move> exchanges = generate_legal_exchanges(req);
+  CHECK(exchanges.size() == 11);
+
+  // Every move is an EXCHANGE of a distinct non-empty sub-multiset of the rack.
+  std::set<std::string> seen;
+  for (const Move& m : exchanges) {
+    CHECK(m.type() == MoveType::EXCHANGE);
+    const int n = m.num_glyphs();
+    CHECK(n >= 1 && n <= 4);
+    std::string tiles;
+    for (int i = 0; i < n; ++i) tiles += m.glyph(i).rack_tile().to_char();
+    std::sort(tiles.begin(), tiles.end());
+    for (char c : tiles) CHECK(c == 'A' || c == 'B' || c == '?');
+    seen.insert(tiles);
+  }
+  CHECK(seen.size() == exchanges.size());
+
+  // Exchanging is illegal when the bag has fewer than RACK_SIZE tiles.
+  MoveRequest starved{board, dict, rack, opp, 0, 0, /*bag_size=*/RACK_SIZE - 1};
+  CHECK(generate_legal_exchanges(starved).empty());
+  std::cout << "  generate_legal_exchanges OK (" << exchanges.size() << " exchanges)\n";
+}
+
+// BinaryLogWriter records a random-opening game's eligible region: begin is the
+// position after the last random ply, end is the bag-non-empty prefix, and the
+// header's num_sample_positions sums the region widths. The DataLoader sizes
+// its epoch from the same regions.
+static void test_binary_log_random_opening_region() {
+  Dictionary dict = medium_dict();
+
+  namespace fs = std::filesystem;
+  fs::path dir = fs::temp_directory_path() / ("scribblez_ro_" + std::to_string(::getpid()) + "_" +
+                                              std::to_string(std::random_device{}()));
+  fs::create_directories(dir);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{dir};
+
+  constexpr int kGames = 3;
+  constexpr int kPlies = 4;
+  std::vector<scribblez::GameLogStorage> logs;
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames);
+    for (int i = 0; i < kGames; ++i) {
+      scribblez::GameLogStorage log =
+        play_random_opening_test_game(dict, /*seed=*/500ULL + i, kPlies);
+      writer.append(scribblez::GameLogStorage(log));
+      logs.push_back(std::move(log));
+    }
+  }
+
+  std::vector<fs::path> slogs;
+  for (const auto& ent : fs::directory_iterator(dir)) {
+    if (ent.path().extension() == ".slog") slogs.push_back(ent.path());
+  }
+  CHECK(slogs.size() == 1);
+  const int64_t fsize = static_cast<int64_t>(fs::file_size(slogs.front()));
+  std::vector<char> raw(fsize);
+  {
+    std::ifstream f(slogs.front(), std::ios::binary);
+    f.read(raw.data(), fsize);
+    CHECK(f);
+  }
+  const auto* hdr = reinterpret_cast<const scribblez::binlog::FileHeader*>(raw.data());
+  const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
+    raw.data() + sizeof(scribblez::binlog::FileHeader));
+  CHECK(hdr->num_games == static_cast<uint32_t>(kGames));
+
+  int64_t expected_rows = 0;
+  for (int i = 0; i < kGames; ++i) {
+    CHECK(logs[i].num_random_opening_plies == kPlies);
+    int prefix = 0;
+    for (const auto& turn : logs[i].turns) {
+      if (turn.bag_size_before <= 0) break;
+      ++prefix;
+    }
+    CHECK(metas[i].eligible_begin == kPlies - 1);
+    CHECK(metas[i].eligible_end == prefix);
+    expected_rows += prefix - (kPlies - 1);
+  }
+  CHECK(static_cast<int64_t>(hdr->num_sample_positions) == expected_rows);
+
+  scribblez::binlog::DataLoader::Params dl_params;
+  dl_params.spec = {&dict, true};
+  dl_params.num_worker_threads = 1;
+  dl_params.num_prefetch_threads = 1;
+  scribblez::binlog::DataLoader loader(dl_params);
+  loader.add_file(slogs.front().string(), expected_rows, fsize);
+  CHECK(loader.num_positions() == expected_rows);
+  std::cout << "  BinaryLogWriter random-opening eligible region OK (" << expected_rows
+            << " rows across " << kGames << " games)\n";
+}
+
 // ===========================================================================
 // Foundation types: Tile / Glyph
 // ===========================================================================
@@ -2093,8 +2236,9 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.sampled_turn = 0;    // eval-only; training uses eligible_turns
-  gm.eligible_turns = 1;  // expand to one row: turn 0
+  gm.sampled_turn = 0;    // eval-only; training uses the eligible region
+  gm.eligible_begin = 0;  // expand to one row: turn 0
+  gm.eligible_end = 1;
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
 
@@ -2225,6 +2369,113 @@ static void test_dataloader_per_row_symmetry() {
     std::cout << "  DataLoader per-row symmetry: " << normal_count << " normal / " << flipped_count
               << " flipped (of " << n << ")\n";
   }
+}
+
+// The DataLoader maps a game's flat rows to turns starting at eligible_begin:
+// a two-PLAY game whose metadata declares the region [1, 2) expands to exactly
+// one row, and that row is the turn-1 post-move encoding (POV p1), not turn 0.
+static void test_dataloader_eligible_begin_offset() {
+  using namespace scribblez::binlog;
+  namespace fs = std::filesystem;
+
+  fs::path dir = fs::temp_directory_path() / ("scribblez_off_" + std::to_string(::getpid()) + "_" +
+                                              std::to_string(std::random_device{}()));
+  fs::create_directories(dir);
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{dir};
+
+  // Synthetic game: turn 0 p0 plays 'Q' at (3,5); turn 1 p1 plays 'C' at (7,3).
+  // Each player's leave after their play is 6 As.
+  Rack p0_init;
+  p0_init.add(Tile::from_char('Q'));
+  for (int i = 0; i < 6; ++i) p0_init.add(Tile::from_char('A'));
+  Rack p1_init;
+  p1_init.add(Tile::from_char('C'));
+  for (int i = 0; i < 6; ++i) p1_init.add(Tile::from_char('A'));
+
+  Move q_play =
+    make_play_full(3, 5, /*horizontal=*/true, 0b1, 42, {Glyph::of(Tile::from_char('Q'))});
+  Move c_play =
+    make_play_full(7, 3, /*horizontal=*/true, 0b1, 21, {Glyph::of(Tile::from_char('C'))});
+
+  InitialRacks ir{};
+  ir.p0 = p0_init;
+  ir.p1 = p1_init;
+  TurnBlob t0{};
+  t0.move = q_play;
+  TurnBlob t1{};
+  t1.move = c_play;
+
+  FileHeader hdr{};
+  hdr.magic = kMagic;
+  hdr.version = kVersion;
+  hdr.num_games = 1;
+  hdr.num_sample_positions = 1;
+
+  GameMetadata gm{};
+  gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
+  gm.num_turns = 2;
+  gm.sampled_turn = 1;
+  gm.eligible_begin = 1;  // the single flat row stands for turn 1
+  gm.eligible_end = 2;
+  gm.final_score_p0 = 350;
+  gm.final_score_p1 = 200;
+
+  fs::path path = dir / "offset_region.slog";
+  {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+    f.write(reinterpret_cast<const char*>(&gm), sizeof(gm));
+    f.write(reinterpret_cast<const char*>(&ir), sizeof(ir));
+    f.write(reinterpret_cast<const char*>(&t0), sizeof(t0));
+    f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
+    CHECK(f);
+  }
+  const int64_t fsize = static_cast<int64_t>(fs::file_size(path));
+
+  Dictionary dict = medium_dict();
+
+  // Reference: replay both moves, then encode turn 1 post-move -- POV p1 with
+  // its post-play leave (6 As).
+  std::vector<float> ref_row(kInputFloats, 0.0f);
+  {
+    GameStateEncoder ref_enc{InputEncodingSpec{&dict, true}};
+    ref_enc.apply_move(q_play);
+    ref_enc.apply_move(c_play);
+    Rack leave;
+    for (int i = 0; i < 6; ++i) leave.add(Tile::from_char('A'));
+    ref_enc.encode_input(/*active_player=*/1, leave, /*apply_flip=*/false, ref_row.data());
+  }
+  // Labels for POV p1 (final 200 vs 350); turn 1 is the last turn, so the
+  // opp-next-placement head is all-zero, matching the scores-only view.
+  float ref_labels[kLabelFloats];
+  encode_labels_flat(make_scores_view(/*fs_active=*/200, /*fs_opp=*/350, /*active_player=*/1),
+                     ref_labels);
+
+  DataLoader::Params params;
+  params.spec = {&dict, true};
+  params.num_worker_threads = 1;
+  params.num_prefetch_threads = 1;
+  DataLoader loader(params);
+  loader.add_file(path.string(), /*num_positions=*/1, fsize);
+  CHECK(loader.num_positions() == 1);
+
+  DataLoader::EpochConfig cfg;
+  cfg.batch_size = 1;
+  cfg.post_move = true;
+  cfg.apply_symmetry = false;
+  cfg.seed = 1;
+  loader.epoch_start(cfg);
+  std::vector<float> row(kRowFloats, 0.0f);
+  CHECK(loader.load_batch(row.data()) == 1);
+  CHECK(std::memcmp(row.data(), ref_row.data(), kInputFloats * sizeof(float)) == 0);
+  CHECK(std::memcmp(row.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)) == 0);
+  std::cout << "  DataLoader eligible_begin offset decode OK\n";
 }
 
 // ===========================================================================
@@ -2986,17 +3237,35 @@ static void test_streaming_row_buffer_shutdown() {
   std::cout << "  StreamingRowBuffer shutdown OK\n";
 }
 
-// pick_sampled_turn only chooses turns with bag_size_before > 0, and returns -1
-// when none qualify.
+// pick_sampled_turn only chooses turns in the eligible region -- within the
+// bag-non-empty prefix and not before the last random-opening ply -- and
+// returns -1 when the region is empty.
 static void test_pick_sampled_turn_eligibility() {
   using namespace scribblez;
   using namespace scribblez::binlog;
 
   GameLogStorage s;
   s.turns.resize(3);  // value-initialized: bag_size_before == 0
+  s.turns[0].bag_size_before = 9;
   s.turns[1].bag_size_before = 5;
   std::mt19937_64 rng(123);
+  CHECK(eligible_span(s.view()).begin == 0);
+  CHECK(eligible_span(s.view()).end == 2);
+  for (int i = 0; i < 20; ++i) {
+    const int t = pick_sampled_turn(s.view(), rng);
+    CHECK(t == 0 || t == 1);
+  }
+
+  // A random opening excludes the positions before its last ply: with 2 random
+  // plies, only turns >= 1 remain eligible.
+  s.num_random_opening_plies = 2;
+  CHECK(eligible_span(s.view()).begin == 1);
   for (int i = 0; i < 20; ++i) CHECK(pick_sampled_turn(s.view(), rng) == 1);
+
+  // A game that ended during its random opening has an empty eligible region.
+  s.num_random_opening_plies = 3;
+  CHECK(pick_sampled_turn(s.view(), rng) == -1);
+  s.num_random_opening_plies = 0;
 
   GameLogStorage z;
   z.turns.resize(2);  // all ineligible
@@ -3801,6 +4070,9 @@ int main() {
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
   test_binary_log_file_and_data_loader_roundtrip();
+  test_game_random_opening();
+  test_generate_legal_exchanges();
+  test_binary_log_random_opening_region();
   test_handicap_shifts_score_diff_input();
   test_tile_glyph_basics();
   test_rack_invariants();
@@ -3814,6 +4086,7 @@ int main() {
   test_natural_less();
   test_encode_labels();
   test_dataloader_per_row_symmetry();
+  test_dataloader_eligible_begin_offset();
   test_epoch_determinism();
   test_epoch_coverage();
   test_epoch_memory_budget_stress();

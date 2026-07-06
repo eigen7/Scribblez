@@ -42,6 +42,11 @@ struct GameLog {
   std::array<int, 2> final_scores = {0, 0};
   std::array<Rack, 2> final_racks;   // tiles left on each rack at game end
   const char* end_reason = nullptr;  // "out", "stalemate", or "max_turns"
+  // Leading plies played uniformly at random via Game::set_random_opening
+  // rather than by the seated agents (0 for a normal game). Positions before
+  // the last of these have a random move after them and are excluded from
+  // training (see binlog::eligible_span).
+  int num_random_opening_plies = 0;
 };
 
 // Owning backing store for a game's log. Produced by self-play (Game), the
@@ -58,6 +63,7 @@ struct GameLogStorage {
   std::array<int, 2> final_scores = {0, 0};
   std::array<Rack, 2> final_racks;
   std::string end_reason;
+  int num_random_opening_plies = 0;  // see GameLog::num_random_opening_plies
 
   GameLog view() const;
 };
@@ -73,6 +79,14 @@ class Game {
   // Give the players a head-start handicap before play begins. Must be called
   // before play(); asserts that no move has been made yet.
   void set_initial_scores(std::array<int, 2> initial_scores);
+
+  // Play the first `plies` turns of the game uniformly at random (via
+  // pick_uniform_random_play, seeded from the game seed) instead of asking the
+  // seated agents, to reach off-policy positions -- especially unusual rack
+  // leaves -- that agent self-play would never visit. Agents still observe the
+  // random moves through observe_move(). Must be called before play(); asserts
+  // that no move has been made yet.
+  void set_random_opening(int plies);
 
   void play();
 
@@ -109,10 +123,17 @@ class Game {
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};
   GameLogStorage log_;
+  int random_opening_plies_ = 0;
+  std::mt19937_64 opening_rng_;  // drives the random-opening move choices
 
   // Draw from the bag until the player's rack is at RACK_SIZE. If
   // `drawn_out` is non-null, the drawn tiles are added to it.
   void refill_rack(int p, Rack* drawn_out);
+
+  // The move for the current turn: a uniformly-random one while the turn index
+  // is within the random opening (tallying it in the log), the seated agent's
+  // choice otherwise.
+  Move choose_move(int player, const MoveRequest& req);
 
   // The turn loop shared by play() and play_from(): `start_player` moves first,
   // play continues until the standard end (out / stalemate / max-turns) with the
