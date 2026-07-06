@@ -9,6 +9,7 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/macondo_bot.h"
 #include "scribblez/movegen.h"
+#include "scribblez/position_json.h"
 #include "scribblez/web_server.h"
 
 #include <boost/json.hpp>
@@ -326,19 +327,8 @@ class ManualGame {
   // currently viewed position, as [row, col] pairs. Empty at the start position
   // and for pass/exchange turns (which place no tiles).
   boost::json::array last_move_squares() const {
-    boost::json::array squares;
-    if (view_ply_ <= 0 || view_ply_ > static_cast<int>(turns_.size())) return squares;
-    const Move& m = turns_[view_ply_ - 1].record.move;
-    if (m.type() != MoveType::PLAY) return squares;
-
-    const uint16_t mask = m.square_mask();
-    for (int lane = 0; lane < BOARD_SIZE; ++lane) {
-      if ((mask & (static_cast<uint16_t>(1) << lane)) == 0) continue;
-      const int r = m.horizontal() ? m.start() : lane;
-      const int c = m.horizontal() ? lane : m.start();
-      squares.emplace_back(boost::json::array{r, c});
-    }
-    return squares;
+    if (view_ply_ <= 0 || view_ply_ > static_cast<int>(turns_.size())) return {};
+    return move_squares(turns_[view_ply_ - 1].record.move);
   }
 
   // End-of-game rack adjustments as a JSON array of {player, tiles, delta,

@@ -318,6 +318,7 @@ def post_move_position_payload(conn, position: int, generation) -> dict:
     return {
         "name": name,
         "start_player": bundle["start_player"],
+        "last_move": bundle["last_move"],
         "board": bundle["board"],
         "bonuses": bundle["bonuses"],
         "rack": bundle["rack"],

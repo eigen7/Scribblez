@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
@@ -61,6 +61,7 @@ function AltLeaveResult({ result }: { result: AltResult }) {
 interface Payload {
   name: string;
   start_player: number;
+  last_move: [number, number][];
   board: (string | null)[][];
   bonuses: (string | null)[][];
   rack: TileInfo[];
@@ -314,6 +315,11 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
     }
   };
 
+  const lastMoveCells = useMemo(
+    () => new Set((payload?.last_move ?? []).map(([r, c]) => `${r},${c}`)),
+    [payload?.last_move],
+  );
+
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
     return <div className="muted" style={{ padding: 20 }}>No post-move-value dataset available.</div>;
@@ -374,6 +380,7 @@ export default function PostMoveAnalysis({ task, tag }: { task: string; tag: str
                 cursorRow={null}
                 cursorCol={null}
                 cursorDir={null}
+                lastMoveCells={lastMoveCells}
                 interactive={false}
                 onCellClick={() => {}}
                 onCellDrop={() => {}}

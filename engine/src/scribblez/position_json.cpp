@@ -81,6 +81,21 @@ int tiles_on_board(const Board& board) {
 
 }  // namespace
 
+json::array move_squares(const Move& m) {
+  json::array squares;
+  if (m.type() != MoveType::PLAY) return squares;
+  const bool horizontal = m.horizontal();
+  const int start = m.start();
+  uint16_t mask = m.square_mask();
+  for (int along = 0; mask; ++along, mask >>= 1) {
+    if ((mask & 1u) == 0) continue;
+    const int r = horizontal ? start : along;
+    const int c = horizontal ? along : start;
+    squares.emplace_back(json::array{r, c});
+  }
+  return squares;
+}
+
 json::object position_state_object(const Board& board, const Rack& my_rack, int my_score,
                                    int opp_score, int bag_size, int opp_rack_size,
                                    const std::string& my_name, const std::string& opp_name,

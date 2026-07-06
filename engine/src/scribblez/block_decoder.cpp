@@ -49,23 +49,6 @@ std::string describe_move(const Move& m) {
   return "PLAY " + tiles + " @ " + square_name(r, c) + (horizontal ? " across" : " down");
 }
 
-// The [row, col] board squares a PLAY placed tiles on (empty for EXCHANGE/PASS),
-// derived from the move's lane mask -- mirrors encode_placement_plane.
-boost::json::array move_squares(const Move& m) {
-  boost::json::array squares;
-  if (m.type() != MoveType::PLAY) return squares;
-  const bool horizontal = m.horizontal();
-  const int start = m.start();
-  uint16_t mask = m.square_mask();
-  for (int along = 0; mask; ++along, mask >>= 1) {
-    if ((mask & 1u) == 0) continue;
-    const int r = horizontal ? start : along;
-    const int c = horizontal ? along : start;
-    squares.emplace_back(boost::json::array{r, c});
-  }
-  return squares;
-}
-
 }  // namespace
 
 int BlockDecoder::row_floats_for(DecodeTask task, const InputEncodingSpec& spec) {

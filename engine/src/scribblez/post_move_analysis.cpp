@@ -168,6 +168,7 @@ std::string post_move_analysis_board_json(const std::string& gcg_text, std::stri
     position_state_object_pov(final_pos.board, pos.leave, final_pos.scores[pos.start_player],
                               final_pos.scores[opp], my_name, opp_name);
   o["start_player"] = pos.start_player;
+  o["last_move"] = move_squares(game.turns.back().record.move);
   return json::serialize(o);
 }
 

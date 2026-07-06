@@ -6,6 +6,7 @@
 // build their JSON from position_state_object(), so the two never drift.
 
 #include "scribblez/board.h"
+#include "scribblez/move.h"
 #include "scribblez/rack.h"
 
 #include <boost/json.hpp>
@@ -31,6 +32,11 @@ boost::json::object position_state_object(const Board& board, const Rack& my_rac
 boost::json::object position_state_object_pov(const Board& board, const Rack& my_rack, int my_score,
                                               int opp_score, const std::string& my_name,
                                               const std::string& opp_name);
+
+// The [row, col] board squares a PLAY placed tiles on (empty for
+// EXCHANGE/PASS), derived from the move's lane mask. This is the web client's
+// last_move shape, used to highlight the most recent play on the board.
+boost::json::array move_squares(const Move& m);
 
 // position_state_object_pov(...) serialized to a string.
 std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
