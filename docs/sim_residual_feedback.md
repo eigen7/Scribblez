@@ -153,6 +153,67 @@ Because the fusion stage sits between the shared trunk and the heads, `M_post`
 can take the same evidence input through the same stage — needed for the
 distillation story below.
 
+### Incremental inference across rounds
+
+Between rounds at one decision point the raw inputs do not change — only the
+evidence set grows — so nothing requires re-running the expensive stages.
+The harness caches the network's intermediate activations:
+
+- The **trunk output `H`** is computed once per decision (this is where almost
+  all the FLOPs live), and the **`N` move encodings** are computed once — the
+  legal-move set does not change.
+- Per round, the incremental work is the evidence fusion stage (self-attention
+  over the evidence tokens, cross-attention against the cached `H` to produce
+  `H′`) plus one re-scoring pass (the cached move encodings cross-attending
+  into `H′`). The re-scoring genuinely must re-run — the scores changing is
+  the point — but it is the cheap linear pass that motivates `M_pre` in the
+  first place.
+
+This is the same mechanism as a KV-cache in a transformer decoder: the
+"memory" is engineered and lossless — tensors held by the harness — with zero
+learning burden on the network, and outputs bit-identical to a full recompute.
+Every round therefore remains reproducible from stored inputs, in the same
+spirit as the replay-reconstruction invariant
+([architecture.md](architecture.md)).
+
+Caching is also what makes **late fusion a load-bearing constraint** rather
+than an incidental choice: evidence must not modulate the trunk's own layers,
+or the trunk cannot be cached across rounds. The cost of late fusion is a
+bound on how deeply evidence can reshape the spatial features; whether a few
+post-trunk attention layers suffice is exactly what the kill-test measures.
+
+**Why not a learned memory instead?** An alternative reading of "the network
+holds the position in memory" is a fixed-size recurrent state, updated as
+evidence arrives, from which re-evaluations (or a proposed next candidate) are
+read out without re-presenting the board or the move set. This is rejected,
+for three reasons in increasing order of severity:
+
+- A learned state is lossy compression, and the deliverable is fine value
+  *margins* between specific candidates. The candidate that matters most in
+  this loop is precisely the low-salience one — the blocker sitting far down
+  the ranking until evidence arrives — and low-salience content is what
+  compression drops first. The cached-activation design compresses nothing.
+- Emitting a next candidate without the move list present would require the
+  network to *generate* a move — spell the word, place the tiles. The
+  lexical-NN track showed that generation is the network's demonstrated blind
+  spot (it recovers a play's score and anchor geometry but cannot fill the
+  interior letters), and it inverts the system's division of labor: the GADDAG
+  finds moves, the network values them. The workable alternative — *pointing*
+  at a candidate via an argmax over the legal set — requires the move
+  encodings to be present to score over, which is exactly the cached design.
+- A network that is stateful across rounds makes training sequential
+  (backpropagation through the round sequence, inherently ordered rows). The
+  evidence-set-as-input formulation is stateless per call: a training row is
+  (position, evidence set, targets), rows stay independent, and prefix sizes
+  can be sampled freely.
+
+The one place the architecture does adopt a learned recurrent state — the
+belief compressor (Scribblez.pdf §3.5) — works because its object, a
+distribution over racks, is genuinely soft and low-dimensional, and its
+consumer is a decoder producing samples. Scores over `N` specific candidates,
+where the decision rides on small margins between named alternatives, are the
+opposite kind of object.
+
 ## The decision procedure
 
 One generic loop, parameterized by a schedule (`B` candidates proposed per
@@ -197,13 +258,16 @@ schedule is a tunable policy, not an architectural fork:
 
 Sequential trade-offs to weigh:
 
-- **Latency, not throughput.** `R` sequential sim-then-infer round trips
-  serialize the decision. For self-play data generation this matters less than
-  it appears: the game-pool design
-  ([generational_training.md](generational_training.md)) keeps many games in
-  flight and batches their GPU evaluations, so per-game serialization does not
-  starve the hardware. Per-move *latency* does suffer, which matters for
-  interactive or competitive play.
+- **Latency, not throughput or compute.** `R` sequential sim-then-infer round
+  trips serialize the decision. With
+  [incremental inference](#incremental-inference-across-rounds) the
+  network-side cost of `R` rounds is one trunk pass plus `R` cheap incremental
+  passes, so the serialization cost is almost entirely sim latency. For
+  self-play data generation even that matters less than it appears: the
+  game-pool design ([generational_training.md](generational_training.md))
+  keeps many games in flight and batches their GPU evaluations, so per-game
+  serialization does not starve the hardware. Per-move *latency* does suffer,
+  which matters for interactive or competitive play.
 - **Exploration becomes an explicit problem at small `B`.** A batch top-`K`
   is diverse by construction. A greedy `B = 1` proposer may propose
   near-duplicates of the current best — exploitation, when what later sims
