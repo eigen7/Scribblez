@@ -81,7 +81,7 @@ def run_python_tests(verbose: bool) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--cpp-only", action="store_true", help="run only the C++ engine tests")

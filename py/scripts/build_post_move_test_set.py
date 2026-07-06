@@ -84,7 +84,7 @@ def clear_loose_gcgs(dataset: Path):
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     p.add_argument("--lexicon", default="NWL23", help="Lexicon name (kwg under --lexica-dir).")
     p.add_argument(

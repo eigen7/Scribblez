@@ -19,7 +19,7 @@ from scribblez.paths import MAX_MOVE_PER_LANE, POST_MOVE_VALUE
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     p.add_argument(
         "--task",

@@ -165,7 +165,7 @@ def generate(args) -> list[str]:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     p.add_argument("--real-lexicon", default=default_kwg_path(), help="Real .kwg to mimic.")
     p.add_argument("--out-txt", default="NWL23_phony.txt", help="Phony word list output.")

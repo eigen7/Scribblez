@@ -62,7 +62,7 @@ def select(words, args) -> list[str]:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     p.add_argument("lexicon", help="A .kwg or .txt lexicon.")
     p.add_argument("--pattern", action="append", default=[], help="Match pattern (repeatable; OR).")

@@ -48,14 +48,15 @@ def run_sim_obs_tool(out_dir: Path, args) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument(
         "-t",
         "--tag",
         required=True,
         help="run tag; data accumulates under <mount>/kill_test/<tag>/slogs",
     )
-    p.add_argument("--threads", type=int, default=8)
+    p.add_argument("--threads", type=int, default=8, help="num c++ threads")
     p.add_argument(
         "--games-per-batch",
         type=int,
