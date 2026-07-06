@@ -1,7 +1,7 @@
 # Scribblez
 
 A research codebase for building a superhuman Scrabble AI.
-See [docs/Scribblez.pdf](docs/Scribblez.pdf) for the design document.
+See [docs/design.md](docs/design.md) for the design document.
 
 This snapshot contains the v0 game engine: a C++ Scrabble core (GADDAG move
 generator + scoring + game loop) plus a Greedy baseline agent, a GCG game-log

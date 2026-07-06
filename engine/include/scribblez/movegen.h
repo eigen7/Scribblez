@@ -14,7 +14,7 @@ namespace scribblez {
 // Selects the underlying enumeration algorithm. Both produce the same set of
 // legal plays; GADDAG is the default and DAWG is retained for cross-validation.
 enum class GenAlgo {
-  GADDAG,  // Gordon's algorithm over the GADDAG (default; see docs/Scribblez.pdf).
+  GADDAG,  // Gordon's algorithm over the GADDAG (default; see docs/design.md).
   DAWG,    // Appel-Jacobson anchor + forward-trie traversal (reference impl).
 };
 

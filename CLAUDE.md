@@ -20,12 +20,13 @@ assume that the machine has GPU/NVIDIA/CUDA availability.
 
 # Doc
 
-Please reference docs/Scribblez.pdf to understand the overall goal of this project.
+Please reference docs/design.md to understand the overall goal of this project.
 
 For how training data flows from self-play to encoded tensors — the component
 chain, the `.slog` format, and the replay-reconstruction invariant (inputs are
 recomputed by replaying moves; targets come from stored final scores) — see
 docs/architecture.md. docs/roadmap.md covers the model roadmap and rationale.
+docs/README.md is the index of all documentation.
 
 # Comments and documentation
 

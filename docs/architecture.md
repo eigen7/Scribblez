@@ -2,7 +2,7 @@
 
 This is a code-level map of how a self-play game becomes a training row. It
 complements [docs/roadmap.md](roadmap.md) (which covers the *why* and the model
-roadmap) and [docs/Scribblez.pdf](Scribblez.pdf) (the design document) by
+roadmap) and [docs/design.md](design.md) (the design document) by
 naming the components and the file that owns each one. For the *what each score
 means to the model* story, see roadmap §1 (M_post heads).
 

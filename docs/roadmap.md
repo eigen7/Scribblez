@@ -35,9 +35,8 @@ context, M_post predicts:
 1. **Self-play**: HastyBot vs. HastyBot games are played in parallel via
    `GameRunner`. Each completed game is serialized to `.slog` format — a
    compact binary log storing initial racks, every move, and every tile draw
-   (~24 bytes per turn). Each game records how many of its turns are
-   training-eligible (the bag-non-empty prefix, or all turns under
-   `--sample-endgames`); every eligible turn becomes a training position.
+   (~24 bytes per turn). Each game records its training-eligible turn region;
+   every eligible turn becomes a training position.
 
 2. **Training**: The `DataLoader` streams `.slog` files through an epoch-based
    API, expanding each game into one row per eligible turn. A `BlockDecoder`
@@ -66,7 +65,7 @@ doc: $y_i = V(s^{\text{post-move}}_{a_i})$.
 
 ---
 
-## Phase 2: Within-Game Move Randomization and Backtracking
+## Phase 2: Self-Play Diversification
 
 ### The problem with HastyBot self-play
 
@@ -77,198 +76,87 @@ The model has no reason to learn accurate values for positions arising from
 suboptimal play, unusual openings, or creative tactical sequences — precisely
 the positions where a superhuman agent would need the most reliable evaluation.
 
-### The solution: randomized self-play with backtracking
+### Mechanisms
 
-Instead of always playing the top-equity move, we inject controlled randomness
-into the self-play games:
+Two are built into the self-play machinery:
 
-1. **Move sampling**: At each turn, instead of playing the top-1 move, sample
-   from the top-K moves (e.g., K=5–10) according to a softmax distribution
-   over their static equities. The temperature parameter controls exploration
-   breadth — high temperature early in training for broad coverage, annealed
-   down as the model matures.
+- **Move sampling** (`--hasty-temperature`, `--hasty-top-k`,
+  `--hasty-temp-min-bag`): instead of playing the top-1 move, sample from the
+  top-K moves via a softmax over their static equities. Temperature controls
+  exploration breadth, optionally confined to the higher-bag (earlier) part of
+  the game.
+- **Random openings** (`--random-opening-mean`; see
+  [architecture.md](architecture.md), "Random openings"): each game's first
+  K ~ round(Exp(mean)) plies are played uniformly at random, driving self-play
+  into off-policy states — especially unusual rack leaves — that agent play
+  never visits. Positions preceding the last random ply are excluded from the
+  training-eligible region so random play never pollutes an outcome target.
 
-2. **Backtracking**: After playing a randomized move and continuing the game to
-   completion (to obtain the outcome label), *rewind* the game state to the
-   same decision point and sample a *different* move from the top-K. Play that
-   branch out to completion as well. This multiplies the number of training
-   positions extracted per "stem" game without re-doing the expensive
-   move-generation for the prefix.
+One remains future work:
 
-3. **Multiple samples per game**: With backtracking, a single game prefix can
-   generate multiple (position, outcome) pairs from the same decision point but
-   with different continuations. This is especially valuable for learning the
-   relative values of moves at critical junctures (e.g., whether to open a
-   triple-word lane or play safe).
-
-### Why this matters
-
-- **State-space coverage**: Randomization ensures the model sees positions from
-  suboptimal and unusual play lines, not just the narrow HastyBot corridor.
-  This is critical for generalization — a model that only knows HastyBot
-  positions can't reliably evaluate a novel opening or an opponent's mistake.
-
-- **Comparative signal**: Backtracking from the same game state with different
-  moves provides direct comparative data — "from this exact position, move A
-  led to a win and move B led to a loss." This is a much stronger learning
-  signal than independently sampled games that happen to pass through similar
-  (but not identical) positions.
-
-- **Efficient data generation**: Backtracking amortizes the cost of
-  move-generation and game-prefix replay across multiple training samples.
-  The expensive part of self-play is move generation (GADDAG traversal +
-  equity evaluation); backtracking reuses all of that work for the prefix.
-
-### Implementation considerations
-
-- The `.slog` format will need extension to support multiple sampled turns per
-  game (currently one) and/or multiple continuations from a branch point.
-- `GameRunner` will need a branching mode where it checkpoints game state at
-  the sampled turn, plays out one continuation, rewinds, and plays out
-  alternatives.
-- Temperature scheduling (how randomization breadth evolves over training)
-  will be a tunable hyperparameter.
+- **Backtracking**: after playing a randomized move to completion, rewind to
+  the same decision point, sample a *different* top-K move, and play that
+  branch out too. This yields direct comparative signal ("from this exact
+  position, move A won and move B lost") and amortizes the prefix's
+  move-generation cost across several training samples. It needs a `.slog`
+  extension for branch points and a branching mode in `GameRunner`.
 
 ---
 
 ## Phase 3: Model Validation and Evaluation Machinery
 
 Validating neural network quality in a game-playing context requires multiple
-complementary approaches. No single metric tells the whole story — structural
-properties, downstream utility, and statistical calibration each reveal
-different failure modes. Building this machinery is a prerequisite for Phase 4
-(M_pre), because we need to know when M_post is good enough to serve as the
-oracle for M_pre's training targets.
-
-### 3.1 Structural Analysis: Monotonicity Probes
-
-**Idea**: For a fixed board + leave, batch-evaluate M_post across a sweep of
-score differentials. The resulting win-probability curve should be:
-
-- **Monotonically increasing** in the active player's score advantage.
-- **Sigmoid-shaped**: approaching 0 when far behind, approaching 1 when far
-  ahead, with a transition region around the break-even point.
-- **Smooth**: no abrupt jumps or non-monotonicities.
-
-**Implementation plan**:
-
-1. Curate a bank of representative (board, leave) positions — varying board
-   openness, tile distribution, game phase (early/mid/late).
-2. For each position, construct a batch of inputs with score differentials
-   swept across [-200, +200] in steps of 1.
-3. Run inference and extract the WLD head's win probability for each step.
-4. Score each curve on:
-   - Monotonicity violations (count of sign changes in the finite difference).
-   - Sigmoid fit quality (R² of a logistic regression to the curve).
-   - Smoothness (total variation of the curve).
-5. Aggregate into a single **structural plausibility score** and track it
-   across training epochs.
-
-**Why this matters**: A model can achieve decent loss on the training set while
-still producing structurally incoherent evaluations (e.g., predicting higher
-win probability when behind). Monotonicity probes catch these failures early.
-
-### 3.2 Agent Evaluation: HastyBot + M_post Top-K
-
-**Idea**: Build a simple agent that uses HastyBot's move generator to produce
-the top-K candidate moves, then selects the move with the highest M_post
-value. Pit this agent against vanilla HastyBot in a series of matches and
-track win percentage over training.
-
-**Expected trajectory**:
-
-- **Early training** (random network): The agent is effectively a *diluted*
-  HastyBot that picks randomly among the top-K instead of always picking top-1.
-  It should lose to HastyBot, and the margin of loss quantifies how much
-  signal the model lacks.
-- **Mid training**: The agent should approach HastyBot's win rate (50%) as
-  M_post learns to approximate static equity ordering.
-- **Late training**: The agent should *exceed* HastyBot's win rate, because
-  M_post captures contextual information (board state, score differential,
-  bag composition) that static equity ignores.
-
-**Implementation plan**:
-
-1. Create a `NeuralTopKAgent` that:
-   - Uses `HastyEquity` to generate + rank the top-K moves.
-   - Applies each move to the current game state.
-   - Runs M_post inference on the K resulting positions.
-   - Selects the move with the highest predicted win probability.
-2. Integrate into `GameRunner` so it can be pitted against `HastyBotAgent`.
-3. Run periodic evaluation matches (e.g., 1000 games every N training epochs).
-4. Track win rate, average score differential, and per-game-phase statistics.
-
-**Why this matters**: This is the most direct measure of whether M_post
-translates into better play. Structural probes test mathematical properties;
-agent eval tests competitive performance.
-
-### 3.3 Calibration: Direct Prediction Accuracy on Held-Out Games
-
-**Idea**: From self-play or from a database of expert games, we know the actual
-game outcomes. We can measure whether M_post's predicted probabilities are
-*accurate* — when it says 70% win probability, does that player actually win
-roughly 70% of the time?
-
-**Metrics**:
-
-- **Brier score**: Mean squared error between predicted win probability and
-  actual outcome (0 or 1). Decomposes into calibration + resolution +
-  uncertainty components.
-- **Log-loss**: Cross-entropy between predicted distribution and actual
-  outcome. More heavily penalizes confident wrong predictions.
-- **Calibration curve**: Bin predictions into deciles (0–10%, 10–20%, ...,
-  90–100%) and plot predicted vs. actual win rate. A perfectly calibrated
-  model produces a diagonal line.
-- **Score-diff calibration**: For the ScoreDiff head, compare the predicted
-  distribution's mean against the actual final score differential. Track the
-  mean absolute error and the predicted distribution's sharpness (entropy).
-
-**Implementation plan**:
-
-1. Reserve a held-out set of `.slog` files (never seen during training).
-2. At evaluation time, decode each held-out game's sampled position with the
-   `BlockDecoder`, run inference, and collect (prediction, actual outcome)
-   pairs.
-3. Compute Brier score, log-loss, and calibration curves.
-4. Track all metrics across training epochs; plot learning curves.
-
-**Why this matters**: A model can have good structural properties
-(monotonicity) and still be poorly calibrated (systematically overconfident or
-underconfident). A well-calibrated model directly translates to better
-decision-making when comparing moves — if M_post says move A gives 72% win
-probability and move B gives 68%, you need those numbers to be *accurate*, not
-just correctly ordered, to make sound decisions in close situations.
-
-**Relationship to other evals**: The three evaluation approaches are
-orthogonal:
+complementary approaches. No single metric tells the whole story:
 
 | Eval | What it tests | Failure mode it catches |
 |---|---|---|
 | Monotonicity probes | Structural coherence | Nonsensical evaluations (e.g., winning when behind) |
-| Agent eval | Downstream utility | Model is calibrated but not *useful* for move selection |
 | Calibration testing | Probabilistic accuracy | Model is structurally sound but systematically biased |
+| Monte-Carlo comparison | Absolute value accuracy | Model diverges from deep-search ground truth |
+| Agent eval | Downstream utility | Model is calibrated but not *useful* for move selection |
 
-All three should be run continuously and reported on a dashboard.
+This machinery is a prerequisite for Phase 4 (M_pre): it is how we know when
+M_post is good enough to serve as the oracle for M_pre's training targets.
 
-### 3.4 Evaluation Infrastructure
+### 3.1 Structural analysis: monotonicity probes — built
 
-To support all three eval approaches, we need:
+For a fixed board + leave, batch-evaluate M_post across a sweep of score
+differentials. The win-probability curve should be monotonically increasing in
+the active player's score advantage, sigmoid-shaped, and smooth; a model can
+achieve decent training loss while violating all three. Implemented in
+[py/scribblez/post_move_value/eval/](../py/scribblez/post_move_value/eval/)
+(probe bank sampled from the frozen test split, per-curve structural scores)
+and rendered by the dashboard.
 
-- **Eval harness binary/script**: A single entry point that loads a model
-  checkpoint, runs all three eval suites, and produces a structured report
-  (JSON + human-readable summary). Integrated into the training loop to run
-  automatically every N epochs.
-- **Position bank**: A curated set of (board, leave, score) tuples for
-  monotonicity probes. Should cover diverse game phases and board
-  configurations. Stored as a small `.slog` or custom format.
-- **Held-out data split**: A fixed set of `.slog` files excluded from training,
-  used exclusively for calibration measurement. Must be established before
-  training begins and never contaminated.
-- **Match server**: Infrastructure for running HastyBot-vs-NeuralTopK matches
-  efficiently (parallelized, with deterministic seeding for reproducibility).
-- **Metrics database + dashboard**: Time-series storage of all eval metrics
-  keyed by (training epoch, eval type). Enables plotting learning curves
-  and detecting regressions.
+### 3.2 Calibration on held-out games — built
+
+Measure whether predicted probabilities are *accurate* — when the model says
+70% win probability, does that player win ~70% of the time? Metrics: Brier
+score, log-loss, decile calibration curves, and score-diff MAE/sharpness,
+computed over the frozen held-out split
+([eval/calibration.py](../py/scribblez/post_move_value/eval/calibration.py))
+and tracked on the dashboard. Calibration matters beyond ordering: comparing
+72% vs 68% between two moves is only sound if the numbers are accurate.
+
+### 3.3 Monte-Carlo ground-truth comparison — built
+
+A committed GCG position dataset with offline Monte-Carlo ground truth
+(~10k rollouts per position via
+[monte_carlo_sim_tool](../engine/apps/monte_carlo_sim_tool.cpp)); every
+checkpoint's predictions are compared against it, per-position on the
+dashboard's Positions tab and in aggregate on the Loss tab (see
+[react_dashboard.md](react_dashboard.md)).
+
+### 3.4 Agent evaluation: HastyBot + M_post top-K
+
+The most direct measure: an agent that ranks HastyBot's top-K candidates by
+M_post value ([NeuralAgent](../engine/include/scribblez/neural_agent.h),
+`--player "--type=neural --model=... --top-k=K"`) is pitted against vanilla
+HastyBot via `play_game`. Expected trajectory: an untrained model plays like a
+*diluted* HastyBot and loses; as M_post approaches static-equity ordering the
+win rate approaches 50%; a model that captures context static equity ignores
+exceeds it. Remaining work: periodic automated match runs during training with
+win-rate curves on the dashboard (today matches are run by hand).
 
 ---
 
@@ -458,12 +346,9 @@ inference, is where compute is spent. Strategies to manage it:
 
 ## Phase Summary
 
-| Phase | Goal | Key deliverable | Depends on |
-|---|---|---|---|
-| 1 | Train M_post on HastyBot self-play | Working model + training pipeline | *(done)* |
-| 2 | Diversify training data | Randomized self-play with backtracking | Phase 1 |
-| 3 | Validate M_post quality | Eval harness (monotonicity + agent + calibration) | Phase 1 |
-| 4 | Pre-move model (M_pre) | Board/move encoder, single-pass cross-attention scoring, exchange head | Phase 3 quality bar |
-
-Phases 2 and 3 should be developed in parallel — evaluation machinery is
-needed to know when M_post is good enough to support Phase 4.
+| Phase | Goal | Status |
+|---|---|---|
+| 1 | Train M_post on HastyBot self-play | Done — model + generational training pipeline |
+| 2 | Diversify training data | Move sampling + random openings done; backtracking open |
+| 3 | Validate M_post quality | Probes, calibration, Monte-Carlo comparison done; automated match eval open |
+| 4 | Pre-move model (M_pre) | Design ready (board/move encoder, single-pass cross-attention scoring, exchange head); gated on the Phase 3 quality bar |

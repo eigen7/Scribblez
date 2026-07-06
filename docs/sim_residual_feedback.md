@@ -35,11 +35,11 @@ than precomputed as an input. The reasons are architectural and are covered in
 - **Roadmap Phase 4** ([roadmap.md](roadmap.md)): the one-round pipeline —
   GADDAG generates all moves, `M_pre` scores them in one cross-attention pass,
   top-`K` go to simulation. This proposal wraps that pipeline in an iteration.
-- **Scribblez.pdf §8.1 (Search-Derived Knowledge Buffers)**: the design doc
+- **[design.md](design.md) §8.1 (Search-Derived Knowledge Buffers)**: the design doc
   envisions a buffer where truths discovered during search are recorded for the
   network to read. The evidence set below is a concrete instantiation of that
   buffer, with a natural training story.
-- **The belief system's iterative particle generation** (Scribblez.pdf §3.5)
+- **The belief system's iterative particle generation** ([design.md](design.md) §3.5)
   follows the same idiom: propose, gather evidence, condition on the evidence,
   re-propose. Here the proposer is `M_pre`, the evidence is sim results, and
   the re-proposal is the next candidate set. At its sequential extreme (see
@@ -211,7 +211,7 @@ for three reasons in increasing order of severity:
   can be sampled freely.
 
 The one place the architecture does adopt a learned recurrent state — the
-belief compressor (Scribblez.pdf §3.5) — works because its object, a
+belief compressor ([design.md](design.md) §3.5) — works because its object, a
 distribution over racks, is genuinely soft and low-dimensional, and its
 consumer is a decoder producing samples. Scores over `N` specific candidates,
 where the decision rides on small margins between named alternatives, are the
