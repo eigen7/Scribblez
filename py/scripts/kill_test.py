@@ -24,6 +24,11 @@ accumulated by scripts/generate_kill_test_data.py under the same tag:
                  evidence, and `full` should be judged against it
        scalar    scalar sim summaries only (the cheap rung of the ladder)
        full      spatial planes + scalar summaries (the real thing)
+     A fifth arm, `loo` (--arms loo), is the deployment-shaped variant: full
+     evidence minus the played move's own sim. At deployment the model only
+     re-scores unsimmed moves (simmed ones are ranked by their sims), so
+     `loo` vs `none` measures cross-candidate transfer without the own-sim
+     shortcut, whose token is a near-copy of the training target.
 
 The decision metric is best held-out WLD cross-entropy; a comparison table
 prints at the end and per-arm histories land in
@@ -165,6 +170,17 @@ def apply_evidence_mode(data: dict[str, torch.Tensor], mode: str, seed: int):
         data["ev_planes"].zero_()
         data["ev_scalars"].zero_()
         data["ev_mask"].zero_()
+    elif mode == "loo":
+        # Leave-one-out: drop candidate 0 -- the equity argmax, which on
+        # HastyBot self-play is the played move whose post-move state the row
+        # encodes. What remains is the deployment-shaped query: evaluate a
+        # move given the OTHER candidates' sims (at deployment the model only
+        # ever re-scores unsimmed moves; simmed ones are ranked by their own
+        # sims directly). The gain of this arm over `none` measures
+        # cross-candidate transfer, with the own-sim shortcut removed.
+        data["ev_planes"][:, 0] = 0
+        data["ev_scalars"][:, 0] = 0
+        data["ev_mask"][:, 0] = False
     elif mode == "scalar":
         data["ev_planes"].zero_()
     elif mode == "shuffled":
@@ -349,30 +365,48 @@ def evidence_yardstick(train, holdout, device) -> dict[str, float]:
     return out
 
 
-def run_analysis(cache: Path, device):
+def run_analysis(cache: Path, device, suffix: str = ""):
     """Paired per-position comparison of the trained arms over the holdout
     split, sliced by the rack-inference and game-phase metadata, plus the
     evidence-only yardstick. Uses the per-position CE vectors saved at each
     arm's best epoch; row order is the holdout shard order in every artifact,
-    which is what makes the pairing valid."""
+    which is what makes the pairing valid. Analyzes whichever arms (of the
+    standard four plus `loo`) have saved artifacts under the given suffix, and
+    drops arms whose holdout size differs from the current cache (arms trained
+    before more data was generated cannot be paired)."""
     results_dir = cache / "results"
-    ce = {arm: load_per_row(results_dir, arm) for arm in ARMS}
     holdout = load_split(cache, "holdout")
     if "meta_opp_unbiased" not in holdout:
         raise SystemExit("holdout shards lack meta columns -- rerun so build_cache upgrades them")
-    n = len(ce["none"])
-    assert all(len(v) == n for v in ce.values()) and len(holdout["wld"]) == n
+    n = len(holdout["wld"])
+
+    ce = {}
+    for arm in (*ARMS, "loo"):
+        path = results_dir / f"{arm}{suffix}_holdout_ce.npy"
+        if not path.exists():
+            continue
+        per_row = np.load(path)
+        if len(per_row) != n:
+            print(f"  (skipping arm `{arm}`: holdout size {len(per_row)} != cache {n})")
+            continue
+        ce[arm] = per_row
+    if len(ce) < 2:
+        print("analysis needs at least two arms with current-cache artifacts; skipping")
+        return
 
     print("\n=== paired per-position analysis (negative d = first arm better) ===")
     pairs = [
         ("full", "none"),
         ("scalar", "none"),
+        ("loo", "none"),
+        ("full", "loo"),
         ("full", "shuffled"),
         ("full", "scalar"),
         ("shuffled", "none"),
     ]
     for a, b in pairs:
-        print(f"  {a:9s} vs {b:9s}  {paired_stats(ce[a] - ce[b])}")
+        if a in ce and b in ce:
+            print(f"  {a:9s} vs {b:9s}  {paired_stats(ce[a] - ce[b])}")
 
     unbiased = holdout["meta_opp_unbiased"].numpy().astype(bool)
     remaining = holdout["meta_remaining"].numpy()
@@ -384,7 +418,9 @@ def run_analysis(cache: Path, device):
         ("mid game", (remaining > terciles[0]) & (remaining <= terciles[1])),
         (f"early game, > {terciles[1]:.0f} moves left", remaining > terciles[1]),
     ]
-    for a, b in (("full", "none"), ("scalar", "none")):
+    for a, b in (("full", "none"), ("scalar", "none"), ("loo", "none")):
+        if a not in ce or b not in ce:
+            continue
         print(f"\n=== {a} vs {b} by slice ===")
         delta = ce[a] - ce[b]
         for label, mask in slices:
@@ -451,9 +487,17 @@ def main():
         help="skip training; rerun the paired/sliced analysis from saved artifacts",
     )
     p.add_argument(
+        "--out-suffix",
+        default="",
+        help="appended to result filenames (<arm><suffix>.json etc.), so variant runs "
+        "(e.g. a different --lambda-sd) do not overwrite the main arms",
+    )
+    p.add_argument(
         "--arms",
         default=",".join(ARMS),
-        help="comma-separated subset of arms to run (default: all four)",
+        help="comma-separated subset of arms to run (default: the four standard arms; "
+        "`loo` is additionally available -- evidence with the played move's own sim "
+        "removed, the deployment-shaped query)",
     )
     args = p.parse_args()
 
@@ -463,7 +507,7 @@ def main():
     results_dir = cache / "results"
 
     if args.analyze:
-        run_analysis(cache, device)
+        run_analysis(cache, device, suffix=args.out_suffix)
         return
 
     build_cache(root / "slogs", cache, args.holdout_every, args.max_k)
@@ -473,17 +517,18 @@ def main():
     results = []
     for arm in arms:
         record = train_arm(arm, cache, args, device)
-        np.save(results_dir / f"{arm}_holdout_ce.npy", record.pop("per_row_ce"))
-        torch.save(record.pop("state_dict"), results_dir / f"{arm}_model.pt")
+        name = f"{arm}{args.out_suffix}"
+        np.save(results_dir / f"{name}_holdout_ce.npy", record.pop("per_row_ce"))
+        torch.save(record.pop("state_dict"), results_dir / f"{name}_model.pt")
         arg_record = {k: v for k, v in vars(args).items() if k != "arms"}
-        (results_dir / f"{arm}.json").write_text(
+        (results_dir / f"{name}.json").write_text(
             json.dumps({"args": arg_record, **record}, indent=2) + "\n"
         )
         results.append(record)
 
-    if set(arms) == set(ARMS):
+    if set(arms) >= set(ARMS) and not args.out_suffix:
         print_summary(results)
-        run_analysis(cache, device)
+    run_analysis(cache, device, suffix=args.out_suffix)
     print(f"per-arm histories: {results_dir}")
 
 

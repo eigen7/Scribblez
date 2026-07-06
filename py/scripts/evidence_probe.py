@@ -67,10 +67,10 @@ def top_squares(plane: np.ndarray, k: int = 6, min_value: float = 0.01) -> str:
     return "  ".join(parts) if parts else "(none)"
 
 
-def load_arm(results_dir: Path, arm: str, device):
+def load_arm(results_dir: Path, arm: str, suffix: str, device):
     """Rebuild an arm's model from its saved weights and recorded args."""
-    meta = json.loads((results_dir / f"{arm}.json").read_text())
-    weights = results_dir / f"{arm}_model.pt"
+    meta = json.loads((results_dir / f"{arm}{suffix}.json").read_text())
+    weights = results_dir / f"{arm}{suffix}_model.pt"
     if not weights.exists():
         raise SystemExit(f"{weights} missing -- rerun kill_test.py once to save arm weights")
     shapes = {s.name: s.dims for s in get_input_shapes()}
@@ -128,6 +128,11 @@ def main():
     )
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--suffix",
+        default="",
+        help="result-file suffix of the arms to load (kill_test.py --out-suffix)",
+    )
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -179,7 +184,7 @@ def main():
 
     print("\n=== model heads (win/draw/loss, score-diff mean+-std) ===")
     for arm in [a.strip() for a in args.arms.split(",") if a.strip()]:
-        model, max_k = load_arm(results_dir, arm, device)
+        model, max_k = load_arm(results_dir, arm, args.suffix, device)
         pos = SobsPosition(
             game_index=0,
             turn_index=0,

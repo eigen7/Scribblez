@@ -570,6 +570,12 @@ best held-out `wld_ce`):
   not `none`.
 - **`scalar` vs `full`** locates the win: if `scalar` captures most of it, the
   spatial fusion machinery can be deferred (the cheap-before-rich ladder).
+- **`loo` (an optional fifth arm, `--arms loo`)** is the deployment-shaped
+  measurement: full evidence minus the evaluated move's own sim. At deployment
+  the model only ever re-scores *unsimmed* moves — simmed candidates are
+  ranked by their sims directly — so `loo` vs `none` is the transfer gain that
+  actually matters for the loop, with the own-sim shortcut (a near-copy of the
+  training target) removed.
 - `brier` and `wld_acc` should move with `wld_ce`; `sd_mae` is a sanity
   side-channel. A `full` arm whose *train* loss drops while holdout `wld_ce`
   does not is memorizing evidence noise — more positions (or fewer epochs)
