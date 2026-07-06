@@ -164,4 +164,11 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
   return d;
 }
 
+const WordMap& Dictionary::word_map() const {
+  std::call_once(word_map_cache_->once, [this] {
+    word_map_cache_->map = std::make_unique<WordMap>(WordMap::build(*this));
+  });
+  return *word_map_cache_->map;
+}
+
 }  // namespace scribblez

@@ -3454,7 +3454,7 @@ static void test_hasty_shadow_matches_reference() {
 static void test_wmp_generate_matches_full() {
   using namespace scribblez;
   Dictionary dict = medium_dict();
-  WordMap wm = WordMap::build(dict);
+  const WordMap& wm = dict.word_map();
   long positions = 0;
   for (uint64_t seed : {7ULL, 99ULL, 12345ULL, 2024ULL, 55ULL, 13ULL, 808ULL, 4242ULL}) {
     GameLogStorage log = play_test_game(dict, seed);
@@ -3565,7 +3565,7 @@ static void test_wmp_matches_gaddag_real_lexicon() {
   }
   Dictionary dict = Dictionary::load_kwg(kwg);
   HastyEquity::init(leaves, peg);
-  WordMap wm = WordMap::build(dict);
+  const WordMap& wm = dict.word_map();
 
   std::vector<CapturedPos> positions, blanked;
   for (uint64_t seed = 1; seed <= 10; ++seed) {
@@ -3580,7 +3580,7 @@ static void test_wmp_matches_gaddag_real_lexicon() {
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     CHECK(move_key(p.board, blank_bot.make_move(req)) ==
-          move_key(p.board, hasty_best_move_wmp(req, wm)));
+          move_key(p.board, hasty_best_move_wmp(req)));
   }
 
   // Blank-free racks: WordMap lookup enumerates exactly the GADDAG's legal plays,
@@ -3596,7 +3596,7 @@ static void test_wmp_matches_gaddag_real_lexicon() {
     total_moves += static_cast<long>(full.size());
 
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
-    CHECK(move_key(p.board, bot.make_move(req)) == move_key(p.board, hasty_best_move_wmp(req, wm)));
+    CHECK(move_key(p.board, bot.make_move(req)) == move_key(p.board, hasty_best_move_wmp(req)));
   }
   CHECK(!positions.empty());
   std::cout << "  WMP/GADDAG equivalence OK (" << positions.size() << " blank-free + "

@@ -11,8 +11,6 @@
 
 namespace scribblez {
 
-class WordMap;
-
 // Total order on (equity, move) used to pick HastyBot's move: higher equity
 // wins; exact-equity ties are broken by a canonical move ordering so the choice
 // is deterministic and independent of move-generation order. Returns true iff
@@ -24,25 +22,26 @@ bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b);
 // HastyBotAgent::make_move reproduces, used to verify the optimized path.
 Move hasty_best_move_reference(const MoveRequest& req);
 
-// Same shadow-play search as HastyBotAgent::make_move's greedy path, but
-// generates each anchor's plays with WordMap anagram lookups
-// (wmp_generate_anchor) instead of GADDAG traversal. Picks the identical move.
-// Blank-free: only valid on racks with no blanks (the WordMap path does not
-// place blanks yet). Exists to benchmark shadow+WMP against shadow+GADDAG in
-// HastyBot's real (pruned) regime.
-Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm);
+// HastyBotAgent::make_move's greedy path: bound each word extent's best
+// possible equity (shadow play), generate extents best-first with WordMap
+// anagram lookups (wmp_generate_extent), and stop once no remaining extent can
+// beat the best move found. Racks holding a blank fall back to the GADDAG
+// anchor search (the WordMap is blank-free). Picks exactly the
+// hasty_best_move_reference move.
+Move hasty_best_move_wmp(const MoveRequest& req);
 
 // An in-process HastyBot player that ranks plays by static equity (score +
 // leave value + opening/PEG/endgame adjustments) using the process-wide
 // HastyEquity singleton. Thread-safe after HastyEquity::init() has been called.
 //
 // Move selection has two modes, set at construction:
-//   temperature == 0 : pure argmax -- play the highest-equity move, found via a
-//                      shadow-play search that bounds each anchor's best possible
-//                      equity, processes anchors best-first, and stops once no
-//                      remaining anchor can beat the move found (instead of
-//                      generating every legal play). Ties broken by
-//                      hasty_move_better.
+//   temperature == 0 : pure argmax -- play the highest-equity move, found via
+//                      hasty_best_move_wmp: a shadow-play search that bounds
+//                      each word extent's best possible equity, generates
+//                      extents best-first with WordMap anagram lookups, and
+//                      stops once no remaining extent can beat the move found
+//                      (instead of generating every legal play). Ties broken
+//                      by hasty_move_better.
 //   temperature  > 0 : generate every legal play and sample
 //                      softmax(equity / temperature) over the top-K moves by
 //                      equity. This injects exploration into self-play data

@@ -245,8 +245,9 @@ struct SubrackLeaveDFS {
 // and resolving blanks by enumerating their letters at query time is too slow
 // (MAGPIE uses precomputed blank tables instead). Blanks are a minority of racks,
 // so self-play still gets the WordMap speedup on the common (blank-free) case.
-Move hasty_best_move_wmp_impl(const MoveRequest& req, const WordMap& wm) {
+Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   if (req.my_rack.counts().blanks() > 0) return hasty_best_move_gaddag(req);
+  const WordMap& wm = req.dict.word_map();
   const HastyEquity& eq = HastyEquity::instance();
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
 
@@ -368,12 +369,13 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 }  // namespace
 
 Move HastyBotAgent::make_move(const MoveRequest& req) {
-  // Greedy: the fast pruned shadow-play search. Used when sampling is disabled
+  // Greedy: the fast pruned shadow-play search (WordMap extents, with a GADDAG
+  // fallback for blank-bearing racks). Used when sampling is disabled
   // (temperature 0) or confined to the opening and the bag has dropped below
   // temperature_min_bag_ (so the rest of the game keeps HastyBot's exact
   // strength).
   if (temperature_ <= 0.0 || req.bag_size < temperature_min_bag_) {
-    return hasty_best_move_gaddag(req);
+    return hasty_best_move_wmp_impl(req);
   }
 
   // Exploratory: generate every legal play, rank by equity, keep the top-K, and
@@ -397,9 +399,7 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
   return plays[static_cast<size_t>(idx[chosen])];
 }
 
-Move hasty_best_move_wmp(const MoveRequest& req, const WordMap& wm) {
-  return hasty_best_move_wmp_impl(req, wm);
-}
+Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
                                                         int thread_id, const std::string& name) {

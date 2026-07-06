@@ -1,8 +1,11 @@
 #pragma once
 
 #include "scribblez/tile.h"
+#include "scribblez/word_map.h"
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -80,10 +83,24 @@ class Dictionary {
   uint32_t arc(uint32_t i) const { return nodes_[i]; }
   static uint8_t arc_tile(uint32_t a) { return static_cast<uint8_t>(a >> 24); }
 
+  // The anagram index (WordMap) derived from this dictionary, built on first
+  // call and cached for the dictionary's lifetime. Thread-safe: concurrent
+  // first calls build exactly once, and the returned reference may be shared
+  // across threads (lookup is const).
+  const WordMap& word_map() const;
+
  private:
+  // Lazily-built word_map() cache, held behind a pointer so Dictionary stays
+  // movable (std::once_flag is neither movable nor copyable).
+  struct WordMapCache {
+    std::once_flag once;
+    std::unique_ptr<WordMap> map;
+  };
+
   std::vector<uint32_t> nodes_;
   uint32_t root_ = 0;
   uint32_t gaddag_root_ = 0;
+  mutable std::unique_ptr<WordMapCache> word_map_cache_ = std::make_unique<WordMapCache>();
 
   static uint8_t tile_of(uint32_t n) { return static_cast<uint8_t>(n >> 24); }
 };
