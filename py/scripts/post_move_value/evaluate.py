@@ -2,8 +2,8 @@
 """Run the evaluation suite over a trained checkpoint and store it in the dashboard DB.
 
 Usage:
-    python -m scripts.post_move_value.evaluate -t mytag                # latest checkpoint
-    python -m scripts.post_move_value.evaluate -t mytag --epoch 30
+    ./py/scripts/post_move_value/evaluate.py -t mytag                # latest checkpoint
+    ./py/scripts/post_move_value/evaluate.py -t mytag --epoch 30
 
 Runs the structural probes (3.1) and full-test-set calibration (3.3) for one
 checkpoint, writing all results to tags/<tag>/dashboard.db keyed by that epoch.

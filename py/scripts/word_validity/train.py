@@ -9,7 +9,7 @@ test: a model with no tool can only memorize and sits near chance on held-out
 words, while one that learns to use the tool generalizes.
 
 Usage:
-    python -m scripts.word_validity.train              # baseline (no tool)
+    ./py/scripts/word_validity/train.py              # baseline (no tool)
 See --help for the compiled-lexicon-tool flags, and docs/word_validity_experiments.md
 for the tool-vs-starve protocol.
 """

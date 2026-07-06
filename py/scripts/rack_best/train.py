@@ -9,8 +9,8 @@ rack-word, so the network only learns to reach the maximal length; with it off
 non-words on held-out racks. Held-out valid-longest accuracy is the measurement.
 
 Usage:
-    python -m scripts.rack_best.train                 # forward-DAWG constrained
-    python -m scripts.rack_best.train --no-dawg       # baseline (no lexicon tool)
+    ./py/scripts/rack_best/train.py                 # forward-DAWG constrained
+    ./py/scripts/rack_best/train.py --no-dawg       # baseline (no lexicon tool)
 """
 
 import argparse

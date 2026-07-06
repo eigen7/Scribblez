@@ -6,8 +6,8 @@ trainer launches it automatically). It serves the per-tag dashboard.db stores un
 <mount-root>/tags/<task>/, reclaiming its ports if a stale dashboard holds them.
 
 Usage:
-    python -m scripts.dashboard --task post_move_value
-    python -m scripts.dashboard --task max_move_per_lane --dev-port 5180
+    ./py/scripts/dashboard.py --task post_move_value
+    ./py/scripts/dashboard.py --task max_move_per_lane --dev-port 5180
 """
 
 import argparse

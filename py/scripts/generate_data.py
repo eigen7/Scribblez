@@ -3,12 +3,12 @@
 
 Usage:
     # HastyBot self-play (iteration 0):
-    python -m scripts.generate_data -t mytag -g 100000 --test-ratio 0.1
+    ./py/scripts/generate_data.py -t mytag -g 100000 --test-ratio 0.1
 
     # Policy-iteration self-play with the neural value agent (temperature adds
     # the exploration that pure argmax self-play lacks). --top-k 0 evaluates
     # every legal play (most diverse); K > 0 keeps the top-K by HastyBot equity:
-    python -m scripts.generate_data -t mytag_iter1 -g 100000 \
+    ./py/scripts/generate_data.py -t mytag_iter1 -g 100000 \
         --model /path/to/model.onnx --top-k 10 --temperature 3.0
 
 This shells out to the C++ `play_game` binary with --binary-log-dir pointed at

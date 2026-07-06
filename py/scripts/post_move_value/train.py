@@ -29,7 +29,7 @@ smaller ablation baseline); an optional lexicon module (--lexicon-*) attaches
 compiled-dictionary features to the trunk.
 
 Usage:
-    python -m scripts.post_move_value.train -t mytag \
+    ./py/scripts/post_move_value/train.py -t mytag \
         --games-per-generation 20000 --reuse-per-position 2 --window 4
 """
 

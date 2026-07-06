@@ -2,7 +2,7 @@
 """Sample a frozen evaluation subset from a tag's held-out test split.
 
 Usage:
-    python -m scripts.post_move_value.sample_test_subset -t mytag -n 12
+    ./py/scripts/post_move_value/sample_test_subset.py -t mytag -n 12
 
 Writes tags/<tag>/test-subset/positions.slog (a standalone .slog holding the
 sampled positions) plus pos-NN.txt ASCII dumps. The structural probes read this

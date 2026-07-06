@@ -24,7 +24,7 @@ losses, plus a per-checkpoint lane-analysis pass over a frozen GCG dataset for t
 dashboard's Lane-analysis tab.
 
 Usage:
-    python -m scripts.max_move_per_lane.train -t mytag \
+    ./py/scripts/max_move_per_lane/train.py -t mytag \
         --games-per-generation 20000 --reuse-per-position 2 --window 4
 """
 

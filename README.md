@@ -130,17 +130,17 @@ window, and the run is restartable at any point (see
 [docs/generational_training.md](docs/generational_training.md)):
 
 ```bash
-python -m scripts.post_move_value.train -t mytag
+./py/scripts/post_move_value/train.py -t mytag
 ```
 
 The trainer launches the per-tag React dashboard (loss curves, structural
 probes, calibration, Monte-Carlo position comparison, live controls); launch it
-standalone with `python -m scripts.dashboard`. Sibling trainers:
-`scripts/max_move_per_lane/train.py` (the lexical representation probe) and the
-lexical-NN experiment trainers under `scripts/word_validity/` and
-`scripts/rack_best/`. `scripts/generate_data.py` generates standalone
-train/test `.slog` splits; `scripts/post_move_value/evaluate.py` runs the eval
-suites on a checkpoint.
+standalone with `./py/scripts/dashboard.py`. Sibling trainers:
+`py/scripts/max_move_per_lane/train.py` (the lexical representation probe) and
+the lexical-NN experiment trainers under `py/scripts/word_validity/` and
+`py/scripts/rack_best/`. `py/scripts/generate_data.py` generates standalone
+train/test `.slog` splits; `py/scripts/post_move_value/evaluate.py` runs the
+eval suites on a checkpoint.
 
 Data flow, formats, and the replay-reconstruction invariant are documented in
 [docs/architecture.md](docs/architecture.md).
