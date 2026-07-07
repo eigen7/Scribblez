@@ -23,6 +23,15 @@ from setup_check import import_setup_common
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TARGET_DIR = os.path.join(ROOT, "target")
+ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
+
+# CPU microarchitectures (GCC/Clang -march values) this project builds
+# bundles for, e.g. for cloud tooling to upload one binary bundle per arch and
+# have each worker fetch the one matching its CPU. Grows by hand: when
+# building on a host whose arch isn't listed here, build_engine() below warns
+# so the operator can add it and commit.
+SUPPORTED_ARCHS = ['alderlake']
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
 # and will error if the existing checkout is at a different tag (unless
@@ -45,6 +54,68 @@ def run(cmd, cwd=None):
     result = subprocess.run(cmd, shell=True, cwd=cwd or ROOT)
     if result.returncode:
         sys.exit(result.returncode)
+
+
+def detect_host_arch() -> str:
+    """Return this host's CPU microarchitecture as a GCC/Clang -march value.
+
+    Asks the compiler what "-march=native" resolves to (e.g. "alderlake",
+    "znver3") instead of inspecting /proc/cpuinfo directly, so the returned
+    string is always one the local compiler accepts as an -march value.
+    """
+    result = subprocess.run(
+        ["g++", "-march=native", "-Q", "--help=target"],
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("-march="):
+            arch = line.split("=", 1)[1].strip()
+            if arch and arch != "native":
+                return arch
+    sys.exit("Could not determine host CPU arch via `g++ -march=native -Q --help=target`.")
+
+
+def arch_build_dir(arch: str) -> str:
+    return os.path.join(ARCHS_DIR, arch)
+
+
+def build_engine(arch: str, build_type: str, jobs: int):
+    """Configure + compile the C++ engine for one CPU microarchitecture."""
+    build_dir = arch_build_dir(arch)
+    print(f"\nBuilding engine for arch '{arch}' ({build_type}) in {build_dir} ...")
+    run(f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} -DSCRIBBLEZ_MARCH={arch}")
+    run(f"cmake --build {build_dir} -j{jobs}")
+
+
+def _replace_with_symlink(link_path: str, real_path: str):
+    """Point `link_path` at `real_path` (relative symlink), replacing whatever
+    was already there -- a stale real file/dir left over from a single-arch
+    build, or a symlink from a previously active arch."""
+    if os.path.islink(link_path):
+        os.unlink(link_path)
+    elif os.path.isdir(link_path):
+        shutil.rmtree(link_path)
+    elif os.path.exists(link_path):
+        os.remove(link_path)
+    os.symlink(os.path.relpath(real_path, os.path.dirname(link_path)), link_path)
+
+
+def link_host_arch_build(arch: str):
+    """Point target/engine and target/compile_commands.json at this host
+    arch's build under target/archs/, so tooling that hardcodes those two
+    paths (tests, scripts, the FFI loader, clangd) keeps working regardless of
+    which archs were actually built.
+    """
+    build_dir = arch_build_dir(arch)
+    _replace_with_symlink(os.path.join(TARGET_DIR, "engine"), os.path.join(build_dir, "engine"))
+    _replace_with_symlink(
+        os.path.join(TARGET_DIR, "compile_commands.json"),
+        os.path.join(build_dir, "compile_commands.json"),
+    )
+    rel_build_dir = os.path.relpath(build_dir, ROOT)
+    print(f"\nLinked target/engine, target/compile_commands.json -> {rel_build_dir}")
 
 
 def list_built_binaries(target_dir: str) -> list[str]:
@@ -146,6 +217,13 @@ def parse_args() -> argparse.Namespace:
         "-j", "--jobs", type=int, default=0, help="parallel build jobs (default: all CPUs)"
     )
     parser.add_argument(
+        "-b",
+        "--build-for-all-archs",
+        action="store_true",
+        help="build once per entry in SUPPORTED_ARCHS (py/build.py) instead of "
+        "just this host's arch, e.g. to produce cloud-distributable bundles",
+    )
+    parser.add_argument(
         "--skip-web", action="store_true", help="skip installing the web UI npm dependencies"
     )
     parser.add_argument(
@@ -166,22 +244,45 @@ def main():
     args = parse_args()
     import_setup_common().check_setup_version()
 
-    target_dir = os.path.join(ROOT, "target")
+    target_dir = TARGET_DIR
     if args.clean and os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
+    elif os.path.exists(os.path.join(target_dir, "CMakeCache.txt")) and not os.path.isdir(
+        ARCHS_DIR
+    ):
+        # Pre-multi-arch layout: a single CMake build sat directly under
+        # target/. Its cache paths don't match the new target/archs/<arch>
+        # layout, so it can't be reused -- wipe it and reconfigure fresh.
+        print(f"\nFound a pre-multi-arch build at {target_dir}; removing it to reconfigure.")
+        shutil.rmtree(target_dir)
 
-    # TODO: the engine builds for baseline x86-64 (no -march tuning), leaving
-    # SIMD performance on the table. Add a mode that compiles the engine once
-    # per entry in a pre-configured list of microarchitecture levels (e.g.
-    # x86-64-v3, x86-64-v4, plus the baseline as a generic fallback) so cloud
-    # tooling can upload one binary bundle per arch. Each cloud worker then
-    # fetches the bundle matching its CPU, falling back to the generic one with
-    # a warning that propagates back to the operator naming the missing arch.
-    # 1. Configure + compile the C++ engine.
+    # 1. Configure + compile the C++ engine, once per requested arch.
     build_type = "Debug" if args.debug else "Release"
-    run(f"cmake -S . -B target -DCMAKE_BUILD_TYPE={build_type}")
     jobs = args.jobs or default_thread_count()
-    run(f"cmake --build target -j{jobs}")
+    host_arch = detect_host_arch()
+
+    if args.build_for_all_archs:
+        if not SUPPORTED_ARCHS:
+            print("\nWARNING: SUPPORTED_ARCHS (py/build.py) is empty; nothing to build.")
+        for arch in SUPPORTED_ARCHS:
+            build_engine(arch, build_type, jobs)
+    else:
+        if host_arch not in SUPPORTED_ARCHS:
+            print(
+                f"\nWARNING: this host's arch ('{host_arch}') is not in "
+                "SUPPORTED_ARCHS (py/build.py). Please add it there and commit, "
+                "so cloud tooling knows to build/distribute a bundle for it."
+            )
+        build_engine(host_arch, build_type, jobs)
+
+    if os.path.isdir(arch_build_dir(host_arch)):
+        link_host_arch_build(host_arch)
+    else:
+        print(
+            f"\nNo build found for this host's arch ('{host_arch}') under "
+            f"{arch_build_dir(host_arch)}; target/engine not updated. Run "
+            "py/build.py without --build-for-all-archs to build it."
+        )
 
     # 2. Install the front-end's npm dependencies so the engine can launch the
     #    Vite dev server (`npm run dev`) for human-vs-AI play.

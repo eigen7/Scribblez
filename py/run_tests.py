@@ -4,7 +4,7 @@
 Usage:
     py/run_tests.py [--cpp-only] [--python-only] [--web-only] [--verbose]
 
-The C++ tests are run via CTest against the existing target/ directory (use
+The C++ tests are run via CTest against the build behind target/engine (use
 py/build.py first if you haven't built yet). The Python tests are run via
 pytest against py/tests/. The web tests are run via `npm run test:run`
 (vitest) in web/.
@@ -20,7 +20,7 @@ from setup_check import import_setup_common
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD_DIR = os.path.join(ROOT, "target")
+ENGINE_LINK = os.path.join(ROOT, "target", "engine")
 WEB_DIR = os.path.join(ROOT, "web")
 PYTHON_DIR = os.path.join(ROOT, "py")
 
@@ -31,10 +31,24 @@ def run(cmd, cwd=None):
     return subprocess.run(cmd, shell=True, cwd=cwd or ROOT).returncode
 
 
+def cpp_build_dir() -> str | None:
+    """Resolve the CMake build dir behind target/engine.
+
+    py/build.py builds each CPU arch under target/archs/<arch>/ and symlinks
+    target/engine to this host's arch build; CTestTestfile.cmake lives at the
+    root of that build dir, one level up from target/engine itself. Returns
+    None if the engine hasn't been built yet.
+    """
+    if not os.path.exists(ENGINE_LINK):
+        return None
+    return os.path.dirname(os.path.realpath(ENGINE_LINK))
+
+
 def run_cpp_tests(verbose: bool) -> int:
-    if not os.path.isdir(BUILD_DIR):
+    build_dir = cpp_build_dir()
+    if build_dir is None:
         print(
-            f"ERROR: build directory not found at {BUILD_DIR}.\nRun py/build.py first.",
+            f"ERROR: no build found at {ENGINE_LINK}.\nRun py/build.py first.",
             file=sys.stderr,
         )
         return 1
@@ -44,7 +58,7 @@ def run_cpp_tests(verbose: bool) -> int:
     flags = "--output-on-failure"
     if verbose:
         flags += " -V"
-    return run(f"ctest {flags}", cwd=BUILD_DIR)
+    return run(f"ctest {flags}", cwd=build_dir)
 
 
 def run_web_tests(verbose: bool) -> int:

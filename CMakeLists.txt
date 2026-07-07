@@ -14,6 +14,12 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
+  # py/build.py always passes this, set to the target CPU microarchitecture
+  # (e.g. "alderlake", "x86-64-v3") so every translation unit is compiled for
+  # that arch's instruction set instead of the generic x86-64 baseline.
+  if(SCRIBBLEZ_MARCH)
+    add_compile_options(-march=${SCRIBBLEZ_MARCH})
+  endif()
 endif()
 
 # Link-time optimization for optimized builds (no-op where the toolchain lacks
