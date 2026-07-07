@@ -21,7 +21,7 @@ from the dev container by `py/scripts/cloud_push_binaries.py`) from the R2 bucke
 it at `/workspace/repo`, and hands off to the bundle's worker entrypoint, which fetches the
 remaining runtime data (lexica, Macondo strategy files) from their public upstreams.
 
-Built and pushed by `./build_worker_image.py`. Rebuild only when the worker's runtime
+Built and pushed by `./build_and_push_worker_image.py`. Rebuild only when the worker's runtime
 dependencies change. See docs/cloud_compute.md for the full architecture.
 
 Shared shell scripts (`entrypoint.sh`, `devuser-setup.sh`) referenced by the local
