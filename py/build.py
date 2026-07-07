@@ -170,6 +170,13 @@ def main():
     if args.clean and os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
 
+    # TODO: the engine builds for baseline x86-64 (no -march tuning), leaving
+    # SIMD performance on the table. Add a mode that compiles the engine once
+    # per entry in a pre-configured list of microarchitecture levels (e.g.
+    # x86-64-v3, x86-64-v4, plus the baseline as a generic fallback) so cloud
+    # tooling can upload one binary bundle per arch. Each cloud worker then
+    # fetches the bundle matching its CPU, falling back to the generic one with
+    # a warning that propagates back to the operator naming the missing arch.
     # 1. Configure + compile the C++ engine.
     build_type = "Debug" if args.debug else "Release"
     run(f"cmake -S . -B target -DCMAKE_BUILD_TYPE={build_type}")
