@@ -12,6 +12,11 @@ Alternates between two phases until stopped (Ctrl-C), accumulating under
      script -- can be stopped and restarted arbitrarily; a restart resumes
      exactly where generation left off.
 
+The per-cycle logic (KillTestParams / run_one_cycle) is also driven by the
+cloud worker entrypoint (py/cloud/worker_entrypoint.py), which runs the same
+cycle on rented machines and uploads each completed pair to the results
+bucket.
+
 Run the 4-armed experiment on the accumulated data with
 scripts/kill_test.py -t <tag> (which may run while this keeps generating; it
 snapshots whatever complete .slog/.sobs pairs exist).
@@ -23,6 +28,7 @@ Usage:
 import argparse
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from scribblez.hardware import default_thread_count
@@ -33,22 +39,58 @@ SIM_OBS_TOOL = "/workspace/repo/target/engine/sim_obs_tool"
 MOUNT_ROOT = Path("/workspace/mount")
 
 
+@dataclass(frozen=True)
+class KillTestParams:
+    """Knobs for one generation cycle (a self-play batch plus its sidecars)."""
+
+    threads: int
+    games_per_batch: int = 200
+    rollouts: int = 200
+    top_k: int = 10
+    positions_per_game: int = 1
+    open_leaves: bool = False
+
+
 def slog_dir(tag: str) -> Path:
     return MOUNT_ROOT / "kill_test" / tag / "slogs"
 
 
-def run_sim_obs_tool(pending: list[Path], args) -> int:
+def run_sim_obs_tool(pending: list[Path], params: KillTestParams) -> int:
     cmd = [
         SIM_OBS_TOOL,
         *[f"--slog-file={p}" for p in pending],
-        f"--rollouts={args.rollouts}",
-        f"--top-k={args.top_k}",
-        f"--positions-per-game={args.positions_per_game}",
-        f"--threads={args.threads}",
+        f"--rollouts={params.rollouts}",
+        f"--top-k={params.top_k}",
+        f"--positions-per-game={params.positions_per_game}",
+        f"--threads={params.threads}",
     ]
-    if args.open_leaves:
+    if params.open_leaves:
         cmd.append("--open-leaves")
     return subprocess.run(cmd, capture_output=False).returncode
+
+
+def run_one_cycle(out_dir: Path, params: KillTestParams) -> int:
+    """One generation cycle: a self-play batch, then sidecars for every .slog
+    in `out_dir` still missing one (the fresh batch, plus any backlog an
+    earlier interrupted run left behind). Returns the first nonzero subprocess
+    exit code, or 0."""
+    rc = run_games(
+        out_dir,
+        num_games=params.games_per_batch,
+        games_per_file=params.games_per_batch,
+        threads=params.threads,
+        player_spec="--type=hastybot",
+    )
+    if rc != 0:
+        print(f"play_game exited with code {rc}", file=sys.stderr)
+        return rc
+    pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(".sobs").exists())
+    if not pending:
+        return 0
+    rc = run_sim_obs_tool(pending, params)
+    if rc != 0:
+        print(f"sim_obs_tool exited with code {rc}", file=sys.stderr)
+    return rc
 
 
 def main() -> int:
@@ -68,12 +110,16 @@ def main() -> int:
     p.add_argument(
         "--games-per-batch",
         type=int,
-        default=200,
+        default=KillTestParams.games_per_batch,
         help="self-play games per .slog file / generation cycle",
     )
-    p.add_argument("--rollouts", type=int, default=200, help="sim rollouts per candidate")
-    p.add_argument("--top-k", type=int, default=10, help="candidates simmed per position")
-    p.add_argument("--positions-per-game", type=int, default=1)
+    p.add_argument(
+        "--rollouts", type=int, default=KillTestParams.rollouts, help="sim rollouts per candidate"
+    )
+    p.add_argument(
+        "--top-k", type=int, default=KillTestParams.top_k, help="candidates simmed per position"
+    )
+    p.add_argument("--positions-per-game", type=int, default=KillTestParams.positions_per_game)
     p.add_argument(
         "--open-leaves",
         action="store_true",
@@ -82,6 +128,14 @@ def main() -> int:
         "--open-leaves to kill_test.py as well",
     )
     args = p.parse_args()
+    params = KillTestParams(
+        threads=args.threads,
+        games_per_batch=args.games_per_batch,
+        rollouts=args.rollouts,
+        top_k=args.top_k,
+        positions_per_game=args.positions_per_game,
+        open_leaves=args.open_leaves,
+    )
 
     out_dir = slog_dir(args.tag)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,26 +147,8 @@ def main() -> int:
             batch += 1
             existing = len(list(out_dir.glob("*.sobs")))
             print(f"\n=== cycle {batch} ({existing} .sobs files so far) ===")
-            rc = run_games(
-                out_dir,
-                num_games=args.games_per_batch,
-                games_per_file=args.games_per_batch,
-                threads=args.threads,
-                player_spec="--type=hastybot",
-            )
+            rc = run_one_cycle(out_dir, params)
             if rc != 0:
-                print(f"play_game exited with code {rc}; stopping", file=sys.stderr)
-                return rc
-            # Sim exactly the files still missing a sidecar: the fresh batch,
-            # plus any backlog an earlier interrupted run left behind.
-            pending = sorted(
-                s for s in out_dir.glob("*.slog") if not s.with_suffix(".sobs").exists()
-            )
-            if not pending:
-                continue
-            rc = run_sim_obs_tool(pending, args)
-            if rc != 0:
-                print(f"sim_obs_tool exited with code {rc}; stopping", file=sys.stderr)
                 return rc
     except KeyboardInterrupt:
         # An interrupt loses at most the in-flight cycle's unfinished work:

@@ -26,6 +26,10 @@
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
+- **[cloud_compute.md](cloud_compute.md)** — distributed data generation on
+  rented cloud CPUs (Runpod): the stable dependency-only worker image, per-arch
+  code bundles through R2, the fleet CLI, and results syncing back to the
+  local mount for unchanged analysis.
 
 ## Design proposals
 

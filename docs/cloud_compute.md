@@ -1,237 +1,170 @@
 # Distributed data generation on rented cloud CPUs
 
-A proposal for running `generate_kill_test_data.py`-style workloads across a fleet of rented
-cloud machines, with results flowing back to the local machine where analysis
-(`kill_test.py`, dashboards) continues to run unchanged. Written with an eye toward two
-futures: GPU workloads on the same scaffolding, and eventually volunteer-donated compute
+How Scribblez runs `generate_kill_test_data.py`-style workloads across a fleet of rented
+cloud machines (Runpod CPU pods), with results flowing back to the local machine where
+analysis (`kill_test.py`, dashboards) runs unchanged. Designed with an eye toward two
+futures: GPU workloads on the same scaffolding, and volunteer-donated compute
 (katagotraining.org-style).
 
-## Why this workload is easy to distribute
-
-The kill-test generator has properties that make the distributed design almost trivial:
+## Why this workload distributes trivially
 
 - **Embarrassingly parallel.** Each cycle (one self-play batch + its sim sidecar) is
-  independent. There is no shared state between cycles or machines.
+  independent; no shared state between cycles or machines.
 - **Merge-by-copy.** Output files are named by nanosecond timestamp, so batches produced by
-  any number of machines coexist in one directory with no coordination and no realistic
-  collision risk. "Merging" fleet output into the local mount dir is a file copy.
+  any number of machines coexist in one directory with no coordination.
 - **Interruption-safe.** `.slog` batches and `.sobs` sidecars land atomically; a killed
-  worker loses at most its in-flight cycle (~2-3 minutes of work). This makes preemptible /
-  spot instances usable with zero extra engineering.
-- **Tiny data.** A cycle produces ~3.8 MB. A full week of 28-core laptop time is roughly
-  15 GB — small enough that data-transfer cost is a non-issue on every provider.
-- **Light runtime dependencies.** HastyBot self-play + `sim_obs_tool` need: the engine
-  binaries, `.kwg` lexica (fetchable from the public liwords URL), and Macondo's
-  `data/strategy` files (fetchable from the public Macondo repo). No GPU, no Macondo binary,
-  no model files.
-
-So the design centers on three artifacts — a **worker image**, a **results bucket**, and a
-**fleet CLI** — and deliberately avoids anything fancier (shared filesystems, job queues,
-coordinators).
+  worker loses at most its in-flight cycle (~2-3 minutes of work).
+- **Tiny data.** A cycle produces ~4 MB; a week of 28-core laptop time is ~15 GB — data
+  transfer cost is a non-issue.
+- **Light runtime deps.** HastyBot self-play + `sim_obs_tool` need the engine binaries,
+  `.kwg` lexica (fetched from the public liwords URL), and Macondo's `data/strategy` files
+  (sparse-cloned from the public Macondo repo). No GPU, no Macondo binary, no models.
 
 ## Architecture
 
+Three stores decouple everything: a **container registry** (stable worker image), the **R2
+bucket** (code bundles outbound, results inbound), and the **local mount dir** (analysis
+home).
+
 ```
- laptop (dev container)                     cloud
- ─────────────────────                      ─────
- build engine ──► build worker image ──► container registry (docker.io private / GHCR)
-                                              │ pulled by
- fleet CLI (up/status/down) ────────────► N CPU workers (Runpod pods or GCP spot VMs)
-                                              │ each runs generate loop,
-                                              │ uploads finished pairs after every cycle
-                                          object storage bucket  (R2 recommended)
-                                              │
- sync tool (pull) ◄───────────────────────────┘
+ dev container                                    cloud
+ ─────────────                                    ─────
+ py/build.py -b            (per-arch binaries)
+ cloud_push_binaries.py ──────────────────────►  R2: bundles/<id>/bundle-<arch>.tar.gz
+ build_and_push_worker_image.py  ──(deps only, rare)───►  docker.io: worker image
+ cloud_fleet.py up      ──────────────────────►  N Runpod CPU pods
+                                                   └─ bootstrap.py: pull bundle for its
+                                                      CPU arch, exec worker entrypoint
+                                                   └─ loop: generate cycle, upload pair
+                                                          │
+ cloud_sync.py ◄──────────────────────────────  R2: kill_test/<tag>/{slogs,params}/
       │
- <mount>/kill_test/<tag>/slogs/   ◄── analysis (kill_test.py, dashboards) runs here,
-                                      locally, exactly as today
+ <mount>/kill_test/<tag>/slogs/   ◄── kill_test.py runs here, locally, as always
 ```
 
-Three principles:
+Principles:
 
-1. **Workers are stateless and disposable.** A worker is one container: it starts, fetches
-   its data dependencies, loops generate-and-upload until killed. No worker ever talks to
-   another worker. Killing one loses ≤ one cycle.
-2. **The bucket is the transport and durable archive; the laptop is the analysis home.**
-   Analysis stays local and interactive — no change to `kill_test.py`, the dashboard, or
-   any downstream ergonomics. The bucket also means workers never need inbound network
-   access to the laptop (which is NAT'd), and it is exactly the ingest shape a future
-   volunteer client needs.
-3. **Provider-agnostic worker, thin provider adapters.** The worker container is identical
-   everywhere. Only the fleet CLI knows about Runpod vs GCP.
+1. **The registry image is dependency-only and stable.** It changes only when worker
+   *dependencies* change — never for code iteration — so Runpod's per-host image cache
+   stays warm and pods never pull a fat uncached image because the engine was recompiled.
+2. **Code travels as bundles through R2, not through Docker or git.** What runs in the
+   cloud is bit-for-bit what was last built and tested locally (uncommitted changes
+   included, flagged as `-dirty` in the bundle id). Workers need no repo credentials and
+   never compile.
+3. **Workers are stateless and disposable.** A worker starts, fetches its bundle and data
+   deps, and loops generate-upload until terminated; SIGTERM flushes completed pairs. The
+   bucket is the durable archive; the laptop holds a synced copy for analysis.
 
-## The worker image
+## The pieces
 
-Runpod pods *are* containers — there is no VM to run `run_docker.py` inside. So the cloud
-unit of deployment is a self-sufficient image whose entrypoint does the work, not the
-interactive dev image. Proposed: a second, slim image alongside the dev image.
+### Worker image — `docker-setup/worker/`, `./build_and_push_worker_image.py`
 
-`docker-setup/worker/Dockerfile`, multi-stage:
+`ubuntu:24.04` + engine runtime libraries + rclone + `g++` (only for CPU-arch detection) +
+the baked-in `bootstrap.py` entrypoint. The NVIDIA/TensorRT runtime `.so`s (which the
+engine binaries link but CPU workloads never execute) are copied out of the local dev image
+rather than pulled via a multi-gigabyte NVIDIA base. Contains no repo code, no binaries, no
+lexica. Built and pushed to the private registry repo (`registry.worker_image` in the
+credentials file) by `./build_and_push_worker_image.py` on the host; rebuild only when
+`docker-setup/worker/` changes.
 
-- **Stage 1 (builder):** `FROM scribblez` (the local dev image). Copy the repo in, run
-  `py/build.py` for the engine targets needed (`play_game`, `sim_obs_tool`,
-  `libscribblez_ffi.so`). This stage runs on the laptop at image-build time; cloud nodes
-  never compile anything.
-- **Stage 2 (runtime):** `FROM ubuntu:24.04` (same glibc/ABI family as the dev image's
-  base). Install only runtime deps: Boost runtime libs, libprotobuf, python3 + the small
-  set of py/ imports the generator uses, `rclone`. `COPY --from=builder` the binaries and
-  the `py/` tree. Result: a few hundred MB instead of the multi-GB dev image — fast to pull
-  onto N nodes.
+### Bundles — `py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`
 
-**Entrypoint** (`worker_entrypoint.py`), parameterized entirely by env vars:
+The engine builds once per CPU microarchitecture in `SUPPORTED_ARCHS` (py/build.py
+`--build-for-all-archs`), including the generic `x86-64` fallback. A push uploads one
+tarball per arch (that arch's `play_game` / `sim_obs_tool` / `libscribblez_ffi.so` plus the
+arch-independent `py/` tree) under `bundles/<bundle_id>/` and points `bundles/LATEST` at
+it. At pod start, `bootstrap.py` detects the pod's arch (same `g++ -march=native` probe as
+py/build.py), downloads the matching tarball — falling back to `x86-64` with a warning that
+names the arch to add to `SUPPORTED_ARCHS` — unpacks it at `/workspace/repo`, and execs the
+bundle's `py/cloud/worker_entrypoint.py`. So even the worker-loop logic is iterable without
+touching the image.
 
-1. Fetch data deps into the container-local `/workspace/mount`:
-   - `.kwg` lexica from the liwords URL (same fetch `setup_wizard.py` automates — this also
-     keeps copyrighted wordlists *out of the image*, which matters if the image is ever
-     pulled by volunteers).
-   - Macondo `data/strategy` via shallow clone / sparse checkout of the public repo.
-2. Write a `params.json` manifest (tag, rollouts, top-k, positions-per-game, open-leaves,
-   image version) into the tag's bucket prefix. Every worker's generation parameters come
-   from the same launch config; the manifest makes the tag self-describing and lets
-   analysis verify that all contributors used identical settings.
-3. Loop: run one generation cycle (reusing the existing batch logic), then
-   `rclone copy` the finished pair — `.slog` first only after its `.sobs` exists, uploaded
-   together — to `bucket:kill_test/<tag>/slogs/`. Uploading only complete pairs preserves
-   the invariant that anything visible downstream is analyzable.
-4. On SIGTERM (spot preemption, `fleet down`): finish the upload of any completed pair and
-   exit. In-flight cycle is discarded — by design, that's cheap.
+### Worker entrypoint — `py/cloud/worker_entrypoint.py`
 
-Env interface (also the future volunteer-client interface): `SCRIBBLEZ_WORKLOAD=kill_test`,
-`TAG`, `THREADS`, workload-specific knobs (`ROLLOUTS`, `TOP_K`, ...), `RCLONE_*` /
-storage credentials, `WORKER_ID` (informational, for logs).
+Configured entirely by environment variables (see its docstring). Fetches lexica and
+Macondo strategy data from their public upstreams (idempotent; a dev container's populated
+mount short-circuits it), records a provenance manifest at
+`kill_test/<tag>/params/<worker_id>.json` (params, bundle id, arch, fallback status), then
+loops the same `run_one_cycle` the local generator uses, uploading each completed
+`.sobs`/`.slog` pair and deleting the local copy. The `.sobs` uploads first so the bucket
+only ever presents complete pairs plus inert orphans. SIGTERM uploads completed pairs and
+exits.
 
-Making the entrypoint dispatch on `SCRIBBLEZ_WORKLOAD` from day 1 is the cheap generality
-that pays off later: a future GPU workload is a new workload name plus whatever extra the
-image needs, not a new scaffolding.
+### Fleet control — `./py/scripts/cloud_fleet.py`
 
-**Registry:** a private repo on docker.io (or GHCR — both fine; docker.io was named as
-acceptable and Runpod pulls from any registry given credentials). Push via a small
-`py/cloud/build_worker_image.py` that builds the multi-stage image and pushes
-`:latest` + a content tag.
+`up` / `status` / `down` over the Runpod REST API. `up -n 4 --vcpus 16 -t hello` launches
+pods named `scz-hello-<suffix>` from the worker image with the R2 credentials and workload
+knobs in their environment; `--bundle latest` resolves to a concrete bundle id at launch so
+one fleet is homogeneous even if newer bundles land meanwhile. `status -t hello` also
+counts the tag's complete pairs in the bucket. `down` only ever touches `scz-` pods.
 
-## Data plane
+### Results sync — `./py/scripts/cloud_sync.py`
 
-**Recommended store: Cloudflare R2** (S3-compatible).
+`-t hello [--watch]` pulls the tag's bucket prefix into `<mount>/kill_test/<tag>/`,
+merging with locally generated data for the same tag. Analysis stays local and unchanged.
 
-- Zero egress fees — the "do we pay to bring data home?" question disappears structurally,
-  not just at today's volume.
-- Provider-neutral: the same bucket serves Runpod workers today, GCP workers tomorrow,
-  volunteers later. Not tied to the compute vendor.
-- Cost at this volume is pocket change: ~15 GB per laptop-week of data at $0.015/GB-month
-  (first 10 GB free).
+### Credentials — `<mount>/cloud/credentials.json`
 
-Alternatives: GCS if the fleet ends up on GCP anyway (egress back home at ~$0.12/GB is ~$2
-per laptop-week — negligible at this data size, but it grows with future workloads);
-Backblaze B2 (free egress up to 3× storage). Runpod's own network-volume storage is
-rejected: it ties data to one provider and one datacenter, and doesn't serve the volunteer
-future.
+Single operator-filled file (template written by setup_wizard.py or
+`cloud_check_credentials.py`; validated end-to-end by the latter): Runpod API key +
+registry-auth id, worker image repo, R2 account/keys/bucket. Workers receive only the R2
+subset, via pod env vars.
 
-Layout:
+## The daily loop
 
 ```
-kill_test/<tag>/params.json
-kill_test/<tag>/slogs/<ns-timestamp>.slog
-kill_test/<tag>/slogs/<ns-timestamp>.sobs
+# once per code change (seconds + a ~40 MB/arch upload):
+./py/build.py -b            # build all SUPPORTED_ARCHS
+./py/scripts/cloud_push_binaries.py
+
+# run an experiment:
+./py/scripts/cloud_fleet.py up -n 8 --vcpus 16 -t hello
+./py/scripts/cloud_fleet.py status -t hello
+./py/scripts/cloud_sync.py -t hello --watch    # meanwhile, kill_test.py -t hello locally
+./py/scripts/cloud_fleet.py down -t hello
 ```
-
-**Sync back:** `py/scripts/cloud_sync.py -t <tag>` — an `rclone copy` of the tag prefix
-into `<mount>/kill_test/<tag>/slogs/`, downloading only pairs where both files exist, with
-an optional `--watch` loop. Local and cloud-generated data for the same tag land in the
-same directory; `kill_test.py` runs on the union with no changes. This answers the
-"where does data live?" question: the bucket is the durable archive, the laptop holds a
-synced copy, and analysis ergonomics are untouched.
-
-## Fleet CLI
-
-`py/cloud/` package, host-side or in-container (it only talks to HTTP APIs):
-
-- `fleet.py up -n 8 --vcpus 32 --provider runpod --workload kill_test -t hello [knobs]`
-  — launch N workers with the given env config.
-- `fleet.py status` — list running workers, uptime, spend rate, cycles uploaded (cheap to
-  derive from bucket listing).
-- `fleet.py down [--tag hello]` — terminate; workers flush on SIGTERM.
-- `fleet.py logs <worker>` — tail one worker's logs.
-
-Provider adapters behind a small interface (`launch(n, spec, env)`, `list()`,
-`terminate(ids)`):
-
-- **Runpod adapter:** the `runpod` Python SDK / REST API creates CPU pods from the worker
-  image with env vars set. Per-second billing; free ingress/egress. `runpodctl` remains
-  available for ad-hoc ssh.
-- **GCP adapter:** `gcloud compute instances create-with-container` on Container-Optimized
-  OS spot VMs — the VM boots straight into the same worker container; preemption is just
-  SIGTERM, which the worker already handles. No GCP-specific image work.
-
-Secrets (Runpod API key, registry pull creds, R2 keys, GCP project) live in an untracked
-`<mount>/cloud/credentials.json`; `fleet.py up` injects the worker-facing subset (R2
-write credentials only) as pod env vars.
-
-Prefer fewer, bigger nodes (16–32 vCPU): the engine already scales by threads within one
-process, fewer image pulls, fewer moving parts in `status`.
 
 ## Economics
 
-Target: one laptop-week ≈ 24 × 7 × 28 = **~4,700 vCPU-hours** per experiment.
+Target scale: a week of 28-core laptop time ≈ **4,700 vCPU-hours** per experiment.
 
 | Option | ~$/vCPU-hr | Cost per laptop-week | Notes |
 |---|---|---|---|
-| Runpod CPU pods | ~$0.02–0.05 (console has exact per-class rates) | ~$100–200 | per-second billing, free egress, no spot tier for CPU |
-| GCP c3d/c2d spot | ~$0.008 (c3d-standard us-central1, mid-2026) | **~$40** | highcpu shapes slightly cheaper; preemption is a non-event here |
-| GCP on-demand | ~$0.045 | ~$210 | no reason to pay this given spot tolerance |
+| Runpod CPU pods | ~$0.02–0.05 (console has per-flavor rates) | ~$100–200 | per-second billing, free egress |
+| GCP c3d/c2d spot | ~$0.008 (mid-2026) | ~$40 | preemption is a non-event for this workload |
 
-Storage/transfer is noise at this volume: ~15 GB/laptop-week; R2 storage ≈ $0.25/month,
-egress $0.
-
-Read on the numbers: **GCP spot is ~3–4× cheaper for pure CPU**, because spot discounts
-(~80%+) exist there and Runpod's pricing edge is GPUs, not CPUs. But the absolute delta is
-~$100–150 per experiment-week. Given the Runpod preference and that the workload is the
-ideal spot candidate anyway, the pragmatic plan is: **build the Runpod adapter first**
-(preferred provider, simplest API, and the GPU future lands there), keep the adapter
-interface honest, and add the GCP spot adapter when either (a) CPU spend starts to matter
-or (b) Runpod CPU capacity/availability disappoints. The GCP adapter is small — one
-`gcloud` invocation template — so deferring it costs little.
-
-Throughput example: 10 × 32-vCPU nodes ≈ 320 vCPU ≈ 11× the laptop → a laptop-week of data
-in ~15 wall-clock hours, for roughly $40 (GCP spot) / $150 (Runpod).
+Storage/transfer is noise (~15 GB per laptop-week; R2 has zero egress fees). GCP spot is
+~3-4× cheaper for pure CPU; Runpod is the implemented provider (preference, simpler API,
+and the GPU future lands there). The provider surface is one small adapter
+(`py/cloud/runpod_api.py` + the `create_pod` call in cloud_fleet.py); a GCP spot adapter —
+`gcloud compute instances create-with-container` on spot Container-Optimized-OS VMs running
+the same worker image — is worth adding if CPU spend starts to matter.
 
 ## Future: GPU workloads
 
-Everything above is GPU-ready by construction:
-
-- The fleet CLI grows a `--gpu <type>` spec; the Runpod adapter passes it through (this is
-  where Runpod's pricing is actually competitive).
-- Worker images stay per-purpose: the kill-test worker stays slim; a training/GPU worker
-  derives from a CUDA runtime base and reuses the same entrypoint contract
-  (`SCRIBBLEZ_WORKLOAD` + env knobs + bucket upload).
-- The bucket layout generalizes to `<workload>/<tag>/...`.
+The scaffolding generalizes as-is: a new `SCZ_WORKLOAD` entry in the worker entrypoint's
+registry, a GPU flavor/`gpuTypeIds` path in the fleet CLI, and (if the workload needs CUDA
+at runtime) a worker-image variant on a CUDA runtime base with the same bootstrap contract.
+Bundles and the bucket layout are workload-agnostic.
 
 ## Future: volunteer compute
 
-Not built now, but the day-1 choices keep the door open:
+The day-1 choices keep this cheap to add later:
 
-- A volunteer is, to first order, someone running `docker run scribblez/worker` with a
-  participation token — the worker image, env-var contract, and "upload complete pairs to
-  an ingest point" flow are already exactly that shape.
-- The image never contains lexica (fetched from public upstream at start), so it can be
-  made publicly pullable without redistributing wordlists.
-- The one piece that must change for volunteers is credentials: raw bucket write keys can't
-  be handed to strangers. The worker's upload step should therefore be a single seam
-  (one `push_results()` call) so that swapping `rclone`-with-keys for
+- A volunteer is, to first order, someone running the worker image with a participation
+  token — the image/bundle/env-var contract is already exactly that shape, and the image
+  contains no redistributable-restricted data (lexica are fetched from public upstream), so
+  it can be made publicly pullable.
+- The one necessary change is credentials: raw bucket write keys can't go to strangers.
+  The worker's uploads are already funneled through two small functions
+  (`upload_completed_pairs`, `upload_manifest`), the seam where rclone-with-keys becomes
   HTTPS-ingest-with-token (presigned URLs from a small ingest service, plus server-side
-  validation of uploaded pairs) touches one function, not the workload logic. Untrusted
-  data will need a validation/quarantine pass at ingest — that's deliberately a
-  later-problem, but the bucket-centric design is what makes it addable.
+  validation/quarantine of uploaded pairs).
 
-## Day-1 checklist
+## Status / remaining work
 
-1. `docker-setup/worker/Dockerfile` (multi-stage: build in dev image, slim runtime) +
-   `py/cloud/build_worker_image.py` (build & push).
-2. `worker_entrypoint.py`: dep fetch, params manifest, generate-upload loop, SIGTERM flush.
-3. R2 bucket + credentials file convention.
-4. `py/cloud/fleet.py` with the Runpod adapter.
-5. `py/scripts/cloud_sync.py` (bucket → local mount, pairs-only, `--watch`).
-6. Smoke test: 1 small pod, 1 cycle, verify the pair appears locally and `kill_test.py`
-   consumes the merged directory.
-
-Decisions to confirm before building: registry (docker.io private vs GHCR), R2 vs
-GCS/B2, and whether a GCP spot adapter is wanted in the first pass or deferred.
+Everything above is implemented and smoke-tested from the dev container (worker entrypoint
+end-to-end against the real bucket, fleet CLI against the live Runpod API). Not yet
+exercised: a real pod launch (first `build_and_push_worker_image.py` push + a 1-pod `up` with small
+knobs), and per-flavor throughput calibration (cycles/hour on `cpu3c` vs `cpu5c` at real
+parameters) to pin down actual $/laptop-week.
