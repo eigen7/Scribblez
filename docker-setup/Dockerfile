@@ -104,10 +104,14 @@ RUN apt-get update && \
 RUN pip3 install --no-cache-dir pypdf
 
 # 6g) rclone, for moving data to/from the R2 results bucket (py/cloud tooling:
-#     credential checks, result syncing, binary pushes).
-RUN apt-get update && \
-    apt-get install -y rclone && \
-    rm -rf /var/lib/apt/lists/*
+#     credential checks, result syncing, binary pushes). Installed from
+#     rclone.org: Ubuntu's packaged rclone (1.60) predates the Cloudflare-R2
+#     provider accommodations and mishandles R2 uploads.
+RUN curl -fsSL https://downloads.rclone.org/v1.74.3/rclone-v1.74.3-linux-amd64.zip \
+      -o /tmp/rclone.zip && \
+    python3 -c "import zipfile; zipfile.ZipFile('/tmp/rclone.zip').extractall('/tmp')" && \
+    install -m 755 /tmp/rclone-v1.74.3-linux-amd64/rclone /usr/local/bin/rclone && \
+    rm -rf /tmp/rclone.zip /tmp/rclone-v1.74.3-linux-amd64
 
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
