@@ -10,6 +10,15 @@ namespace util {
 // Smallest power of two that is >= n (and >= 1, since std::bit_ceil(0) == 1).
 inline uint64_t round_up_pow2(uint64_t n) { return std::bit_ceil(n); }
 
+// splitmix64 finalizer: decorrelates structured integers (file/game/turn
+// triples, seeds) into well-mixed 64-bit values.
+constexpr uint64_t mix64(uint64_t x) {
+  x += 0x9E3779B97F4A7C15ull;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+  return x ^ (x >> 31);
+}
+
 // Round n up to the next multiple of alignment. alignment must be a power of two.
 constexpr uint64_t align_up(uint64_t n, uint64_t alignment) {
   return (n + alignment - 1) & ~(alignment - 1);

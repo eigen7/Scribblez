@@ -21,6 +21,7 @@
 #include "scribblez/max_move_per_lane_input_encoder.h"
 #include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/movegen.h"
+#include "scribblez/mpre_target_log.h"
 #include "scribblez/position_encoder.h"
 #include "scribblez/rack.h"
 #include "scribblez/sim_observation_log.h"
@@ -3970,6 +3971,61 @@ static void test_opp_leave_from_replay() {
   CHECK(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size() == 0);
 }
 
+static void test_mpre_target_log_roundtrip() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_mpt";
+  fs::create_directories(tmp);
+  const std::string path = (tmp / "test.mpt").string();
+
+  const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
+                                 {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
+                                  Glyph::of(Tile::from_char('C'))});
+  TileCounts xchg_tiles;
+  xchg_tiles.add(Tile::from_char('A'));
+  const Move m2 = Move::exchange(xchg_tiles);
+  const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f,  41.0f,
+                                      0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
+
+  {
+    MpreTargetWriter w(path, kMpreTargetFloatsV1, "abc123");
+    w.add_position(3, 11, {m1, m2}, targets);
+    w.close();
+  }
+
+  MpreTargetReader r(path);
+  CHECK(r.record_floats() == kMpreTargetFloatsV1);
+  CHECK(r.model_hash() == "abc123");
+  CHECK(r.num_positions() == 1);
+  const MpreTargetReader::Position p0 = r.position(0);
+  CHECK(p0.header->game_index == 3);
+  CHECK(p0.header->turn_index == 11);
+  CHECK(p0.header->num_candidates == 2);
+  CHECK(r.move_at(p0, 0) == m1);
+  CHECK(r.move_at(p0, 1) == m2);
+  for (int c = 0; c < 2; ++c) {
+    for (int j = 0; j < static_cast<int>(kMpreTargetFloatsV1); ++j) {
+      CHECK(r.targets_at(p0, c)[j] == targets[c * kMpreTargetFloatsV1 + j]);
+    }
+  }
+
+  // A version mismatch fails loudly (stale files must never misparse).
+  {
+    std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+    f.seekp(4);  // MpreTargetFileHeader::version
+    const uint16_t bad = 0xFFFF;
+    f.write(reinterpret_cast<const char*>(&bad), sizeof(bad));
+  }
+  bool threw = false;
+  try {
+    MpreTargetReader r2(path);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  CHECK(threw);
+
+  fs::remove_all(tmp);
+}
+
 static void test_sim_observation_log_roundtrip() {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";
@@ -4517,6 +4573,7 @@ int main() {
   test_sim_runner_partial_leave();
   test_opp_leave_from_replay();
   test_sim_observation_log_roundtrip();
+  test_mpre_target_log_roundtrip();
   std::cout << "All tests passed.\n";
   return 0;
 }

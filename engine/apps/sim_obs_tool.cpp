@@ -29,6 +29,7 @@
 #include "scribblez/sim_observation_log.h"
 #include "scribblez/sim_runner.h"
 #include "util/hardware.h"
+#include "util/math.h"
 #include "util/progress.h"
 
 #include <boost/program_options.hpp>
@@ -83,17 +84,8 @@ struct PositionResult {
   std::vector<SimObservation> observations;
 };
 
-// splitmix64 finalizer: decorrelates the structured (seed, game, turn) triple
-// into the rollout base seed.
-uint64_t mix64(uint64_t x) {
-  x += 0x9E3779B97F4A7C15ull;
-  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-  x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-  return x ^ (x >> 31);
-}
-
 uint64_t position_seed(uint64_t run_seed, uint32_t game_idx, uint32_t turn_idx) {
-  return mix64(run_seed ^ mix64((static_cast<uint64_t>(game_idx) << 20) | turn_idx));
+  return util::mix64(run_seed ^ util::mix64((static_cast<uint64_t>(game_idx) << 20) | turn_idx));
 }
 
 // Sample --positions-per-game eligible turns of game `gm` (without
@@ -105,7 +97,7 @@ void sample_positions(const GameMetadata& gm, uint32_t game_idx, const Options& 
   if (begin >= end) return;
   std::vector<uint32_t> turns(static_cast<size_t>(end - begin));
   std::iota(turns.begin(), turns.end(), static_cast<uint32_t>(begin));
-  std::mt19937_64 rng(mix64(opt.seed ^ mix64(0xC0FFEEull + game_idx)));
+  std::mt19937_64 rng(util::mix64(opt.seed ^ util::mix64(0xC0FFEEull + game_idx)));
   std::shuffle(turns.begin(), turns.end(), rng);
   const int take = std::min<int>(opt.positions_per_game, static_cast<int>(turns.size()));
   for (int i = 0; i < take; ++i) out->push_back({game_idx, turns[i]});

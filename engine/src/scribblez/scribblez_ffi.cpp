@@ -260,24 +260,6 @@ int emit_string(const std::string& s, char* out, int out_cap) {
 
 }  // namespace
 
-namespace {
-
-// Field-wise Move equality (Move packs a padding byte, so memcmp is unsafe).
-bool same_move(const scribblez::Move& a, const scribblez::Move& b) {
-  if (a.type() != b.type() || a.num_glyphs() != b.num_glyphs()) return false;
-  if (a.type() == scribblez::MoveType::PLAY &&
-      (a.horizontal() != b.horizontal() || a.start() != b.start() ||
-       a.square_mask() != b.square_mask())) {
-    return false;
-  }
-  for (int i = 0; i < a.num_glyphs(); ++i) {
-    if (a.glyph(i).to_char() != b.glyph(i).to_char()) return false;
-  }
-  return true;
-}
-
-}  // namespace
-
 int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
                                        uint64_t seed, bool open_leaves, char* out_records,
                                        int* played_rank) const {
@@ -327,7 +309,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 
   *played_rank = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
-    if (same_move(candidates[i], final_turn.move)) *played_rank = static_cast<int>(i);
+    if (candidates[i] == final_turn.move) *played_rank = static_cast<int>(i);
     char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
     std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
     std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));

@@ -45,6 +45,7 @@ add_library(scribblez_core STATIC
   src/scribblez/monte_carlo_sim.cpp
   src/scribblez/sim_runner.cpp
   src/scribblez/sim_observation_log.cpp
+  src/scribblez/mpre_target_log.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/post_move_analysis.cpp
   src/scribblez/seed_producer.cpp
@@ -260,3 +261,15 @@ target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 # any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
+
+# M_pre distillation-target generator: stratified candidate sampling + batched
+# teacher (M_post) inference over .slog positions (docs/roadmap2.md track A).
+add_executable(mpre_target_tool apps/mpre_target_tool.cpp)
+target_link_libraries(mpre_target_tool PRIVATE
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)

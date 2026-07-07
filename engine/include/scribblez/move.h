@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -92,6 +93,12 @@ class Move {
 };
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
+
+// Byte-wise equality is exact: every Move byte is meaningful or explicitly
+// zeroed (reserved_), and the factories produce canonical orderings (play
+// glyphs in lane order, exchange tiles sorted).
+inline bool operator==(const Move& a, const Move& b) { return std::memcmp(&a, &b, 16) == 0; }
+inline bool operator!=(const Move& a, const Move& b) { return !(a == b); }
 
 // Calls f(row, col) once per board square `m` places a tile on, in lane order.
 // EXCHANGE and PASS place nothing, so f is never called for them.
