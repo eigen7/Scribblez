@@ -18,7 +18,10 @@ SOBS_MAGIC = 0x53424F53  # "SOBS"
 SOBS_VERSION = 1
 
 # SimObsFileHeader.flags bits (engine/include/scribblez/sim_observation_log.h).
-SOBS_FLAG_OPEN_RACK = 1
+# Bit 0x1 is retired (full-open-rack sims, an information condition no
+# consumer supports); readers must reject files carrying it.
+SOBS_FLAG_RETIRED_OPEN_RACK = 1
+SOBS_FLAG_OPEN_LEAVES = 2
 
 BOARD = 15
 CELLS = BOARD * BOARD
@@ -104,7 +107,7 @@ class SobsPosition:
 
 def read_sobs_flags(path: str | Path) -> int:
     """The .sobs header's flags word (SOBS_FLAG_* bits) -- e.g. whether the
-    sims were generated under the open-rack information condition. Reads only
+    sims were generated under the open-leaves information condition. Reads only
     the 16-byte header."""
     with open(path, "rb") as f:
         hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]

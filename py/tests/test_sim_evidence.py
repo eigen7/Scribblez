@@ -156,15 +156,15 @@ def test_gcg_sim_evidence_on_dataset_position():
     assert records2.tobytes() == records.tobytes()
 
 
-def test_open_rack_sobs_and_input_arm(sobs_dir, tmp_path):
+def test_open_leaves_sobs_and_input_arm(sobs_dir, tmp_path):
     import sys
 
-    from scribblez.sim_evidence.sobs import SOBS_FLAG_OPEN_RACK, read_sobs_flags
+    from scribblez.sim_evidence.sobs import SOBS_FLAG_OPEN_LEAVES, read_sobs_flags
 
-    # Hidden-rack sidecars carry no flags.
+    # Hidden-mode sidecars carry no flags.
     assert read_sobs_flags(sorted(sobs_dir.glob("*.sobs"))[0]) == 0
 
-    # Regenerate one sidecar open-rack: the flag is recorded and the sims
+    # Regenerate one sidecar open-leaves: the flag is recorded and the sims
     # still satisfy the observation invariants.
     slog = sorted(sobs_dir.glob("*.slog"))[0]
     import shutil
@@ -175,7 +175,7 @@ def test_open_rack_sobs_and_input_arm(sobs_dir, tmp_path):
         [
             str(SIM_OBS_TOOL),
             f"--slog-file={slog_copy}",
-            "--open-rack",
+            "--open-leaves",
             f"--rollouts={ROLLOUTS}",
             f"--top-k={TOP_K}",
             "--positions-per-game=2",
@@ -187,17 +187,17 @@ def test_open_rack_sobs_and_input_arm(sobs_dir, tmp_path):
     )
     assert result.returncode == 0, result.stderr
     sobs = slog_copy.with_suffix(".sobs")
-    assert read_sobs_flags(sobs) == SOBS_FLAG_OPEN_RACK
+    assert read_sobs_flags(sobs) == SOBS_FLAG_OPEN_LEAVES
     for pos in read_sobs(sobs):
         for obs in pos.obs:
             assert int(obs["n"]) == ROLLOUTS
             assert (obs["opp_win_count"] <= obs["opp_next_count"]).all()
 
-    # The open-rack input arm appends the 27 opponent-rack counts. The FFI
+    # The open-leaves input arm appends the 27 opponent-leave counts. The FFI
     # session's layout is fixed at creation, so probe it in a subprocess.
     code = (
-        "from scribblez.ffi import set_opp_rack_input, get_input_shapes\n"
-        "set_opp_rack_input(True)\n"
+        "from scribblez.ffi import set_opp_leave_input, get_input_shapes\n"
+        "set_opp_leave_input(True)\n"
         "print({s.name: s.dims for s in get_input_shapes()}['input_scalar'][0])\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

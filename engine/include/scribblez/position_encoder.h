@@ -23,6 +23,17 @@ class Dictionary;
 
 namespace binlog {
 
+// The opponent's retained leave at the decision point of `sampled_turn`: their
+// current rack (`opp_rack_now`, as tracked by the replay) minus the tiles they
+// drew after their most recent move -- i.e. the Bayesian-inferable part of
+// their rack, with the fresh replenishment draws masked out. Empty when the
+// opponent has not acted yet (their whole rack is an unseen draw). Identical
+// for the pre- and post-move snapshots of the same turn (the mover's move does
+// not touch the opponent's rack). Serves the open-leaves information condition
+// (docs/sim_residual_feedback.md) for both the input encoder and the sim
+// tools.
+Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now);
+
 class PositionEncoder {
  public:
   // `spec` configures the input encoding (lexicon + feature blocks); tasks

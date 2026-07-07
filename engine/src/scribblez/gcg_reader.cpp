@@ -4,6 +4,7 @@
 #include "scribblez/web_server.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <exception>
 #include <map>
@@ -464,6 +465,20 @@ bool read_gcg_text(const std::string& gcg_text, ParsedGcgGame* out_game,
   if (!reader.Read(gcg_text, out_game, error_message)) return false;
   out_game->game_log = out_game->to_game_log_storage();
   return true;
+}
+
+Rack retained_leave(const ParsedGcgGame& game, int player) {
+  for (auto it = game.turns.rbegin(); it != game.turns.rend(); ++it) {
+    if (it->record.player != player) continue;
+    Rack leave = it->record.rack_before;
+    const Move& m = it->record.move;
+    for (int i = 0; i < m.num_glyphs(); ++i) {
+      [[maybe_unused]] const bool ok = leave.remove(m.glyph(i).rack_tile());
+      assert(ok);
+    }
+    return leave;
+  }
+  return Rack{};
 }
 
 }  // namespace scribblez

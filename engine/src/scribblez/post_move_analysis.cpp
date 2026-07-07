@@ -56,24 +56,19 @@ bool parse_final_position(const std::string& gcg_text, ParsedGcgGame* game, Fina
 // `start_player`'s POV holding `leave`. apply_move needs only the moves (not racks),
 // so this reproduces the board / scores / last-two-moves state the training replay
 // builds; only the rack and the unseen-pool feature depend on `leave`.
-// Returns false (with *error set) iff the spec demands the opponent rack (the
-// open-rack arm) and the GCG does not record it -- as in the penultimate-bingo
-// analysis datasets, whose to-act rack is a fresh unknown draw by design.
 bool replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave,
                        const InputEncodingSpec& spec, float* out, std::string* error) {
+  (void)error;
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
   assert(enc.active_player() == game.snapshots.back().turn_player);
-  if (spec.opp_rack_input) {
-    Rack opp;
-    for (const std::optional<Tile>& t : game.snapshots.back().racks[1 - start_player]) {
-      if (t) opp.add(*t);
-    }
-    if (opp.size() == 0) {
-      if (error) *error = "open-rack encode: the GCG does not record the opponent's rack";
-      return false;
-    }
-    enc.encode_input(start_player, leave, opp, /*apply_flip=*/false, out);
+  if (spec.opp_leave_input) {
+    // Open-leaves arm: the opponent's retained leave is reconstructable from
+    // their last recorded move; an empty leave (e.g. the penultimate-bingo
+    // datasets, whose to-act player kept nothing) is legitimate and encodes
+    // as zeros.
+    enc.encode_input(start_player, leave, retained_leave(game, 1 - start_player),
+                     /*apply_flip=*/false, out);
   } else {
     enc.encode_input(start_player, leave, /*apply_flip=*/false, out);
   }

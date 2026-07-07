@@ -557,33 +557,44 @@ in-flight cycle, and a rerun resumes). `kill_test.py` snapshots whatever
 complete pairs exist, so it can run while generation continues, and rerunning
 it after more data has accumulated only decodes the new files.
 
-### The open-rack information condition
+### The open-leaves information condition
 
-Passing `--open-rack` to both commands (under a dedicated tag) runs the same
-experiment in **open-rack Scrabble**: racks are public. Sims start every
-rollout from the opponent's true (replayed) rack instead of sampling it — the
-opponent's first reply to each candidate becomes deterministic under the
-greedy rollout policy, collapsing rollout variance to draw luck — and the
-model input gains the opponent-rack counts block (`kOppRackCounts`,
-input_encoder.h), so the network formally holds all information and lacks
-only the lexical computation. This is the endpoint of the belief-quality axis
-(uniform sampling → leave-enumeration inference → belief system → open rack):
-the open-rack evidence gain, minus the hidden-rack gain, prices the entire
-belief line of work interventionally, and a weak open-rack result points at
-the fusion machinery rather than at rack uncertainty. It is a research
-instrument, not the product path — nothing trained under it is exported for
-serving, and absolute metrics are not comparable across information
-conditions (compare arm deltas within a mode only).
+Passing `--open-leaves` to both commands (under a dedicated tag) runs the
+same experiment in **open-leaves Scrabble**: the tiles a player *retained*
+from their last move are public, while their replenishment draws stay hidden.
+The leave is the Bayesian-inferable part of a rack — a perfect belief system
+could in principle recover its distribution from the move history, but no
+inference can know the fresh draws — so this condition hands the model and
+the sims an **exact rack posterior**: sims seed the opponent's known leave
+and sample only the replenishments, which is precisely the true conditional
+given the mover's information (fresh draws are uniform from the bag by
+construction). The model input gains the opponent-leave counts block
+(`kOppLeaveCounts`, input_encoder.h); an empty leave (opponent bingoed, or
+has not acted) reveals nothing and encodes as zeros. A pass retains the whole
+rack, so a pass reveals all seven tiles — consistent with the rule, and with
+how informative a pass is to real inference.
+
+This is the exact endpoint of the belief-quality axis (uniform sampling →
+leave-enumeration inference → belief system → open leaves): the open-leaves
+evidence gain, minus the hidden gain, prices the entire belief line of work
+interventionally, and a weak open-leaves result points at the fusion
+machinery rather than at rack uncertainty. It is a research instrument, not
+the product path — nothing trained under it is exported for serving, and
+absolute metrics are not comparable across information conditions (compare
+arm deltas within a mode only).
 
 ```
-./py/scripts/generate_kill_test_data.py -t apple-open --open-rack
-./py/scripts/kill_test.py -t apple-open --open-rack
+./py/scripts/generate_kill_test_data.py -t apple-open --open-leaves
+./py/scripts/kill_test.py -t apple-open --open-leaves
 ```
 
-The `.sobs` header records the condition (`flags` bit) and the cache records
-its mode, so mixing modes within a tag fails loudly. HastyBot barely reads
-the opponent rack (only the pre-endgame equity adjustments), so the self-play
-data distribution is essentially unchanged — the "variant" is an information
+No game-runner changes are involved: the `.slog` records already carry each
+move's subsequent draws, so the leave is derived at replay time (the
+opponent's current rack minus the draws since their last move). The `.sobs`
+header records the condition (`flags` bit) and the cache records its mode, so
+mixing modes within a tag fails loudly. HastyBot barely reads the opponent
+rack (only the pre-endgame equity adjustments), so the self-play data
+distribution is essentially unchanged — the "variant" is an information
 condition on the training/eval tasks, not a different game.
 
 **Reading the results** (summary table at the end; per-arm history in

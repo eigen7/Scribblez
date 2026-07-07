@@ -34,8 +34,10 @@ namespace scribblez {
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
 inline constexpr uint16_t kSimObsVersion = 1;
 
-// SimObsFileHeader::flags bits.
-inline constexpr uint32_t kSimObsFlagOpenRack = 1u;  // sims used the true opponent rack
+// SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
+// the opponent's entire true rack, an information condition no consumer
+// supports); readers must reject files carrying it.
+inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
 
 #pragma pack(push, 1)
 

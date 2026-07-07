@@ -2,11 +2,11 @@
 
 #include "scribblez/input_encoding_spec.h"
 #include "scribblez/move.h"
+#include "scribblez/rack.h"
 
 namespace scribblez {
 
 class GameStateEncoder;
-class Rack;
 
 // The post-replay state at a sampled position, from which a TrainingTask encodes
 // one training row (input tensor + labels). It is the single context object both
@@ -15,12 +15,14 @@ class Rack;
 struct EncodeContext {
   // Replayed state at the sampled position. `enc` exposes the board, cumulative
   // scores, and both players' last moves; `pov_rack` is the mover's rack (which
-  // `enc` does not itself hold), and `opp_rack` the opponent's -- consumed only
-  // under the open-rack arm (spec.opp_rack_input). `active_player` is the POV
-  // -- the mover at the sampled turn.
+  // `enc` does not itself hold). `opp_known_leave` holds the tiles the opponent
+  // retained from their last move (their current rack minus the draws that
+  // followed it) -- consumed only under the open-leaves arm
+  // (spec.opp_leave_input); empty when the opponent has not acted or kept
+  // nothing. `active_player` is the POV -- the mover at the sampled turn.
   const GameStateEncoder* enc = nullptr;
   const Rack* pov_rack = nullptr;
-  const Rack* opp_rack = nullptr;
+  Rack opp_known_leave{};
   int active_player = 0;
   bool apply_flip = false;  // transpose spatial planes/labels across the diagonal
 

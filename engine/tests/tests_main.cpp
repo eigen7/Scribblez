@@ -1151,15 +1151,16 @@ static void test_base_layout_is_full_minus_contingent_tails() {
   std::cout << "test_base_layout_is_full_minus_contingent_tails passed\n";
 }
 
-// Open-rack arm: the row is the base row plus the opponent-rack counts block
-// at the scalar tail, holding exactly the opponent rack's per-tile counts.
-static void test_open_rack_layout_appends_opp_rack_counts() {
+// Open-leaves arm: the row is the base row plus the opponent-leave counts
+// block at the scalar tail, holding exactly the known leave's per-tile
+// counts.
+static void test_open_leaves_layout_appends_leave_counts() {
   Dictionary d = medium_dict();
   const InputEncodingSpec base{&d, false};
-  const InputEncodingSpec open{&d, false, /*opp_rack_input=*/true};
+  const InputEncodingSpec open{&d, false, /*opp_leave_input=*/true};
   CHECK(spatial_planes(open) == spatial_planes(base));
-  CHECK(scalar_floats(open) == scalar_floats(base) + kOppRackCountFloats);
-  CHECK(scalar_block_offset(open, ScalarBlockId::kOppRackCounts) == scalar_floats(base));
+  CHECK(scalar_floats(open) == scalar_floats(base) + kOppLeaveCountFloats);
+  CHECK(scalar_block_offset(open, ScalarBlockId::kOppLeaveCounts) == scalar_floats(base));
 
   Move cat = make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
                             {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
@@ -1185,9 +1186,9 @@ static void test_open_rack_layout_appends_opp_rack_counts() {
   CHECK(tail[Tile::from_char('Z').index()] == 1.0f);
   CHECK(tail[Tile::from_char('A').index()] == 2.0f);
   float tail_total = 0.0f;
-  for (int i = 0; i < kOppRackCountFloats; ++i) tail_total += tail[i];
+  for (int i = 0; i < kOppLeaveCountFloats; ++i) tail_total += tail[i];
   CHECK(tail_total == 5.0f);
-  std::cout << "test_open_rack_layout_appends_opp_rack_counts passed\n";
+  std::cout << "test_open_leaves_layout_appends_leave_counts passed\n";
 }
 
 // A hand-checked position: horizontal CAT at (7,7..9), rack {R}. Verifies the
@@ -3865,9 +3866,11 @@ static void test_sim_runner() {
             << params.rollouts << " rollouts)\n";
 }
 
-// Open-rack sims: with the opponent's rack known and a greedy (deterministic)
-// rollout policy, the opponent's first reply to each candidate is the same in
-// every rollout, so the reply-placement counts are exactly 0 or S per square.
+// A full 7-tile known leave degenerates to a completely known opponent rack:
+// under a greedy (deterministic) rollout policy the opponent's first reply to
+// each candidate is then the same in every rollout, so the reply-placement
+// counts are exactly 0 or S per square. (A partial leave is exercised by the
+// partial-leave test below.)
 static void test_sim_runner_known_opp_rack() {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_openrack";
@@ -3885,7 +3888,7 @@ static void test_sim_runner_known_opp_rack() {
   pos.scores = {30, 45};
   pos.mover = 0;
   pos.rack = rack_from("CATSEIQ");
-  pos.opp_rack = rack_from("DOGSTAR");
+  pos.opp_leave = rack_from("DOGSTAR");
 
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
@@ -3916,6 +3919,55 @@ static void test_sim_runner_known_opp_rack() {
 
   fs::remove_all(tmp);
   std::cout << "test_sim_runner_known_opp_rack passed\n";
+}
+
+// A partial known leave: the rollout seeds the opponent's retained tiles and
+// samples only their hidden replenishments, so observations satisfy the same
+// invariants while replies may vary across rollouts.
+static void test_sim_runner_partial_leave() {
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {10, 5};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  pos.opp_leave = rack_from("ZI");  // kept 2; the other 5 are hidden draws
+
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  CHECK(!plays.empty());
+  SimRunner::Params params;
+  params.rollouts = 10;
+  params.threads = 2;
+  const std::vector<SimObservation> obs =
+    SimRunner(d, params).run(pos, {plays.front()}, /*base_seed=*/4);
+  CHECK(static_cast<int>(obs[0].n) == params.rollouts);
+  CHECK(obs[0].wins + obs[0].draws + obs[0].losses == obs[0].n);
+  for (int i = 0; i < SimObservation::kCells; ++i) {
+    CHECK(obs[0].opp_win_count[i] <= obs[0].opp_next_count[i]);
+  }
+}
+
+// opp_leave_from_replay: the opponent's current rack minus the draws after
+// their last move; empty before they have acted.
+static void test_opp_leave_from_replay() {
+  using scribblez::binlog::opp_leave_from_replay;
+  TurnRecord records[2] = {};
+  records[0].player = 1;  // the opponent's move at turn 0
+  records[0].drawn = rack_from("AB");
+  GameLog g{};
+  g.records = records;
+  g.num_records = 2;
+
+  // Mover at turn 1: opponent moved at turn 0, then drew A and B. Their
+  // current rack CABDEFG minus {A, B} leaves their retained CDEFG.
+  const Rack now = rack_from("CABDEFG");
+  const Rack leave = opp_leave_from_replay(g, /*sampled_turn=*/1, now);
+  CHECK(leave.size() == 5);
+  Rack expect = rack_from("CDEFG");
+  for (int i = 0; i < expect.size(); ++i) CHECK(rack_contains(leave, expect.tiles()[i]));
+
+  // Mover at turn 0: the opponent has not acted; nothing is known.
+  CHECK(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size() == 0);
 }
 
 static void test_sim_observation_log_roundtrip() {
@@ -4424,7 +4476,7 @@ int main() {
   test_contingent_map_matches_per_tile_generation();
   test_contingent_map_cat_board();
   test_base_layout_is_full_minus_contingent_tails();
-  test_open_rack_layout_appends_opp_rack_counts();
+  test_open_leaves_layout_appends_leave_counts();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
@@ -4462,6 +4514,8 @@ int main() {
   test_play_from_returned_to_bag();
   test_sim_runner();
   test_sim_runner_known_opp_rack();
+  test_sim_runner_partial_leave();
+  test_opp_leave_from_replay();
   test_sim_observation_log_roundtrip();
   std::cout << "All tests passed.\n";
   return 0;

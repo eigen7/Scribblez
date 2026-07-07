@@ -23,6 +23,21 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
 
 }  // namespace
 
+Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now) {
+  // The opponent of the mover at `sampled_turn` acted at sampled_turn - 1 (if
+  // at all); every tile in records[sampled_turn - 1].drawn is a replenishment
+  // still on their rack (they have not moved since), so subtracting the draws
+  // from the current rack leaves exactly the retained leave.
+  if (sampled_turn == 0) return Rack{};
+  Rack leave = opp_rack_now;
+  for (Tile t : g.records[sampled_turn - 1].drawn.tiles()) {
+    if (t.is_empty()) break;
+    [[maybe_unused]] const bool ok = leave.remove(t);
+    assert(ok);
+  }
+  return leave;
+}
+
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {
   enc_ = GameStateEncoder{spec_, g.initial_scores};
   racks_[0] = g.initial_racks[0];
@@ -62,7 +77,7 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   EncodeContext ctx{};
   ctx.enc = &enc_;
   ctx.pov_rack = &racks_[mover];
-  ctx.opp_rack = &racks_[1 - mover];
+  ctx.opp_known_leave = opp_leave_from_replay(g, sampled_turn, racks_[1 - mover]);
   ctx.active_player = mover;
   ctx.apply_flip = flip;
   ctx.spec = spec_;

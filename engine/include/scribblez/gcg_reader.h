@@ -52,4 +52,11 @@ struct ParsedGcgGame {
 bool read_gcg_text(const std::string& gcg_text, ParsedGcgGame* out_game,
                    std::string* error_message);
 
+// The leave `player` retained at their most recent recorded turn: their
+// rack_before minus the tiles that move played or exchanged (a PASS retains
+// everything). Empty when the player has no recorded turn. This is the
+// known part of their rack under the open-leaves information condition --
+// their replenishment draws after that move are not recorded and stay hidden.
+Rack retained_leave(const ParsedGcgGame& game, int player);
+
 }  // namespace scribblez

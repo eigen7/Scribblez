@@ -31,7 +31,7 @@ from scribblez.ffi import (
     analyze_post_move_gcg,
     gcg_sim_evidence,
     get_input_shapes,
-    set_opp_rack_input,
+    set_opp_leave_input,
 )
 from scribblez.sim_evidence.model import EvidencePostMoveModel
 from scribblez.sim_evidence.sobs import (
@@ -72,14 +72,14 @@ def top_squares(plane: np.ndarray, k: int = 6, min_value: float = 0.01) -> str:
     return "  ".join(parts) if parts else "(none)"
 
 
-def load_arm(results_dir: Path, arm: str, suffix: str, open_rack: bool, device):
+def load_arm(results_dir: Path, arm: str, suffix: str, open_leaves: bool, device):
     """Rebuild an arm's model from its saved weights and recorded args."""
     meta = json.loads((results_dir / f"{arm}{suffix}.json").read_text())
-    arm_open = bool(meta["args"].get("open_rack", False))
-    if arm_open != open_rack:
+    arm_open = bool(meta["args"].get("open_leaves", False))
+    if arm_open != open_leaves:
         raise SystemExit(
-            f"arm `{arm}{suffix}` was trained with open_rack={arm_open}; rerun the probe "
-            f"with{'' if arm_open else 'out'} --open-rack"
+            f"arm `{arm}{suffix}` was trained with open_leaves={arm_open}; rerun the probe "
+            f"with{'' if arm_open else 'out'} --open-leaves"
         )
     weights = results_dir / f"{arm}{suffix}_model.pt"
     if not weights.exists():
@@ -145,14 +145,13 @@ def main():
         help="result-file suffix of the arms to load (kill_test.py --out-suffix)",
     )
     p.add_argument(
-        "--open-rack",
+        "--open-leaves",
         action="store_true",
-        help="the open-rack information condition: encode the input with the "
-        "opponent-rack block and sim with their known rack; the arms must have "
-        "been trained with kill_test.py --open-rack, and the GCG must record the "
-        "opponent's rack (the penultimate-bingo datasets deliberately do not -- "
-        "their to-act rack is a fresh unknown draw, so open-rack probing needs a "
-        "GCG whose final racks are known)",
+        help="the open-leaves information condition: encode the input with the "
+        "opponent-leave block and sim with their retained leave known; the arms "
+        "must have been trained with kill_test.py --open-leaves. (On the "
+        "penultimate-bingo datasets the to-act player just bingoed, so the known "
+        "leave is empty and the sims coincide with hidden mode -- expected.)",
     )
     p.add_argument(
         "--include-own-sim",
@@ -161,7 +160,7 @@ def main():
         "leave-one-out by default, so the default here matches training)",
     )
     args = p.parse_args()
-    set_opp_rack_input(args.open_rack)
+    set_opp_leave_input(args.open_leaves)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gcg_path = Path(args.gcg)
@@ -175,7 +174,7 @@ def main():
         rollouts=args.rollouts,
         threads=args.threads,
         seed=args.seed,
-        open_rack=args.open_rack,
+        open_leaves=args.open_leaves,
     )
     print(
         f"=== sim evidence: {len(records)} candidates x {args.rollouts} rollouts "
@@ -217,7 +216,7 @@ def main():
 
     print("\n=== model heads (win/draw/loss, score-diff mean+-std) ===")
     for arm in [a.strip() for a in args.arms.split(",") if a.strip()]:
-        model, max_k = load_arm(results_dir, arm, args.suffix, args.open_rack, device)
+        model, max_k = load_arm(results_dir, arm, args.suffix, args.open_leaves, device)
         pos = SobsPosition(
             game_index=0,
             turn_index=0,

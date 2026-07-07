@@ -44,10 +44,14 @@
 //                     best contingent score over all lanes (27), the same
 //                     draw-weighted (27), the expected best, the rack-alone
 //                     best.
-//     kOppRackCounts  27 (open-rack runs only): the opponent's raw per-tile
-//                     counts -- the one exception to the POV-visibility rule,
-//                     available only under the open-rack information condition
-//                     (spec.opp_rack_input).
+//     kOppLeaveCounts 27 (open-leaves runs only): per-tile counts of the
+//                     opponent's retained leave -- the tiles they kept from
+//                     their last move, excluding their hidden replenishment
+//                     draws. The one exception to the POV-visibility rule,
+//                     available only under the open-leaves information
+//                     condition (spec.opp_leave_input). All zeros when the
+//                     opponent has not acted or their last move kept nothing
+//                     (a bingo).
 //
 // The conditional blocks sit at the TAILS of their sections, so a smaller
 // arm's row is a larger arm's row with the tails spliced out; consumers that
@@ -83,7 +87,7 @@ inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
 // Per-kind best + per-kind draw-weighted best, then expected best + rack-alone best.
 inline constexpr int kContingentScalarFloats = 27 + 27 + 2;  // 56
-inline constexpr int kOppRackCountFloats = 27;               // open-rack arm only
+inline constexpr int kOppLeaveCountFloats = 27;              // open-leaves arm only
 
 // ---- Block registry ---------------------------------------------------------
 
@@ -94,7 +98,7 @@ enum class ScalarBlockId {
   kScoreDiff,
   kMoveMeta,
   kContingent,
-  kOppRackCounts
+  kOppLeaveCounts
 };
 
 struct SpatialBlockDef {
@@ -106,7 +110,7 @@ struct ScalarBlockDef {
   ScalarBlockId id;
   int floats;
   bool contingent_only;
-  bool opp_rack_only = false;  // included iff spec.opp_rack_input
+  bool opp_leave_only = false;  // included iff spec.opp_leave_input
 };
 
 // The row's blocks in encode order. GameStateEncoder writes by walking these
@@ -124,20 +128,20 @@ inline constexpr ScalarBlockDef kScalarBlocks[] = {
   {ScalarBlockId::kScoreDiff, kScoreDiffThermoFloats, false},
   {ScalarBlockId::kMoveMeta, kMoveMetaFloats, false},
   {ScalarBlockId::kContingent, kContingentScalarFloats, true},
-  {ScalarBlockId::kOppRackCounts, kOppRackCountFloats, false, true},
+  {ScalarBlockId::kOppLeaveCounts, kOppLeaveCountFloats, false, true},
 };
 
 // Whether `spec` includes a scalar block -- the single predicate every walk
 // over kScalarBlocks (sizing, offsets, and the encoder itself) shares.
 inline bool scalar_block_included(const ScalarBlockDef& def, const InputEncodingSpec& spec) {
   return (!def.contingent_only || spec.contingent_features) &&
-         (!def.opp_rack_only || spec.opp_rack_input);
+         (!def.opp_leave_only || spec.opp_leave_input);
 }
 
 // ---- Layout queries (walk the registry under `spec`) ------------------------
 
 int spatial_planes(const InputEncodingSpec& spec);  // 88 full / 85 base
-int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base; +27 open-rack
+int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base; +27 open-leaves
 int spatial_floats(const InputEncodingSpec& spec);  // spatial_planes * kBoardCells
 int input_floats(const InputEncodingSpec& spec);    // spatial + scalar
 
