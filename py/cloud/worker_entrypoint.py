@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""Long-running entrypoint for a cloud worker.
+"""Long-running entrypoint for a worker (cloud pod or local subprocess).
 
-Launched by the worker image's bootstrap (docker-setup/worker/bootstrap.py)
-after it unpacks a code+binary bundle at /workspace/repo. Fetches runtime data
-dependencies, records a provenance manifest in the results bucket, then loops:
-run one generation cycle, upload each completed output pair, delete the local
-copy. SIGTERM (pod stop / preemption) stops the loop, finishes uploading
-already-completed pairs, and exits cleanly -- at most the in-flight cycle is
-lost, matching the local generator's interruption semantics.
+On a cloud pod this is launched by the worker image's bootstrap
+(docker-setup/worker/bootstrap.py) after it unpacks a code+binary bundle; the
+master dashboard launches the same entrypoint as a local subprocess. Fetches
+runtime data dependencies, records a provenance manifest, then loops: run one
+generation cycle, hand completed output pairs to the results sink, and publish
+a per-worker stats record. SIGTERM (pod stop / preemption / dashboard pause)
+stops the loop, flushes completed pairs, and exits cleanly -- at most the
+in-flight cycle is lost.
+
+The results sink (SCZ_SINK) decouples where output goes from how it is made:
+
+    r2 (default)  upload each pair to the results bucket and delete the local
+                  copy; stats and the manifest are uploaded too
+    local         pairs stay where they were generated (the mount dir IS the
+                  destination); stats and the manifest are written as files
 
 Configuration is entirely via environment variables:
 
-    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,     results-bucket credentials
+    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,      bucket credentials (r2 sink only)
     R2_SECRET_ACCESS_KEY, R2_BUCKET
     SCZ_WORKLOAD                          workload name (default "kill_test")
     SCZ_TAG                               run tag (required)
+    SCZ_SINK                              "r2" (default) or "local"
+    SCZ_<PARAM>                           workload params (scribblez/params.py
+                                          encoding; defaults from the dataclass)
     SCZ_THREADS                           worker threads (default: all cores)
-    SCZ_GAMES_PER_BATCH, SCZ_ROLLOUTS,    kill-test knobs (defaults:
-    SCZ_TOP_K, SCZ_POSITIONS_PER_GAME,    KillTestParams field defaults;
-    SCZ_OPEN_LEAVES                       OPEN_LEAVES: "1" to enable)
     SCZ_MAX_CYCLES                        stop after N cycles (default 0 = run
                                           until stopped)
-    SCZ_WORKER_ID                         manifest/log identity (default: the
+    SCZ_WORKER_ID                         manifest/stats identity (default: the
                                           Runpod pod id, else hostname)
-    SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the bootstrap; recorded in
-    SCZ_BUNDLE_ARCH                       the manifest
+    SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the cloud bootstrap; recorded
+    SCZ_BUNDLE_ARCH                       in the manifest and stats
 """
 
 import json
@@ -32,15 +40,22 @@ import os
 import signal
 import socket
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
+from scribblez import params as params_mod
+from scribblez import workloads
 from scribblez.hardware import default_thread_count
-from scripts.generate_kill_test_data import KillTestParams, run_one_cycle, slog_dir
+from scribblez.kill_test_gen import run_one_cycle
 
 from cloud import worker_deps
 from cloud.credentials import R2Credentials
 from cloud.r2 import bucket_path, rclone
+
+# Per-cycle timing samples retained in the published stats record; enough for
+# recent-throughput estimates without unbounded growth.
+RECENT_SAMPLES = 50
 
 
 class WorkerStopped(Exception):
@@ -66,110 +81,188 @@ def worker_id() -> str:
     )
 
 
-def upload_manifest(r2: R2Credentials, tag: str, params: KillTestParams):
-    """Record this worker's exact configuration and code provenance under the
-    tag, making the tag self-describing and cross-worker consistency checkable."""
-    manifest = {
-        "worker_id": worker_id(),
-        "workload": os.environ.get("SCZ_WORKLOAD", "kill_test"),
-        "tag": tag,
-        "params": asdict(params),
+class R2Sink:
+    """Uploads results to the bucket under <workload>/<tag>/ and deletes local
+    copies (the bucket is the destination; the pod disk is scratch).
+
+    Uploaded pair files carry a -<worker_id> stem suffix: the engine names
+    output by per-machine nanosecond timestamp, so two workers could in
+    principle mint the same name, and a bucket collision would silently splice
+    one worker's .slog with another's .sobs. The suffix makes bucket (and
+    therefore synced-local) names globally unique; downstream tools match
+    pairs by stem, which the shared suffix preserves."""
+
+    def __init__(self, r2: R2Credentials, workload: str, tag: str, worker_id: str):
+        self._r2 = r2
+        self._root = (workload, tag)
+        self._worker_id = worker_id
+        self.kind = "cloud"
+
+    def push_json(self, rel_path: str, obj: dict):
+        res = rclone(
+            self._r2,
+            "rcat",
+            bucket_path(self._r2, *self._root, *rel_path.split("/")),
+            capture=True,
+            input_text=json.dumps(obj, indent=2) + "\n",
+        )
+        assert res.returncode == 0, f"upload of {rel_path} failed: {res.stderr}"
+
+    def push_pairs(self, out_dir: Path, new_pairs: list[Path]) -> tuple[int, int, float]:
+        """Upload every complete .slog/.sobs pair in `out_dir` (not just this
+        cycle's -- a restarted worker flushes leftovers too) and delete local
+        copies. Returns (pairs, bytes, seconds).
+
+        The .sobs uploads before its .slog: a .slog missing its sidecar reads
+        as pending work downstream, while an orphaned .sobs is inert -- so the
+        bucket only ever presents complete pairs plus inert leftovers.
+        """
+        moved, nbytes, t0 = 0, 0, time.monotonic()
+        for sobs in sorted(out_dir.glob("*.sobs")):
+            slog = sobs.with_suffix(".slog")
+            for f in (sobs, slog):
+                nbytes += f.stat().st_size
+                res = rclone(
+                    self._r2,
+                    "copyto",
+                    str(f),
+                    bucket_path(
+                        self._r2, *self._root, "slogs", f"{f.stem}-{self._worker_id}{f.suffix}"
+                    ),
+                    capture=True,
+                )
+                assert res.returncode == 0, f"upload of {f.name} failed: {res.stderr}"
+            slog.unlink()
+            sobs.unlink()
+            moved += 1
+        return moved, nbytes, time.monotonic() - t0
+
+
+class LocalSink:
+    """Results stay where they were generated (the mount dir is the
+    destination); manifests and stats are written as plain files."""
+
+    def __init__(self, data_dir: Path):
+        self._data_dir = data_dir
+        self.kind = "local"
+
+    def push_json(self, rel_path: str, obj: dict):
+        path = self._data_dir / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(obj, indent=2) + "\n")
+
+    def push_pairs(self, out_dir: Path, new_pairs: list[Path]) -> tuple[int, int, float]:
+        return len(new_pairs), 0, 0.0
+
+
+def make_sink(spec: workloads.WorkloadSpec, tag: str):
+    if os.environ.get("SCZ_SINK", "r2") == "local":
+        return LocalSink(spec.data_dir(tag))
+    return R2Sink(r2_from_env(), spec.name, tag, worker_id())
+
+
+def provenance() -> dict:
+    return {
         "bundle_id": os.environ.get("SCZ_BUNDLE_ID"),
         "host_arch": os.environ.get("SCZ_HOST_ARCH"),
         "bundle_arch": os.environ.get("SCZ_BUNDLE_ARCH"),
     }
-    res = rclone(
-        r2,
-        "rcat",
-        bucket_path(r2, "kill_test", tag, "params", f"{worker_id()}.json"),
-        capture=True,
-        input_text=json.dumps(manifest, indent=2) + "\n",
-    )
-    assert res.returncode == 0, f"manifest upload failed: {res.stderr}"
 
 
-def upload_completed_pairs(r2: R2Credentials, out_dir: Path, tag: str) -> int:
-    """Upload every complete .slog/.sobs pair in `out_dir` to the tag's bucket
-    prefix and delete the local copies, returning the number of pairs moved.
+class WorkerStats:
+    """The per-worker stats record published after every cycle: cumulative
+    counters plus a bounded window of per-cycle timing samples. The dashboard's
+    Stats tab derives throughput and bottleneck breakdowns from these."""
 
-    The .sobs uploads before its .slog: a .slog missing its sidecar reads as
-    pending work downstream (a local generator would re-sim it; kill_test.py
-    skips it), while an orphaned .sobs is inert -- so the bucket, like the
-    local directory, only ever presents complete pairs plus inert leftovers.
-    """
-    moved = 0
-    for sobs in sorted(out_dir.glob("*.sobs")):
-        slog = sobs.with_suffix(".slog")
-        for f in (sobs, slog):
-            res = rclone(
-                r2,
-                "copyto",
-                str(f),
-                bucket_path(r2, "kill_test", tag, "slogs", f.name),
-                capture=True,
-            )
-            assert res.returncode == 0, f"upload of {f.name} failed: {res.stderr}"
-        slog.unlink()
-        sobs.unlink()
-        moved += 1
-    return moved
+    def __init__(self, sink, threads: int):
+        self._sink = sink
+        self._record = {
+            "worker_id": worker_id(),
+            "kind": sink.kind,
+            "threads": threads,
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            "pairs_total": 0,
+            "cycles_total": 0,
+            "recent": [],
+            **provenance(),
+        }
 
-
-def params_from_env() -> KillTestParams:
-    def get_int(var: str, default: int) -> int:
-        return int(os.environ.get(var, default))
-
-    return KillTestParams(
-        threads=get_int("SCZ_THREADS", default_thread_count()),
-        games_per_batch=get_int("SCZ_GAMES_PER_BATCH", KillTestParams.games_per_batch),
-        rollouts=get_int("SCZ_ROLLOUTS", KillTestParams.rollouts),
-        top_k=get_int("SCZ_TOP_K", KillTestParams.top_k),
-        positions_per_game=get_int("SCZ_POSITIONS_PER_GAME", KillTestParams.positions_per_game),
-        open_leaves=os.environ.get("SCZ_OPEN_LEAVES") == "1",
-    )
+    def cycle_done(self, result, pairs: int, upload_bytes: int, upload_seconds: float):
+        r = self._record
+        r["cycles_total"] += 1
+        r["pairs_total"] += pairs
+        r["updated_at"] = time.time()
+        r["recent"].append(
+            {
+                "t": r["updated_at"],
+                "gen_s": round(result.gen_seconds, 3),
+                "sim_s": round(result.sim_seconds, 3),
+                "upload_s": round(upload_seconds, 3),
+                "bytes": upload_bytes,
+                "pairs": pairs,
+                "pairs_total": r["pairs_total"],
+            }
+        )
+        del r["recent"][:-RECENT_SAMPLES]
+        self._sink.push_json(f"stats/{r['worker_id']}.json", r)
 
 
-def run_kill_test(r2: R2Credentials) -> int:
+def run_kill_test(spec: workloads.WorkloadSpec, sink) -> int:
     tag = os.environ["SCZ_TAG"]
-    params = params_from_env()
+    params = params_mod.from_env(spec.params_cls)
+    threads = int(os.environ.get("SCZ_THREADS", 0)) or default_thread_count()
     max_cycles = int(os.environ.get("SCZ_MAX_CYCLES", 0))
 
     worker_deps.fetch_kill_test_deps()
-    upload_manifest(r2, tag, params)
+    sink.push_json(
+        f"params/{worker_id()}.json",
+        {
+            "worker_id": worker_id(),
+            "workload": spec.name,
+            "tag": tag,
+            "params": asdict(params),
+            "threads": threads,
+            "kind": sink.kind,
+            **provenance(),
+        },
+    )
 
-    out_dir = slog_dir(tag)
+    out_dir = spec.data_dir(tag) / "slogs"
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"worker {worker_id()}: generating tag '{tag}' with {params}")
+    stats = WorkerStats(sink, threads)
+    print(f"worker {worker_id()} ({sink.kind}): generating tag '{tag}' with {params}")
 
     cycle = 0
     try:
         # A restarted worker may find completed pairs a previous run generated
-        # but never uploaded; move them out first.
-        upload_completed_pairs(r2, out_dir, tag)
+        # but never delivered; flush them first.
+        sink.push_pairs(out_dir, [])
         while max_cycles == 0 or cycle < max_cycles:
             cycle += 1
-            rc = run_one_cycle(out_dir, params)
-            if rc != 0:
-                return rc
-            moved = upload_completed_pairs(r2, out_dir, tag)
-            print(f"cycle {cycle}: uploaded {moved} pair(s)")
+            result = run_one_cycle(out_dir, params, threads)
+            if result.returncode != 0:
+                return result.returncode
+            moved, nbytes, secs = sink.push_pairs(out_dir, result.new_pairs)
+            stats.cycle_done(result, moved, nbytes, secs)
+            print(f"cycle {cycle}: {moved} pair(s) delivered")
     except WorkerStopped:
-        moved = upload_completed_pairs(r2, out_dir, tag)
-        print(f"SIGTERM: uploaded {moved} completed pair(s); exiting")
+        moved, _, _ = sink.push_pairs(out_dir, [])
+        print(f"SIGTERM: flushed {moved} completed pair(s); exiting")
     return 0
 
 
-WORKLOADS = {
+WORKLOAD_RUNNERS = {
     "kill_test": run_kill_test,
 }
 
 
 def main() -> int:
     signal.signal(signal.SIGTERM, _on_sigterm)
-    workload = os.environ.get("SCZ_WORKLOAD", "kill_test")
-    r2 = r2_from_env()
+    spec = workloads.get(os.environ.get("SCZ_WORKLOAD", "kill_test"))
     try:
-        return WORKLOADS[workload](r2)
+        sink = make_sink(spec, os.environ["SCZ_TAG"])
+        return WORKLOAD_RUNNERS[spec.name](spec, sink)
     except WorkerStopped:
         print("SIGTERM during startup; exiting")
         return 0

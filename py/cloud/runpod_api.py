@@ -51,3 +51,13 @@ class RunpodClient:
 
     def delete_pod(self, pod_id: str):
         self._request("DELETE", f"/pods/{pod_id}")
+
+    def stop_pod(self, pod_id: str):
+        """Stop without terminating; billing drops to disk-only and start_pod
+        can resume it."""
+        self._request("POST", f"/pods/{pod_id}/stop")
+
+    def start_pod(self, pod_id: str):
+        """Start or resume a stopped pod (including one Runpod reclaimed from
+        an interruptible rental, capacity permitting)."""
+        self._request("POST", f"/pods/{pod_id}/start")

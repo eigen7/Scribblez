@@ -5,13 +5,17 @@
     status  list fleet pods (and, with --tag, the tag's bucket progress)
     down    terminate fleet pods
 
-Workers run the worker image (build_and_push_worker_image.py) and pull their code from
-the bundle named by --bundle (see cloud_push_binaries.py); "latest" resolves
-to a concrete bundle_id at launch so every pod in one `up` runs identical
-code even if newer bundles are pushed meanwhile.
+Workers run the worker image (build_and_push_worker_image.py) and pull their
+code from the bundle named by --bundle (see cloud_push_binaries.py); "latest"
+resolves to a concrete bundle_id at launch so every pod in one `up` runs
+identical code even if newer bundles are pushed meanwhile. The workload and
+its parameter flags come from the workload registry (scribblez/workloads.py);
+pods are rented interruptible when the workload tolerates preemption.
 
 Pods are named scz-<tag>-<suffix>, which is how status/down recognize fleet
-pods; pods created any other way are never touched.
+pods; pods created any other way are never touched. The master dashboard
+manages workers through the same pod_create_spec, so pods are identical
+however launched.
 
 Usage:
     ./py/scripts/cloud_fleet.py up -n 4 --vcpus 16 -t hello
@@ -27,7 +31,9 @@ from cloud.bundles import resolve_bundle_id
 from cloud.credentials import CloudCredentials, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from scripts.generate_kill_test_data import KillTestParams
+from scribblez import params as params_mod
+from scribblez import workloads
+from scribblez.kill_test_gen import KillTestParams
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 POD_NAME_PREFIX = "scz-"
@@ -38,51 +44,73 @@ def fleet_pods(client: RunpodClient, tag: str | None) -> list[dict]:
     return [p for p in client.list_pods() if p.get("name", "").startswith(prefix)]
 
 
-def worker_env(creds: CloudCredentials, args, bundle_id: str, name: str) -> dict[str, str]:
-    env = {
+def r2_env(creds: CloudCredentials) -> dict[str, str]:
+    return {
         "R2_ACCOUNT_ID": creds.r2.account_id,
         "R2_ACCESS_KEY_ID": creds.r2.access_key_id,
         "R2_SECRET_ACCESS_KEY": creds.r2.secret_access_key,
         "R2_BUCKET": creds.r2.bucket,
+    }
+
+
+def pod_create_spec(
+    creds: CloudCredentials,
+    spec: workloads.WorkloadSpec,
+    tag: str,
+    params,
+    *,
+    bundle_id: str,
+    vcpus: int,
+    flavor: str,
+    container_disk_gb: int = 20,
+) -> tuple[str, dict]:
+    """(pod name, POST /pods body) for one cloud worker. Shared by this CLI and
+    the dashboard's WorkerManager so pods are identical however launched."""
+    name = f"{POD_NAME_PREFIX}{tag}-{secrets.token_hex(3)}"
+    env = {
+        **r2_env(creds),
+        **spec.worker_env(tag, params),
         "SCZ_BUNDLE": bundle_id,
-        "SCZ_WORKLOAD": "kill_test",
-        "SCZ_TAG": args.tag,
-        "SCZ_GAMES_PER_BATCH": str(args.games_per_batch),
-        "SCZ_ROLLOUTS": str(args.rollouts),
-        "SCZ_TOP_K": str(args.top_k),
-        "SCZ_POSITIONS_PER_GAME": str(args.positions_per_game),
         "SCZ_WORKER_ID": name,
     }
-    if args.open_leaves:
-        env["SCZ_OPEN_LEAVES"] = "1"
-    return env
+    return name, {
+        "name": name,
+        "imageName": creds.registry.worker_image,
+        "computeType": "CPU",
+        "cpuFlavorIds": [flavor],
+        "vcpuCount": vcpus,
+        "containerDiskInGb": container_disk_gb,
+        "containerRegistryAuthId": creds.runpod.container_registry_auth_id,
+        "interruptible": spec.interruptible,
+        "env": env,
+    }
 
 
 def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
+    spec = workloads.get(args.workload)
+    params = params_mod.from_args(spec.params_cls, args)
     bundle_id = resolve_bundle_id(creds.r2, args.bundle)
     print(f"Launching {args.num_workers} worker(s) on bundle {bundle_id} ...")
     for _ in range(args.num_workers):
-        name = f"{POD_NAME_PREFIX}{args.tag}-{secrets.token_hex(3)}"
-        pod = client.create_pod(
-            {
-                "name": name,
-                "imageName": creds.registry.worker_image,
-                "computeType": "CPU",
-                "cpuFlavorIds": [args.flavor],
-                "vcpuCount": args.vcpus,
-                "containerDiskInGb": args.container_disk_gb,
-                "containerRegistryAuthId": creds.runpod.container_registry_auth_id,
-                "env": worker_env(creds, args, bundle_id, name),
-            }
+        name, body = pod_create_spec(
+            creds,
+            spec,
+            args.tag,
+            params,
+            bundle_id=bundle_id,
+            vcpus=args.vcpus,
+            flavor=args.flavor,
+            container_disk_gb=args.container_disk_gb,
         )
+        pod = client.create_pod(body)
         cost = pod.get("costPerHr")
         print(f"  {name}  id={pod.get('id')}  ${cost}/hr")
     print(f"Fleet is launching. Watch with: cloud_fleet.py status -t {args.tag}")
     return 0
 
 
-def tag_bucket_stats(creds: CloudCredentials, tag: str):
-    res = rclone(creds.r2, "lsf", bucket_path(creds.r2, "kill_test", tag, "slogs"), capture=True)
+def tag_bucket_stats(creds: CloudCredentials, workload: str, tag: str):
+    res = rclone(creds.r2, "lsf", bucket_path(creds.r2, workload, tag, "slogs"), capture=True)
     names = res.stdout.split()
     pairs = sum(1 for n in names if n.endswith(".sobs"))
     print(f"\nBucket tag '{tag}': {pairs} complete pair(s)")
@@ -103,7 +131,7 @@ def cmd_status(creds: CloudCredentials, client: RunpodClient, args) -> int:
             )
         print(f"{len(pods)} pod(s), ${total_cost:.3f}/hr total")
     if args.tag:
-        tag_bucket_stats(creds, args.tag)
+        tag_bucket_stats(creds, args.workload, args.tag)
     return 0
 
 
@@ -130,20 +158,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter
     )
+    parser.add_argument(
+        "--workload",
+        choices=sorted(workloads.WORKLOADS),
+        default="kill_test",
+        help="workload the workers run (registry: scribblez/workloads.py)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     up = sub.add_parser("up", help="launch workers", formatter_class=ArgumentDefaultsHelpFormatter)
     up.add_argument("-n", "--num-workers", type=int, default=1)
-    up.add_argument("-t", "--tag", required=True, help="run tag (kill_test data tag)")
+    up.add_argument("-t", "--tag", required=True, help="run tag (the workload's data tag)")
     up.add_argument("--vcpus", type=int, default=16, help="vCPUs per worker pod")
     up.add_argument("--flavor", default="cpu3c", help="Runpod CPU flavor id")
     up.add_argument("--container-disk-gb", type=int, default=20)
     up.add_argument("--bundle", default="latest", help='bundle_id or "latest"')
-    up.add_argument("--games-per-batch", type=int, default=KillTestParams.games_per_batch)
-    up.add_argument("--rollouts", type=int, default=KillTestParams.rollouts)
-    up.add_argument("--top-k", type=int, default=KillTestParams.top_k)
-    up.add_argument("--positions-per-game", type=int, default=KillTestParams.positions_per_game)
-    up.add_argument("--open-leaves", action="store_true")
+    params_mod.add_arguments(up, KillTestParams)
     up.set_defaults(func=cmd_up)
 
     status = sub.add_parser("status", help="list fleet pods")

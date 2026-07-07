@@ -15,6 +15,7 @@ See docs/react_dashboard.md for the architecture.
 
 import argparse
 import json
+import signal
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
@@ -27,7 +28,8 @@ from bokeh.embed import json_item
 from bokeh.layouts import column
 
 from scribblez import lane_analysis
-from scribblez.dashboard import db, plots
+from scribblez.dashboard import db, master_api, plots
+from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     analyze_gcg,
     analyze_post_move_gcg_leave,
@@ -43,6 +45,9 @@ _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 # The tables whose row counts form the per-tag change token the React shell polls
 # (a change in any count means that tab's data advanced). Mirrors the Bokeh shell's
 # per-tab ``watch()``.
+# How often the WorkerManager closes desired-vs-actual worker-slot gaps.
+RECONCILE_SECONDS = 30
+
 VERSION_TABLES = (
     "metrics",
     "monotonicity",
@@ -671,9 +676,12 @@ class PostMoveAltLeaveHandler(_Base):
         )
 
 
-def make_app(mount_root: str) -> tornado.web.Application:
+def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
+    """The full API app: the read-only training data plane plus (when a
+    WorkerManager is supplied) the master dashboard's control plane."""
     return tornado.web.Application(
         [
+            *master_api.MASTER_ROUTES,
             (r"/api/tags", TagsHandler),
             (r"/api/version", VersionHandler),
             (r"/api/meta", MetaHandler),
@@ -689,13 +697,41 @@ def make_app(mount_root: str) -> tornado.web.Application:
             (r"/api/post_move/alt_leave", PostMoveAltLeaveHandler),
         ],
         mount_root=mount_root,
+        worker_manager=worker_manager,
     )
 
 
 def run(port: int, mount_root: str):
-    """Serve the API on `port` until interrupted (used by the dashboard launcher)."""
-    make_app(mount_root).listen(port, address="0.0.0.0")
-    tornado.ioloop.IOLoop.current().start()
+    """Serve the API on `port` until SIGTERM/interrupt (used by the dashboard
+    launcher). Binds to localhost only: the control plane holds cloud
+    credentials and launches processes, so it must not be reachable
+    off-machine (the browser reaches it through the Vite /api proxy).
+
+    The WorkerManager reconciles worker slots at boot (relaunching local
+    workers that should be running) and every RECONCILE_SECONDS thereafter
+    (restarting interruptible pods Runpod reclaimed). On shutdown, owned local
+    workers get SIGTERM (they flush and exit); cloud pods keep running.
+    """
+    manager = WorkerManager()
+    make_app(mount_root, manager).listen(port, address="127.0.0.1")
+    loop = tornado.ioloop.IOLoop.current()
+
+    def reconcile():
+        try:
+            manager.reconcile()
+        except Exception as e:  # noqa: BLE001 -- reconciliation must keep ticking
+            print(f"reconcile: {e}")
+
+    def stop(signum, frame):
+        loop.add_callback_from_signal(loop.stop)
+
+    signal.signal(signal.SIGTERM, stop)
+    loop.add_callback(reconcile)
+    tornado.ioloop.PeriodicCallback(reconcile, RECONCILE_SECONDS * 1000).start()
+    try:
+        loop.start()
+    finally:
+        manager.shutdown()
 
 
 def main():

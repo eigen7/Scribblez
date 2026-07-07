@@ -31,7 +31,7 @@ ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
 # have each worker fetch the one matching its CPU. Grows by hand: when
 # building on a host whose arch isn't listed here, build_engine() below warns
 # so the operator can add it and commit.
-SUPPORTED_ARCHS = ["alderlake", "x86-64", "znver2"]
+SUPPORTED_ARCHS = ["alderlake", "x86-64", "znver2", "znver4"]
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
 # and will error if the existing checkout is at a different tag (unless

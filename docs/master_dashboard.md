@@ -1,128 +1,130 @@
-# Master dashboard: one web UI to launch, monitor, and analyze all work
+# Master dashboard
 
-A proposal for evolving the React dashboard into the single entrypoint for all Scribblez
-work: pick a workload, configure it, launch it onto local and/or cloud workers, watch it,
-stop it, and view its workload-specific analysis tabs — from the browser.
+The React dashboard is the single web entrypoint for Scribblez work: pick a workload,
+pick or create a tag, configure its parameters, attach workers (the local machine and/or
+rented cloud pods), start/pause them, and watch progress and workload-specific analysis —
+all from the browser. The first (and currently only) registered workload is kill-test
+data generation; the training dashboards continue to work as before and fold into the
+registry over time.
 
-## Where we start (already true today)
+## Concepts
 
-The dashboard is already a single umbrella, which makes this proposal an evolution rather
-than a rewrite:
+- **Workload** — a kind of work (e.g. `kill_test`). Declared in the workload registry
+  (`py/scribblez/workloads.py`) as a `WorkloadSpec`: display title, the params dataclass,
+  where its data lives, how to launch a worker locally, and the env-var mapping for cloud
+  workers. The params dataclass is the single source of truth for parameters: its fields
+  (name, type, default, help metadata) generate both the web form (with validation) and
+  the CLI flags, so the CLI and dashboard cannot drift.
+- **Task** — one (workload, tag) pair with a fixed parameter set, recorded in
+  `<data_dir>/task.json` at creation. Parameters are frozen at task creation because
+  every worker on a tag must generate with identical settings for the data to be
+  analyzable as one corpus. Tags created before the dashboard existed (no task.json)
+  still appear in the tag list, read-only.
+- **Worker** — a durable *slot* attached to a task: a record in task.json holding
+  `worker_id`, kind, its resource allocation, and a **desired state** (running/paused).
+  Two kinds:
+  - **local**: the slot is backed by a subprocess of the dashboard server running the
+    same worker loop as the cloud, with a thread-count knob (CPU allocation) and a local
+    results sink (files stay in the mount dir; no upload).
+  - **cloud**: the slot is backed by exactly one Runpod CPU pod (vCPU count + flavor),
+    running the worker image + bundle flow of docs/cloud_compute.md and uploading results
+    to R2. While a task has cloud workers, the server keeps a `cloud_sync --watch`
+    subprocess running so cloud results stream into the local mount automatically.
 
-- **One React app** (`web/src/AppDashboard.tsx`, `VITE_TOOL=dashboard`) and **one Tornado
-  data API** (`py/scribblez/dashboard/api.py`) serve both training tasks, with
-  task-conditional tabs and a task-aware per-request DB connection.
-- Clean extension points exist: new figure tabs are one entry in `FIGURES` (api.py) plus
-  one in `FIGURE_TABS` (AppDashboard.tsx); interactive tabs are one component plus a
-  `renderTab()` branch; new endpoints subclass `_Base` and register in `make_app()`.
-- The cloud fleet machinery (`py/cloud/`: bundles, Runpod client, worker env contract) is
-  already a library the CLI drives; a dashboard can drive the same library.
+  A slot's *actual* state can diverge from its desired state — a pod the operator paused,
+  a local process that exited, or an interruptible pod Runpod reclaimed — and the UI
+  shows both. The server reconciles desired vs. actual: on startup (relaunching local
+  workers that should be running) and periodically (restarting reclaimed interruptible
+  pods when capacity returns). This maps one-to-one onto Runpod's pod model
+  (stop/start/terminate + the `interruptible` rental flag).
+- **Interruptible rentals** — `WorkloadSpec.interruptible` declares whether a workload
+  tolerates preemption; kill-test generation does (atomic pairs, at most one in-flight
+  cycle lost), so its cloud pods are created `interruptible: true` for the discount, and
+  preemption is handled by the reconcile loop rather than by a human.
 
-What's missing, in order of substance:
+## The web flow
 
-1. A **control plane**: nothing today can launch or stop work; the dashboard only reads.
-2. The shell is **per-run**: `task` is fixed at launch (`VITE_TASK`), and trainers spawn a
-   dashboard instance per training run rather than there being one standing dashboard.
-3. **Kill-test results** appear nowhere: `kill_test.py` is terminal-only (it already
-   writes per-arm JSON histories to its results dir — unread by anything).
+1. **Home page**: workload selector → tag list for that workload, sortable by name or
+   last-activity, each row showing pair counts and running-worker counts. Selecting a tag
+   opens its task view. **New tag** opens the schema-generated params form (typed inputs,
+   int/bool validation, defaults prefilled); Create writes task.json and opens the task.
+2. **Task view** — tabs:
+   - **Overview**: the frozen params; task-agnostic info (created, pair count, data
+     location, live cloud $/hr); the workers table; add-worker forms (local: threads;
+     cloud: count × vCPUs × flavor from the Runpod flavor enum, with a console link for
+     live availability/pricing); per-worker rows show kind, state, cost rate, and for
+     cloud pods the ssh command (`ssh <podId>@ssh.runpod.io`, requires a registered
+     Runpod SSH key); buttons: per-worker start/pause/remove and task-level Start all /
+     Pause all (enabled only when they would do something). Pausing a cloud worker stops
+     the pod (billing drops to disk-only); pausing a local worker interrupts the
+     subprocess (the loop is interruption-safe by design). Only a non-running worker can
+     be removed, so removal never silently discards an in-flight cycle. The home page's
+     tag list offers per-tag deletion (local data dir only -- the bucket archive is
+     kept), refused while the tag has workers.
+   - **Stats** (kill-test): Bokeh figures built server-side and embedded via the existing
+     `BokehFigure` path — cumulative pairs over time (per worker and total), per-worker
+     throughput (pairs/hour), and a per-worker cycle-time breakdown (generate vs sim vs
+     upload seconds) that makes bottlenecks legible: a worker whose upload share
+     dominates is network-bound (the upload MB/s column gives the transfer rate, e.g.
+     for spotting Asia↔US path problems), one whose sim share dominates is CPU-bound.
 
-## Proposed shape
+## Worker statistics (the data behind Stats)
+
+Each worker maintains `stats/<worker_id>.json` under the tag — cumulative counters
+(pairs, cycles) plus a bounded window of recent per-cycle samples
+`{t, gen_s, sim_s, upload_s, bytes}` and identity fields (kind, threads/vcpus, arch).
+Cloud workers rcat it to the bucket after every cycle (it rides the same sync back);
+the local worker writes it directly. The dashboard reads only the local mount, so the
+Stats tab needs no live bucket access; freshness is bounded by the sync interval.
+
+Cloud workers upload each pair's files with a `-<worker_id>` stem suffix: output names
+are per-machine nanosecond timestamps, so two workers could in principle mint the same
+name, and a bucket collision would silently splice one worker's .slog with another's
+.sobs. The suffix makes bucket (and synced-local) names globally unique while preserving
+the stem-based pair matching downstream tools rely on.
+
+## Server architecture
+
+One Tornado process (the existing `scribblez.dashboard.api`) gains a control plane
+alongside the read-only data plane:
 
 ```
- browser ─► React shell
-             ├─ global nav: workload picker ▸ tag picker ▸ tabs
-             ├─ Jobs tab (new, workload-agnostic): launch form · running jobs ·
-             │    start/stop · logs · cloud fleet cost meter
-             └─ workload tabs (existing): Loss · Positions · Training · Lane analysis · …
-                     │
-             Tornado API (same process as today)
-             ├─ data plane: /api/figure, /api/lane/*, /api/post_move/*  (unchanged)
-             └─ control plane (new): /api/workloads · /api/jobs · /api/jobs/<id>/stop|log
-                     │
-             JobManager ──► local jobs: subprocess (generate_kill_test_data, train, …)
-                       └──► cloud jobs: py/cloud fleet up/status/down + cloud_sync watcher
+GET  /api/workloads                      registry + params schemas (drives the form)
+GET  /api/workload_tags?workload=        tag list with counts/last-activity
+POST /api/tasks                          create task.json (validates params)
+GET  /api/task?workload=&tag=            params + info + workers with live status
+POST /api/task/workers                   add worker(s) (local or cloud) and start them
+POST /api/task/worker_action             {action: start|pause|remove, worker_id?};
+                                         no worker_id = every slot (Start/Pause all)
+GET  /api/kill_test/stats?tag=           per-worker summary rows for the Stats table
+GET  /api/kill_test/figure/<name>?tag=   Bokeh json_items for the Stats tab
 ```
 
-### 1. The workload registry — one source of truth
+- `py/scribblez/dashboard/tasks.py` — task records, tag enumeration, params
+  schema/validation (shared with the argparse generator in workloads.py).
+- `py/scribblez/dashboard/workers.py` — the WorkerManager: local subprocesses (spawn,
+  interrupt, respawn; logs under the tag's `logs/`), cloud pods via `py/cloud`
+  (create/stop/start/terminate), and the per-task sync watcher.
+- The API binds to localhost only: it holds cloud credentials and launches processes, so
+  it must not be reachable off-machine (the container port-forward provides browser
+  access).
 
-A `WorkloadSpec` registry (new module, e.g. `py/scribblez/workloads.py`) describing each
-launchable workload:
+The React shell (`web/src/AppDashboard.tsx`) becomes the master app: home page +
+task view. When launched with `VITE_TASK` set (the trainers' auto-spawned dashboards),
+it renders the training-task view exactly as before; the master flow is the no-VITE_TASK
+default. `scripts/dashboard.py` with no arguments starts the master dashboard.
 
-- name (`kill_test`, `post_move_value_train`, `max_move_per_lane_train`, …)
-- its params dataclass (e.g. the existing `KillTestParams`) — field names, types, and
-  defaults become both the CLI flags and the dashboard's auto-generated config form
-- how to launch it locally (argv builder) and on the cloud (worker env-var mapping)
-- which dashboard tabs it owns
+## Worker loop changes
 
-This is the generalization already wanted on the CLI side (cloud_fleet.py is hardcoded to
-kill_test): `cloud_fleet.py --workload <w>` and the dashboard's launch form both read the
-same spec, so adding a workload is one registry entry, not N touchpoints.
+The cloud worker entrypoint (`py/cloud/worker_entrypoint.py`) is the one worker loop for
+both kinds, parameterized by a **results sink** (`SCZ_SINK=r2|local`): r2 uploads each
+pair and deletes the local copy; local leaves pairs in place. Both sinks record the
+per-cycle timing samples. The generation cycle itself (`scribblez/kill_test_gen.py`,
+moved out of scripts/ so library code does not import from scripts/) reports per-phase
+timings; `generate_kill_test_data.py` remains as the thin CLI over the same cycle.
 
-### 2. The JobManager + jobs API
+## Later (unchanged from the original proposal)
 
-A job is `{job_id, kind: local|cloud, workload, tag, params, state, started_at, …}`,
-persisted under `<mount>/jobs/<job_id>/` (a small JSON record + log file), so a dashboard
-restart re-attaches to running work instead of orphaning it.
-
-- **Local jobs**: `subprocess.Popen` of the workload's argv with stdout/stderr to the
-  job's log file; stop sends the interrupt the tool already handles gracefully (the
-  generators are interruption-safe by design). The local machine is just another worker.
-- **Cloud jobs**: a "fleet" job — N pods created via the existing `py/cloud` library, with
-  the job record holding pod ids. Status merges pod state (Runpod API), bucket progress
-  (pair counts), and $/hr; stop = fleet down. Each cloud job also owns a background
-  `cloud_sync` watcher so results stream into the local mount automatically while it runs.
-- Endpoints: `GET /api/workloads` (registry + param schemas), `POST /api/jobs` (launch),
-  `GET /api/jobs`, `POST /api/jobs/<id>/stop`, `GET /api/jobs/<id>/log?tail=N`.
-
-### 3. Shell changes
-
-- Promote **workload** to a runtime navigation dimension alongside tag (today: baked in as
-  `VITE_TASK` at Vite launch). Tab lists are already task-conditional; they become
-  workload-conditional via the registry.
-- A standing **Jobs tab** independent of workload: launch form (workload picker →
-  auto-generated params form → local/cloud toggle, worker count, vCPUs), the running-jobs
-  table with start/stop, log tail, and a prominent fleet cost meter.
-- `scripts/dashboard.py` (no args) becomes the master entrypoint: start once, leave
-  running. Trainer auto-spawn becomes "reuse the healthy standing dashboard if one is up,
-  else spawn" — and a dashboard-launched training run is just a local job, closing the
-  loop.
-
-### 4. Kill-test analysis tab (the one genuinely new data surface)
-
-`kill_test.py` stays a CLI, but its analysis becomes displayable: running it (locally, as
-a job — it's compute-heavy) already leaves per-arm JSON histories in the tag's results
-dir; a small `/api/kill_test/results?tag=` endpoint reads those, and a tab renders the
-4-arm comparison (and a "re-run analysis" button that launches the job). No live coupling
-to the analysis internals — the JSON on disk is the interface.
-
-## Safety and scope notes
-
-- **Bind the API to localhost.** Today it listens on `0.0.0.0`; once it can spend money
-  and run subprocesses, it must not be reachable off-machine (the container port-forward
-  already provides browser access). Cloud credentials stay server-side; the browser never
-  sees them.
-- **Spend guardrails**: launching cloud workers shows the computed $/hr before confirm;
-  the cost meter is on the Jobs tab permanently; `down` is one click.
-- The C++ WebSocket tools in `web/` (`play_game`, `manual`, `board`) are untouched; they
-  share only the component library.
-
-## Phasing (each lands independently useful)
-
-1. **Registry + generic CLI**: `WorkloadSpec` registry; `cloud_fleet.py --workload`
-   generalization; shared fleet lib. Pure refactor, no UI.
-2. **Jobs core**: JobManager + jobs API + Jobs tab, local jobs only; `dashboard.py` as
-   standing master (workload picker in-app; trainer spawn made reuse-aware).
-3. **Cloud jobs**: fleet launch/stop/status from the Jobs tab + per-job auto-sync.
-4. **Kill-test tab**: results endpoint + comparison view + re-run button.
-5. **Niceties, iteratively** (as they earn their keep): live log streaming, run history,
-   bundle picker (LATEST vs pinned), per-flavor throughput/$ calibration display,
-   notifications on fleet errors or arch-fallback warnings.
-
-## Open questions
-
-- Params forms: generate purely from dataclass fields (uniform but plain) vs. per-workload
-  hand-tuned forms (nicer, more code). Proposal: generated, with an escape hatch.
-- Should analysis runs (`kill_test.py`) be jobs too (proposed: yes — they're long-running
-  compute like everything else), or stay CLI-only initially?
-- Job identity across dashboard restarts: pidfile + process-group re-attach is proposed;
-  the alternative (jobs die with the dashboard) is simpler but hostile to long runs.
+Kill-test analysis results tab (render `kill_test.py`'s per-arm JSON output + a re-run
+button), folding the training workloads into the registry as launchable tasks, live log
+streaming, run history, GCP spot adapter, volunteer ingest.

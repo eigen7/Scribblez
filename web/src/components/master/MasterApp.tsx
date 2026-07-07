@@ -1,0 +1,278 @@
+import { useCallback, useEffect, useState } from 'react';
+import { getJSON, postJSON } from '../../lib/api';
+import TaskView from './TaskView';
+
+// The master dashboard: the entrypoint for all work. Pick a workload, then a
+// tag (or create one, configuring its parameters via the workload's schema);
+// a tag opens its task view (workers, progress, workload tabs). Rendered by
+// AppDashboard when no training task was requested. See docs/master_dashboard.md.
+
+export type ParamField = { name: string; kind: 'int' | 'bool'; default: number | boolean; help: string };
+export type Workload = { name: string; title: string; interruptible: boolean; params: ParamField[] };
+type TagRow = {
+  tag: string; has_task: boolean; created_at: number | null;
+  workers: number; pairs: number; last_active: number;
+};
+
+export function relTime(epochSeconds: number | null): string {
+  if (!epochSeconds) return '—';
+  const s = Date.now() / 1000 - epochSeconds;
+  if (s < 90) return `${Math.max(0, Math.round(s))}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)}m ago`;
+  if (s < 129600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+const inputStyle = { fontSize: 14, padding: '3px 6px', border: '1px solid #b8c4d0', borderRadius: 4 };
+
+export function Button({ label, onClick, disabled, tone }: {
+  label: string; onClick: () => void; disabled?: boolean; tone?: 'danger' | 'primary';
+}) {
+  const bg = disabled ? '#b8c4d0' : tone === 'danger' ? '#b23b3b' : '#1f77b4';
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        fontSize: 13, padding: '4px 12px', border: 'none', borderRadius: 4,
+        background: bg, color: 'white', cursor: disabled ? 'default' : 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// The new-tag section: a tag-name input plus one typed input per schema field,
+// validated client-side (ints must parse) and server-side (the create endpoint
+// re-validates and reports errors verbatim).
+function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
+  const [tag, setTag] = useState('');
+  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setValues(Object.fromEntries(workload.params.map((p) => [p.name, p.kind === 'bool' ? false : String(p.default)])));
+  }, [workload]);
+
+  const tagOk = /^[A-Za-z0-9._-]+$/.test(tag);
+  const badInts = workload.params.filter((p) => p.kind === 'int' && !/^-?\d+$/.test(String(values[p.name] ?? '')));
+  const canCreate = tagOk && badInts.length === 0 && !busy;
+
+  const create = async () => {
+    setBusy(true);
+    setError('');
+    const params = Object.fromEntries(workload.params.map((p) => [
+      p.name, p.kind === 'bool' ? Boolean(values[p.name]) : parseInt(String(values[p.name]), 10),
+    ]));
+    try {
+      await postJSON('/api/tasks', { workload: workload.name, tag, params });
+      onCreated(tag);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <b style={{ fontSize: 15 }}>New tag</b>
+      <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
+        <label style={{ fontSize: 13 }}>
+          Tag name<br />
+          <input
+            style={{ ...inputStyle, borderColor: tag && !tagOk ? '#b23b3b' : '#b8c4d0' }}
+            value={tag}
+            onChange={(e) => setTag(e.target.value.trim())}
+            placeholder="e.g. exp42"
+          />
+        </label>
+        {workload.params.map((p) => (
+          <label key={p.name} style={{ fontSize: 13 }} title={p.help}>
+            {p.name}<br />
+            {p.kind === 'bool' ? (
+              <input
+                type="checkbox"
+                checked={Boolean(values[p.name])}
+                onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.checked }))}
+              />
+            ) : (
+              <input
+                style={{
+                  ...inputStyle, width: 90,
+                  borderColor: badInts.some((b) => b.name === p.name) ? '#b23b3b' : '#b8c4d0',
+                }}
+                value={String(values[p.name] ?? '')}
+                onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))}
+              />
+            )}
+          </label>
+        ))}
+        <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
+      </div>
+      <div style={{ fontSize: 12, color: '#556070', marginTop: 8 }}>
+        Parameters are frozen at creation: every worker on a tag generates with identical settings.
+        Hover a field for its meaning.
+      </div>
+      {error && <div style={{ color: '#b23b3b', fontSize: 13, marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
+  const [rows, setRows] = useState<TagRow[]>([]);
+  const [sortBy, setSortBy] = useState<'name' | 'last-ran'>('last-ran');
+  const [error, setError] = useState('');
+
+  const refresh = useCallback(() => {
+    getJSON(`/api/workload_tags?workload=${workload.name}`)
+      .then((d) => setRows(d.tags))
+      .catch(() => {});
+  }, [workload]);
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  // Deleting a tag deletes its local data dir (the bucket archive, if any, is
+  // kept); the server refuses while the tag still has workers.
+  const deleteTag = async (tag: string) => {
+    if (!window.confirm(`Delete tag '${tag}' and its local data?`)) return;
+    setError('');
+    try {
+      await postJSON('/api/task/delete', { workload: workload.name, tag });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const sorted = [...rows].sort((a, b) =>
+    sortBy === 'name' ? a.tag.localeCompare(b.tag) : b.last_active - a.last_active,
+  );
+
+  return (
+    <>
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+          <b style={{ fontSize: 15 }}>Tags</b>
+          <label style={{ fontSize: 13 }}>
+            sort by{' '}
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'name' | 'last-ran')}>
+              <option value="last-ran">last ran</option>
+              <option value="name">name</option>
+            </select>
+          </label>
+        </div>
+        {sorted.length === 0 ? (
+          <div style={{ color: '#556070', fontStyle: 'italic' }}>No tags yet — create one below.</div>
+        ) : (
+          <table style={{ borderCollapse: 'collapse', fontSize: 14, width: '100%' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#445063' }}>
+                <th style={{ padding: '4px 14px 4px 0' }}>tag</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>pairs</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>workers</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>last ran</th>
+                <th style={{ padding: '4px 14px 4px 0' }} />
+                <th style={{ padding: '4px 14px 4px 0' }} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr
+                  key={r.tag}
+                  onClick={() => onOpen(r.tag)}
+                  style={{ cursor: 'pointer', borderTop: '1px solid #e2e8ee' }}
+                >
+                  <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{r.tag}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{r.pairs}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{r.workers}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{relTime(r.last_active)}</td>
+                  <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#8494a5' }}>
+                    {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
+                  </td>
+                  <td style={{ padding: '6px 0' }} onClick={(e) => e.stopPropagation()}>
+                    <span title={r.workers > 0 ? 'remove the tag’s workers first' : undefined}>
+                      <Button
+                        label="Delete" tone="danger" disabled={r.workers > 0}
+                        onClick={() => deleteTag(r.tag)}
+                      />
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {error && <div style={{ color: '#b23b3b', fontSize: 13, marginTop: 8 }}>{error}</div>}
+      </div>
+      <NewTagForm workload={workload} onCreated={onOpen} />
+    </>
+  );
+}
+
+export default function MasterApp() {
+  const initial = new URLSearchParams(window.location.search);
+  const [workloads, setWorkloads] = useState<Workload[]>([]);
+  const [workloadName, setWorkloadName] = useState(initial.get('workload') ?? 'kill_test');
+  const [openTag, setOpenTag] = useState<string | null>(initial.get('tag'));
+
+  useEffect(() => {
+    getJSON('/api/workloads').then((d) => setWorkloads(d.workloads)).catch(() => {});
+  }, []);
+
+  // Keep ?workload=&tag= in the URL so views are shareable and reload-stable.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('workload', workloadName);
+    if (openTag) params.set('tag', openTag);
+    else params.delete('tag');
+    window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+  }, [workloadName, openTag]);
+
+  const workload = workloads.find((w) => w.name === workloadName);
+
+  return (
+    <div style={{
+      fontFamily: 'system-ui, sans-serif', padding: '14px 18px', color: '#1a1f28', fontSize: 15,
+      background: '#f4f6f8', minHeight: '100vh',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
+        <strong style={{ fontSize: 19 }}>Scribblez</strong>
+        <label style={{ fontSize: 15 }}>
+          Workload{' '}
+          <select
+            value={workloadName}
+            onChange={(e) => { setWorkloadName(e.target.value); setOpenTag(null); }}
+          >
+            {workloads.map((w) => (
+              <option key={w.name} value={w.name}>{w.title}</option>
+            ))}
+          </select>
+        </label>
+        {openTag && (
+          <>
+            <span
+              onClick={() => setOpenTag(null)}
+              style={{ color: '#1f77b4', cursor: 'pointer', fontSize: 14 }}
+            >
+              ← all tags
+            </span>
+            <b>{openTag}</b>
+          </>
+        )}
+      </div>
+      {!workload ? (
+        <div style={{ color: '#556070', fontStyle: 'italic' }}>Connecting to the data API…</div>
+      ) : openTag ? (
+        <TaskView workload={workload} tag={openTag} />
+      ) : (
+        <HomePage workload={workload} onOpen={setOpenTag} />
+      )}
+    </div>
+  );
+}

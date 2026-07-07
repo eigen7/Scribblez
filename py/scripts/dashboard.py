@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Launch the training dashboard (React app + Python data API) for a task.
+"""Launch the web dashboard (React app + Python data API).
 
-Run this to view a tag's dashboard when a trainer isn't already serving one (each
-trainer launches it automatically). It serves the per-tag dashboard.db stores under
-<mount-root>/tags/<task>/, reclaiming its ports if a stale dashboard holds them.
+With no --task this serves the master dashboard: the entrypoint for all work,
+where you pick a workload, create or open a tag, attach local/cloud workers,
+and watch progress (docs/master_dashboard.md). With --task it opens directly
+on one training task's view, which is also what each trainer auto-spawns.
+Reclaims the API/Vite ports from any stale dashboard first.
 
 Usage:
+    ./py/scripts/dashboard.py                       # master dashboard
     ./py/scripts/dashboard.py --task post_move_value
-    ./py/scripts/dashboard.py --task max_move_per_lane --dev-port 5180
 """
 
 import argparse
@@ -23,8 +25,8 @@ def main() -> int:
     p.add_argument(
         "--task",
         choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE],
-        default=POST_MOVE_VALUE,
-        help="Which model's runs to serve.",
+        default=None,
+        help="open directly on one training task's view (default: the master dashboard)",
     )
     p.add_argument(
         "--tag", default=None, help="Open the dashboard on this tag (default: the first available)."

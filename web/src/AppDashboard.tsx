@@ -3,6 +3,7 @@ import BokehFigure from './components/BokehFigure';
 import ControlsTab from './components/ControlsTab';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
+import MasterApp from './components/master/MasterApp';
 import PostMoveAnalysis from './components/PostMoveAnalysis';
 import { getJSON } from './lib/api';
 
@@ -29,18 +30,19 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
-// The React training dashboard. It renders the existing Bokeh metrics plots by
-// embedding json_items fetched from the Python (Tornado) data API, with the shell
-// state (tag selection, tabs, the loss-normalization toggle, polling) owned here in
-// React. The engine injects VITE_TASK when it launches this dev server; a
-// standalone run falls back to a ?task= query param. See docs/react_dashboard.md.
+// The dashboard app has two faces. With an explicit training task (VITE_TASK,
+// injected when a trainer launches the dev server, or a ?task= query param) it
+// renders that task's training dashboard: the Bokeh metrics plots embedded as
+// json_items fetched from the Python (Tornado) data API, with shell state (tag
+// selection, tabs, polling) owned in React (docs/react_dashboard.md). With no
+// task it renders the master dashboard -- the entrypoint for all work
+// (docs/master_dashboard.md).
 
-const DEFAULT_TASK = 'post_move_value';
 const MAX_MOVE_PER_LANE = 'max_move_per_lane';
 
-function requestedTask(): string {
+function requestedTask(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return import.meta.env.VITE_TASK ?? params.get('task') ?? DEFAULT_TASK;
+  return import.meta.env.VITE_TASK ?? params.get('task');
 }
 
 // A `?tag=<tag>` query param opens the dashboard on that run (the trainer prints
@@ -224,6 +226,10 @@ function renderTab(name: string, task: string, tag: string | null, tags: string[
 
 export default function AppDashboard() {
   const task = requestedTask();
+  return task ? <TrainingDashboard task={task} /> : <MasterApp />;
+}
+
+function TrainingDashboard({ task }: { task: string }) {
   const tabs =
     task === MAX_MOVE_PER_LANE
       ? ['Loss', 'Lane analysis', 'Info']

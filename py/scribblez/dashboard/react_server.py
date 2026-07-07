@@ -67,7 +67,7 @@ def _dashboard_banner(url: str) -> str:
 
 
 def spawn(
-    task: str,
+    task: str | None,
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
@@ -93,10 +93,12 @@ def spawn(
         ]
     )
     # fmt: on
+    # With a task, the React app renders that training-task view (the trainers'
+    # auto-spawned dashboards); with task=None it renders the master dashboard.
     env = {
         **os.environ,
         "VITE_TOOL": "dashboard",
-        "VITE_TASK": task,
+        **({"VITE_TASK": task} if task else {}),
         "VITE_DEV_PORT": str(dev_port),
         "VITE_API_PORT": str(api_port),
     }
@@ -119,7 +121,7 @@ def spawn(
 
 
 def launch(
-    task: str,
+    task: str | None,
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
