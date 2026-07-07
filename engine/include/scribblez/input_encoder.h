@@ -44,11 +44,15 @@
 //                     best contingent score over all lanes (27), the same
 //                     draw-weighted (27), the expected best, the rack-alone
 //                     best.
+//     kOppRackCounts  27 (open-rack runs only): the opponent's raw per-tile
+//                     counts -- the one exception to the POV-visibility rule,
+//                     available only under the open-rack information condition
+//                     (spec.opp_rack_input).
 //
-// The contingent blocks sit at the TAILS of their sections, so a base-layout
-// row is the full-layout row with the tails spliced out; consumers that serve
-// both arms (e.g. the dashboard running a base model on full-layout rows)
-// rely on that prefix property.
+// The conditional blocks sit at the TAILS of their sections, so a smaller
+// arm's row is a larger arm's row with the tails spliced out; consumers that
+// serve multiple arms (e.g. the dashboard running a base model on full-layout
+// rows) rely on that prefix property.
 //
 // Symmetry: the board is invariant under the diagonal flip (r,c) -> (c,r);
 // `apply_flip` transposes every spatial plane, and all scalars are
@@ -79,11 +83,19 @@ inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
 // Per-kind best + per-kind draw-weighted best, then expected best + rack-alone best.
 inline constexpr int kContingentScalarFloats = 27 + 27 + 2;  // 56
+inline constexpr int kOppRackCountFloats = 27;               // open-rack arm only
 
 // ---- Block registry ---------------------------------------------------------
 
 enum class SpatialBlockId { kBoard, kSelfPlacement, kOppPlacement, kCrossChecks, kContingent };
-enum class ScalarBlockId { kRackCounts, kUnseenPool, kScoreDiff, kMoveMeta, kContingent };
+enum class ScalarBlockId {
+  kRackCounts,
+  kUnseenPool,
+  kScoreDiff,
+  kMoveMeta,
+  kContingent,
+  kOppRackCounts
+};
 
 struct SpatialBlockDef {
   SpatialBlockId id;
@@ -94,6 +106,7 @@ struct ScalarBlockDef {
   ScalarBlockId id;
   int floats;
   bool contingent_only;
+  bool opp_rack_only = false;  // included iff spec.opp_rack_input
 };
 
 // The row's blocks in encode order. GameStateEncoder writes by walking these
@@ -111,12 +124,20 @@ inline constexpr ScalarBlockDef kScalarBlocks[] = {
   {ScalarBlockId::kScoreDiff, kScoreDiffThermoFloats, false},
   {ScalarBlockId::kMoveMeta, kMoveMetaFloats, false},
   {ScalarBlockId::kContingent, kContingentScalarFloats, true},
+  {ScalarBlockId::kOppRackCounts, kOppRackCountFloats, false, true},
 };
+
+// Whether `spec` includes a scalar block -- the single predicate every walk
+// over kScalarBlocks (sizing, offsets, and the encoder itself) shares.
+inline bool scalar_block_included(const ScalarBlockDef& def, const InputEncodingSpec& spec) {
+  return (!def.contingent_only || spec.contingent_features) &&
+         (!def.opp_rack_only || spec.opp_rack_input);
+}
 
 // ---- Layout queries (walk the registry under `spec`) ------------------------
 
 int spatial_planes(const InputEncodingSpec& spec);  // 88 full / 85 base
-int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base
+int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base; +27 open-rack
 int spatial_floats(const InputEncodingSpec& spec);  // spatial_planes * kBoardCells
 int input_floats(const InputEncodingSpec& spec);    // spatial + scalar
 

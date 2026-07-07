@@ -57,7 +57,11 @@ class ShapeInfo:
 def _setup_lib(lib: ctypes.CDLL):
     """Declare argtypes/restypes for every FFI entry point."""
     lib.scribblez_session_new.restype = ctypes.c_void_p
-    lib.scribblez_session_new.argtypes = [ctypes.c_char_p, ctypes.c_int]  # lexicon, contingent
+    lib.scribblez_session_new.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]  # lexicon, contingent, opp-rack input
 
     lib.scribblez_session_delete.restype = None
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
@@ -147,6 +151,7 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_uint64,
+        ctypes.c_int,  # open_rack
         ctypes.POINTER(ctypes.c_char),
         ctypes.POINTER(ctypes.c_int),
     ]
@@ -249,6 +254,7 @@ DEFAULT_LEXICON = "NWL23"
 
 _SESSION_HANDLE = None
 _CONTINGENT_FEATURES = True
+_OPP_RACK_INPUT = False
 
 
 def set_contingent_features(enabled: bool):
@@ -266,6 +272,19 @@ def set_contingent_features(enabled: bool):
     _CONTINGENT_FEATURES = enabled
 
 
+def set_opp_rack_input(enabled: bool):
+    """Choose the open-rack experiment arm before any dictionary-dependent FFI
+    call: whether the input layout includes the opponent-rack counts block
+    (the open-rack information condition of docs/sim_residual_feedback.md).
+    Like set_contingent_features, the flag is baked into the process-wide
+    session at creation, so flipping it afterwards is an error.
+    """
+    global _OPP_RACK_INPUT
+    if _SESSION_HANDLE is not None and _OPP_RACK_INPUT != enabled:
+        raise RuntimeError("set_opp_rack_input called after the FFI session was created")
+    _OPP_RACK_INPUT = enabled
+
+
 def _session() -> int:
     """The process-wide ScribblezSession handle, created on first use.
 
@@ -276,7 +295,7 @@ def _session() -> int:
     global _SESSION_HANDLE
     if _SESSION_HANDLE is None:
         _SESSION_HANDLE = _lib().scribblez_session_new(
-            DEFAULT_LEXICON.encode("utf-8"), int(_CONTINGENT_FEATURES)
+            DEFAULT_LEXICON.encode("utf-8"), int(_CONTINGENT_FEATURES), int(_OPP_RACK_INPUT)
         )
     return _SESSION_HANDLE
 
@@ -403,13 +422,16 @@ def gcg_sim_evidence(
     rollouts: int = 200,
     threads: int = 8,
     seed: int = 0,
+    open_rack: bool = False,
 ) -> tuple[np.ndarray, int]:
     """Sim evidence for a penultimate-bingo analysis GCG's final decision point.
 
     Replays to the state before the final recorded move, ranks the mover's
     legal moves by HastyBot equity, and sims the top-K with common random
-    numbers. Returns (records, played_rank): `records` is a structured array
-    in the .sobs record layout (scribblez.sim_evidence.sobs.RECORD_DTYPE) and
+    numbers. `open_rack` starts every rollout's opponent from their known
+    final rack (the open-rack information condition) instead of sampling.
+    Returns (records, played_rank): `records` is a structured array in the
+    .sobs record layout (scribblez.sim_evidence.sobs.RECORD_DTYPE) and
     `played_rank` is the GCG's final move's index within it (-1 if outside
     the top-K). Raises on a parse error or an endgame decision point.
     """
@@ -424,11 +446,16 @@ def gcg_sim_evidence(
         int(rollouts),
         int(threads),
         int(seed),
+        int(open_rack),
         buf,
         ctypes.byref(played_rank),
     )
     if n < 0:
-        raise OSError("gcg_sim_evidence failed (parse error or endgame decision point)")
+        raise OSError(
+            "gcg_sim_evidence failed: parse error, endgame decision point, or (with "
+            "open_rack) a GCG that does not record the opponent's rack -- the "
+            "penultimate-bingo datasets deliberately leave it a fresh unknown draw"
+        )
     # View over an owned bytes copy. (A structured-array .copy() would rewrite
     # field by field and leave the dtype's padding bytes uninitialized, breaking
     # byte-level comparisons of the records.)

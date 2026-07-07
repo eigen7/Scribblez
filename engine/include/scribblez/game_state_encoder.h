@@ -101,7 +101,16 @@ class GameStateEncoder {
   // The encoder's own active_player() is now the opponent; passing the
   // pre-flip player here keeps the encode anchored to their POV (so labels
   // and last_opp_move both attach correctly to that player).
+  // This overload serves specs without the open-rack block (it aborts if the
+  // spec demands the opponent rack).
   void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
+
+  // Open-rack overload: as above, additionally encoding `opp_rack` (the
+  // opponent's actual rack) into the kOppRackCounts block -- the one
+  // deliberate exception to the POV-visibility rule, available only under
+  // the open-rack information condition (spec().opp_rack_input).
+  void encode_input(int player, const Rack& my_rack, const Rack& opp_rack, bool apply_flip,
+                    float* out) const;
 
   // Encode as encode_input(), but force the score differential
   // (score(player) - score(opp)) to `score_diff`, leaving every other

@@ -62,6 +62,7 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   EncodeContext ctx{};
   ctx.enc = &enc_;
   ctx.pov_rack = &racks_[mover];
+  ctx.opp_rack = &racks_[1 - mover];
   ctx.active_player = mover;
   ctx.apply_flip = flip;
   ctx.spec = spec_;

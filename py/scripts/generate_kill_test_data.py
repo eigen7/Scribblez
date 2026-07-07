@@ -46,6 +46,8 @@ def run_sim_obs_tool(pending: list[Path], args) -> int:
         f"--positions-per-game={args.positions_per_game}",
         f"--threads={args.threads}",
     ]
+    if args.open_rack:
+        cmd.append("--open-rack")
     return subprocess.run(cmd, capture_output=False).returncode
 
 
@@ -72,6 +74,12 @@ def main() -> int:
     p.add_argument("--rollouts", type=int, default=200, help="sim rollouts per candidate")
     p.add_argument("--top-k", type=int, default=10, help="candidates simmed per position")
     p.add_argument("--positions-per-game", type=int, default=1)
+    p.add_argument(
+        "--open-rack",
+        action="store_true",
+        help="sim with the opponent's true rack (the open-rack information condition); "
+        "use a dedicated tag, and pass --open-rack to kill_test.py as well",
+    )
     args = p.parse_args()
 
     out_dir = slog_dir(args.tag)

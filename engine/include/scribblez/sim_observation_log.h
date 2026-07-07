@@ -34,6 +34,9 @@ namespace scribblez {
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
 inline constexpr uint16_t kSimObsVersion = 1;
 
+// SimObsFileHeader::flags bits.
+inline constexpr uint32_t kSimObsFlagOpenRack = 1u;  // sims used the true opponent rack
+
 #pragma pack(push, 1)
 
 struct SimObsFileHeader {
@@ -41,7 +44,7 @@ struct SimObsFileHeader {
   uint16_t version;  // kSimObsVersion
   uint16_t reserved;
   uint32_t num_positions;
-  uint32_t reserved2;
+  uint32_t flags;  // kSimObsFlag* bits; consumers must match on them
 };
 static_assert(sizeof(SimObsFileHeader) == 16, "SimObsFileHeader must be 16 bytes");
 
@@ -69,7 +72,7 @@ static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
 // (or destruction) completes.
 class SimObsWriter {
  public:
-  explicit SimObsWriter(const std::string& path);
+  explicit SimObsWriter(const std::string& path, uint32_t flags = 0);
   ~SimObsWriter();  // closes if close() was not called
 
   SimObsWriter(const SimObsWriter&) = delete;

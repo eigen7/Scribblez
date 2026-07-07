@@ -557,6 +557,35 @@ in-flight cycle, and a rerun resumes). `kill_test.py` snapshots whatever
 complete pairs exist, so it can run while generation continues, and rerunning
 it after more data has accumulated only decodes the new files.
 
+### The open-rack information condition
+
+Passing `--open-rack` to both commands (under a dedicated tag) runs the same
+experiment in **open-rack Scrabble**: racks are public. Sims start every
+rollout from the opponent's true (replayed) rack instead of sampling it — the
+opponent's first reply to each candidate becomes deterministic under the
+greedy rollout policy, collapsing rollout variance to draw luck — and the
+model input gains the opponent-rack counts block (`kOppRackCounts`,
+input_encoder.h), so the network formally holds all information and lacks
+only the lexical computation. This is the endpoint of the belief-quality axis
+(uniform sampling → leave-enumeration inference → belief system → open rack):
+the open-rack evidence gain, minus the hidden-rack gain, prices the entire
+belief line of work interventionally, and a weak open-rack result points at
+the fusion machinery rather than at rack uncertainty. It is a research
+instrument, not the product path — nothing trained under it is exported for
+serving, and absolute metrics are not comparable across information
+conditions (compare arm deltas within a mode only).
+
+```
+./py/scripts/generate_kill_test_data.py -t apple-open --open-rack
+./py/scripts/kill_test.py -t apple-open --open-rack
+```
+
+The `.sobs` header records the condition (`flags` bit) and the cache records
+its mode, so mixing modes within a tag fails loudly. HastyBot barely reads
+the opponent rack (only the pre-endgame equity adjustments), so the self-play
+data distribution is essentially unchanged — the "variant" is an information
+condition on the training/eval tasks, not a different game.
+
 **Reading the results** (summary table at the end; per-arm history in
 `<mount>/kill_test/<tag>/cache/results/<arm>.json`; the decision metric is
 best held-out `wld_ce`):
@@ -570,12 +599,15 @@ best held-out `wld_ce`):
   not `none`.
 - **`scalar` vs `full`** locates the win: if `scalar` captures most of it, the
   spatial fusion machinery can be deferred (the cheap-before-rich ladder).
-- **`loo` (an optional fifth arm, `--arms loo`)** is the deployment-shaped
-  measurement: full evidence minus the evaluated move's own sim. At deployment
-  the model only ever re-scores *unsimmed* moves — simmed candidates are
-  ranked by their sims directly — so `loo` vs `none` is the transfer gain that
-  actually matters for the loop, with the own-sim shortcut (a near-copy of the
-  training target) removed.
+- **Every evidence arm is leave-one-out by default**: the played move's own
+  sim (candidate 0) is masked from the evidence. At deployment the model only
+  ever re-scores *unsimmed* moves — simmed candidates are ranked by their sims
+  directly — so the LOO gains are the transfer gains that actually matter for
+  the loop. The own-sim token is a near-copy of the training target; measuring
+  with it present flatters the result with a shortcut deployment never uses.
+- **`ownsim` (an optional fifth arm, `--arms ownsim`)** opts back into full
+  evidence including the played move's own sim; `ownsim` vs `full` prices
+  that shortcut.
 - `brier` and `wld_acc` should move with `wld_ce`; `sd_mae` is a sanity
   side-channel. A `full` arm whose *train* loss drops while holdout `wld_ce`
   does not is memorizing evidence noise — more positions (or fewer epochs)

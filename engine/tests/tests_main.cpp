@@ -1151,6 +1151,45 @@ static void test_base_layout_is_full_minus_contingent_tails() {
   std::cout << "test_base_layout_is_full_minus_contingent_tails passed\n";
 }
 
+// Open-rack arm: the row is the base row plus the opponent-rack counts block
+// at the scalar tail, holding exactly the opponent rack's per-tile counts.
+static void test_open_rack_layout_appends_opp_rack_counts() {
+  Dictionary d = medium_dict();
+  const InputEncodingSpec base{&d, false};
+  const InputEncodingSpec open{&d, false, /*opp_rack_input=*/true};
+  CHECK(spatial_planes(open) == spatial_planes(base));
+  CHECK(scalar_floats(open) == scalar_floats(base) + kOppRackCountFloats);
+  CHECK(scalar_block_offset(open, ScalarBlockId::kOppRackCounts) == scalar_floats(base));
+
+  Move cat = make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
+                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                             Glyph::of(Tile::from_char('T'))});
+  GameStateEncoder base_enc{base};
+  GameStateEncoder open_enc{open};
+  base_enc.apply_move(cat);
+  open_enc.apply_move(cat);
+  const Rack rack = rack_from("RSE");
+  const Rack opp = rack_from("QIZAA");
+
+  std::vector<float> base_row(input_floats(base), -1.0f);
+  std::vector<float> open_row(input_floats(open), -1.0f);
+  base_enc.encode_input(base_enc.active_player(), rack, /*apply_flip=*/false, base_row.data());
+  open_enc.encode_input(open_enc.active_player(), rack, opp, /*apply_flip=*/false, open_row.data());
+
+  // Identical prefix; the tail is the opponent rack's counts.
+  CHECK(std::memcmp(base_row.data(), open_row.data(),
+                    sizeof(float) * static_cast<size_t>(input_floats(base))) == 0);
+  const float* tail = open_row.data() + input_floats(base);
+  CHECK(tail[Tile::from_char('Q').index()] == 1.0f);
+  CHECK(tail[Tile::from_char('I').index()] == 1.0f);
+  CHECK(tail[Tile::from_char('Z').index()] == 1.0f);
+  CHECK(tail[Tile::from_char('A').index()] == 2.0f);
+  float tail_total = 0.0f;
+  for (int i = 0; i < kOppRackCountFloats; ++i) tail_total += tail[i];
+  CHECK(tail_total == 5.0f);
+  std::cout << "test_open_rack_layout_appends_opp_rack_counts passed\n";
+}
+
 // A hand-checked position: horizontal CAT at (7,7..9), rack {R}. Verifies the
 // specific contingent entries, the phantom-blank rescoring, and the encoded
 // planes' footprint painting and flip symmetry.
@@ -3826,6 +3865,59 @@ static void test_sim_runner() {
             << params.rollouts << " rollouts)\n";
 }
 
+// Open-rack sims: with the opponent's rack known and a greedy (deterministic)
+// rollout policy, the opponent's first reply to each candidate is the same in
+// every rollout, so the reply-placement counts are exactly 0 or S per square.
+static void test_sim_runner_known_opp_rack() {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_openrack";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  pos.opp_rack = rack_from("DOGSTAR");
+
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  CHECK(plays.size() >= 2);
+  const std::vector<Move> candidates = {plays.front(), plays[plays.size() / 2]};
+
+  SimRunner::Params params;
+  params.rollouts = 12;
+  params.threads = 3;
+  const SimRunner runner(d, params);
+  const std::vector<SimObservation> obs = runner.run(pos, candidates, /*base_seed=*/9);
+  bool any_reply = false;
+  for (const SimObservation& o : obs) {
+    CHECK(static_cast<int>(o.n) == params.rollouts);
+    for (int i = 0; i < SimObservation::kCells; ++i) {
+      CHECK(o.opp_next_count[i] == 0 || o.opp_next_count[i] == o.n);
+      if (o.opp_next_count[i] == o.n) any_reply = true;
+    }
+  }
+  CHECK(any_reply);
+
+  // Determinism across thread counts holds in this mode too.
+  SimRunner::Params p1 = params;
+  p1.threads = 1;
+  const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, /*base_seed=*/9);
+  for (size_t c = 0; c < obs.size(); ++c)
+    CHECK(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)) == 0);
+
+  fs::remove_all(tmp);
+  std::cout << "test_sim_runner_known_opp_rack passed\n";
+}
+
 static void test_sim_observation_log_roundtrip() {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";
@@ -4332,6 +4424,7 @@ int main() {
   test_contingent_map_matches_per_tile_generation();
   test_contingent_map_cat_board();
   test_base_layout_is_full_minus_contingent_tails();
+  test_open_rack_layout_appends_opp_rack_counts();
   test_encoder_forced_score_diff_isolation();
   test_encoder_nonplay_last_move_metadata();
   test_extract_positions_movegen_roundtrip();
@@ -4368,6 +4461,7 @@ int main() {
   test_topk1_selection_matches_hastybot();
   test_play_from_returned_to_bag();
   test_sim_runner();
+  test_sim_runner_known_opp_rack();
   test_sim_observation_log_roundtrip();
   std::cout << "All tests passed.\n";
   return 0;

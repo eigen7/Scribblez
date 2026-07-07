@@ -67,10 +67,17 @@ RolloutOutcome run_rollout(const SimPosition& pos, const AppliedCandidate& a,
                            uint64_t seed) {
   const int opponent = 1 - pos.mover;
   // Built from the PRE-move board and full rack so the pool -- and therefore
-  // the opponent's sampled rack -- is identical across candidates (CRN).
-  const Bag pool = unseen_pool(pos.board, pos.rack, seed);
+  // the opponent's sampled rack, when it must be sampled -- is identical
+  // across candidates (CRN). A known opp_rack instead seeds the opponent's
+  // known tiles and leaves the pool holding only the true bag.
+  Bag pool = unseen_pool(pos.board, pos.rack, seed);
+  std::array<Rack, 2> known_racks = a.known_racks;
+  if (pos.opp_rack.size() > 0) {
+    known_racks[opponent] = pos.opp_rack;
+    for (int i = 0; i < pos.opp_rack.size(); ++i) pool.remove(pos.opp_rack.tiles()[i]);
+  }
   Game game(a0, a1, dict, seed);
-  game.play_from(a.board, a.scores, a.known_racks, pool, /*to_move=*/opponent, a.returned_to_bag);
+  game.play_from(a.board, a.scores, known_racks, pool, /*to_move=*/opponent, a.returned_to_bag);
   const GameLog log = game.log();
 
   RolloutOutcome o;
@@ -183,9 +190,11 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
                                            const std::vector<Move>& candidates,
                                            uint64_t base_seed) const {
   if (candidates.empty()) return {};
-  // pool size > RACK_SIZE implies a non-empty bag even when the opponent
-  // holds a full rack -- the documented non-endgame requirement.
-  assert(unseen_pool(pos.board, pos.rack, 0).size() > RACK_SIZE);
+  // The documented non-endgame requirement: a non-empty bag at the decision
+  // point. With a hidden opponent rack the pool still contains their (up to
+  // RACK_SIZE) tiles, so the bound shifts accordingly.
+  assert(unseen_pool(pos.board, pos.rack, 0).size() >
+         (pos.opp_rack.size() > 0 ? pos.opp_rack.size() : RACK_SIZE));
 
   std::vector<AppliedCandidate> applied;
   applied.reserve(candidates.size());

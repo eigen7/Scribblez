@@ -18,11 +18,12 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
 
 }  // namespace
 
-SimObsWriter::SimObsWriter(const std::string& path) : path_(path) {
+SimObsWriter::SimObsWriter(const std::string& path, uint32_t flags) : path_(path) {
   SimObsFileHeader hdr{};
   hdr.magic = kSimObsMagic;
   hdr.version = kSimObsVersion;
   hdr.num_positions = 0;  // patched in close()
+  hdr.flags = flags;
   append_bytes(&buffer_, &hdr, sizeof(hdr));
 }
 

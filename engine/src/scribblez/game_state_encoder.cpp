@@ -53,6 +53,7 @@ struct PovCtx {
   const uint8_t* unseen;  // 27 per-kind unseen-pool counts
   bool apply_flip;
   const ContingentMap* contingent;  // null iff the spec excludes the blocks
+  const Rack* opp_rack;             // null iff the spec excludes the open-rack block
 };
 
 // Placement plane (1 plane at `out`): mark squares `m` placed tiles on. Uses
@@ -206,6 +207,8 @@ int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
     case ScalarBlockId::kContingent:
       ctx.contingent->encode_scalars(out);
       return kContingentScalarFloats;
+    case ScalarBlockId::kOppRackCounts:
+      return encode_rack_counts(*ctx.opp_rack, out);
   }
   std::abort();  // unreachable: the switch covers every ScalarBlockId
 }
@@ -225,8 +228,10 @@ void check_layout(bool ok, const char* what) {
 // Writes the spec's blocks in registry order, validating every block's size
 // and the final totals against the registry.
 void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& my_rack,
-                const Move& self_move, const Move& opp_move, int score_diff, bool apply_flip,
-                float* out) {
+                const Move& self_move, const Move& opp_move, int score_diff, const Rack* opp_rack,
+                bool apply_flip, float* out) {
+  check_layout(!spec.opp_rack_input || opp_rack != nullptr,
+               "an open-rack spec encoded without the opponent rack");
   std::memset(out, 0, sizeof(float) * static_cast<size_t>(input_floats(spec)));
   // The cross-check and contingent blocks read the board's move-generation
   // caches; build them up front (a no-op when already valid) so they are
@@ -238,8 +243,15 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   if (spec.contingent_features) {
     contingent = ContingentMap::compute(board, my_rack, unseen, *spec.dict);
   }
-  const PovCtx ctx{board,      my_rack, self_move,  opp_move,
-                   score_diff, unseen,  apply_flip, contingent ? &*contingent : nullptr};
+  const PovCtx ctx{board,
+                   my_rack,
+                   self_move,
+                   opp_move,
+                   score_diff,
+                   unseen,
+                   apply_flip,
+                   contingent ? &*contingent : nullptr,
+                   spec.opp_rack_input ? opp_rack : nullptr};
 
   float* cursor = out;
   for (const SpatialBlockDef& def : kSpatialBlocks) {
@@ -250,7 +262,7 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   }
   check_layout(cursor == out + spatial_floats(spec), "the spatial section's total");
   for (const ScalarBlockDef& def : kScalarBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
+    if (!scalar_block_included(def, spec)) continue;
     const int floats = encode_scalar_block(def.id, ctx, cursor);
     check_layout(floats == def.floats, "a scalar block's float count");
     cursor += floats;
@@ -276,7 +288,15 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp],
-             scores_[player] - scores_[opp], apply_flip, out);
+             scores_[player] - scores_[opp], /*opp_rack=*/nullptr, apply_flip, out);
+}
+
+void GameStateEncoder::encode_input(int player, const Rack& my_rack, const Rack& opp_rack,
+                                    bool apply_flip, float* out) const {
+  assert(player == 0 || player == 1);
+  const int opp = 1 - player;
+  encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp],
+             scores_[player] - scores_[opp], &opp_rack, apply_flip, out);
 }
 
 void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
@@ -284,7 +304,7 @@ void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_r
   assert(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff,
-             apply_flip, out);
+             /*opp_rack=*/nullptr, apply_flip, out);
 }
 
 void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) const {

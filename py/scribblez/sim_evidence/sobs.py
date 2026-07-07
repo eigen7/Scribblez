@@ -17,6 +17,9 @@ import numpy as np
 SOBS_MAGIC = 0x53424F53  # "SOBS"
 SOBS_VERSION = 1
 
+# SimObsFileHeader.flags bits (engine/include/scribblez/sim_observation_log.h).
+SOBS_FLAG_OPEN_RACK = 1
+
 BOARD = 15
 CELLS = BOARD * BOARD
 
@@ -39,7 +42,7 @@ def glyph_char(code: int) -> str:
 
 _FILE_HEADER = np.dtype(
     {
-        "names": ["magic", "version", "reserved", "num_positions", "reserved2"],
+        "names": ["magic", "version", "reserved", "num_positions", "flags"],
         "formats": ["<u4", "<u2", "<u2", "<u4", "<u4"],
         "offsets": [0, 4, 6, 8, 12],
         "itemsize": 16,
@@ -97,6 +100,17 @@ class SobsPosition:
     base_seed: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     obs: np.ndarray  # (K,) observation records
+
+
+def read_sobs_flags(path: str | Path) -> int:
+    """The .sobs header's flags word (SOBS_FLAG_* bits) -- e.g. whether the
+    sims were generated under the open-rack information condition. Reads only
+    the 16-byte header."""
+    with open(path, "rb") as f:
+        hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]
+    if hdr["magic"] != SOBS_MAGIC:
+        raise ValueError(f"bad .sobs magic in {path}")
+    return int(hdr["flags"])
 
 
 def read_sobs(path: str | Path) -> list[SobsPosition]:

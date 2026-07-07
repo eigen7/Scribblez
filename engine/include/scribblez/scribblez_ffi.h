@@ -69,7 +69,8 @@ int scribblez_max_move_per_lane_input_floats(void);
 // callers never branch on the arm.
 typedef struct ScribblezSession ScribblezSession;
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features,
+                                        int opp_rack_input);
 void scribblez_session_delete(ScribblezSession* s);
 
 // The session's input tensor shapes (see scribblez_target_shapes for the
@@ -102,8 +103,10 @@ int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int
 // Sim evidence for a penultimate-bingo analysis GCG's final decision point:
 // replays the GCG to the state BEFORE its final recorded move, ranks the
 // mover's legal moves by HastyBot static equity, and runs SimRunner over the
-// top-K (common random numbers, `rollouts` HastyBot rollouts each, opponent
-// racks sampled uniformly from the unseen pool). Writes the evidence as
+// top-K (common random numbers, `rollouts` HastyBot rollouts each; with
+// open_rack != 0 every rollout starts the opponent from their known final
+// rack, otherwise opponent racks are sampled uniformly from the unseen
+// pool). Writes the evidence as
 // consecutive SimObsRecord blobs (the .sobs record layout,
 // sim_observation_log.h) into `out_records`, which must hold at least top_k
 // records. Sets *played_rank to the index of the GCG's final (actually
@@ -111,7 +114,8 @@ int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int
 // top-K. Returns the record count, or -1 on a parse error / an endgame
 // position (the sim requires a non-empty bag at the decision point).
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, char* out_records, int* played_rank);
+                               int threads, uint64_t seed, int open_rack, char* out_records,
+                               int* played_rank);
 
 // Decode explicit training rows of one .slog file: row j is the position at
 // (game_idx[j], turn_idx[j]), encoded exactly like a DataLoader training row

@@ -30,15 +30,20 @@ namespace scribblez {
 class Dictionary;
 struct MoveRequest;  // agent.h
 
-// The pre-move decision point candidates are simmed from, described with only
-// mover-visible information: the board, both cumulative scores, and the
-// mover's own rack. The opponent's rack is unknown and is re-sampled per
-// rollout from the unseen pool (a full bag minus the board tiles and `rack`).
+// The pre-move decision point candidates are simmed from: the board, both
+// cumulative scores, and the mover's own rack. `opp_rack` selects the
+// information condition: empty (the default) means the opponent's rack is
+// hidden and is re-sampled per rollout from the unseen pool (a full bag minus
+// the board tiles and `rack`); non-empty means it is known ("open rack") and
+// every rollout starts the opponent from exactly those tiles, which makes the
+// opponent's first reply to each candidate deterministic under the greedy
+// rollout policy -- rollout randomness reduces to draw luck.
 struct SimPosition {
   Board board;
   std::array<int, 2> scores{0, 0};
   int mover = 0;
-  Rack rack;  // the mover's full pre-move rack
+  Rack rack;      // the mover's full pre-move rack
+  Rack opp_rack;  // the opponent's rack when known; empty = sample per rollout
 };
 
 // Aggregate observations from `n` rollouts of one candidate, all from the
@@ -77,7 +82,8 @@ class SimRunner {
   SimRunner(const Dictionary& dict, const Params& params);
 
   // Sim every candidate (PLAY, EXCHANGE, or PASS) from `pos`. Rollout i of
-  // every candidate is seeded by `base_seed + i` (the CRN scheme above), and
+  // every candidate is seeded by `base_seed + i` (the CRN scheme above; under
+  // a known opp_rack the shared randomness is the draw stream alone), and
   // rollouts are HastyBot-vs-HastyBot played to a natural game end. Requires
   // a non-empty bag at the decision point -- the training-eligibility rule
   // (binary_log.h) -- so no candidate can end the game outright.

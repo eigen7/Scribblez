@@ -47,7 +47,7 @@ using scribblez::binlog::kVersion;
 // constructed session is proof the lexicon is loaded, so the methods do no
 // load-failure checking.
 struct ScribblezSession {
-  ScribblezSession(const char* lexicon_name, bool contingent_features);
+  ScribblezSession(const char* lexicon_name, bool contingent_features, bool opp_rack_input);
 
   const ScribblezShape* input_shapes() const { return input_shapes_; }
   int input_floats() const { return scribblez::input_floats(spec); }
@@ -58,7 +58,7 @@ struct ScribblezSession {
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
-                       char* out_records, int* played_rank) const;
+                       bool open_rack, char* out_records, int* played_rank) const;
   int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                     int out_cap) const;
   int dump_position_json(const char* path, int64_t game_idx, bool post_move, char* out,
@@ -101,16 +101,18 @@ const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
 
 }  // namespace
 
-ScribblezSession::ScribblezSession(const char* lexicon_name, bool contingent_features)
-    : spec{&load_session_dictionary(lexicon_name), contingent_features},
+ScribblezSession::ScribblezSession(const char* lexicon_name, bool contingent_features,
+                                   bool opp_rack_input)
+    : spec{&load_session_dictionary(lexicon_name), contingent_features, opp_rack_input},
       spatial_dims_{scribblez::spatial_planes(spec), scribblez::kBoardSide, scribblez::kBoardSide},
       scalar_dims_{scribblez::scalar_floats(spec)},
       input_shapes_{{"input_spatial", spatial_dims_, 3, -1},
                     {"input_scalar", scalar_dims_, 1, -1},
                     {nullptr, nullptr, 0, 0}} {}
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features) {
-  return new ScribblezSession(lexicon_name, contingent_features != 0);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features,
+                                        int opp_rack_input) {
+  return new ScribblezSession(lexicon_name, contingent_features != 0, opp_rack_input != 0);
 }
 
 void scribblez_session_delete(ScribblezSession* s) { delete s; }
@@ -277,7 +279,8 @@ bool same_move(const scribblez::Move& a, const scribblez::Move& b) {
 }  // namespace
 
 int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
-                                       uint64_t seed, char* out_records, int* played_rank) const {
+                                       uint64_t seed, bool open_rack, char* out_records,
+                                       int* played_rank) const {
   if (!gcg_text || !out_records || top_k < 1) return -1;
   scribblez::ParsedGcgGame game;
   std::string error;
@@ -294,20 +297,32 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   pos.mover = final_turn.player;
   pos.rack = final_turn.rack_before;
 
+  if (open_rack) {
+    // The opponent's rack at the decision point equals their final rack (they
+    // do not act between the two), whose known tiles the parser recovers from
+    // the #Rack headers.
+    for (const std::optional<scribblez::Tile>& t : game.snapshots.back().racks[1 - pos.mover]) {
+      if (t) pos.opp_rack.add(*t);
+    }
+    if (pos.opp_rack.size() == 0) return -1;  // rack unknown; open-rack sims impossible
+  }
+
   const int pool_size = scribblez::unseen_pool(pos.board, pos.rack, 0).size();
-  if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
+  const int hidden = open_rack ? pos.opp_rack.size() : scribblez::RACK_SIZE;
+  if (pool_size <= hidden) return -1;  // endgame: SimRunner's non-empty-bag rule
 
   scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  // Bag size from the mover's POV: the unseen pool minus the opponent's
-  // (assumed full) rack. Only equity's endgame adjustments read it.
+  // Bag size from the mover's POV: the unseen pool minus the opponent's rack
+  // (known under open-rack, assumed full otherwise). Only equity's endgame
+  // adjustments read the opponent rack, which open-rack legitimately reveals.
   const scribblez::Rack hidden_opp;
   scribblez::MoveRequest req{pos.board,
                              *spec.dict,
                              pos.rack,
-                             hidden_opp,
+                             open_rack ? pos.opp_rack : hidden_opp,
                              pos.scores[pos.mover],
                              pos.scores[1 - pos.mover],
-                             std::max(0, pool_size - scribblez::RACK_SIZE)};
+                             std::max(0, pool_size - hidden)};
   const std::vector<scribblez::Move> candidates = scribblez::equity_top_k(req, top_k);
 
   scribblez::SimRunner::Params params;
@@ -327,8 +342,10 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 }
 
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, char* out_records, int* played_rank) {
-  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, threads, seed, out_records, played_rank);
+                               int threads, uint64_t seed, int open_rack, char* out_records,
+                               int* played_rank) {
+  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, threads, seed, open_rack != 0, out_records,
+                             played_rank);
 }
 
 int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,

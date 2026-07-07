@@ -55,6 +55,7 @@ using binlog::GameMetadata;
 struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
+  bool open_rack = false;
   int rollouts = 200;
   int top_k = 10;
   int positions_per_game = 1;
@@ -136,6 +137,9 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     pos.scores = {encoder.enc().score(0), encoder.enc().score(1)};
     pos.mover = mover;
     pos.rack = encoder.rack(mover);
+    // Open rack: the replay knows the opponent's actual tiles; handing them
+    // to the sim makes every rollout start the opponent from the truth.
+    if (opt.open_rack) pos.opp_rack = encoder.rack(1 - mover);
 
     int on_board = 0;
     for (int r = 0; r < BOARD_SIZE; ++r)
@@ -143,11 +147,15 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
         if (!pos.board.at(r, c).is_empty()) ++on_board;
     const int bag_size = total_tiles - on_board - encoder.rack(0).size() - encoder.rack(1).size();
 
-    // The opponent's replayed rack is ground truth the mover cannot see; the
-    // candidate ranking must not use it.
+    // Hidden-rack mode: the opponent's replayed rack is ground truth the
+    // mover cannot see, so the candidate ranking must not use it. Open-rack
+    // mode legitimately reveals it (only equity's endgame adjustments read
+    // it).
     const Rack hidden_opp;
-    MoveRequest ranking_req{
-      pos.board, dict, pos.rack, hidden_opp, pos.scores[mover], pos.scores[1 - mover], bag_size};
+    MoveRequest ranking_req{pos.board,         dict,
+                            pos.rack,          opt.open_rack ? pos.opp_rack : hidden_opp,
+                            pos.scores[mover], pos.scores[1 - mover],
+                            bag_size};
 
     PositionResult& res = (*results)[i];
     res.game_idx = w.game_idx;
@@ -184,7 +192,7 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   // The work list is sorted by (game, turn) and results are indexed by work
   // slot, so the output is canonically ordered and byte-stable across thread
   // counts.
-  SimObsWriter writer(sobs_path.string());
+  SimObsWriter writer(sobs_path.string(), opt.open_rack ? kSimObsFlagOpenRack : 0);
   for (const PositionResult& r : results) {
     writer.add_position(r.game_idx, r.turn_idx, r.candidates, r.observations,
                         static_cast<uint32_t>(opt.rollouts), r.base_seed);
@@ -230,6 +238,9 @@ int main(int argc, char** argv) {
       "directory of .slog files; each without a .sobs sidecar gets one")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
+      "open-rack", po::bool_switch(&opt.open_rack),
+      "sim with the opponent's true (replayed) rack instead of sampling it -- the "
+      "open-rack information condition; recorded in the .sobs header flags")(
       "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
       "Monte-Carlo rollouts per candidate")(
       "top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),

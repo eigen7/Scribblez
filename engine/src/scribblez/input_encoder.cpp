@@ -26,7 +26,7 @@ int spatial_planes(const InputEncodingSpec& spec) {
 int scalar_floats(const InputEncodingSpec& spec) {
   int floats = 0;
   for (const ScalarBlockDef& def : kScalarBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
+    if (!scalar_block_included(def, spec)) continue;
     floats += def.floats;
   }
   return floats;
@@ -51,7 +51,7 @@ int spatial_block_plane0(const InputEncodingSpec& spec, SpatialBlockId id) {
 int scalar_block_offset(const InputEncodingSpec& spec, ScalarBlockId id) {
   int offset = 0;
   for (const ScalarBlockDef& def : kScalarBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
+    if (!scalar_block_included(def, spec)) continue;
     if (def.id == id) return offset;
     offset += def.floats;
   }

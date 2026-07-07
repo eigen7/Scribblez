@@ -56,12 +56,28 @@ bool parse_final_position(const std::string& gcg_text, ParsedGcgGame* game, Fina
 // `start_player`'s POV holding `leave`. apply_move needs only the moves (not racks),
 // so this reproduces the board / scores / last-two-moves state the training replay
 // builds; only the rack and the unseen-pool feature depend on `leave`.
-void replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave,
-                       const InputEncodingSpec& spec, float* out) {
+// Returns false (with *error set) iff the spec demands the opponent rack (the
+// open-rack arm) and the GCG does not record it -- as in the penultimate-bingo
+// analysis datasets, whose to-act rack is a fresh unknown draw by design.
+bool replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& leave,
+                       const InputEncodingSpec& spec, float* out, std::string* error) {
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
   assert(enc.active_player() == game.snapshots.back().turn_player);
-  enc.encode_input(start_player, leave, /*apply_flip=*/false, out);
+  if (spec.opp_rack_input) {
+    Rack opp;
+    for (const std::optional<Tile>& t : game.snapshots.back().racks[1 - start_player]) {
+      if (t) opp.add(*t);
+    }
+    if (opp.size() == 0) {
+      if (error) *error = "open-rack encode: the GCG does not record the opponent's rack";
+      return false;
+    }
+    enc.encode_input(start_player, leave, opp, /*apply_flip=*/false, out);
+  } else {
+    enc.encode_input(start_player, leave, /*apply_flip=*/false, out);
+  }
+  return true;
 }
 
 // Parse a leave string into a Rack: A-Z (any case) are letters, '?' is a blank,
@@ -128,8 +144,7 @@ bool encode_post_move_analysis_input(const std::string& gcg_text, const InputEnc
   ParsedGcgGame game;
   FinalPosition pos;
   if (!parse_final_position(gcg_text, &game, &pos, error)) return false;
-  replay_and_encode(game, pos.start_player, pos.leave, spec, out);
-  return true;
+  return replay_and_encode(game, pos.start_player, pos.leave, spec, out, error);
 }
 
 bool encode_post_move_analysis_input_with_leave(const std::string& gcg_text,
@@ -151,8 +166,7 @@ bool encode_post_move_analysis_input_with_leave(const std::string& gcg_text,
   }
   if (!leave_available(leave, game.snapshots.back().board, error)) return false;
 
-  replay_and_encode(game, pos.start_player, leave, spec, out);
-  return true;
+  return replay_and_encode(game, pos.start_player, leave, spec, out, error);
 }
 
 std::string post_move_analysis_board_json(const std::string& gcg_text, std::string* error) {

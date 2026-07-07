@@ -15,10 +15,12 @@ class Rack;
 struct EncodeContext {
   // Replayed state at the sampled position. `enc` exposes the board, cumulative
   // scores, and both players' last moves; `pov_rack` is the mover's rack (which
-  // `enc` does not itself hold). `active_player` is the POV -- the mover at the
-  // sampled turn.
+  // `enc` does not itself hold), and `opp_rack` the opponent's -- consumed only
+  // under the open-rack arm (spec.opp_rack_input). `active_player` is the POV
+  // -- the mover at the sampled turn.
   const GameStateEncoder* enc = nullptr;
   const Rack* pov_rack = nullptr;
+  const Rack* opp_rack = nullptr;
   int active_player = 0;
   bool apply_flip = false;  // transpose spatial planes/labels across the diagonal
 

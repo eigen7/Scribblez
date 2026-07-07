@@ -27,7 +27,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scribblez.ffi import analyze_post_move_gcg, gcg_sim_evidence, get_input_shapes
+from scribblez.ffi import (
+    analyze_post_move_gcg,
+    gcg_sim_evidence,
+    get_input_shapes,
+    set_opp_rack_input,
+)
 from scribblez.sim_evidence.model import EvidencePostMoveModel
 from scribblez.sim_evidence.sobs import (
     MOVE_EXCHANGE,
@@ -67,9 +72,15 @@ def top_squares(plane: np.ndarray, k: int = 6, min_value: float = 0.01) -> str:
     return "  ".join(parts) if parts else "(none)"
 
 
-def load_arm(results_dir: Path, arm: str, suffix: str, device):
+def load_arm(results_dir: Path, arm: str, suffix: str, open_rack: bool, device):
     """Rebuild an arm's model from its saved weights and recorded args."""
     meta = json.loads((results_dir / f"{arm}{suffix}.json").read_text())
+    arm_open = bool(meta["args"].get("open_rack", False))
+    if arm_open != open_rack:
+        raise SystemExit(
+            f"arm `{arm}{suffix}` was trained with open_rack={arm_open}; rerun the probe "
+            f"with{'' if arm_open else 'out'} --open-rack"
+        )
     weights = results_dir / f"{arm}{suffix}_model.pt"
     if not weights.exists():
         raise SystemExit(f"{weights} missing -- rerun kill_test.py once to save arm weights")
@@ -133,7 +144,24 @@ def main():
         default="",
         help="result-file suffix of the arms to load (kill_test.py --out-suffix)",
     )
+    p.add_argument(
+        "--open-rack",
+        action="store_true",
+        help="the open-rack information condition: encode the input with the "
+        "opponent-rack block and sim with their known rack; the arms must have "
+        "been trained with kill_test.py --open-rack, and the GCG must record the "
+        "opponent's rack (the penultimate-bingo datasets deliberately do not -- "
+        "their to-act rack is a fresh unknown draw, so open-rack probing needs a "
+        "GCG whose final racks are known)",
+    )
+    p.add_argument(
+        "--include-own-sim",
+        action="store_true",
+        help="keep the played move's own sim in the evidence (the arms train "
+        "leave-one-out by default, so the default here matches training)",
+    )
     args = p.parse_args()
+    set_opp_rack_input(args.open_rack)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gcg_path = Path(args.gcg)
@@ -142,7 +170,12 @@ def main():
 
     # --- live sim evidence at the decision point ---
     records, played_rank = gcg_sim_evidence(
-        gcg_text, top_k=args.top_k, rollouts=args.rollouts, threads=args.threads, seed=args.seed
+        gcg_text,
+        top_k=args.top_k,
+        rollouts=args.rollouts,
+        threads=args.threads,
+        seed=args.seed,
+        open_rack=args.open_rack,
     )
     print(
         f"=== sim evidence: {len(records)} candidates x {args.rollouts} rollouts "
@@ -184,7 +217,7 @@ def main():
 
     print("\n=== model heads (win/draw/loss, score-diff mean+-std) ===")
     for arm in [a.strip() for a in args.arms.split(",") if a.strip()]:
-        model, max_k = load_arm(results_dir, arm, args.suffix, device)
+        model, max_k = load_arm(results_dir, arm, args.suffix, args.open_rack, device)
         pos = SobsPosition(
             game_index=0,
             turn_index=0,
@@ -194,6 +227,12 @@ def main():
             obs=records["obs"],
         )
         planes, scalars, mask = evidence_features(pos, max_k)
+        # The arms train leave-one-out, so mask the played move's own sim to
+        # keep the probe's evidence in-distribution.
+        if not args.include_own_sim and played_rank >= 0 and played_rank < max_k:
+            planes[played_rank] = 0
+            scalars[played_rank] = 0
+            mask[played_rank] = False
         ev = (
             torch.from_numpy(planes).unsqueeze(0).float().to(device),
             torch.from_numpy(scalars).unsqueeze(0).to(device),
