@@ -26,6 +26,7 @@ VS Code attach config, or rebuild the image.
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -47,6 +48,26 @@ from subtrees.devenv_utils import (
 )
 
 PHONY_LEXICA_DIR = Path(__file__).resolve().parent / "phonies"
+
+# Mirrors the TEMPLATE in py/cloud/credentials.py. Duplicated rather than
+# imported: setup_wizard.py runs on the host, where py/ is not on the import
+# path (it only lands on PYTHONPATH inside the Docker container), so the
+# host-side wizard can't import the container-side cloud.credentials module.
+CLOUD_CREDENTIALS_TEMPLATE = {
+    "runpod": {
+        "api_key": "FILL_ME",
+        "container_registry_auth_id": "FILL_ME",
+    },
+    "registry": {
+        "worker_image": "FILL_ME",
+    },
+    "r2": {
+        "account_id": "FILL_ME",
+        "access_key_id": "FILL_ME",
+        "secret_access_key": "FILL_ME",
+        "bucket": "scribblez",
+    },
+}
 
 
 class ScribblezSetupWizard(SetupWizardTool):
@@ -106,6 +127,24 @@ class ScribblezSetupWizard(SetupWizardTool):
         if failed:
             print_red(f"Failed: {', '.join(failed)}")
 
+    def setup_cloud_credentials(self):
+        """Write a placeholder cloud credentials file if one isn't there yet.
+
+        Never overwrites an existing file, so a real, filled-in credentials.json
+        is left untouched on re-runs. Fill in the FILL_ME values by hand, then
+        validate with py/scripts/cloud_check_credentials.py.
+        """
+        path = self.mount_dir / "cloud" / "credentials.json"
+        if path.exists():
+            print_green(f"Cloud credentials already present at {path}.")
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(CLOUD_CREDENTIALS_TEMPLATE, indent=2) + "\n")
+        path.chmod(0o600)
+        print_green(f"Wrote placeholder cloud credentials to {path}.")
+        print("Fill in each FILL_ME value, then verify with:")
+        print("    ./py/scripts/cloud_check_credentials.py")
+
     def install_phony_lexica(self):
         """Copy the repo's committed phony lexica into <mount>/lexica/.
 
@@ -159,6 +198,8 @@ def main():
         tool.setup_lexica()
         tool.rule()
         tool.install_phony_lexica()
+        tool.rule()
+        tool.setup_cloud_credentials()
         tool.rule()
         tool.setup_vscode_attach_config()
         tool.rule()
