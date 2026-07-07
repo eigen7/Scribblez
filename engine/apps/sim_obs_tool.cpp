@@ -28,6 +28,7 @@
 #include "scribblez/position_encoder.h"
 #include "scribblez/sim_observation_log.h"
 #include "scribblez/sim_runner.h"
+#include "util/hardware.h"
 #include "util/progress.h"
 
 #include <boost/program_options.hpp>
@@ -57,7 +58,7 @@ struct Options {
   int rollouts = 200;
   int top_k = 10;
   int positions_per_game = 1;
-  int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+  int threads = util::default_thread_count();
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
 };

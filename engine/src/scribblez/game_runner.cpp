@@ -125,8 +125,9 @@ void GameRunner::Params::add_options(boost::program_options::options_description
     ("games-per-file", po::value<int>(&games_per_file)->default_value(games_per_file),  //
      "games per .slog file (only used with --binary-log-dir)")                          //
     ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
-     "number of parallel game threads (>1 requires all players to support "
-     "parallelism, i.e. no human players)")  //
+     "number of parallel game threads (default: all logical processors; "
+     "downgraded to 1 when a player does not support parallelism, e.g. a "
+     "human seat)")  //
     ("random-handicap-max",
      po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
      "if > 0, each game gifts a randomly chosen player a head-start of P "

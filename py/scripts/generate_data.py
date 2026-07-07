@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 from scribblez.ffi import read_file_header
+from scribblez.hardware import default_thread_count
 from scribblez.paths import POST_MOVE_VALUE, TagPaths
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -110,7 +111,13 @@ def main() -> int:
     )
     parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     parser.add_argument("-g", "--num-games", type=int, default=100000, help="Total games.")
-    parser.add_argument("-T", "--threads", type=int, default=8, help="Parallel game threads.")
+    parser.add_argument(
+        "-T",
+        "--threads",
+        type=int,
+        default=default_thread_count(),
+        help="Parallel game threads (default: all logical processors).",
+    )
     parser.add_argument(
         "-p", "--games-per-file", type=int, default=10000, help="Games per .slog file."
     )

@@ -4,6 +4,7 @@
 #include "scribblez/game_sink.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/self_play_engine.h"
+#include "util/hardware.h"
 
 #include <array>
 #include <atomic>
@@ -37,11 +38,14 @@ class Dictionary;
 class GameRunner : public GameSink {
  public:
   struct Params {
-    int games = 1;                     // minimum number of games to play
-    std::string log_dir;               // if non-empty, write one <id>.gcg per game here
-    std::string binary_log_dir;        // if non-empty, write batched .slog files here
-    int games_per_file = 100;          // games per .slog file (only used with binary_log_dir)
-    int threads = 1;                   // number of parallel game threads
+    int games = 1;               // minimum number of games to play
+    std::string log_dir;         // if non-empty, write one <id>.gcg per game here
+    std::string binary_log_dir;  // if non-empty, write batched .slog files here
+    int games_per_file = 100;    // games per .slog file (only used with binary_log_dir)
+    // Parallel game threads; defaults to every available logical processor.
+    // SelfPlayEngine downgrades to 1 (with a warning) when a player does not
+    // support parallelism (e.g. a human seat).
+    int threads = util::default_thread_count();
     int random_handicap_max = 0;       // if > 0, gift a random player a head-start of
                                        // P points, P uniform in [0, this], each game
     double random_opening_mean = 0.0;  // if > 0, open each game with K uniformly-

@@ -14,6 +14,7 @@
 #include "scribblez/game_runner.h"
 #include "scribblez/lexicon.h"
 #include "scribblez/monte_carlo_sim.h"
+#include "util/hardware.h"
 #include "util/io.h"
 #include "util/json.h"
 #include "util/path.h"
@@ -26,7 +27,6 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
   try {
     std::string dataset_name = "post-move-value-test-dataset";
     int games = 10000;
-    int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    int threads = util::default_thread_count();
 
     po::options_description desc("monte_carlo_sim_tool options");
     desc.add_options()("help,h", "show this help and exit")(

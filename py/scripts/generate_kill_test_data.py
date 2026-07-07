@@ -25,6 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scribblez.hardware import default_thread_count
 from scripts.generate_data import run_games
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -56,7 +57,12 @@ def main() -> int:
         required=True,
         help="run tag; data accumulates under <mount>/kill_test/<tag>/slogs",
     )
-    p.add_argument("--threads", type=int, default=8, help="num c++ threads")
+    p.add_argument(
+        "--threads",
+        type=int,
+        default=default_thread_count(),
+        help="num c++ threads (default: all logical processors)",
+    )
     p.add_argument(
         "--games-per-batch",
         type=int,

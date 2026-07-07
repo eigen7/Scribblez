@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 
+from scribblez.hardware import default_thread_count
 from setup_check import import_setup_common
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -172,7 +173,7 @@ def main():
     # 1. Configure + compile the C++ engine.
     build_type = "Debug" if args.debug else "Release"
     run(f"cmake -S . -B target -DCMAKE_BUILD_TYPE={build_type}")
-    jobs = args.jobs or (os.cpu_count() or 1)
+    jobs = args.jobs or default_thread_count()
     run(f"cmake --build target -j{jobs}")
 
     # 2. Install the front-end's npm dependencies so the engine can launch the

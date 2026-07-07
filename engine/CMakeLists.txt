@@ -51,6 +51,7 @@ add_library(scribblez_core STATIC
   src/scribblez/web_server.cpp
   src/util/encoding.cpp
   src/util/crypto.cpp
+  src/util/hardware.cpp
   src/util/io.cpp
   src/util/json.cpp
   src/util/math.cpp
