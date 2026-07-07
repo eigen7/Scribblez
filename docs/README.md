@@ -9,6 +9,10 @@
 - **[roadmap.md](roadmap.md)** — the phased plan from the post-move value model
   (M_post, built) through self-play diversification and evaluation machinery to
   the pre-move model (M_pre), with per-phase status.
+- **[roadmap2.md](roadmap2.md)** — the forward plan from here: M_pre, rack
+  inference, covariance-guided sim scheduling, the rollout-policy ladder
+  (value truncation, self-model plies, endgame solver), and the experiments
+  that gate each track.
 
 ## The system as built
 
