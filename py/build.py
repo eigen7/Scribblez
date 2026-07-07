@@ -13,10 +13,12 @@ Then play a human-vs-AI game with:
 """
 
 import argparse
+import concurrent.futures
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from scribblez.hardware import default_thread_count
 from setup_check import import_setup_common
@@ -49,11 +51,18 @@ LEXICA_DIR = os.path.join(MOUNT_DIR, "lexica")
 MACONDO_GADDAG_DIR = os.path.join(MACONDO_DIR, "data", "lexica", "gaddag")
 
 
-def run(cmd, cwd=None):
+def run_rc(cmd, cwd=None) -> int:
+    """Like run(), but returns the exit code instead of exiting the process --
+    for callers that need to keep going after a failure (e.g. a parallel arch
+    build, where one arch failing shouldn't kill its still-running siblings)."""
     print(f"$ {cmd}")
-    result = subprocess.run(cmd, shell=True, cwd=cwd or ROOT)
-    if result.returncode:
-        sys.exit(result.returncode)
+    return subprocess.run(cmd, shell=True, cwd=cwd or ROOT).returncode
+
+
+def run(cmd, cwd=None):
+    result_code = run_rc(cmd, cwd)
+    if result_code:
+        sys.exit(result_code)
 
 
 def detect_host_arch() -> str:
@@ -81,12 +90,183 @@ def arch_build_dir(arch: str) -> str:
     return os.path.join(ARCHS_DIR, arch)
 
 
-def build_engine(arch: str, build_type: str, jobs: int):
-    """Configure + compile the C++ engine for one CPU microarchitecture."""
+def arch_build_log(arch: str) -> str:
+    return os.path.join(arch_build_dir(arch), "build.log")
+
+
+# Strips ANSI/terminal escape sequences (colored diagnostics, cursor control)
+# so a log file reads as plain text regardless of what the tool that produced
+# it thought it was writing to.
+_STRIP_TTY_SED = r"sed -u 's/\x1b\[[0-9;]*[a-zA-Z]//g'"
+
+
+def configure_engine(arch: str, build_type: str, *, live: bool) -> int:
+    """Run just the CMake configure step for one CPU microarchitecture.
+
+    When `live` is False, output is redirected to the arch's build.log
+    instead of the terminal, for the non-primary archs of a multi-arch build
+    (see build_all_archs).
+    """
     build_dir = arch_build_dir(arch)
-    print(f"\nBuilding engine for arch '{arch}' ({build_type}) in {build_dir} ...")
-    run(f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} -DSCRIBBLEZ_MARCH={arch}")
-    run(f"cmake --build {build_dir} -j{jobs}")
+    cmd = f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} -DSCRIBBLEZ_MARCH={arch}"
+    if live:
+        print(f"\nConfiguring arch '{arch}' ({build_type}) in {build_dir} ...")
+        return run_rc(cmd)
+    os.makedirs(build_dir, exist_ok=True)
+    with open(arch_build_log(arch), "w") as f:
+        f.write(f"$ {cmd}\n")
+        f.flush()
+        return subprocess.run(
+            cmd, shell=True, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT
+        ).returncode
+
+
+def build_engine(arch: str, build_type: str, jobs: int) -> int:
+    """Configure + compile the C++ engine for one CPU microarchitecture.
+
+    Returns the exit code of the first failing step, or 0.
+    """
+    build_dir = arch_build_dir(arch)
+    rc = configure_engine(arch, build_type, live=True)
+    if rc:
+        return rc
+    print(f"\nCompiling arch '{arch}' (-j{jobs}) in {build_dir} ...")
+    return run_rc(f"cmake --build {build_dir} -j{jobs}")
+
+
+def build_all_archs(
+    archs: list[str], build_type: str, total_jobs: int, host_arch: str
+) -> list[str]:
+    """Configure then build every arch in `archs`.
+
+    Configuring (`cmake -S -B`) is comparatively cheap and not CPU-bound, so
+    every arch configures concurrently. Compiling is CPU-bound; statically
+    splitting total_jobs across archs up front would leave cores idle once a
+    faster (or already-cached) arch finishes early. Instead, every arch's
+    build is driven as a recursive submake ("+$(MAKE) -C <dir>") under one
+    top-level `make -j{total_jobs}`. GNU Make's jobserver protocol then pools
+    job tokens across all of them: an arch that finishes frees its tokens
+    immediately for the arch(s) still compiling, keeping the machine
+    saturated without exceeding total_jobs concurrent compiler invocations,
+    regardless of how unevenly the archs finish. This relies on the project's
+    Unix Makefiles generator (CMAKE_MAKE_PROGRAM is gmake here); it would need
+    rework under Ninja, which has no equivalent cross-process job-sharing
+    protocol.
+
+    Building N archs at once means N streams of compiler output racing for
+    the same terminal. Rather than interleaving (or grouping) all of them,
+    only one arch -- the "primary", `host_arch` if it's in `archs` else the
+    first entry -- prints live; every other arch's output goes straight to
+    its own target/archs/<arch>/build.log with nothing printed live. Every
+    arch's log is written regardless (including the primary's), with
+    terminal escape sequences stripped so the files stay plain text even
+    though the primary's live view keeps them.
+
+    Returns the archs whose configure or build step failed (empty on
+    success).
+    """
+    primary = host_arch if host_arch in archs else archs[0]
+
+    # Every arch's log gets rebuilt from scratch this run. Non-primary archs'
+    # logs get recreated by configure_engine(live=False) below regardless,
+    # but the primary's doesn't touch its log at all during the (live)
+    # configure step, so without this a repeat run would silently append
+    # this run's build output after last run's stale leftovers.
+    for arch in archs:
+        log = arch_build_log(arch)
+        if os.path.exists(log):
+            os.remove(log)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(archs)) as pool:
+        configure_rcs = dict(
+            zip(
+                archs,
+                pool.map(
+                    lambda arch: configure_engine(arch, build_type, live=(arch == primary)),
+                    archs,
+                ),
+                strict=True,
+            )
+        )
+    failed = [arch for arch, rc in configure_rcs.items() if rc]
+    if failed:
+        _print_log_locations(archs)
+        return failed
+
+    print(
+        f"\nCompiling {len(archs)} arch(s) under a shared -j{total_jobs} job pool "
+        f"(showing '{primary}' live) ..."
+    )
+
+    # A recipe's own exit code can't be read back from the single `make`
+    # subprocess we invoke below, so each one records a real failure via a
+    # marker file instead (cleared up front so a stale marker from a prior
+    # run can't be misread as this run failing). `|| touch <marker>` also
+    # makes every recipe report success to `make` itself, so one arch failing
+    # never stops the others from being scheduled -- there's no need for `-k`.
+    fail_markers = {arch: os.path.join(arch_build_dir(arch), ".build_failed") for arch in archs}
+    for marker in fail_markers.values():
+        if os.path.exists(marker):
+            os.remove(marker)
+
+    # pipefail (via .SHELLFLAGS) makes each recipe's exit status reflect
+    # $(MAKE) rather than tee/sed (which almost never fail), so
+    # `|| touch <marker>` actually triggers on a real build failure. The
+    # primary's recipe tees its raw (uncleaned) output live to the terminal
+    # while also piping a filtered copy into its log via process
+    # substitution; every other arch pipes straight into a filtered log with
+    # nothing going to the terminal at all.
+    def recipe(arch: str) -> str:
+        make_cmd = f"+$(MAKE) -C {arch_build_dir(arch)} 2>&1"
+        log = arch_build_log(arch)
+        if arch == primary:
+            pipeline = f"{make_cmd} | tee >({_STRIP_TTY_SED} >> {log})"
+        else:
+            pipeline = f"{make_cmd} | {_STRIP_TTY_SED} >> {log}"
+        return f"{arch}:\n\t{pipeline} || touch {fail_markers[arch]}\n\n"
+
+    targets = " ".join(archs)
+    rules = "".join(recipe(arch) for arch in archs)
+    dispatch_makefile = (
+        f"SHELL := /bin/bash\n.SHELLFLAGS := -o pipefail -c\n\n"
+        f".PHONY: all {targets}\nall: {targets}\n\n{rules}"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".mk", dir=TARGET_DIR, delete=False) as f:
+        f.write(dispatch_makefile)
+        dispatch_path = f.name
+    try:
+        run_rc(f"make -f {dispatch_path} -j{total_jobs} all")
+    finally:
+        os.unlink(dispatch_path)
+
+    print(f"\nAbove output was for arch={primary}.")
+    _print_log_locations(archs)
+
+    return [arch for arch, marker in fail_markers.items() if os.path.exists(marker)]
+
+
+def count_warnings(log_path: str) -> int:
+    """Count compiler warning diagnostics in a build log.
+
+    GCC and Clang both emit "warning:" in every warning diagnostic line
+    (e.g. "foo.cpp:12:3: warning: unused variable [-Wunused-variable]").
+    """
+    if not os.path.isfile(log_path):
+        return 0
+    with open(log_path, errors="replace") as f:
+        return sum(1 for line in f if ": warning: " in line)
+
+
+def _print_log_locations(archs: list[str]):
+    print("\nTo see output for all archs, see:")
+    for arch in archs:
+        rel = os.path.relpath(arch_build_log(arch), ROOT)
+        warnings = count_warnings(arch_build_log(arch))
+        if warnings:
+            plural = "" if warnings == 1 else "s"
+            print(f"    {rel}  \033[33m<- {warnings} warning{plural}\033[0m")
+        else:
+            print(f"    {rel}")
 
 
 def _replace_with_symlink(link_path: str, real_path: str):
@@ -264,8 +444,10 @@ def main():
     if args.build_for_all_archs:
         if not SUPPORTED_ARCHS:
             print("\nWARNING: SUPPORTED_ARCHS (py/build.py) is empty; nothing to build.")
-        for arch in SUPPORTED_ARCHS:
-            build_engine(arch, build_type, jobs)
+        else:
+            failed = build_all_archs(SUPPORTED_ARCHS, build_type, jobs, host_arch)
+            if failed:
+                sys.exit(f"Build failed for arch(s): {', '.join(sorted(failed))}")
     else:
         if host_arch not in SUPPORTED_ARCHS:
             print(
@@ -273,7 +455,9 @@ def main():
                 "SUPPORTED_ARCHS (py/build.py). Please add it there and commit, "
                 "so cloud tooling knows to build/distribute a bundle for it."
             )
-        build_engine(host_arch, build_type, jobs)
+        rc = build_engine(host_arch, build_type, jobs)
+        if rc:
+            sys.exit(rc)
 
     if os.path.isdir(arch_build_dir(host_arch)):
         link_host_arch_build(host_arch)
