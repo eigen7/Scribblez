@@ -18,7 +18,10 @@ from scribblez.workloads import WorkloadSpec
 @dataclass
 class WorkerRecord:
     """One worker slot: durable identity + desired state. The backing process
-    or pod's actual state is observed live by the WorkerManager."""
+    or pod's actual state is observed live by the WorkerManager, which also
+    accrues the spend estimate here (observed running time x the pod's rate;
+    Runpod's billing API returns nothing for CPU pods, so spend is estimated
+    from our own observations)."""
 
     worker_id: str
     kind: str  # "local" | "cloud"
@@ -27,6 +30,10 @@ class WorkerRecord:
     vcpus: int | None = None  # cloud: pod size
     flavor: str | None = None  # cloud: Runpod CPU flavor
     pod_id: str | None = None  # cloud: the backing pod
+    cost_per_hr: float | None = None  # cloud: last observed rental rate
+    spend: float = 0.0  # estimated dollars spent by this slot so far
+    observed_at: float | None = None  # when the slot was last observed
+    observed_running: bool = False  # whether it was running then
 
 
 @dataclass
@@ -36,6 +43,9 @@ class TaskRecord:
     params: dict  # raw param values (validated against the workload's schema)
     created_at: float
     workers: list[WorkerRecord] = field(default_factory=list)
+    # Estimated spend of worker slots that have since been removed, so the
+    # task's cumulative total survives slot removal.
+    retired_spend: float = 0.0
 
     def worker(self, worker_id: str) -> WorkerRecord:
         for w in self.workers:

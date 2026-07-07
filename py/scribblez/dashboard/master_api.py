@@ -99,6 +99,8 @@ class TaskHandler(_MasterBase):
         def info():
             task = tasks.load_task(spec, tag)
             slogs = spec.data_dir(tag) / "slogs"
+            workers = self.manager.worker_status(spec, task) if task else []
+            spend = task.retired_spend + sum(w.spend for w in task.workers) if task else 0.0
             return {
                 "workload": spec.name,
                 "tag": tag,
@@ -107,7 +109,8 @@ class TaskHandler(_MasterBase):
                 "created_at": task.created_at if task else None,
                 "pairs": sum(1 for _ in slogs.glob("*.sobs")) if slogs.is_dir() else 0,
                 "data_dir": str(spec.data_dir(tag)),
-                "workers": self.manager.worker_status(spec, task) if task else [],
+                "workers": workers,
+                "spend": spend,
             }
 
         self.guarded(info)

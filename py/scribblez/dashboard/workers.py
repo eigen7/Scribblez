@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from cloud.bundles import resolve_bundle_id
@@ -39,6 +40,21 @@ SYNC_INTERVAL_SECONDS = 30
 
 def _key(spec: workloads.WorkloadSpec, tag: str, worker_id: str = "") -> str:
     return f"{spec.name}/{tag}/{worker_id}"
+
+
+def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
+    """Advance a slot's spend estimate to now: if it was running at its last
+    observation, the elapsed interval is charged at the last observed rate.
+    Every observation point (status polls, the reconcile tick, state changes)
+    calls this, so the estimate only drifts across dashboard-server downtime.
+    """
+    now = time.time()
+    if w.observed_running and w.observed_at is not None:
+        w.spend += (now - w.observed_at) / 3600 * (w.cost_per_hr or 0.0)
+    w.observed_at = now
+    w.observed_running = running
+    if cost_per_hr is not None:
+        w.cost_per_hr = cost_per_hr
 
 
 class WorkerManager:
@@ -145,6 +161,7 @@ class WorkerManager:
     def set_worker_state(self, spec, task: tasks.TaskRecord, worker_id: str, run: bool):
         w = task.worker(worker_id)
         w.desired_state = "running" if run else "paused"
+        _accrue(w, run, None)
         tasks.save_task(spec, task)
         if w.kind == "local":
             proc = self._local_proc(spec, task.tag, worker_id)
@@ -177,6 +194,8 @@ class WorkerManager:
             )
             if pod is not None:
                 client.delete_pod(w.pod_id)
+        _accrue(w, False, None)
+        task.retired_spend += w.spend
         task.workers.remove(w)
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
@@ -184,7 +203,8 @@ class WorkerManager:
     # ---- observation -----------------------------------------------------
 
     def worker_status(self, spec, task: tasks.TaskRecord) -> list[dict]:
-        """One dict per slot: the durable record plus observed live state."""
+        """One dict per slot: the durable record plus observed live state.
+        Every call is also a spend-accrual observation point (persisted)."""
         out = []
         pods = None  # fetched lazily, once, only if the task has cloud slots
         for w in task.workers:
@@ -203,6 +223,7 @@ class WorkerManager:
                 info["state"] = "running" if running else (
                     "paused" if w.desired_state == "paused" else "exited"
                 )  # fmt: skip
+                _accrue(w, running, None)
             else:
                 if pods is None:
                     _, client = self._cloud()
@@ -210,6 +231,7 @@ class WorkerManager:
                 pod = pods.get(w.pod_id)
                 if pod is None:
                     info["state"] = "terminated"
+                    _accrue(w, False, None)
                 else:
                     running = pod.get("desiredStatus") == "RUNNING"
                     info["state"] = "running" if running else (
@@ -218,7 +240,11 @@ class WorkerManager:
                     info["cost_per_hr"] = pod.get("costPerHr")
                     info["public_ip"] = pod.get("publicIp")
                     info["ssh"] = f"ssh {w.pod_id}@ssh.runpod.io"
+                    _accrue(w, running, pod.get("costPerHr"))
+            info["spend"] = w.spend
             out.append(info)
+        if task.workers:
+            tasks.save_task(spec, task)
         return out
 
     # ---- reconciliation ----------------------------------------------------
@@ -235,23 +261,19 @@ class WorkerManager:
     def reconcile(self):
         """Close desired-vs-actual gaps: respawn local workers that should be
         running (dashboard restart, crashed process) and restart interruptible
-        pods Runpod reclaimed. Runs at boot and periodically."""
+        pods Runpod reclaimed. Runs at boot and periodically; doubling as a
+        spend-accrual heartbeat (worker_status persists it) even when no
+        browser is polling."""
         for spec, task in self._tasks_with_workers():
-            pods = None
-            for w in task.workers:
+            status = self.worker_status(spec, task)
+            for w, info in zip(task.workers, status, strict=True):
                 if w.desired_state != "running":
                     continue
-                if w.kind == "local":
-                    proc = self._local_proc(spec, task.tag, w.worker_id)
-                    if proc is None or proc.poll() is not None:
-                        self._spawn_local(spec, task, w)
-                else:
-                    if pods is None:
-                        _, client = self._cloud()
-                        pods = {p["id"]: p for p in client.list_pods()}
-                    pod = pods.get(w.pod_id)
-                    if pod is not None and pod.get("desiredStatus") == "EXITED":
-                        client.start_pod(w.pod_id)
+                if w.kind == "local" and info["state"] == "exited":
+                    self._spawn_local(spec, task, w)
+                elif w.kind == "cloud" and info["state"] == "interrupted":
+                    _, client = self._cloud()
+                    client.start_pod(w.pod_id)
             self._ensure_sync(spec, task)
 
     def shutdown(self):

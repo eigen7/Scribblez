@@ -16,6 +16,7 @@ type WorkerInfo = {
 type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean> | null;
   created_at: number | null; pairs: number; data_dir: string; workers: WorkerInfo[];
+  spend: number;
 };
 type WorkerStats = {
   worker_id: string; kind: string; threads: number | null; host_arch: string | null;
@@ -235,7 +236,8 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
             ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
             ['complete pairs', info.pairs],
             ['data dir', info.data_dir],
-            ['cloud spend', `$${cloudCost.toFixed(3)}/hr`],
+            ['cloud burn rate', `$${cloudCost.toFixed(3)}/hr`],
+            ['cloud spend (est. total)', `$${info.spend.toFixed(2)}`],
           ]} />
         </Card>
         <Card title="Parameters (frozen)">
@@ -249,6 +251,13 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
             <Button label="Pause all" disabled={!anyRunning} onClick={() => act({ action: 'pause' })} />
+            <span title={anyRunning ? 'pause all workers before removing them' : undefined}>
+              <Button
+                label="Remove all" tone="danger"
+                disabled={anyRunning || info.workers.length === 0}
+                onClick={() => act({ action: 'remove' })}
+              />
+            </span>
           </div>
           <WorkersTable
             workers={info.workers}
