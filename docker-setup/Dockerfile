@@ -103,6 +103,12 @@ RUN apt-get update && \
 # 6f) pypdf (pdf reading)
 RUN pip3 install --no-cache-dir pypdf
 
+# 6g) rclone, for moving data to/from the R2 results bucket (py/cloud tooling:
+#     credential checks, result syncing, binary pushes).
+RUN apt-get update && \
+    apt-get install -y rclone && \
+    rm -rf /var/lib/apt/lists/*
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
@@ -121,7 +127,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.4.1"
+ARG VERSION="3.5.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 
