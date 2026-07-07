@@ -81,6 +81,7 @@ def make_config() -> DevenvConfig:
     return DevenvConfig(
         name="scribblez",
         repo_root=REPO_ROOT,
+        docker_context=REPO_ROOT / "docker-setup" / "local",
         required_ports=REQUIRED_PORTS,
         min_image_version=MINIMUM_REQUIRED_IMAGE_VERSION,
         setup_version=SETUP_VERSION,
