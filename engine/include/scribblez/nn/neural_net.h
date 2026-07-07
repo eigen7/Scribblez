@@ -6,6 +6,10 @@
 #include <memory>
 #include <string>
 
+namespace boost::program_options {
+class options_description;
+}
+
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
 // Scribblez post-move value model: two inputs ("input_spatial"
 // (N,spatial_planes,15,15), "input_scalar" (N,scalar_floats) -- widths declared
@@ -46,6 +50,11 @@ struct NeuralNetParams {
   // and quick checks, not for production agents. Fast-built plans are cached
   // separately from full-optimization plans (see engine_plan_cache_path).
   bool fast_build = false;
+
+  // Register the command-line-facing subset on the given options_description
+  // (--model, --batch-size, --fast-build), binding directly to this struct's
+  // fields. Call before parsing argv.
+  void add_options(boost::program_options::options_description& desc);
 };
 
 class NeuralNet {

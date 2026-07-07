@@ -1,13 +1,13 @@
 #pragma once
 
-// Binary sidecar format for M_pre distillation targets. One .mpt file
-// accompanies one .slog file (binary_log.h) and holds, for a subset of that
-// file's positions, the candidate moves sampled at the position and the
-// teacher M_post's readouts for each candidate's post-move state. The M_pre
-// trainer pairs these targets with inputs it reconstructs by replay
-// (docs/roadmap2.md, track A).
+// Binary sidecar format for pre-move value model distillation targets. One
+// .pmt file accompanies one .slog file (binary_log.h) and holds, for a subset
+// of that file's positions, the candidate moves sampled at the position and
+// the teacher post-move value model's readouts for each candidate's post-move
+// state. The pre-move trainer pairs these targets with inputs it reconstructs
+// by replay (docs/roadmap2.md, track A).
 //
-// The teacher is pinned: the header records the content hash of the M_post
+// The teacher is pinned: the header records the content hash of the teacher
 // ONNX that produced the targets, so a corpus can be verified to come from
 // one blessed checkpoint. The per-record target width is also in the header
 // (`record_floats`), making the record layout head-extensible: readers
@@ -16,16 +16,16 @@
 //
 // File layout
 // -----------
-//   [MpreTargetFileHeader                          84 B]
+//   [TargetFileHeader                              84 B]
 //   For each position p in [0, num_positions):
-//     [MpreTargetPositionHeader                    16 B]
+//     [TargetPositionHeader                        16 B]
 //     [num_candidates(p) x (Move 16 B + record_floats x float)]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file, addressing the PRE-move decision point; each record's targets
 // describe the post-move state its Move produces. Version-1 targets, in
 // order: [p_win, p_draw, p_loss, score_diff_mean, score_diff_std], all from
-// the mover's POV (kMpreTargetFloatsV1).
+// the mover's POV (kTargetFloatsV1).
 
 #include "scribblez/move.h"
 
@@ -34,55 +34,56 @@
 #include <vector>
 
 namespace scribblez {
+namespace pre_move_value {
 
-// "MPTG" in little-endian (bytes 'M','P','T','G' on disk).
-inline constexpr uint32_t kMpreTargetMagic = 0x4754504Du;
-inline constexpr uint16_t kMpreTargetVersion = 1;
-inline constexpr uint32_t kMpreTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_mean, sd_std]
+// "PMVT" in little-endian (bytes 'P','M','V','T' on disk).
+inline constexpr uint32_t kTargetMagic = 0x54564D50u;
+inline constexpr uint16_t kTargetVersion = 1;
+inline constexpr uint32_t kTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_mean, sd_std]
 
-// MpreTargetFileHeader::flags bits. Mirrors the .sobs convention
+// TargetFileHeader::flags bits. Mirrors the .sobs convention
 // (sim_observation_log.h): bit 0x2 marks the open-leaves information
 // condition (inputs carry the opponent-leave block).
-inline constexpr uint32_t kMpreTargetFlagOpenLeaves = 2u;
+inline constexpr uint32_t kTargetFlagOpenLeaves = 2u;
 
-inline constexpr int kMpreTargetModelHashChars = 64;
+inline constexpr int kTargetModelHashChars = 64;
 
 #pragma pack(push, 1)
 
-struct MpreTargetFileHeader {
-  uint32_t magic;    // kMpreTargetMagic
-  uint16_t version;  // kMpreTargetVersion
+struct TargetFileHeader {
+  uint32_t magic;    // kTargetMagic
+  uint16_t version;  // kTargetVersion
   uint16_t reserved;
   uint32_t num_positions;
   uint32_t record_floats;  // target floats per candidate record
-  uint32_t flags;          // kMpreTargetFlag* bits
-  // Hex content hash of the teacher M_post ONNX (NUL-padded), pinning the
-  // corpus to one checkpoint.
-  char model_hash[kMpreTargetModelHashChars];
+  uint32_t flags;          // kTargetFlag* bits
+  // Hex content hash of the teacher ONNX (NUL-padded), pinning the corpus to
+  // one checkpoint.
+  char model_hash[kTargetModelHashChars];
 };
-static_assert(sizeof(MpreTargetFileHeader) == 84, "MpreTargetFileHeader must be 84 bytes");
+static_assert(sizeof(TargetFileHeader) == 84, "TargetFileHeader must be 84 bytes");
 
-struct MpreTargetPositionHeader {
+struct TargetPositionHeader {
   uint32_t game_index;      // game within the companion .slog file
   uint32_t turn_index;      // pre-move turn the candidates were sampled at
   uint32_t num_candidates;  // records that follow
   uint32_t reserved;
 };
-static_assert(sizeof(MpreTargetPositionHeader) == 16, "MpreTargetPositionHeader must be 16 bytes");
+static_assert(sizeof(TargetPositionHeader) == 16, "TargetPositionHeader must be 16 bytes");
 
 #pragma pack(pop)
 
-// Streams positions to a .mpt file. Buffered in memory and written atomically
+// Streams positions to a .pmt file. Buffered in memory and written atomically
 // (temp + rename) on close(), so an interrupted run never leaves a truncated
 // file that a resume (which skips existing sidecars) would silently keep.
-class MpreTargetWriter {
+class TargetWriter {
  public:
-  MpreTargetWriter(const std::string& path, uint32_t record_floats, const std::string& model_hash,
-                   uint32_t flags = 0);
-  ~MpreTargetWriter();  // closes if close() was not called
+  TargetWriter(const std::string& path, uint32_t record_floats, const std::string& model_hash,
+               uint32_t flags = 0);
+  ~TargetWriter();  // closes if close() was not called
 
-  MpreTargetWriter(const MpreTargetWriter&) = delete;
-  MpreTargetWriter& operator=(const MpreTargetWriter&) = delete;
+  TargetWriter(const TargetWriter&) = delete;
+  TargetWriter& operator=(const TargetWriter&) = delete;
 
   // Append one position. `targets` is candidates.size() x record_floats,
   // candidate-major.
@@ -100,20 +101,20 @@ class MpreTargetWriter {
   bool closed_ = false;
 };
 
-// Loads a .mpt file into memory and serves per-position views. Throws
+// Loads a .pmt file into memory and serves per-position views. Throws
 // std::runtime_error on a missing file, bad magic, or version mismatch, so a
 // stale file fails loudly rather than misparses.
-class MpreTargetReader {
+class TargetReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.
   // Records are (Move, record_floats() floats) pairs, candidate-major, at
   // `records`; move_at/targets_at compute the offsets.
   struct Position {
-    const MpreTargetPositionHeader* header;
+    const TargetPositionHeader* header;
     const char* records;
   };
 
-  explicit MpreTargetReader(const std::string& path);
+  explicit TargetReader(const std::string& path);
 
   uint32_t record_floats() const { return header_.record_floats; }
   uint32_t flags() const { return header_.flags; }
@@ -127,9 +128,10 @@ class MpreTargetReader {
  private:
   size_t record_bytes() const { return sizeof(Move) + sizeof(float) * header_.record_floats; }
 
-  MpreTargetFileHeader header_{};
+  TargetFileHeader header_{};
   std::vector<char> buffer_;
   std::vector<Position> positions_;
 };
 
+}  // namespace pre_move_value
 }  // namespace scribblez

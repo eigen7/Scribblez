@@ -45,7 +45,7 @@ add_library(scribblez_core STATIC
   src/scribblez/monte_carlo_sim.cpp
   src/scribblez/sim_runner.cpp
   src/scribblez/sim_observation_log.cpp
-  src/scribblez/mpre_target_log.cpp
+  src/scribblez/pre_move_value_target_log.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/post_move_analysis.cpp
   src/scribblez/seed_producer.cpp
@@ -132,7 +132,7 @@ target_include_directories(scribblez_nn
   PRIVATE ${CUDA_INCLUDE_DIR} ${TENSORRT_INCLUDE_DIR})
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
-target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen)
+target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen Boost::program_options)
 # Reading the exported model's metadata_props (the input-encoding arm) parses
 # the ONNX protobuf directly. The system onnx package ships the ML variant of
 # the generated headers, selected via ONNX_ML.
@@ -262,10 +262,11 @@ target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
 
-# M_pre distillation-target generator: stratified candidate sampling + batched
-# teacher (M_post) inference over .slog positions (docs/roadmap2.md track A).
-add_executable(mpre_target_tool apps/mpre_target_tool.cpp)
-target_link_libraries(mpre_target_tool PRIVATE
+# Pre-move value model distillation-target generator: stratified candidate
+# sampling + batched teacher (post-move model) inference over .slog positions
+# (docs/roadmap2.md track A).
+add_executable(pre_move_value_target_generator apps/pre_move_value_target_generator.cpp)
+target_link_libraries(pre_move_value_target_generator PRIVATE
   scribblez_nn
   scribblez_core
   Boost::program_options

@@ -4,6 +4,7 @@
 #include "scribblez/nn/cuda_util.h"
 #include "scribblez/training_targets.h"
 
+#include <boost/program_options.hpp>
 #include <onnx/onnx_pb.h>
 
 #include <NvInfer.h>
@@ -104,6 +105,18 @@ nvinfer1::Dims scalar_dims(int rows, int floats) {
 }
 
 }  // namespace
+
+void NeuralNetParams::add_options(boost::program_options::options_description& desc) {
+  namespace po = boost::program_options;
+  desc.add_options()  //
+    ("model", po::value<std::string>(&onnx_path)->required(),
+     "exported ONNX model to build the TensorRT engine from")  //
+    ("batch-size", po::value<int>(&max_batch_size)->default_value(max_batch_size),
+     "maximum TensorRT batch size")  //
+    ("fast-build", po::bool_switch(&fast_build),
+     "TensorRT builder optimization level 0 (fast engine build, slower inference); "
+     "for tests and smoke runs");
+}
 
 struct NeuralNet::Impl {
   explicit Impl(const NeuralNetParams& p) : params(p) {}

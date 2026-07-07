@@ -1,7 +1,7 @@
-"""Pure-numpy reader for .mpt M_pre distillation-target sidecars.
+"""Pure-numpy reader for .pmt pre-move value model distillation-target sidecars.
 
-The binary layout is owned by engine/include/scribblez/mpre_target_log.h (one
-MpreTargetFileHeader, then per position a MpreTargetPositionHeader followed by
+The binary layout is owned by engine/include/scribblez/pre_move_value_target_log.h (one
+TargetFileHeader, then per position a TargetPositionHeader followed by
 its (Move, targets) records); the dtypes below mirror those packed structs and
 are guarded by itemsize checks so a C++ layout change fails loudly here rather
 than misparsing. The record's target width comes from the header
@@ -17,14 +17,14 @@ import numpy as np
 
 from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
-MPT_MAGIC = 0x4754504D  # "MPTG"
-MPT_VERSION = 1
+PMT_MAGIC = 0x54564D50  # "PMVT"
+PMT_VERSION = 1
 
 # Version-1 target floats per candidate, in record order (mover's POV).
 TARGET_NAMES_V1 = ("p_win", "p_draw", "p_loss", "sd_mean", "sd_std")
 
-# MpreTargetFileHeader.flags bits (mirrors the .sobs convention).
-MPT_FLAG_OPEN_LEAVES = 2
+# TargetFileHeader.flags bits (mirrors the .sobs convention).
+PMT_FLAG_OPEN_LEAVES = 2
 
 _FILE_HEADER = np.dtype(
     {
@@ -58,7 +58,7 @@ def _record_dtype(record_floats: int) -> np.dtype:
 
 
 @dataclass
-class MptPosition:
+class PmtPosition:
     """One position's sampled candidates and their teacher readouts."""
 
     game_index: int
@@ -68,26 +68,26 @@ class MptPosition:
 
 
 @dataclass
-class MptFile:
+class PmtFile:
     model_hash: str  # hex content hash of the teacher M_post ONNX
     flags: int
     record_floats: int
-    positions: list[MptPosition]
+    positions: list[PmtPosition]
 
 
-def read_mpt(path: str | Path) -> MptFile:
-    """Parse a .mpt file. Raises on a bad magic or a version mismatch (stale
+def read_pmt(path: str | Path) -> PmtFile:
+    """Parse a .pmt file. Raises on a bad magic or a version mismatch (stale
     files must fail loudly)."""
     buf = np.fromfile(str(path), dtype=np.uint8)
     hdr = np.frombuffer(buf[: _FILE_HEADER.itemsize].tobytes(), dtype=_FILE_HEADER)[0]
-    if hdr["magic"] != MPT_MAGIC:
-        raise ValueError(f"bad .mpt magic in {path}")
-    if hdr["version"] != MPT_VERSION:
-        raise ValueError(f".mpt version mismatch in {path}: file={hdr['version']}")
+    if hdr["magic"] != PMT_MAGIC:
+        raise ValueError(f"bad .pmt magic in {path}")
+    if hdr["version"] != PMT_VERSION:
+        raise ValueError(f".pmt version mismatch in {path}: file={hdr['version']}")
     record_floats = int(hdr["record_floats"])
     rec_dtype = _record_dtype(record_floats)
 
-    positions: list[MptPosition] = []
+    positions: list[PmtPosition] = []
     off = _FILE_HEADER.itemsize
     for _ in range(int(hdr["num_positions"])):
         ph_bytes = buf[off : off + _POSITION_HEADER.itemsize].tobytes()
@@ -97,7 +97,7 @@ def read_mpt(path: str | Path) -> MptFile:
         records = np.frombuffer(buf[off : off + k * rec_dtype.itemsize].tobytes(), rec_dtype)
         off += k * rec_dtype.itemsize
         positions.append(
-            MptPosition(
+            PmtPosition(
                 game_index=int(ph["game_index"]),
                 turn_index=int(ph["turn_index"]),
                 moves=records["move"],
@@ -106,7 +106,7 @@ def read_mpt(path: str | Path) -> MptFile:
         )
     if off != len(buf):
         raise ValueError(f"trailing bytes in {path}")
-    return MptFile(
+    return PmtFile(
         model_hash=bytes(hdr["model_hash"]).rstrip(b"\x00").decode(),
         flags=int(hdr["flags"]),
         record_floats=record_floats,

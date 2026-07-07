@@ -1,20 +1,21 @@
-// Offline generator of M_pre distillation targets (.mpt sidecars) for .slog
-// self-play data (docs/roadmap2.md, track A).
+// Offline generator of pre-move value model distillation targets (.pmt
+// sidecars) for .slog self-play data (docs/roadmap2.md, track A).
 //
 // For every training-eligible position of each game (or a per-game sample),
 // the tool replays to the pre-move decision point, draws a STRATIFIED sample
 // of the legal candidates, encodes each candidate's post-move state exactly
-// as an M_post training row, and evaluates the batch with the teacher M_post
-// (TensorRT). Each .slog file gets a same-stem .mpt sidecar recording the
-// sampled Moves and the teacher's readouts (kMpreTargetFloatsV1); files whose
-// sidecar already exists are skipped, so interrupted runs resume by rerunning.
+// as a post-move-model training row, and evaluates the batch with the teacher
+// post-move value model (TensorRT). Each .slog file gets a same-stem .pmt
+// sidecar recording the sampled Moves and the teacher's readouts
+// (pre_move_value::kTargetFloatsV1); files whose sidecar already exists are
+// skipped, so interrupted runs resume by rerunning.
 //
 // The stratified sample balances the filter's two failure modes: dense
 // coverage at the top of the equity ranking (where ranking precision
 // matters), a slice of the contention zone, uniform coverage of the tail
 // (junk rejection -- and where surprising constructive plays live), and
-// exchange/pass candidates (the exchange head starves otherwise). The
-// actually-played move is always included. Distillation needs coverage, not
+// exchange candidates (the exchange head starves otherwise). The actually-
+// played move is always included. Distillation needs coverage, not
 // unbiasedness: the sampler only has to visit a move for the teacher to
 // value it honestly.
 //
@@ -31,10 +32,10 @@
 #include "scribblez/game_runner.h"
 #include "scribblez/hasty_equity.h"
 #include "scribblez/lexicon.h"
-#include "scribblez/mpre_target_log.h"
 #include "scribblez/nn/nn_evaluation_service.h"
 #include "scribblez/nn/trt_util.h"
 #include "scribblez/position_encoder.h"
+#include "scribblez/pre_move_value_target_log.h"
 #include "scribblez/sim_runner.h"
 #include "util/math.h"
 #include "util/progress.h"
@@ -43,6 +44,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <compare>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -66,7 +68,6 @@ using binlog::GameMetadata;
 struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
-  std::string model;
   int quota_top = 4;
   int quota_mid = 4;
   int quota_tail = 4;
@@ -74,43 +75,42 @@ struct Options {
   int mid_rank_limit = 32;
   int positions_per_game = 0;  // 0 = every training-eligible turn
   int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-  int batch_size = 256;
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
-  bool fast_build = false;
 };
 
-// One sampled decision point of the file being processed.
-struct PositionWork {
+// Identifies one decision point: (game, turn) within the file being
+// processed. Ordering is the file's canonical position order.
+struct GamePositionIndex {
   uint32_t game_idx;
   uint32_t turn_idx;
-};
 
-bool position_order(const PositionWork& a, const PositionWork& b) {
-  return a.game_idx != b.game_idx ? a.game_idx < b.game_idx : a.turn_idx < b.turn_idx;
-}
+  auto operator<=>(const GamePositionIndex&) const = default;
+};
 
 // A position's sampled candidates with their encoded post-move rows, produced
 // by an encoder worker and consumed by the inference thread, which fills
-// `targets` (num candidates x kMpreTargetFloatsV1).
-struct EncodedPosition {
-  uint32_t game_idx = 0;
-  uint32_t turn_idx = 0;
+// `targets` (num candidates x pre_move_value::kTargetFloatsV1).
+struct MoveSet {
+  GamePositionIndex pos;
   std::vector<Move> candidates;
   std::vector<float> rows;  // candidates.size() x input_floats(spec)
   std::vector<float> targets;
 };
 
+bool move_set_order(const MoveSet& a, const MoveSet& b) { return a.pos < b.pos; }
+
 // Bounded handoff between the encoder pool and the inference thread. Bounding
 // keeps memory flat when encoding outpaces the GPU.
-class EncodedQueue {
+class MoveSetQueue {
  public:
-  explicit EncodedQueue(size_t capacity) : capacity_(capacity) {}
+  explicit MoveSetQueue(size_t capacity) : capacity_(capacity) {}
 
-  void push(EncodedPosition&& item);
+  void add_producer();
+  void push(MoveSet&& item);
   // Pops one item; returns false when the queue is drained AND every producer
   // has finished.
-  bool pop(EncodedPosition* out);
+  bool pop(MoveSet* out);
   void producer_done();
 
  private:
@@ -118,24 +118,23 @@ class EncodedQueue {
   std::mutex mutex_;
   std::condition_variable can_push_;
   std::condition_variable can_pop_;
-  std::deque<EncodedPosition> items_;
+  std::deque<MoveSet> items_;
   int active_producers_ = 0;
-
- public:
-  void add_producer() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++active_producers_;
-  }
 };
 
-void EncodedQueue::push(EncodedPosition&& item) {
+void MoveSetQueue::add_producer() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ++active_producers_;
+}
+
+void MoveSetQueue::push(MoveSet&& item) {
   std::unique_lock<std::mutex> lock(mutex_);
   can_push_.wait(lock, [&] { return items_.size() < capacity_; });
   items_.push_back(std::move(item));
   can_pop_.notify_one();
 }
 
-bool EncodedQueue::pop(EncodedPosition* out) {
+bool MoveSetQueue::pop(MoveSet* out) {
   std::unique_lock<std::mutex> lock(mutex_);
   can_pop_.wait(lock, [&] { return !items_.empty() || active_producers_ == 0; });
   if (items_.empty()) return false;
@@ -145,7 +144,7 @@ bool EncodedQueue::pop(EncodedPosition* out) {
   return true;
 }
 
-void EncodedQueue::producer_done() {
+void MoveSetQueue::producer_done() {
   std::lock_guard<std::mutex> lock(mutex_);
   --active_producers_;
   can_pop_.notify_all();
@@ -171,6 +170,8 @@ void sample_range(const std::vector<Move>& ranked, int lo, int hi, int count, st
 std::vector<Move> sample_candidates(const std::vector<Move>& ranked, const Move& played,
                                     const Options& opt, std::mt19937_64& rng) {
   std::vector<Move> out;
+  out.reserve(
+    static_cast<size_t>(1 + opt.quota_top + opt.quota_mid + opt.quota_tail + opt.quota_exchange));
   out.push_back(played);
   const int n = static_cast<int>(ranked.size());
 
@@ -182,7 +183,7 @@ std::vector<Move> sample_candidates(const std::vector<Move>& ranked, const Move&
   sample_range(ranked, opt.quota_top, opt.mid_rank_limit, opt.quota_mid, rng, &out);
   sample_range(ranked, opt.mid_rank_limit, n, opt.quota_tail, rng, &out);
 
-  // Exchange/pass stratum: uniform among the non-PLAY candidates (omit PASS).
+  // Exchange stratum: uniform among the non-PLAY candidates.
   std::vector<Move> non_plays;
   for (const Move& m : ranked) {
     if (m.type() != MoveType::PLAY) non_plays.push_back(m);
@@ -200,19 +201,19 @@ std::vector<Move> sample_candidates(const std::vector<Move>& ranked, const Move&
 }
 
 // Encoder worker: claims positions, replays to the pre-move state, samples
-// candidates, and encodes each candidate's post-move row exactly as an M_post
-// training row (apply the move to a copy of the replayed encoder, rack = the
-// leave, no symmetry flip).
+// candidates, and encodes each candidate's post-move row exactly as a
+// post-move-model training row (apply the move to a copy of the replayed
+// encoder, rack = the leave, no symmetry flip).
 void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
-                   const Options& opt, const std::vector<PositionWork>& work,
-                   std::atomic<size_t>* next, EncodedQueue* queue) {
+                   const Options& opt, const std::vector<GamePositionIndex>& work,
+                   std::atomic<size_t>* next, MoveSetQueue* queue) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(spec);
   const int row_floats = input_floats(spec);
   const int total_tiles = Bag(0).size();
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
-    const PositionWork& w = work[i];
+    const GamePositionIndex& w = work[i];
     const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
     const int mover = encoder.replay_to_sampled(g, static_cast<int>(w.turn_idx),
                                                 /*post_move=*/false);
@@ -234,9 +235,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
     std::mt19937_64 rng(
       util::mix64(opt.seed ^ util::mix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
-    EncodedPosition item;
-    item.game_idx = w.game_idx;
-    item.turn_idx = w.turn_idx;
+    MoveSet item;
+    item.pos = w;
     item.candidates = sample_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
 
     // The cross-check planes read the board's movegen caches; building them on
@@ -262,44 +262,46 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
 // positions, up to the batch limit), evaluates, and scatters the teacher's
 // readouts into each position's target block.
 void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_size,
-                    util::ProgressMeter* meter, EncodedQueue* queue,
-                    std::vector<EncodedPosition>* done, std::mutex* done_mutex) {
-  std::vector<EncodedPosition> pending;
+                    util::ProgressMeter* meter, MoveSetQueue* queue, std::vector<MoveSet>* done,
+                    std::mutex* done_mutex) {
+  std::vector<MoveSet> pending;
   std::vector<float> inputs(static_cast<size_t>(batch_size) * row_floats);
   std::vector<nn::Eval> evals(static_cast<size_t>(batch_size));
 
   auto flush = [&]() {
     if (pending.empty()) return;
     int rows = 0;
-    for (const EncodedPosition& p : pending) {
+    for (const MoveSet& p : pending) {
       std::memcpy(inputs.data() + static_cast<size_t>(rows) * row_floats, p.rows.data(),
                   p.rows.size() * sizeof(float));
       rows += static_cast<int>(p.candidates.size());
     }
     service->evaluate(inputs.data(), rows, evals.data());
     int cursor = 0;
-    for (EncodedPosition& p : pending) {
-      p.targets.resize(p.candidates.size() * kMpreTargetFloatsV1);
+    for (MoveSet& p : pending) {
+      p.targets.resize(p.candidates.size() * pre_move_value::kTargetFloatsV1);
       for (size_t c = 0; c < p.candidates.size(); ++c) {
         const nn::Eval& e = evals[static_cast<size_t>(cursor++)];
-        float* t = p.targets.data() + c * kMpreTargetFloatsV1;
+        float* t = p.targets.data() + c * pre_move_value::kTargetFloatsV1;
         t[0] = e.p_win;
         t[1] = e.p_draw;
         t[2] = e.p_loss;
         t[3] = e.score_diff_mean;
         t[4] = e.score_diff_std;
       }
+      // Free the encoded rows now that they are consumed; `done` accumulates
+      // a whole file's positions and must not hold every encoding.
       p.rows.clear();
       p.rows.shrink_to_fit();
       meter->add_done();
     }
     std::lock_guard<std::mutex> lock(*done_mutex);
-    for (EncodedPosition& p : pending) done->push_back(std::move(p));
+    for (MoveSet& p : pending) done->push_back(std::move(p));
     pending.clear();
   };
 
   int pending_rows = 0;
-  EncodedPosition item;
+  MoveSet item;
   while (queue->pop(&item)) {
     if (pending_rows + static_cast<int>(item.candidates.size()) > batch_size) {
       flush();
@@ -311,13 +313,9 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
   flush();
 }
 
-bool result_order(const EncodedPosition& a, const EncodedPosition& b) {
-  return a.game_idx != b.game_idx ? a.game_idx < b.game_idx : a.turn_idx < b.turn_idx;
-}
-
-// Generate the .mpt sidecar for one loaded .slog file.
-void process_file(const std::vector<char>& buf, const fs::path& mpt_path, const Dictionary& dict,
-                  const InputEncodingSpec& spec, nn::NNEvaluationService* service,
+// Generate the .pmt sidecar for one loaded .slog file.
+void process_file(const std::vector<char>& buf, const fs::path& pmt_path, const Dictionary& dict,
+                  const InputEncodingSpec& spec, nn::NNEvaluationService* service, int batch_size,
                   const std::string& model_hash, const Options& opt, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
@@ -325,7 +323,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mpt_path, const 
 
   uint32_t num_games = hdr->num_games;
   if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-  std::vector<PositionWork> work;
+  std::vector<GamePositionIndex> work;
   for (uint32_t g = 0; g < num_games; ++g) {
     const int begin = metas[g].eligible_begin;
     const int end = metas[g].eligible_end;
@@ -341,10 +339,10 @@ void process_file(const std::vector<char>& buf, const fs::path& mpt_path, const 
       for (int i = 0; i < take; ++i) work.push_back({g, turns[i]});
     }
   }
-  std::sort(work.begin(), work.end(), position_order);
+  std::sort(work.begin(), work.end());
 
-  EncodedQueue queue(/*capacity=*/64);
-  std::vector<EncodedPosition> done;
+  MoveSetQueue queue(/*capacity=*/64);
+  std::vector<MoveSet> done;
   std::mutex done_mutex;
   std::atomic<size_t> next{0};
   const int encoders = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
@@ -354,16 +352,17 @@ void process_file(const std::vector<char>& buf, const fs::path& mpt_path, const 
     workers.emplace_back(encode_worker, buf.data(), std::cref(dict), std::cref(spec),
                          std::cref(opt), std::cref(work), &next, &queue);
   const int row_floats = input_floats(spec);
-  std::thread gpu(inference_loop, service, row_floats, opt.batch_size, meter, &queue, &done,
+  std::thread gpu(inference_loop, service, row_floats, batch_size, meter, &queue, &done,
                   &done_mutex);
   for (auto& w : workers) w.join();
   gpu.join();
 
   // Canonical order, independent of thread scheduling.
-  std::sort(done.begin(), done.end(), result_order);
-  MpreTargetWriter writer(mpt_path.string(), kMpreTargetFloatsV1, model_hash);
-  for (const EncodedPosition& p : done) {
-    writer.add_position(p.game_idx, p.turn_idx, p.candidates, p.targets);
+  std::sort(done.begin(), done.end(), move_set_order);
+  pre_move_value::TargetWriter writer(pmt_path.string(), pre_move_value::kTargetFloatsV1,
+                                      model_hash);
+  for (const MoveSet& p : done) {
+    writer.add_position(p.pos.game_idx, p.pos.turn_idx, p.candidates, p.targets);
   }
   writer.close();
 }
@@ -383,14 +382,13 @@ int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
     Options opt;
-    po::options_description desc("mpre_target_tool options");
+    nn::NeuralNetParams params;
+    po::options_description desc("pre_move_value_target_generator options");
     desc.add_options()("help,h", "show this help and exit")(
       "slog-dir", po::value<std::string>(&opt.slog_dir),
-      "directory of .slog files; each without a .mpt sidecar gets one")(
+      "directory of .slog files; each without a .pmt sidecar gets one")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
-      "model", po::value<std::string>(&opt.model)->required(),
-      "teacher M_post ONNX; its content hash is recorded in every sidecar")(
       "quota-top", po::value<int>(&opt.quota_top)->default_value(opt.quota_top),
       "candidates from the head of the equity ranking")(
       "quota-mid", po::value<int>(&opt.quota_mid)->default_value(opt.quota_mid),
@@ -398,36 +396,29 @@ int main(int argc, char** argv) {
       "quota-tail", po::value<int>(&opt.quota_tail)->default_value(opt.quota_tail),
       "candidates sampled uniformly from the remaining ranks")(
       "quota-exchange", po::value<int>(&opt.quota_exchange)->default_value(opt.quota_exchange),
-      "exchange/pass candidates")(
-      "mid-rank-limit", po::value<int>(&opt.mid_rank_limit)->default_value(opt.mid_rank_limit),
-      "exclusive rank bound of the contention zone")(
+      "exchange candidates")("mid-rank-limit",
+                             po::value<int>(&opt.mid_rank_limit)->default_value(opt.mid_rank_limit),
+                             "exclusive rank bound of the contention zone")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (0 = every eligible turn)")(
       "threads", po::value<int>(&opt.threads)->default_value(opt.threads),
       "encoder worker threads (encoding, not inference, is the bottleneck)")(
-      "batch-size", po::value<int>(&opt.batch_size)->default_value(opt.batch_size),
-      "TensorRT batch size")("seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
-                             "run seed (drives position and stratum sampling)")(
+      "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
+      "run seed (drives position and stratum sampling)")(
       "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
-      "process only the first N games of each file (0 = all); for smoke runs")(
-      "fast-build", po::bool_switch(&opt.fast_build),
-      "TensorRT builder optimization level 0 (fast engine build, slower inference); "
-      "for tests and smoke runs");
+      "process only the first N games of each file (0 = all); for smoke runs");
+    params.add_options(desc);
     Lexicon::instance().add_options(desc);
     parse_command_line(argc, argv, desc);
 
     const Dictionary& dict = GameRunner::load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    nn::NeuralNetParams params;
-    params.onnx_path = opt.model;
-    params.max_batch_size = opt.batch_size;
-    params.fast_build = opt.fast_build;
     nn::NNEvaluationService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features()};
-    const std::string model_hash = nn::content_hash(read_file_bytes(opt.model));
+    const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
 
     std::vector<fs::path> slogs;
     if (!opt.slog_files.empty()) {
@@ -444,9 +435,9 @@ int main(int argc, char** argv) {
     std::vector<std::pair<fs::path, std::vector<char>>> pending;
     uint64_t total_positions = 0;
     for (const fs::path& slog : slogs) {
-      fs::path mpt = slog;
-      mpt.replace_extension(".mpt");
-      if (fs::exists(mpt)) continue;
+      fs::path pmt = slog;
+      pmt.replace_extension(".pmt");
+      if (fs::exists(pmt)) continue;
       std::vector<char> buf = read_file_bytes(slog);
       const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
       if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
@@ -467,17 +458,17 @@ int main(int argc, char** argv) {
       pending.emplace_back(slog, std::move(buf));
     }
     if (pending.empty()) return 0;
-    std::cerr << "mpre-targets: " << pending.size() << " file(s), " << total_positions
+    std::cerr << "pre-move targets: " << pending.size() << " file(s), " << total_positions
               << " positions; teacher " << model_hash.substr(0, 12) << ", " << opt.threads
               << " encoder threads\n";
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const auto& [slog, buf] : pending) {
-      fs::path mpt = slog;
-      mpt.replace_extension(".mpt");
-      process_file(buf, mpt, dict, spec, &service, model_hash, opt, &meter);
+      fs::path pmt = slog;
+      pmt.replace_extension(".pmt");
+      process_file(buf, pmt, dict, spec, &service, params.max_batch_size, model_hash, opt, &meter);
     }
-    meter.finish("mpre-targets");
+    meter.finish("pre-move targets");
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";
