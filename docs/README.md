@@ -33,6 +33,10 @@
 
 ## Design proposals
 
+- **[master_dashboard.md](master_dashboard.md)** — evolving the React dashboard
+  into the single entrypoint for all work: a workload registry, a job-control
+  plane (launch/stop local and cloud workers from the browser), and
+  workload-specific analysis tabs.
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
   rollout evidence back into the value models for evidence-conditioned
   re-evaluation, and covariance-guided candidate selection. Steps 1–2 of its
