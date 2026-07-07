@@ -3,6 +3,7 @@
 #include "scribblez/dictionary.h"
 #include "util/math.h"
 
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -20,8 +21,12 @@ struct BitRackHash {
 using Grouped =
   std::array<std::unordered_map<BitRack, std::vector<std::vector<Tile>>, BitRackHash>, kMaxLen + 1>;
 
-// Depth-first walk of the DAWG, collecting every accepted word.
-void dfs(const Dictionary& dict, uint32_t node, std::vector<Tile>& word, BitRack key,
+// Letters accumulated along the current DFS path, capped at kMaxLen.
+using WordBuf = std::array<Tile, kMaxLen>;
+
+// Depth-first walk of the DAWG, collecting every accepted word. `len` is how
+// many of `word`'s leading entries are the current path.
+void dfs(const Dictionary& dict, uint32_t node, WordBuf& word, int len, BitRack key,
          Grouped& grouped) {
   if (node == 0) return;
   for (uint32_t i = node;; ++i) {
@@ -29,15 +34,14 @@ void dfs(const Dictionary& dict, uint32_t node, std::vector<Tile>& word, BitRack
     const uint8_t tv = Dictionary::arc_tile(a);
     if (tv >= 1 && tv <= 26) {
       const Tile L = Tile::of(tv - 1);
-      word.push_back(L);
+      word[len] = L;
       key.add_letter(L.index());
-      const int len = static_cast<int>(word.size());
-      if ((a & Dictionary::ACCEPTS_BIT) && len >= 2 && len <= kMaxLen) {
-        grouped[len][key].push_back(word);
+      const int new_len = len + 1;
+      if ((a & Dictionary::ACCEPTS_BIT) && new_len >= 2 && new_len <= kMaxLen) {
+        grouped[new_len][key].emplace_back(word.begin(), word.begin() + new_len);
       }
-      if (len < kMaxLen) dfs(dict, a & Dictionary::ARC_MASK, word, key, grouped);
+      if (new_len < kMaxLen) dfs(dict, a & Dictionary::ARC_MASK, word, new_len, key, grouped);
       key.add_letter(L.index(), -1);
-      word.pop_back();
     }
     if (a & Dictionary::IS_END_BIT) break;
   }
@@ -47,9 +51,8 @@ void dfs(const Dictionary& dict, uint32_t node, std::vector<Tile>& word, BitRack
 
 WordMap WordMap::build(const Dictionary& dict) {
   Grouped grouped;
-  std::vector<Tile> word;
-  word.reserve(kMaxLen);
-  dfs(dict, dict.root(), word, BitRack{}, grouped);
+  WordBuf word;
+  dfs(dict, dict.root(), word, 0, BitRack{}, grouped);
 
   WordMap wm;
   for (int len = 2; len <= kMaxLen; ++len) {
