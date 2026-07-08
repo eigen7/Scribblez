@@ -32,14 +32,12 @@ struct WldTarget {
 };
 
 struct ScoreDiffTarget {
-  // Regression target for the score-differential head. The differential (active
-  // player's final score minus the opponent's) is clipped (not rejected) to a
-  // symmetric range; 400 covers essentially every realistic Scrabble game. The
-  // head predicts the mean and standard deviation of this differential (a
-  // Gaussian, see kScoreDiffOutputFloats) and is trained by Gaussian negative
-  // log-likelihood, so the single stored target float is just the observed
-  // (clipped) differential the NLL scores against.
-  static constexpr int kClip = 400;
+  // Regression target for the score-differential head: the final differential,
+  // the active player's final score minus the opponent's. The head predicts the
+  // mean and standard deviation of this differential (a Gaussian, see
+  // kScoreDiffOutputFloats) and is trained by Gaussian negative log-likelihood,
+  // so the single stored target float is just the observed differential the NLL
+  // scores against.
   static constexpr const char* kName = "score_diff";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
@@ -138,7 +136,6 @@ inline constexpr int kLabelFloats = AllTargets::total_floats;
 // docs) can refer to a specific target's size without naming the struct.
 inline constexpr int kWldFloats = detail::target_floats<WldTarget>();
 inline constexpr int kScoreDiffFloats = detail::target_floats<ScoreDiffTarget>();  // 1 (regression)
-inline constexpr int kScoreDiffClip = ScoreDiffTarget::kClip;
 // The score-diff head's OUTPUT width: the mean and standard deviation of the
 // final differential (a Gaussian). Distinct from kScoreDiffFloats, which is the
 // 1-float regression target the NLL loss scores those two against.

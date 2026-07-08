@@ -19,8 +19,7 @@ void WldTarget::encode(const EncodeContext& v, float* out) {
 // ---------- ScoreDiffTarget --------------------------------------------
 
 void ScoreDiffTarget::encode(const EncodeContext& v, float* out) {
-  const int diff = v.final_active() - v.final_opp();
-  out[0] = static_cast<float>(std::clamp(diff, -kClip, kClip));
+  out[0] = static_cast<float>(v.final_active() - v.final_opp());
 }
 
 // ---------- placement-plane targets -------------------------------------

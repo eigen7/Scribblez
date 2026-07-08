@@ -2117,9 +2117,8 @@ static void test_encode_labels() {
 
   auto check_score_diff = [&](int diff_signed) {
     // Score-diff target is a single scalar at offset kWldFloats: the final
-    // differential clamped to +/- kScoreDiffClip.
-    const int expected_clipped = std::clamp(diff_signed, -kScoreDiffClip, kScoreDiffClip);
-    CHECK(flat[kWldFloats] == static_cast<float>(expected_clipped));
+    // differential, stored as-is.
+    CHECK(flat[kWldFloats] == static_cast<float>(diff_signed));
   };
 
   // Win.
@@ -2146,13 +2145,13 @@ static void test_encode_labels() {
   CHECK(flat[2] == 1.0f);
   check_score_diff(-15);
 
-  // Differentials beyond +/- kScoreDiffClip are clipped (not rejected).
-  auto v_huge_win = make_scores_view(/*fs_active=*/kScoreDiffClip + 50, /*fs_opp=*/0, 0);
+  // Large differentials are stored as-is (not clipped or rejected).
+  auto v_huge_win = make_scores_view(/*fs_active=*/620, /*fs_opp=*/0, 0);
   encode_labels_flat(v_huge_win, flat);
-  check_score_diff(kScoreDiffClip + 50);  // helper clamps; stored value is the clipped diff
-  auto v_huge_loss = make_scores_view(0, kScoreDiffClip + 50, 0);
+  check_score_diff(620);
+  auto v_huge_loss = make_scores_view(0, 620, 0);
   encode_labels_flat(v_huge_loss, flat);
-  check_score_diff(-(kScoreDiffClip + 50));
+  check_score_diff(-620);
 
   // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
