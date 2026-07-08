@@ -12,7 +12,6 @@
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
 #include "game/game.h"
-#include "training/training_targets.h"
 
 #include <cstdint>
 #include <string>

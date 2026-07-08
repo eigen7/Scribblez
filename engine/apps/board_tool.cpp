@@ -7,8 +7,8 @@
 #include "selfplay/game_runner.h"
 #include "serve/instance_ports.h"
 #include "serve/web_server.h"
-#include "util/cli.h"
 #include "util/exception.h"
+#include "util/misc.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
       "front-end package dir (cwd of npm run dev)");
     scribblez::Lexicon::instance().add_options(desc);
 
-    scribblez::parse_command_line(argc, argv, desc);
+    scribblez::util::parse_command_line(argc, argv, desc);
 
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);

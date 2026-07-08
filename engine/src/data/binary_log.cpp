@@ -1,7 +1,7 @@
 #include "data/binary_log.h"
 
 #include "game/game.h"
-#include "util/unique_id.h"
+#include "util/misc.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -239,7 +239,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   const std::vector<GameMetadata> meta = build_metadata_table(prepared);
   // unique_id keeps slog filenames globally unique, as with gcg log filenames.
   const std::filesystem::path path =
-    std::filesystem::path(dir_) / (std::to_string(get_unique_id()) + ".slog");
+    std::filesystem::path(dir_) / (std::to_string(util::get_unique_id()) + ".slog");
   write_slog_file(path, prepared, meta);
 }
 

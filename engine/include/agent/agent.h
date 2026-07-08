@@ -4,7 +4,6 @@
 #include "game/move.h"
 #include "game/rack.h"
 
-#include <array>
 #include <memory>
 #include <random>
 #include <string>

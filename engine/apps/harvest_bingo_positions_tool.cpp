@@ -24,7 +24,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
 #include "selfplay/game_runner.h"
-#include "util/cli.h"
+#include "util/misc.h"
 
 #include <boost/program_options.hpp>
 
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
       "training)");
     scribblez::Lexicon::instance().add_options(desc);
 
-    scribblez::parse_command_line(argc, argv, desc);
+    scribblez::util::parse_command_line(argc, argv, desc);
 
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     const std::string& lexicon = scribblez::Lexicon::instance().name();

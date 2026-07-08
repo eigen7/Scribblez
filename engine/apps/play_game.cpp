@@ -21,8 +21,8 @@
 #include "lexicon/lexicon.h"
 #include "selfplay/game_runner.h"
 #include "selfplay/seed_producer.h"
-#include "util/cli.h"
 #include "util/exception.h"
+#include "util/misc.h"
 
 #include <boost/program_options.hpp>
 
@@ -55,9 +55,9 @@ int main(int argc, char** argv) {
     player_params.add_options(desc);
     runner_params.add_options(desc);
 
-    scribblez::parse_command_line(argc, argv, desc,
-                                  "Player types (use --player \"--type=X [options]\"):\n\n" +
-                                    scribblez::PlayerFactory::all_player_types_help());
+    scribblez::util::parse_command_line(argc, argv, desc,
+                                        "Player types (use --player \"--type=X [options]\"):\n\n" +
+                                          scribblez::PlayerFactory::all_player_types_help());
 
     if (!leaves_file.empty()) {
       scribblez::HastyEquity::init(leaves_file, peg_file);

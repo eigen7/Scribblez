@@ -6,7 +6,6 @@
 #include "lexicon/leave_values.h"
 
 #include <array>
-#include <bit>
 #include <bitset>
 #include <cstdint>
 #include <string>

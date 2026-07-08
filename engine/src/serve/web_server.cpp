@@ -3,8 +3,6 @@
 #include "game/game.h"
 #include "game/tile.h"
 #include "serve/position_json.h"
-#include "util/crypto.h"
-#include "util/encoding.h"
 #include "util/io.h"
 #include "util/string.h"
 

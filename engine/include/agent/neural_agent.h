@@ -6,7 +6,6 @@
 #include "nn/neural_net.h"
 #include "util/math.h"
 
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <random>

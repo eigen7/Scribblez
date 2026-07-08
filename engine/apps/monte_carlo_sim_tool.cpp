@@ -13,10 +13,8 @@
 #include "lexicon/lexicon.h"
 #include "selfplay/game_runner.h"
 #include "selfplay/monte_carlo_sim.h"
-#include "util/cli.h"
-#include "util/hardware.h"
 #include "util/io.h"
-#include "util/json.h"
+#include "util/misc.h"
 #include "util/string.h"
 
 #include <boost/json.hpp>
@@ -52,7 +50,7 @@ int main(int argc, char** argv) {
       "threads", po::value<int>(&threads)->default_value(threads), "parallel workers");
     scribblez::Lexicon::instance().add_options(desc);
 
-    scribblez::parse_command_line(argc, argv, desc);
+    scribblez::util::parse_command_line(argc, argv, desc);
 
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     const std::string& lexicon = scribblez::Lexicon::instance().name();

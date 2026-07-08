@@ -3,7 +3,6 @@
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
 
-#include <string>
 #include <vector>
 
 // Synchronous front-end over a NeuralNet that turns raw encoder rows into

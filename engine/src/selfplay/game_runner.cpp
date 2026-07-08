@@ -7,8 +7,8 @@
 #include "lexicon/lexicon.h"
 #include "selfplay/seed_producer.h"
 #include "util/exception.h"
+#include "util/misc.h"
 #include "util/string.h"
-#include "util/unique_id.h"
 
 #include <boost/program_options.hpp>
 
@@ -215,7 +215,7 @@ void GameRunner::on_game(GameLogStorage&& storage, const std::array<int, 2>& sea
   const GameLog log = storage.view();
 
   if (!params_.log_dir.empty()) {
-    std::string path = params_.log_dir + "/" + std::to_string(get_unique_id()) + ".gcg";
+    std::string path = params_.log_dir + "/" + std::to_string(util::get_unique_id()) + ".gcg";
     std::ofstream f(path);
     if (f) {
       write_game_log_gcg(log, f);

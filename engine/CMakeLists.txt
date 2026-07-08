@@ -30,10 +30,8 @@ add_library(scribblez_core STATIC
   src/data/slog_subset.cpp
   src/serve/position_json.cpp
   src/data/data_loader.cpp
-  src/util/unique_id.cpp
   src/agent/agent.cpp
   src/agent/agent_options.cpp
-  src/util/cli.cpp
   src/selfplay/self_play_engine.cpp
   src/selfplay/game_runner.cpp
   src/lexicon/hasty_equity.cpp
@@ -51,12 +49,10 @@ add_library(scribblez_core STATIC
   src/training/position_eval_analysis.cpp
   src/selfplay/seed_producer.cpp
   src/serve/web_server.cpp
-  src/util/encoding.cpp
-  src/util/crypto.cpp
-  src/util/hardware.cpp
+  src/util/string.cpp
   src/util/io.cpp
-  src/util/json.cpp
   src/util/math.cpp
+  src/util/misc.cpp
   src/util/progress.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link

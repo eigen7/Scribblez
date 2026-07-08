@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cctype>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -21,6 +23,12 @@ inline std::string fmt_dur(double secs);
 // Order filesystem paths by their filename in natural-sort order (so "pos-2.gcg"
 // precedes "pos-10.gcg"). Suitable as a std::sort comparator.
 inline bool path_natural_less(const std::filesystem::path& a, const std::filesystem::path& b);
+
+// Standard Base64 (RFC 4648) encoding of len bytes, with '=' padding.
+std::string base64(const uint8_t* data, size_t len);
+
+// Compute the SHA-1 digest of msg, writing the 20-byte result to out.
+void sha1(const std::string& msg, uint8_t out[20]);
 
 }  // namespace scribblez::util
 

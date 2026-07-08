@@ -27,9 +27,8 @@
 #include "selfplay/game_runner.h"
 #include "selfplay/sim_observation_log.h"
 #include "selfplay/sim_runner.h"
-#include "util/cli.h"
-#include "util/hardware.h"
 #include "util/math.h"
+#include "util/misc.h"
 #include "util/progress.h"
 
 #include <boost/program_options.hpp>
@@ -251,7 +250,7 @@ int main(int argc, char** argv) {
       "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
       "process only the first N games of each file (0 = all); for smoke runs");
     Lexicon::instance().add_options(desc);
-    parse_command_line(argc, argv, desc);
+    util::parse_command_line(argc, argv, desc);
 
     const Dictionary& dict = GameRunner::load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

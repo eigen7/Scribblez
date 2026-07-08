@@ -36,8 +36,8 @@
 #include "selfplay/game_runner.h"
 #include "selfplay/sim_runner.h"
 #include "training/move_set_eval_target_log.h"
-#include "util/cli.h"
 #include "util/math.h"
+#include "util/misc.h"
 #include "util/progress.h"
 
 #include <boost/program_options.hpp>
@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
       "process only the first N games of each file (0 = all); for smoke runs");
     params.add_options(desc);
     Lexicon::instance().add_options(desc);
-    parse_command_line(argc, argv, desc);
+    util::parse_command_line(argc, argv, desc);
 
     const Dictionary& dict = GameRunner::load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

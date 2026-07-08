@@ -1,12 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace boost::program_options {
 class options_description;
 }
 
-namespace scribblez {
+namespace scribblez::util {
 
 // Parse argv against `desc`, handling --help and parse errors uniformly.
 //
@@ -22,4 +23,16 @@ namespace scribblez {
 void parse_command_line(int argc, char** argv, boost::program_options::options_description& desc,
                         const std::string& help_epilog = "");
 
-}  // namespace scribblez
+// The number of logical processors available to this process (its CPU affinity
+// mask, so taskset/cgroup cpusets are respected). This is the project-wide
+// default for worker-thread counts: compute-bound thread pools (self-play
+// games, Monte Carlo workers) default to using every available logical
+// processor. The Python counterpart is scribblez.hardware.default_thread_count.
+int default_thread_count();
+
+// Returns a unique uint64_t nanosecond Unix timestamp. Thread-safe. If the
+// current clock reading equals the last value returned, spins until the clock
+// advances so that every returned value is strictly greater than the previous.
+uint64_t get_unique_id();
+
+}  // namespace scribblez::util

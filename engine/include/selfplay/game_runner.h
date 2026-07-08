@@ -4,7 +4,7 @@
 #include "game/game.h"
 #include "selfplay/game_sink.h"
 #include "selfplay/self_play_engine.h"
-#include "util/hardware.h"
+#include "util/misc.h"
 
 #include <array>
 #include <atomic>
