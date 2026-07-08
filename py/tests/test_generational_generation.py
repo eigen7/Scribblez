@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 from scribblez.generational import generation, lifecycle
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.paths import POSITION_EVAL, TagPaths
 
 
 @pytest.fixture
 def paths(tmp_path: Path) -> TagPaths:
-    return TagPaths("t", POST_MOVE_VALUE, mount_root=tmp_path)
+    return TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
 
 
 def _fake_generate(calls: list, n_files: int = 3):

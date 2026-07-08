@@ -93,7 +93,7 @@ class SpatialTrunk(nn.Module):
     forward returns (features, scalar_proj): the post-tower feature map and the
     C-dimensional projection of the scalar input. The projection is broadcast-
     added at the stem and also returned so a model's heads can read the scalar
-    features directly (the post-move value heads do).
+    features directly (the position evaluation heads do).
     """
 
     def __init__(

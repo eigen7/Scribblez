@@ -2,7 +2,7 @@
 
 Results of the [sim_residual_feedback.md](sim_residual_feedback.md) kill-test
 (roadmap step 3) — the go/no-go gate for the sim-evidence loop, testing its
-load-bearing hypothesis in isolation: *does conditioning `M_post` on
+load-bearing hypothesis in isolation: *does conditioning the position evaluation model on
 Monte-Carlo sim evidence improve its outcome prediction?*
 
 **Verdict: pass.** The evidence effect is real and statistically unambiguous
@@ -29,7 +29,7 @@ directly motivates truncated (value-bootstrapped) rollouts as the next lever.
   `none` (evidence zeroed — baseline), `shuffled` (real evidence permuted
   across positions — falsification control), `scalar` (sim summaries only),
   `full` (spatial planes + summaries).
-- **Model**: `EvidencePostMoveModel`, 96-channel / 6-block trunk, 1.4 M
+- **Model**: `EvidencePositionEvalModel`, 96-channel / 6-block trunk, 1.4 M
   params; AdamW 3e-4, batch 256, early stopping (patience 4). Decision
   metric: best held-out WLD cross-entropy.
 
@@ -117,7 +117,7 @@ cross-tab would settle it.
 1. **Proceed past the gate.** The loop's premise — sim evidence carries
    usable signal the network absorbs — is confirmed with clean controls.
 2. **Truncated rollouts are the top-ranked next lever**: sim a small number
-   of plies, then read `M_post`'s value at the horizon (the design.md §5.2
+   of plies, then read the position evaluation model's value at the horizon (the design.md §5.2
    sim shape). The phase gradient shows the payoff of trustworthy sims;
    truncation manufactures late-game-quality (low-variance) evidence at
    every phase, and cheaper per rollout besides. Costs to accept: evidence

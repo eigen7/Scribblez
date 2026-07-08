@@ -9,14 +9,14 @@ Reclaims the API/Vite ports from any stale dashboard first.
 
 Usage:
     ./py/scripts/dashboard.py                       # master dashboard
-    ./py/scripts/dashboard.py --task post_move_value
+    ./py/scripts/dashboard.py --task position_eval
 """
 
 import argparse
 import sys
 
 from scribblez.dashboard import react_server
-from scribblez.paths import MAX_MOVE_PER_LANE, POST_MOVE_VALUE
+from scribblez.paths import MAX_MOVE_PER_LANE, POSITION_EVAL
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -24,7 +24,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument(
         "--task",
-        choices=[POST_MOVE_VALUE, MAX_MOVE_PER_LANE],
+        choices=[POSITION_EVAL, MAX_MOVE_PER_LANE],
         default=None,
         help="open directly on one training task's view (default: the master dashboard)",
     )

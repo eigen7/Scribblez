@@ -1,7 +1,7 @@
 # Roadmap 2: from evidence to a decision loop
 
 The successor to [roadmap.md](roadmap.md), which carried the project through
-M_post, the generational training pipeline, self-play diversification, and the
+the position evaluation model, the generational training pipeline, self-play diversification, and the
 validation machinery. This document plans the next stage: turning a
 well-validated value model into a *decision loop* — candidate scoring,
 belief-aware simulation, evidence-conditioned re-ranking — and doing it the
@@ -14,7 +14,7 @@ The sim-evidence kill-test
 ([sim_obs_experiment_results.md](sim_obs_experiment_results.md),
 [sim_residual_feedback.md](sim_residual_feedback.md)) established:
 
-- **The mechanism is real.** Conditioning M_post on sim evidence improves
+- **The mechanism is real.** Conditioning the position evaluation model on sim evidence improves
   held-out outcome prediction with clean controls; the deployment-shaped
   (leave-one-out) transfer gain is smaller but significant, tail-concentrated,
   and late-game-loaded — the signature of evidence mattering exactly where
@@ -43,13 +43,13 @@ labeled by its track:
 GADDAG generates all N moves
       │
       ▼
-M_pre scores all N in one pass                        [A]
+the move set evaluation model scores all N in one pass    [A]
       │
       ▼
 covariance-guided scheduler picks what to sim         [C]
       │
       ▼                     rollout policy ladder      [D]
-sims: racks from belief    ── ply 1..2: our own stack (M_pre + belief)
+sims: racks from belief    ── ply 1..2: our own stack (move set eval + belief)
       inference        [B]  ── middle plies: HastyBot (WMP greedy)
       │                     ── bag empty: depth-limited endgame solver
       ▼
@@ -67,9 +67,9 @@ actually read) match reality.
 
 ---
 
-## Track A: M_pre — the spine
+## Track A: the move set evaluation model — the spine
 
-Everything else attaches to M_pre: it is the candidate filter, the host of
+Everything else attaches to the move set evaluation model: it is the candidate filter, the host of
 the covariance head, the re-ranking surface for evidence, and eventually the
 first plies of the rollout policy. The design (board encoder + move encoder +
 single-pass cross-attention + exchange head) is specified in
@@ -80,22 +80,22 @@ single-pass cross-attention + exchange head) is specified in
   sequential significance test) on the dashboard. This is a prerequisite, not
   a nicety: every downstream track's final readout is match play, because
   root CE demonstrably cannot see re-ranking value.
-- **A2 — target generation.** Label-a-subset M_post targets stored alongside
+- **A2 — target generation.** Label-a-subset position-evaluation targets stored alongside
   `.slog` (the Phase 4 plan), generated on the cloud fleet. The `.sobs`
   sidecar pattern (identity-addressed per-position artifacts, mode flags,
   atomic writes) is the template.
-- **A3 — M_pre v1 + the recall metric.** Train the distillation model. The
-  headline metric is not target MSE but **top-K recall against M_post's
-  ranking** (does M_pre's top-K contain the moves M_post would pick?) and
+- **A3 — move-set-evaluation v1 + the recall metric.** Train the distillation model. The
+  headline metric is not target MSE but **top-K recall against the position evaluation model's
+  ranking** (does the move set evaluation model's top-K contain the moves the position evaluation model would pick?) and
   rank correlation over held-out candidate sets — recall is the filter's one
   job ([lexical_features_for_value.md](lexical_features_for_value.md)).
-- **A4 — M_pre agent.** Top-K by M_pre → sim → pick by sim; match it against
-  vanilla HastyBot and against the M_post-top-K agent. This is the first
+- **A4 — move-set-evaluation agent.** Top-K by the move set evaluation model → sim → pick by sim; match it against
+  vanilla HastyBot and against the position-evaluation-top-K agent. This is the first
   end-to-end product of the new loop and the baseline every later component
   must beat.
-- **A5 — evidence-conditioned M_pre** (steps 5–6 of
+- **A5 — evidence-conditioned move set evaluation** (steps 5–6 of
   [sim_residual_feedback.md](sim_residual_feedback.md)): the fusion stage
-  migrates from the kill-test's M_post harness onto M_pre, enabling the
+  migrates from the kill-test's position-evaluation harness onto the move set evaluation model, enabling the
   two-round re-rank. Gated on E3 (below) showing the re-rank is worth a
   round trip.
 
@@ -143,7 +143,7 @@ correlated arms; the scheduler should exploit that.
 - **C1 — v0 diversity.** Footprint/lane-overlap novelty penalty at top-K
   selection time. Hours of work; also directly improves evidence diversity
   for A5.
-- **C2 — covariance head.** Low-rank per-move embedding φ on M_pre with
+- **C2 — covariance head.** Low-rank per-move embedding φ on the move set evaluation model with
   `Cov(M, M′) ≈ φφᵀ + diagonal`, trained on the pairwise empirical
   covariances that CRN sims already produce (a free byproduct sitting in
   every `.sobs`).
@@ -154,7 +154,7 @@ correlated arms; the scheduler should exploit that.
   quality. The prize is real at deployment: sims dominate think time, so a
   2× budget saving is a 2× stronger agent per second.
 
-Dependency: C2 wants M_pre (A3) as the host. A stopgap φ can be prototyped
+Dependency: C2 wants the move set evaluation model (A3) as the host. A stopgap φ can be prototyped
 from move features alone to validate the posterior machinery earlier.
 
 ## Track D: the rollout policy ladder
@@ -164,7 +164,7 @@ semantics — so each lands behind a `.sobs` flag/version, gets validated by
 the paired kill-test machinery, and then by match play.
 
 - **D1 — value-truncated rollouts** (design.md §5.2): sim a few plies, read
-  M_post's value at the horizon. The kill-test's 8× late-vs-early phase
+  the position evaluation model's value at the horizon. The kill-test's 8× late-vs-early phase
   gradient is direct evidence this is the biggest sim-quality lever —
   truncation manufactures late-game-quality (low-variance) evidence at every
   phase. Keep an **anchor fraction** of terminal rollouts per candidate: a
@@ -174,14 +174,14 @@ the paired kill-test machinery, and then by match play.
   and sims start contending for the GPU — the contention-manager regime
   [generational_training.md](generational_training.md) already plans for.
 - **D2 — self-model plies.** Model the opponent (and our own next reply) as
-  using our full stack: ply 1–2 of each rollout are played by M_pre top-1
+  using our full stack: ply 1–2 of each rollout are played by the move set evaluation model's top-1
   (or a temperature sample) with belief-sampled racks, then HastyBot to the
   horizon/end. This matters more than a generic policy upgrade because the
   evidence maps *read exactly plies 1–2* (the opponent's reply and our
   follow-up): upgrading those plies upgrades the evidence at its point of
-  consumption. Cost: M_pre inference inside rollouts → batched leaf
+  consumption. Cost: move-set-evaluation inference inside rollouts → batched leaf
   evaluation on the game-pool substrate; respect the roadmap.md rollout note
-  (full-N M_pre passes at shallow plies only — deeper plies use cheap
+  (full-N passes at shallow plies only — deeper plies use cheap
   policies).
 - **D3 — endgame solver for late-game rollouts.** Macondo's negamax solver
   is configurable in exactly the ways needed: `Solve(ctx, plies)`
@@ -215,8 +215,8 @@ localized payoff.
   sims the promoted moves, and picks. The LOO transfer gain says the
   re-ranker has signal; E3 asks whether it changes picked moves often enough
   — and correctly enough — to win games. Runnable with the kill-test's
-  M_post-based fusion model before M_pre exists (re-scoring a few dozen
-  candidates with M_post per decision is affordable in an eval harness);
+  position-evaluation-based fusion model before the move set evaluation model exists (re-scoring a few dozen
+  candidates with the position evaluation model per decision is affordable in an eval harness);
   A5 productionizes it only if E3 says yes.
 
 ---
@@ -229,9 +229,9 @@ lead with the spine, interleave the others as experiments block on data).
 | Stage | Spine (A) | Sims (B/C/D) | Enablers (E) |
 |---|---|---|---|
 | 1 | A1 match harness; A2 target-gen prototype | — | E1 fleet lands; **B0 matched-scale hidden + open-leaves runs** |
-| 2 | A3 M_pre v1 (recall metric) | D1 truncated rollouts (kill-test validated); C1 novelty dedup | E3 re-ranking match experiment (M_post-based) |
-| 3 | A4 M_pre agent baseline | B1 leave enumeration *if B0 says belief pays*; C2 covariance head on M_pre | — |
-| 4 | A5 evidence-conditioned M_pre *if E3 says re-ranking pays* | D2 self-model plies; C3 posterior scheduling | — |
+| 2 | A3 move-set-evaluation v1 (recall metric) | D1 truncated rollouts (kill-test validated); C1 novelty dedup | E3 re-ranking match experiment (position-evaluation-based) |
+| 3 | A4 move-set-evaluation agent baseline | B1 leave enumeration *if B0 says belief pays*; C2 covariance head on the move set evaluation model | — |
+| 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 posterior scheduling | — |
 | 5 | — | D3 endgame-solver port; B2 accept/reject; B3 learned belief *if the gap to B0's ceiling warrants* | volunteer-compute hardening |
 
 Decision gates, stated so the results can veto the plan:
@@ -242,11 +242,11 @@ Decision gates, stated so the results can veto the plan:
 2. **E3** (stage 2): the two-round agent beats pick-by-sim at equal rollout
    budget → A5 and the full loop proceed; it doesn't → the evidence loop's
    deployment form is reconsidered (the fallback is still valuable: better
-   sims + better scheduling + M_pre alone are an engine improvement without
+   sims + better scheduling + the move set evaluation model alone are an engine improvement without
    any second round).
-3. **A3** (stage 2): M_pre's top-K recall against M_post must clear a bar
+3. **A3** (stage 2): the move set evaluation model's top-K recall against the position evaluation model must clear a bar
    (to be set from A4's sensitivity — how much win rate a recall miss costs)
-   before it replaces M_post-top-K anywhere.
+   before it replaces position-evaluation-top-K anywhere.
 
 ## What is deliberately not here
 

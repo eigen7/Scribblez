@@ -12,12 +12,12 @@
 
 namespace scribblez {
 
-// The post-move analysis position parsed from a penultimate-bingo GCG: the board
+// The analysis position parsed from a penultimate-bingo GCG: the board
 // and cumulative scores after the final recorded move, plus the `start_player` --
-// the seat that made that final move, whose POV the post-move-value model evaluates
-// -- and its leave. The other seat (1 - start_player) bingoed on the penultimate
-// move, so in a rollout it draws a clean full rack and, having moved earlier, plays
-// first.
+// the seat that made that final move, whose POV the position evaluation model
+// evaluates -- and its leave. The other seat (1 - start_player) bingoed on the
+// penultimate move, so in a rollout it draws a clean full rack and, having moved
+// earlier, plays first.
 struct MonteCarloPosition {
   Board board;
   std::array<int, 2> scores{0, 0};

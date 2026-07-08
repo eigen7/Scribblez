@@ -97,22 +97,22 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # out_input
     ]
 
-    lib.scribblez_post_move_value_analyze_gcg.restype = ctypes.c_int
-    lib.scribblez_post_move_value_analyze_gcg.argtypes = [
+    lib.scribblez_position_eval_analyze_gcg.restype = ctypes.c_int
+    lib.scribblez_position_eval_analyze_gcg.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.POINTER(ctypes.c_float),  # out_input
     ]
 
-    lib.scribblez_post_move_value_board_json.restype = ctypes.c_int
-    lib.scribblez_post_move_value_board_json.argtypes = [
+    lib.scribblez_position_eval_board_json.restype = ctypes.c_int
+    lib.scribblez_position_eval_board_json.argtypes = [
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # out_json
         ctypes.c_int,  # out_cap
     ]
 
-    lib.scribblez_post_move_value_analyze_gcg_leave.restype = ctypes.c_int
-    lib.scribblez_post_move_value_analyze_gcg_leave.argtypes = [
+    lib.scribblez_position_eval_analyze_gcg_leave.restype = ctypes.c_int
+    lib.scribblez_position_eval_analyze_gcg_leave.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # leave_str
@@ -143,8 +143,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
-    lib.scribblez_pre_move_value_encode_moves.restype = None
-    lib.scribblez_pre_move_value_encode_moves.argtypes = [
+    lib.scribblez_move_set_encode_moves.restype = None
+    lib.scribblez_move_set_encode_moves.argtypes = [
         ctypes.c_void_p,  # moves (packed 16-byte Move records)
         ctypes.c_int64,
         ctypes.POINTER(ctypes.c_int32),  # pre_move_score_diffs
@@ -155,8 +155,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # scalars
     ]
 
-    lib.scribblez_pre_move_value_move_dims.restype = None
-    lib.scribblez_pre_move_value_move_dims.argtypes = [
+    lib.scribblez_move_set_move_dims.restype = None
+    lib.scribblez_move_set_move_dims.argtypes = [
         ctypes.POINTER(ctypes.c_int32),
         ctypes.POINTER(ctypes.c_int32),
         ctypes.POINTER(ctypes.c_int32),
@@ -446,14 +446,14 @@ def decode_rows(
 
 
 def move_encoding_dims() -> tuple[int, int, int, int]:
-    """The pre-move value model's move-encoder layout, owned by the engine
-    (scribblez/pre_move_value_move_encoder.h): (max_placed, num_scalars,
+    """The move set evaluation model's move-encoder layout, owned by the engine
+    (scribblez/move_set_encoder.h): (max_placed, num_scalars,
     letter_vocab, cells). Needs no session -- it is a pure layout query."""
     max_placed = ctypes.c_int32()
     num_scalars = ctypes.c_int32()
     letter_vocab = ctypes.c_int32()
     cells = ctypes.c_int32()
-    _lib().scribblez_pre_move_value_move_dims(
+    _lib().scribblez_move_set_move_dims(
         ctypes.byref(max_placed),
         ctypes.byref(num_scalars),
         ctypes.byref(letter_vocab),
@@ -474,12 +474,13 @@ def score_diff_input_layout() -> tuple[int, float]:
 
 def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[str, np.ndarray]:
     """Encode a (M,) array of packed 16-byte Move records
-    (scribblez.sim_evidence.sobs.MOVE_DTYPE) into the pre-move value model's
-    move-encoder inputs, via the engine's encoder (the single source of truth,
-    shared with the M_pre agent). `pre_move_score_diffs` is the (M,) per-move
-    mover pre-move score advantage in points, used for the resultant post-move
-    differential feature. Returns letters/squares (M, max_placed) int64, blanks
-    and tile_mask (M, max_placed) bool, and scalars (M, num_scalars) float32.
+    (scribblez.sim_evidence.sobs.MOVE_DTYPE) into the move set evaluation
+    model's move-encoder inputs, via the engine's encoder (the single source
+    of truth, shared with the move set evaluation agent). `pre_move_score_diffs`
+    is the (M,) per-move mover pre-move score advantage in points, used for the
+    resultant post-move differential feature. Returns letters/squares
+    (M, max_placed) int64, blanks and tile_mask (M, max_placed) bool, and
+    scalars (M, num_scalars) float32.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -495,7 +496,7 @@ def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[st
     tile_mask = np.zeros((n, max_placed), dtype=np.uint8)
     scalars = np.zeros((n, num_scalars), dtype=np.float32)
     if n:
-        _lib().scribblez_pre_move_value_encode_moves(
+        _lib().scribblez_move_set_encode_moves(
             moves.ctypes.data_as(ctypes.c_void_p),
             n,
             pre_diffs.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
@@ -608,9 +609,9 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
     return json.loads(out.value.decode("utf-8")), inp
 
 
-def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
-    """Encode a penultimate-bingo GCG's post-move analysis position into the
-    post-move value model's flat float32 input tensor (input_floats() long).
+def analyze_position_eval_gcg(gcg_text: str) -> np.ndarray:
+    """Encode a penultimate-bingo GCG's analysis position into the position
+    evaluation model's flat float32 input tensor (input_floats() long).
 
     The position is the board after the final recorded move, encoded from the POV of
     the player that made it (its leave is the encode-time rack) -- the same seat the
@@ -620,13 +621,13 @@ def analyze_post_move_gcg(gcg_text: str) -> np.ndarray:
     lib = _lib()
     inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    if lib.scribblez_post_move_value_analyze_gcg(_session(), gcg_text.encode("utf-8"), inp_ptr) < 0:
-        raise OSError("analyze_post_move_gcg failed (GCG parse error or non-PLAY final move)")
+    if lib.scribblez_position_eval_analyze_gcg(_session(), gcg_text.encode("utf-8"), inp_ptr) < 0:
+        raise OSError("analyze_position_eval_gcg failed (GCG parse error or non-PLAY final move)")
     return inp
 
 
-def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
-    """Encode the post-move analysis position with an explicit alternate `leave` ('?' =
+def analyze_position_eval_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
+    """Encode the analysis position with an explicit alternate `leave` ('?' =
     a blank) instead of the GCG's recorded one -- a dashboard what-if.
 
     Board, scores, and moves are unchanged; only the rack and unseen-pool features
@@ -637,7 +638,7 @@ def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
     inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     err = ctypes.create_string_buffer(256)
-    n = lib.scribblez_post_move_value_analyze_gcg_leave(
+    n = lib.scribblez_position_eval_analyze_gcg_leave(
         _session(), gcg_text.encode("utf-8"), leave.encode("utf-8"), inp_ptr, err, len(err)
     )
     if n < 0:
@@ -645,8 +646,8 @@ def analyze_post_move_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
     return inp
 
 
-def post_move_board_json(gcg_text: str) -> dict:
-    """The web-render board bundle for a penultimate-bingo GCG's post-move analysis
+def position_eval_board_json(gcg_text: str) -> dict:
+    """The web-render board bundle for a penultimate-bingo GCG's analysis
     position (board / bonuses / rack / tile_scores / start_player), parsed to a dict.
 
     The board is the position after the final recorded move; the rack is the leave of
@@ -654,13 +655,13 @@ def post_move_board_json(gcg_text: str) -> dict:
     non-PLAY final move.
     """
     lib = _lib()
-    fn = lib.scribblez_post_move_value_board_json
+    fn = lib.scribblez_position_eval_board_json
     encoded = gcg_text.encode("utf-8")
     cap = 1 << 16
     out = ctypes.create_string_buffer(cap)
     n = fn(encoded, out, cap)
     if n < 0:
-        raise OSError("post_move_board_json failed (GCG parse error or non-PLAY final move)")
+        raise OSError("position_eval_board_json failed (GCG parse error or non-PLAY final move)")
     if n >= cap:  # JSON was truncated; retry once at the exact size
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
@@ -706,19 +707,19 @@ class NativeDataLoader:
     """Python wrapper around the C++ DataLoader via FFI.
 
     `task` selects which training row the loader decodes from each .slog game:
-    "post_move" (the post-move value row, over each game's eligible-turn prefix)
+    "position_eval" (the position-evaluation row, over each game's eligible-turn prefix)
     or "max_move_per_lane" (the per-lane row, over every turn). It fixes the row
     width and is baked into the handle at construction.
     """
 
-    _TASK_CODES = {"post_move": 0, "max_move_per_lane": 1}
+    _TASK_CODES = {"position_eval": 0, "max_move_per_lane": 1}
 
     def __init__(
         self,
         memory_budget: int = 256 * 1024 * 1024,
         num_workers: int = 4,
         num_prefetch: int = 2,
-        task: str = "post_move",
+        task: str = "position_eval",
     ):
         if task not in self._TASK_CODES:
             raise ValueError(f"unknown dataloader task {task!r}")

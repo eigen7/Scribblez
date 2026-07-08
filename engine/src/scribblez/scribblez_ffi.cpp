@@ -14,9 +14,9 @@
 #include "scribblez/lexicon.h"
 #include "scribblez/max_move_per_lane_input_encoder.h"
 #include "scribblez/max_move_per_lane_task.h"
+#include "scribblez/move_set_encoder.h"
 #include "scribblez/player_factory.h"
-#include "scribblez/post_move_analysis.h"
-#include "scribblez/pre_move_value_move_encoder.h"
+#include "scribblez/position_eval_analysis.h"
 #include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
 #include "scribblez/sim_observation_log.h"
@@ -66,9 +66,9 @@ struct ScribblezSession {
                          int out_cap) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
-  int post_move_value_analyze_gcg(const char* gcg_text, float* out_input) const;
-  int post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                        float* out_input, char* out_err, int err_cap) const;
+  int position_eval_analyze_gcg(const char* gcg_text, float* out_input) const;
+  int position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str, float* out_input,
+                                      char* out_err, int err_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
                            int task) const;
   StreamHandle* stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
@@ -346,30 +346,30 @@ int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* 
   return s->decode_rows(path, game_idx, turn_idx, n, post_move != 0, out);
 }
 
-void scribblez_pre_move_value_encode_moves(const void* moves, int64_t n,
-                                           const int32_t* pre_move_score_diffs,
-                                           int32_t* out_letters, uint8_t* out_blanks,
-                                           int32_t* out_squares, uint8_t* out_tile_mask,
-                                           float* out_scalars) {
-  namespace pmv = scribblez::pre_move_value;
+void scribblez_move_set_encode_moves(const void* moves, int64_t n,
+                                     const int32_t* pre_move_score_diffs, int32_t* out_letters,
+                                     uint8_t* out_blanks, int32_t* out_squares,
+                                     uint8_t* out_tile_mask, float* out_scalars) {
+  namespace mset = scribblez::move_set;
   const char* bytes = static_cast<const char*>(moves);
   // The input is a packed byte buffer of serialized Moves whose alignment the
   // caller does not guarantee, so copy each into a Move before encoding.
   for (int64_t i = 0; i < n; ++i) {
     scribblez::Move m;
     std::memcpy(&m, bytes + i * sizeof(scribblez::Move), sizeof(scribblez::Move));
-    pmv::encode_move(m, pre_move_score_diffs[i], out_letters + i * pmv::kMoveMaxPlaced,
-                     out_blanks + i * pmv::kMoveMaxPlaced, out_squares + i * pmv::kMoveMaxPlaced,
-                     out_tile_mask + i * pmv::kMoveMaxPlaced, out_scalars + i * pmv::kMoveScalars);
+    mset::encode_move(m, pre_move_score_diffs[i], out_letters + i * mset::kMoveMaxPlaced,
+                      out_blanks + i * mset::kMoveMaxPlaced, out_squares + i * mset::kMoveMaxPlaced,
+                      out_tile_mask + i * mset::kMoveMaxPlaced,
+                      out_scalars + i * mset::kMoveScalars);
   }
 }
 
-void scribblez_pre_move_value_move_dims(int32_t* max_placed, int32_t* num_scalars,
-                                        int32_t* letter_vocab, int32_t* cells) {
-  *max_placed = scribblez::pre_move_value::kMoveMaxPlaced;
-  *num_scalars = scribblez::pre_move_value::kMoveScalars;
-  *letter_vocab = scribblez::pre_move_value::kMoveLetterVocab;
-  *cells = scribblez::pre_move_value::kMoveCells;
+void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
+                                  int32_t* cells) {
+  *max_placed = scribblez::move_set::kMoveMaxPlaced;
+  *num_scalars = scribblez::move_set::kMoveScalars;
+  *letter_vocab = scribblez::move_set::kMoveLetterVocab;
+  *cells = scribblez::move_set::kMoveCells;
 }
 
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale) {
@@ -427,11 +427,11 @@ int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg
   return s->max_move_per_lane_analyze_gcg(gcg_text, out_json, out_cap, out_input);
 }
 
-int ScribblezSession::post_move_value_analyze_gcg(const char* gcg_text, float* out_input) const {
+int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, float* out_input) const {
   if (!gcg_text || !out_input) return -1;
   try {
     std::string error;
-    if (!scribblez::encode_post_move_analysis_input(gcg_text, spec, out_input, &error)) {
+    if (!scribblez::encode_position_eval_analysis_input(gcg_text, spec, out_input, &error)) {
       return -1;
     }
     return input_floats();
@@ -440,16 +440,16 @@ int ScribblezSession::post_move_value_analyze_gcg(const char* gcg_text, float* o
   }
 }
 
-int scribblez_post_move_value_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                          float* out_input) {
-  return s->post_move_value_analyze_gcg(gcg_text, out_input);
+int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_text,
+                                        float* out_input) {
+  return s->position_eval_analyze_gcg(gcg_text, out_input);
 }
 
-int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, int out_cap) {
+int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap) {
   if (!gcg_text) return -1;
   try {
     std::string error;
-    const std::string json = scribblez::post_move_analysis_board_json(gcg_text, &error);
+    const std::string json = scribblez::position_eval_analysis_board_json(gcg_text, &error);
     if (json.empty()) return -1;
     return emit_string(json, out_json, out_cap);
   } catch (const std::exception&) {
@@ -457,15 +457,15 @@ int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, i
   }
 }
 
-int ScribblezSession::post_move_value_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                                        float* out_input, char* out_err,
-                                                        int err_cap) const {
+int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
+                                                      float* out_input, char* out_err,
+                                                      int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !leave_str || !out_input) return -1;
   try {
     std::string error;
-    if (!scribblez::encode_post_move_analysis_input_with_leave(gcg_text, leave_str, spec, out_input,
-                                                               &error)) {
+    if (!scribblez::encode_position_eval_analysis_input_with_leave(gcg_text, leave_str, spec,
+                                                                   out_input, &error)) {
       emit_string(error, out_err, err_cap);
       return -1;
     }
@@ -476,10 +476,10 @@ int ScribblezSession::post_move_value_analyze_gcg_leave(const char* gcg_text, co
   }
 }
 
-int scribblez_post_move_value_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
-                                                const char* leave_str, float* out_input,
-                                                char* out_err, int err_cap) {
-  return s->post_move_value_analyze_gcg_leave(gcg_text, leave_str, out_input, out_err, err_cap);
+int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
+                                              const char* leave_str, float* out_input,
+                                              char* out_err, int err_cap) {
+  return s->position_eval_analyze_gcg_leave(gcg_text, leave_str, out_input, out_err, err_cap);
 }
 
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
@@ -523,7 +523,7 @@ DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker
   DataLoader::Params p;
   p.spec = spec;
   p.task = task == 1 ? scribblez::binlog::DecodeTask::kMaxMovePerLane
-                     : scribblez::binlog::DecodeTask::kPostMoveValue;
+                     : scribblez::binlog::DecodeTask::kPositionEval;
   p.memory_budget = memory_budget;
   p.num_worker_threads = num_worker_threads;
   p.num_prefetch_threads = num_prefetch_threads;
@@ -632,7 +632,7 @@ StreamHandle* ScribblezSession::stream_new(float* const* slot_ptrs, int num_slot
   return ::new_stream(
     slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
     player_specs, num_specs, row_size_floats(), [enc_spec, post_move]() {
-      return scribblez::binlog::make_post_move_value_row_encoder(enc_spec, post_move);
+      return scribblez::binlog::make_position_eval_row_encoder(enc_spec, post_move);
     });
 }
 

@@ -84,7 +84,7 @@ adds a seat (default: two greedy players). Player types:
 - **`hastybot`** — in-process static-equity bot (score + leave value +
   adjustments), optionally softmax-sampling among its top-K
   (`--temperature`, `--top-k`). The self-play workhorse.
-- **`neural`** — HastyBot move-gen + the M_post value model: applies candidate
+- **`neural`** — HastyBot move-gen + the position evaluation model: applies candidate
   plays and picks the one whose post-move state the model rates highest
   (`--model=<onnx>`, TensorRT under the hood).
 - **`human`** — a browser UI seat (below).
@@ -124,13 +124,13 @@ browse/preview the engine's move list (sorted by score, highest first). Swap the
 
 ## Train
 
-The post-move value model (M_post) trains in an open-ended generate→train loop
+The position evaluation model trains in an open-ended generate→train loop
 — self-play games are generated to disk per generation, trained over a sliding
 window, and the run is restartable at any point (see
 [docs/generational_training.md](docs/generational_training.md)):
 
 ```bash
-./py/scripts/post_move_value/train.py -t mytag
+./py/scripts/position_eval/train.py -t mytag
 ```
 
 The trainer launches the per-tag React dashboard (loss curves, structural
@@ -139,7 +139,7 @@ standalone with `./py/scripts/dashboard.py`. Sibling trainers:
 `py/scripts/max_move_per_lane/train.py` (the lexical representation probe) and
 the lexical-NN experiment trainers under `py/scripts/word_validity/` and
 `py/scripts/rack_best/`. `py/scripts/generate_data.py` generates standalone
-train/test `.slog` splits; `py/scripts/post_move_value/evaluate.py` runs the
+train/test `.slog` splits; `py/scripts/position_eval/evaluate.py` runs the
 eval suites on a checkpoint.
 
 Data flow, formats, and the replay-reconstruction invariant are documented in

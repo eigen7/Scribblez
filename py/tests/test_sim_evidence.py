@@ -13,7 +13,7 @@ import pytest
 import torch
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
-from scribblez.sim_evidence.model import EvidencePostMoveModel
+from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     MOVE_PLAY,
     NUM_EVIDENCE_SCALARS,
@@ -139,9 +139,9 @@ def test_gcg_sim_evidence_on_dataset_position():
         pytest.skip("HastyBot leave values not installed")
     from scribblez.ffi import gcg_sim_evidence
 
-    gcg = Path("/workspace/repo/positions/NWL23/post-move-value-test-dataset/pos-6.gcg")
+    gcg = Path("/workspace/repo/positions/NWL23/position-eval-test-dataset/pos-6.gcg")
     if not gcg.exists():
-        pytest.skip("post-move-value test dataset not present")
+        pytest.skip("position-eval test dataset not present")
     records, played_rank = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, threads=4, seed=3)
     assert 1 <= len(records) <= 4
     assert -1 <= played_rank < len(records)
@@ -227,10 +227,10 @@ def test_position_meta_flags(sobs_dir):
             assert meta["meta_opp_unbiased"][i] == expect
 
 
-def _tiny_model() -> EvidencePostMoveModel:
+def _tiny_model() -> EvidencePositionEvalModel:
     shapes = {s.name: s.dims for s in get_input_shapes()}
     torch.manual_seed(0)
-    return EvidencePostMoveModel(
+    return EvidencePositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
         trunk_channels=16,

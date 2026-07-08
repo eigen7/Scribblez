@@ -1,6 +1,6 @@
-"""Evidence-conditioned post-move value model (docs/sim_residual_feedback.md).
+"""Evidence-conditioned position evaluation model (docs/sim_residual_feedback.md).
 
-The model is PostMoveValueModel with a fusion stage inserted between the trunk
+The model is PositionEvalModel with a fusion stage inserted between the trunk
 and the heads. Each simmed candidate contributes one evidence token (its
 scalar sim summary) paired with its spatial observation planes; tokens
 self-attend (cross-candidate contrasts -- "A left this spot open, B blocked
@@ -10,7 +10,7 @@ to the trunk output. A pooled token summary is likewise projected into the
 value-head input.
 
 Both fusion projections are zero-initialized, so at initialization the model
-computes exactly the plain PostMoveValueModel, and an empty evidence set (all
+computes exactly the plain PositionEvalModel, and an empty evidence set (all
 mask entries False) keeps it that way -- the evidence-free baseline arm of the
 kill-test is this same architecture with the evidence inputs zeroed, making
 the two arms parameter-identical.
@@ -21,7 +21,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from scribblez.post_move_value.model import MASK_HEAD_NAMES, PostMoveValueModel
+from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS
 from scribblez.spatial_trunk import mean_max_pool
 
@@ -88,8 +88,8 @@ class EvidenceEncoder(nn.Module):
         return self.spatial_out(evidence_map), pooled
 
 
-class EvidencePostMoveModel(PostMoveValueModel):
-    """PostMoveValueModel whose trunk output and value summary are conditioned
+class EvidencePositionEvalModel(PositionEvalModel):
+    """PositionEvalModel whose trunk output and value summary are conditioned
     on a sim-evidence set before reaching the (inherited) heads."""
 
     def __init__(

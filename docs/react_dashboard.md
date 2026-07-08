@@ -3,7 +3,7 @@
 The training dashboard is a **React app with a Python data API**: a React shell
 (tabs, tag select, polling) that embeds the Bokeh metric figures and hosts the
 genuinely interactive tabs — the **max-move-per-lane lane analysis** board
-(click a square, highlight its lane) and the **post-move-value Positions**
+(click a square, highlight its lane) and the **position-evaluation Positions**
 board — as native React components.
 
 ## Why React + embedded Bokeh
@@ -68,11 +68,11 @@ React dashboard.
 
 | Task | Tabs |
 |---|---|
-| post_move_value | Loss · Positions · Training · Controls · Info |
+| position_eval | Loss · Positions · Training · Controls · Info |
 | max_move_per_lane | Loss · Lane analysis · Info |
 
 `Loss` and `Training` embed an API figure (`loss`, `training_metrics`) and
-re-fetch when their version-token table advances. `Positions` (post-move-value)
+re-fetch when their version-token table advances. `Positions` (position-evaluation)
 and `Lane analysis` (max-move-per-lane) are native-React interactive tabs (see
 below).
 
@@ -122,11 +122,11 @@ lane max, and return their word / coordinates / direction / score
 - Score histogram: the selected lane's predicted 100-bin score PMF with the true
   score bin highlighted.
 
-## The post-move-value Positions tab
+## The position-evaluation Positions tab
 
-A native-React tab that compares each model generation's post-move-value
+A native-React tab that compares each model generation's position-evaluation
 prediction against a Monte-Carlo ground truth, over a GCG dataset
-(`positions/NWL23/post-move-value-test-dataset/`).
+(`positions/NWL23/position-eval-test-dataset/`).
 
 ### The analysis position (per `pos-N.gcg`)
 
@@ -145,13 +145,13 @@ final-score-delta histogram from the start player's POV into
 
 ### Model predictions (Python, in-process at each checkpoint)
 
-- One FFI (`scribblez_post_move_value_analyze_gcg`): replay the GCG into a fresh
+- One FFI (`scribblez_position_eval_analyze_gcg`): replay the GCG into a fresh
   `GameStateEncoder` and `encode_input` from the start player's POV — byte-identical
   to a training row's input. A board-bundle FFI
-  (`scribblez_post_move_value_board_json`) serves the renderable board (leave rack).
+  (`scribblez_position_eval_board_json`) serves the renderable board (leave rack).
 - The trainer's checkpoint hook runs the model on the dataset batch and writes each
   generation's WLD probabilities + score-delta mean/std into the tag's
-  `dashboard.db` (`post_move_pred` table), keyed by generation.
+  `dashboard.db` (`position_eval_pred` table), keyed by generation.
 
 ### UI (reuses `Board.tsx`)
 

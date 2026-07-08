@@ -142,9 +142,9 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
 std::string NeuralAgent::options_help() {
   NeuralOptions opts;
   std::ostringstream os;
-  os << "  HastyBot move-gen + M_post value model: applies candidate plays and\n"
-        "  plays the one whose post-move state the model's objective head rates\n"
-        "  highest.\n"
+  os << "  HastyBot move-gen + position evaluation model: applies candidate plays\n"
+        "  and plays the one whose post-move state the model's objective head\n"
+        "  rates highest.\n"
      << make_options_description(opts);
   return os.str();
 }

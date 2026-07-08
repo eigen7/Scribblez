@@ -45,10 +45,10 @@ add_library(scribblez_core STATIC
   src/scribblez/monte_carlo_sim.cpp
   src/scribblez/sim_runner.cpp
   src/scribblez/sim_observation_log.cpp
-  src/scribblez/pre_move_value_target_log.cpp
-  src/scribblez/pre_move_value_move_encoder.cpp
+  src/scribblez/move_set_eval_target_log.cpp
+  src/scribblez/move_set_encoder.cpp
   src/scribblez/player_factory.cpp
-  src/scribblez/post_move_analysis.cpp
+  src/scribblez/position_eval_analysis.cpp
   src/scribblez/seed_producer.cpp
   src/scribblez/web_server.cpp
   src/util/encoding.cpp
@@ -93,7 +93,7 @@ target_link_libraries(scribblez_ffi PRIVATE
   Threads::Threads)
 
 # --- Neural-net inference (TensorRT) -----------------------------------------
-# The post-move value model (M_post) runs on the GPU through TensorRT. Discover
+# The position evaluation model runs on the GPU through TensorRT. Discover
 # CUDA and TensorRT assuming the standard NVIDIA TensorRT container layout (the
 # project always runs inside that container -- see CLAUDE.md). The CUDA runtime
 # is used purely as a host library, so no CUDA language needs to be enabled
@@ -178,7 +178,7 @@ target_link_libraries(board_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# One-off Monte-Carlo ground-truth generator for the post-move-value test dataset.
+# One-off Monte-Carlo ground-truth generator for the position-evaluation test dataset.
 add_executable(monte_carlo_sim_tool apps/monte_carlo_sim_tool.cpp)
 target_link_libraries(monte_carlo_sim_tool PRIVATE
   scribblez_core
@@ -263,11 +263,11 @@ target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
 
-# Pre-move value model distillation-target generator: stratified candidate
-# sampling + batched teacher (post-move model) inference over .slog positions
-# (docs/roadmap2.md track A).
-add_executable(pre_move_value_target_generator apps/pre_move_value_target_generator.cpp)
-target_link_libraries(pre_move_value_target_generator PRIVATE
+# Move set evaluation model distillation-target generator: stratified
+# candidate sampling + batched teacher (position evaluation model) inference
+# over .slog positions (docs/roadmap2.md track A).
+add_executable(move_set_eval_target_generator apps/move_set_eval_target_generator.cpp)
+target_link_libraries(move_set_eval_target_generator PRIVATE
   scribblez_nn
   scribblez_core
   Boost::program_options

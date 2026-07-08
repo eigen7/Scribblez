@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 from scribblez.generational import lifecycle as lc
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.paths import POSITION_EVAL, TagPaths
 
 
 @pytest.fixture
 def paths(tmp_path: Path) -> TagPaths:
-    return TagPaths("t", POST_MOVE_VALUE, mount_root=tmp_path)
+    return TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
 
 
 def _open(paths: TagPaths, index: int, target_games: int = 100) -> Path:

@@ -11,7 +11,7 @@ class options_description;
 }
 
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
-// Scribblez post-move value model: two inputs ("input_spatial"
+// Scribblez position evaluation model: two inputs ("input_spatial"
 // (N,spatial_planes,15,15), "input_scalar" (N,scalar_floats) -- widths declared
 // by the model itself) and six outputs ("wld" (N,3), "score_diff"
 // (N,2 = [mean, std]), plus the auxiliary masks "opp_next_placement",

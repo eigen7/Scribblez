@@ -15,7 +15,7 @@
 
 namespace scribblez {
 
-// Post-move value-model agent (M_post). On its turn it picks a candidate set of
+// Position evaluation model agent. On its turn it picks a candidate set of
 // legal plays, applies each to a copy of its tracked GameStateEncoder, encodes
 // the resulting post-move position from its own POV, batch-evaluates them with
 // the model, and selects among them by the configured objective.

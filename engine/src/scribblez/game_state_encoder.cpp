@@ -163,8 +163,8 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
 // look at the near-empty-bag, small-|diff| cells for under-sharpening (win prob
 // flattened across the flip point). If it shows, prefer a compact nonlinear
 // featurization (a handful of RBF/bins, denser near 0) over widening back to a
-// full thermometer, and apply the same basis to the pre-move value model's
-// resultant-diff move feature (pre_move_value_move_encoder) so the two stay on
+// full thermometer, and apply the same basis to the move set evaluation
+// model's resultant-diff move feature (move_set_encoder) so the two stay on
 // one representation. The principled answer for the decisive endgame is the
 // negamax solver (docs/roadmap2.md, D3), not finer value-net input resolution.
 int encode_score_diff_scalar(int score_diff, float* out) {

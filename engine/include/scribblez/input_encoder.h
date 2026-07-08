@@ -79,7 +79,7 @@ inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
 // Score differential as a single signed scalar: (score_active - score_opp)
-// divided by kScoreDiffInputScale, not clipped. The pre-move value model's
+// divided by kScoreDiffInputScale, not clipped. The move set evaluation model's
 // resultant-diff move feature shares this representation, so a post-move
 // differential is the pre-move differential plus the move score, a plain sum.
 inline constexpr int kScoreDiffInputFloats = 1;

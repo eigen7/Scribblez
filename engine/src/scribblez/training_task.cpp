@@ -4,11 +4,11 @@
 
 namespace scribblez {
 
-int PostMoveValueTask::row_floats(const InputEncodingSpec& spec) {
+int PositionEvalTask::row_floats(const InputEncodingSpec& spec) {
   return input_floats(spec) + kLabelFloats;
 }
 
-void PostMoveValueTask::encode_row(const EncodeContext& ctx, float* out_row) {
+void PositionEvalTask::encode_row(const EncodeContext& ctx, float* out_row) {
   if (ctx.spec.opp_leave_input) {
     ctx.enc->encode_input(ctx.active_player, *ctx.pov_rack, ctx.opp_known_leave, ctx.apply_flip,
                           out_row);

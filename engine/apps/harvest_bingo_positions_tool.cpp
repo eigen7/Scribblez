@@ -1,4 +1,4 @@
-// Offline harvester for the large post-move-value Monte-Carlo test set.
+// Offline harvester for the large position-evaluation Monte-Carlo test set.
 //
 // Plays HastyBot-vs-HastyBot games and, from each game, samples one
 // "penultimate-bingo" position: a turn where a player bingoed (placed all 7 rack
@@ -121,7 +121,7 @@ void write_bundles(const fs::path& dir, const std::vector<std::string>& gcgs, in
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
-    std::string dataset_name = "post-move-value-test-dataset-large";
+    std::string dataset_name = "position-eval-test-dataset-large";
     int count = 1000;
     int per_file = 100;
     long base_seed = 1000000;

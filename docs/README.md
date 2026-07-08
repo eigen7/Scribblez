@@ -6,10 +6,10 @@
   beatable (context-blind leave evaluation, naive rack inference), and the
   target architecture — public belief system, unified Q/V network, GADDAG +
   Monte Carlo search.
-- **[roadmap.md](roadmap.md)** — the phased plan from the post-move value model
-  (M_post, built) through self-play diversification and evaluation machinery to
-  the pre-move model (M_pre), with per-phase status.
-- **[roadmap2.md](roadmap2.md)** — the forward plan from here: M_pre, rack
+- **[roadmap.md](roadmap.md)** — the phased plan from the position evaluation model
+  (built) through self-play diversification and evaluation machinery to
+  the move set evaluation model, with per-phase status.
+- **[roadmap2.md](roadmap2.md)** — the forward plan from here: the move set evaluation model, rack
   inference, covariance-guided sim scheduling, the rollout-policy ladder
   (value truncation, self-model plies, endgame solver), and the experiments
   that gate each track.

@@ -4,7 +4,7 @@ import ControlsTab from './components/ControlsTab';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import MasterApp from './components/master/MasterApp';
-import PostMoveAnalysis from './components/PostMoveAnalysis';
+import PositionEvalAnalysis from './components/PositionEvalAnalysis';
 import { getJSON } from './lib/api';
 
 // Contains a render error to the active tab: a crashing tab shows an inline message
@@ -214,7 +214,7 @@ function renderTab(name: string, task: string, tag: string | null, tags: string[
   if (name === 'Info') return <InfoTab task={task} tag={tag} />;
   if (name === 'Controls') return <ControlsTab task={task} tag={tag} />;
   if (name === 'Lane analysis') return <LaneAnalysis task={task} tag={tag} />;
-  if (name === 'Positions') return <PostMoveAnalysis task={task} tag={tag} />;
+  if (name === 'Positions') return <PositionEvalAnalysis task={task} tag={tag} />;
   if (name === 'Loss') return <LossTab task={task} tag={tag} tags={tags} />;
   const cfg = FIGURE_TABS[name];
   return (

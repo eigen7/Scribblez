@@ -25,7 +25,7 @@ namespace nn {
 namespace {
 
 // Names of the engine's I/O tensors. These match the input_names / output_names
-// passed to torch.onnx.export in py/scribblez/post_move_value/onnx_export.py.
+// passed to torch.onnx.export in py/scribblez/position_eval/onnx_export.py.
 constexpr const char* kInputSpatial = "input_spatial";
 constexpr const char* kInputScalar = "input_scalar";
 constexpr const char* kOutputWld = "wld";

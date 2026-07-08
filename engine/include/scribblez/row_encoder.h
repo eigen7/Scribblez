@@ -38,12 +38,12 @@ using RowEncoderFactory = std::function<std::unique_ptr<RowEncoder>()>;
 
 // Built-in row encoders. Both take the run's input-encoding spec (lexicon +
 // feature blocks).
-//   * post-move: the win-probability task; samples bag-nonempty turns; the
+//   * position-eval: the win-probability task; samples bag-nonempty turns; the
 //     `post_move` flag picks the pre-move vs post-move snapshot.
 //   * max-move-per-lane: the per-lane best-move task; samples any turn (incl. endgames)
 //     pre-move, and additionally enumerates legal moves with the spec's lexicon.
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const InputEncodingSpec& spec,
-                                                             bool post_move);
+std::unique_ptr<RowEncoder> make_position_eval_row_encoder(const InputEncodingSpec& spec,
+                                                           bool post_move);
 std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const InputEncodingSpec& spec);
 
 }  // namespace binlog

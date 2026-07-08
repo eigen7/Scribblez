@@ -4,15 +4,15 @@
 
 Train a NN whose weights encode knowledge of a Scrabble lexicon.
 
-Existing NN training pipelines like `py/scripts/post_move_value/train.py` train a CNN, which
+Existing NN training pipelines like `py/scripts/position_eval/train.py` train a CNN, which
 likely lacks the capability to learn the thousands of commonly occurring Scrabble words.
 
 ## Learning Setup
 
-Similarly to `scripts/post_move_value/train.py`, play fast hasty-vs-hasty games in c++ and train over
+Similarly to `scripts/position_eval/train.py`, play fast hasty-vs-hasty games in c++ and train over
 the resulting `.slog` games in a generational generate->train loop.
 
-Unlike `scripts/post_move_value/train.py`, every turn of a game is a training row, including endgame
+Unlike `scripts/position_eval/train.py`, every turn of a game is a training row, including endgame
 positions.
 
 The learning problem is to take a pre-move rack and a board, and to predict the highest-scoring
@@ -79,10 +79,10 @@ For CDF-loss, we can use sum_{0 <= k <= 99} (sum_{j <= k} B(j) - B_hat(j))^2.
 
 ## Input Encoding
 
-This task needs its own lean input encoder, **not** the one from `scripts/post_move_value/train.py`. Two
+This task needs its own lean input encoder, **not** the one from `scripts/position_eval/train.py`. Two
 points:
 
-- The post-move encoder's spatial planes include horizontal/vertical cross-checks (which letters are
+- The position evaluation encoder's spatial planes include horizontal/vertical cross-checks (which letters are
   legal at each empty square) — that is lexicon knowledge, and feeding it to a net whose purpose is
   to *learn* the lexicon defeats the experiment. Cross-checks must be excluded from the input. (They
   may instead become an auxiliary *output*/loss term; see Dashboard.)
@@ -98,7 +98,7 @@ R's" is a counting fact).
 The model is `py/scribblez/max_move_per_lane/model.py` (`MaxMovePerLaneModel`). It has two stages
 that split the problem into "where" and "what word":
 
-- **Spatial stage (CNN).** A conv trunk -- the `SpatialTrunk` shared with the post-move model (stem,
+- **Spatial stage (CNN).** A conv trunk -- the `SpatialTrunk` shared with the position evaluation model (stem,
   rack-scalar injection, a residual tower with KataGo-style global-pooling blocks) -- encodes the
   board into a `(C, 15, 15)` feature map. Convolution is the natural tool for the spatial facts:
   premium-square geometry, which tiles sit where, board openness.
@@ -130,7 +130,7 @@ over all 30 lanes.
 
 ## Dashboard
 
-`scripts/max_move_per_lane/train.py` writes to the same per-tag dashboard the post-move trainer uses;
+`scripts/max_move_per_lane/train.py` writes to the same per-tag dashboard the position-evaluation trainer uses;
 the two share the trainer scaffolding (`scribblez/train_common.py`) and the entire dashboard
 (`scribblez/dashboard/`). One metrics record is written per epoch (keyed on positions trained, the
 loss plots' x-axis), and the shared panels are task-agnostic:

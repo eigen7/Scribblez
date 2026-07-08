@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trainer for the max-move-per-lane model: an open-ended generate->train loop.
 
-Sibling to the post-move value trainer (scripts/post_move_value/train.py). It runs
+Sibling to the position evaluation trainer (scripts/position_eval/train.py). It runs
 the same generational lifecycle -- generate a generation of HastyBot self-play
 games to disk, train a few epochs over a sliding window of the most recent
 generations (reusing each position, and with --turns-per-game sampling several

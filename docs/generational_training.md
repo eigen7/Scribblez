@@ -1,7 +1,7 @@
 # Generational training
 
 This is the training pipeline — implemented as
-[scripts/post_move_value/train.py](../py/scripts/post_move_value/train.py) and
+[scripts/position_eval/train.py](../py/scripts/position_eval/train.py) and
 [scripts/max_move_per_lane/train.py](../py/scripts/max_move_per_lane/train.py) —
 plus the C++ and coordination machinery it grows into. The core lifecycle
 (rows-clock, generations, the sliding window, reuse-driven epochs, restart
@@ -155,7 +155,7 @@ pool structure is identical; only the eval-batching layer differs. The disk
 ## Producer process model: relaunch-per-generation vs. run-forever
 
 The generational trainer currently **relaunches the `play_game` subprocess once
-per generation** ([train.py](../py/scripts/post_move_value/train.py)
+per generation** ([train.py](../py/scripts/position_eval/train.py)
 via [generate_data.run_games](../py/scripts/generate_data.py)): each generation
 opens its directory, runs `play_game --games N --threads T` into it, and the
 process exits at N games. The thread count is a live control (`CpuController`),
@@ -242,7 +242,7 @@ boundary-granularity thread tuning already covers most of the need.
 
 The orchestrator lives in the trainer script and drives its per-minibatch step
 through a shared per-task `run_epoch`
-([post_move_value/train_loop.py](../py/scribblez/post_move_value/train_loop.py),
+([position_eval/train_loop.py](../py/scribblez/position_eval/train_loop.py),
 [max_move_per_lane/train_loop.py](../py/scribblez/max_move_per_lane/train_loop.py)),
 so the gradient step is isolated from the lifecycle. The learning rate is set per
 step from a pure function of the rows-clock (see below).

@@ -2,8 +2,8 @@
 """The 4-armed sim-evidence kill-test (docs/sim_residual_feedback.md, step 3).
 
 Tests the load-bearing hypothesis of the sim-evidence loop in isolation: does
-conditioning M_post on Monte-Carlo sim evidence improve its outcome
-prediction? One invocation runs the whole experiment against the data
+conditioning the position evaluation model on Monte-Carlo sim evidence improve
+its outcome prediction? One invocation runs the whole experiment against the data
 accumulated by scripts/generate_kill_test_data.py under the same tag:
 
   1. Cache build: every complete .slog/.sobs pair under
@@ -70,8 +70,8 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
-from scribblez.post_move_value.model import MASK_HEAD_NAMES, compute_loss
-from scribblez.sim_evidence.model import EvidencePostMoveModel
+from scribblez.position_eval.model import MASK_HEAD_NAMES, compute_loss
+from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import (
     NUM_EVIDENCE_SCALARS,
@@ -297,7 +297,7 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
     apply_evidence_mode(holdout, arm, seed=args.seed + 1)
 
     input_shapes = {s.name: s.dims for s in get_input_shapes()}
-    model = EvidencePostMoveModel(
+    model = EvidencePositionEvalModel(
         spatial_planes=input_shapes["input_spatial"][0],
         scalar_size=input_shapes["input_scalar"][0],
         trunk_channels=args.trunk_channels,

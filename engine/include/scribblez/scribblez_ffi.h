@@ -129,23 +129,22 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
-// Encode `n` candidate Moves into the pre-move value model's move-encoder input
-// arrays (the single source of truth for that layout;
-// scribblez/pre_move_value_move_encoder.h -- the training dataset reaches it
-// here and the M_pre agent shares it at inference). `moves` points to n
-// contiguous 16-byte serialized Moves (as stored in .slog/.pmt);
+// Encode `n` candidate Moves into the move set evaluation model's
+// move-encoder input arrays (the single source of truth for that layout;
+// scribblez/move_set_encoder.h -- the training dataset reaches it here and
+// the move set evaluation agent shares it at inference). `moves` points to n
+// contiguous 16-byte serialized Moves (as stored in .slog/.mset);
 // `pre_move_score_diffs` is the mover's pre-move score advantage (points) per
 // move, used to form the resultant post-move differential feature. Writes
 // out_letters and out_squares as int32[n * max_placed], out_blanks and
 // out_tile_mask as uint8[n * max_placed], and out_scalars as
 // float[n * num_scalars], where max_placed / num_scalars come from
-// scribblez_pre_move_value_move_dims. A pure function of its inputs: it needs
+// scribblez_move_set_move_dims. A pure function of its inputs: it needs
 // no session or dictionary.
-void scribblez_pre_move_value_encode_moves(const void* moves, int64_t n,
-                                           const int32_t* pre_move_score_diffs,
-                                           int32_t* out_letters, uint8_t* out_blanks,
-                                           int32_t* out_squares, uint8_t* out_tile_mask,
-                                           float* out_scalars);
+void scribblez_move_set_encode_moves(const void* moves, int64_t n,
+                                     const int32_t* pre_move_score_diffs, int32_t* out_letters,
+                                     uint8_t* out_blanks, int32_t* out_squares,
+                                     uint8_t* out_tile_mask, float* out_scalars);
 
 // The move-encoder layout constants, so Python callers never hardcode them:
 //   max_placed    letter/square array width (tiles per move slot)
@@ -153,14 +152,14 @@ void scribblez_pre_move_value_encode_moves(const void* moves, int64_t n,
 //   letter_vocab  letter-embedding vocabulary size (valid ids 0..letter_vocab-1;
 //                 0 is the empty slot, 1..26 the letters)
 //   cells         board-square embedding size (max square index + 1)
-void scribblez_pre_move_value_move_dims(int32_t* max_placed, int32_t* num_scalars,
-                                        int32_t* letter_vocab, int32_t* cells);
+void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
+                                  int32_t* cells);
 
-// The board input's score-differential scalar, so the pre-move dataset can read
-// each position's pre-move differential straight out of the encoded row (rather
-// than recomputing it): `scalar_index` is its index within the scalar input
-// vector for this session's arm, and `scale` is the divisor the encoder applied
-// (so points = input_scalar[scalar_index] * scale).
+// The board input's score-differential scalar, so the move set dataset can
+// read each position's pre-move differential straight out of the encoded row
+// (rather than recomputing it): `scalar_index` is its index within the scalar
+// input vector for this session's arm, and `scale` is the divisor the
+// encoder applied (so points = input_scalar[scalar_index] * scale).
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale);
 
 // Render an ASCII description of a sampled position (POV, scores, leave, last
@@ -188,32 +187,34 @@ int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t 
 int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg_text,
                                             char* out_json, int out_cap, float* out_input);
 
-// Parse a penultimate-bingo GCG's text into its post-move analysis position and fill
-// `out_input` with the post-move value model's input tensor (scribblez_input_floats()
-// floats), encoded from the POV of the player that made the final recorded move
-// (whose leave is the encode-time rack). The encoding replays the recorded moves, so
-// it is byte-identical to a training row's input for the same position. Returns
-// scribblez_input_floats() on success, or -1 on a parse error / non-PLAY final move.
-int scribblez_post_move_value_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                          float* out_input);
+// Parse a penultimate-bingo GCG's text into its analysis position and fill
+// `out_input` with the position evaluation model's input tensor
+// (scribblez_input_floats() floats), encoded from the POV of the player that
+// made the final recorded move (whose leave is the encode-time rack). The
+// encoding replays the recorded moves, so it is byte-identical to a training
+// row's input for the same position. Returns scribblez_input_floats() on
+// success, or -1 on a parse error / non-PLAY final move.
+int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_text,
+                                        float* out_input);
 
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
-// tile_scores, plus a "start_player" field) for a penultimate-bingo GCG's post-move
-// analysis position, from the POV of the player that made the final move (its leave
-// is the shown rack), into `out_json` (NUL-terminated, truncated to out_cap). Returns
-// the full JSON length (same retry/truncation contract as the dump functions), or -1
-// on a parse error / non-PLAY final move.
-int scribblez_post_move_value_board_json(const char* gcg_text, char* out_json, int out_cap);
+// tile_scores, plus a "start_player" field) for a penultimate-bingo GCG's
+// analysis position, from the POV of the player that made the final move (its
+// leave is the shown rack), into `out_json` (NUL-terminated, truncated to
+// out_cap). Returns the full JSON length (same retry/truncation contract as
+// the dump functions), or -1 on a parse error / non-PLAY final move.
+int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap);
 
-// Like scribblez_post_move_value_analyze_gcg, but encodes from an explicit alternate
-// `leave_str` ('?' = a blank) -- a dashboard what-if -- instead of the GCG's recorded
-// leave. The alternate leave must match the recorded leave's tile count and use only
-// tiles available off the board. Returns scribblez_input_floats() on success; on
-// failure returns -1 and writes a human-readable reason into `out_err` (NUL-
-// terminated, truncated to err_cap).
-int scribblez_post_move_value_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
-                                                const char* leave_str, float* out_input,
-                                                char* out_err, int err_cap);
+// Like scribblez_position_eval_analyze_gcg, but encodes from an explicit
+// alternate `leave_str` ('?' = a blank) -- a dashboard what-if -- instead of
+// the GCG's recorded leave. The alternate leave must match the recorded
+// leave's tile count and use only tiles available off the board. Returns
+// scribblez_input_floats() on success; on failure returns -1 and writes a
+// human-readable reason into `out_err` (NUL- terminated, truncated to
+// err_cap).
+int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
+                                              const char* leave_str, float* out_input,
+                                              char* out_err, int err_cap);
 
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
@@ -233,7 +234,7 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
 typedef struct DataLoaderHandle DataLoaderHandle;
 
 // Create a loader over the session's lexicon. `task` selects the training row it
-// decodes: 0 = the post-move value row (expands each game over its bag-non-empty
+// decodes: 0 = the position evaluation row (expands each game over its bag-non-empty
 // eligible-turn prefix), 1 = the max-move-per-lane row (expands over every turn).
 // A task-1 loader emits scribblez_max_move_per_lane_row_size_floats() per row; a
 // task-0 loader emits scribblez_row_size_floats().

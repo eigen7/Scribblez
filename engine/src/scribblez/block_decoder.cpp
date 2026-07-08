@@ -78,8 +78,8 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
     const uint32_t game_idx = static_cast<uint32_t>(local_start + i);
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
-    pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(sampled), post_move, flips[i] != 0,
-                                       output + (output_row_start + i) * row_floats_);
+    pos_.encode_row<PositionEvalTask>(g, static_cast<int>(sampled), post_move, flips[i] != 0,
+                                      output + (output_row_start + i) * row_floats_);
   }
 }
 
@@ -104,7 +104,7 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
     pos_.encode_row<MaxMovePerLaneTask>(g, static_cast<int>(turn_idx), /*post_move=*/false, flip,
                                         out);
   } else {
-    pos_.encode_row<PostMoveValueTask>(g, static_cast<int>(turn_idx), post_move, flip, out);
+    pos_.encode_row<PositionEvalTask>(g, static_cast<int>(turn_idx), post_move, flip, out);
   }
 }
 

@@ -23,20 +23,20 @@ namespace binlog {
 
 // Which training task a decoder emits. This fixes both the row width and, one
 // level up in the DataLoader, which of a game's turns expand into rows:
-//   kPostMoveValue    -- input + wld/score-diff/opp-placement labels; a game
+//   kPositionEval     -- input + wld/score-diff/opp-placement labels; a game
 //                        expands over its bag-non-empty eligible-turn prefix,
 //                        encoded post-move.
 //   kMaxMovePerLane   -- the lean board/rack input + per-lane occupancy/score/
 //                        mask labels; a game expands over every turn, encoded
 //                        pre-move (the labels come from legal-move enumeration
 //                        at the position, so the outcome/score fields are unused).
-enum class DecodeTask { kPostMoveValue, kMaxMovePerLane };
+enum class DecodeTask { kPositionEval, kMaxMovePerLane };
 
 class BlockDecoder {
  public:
   // `spec` configures the input encoding (lexicon + feature blocks); `task`
   // selects which training row is emitted and thus its width.
-  explicit BlockDecoder(const InputEncodingSpec& spec, DecodeTask task = DecodeTask::kPostMoveValue)
+  explicit BlockDecoder(const InputEncodingSpec& spec, DecodeTask task = DecodeTask::kPositionEval)
       : task_(task), row_floats_(row_floats_for(task, spec)), pos_(spec) {}
 
   // Decode games [local_start, local_start + n_rows) of the .slog file

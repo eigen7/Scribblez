@@ -32,12 +32,12 @@ from scribblez.dashboard import db, master_api, plots
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     analyze_gcg,
-    analyze_post_move_gcg_leave,
+    analyze_position_eval_gcg_leave,
     get_input_shapes,
-    post_move_board_json,
+    position_eval_board_json,
 )
 from scribblez.paths import TagPaths
-from scribblez.post_move_value import analysis as post_move_analysis
+from scribblez.position_eval import analysis as position_eval_analysis
 
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
 _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
@@ -254,22 +254,22 @@ def lane_position_payload(conn, position: int, generation) -> dict:
 
 
 @lru_cache(maxsize=1)
-def _post_move_dataset_files() -> tuple:
-    return tuple(post_move_analysis.dataset_gcgs(post_move_analysis.DEFAULT_DATASET))
+def _position_eval_dataset_files() -> tuple:
+    return tuple(position_eval_analysis.dataset_gcgs(position_eval_analysis.DEFAULT_DATASET))
 
 
 @lru_cache(maxsize=64)
-def _post_move_board(position: int) -> tuple:
-    """(name, board_bundle) for a post-move dataset position -- board / bonuses / leave
+def _position_eval_board(position: int) -> tuple:
+    """(name, board_bundle) for a position evaluation dataset position -- board / bonuses / leave
     rack for rendering. Cached: it is fixed for the dataset."""
-    gcg = _post_move_dataset_files()[position]
-    return gcg.stem, post_move_board_json(gcg.read_text())
+    gcg = _position_eval_dataset_files()[position]
+    return gcg.stem, position_eval_board_json(gcg.read_text())
 
 
 @lru_cache(maxsize=1)
 def _mc_ground_truth() -> dict:
     """The committed Monte-Carlo ground truth, keyed by position name (pos-1, ...)."""
-    path = post_move_analysis.DEFAULT_DATASET / post_move_analysis.GROUND_TRUTH_FILENAME
+    path = position_eval_analysis.DEFAULT_DATASET / position_eval_analysis.GROUND_TRUTH_FILENAME
     return json.loads(path.read_text()) if path.exists() else {}
 
 
@@ -290,13 +290,13 @@ def _mc_payload(name: str) -> dict:
     }
 
 
-def post_move_position_payload(conn, position: int, generation) -> dict:
+def position_eval_position_payload(conn, position: int, generation) -> dict:
     """The full per-position view: board + leave for rendering, the Monte-Carlo ground
     truth, and the selected generation's model prediction (WLD + score-delta Gaussian)
     -- or None when no prediction exists for this generation/position."""
-    name, bundle = _post_move_board(position)
+    name, bundle = _position_eval_board(position)
     pred = (
-        db.read_post_move_pred(conn, generation, position)
+        db.read_position_eval_pred(conn, generation, position)
         if (conn is not None and generation is not None)
         else None
     )
@@ -326,11 +326,11 @@ def post_move_position_payload(conn, position: int, generation) -> dict:
     }
 
 
-def _resolve_post_move_generation(conn, arg: str):
+def _resolve_position_eval_generation(conn, arg: str):
     """Resolve a generation query arg: a specific index, or the newest recorded one for
     '', 'latest', or None (or None when nothing is recorded)."""
     if conn is not None and arg in ("", "latest"):
-        gens = db.read_post_move_generations(conn)
+        gens = db.read_position_eval_generations(conn)
         return gens[-1]["generation"] if gens else None
     return int(arg) if arg not in ("", "latest") else None
 
@@ -341,7 +341,7 @@ def _resolve_post_move_generation(conn, arg: str):
 _ONNX_SESSIONS: dict = {}
 
 
-def _post_move_onnx_session(onnx_path: Path):
+def _position_eval_onnx_session(onnx_path: Path):
     key = (str(onnx_path), onnx_path.stat().st_mtime)
     sess = _ONNX_SESSIONS.get(key)
     if sess is None:
@@ -350,7 +350,7 @@ def _post_move_onnx_session(onnx_path: Path):
     return sess
 
 
-def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
+def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     """Run the exported post-move model on one flat input tensor and decode the value
     outputs: W/L/D probabilities and the score-delta mean/std.
 
@@ -359,7 +359,7 @@ def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     export). A baseline model consumes the base layout, whose spatial planes and
     scalars are prefixes of the full blocks, so its declared input widths select
     the right slices."""
-    sess = _post_move_onnx_session(onnx_path)
+    sess = _position_eval_onnx_session(onnx_path)
     meta = sess.get_modelmeta().custom_metadata_map
     contingent = meta["contingent_features"] == "true"
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
@@ -368,7 +368,7 @@ def _run_post_move_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     full_planes = {s.name: s.dims for s in get_input_shapes()}["input_spatial"][0]
     if contingent != (planes == full_planes):
         raise ValueError(f"{onnx_path}: metadata arm disagrees with the declared input widths")
-    cells = post_move_analysis.BOARD_SIZE**2
+    cells = position_eval_analysis.BOARD_SIZE**2
     spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
     scalar = flat_input[full_planes * cells :][:scalars].reshape(1, -1).astype(np.float32)
     wld, sd = sess.run(["wld", "score_diff"], {"input_spatial": spatial, "input_scalar": scalar})
@@ -580,18 +580,18 @@ class LanePositionHandler(_Base):
         return int(arg) if arg not in ("", "latest") else None
 
 
-class PostMovePositionsHandler(_Base):
-    """The post-move-value dataset's positions (the UI's position selector)."""
+class PositionEvalPositionsHandler(_Base):
+    """The position evaluation dataset's positions (the UI's position selector)."""
 
     def get(self):
         try:
-            self.write({"positions": [gcg.stem for gcg in _post_move_dataset_files()]})
+            self.write({"positions": [gcg.stem for gcg in _position_eval_dataset_files()]})
         except OSError:
             self.write({"positions": []})
 
 
-class PostMoveGenerationsHandler(_Base):
-    """The model generations a tag has post-move-value predictions for (the slider)."""
+class PositionEvalGenerationsHandler(_Base):
+    """The model generations a tag has position evaluation predictions for (the slider)."""
 
     def get(self):
         conn = self._open_conn()
@@ -599,17 +599,17 @@ class PostMoveGenerationsHandler(_Base):
             self.write({"generations": []})
             return
         try:
-            self.write({"generations": db.read_post_move_generations(conn)})
+            self.write({"generations": db.read_position_eval_generations(conn)})
         finally:
             conn.close()
 
 
-class PostMovePositionHandler(_Base):
+class PositionEvalPositionHandler(_Base):
     """Board + Monte-Carlo ground truth merged with one generation's prediction.
     `generation` may be omitted or 'latest' to use the newest recorded one."""
 
     def get(self):
-        files = _post_move_dataset_files()
+        files = _position_eval_dataset_files()
         position = int(self.get_query_argument("position", "0"))
         if not 0 <= position < len(files):
             self.set_status(404)
@@ -617,10 +617,10 @@ class PostMovePositionHandler(_Base):
             return
         conn = self._open_conn()
         try:
-            generation = _resolve_post_move_generation(
+            generation = _resolve_position_eval_generation(
                 conn, self.get_query_argument("generation", "latest")
             )
-            self.write(post_move_position_payload(conn, position, generation))
+            self.write(position_eval_position_payload(conn, position, generation))
         except OSError:  # engine unavailable -> can't build the board
             self.set_status(503)
             self.write({"error": "engine unavailable; cannot build board"})
@@ -629,13 +629,13 @@ class PostMovePositionHandler(_Base):
                 conn.close()
 
 
-class PostMoveAltLeaveHandler(_Base):
+class PositionEvalAltLeaveHandler(_Base):
     """Evaluate the selected generation's model on a position with an alternate leave (a
     what-if). Query: position, generation, leave. Returns the model's W/L/D + score-delta
     mean/std, or a 400 with a human-readable reason for an invalid/unavailable leave."""
 
     def get(self):
-        files = _post_move_dataset_files()
+        files = _position_eval_dataset_files()
         position = int(self.get_query_argument("position", "0"))
         if not 0 <= position < len(files):
             self.set_status(404)
@@ -644,7 +644,7 @@ class PostMoveAltLeaveHandler(_Base):
         leave = self.get_query_argument("leave", "").strip()
         conn = self._open_conn()
         try:
-            generation = _resolve_post_move_generation(
+            generation = _resolve_position_eval_generation(
                 conn, self.get_query_argument("generation", "latest")
             )
         finally:
@@ -655,7 +655,7 @@ class PostMoveAltLeaveHandler(_Base):
             self.write({"error": "no model generations recorded yet"})
             return
         try:
-            inp = analyze_post_move_gcg_leave(files[position].read_text(), leave)
+            inp = analyze_position_eval_gcg_leave(files[position].read_text(), leave)
         except ValueError as e:  # bad size / unavailable tiles -> show the reason
             self.set_status(400)
             self.write({"error": str(e)})
@@ -672,7 +672,11 @@ class PostMoveAltLeaveHandler(_Base):
             self.write({"error": f"model for generation {generation} is not available"})
             return
         self.write(
-            {"leave": leave, "generation": generation, "model": _run_post_move_onnx(onnx_path, inp)}
+            {
+                "leave": leave,
+                "generation": generation,
+                "model": _run_position_eval_onnx(onnx_path, inp),
+            }
         )
 
 
@@ -691,10 +695,10 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
             (r"/api/lane/positions", LanePositionsHandler),
             (r"/api/lane/generations", LaneGenerationsHandler),
             (r"/api/lane/position", LanePositionHandler),
-            (r"/api/post_move/positions", PostMovePositionsHandler),
-            (r"/api/post_move/generations", PostMoveGenerationsHandler),
-            (r"/api/post_move/position", PostMovePositionHandler),
-            (r"/api/post_move/alt_leave", PostMoveAltLeaveHandler),
+            (r"/api/position_eval/positions", PositionEvalPositionsHandler),
+            (r"/api/position_eval/generations", PositionEvalGenerationsHandler),
+            (r"/api/position_eval/position", PositionEvalPositionHandler),
+            (r"/api/position_eval/alt_leave", PositionEvalAltLeaveHandler),
         ],
         mount_root=mount_root,
         worker_manager=worker_manager,

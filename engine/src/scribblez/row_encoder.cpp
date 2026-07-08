@@ -10,11 +10,11 @@ namespace binlog {
 
 namespace {
 
-// Win-probability rows: bag-nonempty turn sampling + PostMoveValueTask encoding.
-class PostMoveValueRowEncoder : public RowEncoder {
+// Win-probability rows: bag-nonempty turn sampling + PositionEvalTask encoding.
+class PositionEvalRowEncoder : public RowEncoder {
  public:
-  PostMoveValueRowEncoder(const InputEncodingSpec& spec, bool post_move)
-      : post_move_(post_move), row_floats_(PostMoveValueTask::row_floats(spec)), pos_(spec) {}
+  PositionEvalRowEncoder(const InputEncodingSpec& spec, bool post_move)
+      : post_move_(post_move), row_floats_(PositionEvalTask::row_floats(spec)), pos_(spec) {}
 
   int row_floats() const override { return row_floats_; }
 
@@ -23,7 +23,7 @@ class PostMoveValueRowEncoder : public RowEncoder {
   }
 
   void encode(const GameLog& view, int turn, bool flip, float* dest) override {
-    pos_.encode_row<PostMoveValueTask>(view, turn, post_move_, flip, dest);
+    pos_.encode_row<PositionEvalTask>(view, turn, post_move_, flip, dest);
   }
 
  private:
@@ -54,9 +54,9 @@ class MaxMovePerLaneRowEncoder : public RowEncoder {
 
 }  // namespace
 
-std::unique_ptr<RowEncoder> make_post_move_value_row_encoder(const InputEncodingSpec& spec,
-                                                             bool post_move) {
-  return std::make_unique<PostMoveValueRowEncoder>(spec, post_move);
+std::unique_ptr<RowEncoder> make_position_eval_row_encoder(const InputEncodingSpec& spec,
+                                                           bool post_move) {
+  return std::make_unique<PositionEvalRowEncoder>(spec, post_move);
 }
 
 std::unique_ptr<RowEncoder> make_max_move_per_lane_row_encoder(const InputEncodingSpec& spec) {

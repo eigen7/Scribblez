@@ -89,7 +89,7 @@ class DataLoader {
     InputEncodingSpec spec{nullptr, false};
     // Which training row the loader decodes, and (for the lane task) that a game
     // expands over all its turns rather than only the eligible prefix.
-    DecodeTask task = DecodeTask::kPostMoveValue;
+    DecodeTask task = DecodeTask::kPositionEval;
     int64_t memory_budget = 256LL * 1024 * 1024;  // 256 MB resident buffers
     int num_worker_threads = 4;                   // decoder pool size
     int num_prefetch_threads = 2;                 // disk-I/O pool size

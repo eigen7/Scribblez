@@ -4,13 +4,13 @@ from types import SimpleNamespace
 
 import torch
 from scribblez.generational.checkpoint import GenerationalState, resume, save
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.paths import POSITION_EVAL, TagPaths
 
 _CPU = torch.device("cpu")
 
 
 def _paths(tmp_path) -> TagPaths:
-    return TagPaths("t", POST_MOVE_VALUE, mount_root=tmp_path)
+    return TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
 
 
 def test_resume_without_checkpoint_is_fresh(tmp_path):

@@ -2,10 +2,10 @@
 
 ## Purpose
 
-Move selection (roadmap Phase 4) runs `M_pre` over all legal moves, sends the
+Move selection (roadmap Phase 4) runs the move set evaluation model over all legal moves, sends the
 top-`K` to Monte Carlo simulation, and picks the best simmed move. This
 document proposes making that a **loop**: the simulation results for each
-simmed candidate are fed back into `M_pre` as *evidence*, and the full move
+simmed candidate are fed back into the move set evaluation model as *evidence*, and the full move
 set is re-evaluated conditioned on that evidence, yielding a new set of
 candidates to sim before the final pick.
 
@@ -33,7 +33,7 @@ than precomputed as an input. The reasons are architectural and are covered in
 ## Where this sits
 
 - **Roadmap Phase 4** ([roadmap.md](roadmap.md)): the one-round pipeline —
-  GADDAG generates all moves, `M_pre` scores them in one cross-attention pass,
+  GADDAG generates all moves, the move set evaluation model scores them in one cross-attention pass,
   top-`K` go to simulation. This proposal wraps that pipeline in an iteration.
 - **[design.md](design.md) §8.1 (Search-Derived Knowledge Buffers)**: the design doc
   envisions a buffer where truths discovered during search are recorded for the
@@ -41,7 +41,7 @@ than precomputed as an input. The reasons are architectural and are covered in
   buffer, with a natural training story.
 - **The belief system's iterative particle generation** ([design.md](design.md) §3.5)
   follows the same idiom: propose, gather evidence, condition on the evidence,
-  re-propose. Here the proposer is `M_pre`, the evidence is sim results, and
+  re-propose. Here the proposer is the move set evaluation model, the evidence is sim results, and
   the re-proposal is the next candidate set. At its sequential extreme (see
   [the schedule spectrum](#the-schedule-spectrum)) the loop is a learned,
   amortized root search — candidate expansion informed by accumulated rollout
@@ -54,7 +54,7 @@ than precomputed as an input. The reasons are architectural and are covered in
   board, the sims exposed it, and the re-evaluation corrects the ranking.
   Neither mechanism subsumes the other (see
   [Limitations](#limitations-and-caveats)).
-- **`M_post`'s `OppNextPlacement` head**
+- **the position evaluation model's `OppNextPlacement` head**
   ([training_targets.h](../engine/include/scribblez/training_targets.h))
   already predicts a 15×15 mask of where the opponent's next move will place
   tiles. The heads below are that head conjoined with the game outcome — this
@@ -67,7 +67,7 @@ Two 15×15 heads on the value models, each a per-square Bernoulli probability
 (implemented: `OppWinPlacementTarget` / `SelfWinPlacementTarget` in
 [training_targets.h](../engine/include/scribblez/training_targets.h), served
 with the marginal placement heads by the shared `mask_conv` stack in
-[model.py](../py/scribblez/post_move_value/model.py)):
+[model.py](../py/scribblez/position_eval/model.py)):
 
 - **Opponent danger**: for square `S`,
   `Pr[opponent's next move occupies S  AND  opponent wins the game]`.
@@ -132,7 +132,7 @@ this is an attentive-neural-process shape: context pairs of input = move,
 observation = sim outcome, queried at new inputs.) Concretely:
 
 - **Evidence tokens.** Each simmed candidate becomes one token: its move
-  encoding (`M_pre`'s move encoder, reused) fused with an encoding of its sim
+  encoding (the move set evaluation model's move encoder, reused) fused with an encoding of its sim
   observations — the empirical maps, the sim value, the rollout counts — plus
   the network's own first-pass predictions for that move (already computed, so
   free to include; this hands the network the residual contrast directly
@@ -149,10 +149,10 @@ observation = sim outcome, queried at new inputs.) Concretely:
   learned replacement for any hand-crafted aggregation.
 
 An **empty evidence set** must degrade gracefully to the plain one-pass
-`M_pre` (the fusion stage becomes a no-op or near-no-op); training covers this
+move set evaluation model (the fusion stage becomes a no-op or near-no-op); training covers this
 case explicitly (see [Training](#training)).
 
-Because the fusion stage sits between the shared trunk and the heads, `M_post`
+Because the fusion stage sits between the shared trunk and the heads, the position evaluation model
 can take the same evidence input through the same stage — needed for the
 distillation story below.
 
@@ -169,7 +169,7 @@ The harness caches the network's intermediate activations:
   over the evidence tokens, cross-attention against the cached `H` to produce
   `H′`) plus one re-scoring pass (the cached move encodings cross-attending
   into `H′`). The re-scoring genuinely must re-run — the scores changing is
-  the point — but it is the cheap linear pass that motivates `M_pre` in the
+  the point — but it is the cheap linear pass that motivates the move set evaluation model in the
   first place.
 
 This is the same mechanism as a KV-cache in a transformer decoder: the
@@ -346,7 +346,7 @@ Empirical covariance exists only between already-simmed moves; choosing an
 unsimmed `C` requires *predicted* covariance — a model. Two facts make this
 cheap:
 
-- **Low-rank, not `N×N`.** `M_pre` emits, per move, a small embedding
+- **Low-rank, not `N×N`.** The move set evaluation model emits, per move, a small embedding
   `φ(M) ∈ ℝʳ` alongside its score, with
   `Cov(M, M′) ≈ φ(M)·φ(M′)` plus a per-move diagonal noise term. One more
   per-move output head; the `O(N)` scoring pass is unchanged.
@@ -357,7 +357,7 @@ cheap:
 
 ### The root posterior and the acquisition rule
 
-With predicted means (the `M_pre` scores), predicted covariance
+With predicted means (the move set evaluation model's scores), predicted covariance
 (`φφᵀ + diagonal`), and sim results as observations, maintain a Gaussian
 posterior over the value vector. The acquisition rule can then be as simple as
 **Thompson sampling**: draw `Q̃ ~ N(μ, Σ)`, sim the argmax of `Q̃`, update.
@@ -416,10 +416,10 @@ Three further consequences:
 The evidence input for a training row is **the set of (move, sim-result) pairs
 gathered at the decision point** — uniform for every candidate being scored,
 whether or not that candidate is itself in the set. This uniformity is what
-keeps `M_pre` distillation targets well-defined across the whole move set (an
+keeps move set evaluation distillation targets well-defined across the whole move set (an
 "own-sim" input would be undefined for the unsimmed majority).
 
-### `M_post` with evidence
+### The position evaluation model with evidence
 
 Data generation, per labeled position:
 
@@ -437,16 +437,16 @@ Rows are trained at multiple evidence-prefix sizes, including **size zero** —
 the zero-evidence rows are what keep the evidence-free first pass from
 degrading, and they are free (every unlabeled position is one).
 
-### `M_pre` with evidence
+### The move set evaluation model with evidence
 
-`M_pre`'s training story is unchanged in shape: it distills `M_post` (roadmap
+the move set evaluation model's training story is unchanged in shape: it distills the position evaluation model (roadmap
 Phase 4), now with the evidence set present on both sides through the shared
 fusion stage. For a labeled position, the target for candidate `M` is
-evidence-conditioned `M_post` evaluated on `M`'s post-move state, given the
+the evidence-conditioned position evaluation model evaluated on `M`'s post-move state, given the
 same decision-point evidence. The "label a subset, mask the loss" strategy
 from Phase 4 applies unchanged. (An alternative for later-round scoring —
 training directly against sim values for simmed moves plus game outcome,
-bypassing `M_post` — is coherent but departs further from the Phase 4
+bypassing the position evaluation model — is coherent but departs further from the Phase 4
 pipeline; it is noted as an open question.)
 
 ### The cost elephant
@@ -513,17 +513,17 @@ Mitigations, all compatible:
 
 The load-bearing hypothesis is narrow: *conditioning on sim evidence improves
 the value model's outcome prediction.* That is testable offline, cheaply,
-before any agent or `M_pre` work:
+before any agent or move-set-evaluation work:
 
 1. Take a modest set of self-play positions; for each, generate evidence
-   (top-`K` by the current `M_post` over candidate post-move states, HastyBot
+   (top-`K` by the current position evaluation model over candidate post-move states, HastyBot
    rollouts, empirical maps + values + counts).
-2. Train evidence-conditioned `M_post` (evidence encoder + fusion stage) vs.
+2. Train the evidence-conditioned position evaluation model (evidence encoder + fusion stage) vs.
    the plain baseline on identical data.
 3. Compare held-out WLD loss and calibration (the Phase 3 machinery).
 
 If the evidence-conditioned model shows no WLD improvement, the whole loop is
-moot — and that is learned without touching `M_pre`, the multi-round agent, or
+moot — and that is learned without touching the move set evaluation model, the multi-round agent, or
 any selection-time plumbing. The same experiment de-risks the fusion
 architecture itself (evidence tokens, self-attention, board fusion), which is
 the main new network component.
@@ -531,7 +531,7 @@ the main new network component.
 ### Runbook
 
 The pipeline is [sim_obs_tool](../engine/apps/sim_obs_tool.cpp) (candidates =
-HastyBot-equity top-K — a deliberate simplification over top-K-by-`M_post`,
+HastyBot-equity top-K — a deliberate simplification over top-K-by-position-evaluation,
 avoiding C++-side model inference; on HastyBot self-play data the equity
 argmax is also the move actually played, so each position's evidence contains
 the played move's own sim) feeding
@@ -635,11 +635,11 @@ If the arms' gap looks real but noisy, let the generator run longer and rerun
 
 | Step | Build | Depends on | Status |
 |------|-------|-----------|--------|
-| 1 | Conjunction heads on `M_post` (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
+| 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/scribblez/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/scribblez/sim_observation_log.h) (the versioned `.sobs` sidecar). |
-| 3 | **Kill-test** (above): evidence-conditioned `M_post` vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Done — passed.** Evidence gain of −0.0063 CE at 5.7 SE with clean controls; magnitude bounded by root-readout saturation, and an 8× late-vs-early phase gradient supports the mechanism. Full numbers and conclusions: [sim_obs_experiment_results.md](sim_obs_experiment_results.md). |
+| 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Done — passed.** Evidence gain of −0.0063 CE at 5.7 SE with clean controls; magnitude bounded by root-readout saturation, and an 8× late-vs-early phase gradient supports the mechanism. Full numbers and conclusions: [sim_obs_experiment_results.md](sim_obs_experiment_results.md). |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
-| 5 | `M_pre` inherits the heads and the fusion stage; distillation from evidence-conditioned `M_post`. | 4, roadmap Phase 4 | — |
+| 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap Phase 4 | — |
 | 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the covariance head + root posterior if the small-`B` schedule shows value; match-play eval vs. the one-round agent (Phase 3 agent-eval harness). | 5 | — |
 
 Steps 1–3 are cheap relative to what they de-risk and are worth doing early;
@@ -661,7 +661,7 @@ steps 4–6 ride the Phase 4 timeline.
   cheap-before-rich sequencing of
   [lexical_features_for_value.md](lexical_features_for_value.md) applies here
   too.
-- **Later-round training targets** — evidence-conditioned `M_post`
+- **Later-round training targets** — the evidence-conditioned position evaluation model
   distillation (the default above) vs. training directly against sim values
   for simmed candidates.
 - **Sim reuse across rounds** — candidates retained across rounds keep their

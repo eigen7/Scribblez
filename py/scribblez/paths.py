@@ -25,7 +25,7 @@ DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 
 # Training-task identifiers: the `<task>` level of the tags/ tree and the
 # dashboard's --task choices. The single source of truth for these slugs.
-POST_MOVE_VALUE = "post_move_value"
+POSITION_EVAL = "position_eval"
 MAX_MOVE_PER_LANE = "max_move_per_lane"
 
 

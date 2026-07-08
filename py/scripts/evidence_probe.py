@@ -2,7 +2,7 @@
 """Single-position sim-evidence probe (docs/sim_residual_feedback.md).
 
 Evaluates kill-test-trained models on one penultimate-bingo analysis GCG
-(the post-move-value test dataset format), with and without the position's
+(the position-eval test dataset format), with and without the position's
 sim evidence, to make the evidence's effect inspectable head by head:
 
   - runs SimRunner live on the GCG's final decision point (HastyBot-equity
@@ -18,7 +18,7 @@ Requires the arms' saved weights (<mount>/kill_test/<tag>/cache/results/
 
 Usage:
     ./py/scripts/evidence_probe.py -t apple \\
-        --gcg positions/NWL23/post-move-value-test-dataset/pos-6.gcg
+        --gcg positions/NWL23/position-eval-test-dataset/pos-6.gcg
 """
 
 import argparse
@@ -33,7 +33,7 @@ from scribblez.ffi import (
     get_input_shapes,
     set_opp_leave_input,
 )
-from scribblez.sim_evidence.model import EvidencePostMoveModel
+from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     MOVE_EXCHANGE,
     MOVE_PLAY,
@@ -85,7 +85,7 @@ def load_arm(results_dir: Path, arm: str, suffix: str, open_leaves: bool, device
     if not weights.exists():
         raise SystemExit(f"{weights} missing -- rerun kill_test.py once to save arm weights")
     shapes = {s.name: s.dims for s in get_input_shapes()}
-    model = EvidencePostMoveModel(
+    model = EvidencePositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
         trunk_channels=meta["args"]["trunk_channels"],

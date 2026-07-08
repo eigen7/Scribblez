@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The value models (`M_post`, `M_pre`; see [roadmap.md](roadmap.md)) need
+The value models (the position evaluation model and the move set evaluation model; see [roadmap.md](roadmap.md)) need
 **board-conditional leave evaluation with lexical foresight**: the value of the
 tiles a player keeps depends on what those tiles can *do* on this specific board,
 which is a lexical fact. Rather than teach the network the lexicon, the plan is
@@ -17,10 +17,10 @@ tradeoffs and the optimizations that keep them affordable.
 
 ## Where this sits in the system
 
-- **`M_post`** evaluates a position after the active player places tiles but
+- **The position evaluation model** evaluates a position after the active player places tiles but
   before drawing replacements. It already sees the post-play **leave**, so
   evaluating the leave is squarely its job.
-- **`M_pre`** predicts what `M_post` would say for each of `N` candidate moves in
+- **The move set evaluation model** predicts what the position evaluation model would say for each of `N` candidate moves in
   a single cross-attention pass (the board is encoded once and each move attends
   into it, so scoring is `O(N)` — no candidate-set reduction is needed before
   scoring). It acts as a **filter**: the top `K` moves by predicted value reach
@@ -73,10 +73,10 @@ compute it externally and hand it over.
 A natural objection: Monte Carlo rollouts of the four-tile play would reveal the
 `ZIN` leave's quality, so why engineer a feature?
 
-Because **Monte Carlo only runs on candidates that survive the `M_pre` filter.**
+Because **Monte Carlo only runs on candidates that survive the move-set-evaluation filter.**
 If the pre-move model cannot value the four-tile play's leave upside, that play
 falls outside the top-`K` and never reaches simulation. The lexical signal
-therefore has to live **upstream, in the features `M_pre` sees** — not only in
+therefore has to live **upstream, in the features the move set evaluation model sees** — not only in
 the deep search.
 
 Framed as a recall/precision split:
@@ -204,17 +204,17 @@ square along the perpendicular axis), rather than the full cross-check planes.
   perpendicular-adjacent to its placed tiles and at its lane's extension points —
   `O(tiles placed)` squares, each a 26-bit cross-set per axis. Encoding that
   handful of `(square, axis, changed-letters)` entries is far smaller than the
-  full `26×15×15×2` cross-check representation, and it belongs in `M_pre`'s
+  full `26×15×15×2` cross-check representation, and it belongs in the move set evaluation model's
   **per-move** embedding (it is a property of the specific move).
 - **Complementary to the potential map.** The 27×30 map captures exploiting
   *existing* board structure; the cross-check delta captures exploiting structure
   the move *creates*. Neither subsumes the other, and they attach to different
-  halves of `M_pre` (shared board features vs. the per-move embedding).
+  halves of the move set evaluation model (shared board features vs. the per-move embedding).
 
-## Mapping onto `M_pre`
+## Mapping onto the move set evaluation model
 
 - The **shared potential map** becomes additional board-encoder features that
-  each move embedding attends over via `M_pre`'s cross-attention. Geometric
+  each move embedding attends over via the move set evaluation model's cross-attention. Geometric
   conflict between a candidate move and a contingent play is spatial overlap,
   which attention/convolution detect well.
 - The **cross-check delta** rides in the per-move embedding.
@@ -238,7 +238,7 @@ square along the perpendicular axis), rather than the full cross-check planes.
 ## Pointers
 
 - [contingent_map.h](../engine/include/scribblez/contingent_map.h) — the
-  `M_post` implementation of the potential map. For `M_post` the cost/accuracy
+  position evaluation model implementation of the potential map. For the position evaluation model the cost/accuracy
   ladder collapses: the input state is already post-move (rack = leave, board
   includes the move), so one generation per position yields the tier-3-correct
   feature. The 27 per-tile passes collapse into a single generation over
@@ -246,7 +246,7 @@ square along the perpendicular axis), rather than the full cross-check planes.
   rescored at `L`'s face value, is the "drew `L`" play). Encoded as input
   planes 85–87 plus 56 scalars (see
   [input_encoder.h](../engine/include/scribblez/input_encoder.h)).
-- [roadmap.md](roadmap.md) — `M_post`/`M_pre`, the candidate-scoring/selection
+- [roadmap.md](roadmap.md) — the position evaluation model and the move set evaluation model, the candidate-scoring/selection
   pipeline, the two weaknesses.
 - [architecture.md](architecture.md) — the input encoder and the `.slog`
   data-generation pipeline (where precomputed features would be stored).

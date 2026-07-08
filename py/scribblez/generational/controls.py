@@ -1,6 +1,6 @@
 """Live operator controls shared by the generational trainers.
 
-Every generational trainer (post-move value, max-move-per-lane) exposes the same
+Every generational trainer (position evaluation, max-move-per-lane) exposes the same
 dashboard-tunable knobs -- a base learning rate and the three CPU-thread pools --
 persisted in the per-tag dashboard DB's control table and restored on restart.
 The controllers here read those controls at their natural cadence (the LR once

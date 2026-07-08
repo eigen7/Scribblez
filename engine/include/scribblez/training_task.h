@@ -16,7 +16,7 @@ namespace scribblez {
 // stateful GameStateEncoder the context points at) plus the WLD, score-diff, and
 // opponent-next-placement labels. The input width is the spec's
 // input_floats(); the row is that plus kLabelFloats.
-struct PostMoveValueTask {
+struct PositionEvalTask {
   static int row_floats(const InputEncodingSpec& spec);
 
   static void encode_row(const EncodeContext& ctx, float* out_row);

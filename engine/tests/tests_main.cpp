@@ -20,10 +20,10 @@
 #include "scribblez/macondo_bot.h"
 #include "scribblez/max_move_per_lane_input_encoder.h"
 #include "scribblez/max_move_per_lane_task.h"
+#include "scribblez/move_set_encoder.h"
+#include "scribblez/move_set_eval_target_log.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
-#include "scribblez/pre_move_value_move_encoder.h"
-#include "scribblez/pre_move_value_target_log.h"
 #include "scribblez/rack.h"
 #include "scribblez/sim_observation_log.h"
 #include "scribblez/sim_runner.h"
@@ -750,8 +750,8 @@ static void test_position_encoder_cross_check_planes_lexical() {
 
   PositionEncoder enc(InputEncodingSpec{&d, true});
   std::vector<float> row(kRowFloats, 0.0f);
-  enc.encode_row<PostMoveValueTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
-                                    /*flip=*/false, row.data());
+  enc.encode_row<PositionEvalTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
+                                   /*flip=*/false, row.data());
 
   auto h_cross_check = [&row](char ch, int r, int c) {
     return row[(kHorizontalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
@@ -3237,8 +3237,8 @@ static void test_streaming_disk_encode_equivalence() {
 
       std::vector<float> row_stream(row_floats, 0.0f);
       PositionEncoder enc(InputEncodingSpec{&dict, true});
-      enc.encode_row<PostMoveValueTask>(storage.view(), sampled, post_move, /*flip=*/false,
-                                        row_stream.data());
+      enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*flip=*/false,
+                                       row_stream.data());
 
       for (int i = 0; i < row_floats; ++i) CHECK(row_disk[i] == row_stream[i]);
       ++compared;
@@ -3965,11 +3965,11 @@ static void test_opp_leave_from_replay() {
   CHECK(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size() == 0);
 }
 
-static void test_pre_move_value_target_log_roundtrip() {
+static void test_move_set_eval_target_log_roundtrip() {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_pmt";
+  auto tmp = fs::temp_directory_path() / "scribblez_test_mset";
   fs::create_directories(tmp);
-  const std::string path = (tmp / "test.pmt").string();
+  const std::string path = (tmp / "test.mset").string();
 
   const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
@@ -3981,24 +3981,24 @@ static void test_pre_move_value_target_log_roundtrip() {
                                       0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
 
   {
-    pre_move_value::TargetWriter w(path, pre_move_value::kTargetFloatsV1, "abc123");
+    move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, "abc123");
     w.add_position(3, 11, {m1, m2}, targets);
     w.close();
   }
 
-  pre_move_value::TargetReader r(path);
-  CHECK(r.record_floats() == pre_move_value::kTargetFloatsV1);
+  move_set_eval::TargetReader r(path);
+  CHECK(r.record_floats() == move_set_eval::kTargetFloatsV1);
   CHECK(r.model_hash() == "abc123");
   CHECK(r.num_positions() == 1);
-  const pre_move_value::TargetReader::Position p0 = r.position(0);
+  const move_set_eval::TargetReader::Position p0 = r.position(0);
   CHECK(p0.header->game_index == 3);
   CHECK(p0.header->turn_index == 11);
   CHECK(p0.header->num_candidates == 2);
   CHECK(r.move_at(p0, 0) == m1);
   CHECK(r.move_at(p0, 1) == m2);
   for (int c = 0; c < 2; ++c) {
-    for (int j = 0; j < static_cast<int>(pre_move_value::kTargetFloatsV1); ++j) {
-      CHECK(r.targets_at(p0, c)[j] == targets[c * pre_move_value::kTargetFloatsV1 + j]);
+    for (int j = 0; j < static_cast<int>(move_set_eval::kTargetFloatsV1); ++j) {
+      CHECK(r.targets_at(p0, c)[j] == targets[c * move_set_eval::kTargetFloatsV1 + j]);
     }
   }
 
@@ -4011,7 +4011,7 @@ static void test_pre_move_value_target_log_roundtrip() {
   }
   bool threw = false;
   try {
-    pre_move_value::TargetReader r2(path);
+    move_set_eval::TargetReader r2(path);
   } catch (const std::runtime_error&) {
     threw = true;
   }
@@ -4020,8 +4020,8 @@ static void test_pre_move_value_target_log_roundtrip() {
   fs::remove_all(tmp);
 }
 
-static void test_pre_move_value_move_encoder() {
-  namespace pmv = pre_move_value;
+static void test_move_set_encoder() {
+  namespace mset = move_set;
   // A horizontal PLAY at (row 4, cols 2..4): A, a blank shown as B, C; scoring
   // 24. And an exchange of a single tile.
   const Move play = make_play_full(
@@ -4034,13 +4034,13 @@ static void test_pre_move_value_move_encoder() {
   const Move moves[2] = {play, exch};
   const int32_t pre_diffs[2] = {10, -5};  // mover's pre-move score advantage
 
-  std::vector<int32_t> letters(2 * pmv::kMoveMaxPlaced);
-  std::vector<uint8_t> blanks(2 * pmv::kMoveMaxPlaced);
-  std::vector<int32_t> squares(2 * pmv::kMoveMaxPlaced);
-  std::vector<uint8_t> tile_mask(2 * pmv::kMoveMaxPlaced);
-  std::vector<float> scalars(2 * pmv::kMoveScalars);
-  pmv::encode_moves(moves, 2, pre_diffs, letters.data(), blanks.data(), squares.data(),
-                    tile_mask.data(), scalars.data());
+  std::vector<int32_t> letters(2 * mset::kMoveMaxPlaced);
+  std::vector<uint8_t> blanks(2 * mset::kMoveMaxPlaced);
+  std::vector<int32_t> squares(2 * mset::kMoveMaxPlaced);
+  std::vector<uint8_t> tile_mask(2 * mset::kMoveMaxPlaced);
+  std::vector<float> scalars(2 * mset::kMoveScalars);
+  mset::encode_moves(moves, 2, pre_diffs, letters.data(), blanks.data(), squares.data(),
+                     tile_mask.data(), scalars.data());
 
   // PLAY: three placed tiles in lane order; the middle is a blank. Letters are
   // 1..26 identities regardless of blank-ness.
@@ -4059,10 +4059,10 @@ static void test_pre_move_value_move_encoder() {
 
   // EXCHANGE: no placed tiles; resultant diff is the pre-move diff (score 0),
   // and is_play is 0.
-  for (int j = 0; j < pmv::kMoveMaxPlaced; ++j) CHECK(tile_mask[pmv::kMoveMaxPlaced + j] == 0);
-  CHECK(std::abs(scalars[pmv::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale) < 1e-6f);
-  CHECK(std::abs(scalars[pmv::kMoveScalars + 1] - 1.0f / 7.0f) < 1e-6f);
-  CHECK(scalars[pmv::kMoveScalars + 2] == 0.0f);
+  for (int j = 0; j < mset::kMoveMaxPlaced; ++j) CHECK(tile_mask[mset::kMoveMaxPlaced + j] == 0);
+  CHECK(std::abs(scalars[mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale) < 1e-6f);
+  CHECK(std::abs(scalars[mset::kMoveScalars + 1] - 1.0f / 7.0f) < 1e-6f);
+  CHECK(scalars[mset::kMoveScalars + 2] == 0.0f);
 }
 
 static void test_sim_observation_log_roundtrip() {
@@ -4609,8 +4609,8 @@ int main() {
   test_sim_runner_partial_leave();
   test_opp_leave_from_replay();
   test_sim_observation_log_roundtrip();
-  test_pre_move_value_target_log_roundtrip();
-  test_pre_move_value_move_encoder();
+  test_move_set_eval_target_log_roundtrip();
+  test_move_set_encoder();
   std::cout << "All tests passed.\n";
   return 0;
 }

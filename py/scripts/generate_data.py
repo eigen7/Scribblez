@@ -28,7 +28,7 @@ from pathlib import Path
 
 from scribblez.ffi import read_file_header
 from scribblez.hardware import default_thread_count
-from scribblez.paths import POST_MOVE_VALUE, TagPaths
+from scribblez.paths import POSITION_EVAL, TagPaths
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 PLAY_GAME = "/workspace/repo/target/engine/play_game"
@@ -180,7 +180,7 @@ def main() -> int:
         print("--test-ratio must be in [0, 1).", file=sys.stderr)
         return 2
 
-    paths = TagPaths(args.tag, POST_MOVE_VALUE)
+    paths = TagPaths(args.tag, POSITION_EVAL)
     player_spec = build_player_spec(args)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games

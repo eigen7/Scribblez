@@ -1,5 +1,5 @@
 """Task-independent training scaffolding shared by the generational trainers
-(post-move value, max-move-per-lane): `reset_tag` (run-artifact reset) and
+(position evaluation, max-move-per-lane): `reset_tag` (run-artifact reset) and
 `timed_print` (progress lines)."""
 
 import shutil

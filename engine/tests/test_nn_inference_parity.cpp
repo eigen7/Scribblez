@@ -4,7 +4,7 @@
 // The fixture is a directory holding model.onnx, inputs.bin (N x kInputFloats
 // float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
 // score_diff_mean, score_diff_std, the PyTorch decode), produced by
-// py/scripts/post_move_value/gen_parity_fixture.py. This test loads the model through
+// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model through
 // NNEvaluationService and evaluates the rows at FP16 -- the precision production
 // inference runs -- holding every field to a tight tolerance against the PyTorch
 // FP32 reference. FP16 is the coarser precision, so its deviation bounds FP32's;
@@ -129,7 +129,7 @@ static std::filesystem::path make_scratch_dir() {
 static bool generate_fixture(const std::string& out_dir) {
   const std::string py_dir = SCRIBBLEZ_PY_DIR;
   const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
-                          "\" python3 -m scripts.post_move_value.gen_parity_fixture --out-dir \"" +
+                          "\" python3 -m scripts.position_eval.gen_parity_fixture --out-dir \"" +
                           out_dir + "\" --num-rows 8";
   return std::system(cmd.c_str()) == 0;
 }

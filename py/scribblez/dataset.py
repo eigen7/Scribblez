@@ -70,7 +70,7 @@ class SlogDataset:
     def __init__(
         self,
         data_dir: str | Path | Iterable[str | Path],
-        task: str = "post_move",
+        task: str = "position_eval",
         post_move: bool = True,
         apply_symmetry: bool = True,
         memory_budget: int = 512 * 1024 * 1024,

@@ -2,7 +2,7 @@
 
 The agent (NeuralAgent) and the dashboard probes run the *same weights*
 through *different* inference stacks: the dashboard calls the in-memory PyTorch
-PostMoveValueModel (FP32), while the agent uses onnx_export -> TensorRT. This test
+PositionEvalModel (FP32), while the agent uses onnx_export -> TensorRT. This test
 pins the first hop of that chain -- that exporting to ONNX and running it under
 ONNXRuntime reproduces the PyTorch outputs bit-for-bit (FP32) -- so an export
 regression (wrong head order/names, opset/tracing breakage) fails loudly here
@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 import torch
 from scribblez.ffi import get_input_shapes
-from scribblez.post_move_value.model import MASK_HEAD_NAMES, PostMoveValueModel
-from scribblez.post_move_value.onnx_export import export_onnx
+from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
+from scribblez.position_eval.onnx_export import export_onnx
 
 # Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
 # surfaced through the FFI). The export is numerically agnostic to these, but
@@ -38,11 +38,11 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 OUTPUT_NAMES = ["wld", "score_diff", *MASK_HEAD_NAMES]
 
 
-def _random_model(seed: int = 0) -> PostMoveValueModel:
+def _random_model(seed: int = 0) -> PositionEvalModel:
     """A small randomly-initialized model in eval mode (BatchNorm uses its
     default running stats, so the forward pass is deterministic)."""
     torch.manual_seed(seed)
-    model = PostMoveValueModel(
+    model = PositionEvalModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,  # tiny: this test checks numerics, not capacity

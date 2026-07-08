@@ -3,7 +3,7 @@
 The generational orchestrator drives per-minibatch training through run_epoch:
 move a batch to the device, forward, combined-lane-loss backward, optimizer step,
 and accumulate the per-component losses plus the per-lane train accuracies.
-Keeping the step here (a sibling to the post-move value trainer's train_loop)
+Keeping the step here (a sibling to the position-evaluation trainer's train_loop)
 means the orchestrator owns only its data lifecycle, learning-rate policy,
 evaluation, and checkpointing.
 """
