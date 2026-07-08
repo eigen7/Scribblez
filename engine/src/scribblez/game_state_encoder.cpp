@@ -151,6 +151,22 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
 
 // Score differential as a single signed scalar (kScoreDiffInputFloats floats):
 // (score_active - score_opp) / kScoreDiffInputScale, not clipped.
+//
+// ANALYSIS TODO (score-diff resolution near the endgame): as the bag empties
+// the win/draw/loss boundary in score differential becomes sharp and
+// phase-conditional -- a two-point swing (e.g. +15 vs +17) can flip the likely
+// outcome, whereas mid-game it is nearly flat. A single scalar can express this
+// (the first projection can amplify small differences), but its smoothness bias
+// makes a steep, phase-gated transition something the trunk must spend capacity
+// to learn, exactly where true-endgame training positions are sparsest. Measure
+// it: slice held-out WLD calibration/Brier by (tiles-remaining, score-diff) and
+// look at the near-empty-bag, small-|diff| cells for under-sharpening (win prob
+// flattened across the flip point). If it shows, prefer a compact nonlinear
+// featurization (a handful of RBF/bins, denser near 0) over widening back to a
+// full thermometer, and apply the same basis to the pre-move value model's
+// resultant-diff move feature (pre_move_value_move_encoder) so the two stay on
+// one representation. The principled answer for the decisive endgame is the
+// negamax solver (docs/roadmap2.md, D3), not finer value-net input resolution.
 int encode_score_diff_scalar(int score_diff, float* out) {
   out[0] = static_cast<float>(score_diff) / kScoreDiffInputScale;
   return kScoreDiffInputFloats;
