@@ -129,6 +129,40 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
+// Encode `n` candidate Moves into the pre-move value model's move-encoder input
+// arrays (the single source of truth for that layout;
+// scribblez/pre_move_value_move_encoder.h -- the training dataset reaches it
+// here and the M_pre agent shares it at inference). `moves` points to n
+// contiguous 16-byte serialized Moves (as stored in .slog/.pmt);
+// `pre_move_score_diffs` is the mover's pre-move score advantage (points) per
+// move, used to form the resultant post-move differential feature. Writes
+// out_letters and out_squares as int32[n * max_placed], out_blanks and
+// out_tile_mask as uint8[n * max_placed], and out_scalars as
+// float[n * num_scalars], where max_placed / num_scalars come from
+// scribblez_pre_move_value_move_dims. A pure function of its inputs: it needs
+// no session or dictionary.
+void scribblez_pre_move_value_encode_moves(const void* moves, int64_t n,
+                                           const int32_t* pre_move_score_diffs,
+                                           int32_t* out_letters, uint8_t* out_blanks,
+                                           int32_t* out_squares, uint8_t* out_tile_mask,
+                                           float* out_scalars);
+
+// The move-encoder layout constants, so Python callers never hardcode them:
+//   max_placed    letter/square array width (tiles per move slot)
+//   num_scalars   per-move scalar-feature count
+//   letter_vocab  letter-embedding vocabulary size (valid ids 0..letter_vocab-1;
+//                 0 is the empty slot, 1..26 the letters)
+//   cells         board-square embedding size (max square index + 1)
+void scribblez_pre_move_value_move_dims(int32_t* max_placed, int32_t* num_scalars,
+                                        int32_t* letter_vocab, int32_t* cells);
+
+// The board input's score-differential scalar, so the pre-move dataset can read
+// each position's pre-move differential straight out of the encoded row (rather
+// than recomputing it): `scalar_index` is its index within the scalar input
+// vector for this session's arm, and `scale` is the divisor the encoder applied
+// (so points = input_scalar[scalar_index] * scale).
+void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale);
+
 // Render an ASCII description of a sampled position (POV, scores, leave, last
 // moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
 // the full string length on success (which may exceed out_cap - 1, signaling

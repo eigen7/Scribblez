@@ -1,0 +1,193 @@
+"""Training dataset for the pre-move value model: .pmt targets paired with
+pre-move inputs reconstructed by replay.
+
+Each position is identified by (game_index, turn_index) in a .slog file and
+carries, in a companion .pmt sidecar, a sampled set of candidate moves with the
+teacher M_post's readouts for each candidate's post-move state
+(scribblez.pre_move_value.targets). This dataset:
+
+  * indexes every labeled position across a directory's .pmt/.slog pairs and
+    holds the (small) candidate/target records in memory;
+  * shuffles at the position level across all files each epoch (not inside any
+    one file), per the replay-reconstruction pipeline
+    (docs/architecture.md);
+  * reconstructs each position's PRE-move board input on demand via
+    decode_rows(post_move=False) -- the standard invariant: inputs are recomputed
+    from the replay, targets come from the sidecar.
+
+A batch is P positions. The variable-length candidate sets are flattened across
+those positions with no padding: all M = sum of per-position candidate counts
+moves are concatenated, and a `move_pos_id` array maps each move back to its
+position row (0..P-1) so the model can attend each move to its own board and the
+loss can be taken per move.
+
+The board-input encoding arm (contingent features, opponent-leave block) is a
+property of the process-wide FFI session; the caller must configure it (via
+scribblez.ffi.set_contingent_features / set_opp_leave_input) to match the model
+being trained before iterating. The .pmt open-leaves flag is surfaced as
+`open_leaves` so the caller can honor it.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Iterable
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from scribblez.dataset import row_layout
+from scribblez.ffi import decode_rows
+
+from . import moves as move_enc
+from .targets import PMT_FLAG_OPEN_LEAVES, read_pmt
+
+
+class _Position:
+    """One labeled position: where to reconstruct its input, and its targets."""
+
+    __slots__ = ("file_id", "game_index", "turn_index", "moves", "targets")
+
+    def __init__(self, file_id: int, game_index: int, turn_index: int, moves, targets):
+        self.file_id = file_id
+        self.game_index = game_index
+        self.turn_index = turn_index
+        self.moves = moves  # (K,) MOVE_DTYPE
+        self.targets = targets  # (K, 5) float32: [p_win, p_draw, p_loss, sd_mean, sd_std]
+
+
+class PmtDataset:
+    """Streams flattened candidate batches from .pmt/.slog pairs in one or more
+    directories, reconstructing pre-move board inputs by replay."""
+
+    def __init__(self, data_dir: str | Path | Iterable[str | Path]):
+        if isinstance(data_dir, (str, Path)):
+            data_dirs = [Path(data_dir)]
+        else:
+            data_dirs = [Path(d) for d in data_dir]
+
+        pmt_files = sorted(
+            f for d in data_dirs for f in d.glob("*.pmt") if f.with_suffix(".slog").exists()
+        )
+        if not pmt_files:
+            dirs = ", ".join(str(d) for d in data_dirs)
+            raise FileNotFoundError(f"No .pmt files with a companion .slog in {dirs}")
+
+        self._slogs: list[Path] = []
+        self._positions: list[_Position] = []
+        model_hashes: set[str] = set()
+        flags: set[int] = set()
+        for pmt_path in pmt_files:
+            parsed = read_pmt(pmt_path)
+            model_hashes.add(parsed.model_hash)
+            flags.add(parsed.flags)
+            file_id = len(self._slogs)
+            self._slogs.append(pmt_path.with_suffix(".slog"))
+            for pos in parsed.positions:
+                self._positions.append(
+                    _Position(file_id, pos.game_index, pos.turn_index, pos.moves, pos.targets)
+                )
+
+        # A corpus must come from one blessed teacher and one information
+        # condition; a mix would train against inconsistent targets.
+        if len(model_hashes) != 1:
+            raise ValueError(f"pmt corpus mixes teacher hashes: {sorted(model_hashes)}")
+        if len(flags) != 1:
+            raise ValueError(f"pmt corpus mixes header flags: {sorted(flags)}")
+        self.model_hash = next(iter(model_hashes))
+        self._flags = next(iter(flags))
+
+        input_shapes, _ = row_layout()
+        self._spatial_shape = tuple(input_shapes[0].dims)
+        self._scalar_width = int(input_shapes[1].dims[0])
+        self._spatial_floats = int(np.prod(self._spatial_shape))
+
+        # Where the mover's pre-move score differential sits in the decoded
+        # scalar input, so each candidate's resultant post-move differential
+        # feature can be formed from the same value the board trunk sees.
+        self._sd_index, self._sd_scale = move_enc.score_diff_input_layout()
+
+    @property
+    def num_positions(self) -> int:
+        return len(self._positions)
+
+    @property
+    def num_candidates(self) -> int:
+        return sum(len(p.moves) for p in self._positions)
+
+    @property
+    def open_leaves(self) -> bool:
+        """Whether the teacher labeled these positions under the open-leaves
+        information condition (the caller must then enable the opponent-leave
+        input block on the FFI session to match)."""
+        return bool(self._flags & PMT_FLAG_OPEN_LEAVES)
+
+    @property
+    def spatial_planes(self) -> int:
+        return self._spatial_shape[0]
+
+    @property
+    def scalar_size(self) -> int:
+        return self._scalar_width
+
+    def iter_batches(self, positions_per_batch: int, seed: int = 0, epoch_index: int = 0):
+        """Yield one epoch of batch dicts.
+
+        Positions are shuffled globally (deterministically for a given
+        seed/epoch); each batch reconstructs its positions' board inputs and
+        flattens their candidate sets. `positions_per_batch` is the number of
+        positions (not candidates) per batch.
+        """
+        rng = np.random.default_rng(seed + epoch_index)
+        order = rng.permutation(len(self._positions))
+        for start in range(0, len(order), positions_per_batch):
+            chunk = order[start : start + positions_per_batch]
+            yield self._build_batch([self._positions[i] for i in chunk])
+
+    def _build_batch(self, batch: list[_Position]) -> dict[str, torch.Tensor]:
+        p = len(batch)
+        spatial = np.empty((p, *self._spatial_shape), dtype=np.float32)
+        scalar = np.empty((p, self._scalar_width), dtype=np.float32)
+
+        # Reconstruct board inputs one decode_rows call per source file (each
+        # call addresses a batch of positions in one .slog by identity).
+        by_file: dict[int, list[int]] = defaultdict(list)
+        for local_p, pos in enumerate(batch):
+            by_file[pos.file_id].append(local_p)
+        for file_id, locals_ in by_file.items():
+            games = np.array([batch[j].game_index for j in locals_], dtype=np.int64)
+            turns = np.array([batch[j].turn_index for j in locals_], dtype=np.int64)
+            rows = decode_rows(self._slogs[file_id], games, turns, post_move=False)
+            spatial_block = rows[:, : self._spatial_floats]
+            spatial_block = spatial_block.reshape(len(locals_), *self._spatial_shape)
+            scalar_block = rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
+            for k, j in enumerate(locals_):
+                spatial[j] = spatial_block[k]
+                scalar[j] = scalar_block[k]
+
+        # Flatten candidate sets across positions (no padding); pos_id maps each
+        # move back to its board row.
+        all_moves = np.concatenate([pos.moves for pos in batch])
+        all_targets = np.concatenate([pos.targets for pos in batch]).astype(np.float32)
+        pos_id = np.concatenate(
+            [np.full(len(pos.moves), local_p, dtype=np.int64) for local_p, pos in enumerate(batch)]
+        )
+        # Each position's pre-move differential (points) read from the decoded
+        # score-diff scalar, expanded to one value per candidate move.
+        pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
+        move_pre_diffs = pre_diff_points[pos_id]
+        enc = move_enc.encode_moves(all_moves, move_pre_diffs)
+
+        return {
+            "input_spatial": torch.from_numpy(spatial),
+            "input_scalar": torch.from_numpy(scalar),
+            "move_letters": torch.from_numpy(enc["letters"]),
+            "move_blanks": torch.from_numpy(enc["blanks"]),
+            "move_squares": torch.from_numpy(enc["squares"]),
+            "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
+            "move_scalars": torch.from_numpy(enc["scalars"]),
+            "move_pos_id": torch.from_numpy(pos_id),
+            "target_wld": torch.from_numpy(all_targets[:, :3].copy()),
+            "target_score_diff": torch.from_numpy(all_targets[:, 3:5].copy()),
+        }

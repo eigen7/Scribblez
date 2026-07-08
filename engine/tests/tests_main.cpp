@@ -22,6 +22,7 @@
 #include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/movegen.h"
 #include "scribblez/position_encoder.h"
+#include "scribblez/pre_move_value_move_encoder.h"
 #include "scribblez/pre_move_value_target_log.h"
 #include "scribblez/rack.h"
 #include "scribblez/sim_observation_log.h"
@@ -4020,6 +4021,51 @@ static void test_pre_move_value_target_log_roundtrip() {
   fs::remove_all(tmp);
 }
 
+static void test_pre_move_value_move_encoder() {
+  namespace pmv = pre_move_value;
+  // A horizontal PLAY at (row 4, cols 2..4): A, a blank shown as B, C; scoring
+  // 24. And an exchange of a single tile.
+  const Move play = make_play_full(
+    4, 2, /*horizontal=*/true, 0b111, 24,
+    {Glyph::of(Tile::from_char('A')), Glyph::played(Tile::from_char('B'), /*is_blank=*/true),
+     Glyph::of(Tile::from_char('C'))});
+  TileCounts xchg_tiles;
+  xchg_tiles.add(Tile::from_char('A'));
+  const Move exch = Move::exchange(xchg_tiles);
+  const Move moves[2] = {play, exch};
+  const int32_t pre_diffs[2] = {10, -5};  // mover's pre-move score advantage
+
+  std::vector<int32_t> letters(2 * pmv::kMoveMaxPlaced);
+  std::vector<uint8_t> blanks(2 * pmv::kMoveMaxPlaced);
+  std::vector<int32_t> squares(2 * pmv::kMoveMaxPlaced);
+  std::vector<uint8_t> tile_mask(2 * pmv::kMoveMaxPlaced);
+  std::vector<float> scalars(2 * pmv::kMoveScalars);
+  pmv::encode_moves(moves, 2, pre_diffs, letters.data(), blanks.data(), squares.data(),
+                    tile_mask.data(), scalars.data());
+
+  // PLAY: three placed tiles in lane order; the middle is a blank. Letters are
+  // 1..26 identities regardless of blank-ness.
+  CHECK(tile_mask[0] == 1 && tile_mask[1] == 1 && tile_mask[2] == 1);
+  CHECK(tile_mask[3] == 0 && tile_mask[6] == 0);
+  CHECK(letters[0] == Tile::from_char('A').index() + 1);
+  CHECK(letters[1] == Tile::from_char('B').index() + 1);
+  CHECK(letters[2] == Tile::from_char('C').index() + 1);
+  CHECK(blanks[0] == 0 && blanks[1] == 1 && blanks[2] == 0);
+  CHECK(squares[0] == 4 * BOARD_SIZE + 2);
+  CHECK(squares[2] == 4 * BOARD_SIZE + 4);
+  // Resultant differential (pre 10 + score 24), tiles/7, is_play.
+  CHECK(std::abs(scalars[0] - 34.0f / kScoreDiffInputScale) < 1e-6f);
+  CHECK(std::abs(scalars[1] - 3.0f / 7.0f) < 1e-6f);
+  CHECK(scalars[2] == 1.0f);
+
+  // EXCHANGE: no placed tiles; resultant diff is the pre-move diff (score 0),
+  // and is_play is 0.
+  for (int j = 0; j < pmv::kMoveMaxPlaced; ++j) CHECK(tile_mask[pmv::kMoveMaxPlaced + j] == 0);
+  CHECK(std::abs(scalars[pmv::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale) < 1e-6f);
+  CHECK(std::abs(scalars[pmv::kMoveScalars + 1] - 1.0f / 7.0f) < 1e-6f);
+  CHECK(scalars[pmv::kMoveScalars + 2] == 0.0f);
+}
+
 static void test_sim_observation_log_roundtrip() {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";
@@ -4565,6 +4611,7 @@ int main() {
   test_opp_leave_from_replay();
   test_sim_observation_log_roundtrip();
   test_pre_move_value_target_log_roundtrip();
+  test_pre_move_value_move_encoder();
   std::cout << "All tests passed.\n";
   return 0;
 }

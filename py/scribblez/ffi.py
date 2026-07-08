@@ -143,6 +143,33 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    lib.scribblez_pre_move_value_encode_moves.restype = None
+    lib.scribblez_pre_move_value_encode_moves.argtypes = [
+        ctypes.c_void_p,  # moves (packed 16-byte Move records)
+        ctypes.c_int64,
+        ctypes.POINTER(ctypes.c_int32),  # pre_move_score_diffs
+        ctypes.POINTER(ctypes.c_int32),  # letters
+        ctypes.POINTER(ctypes.c_uint8),  # blanks
+        ctypes.POINTER(ctypes.c_int32),  # squares
+        ctypes.POINTER(ctypes.c_uint8),  # tile_mask
+        ctypes.POINTER(ctypes.c_float),  # scalars
+    ]
+
+    lib.scribblez_pre_move_value_move_dims.restype = None
+    lib.scribblez_pre_move_value_move_dims.argtypes = [
+        ctypes.POINTER(ctypes.c_int32),
+        ctypes.POINTER(ctypes.c_int32),
+        ctypes.POINTER(ctypes.c_int32),
+        ctypes.POINTER(ctypes.c_int32),
+    ]
+
+    lib.scribblez_score_diff_input_layout.restype = None
+    lib.scribblez_score_diff_input_layout.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.POINTER(ctypes.c_int32),  # scalar_index
+        ctypes.POINTER(ctypes.c_float),  # scale
+    ]
+
     lib.scribblez_gcg_sim_evidence.restype = ctypes.c_int
     lib.scribblez_gcg_sim_evidence.argtypes = [
         ctypes.c_void_p,  # session
@@ -416,6 +443,75 @@ def decode_rows(
     if rc != 0:
         raise OSError(f"decode_rows failed (rc={rc}) for {path}")
     return out
+
+
+def move_encoding_dims() -> tuple[int, int, int, int]:
+    """The pre-move value model's move-encoder layout, owned by the engine
+    (scribblez/pre_move_value_move_encoder.h): (max_placed, num_scalars,
+    letter_vocab, cells). Needs no session -- it is a pure layout query."""
+    max_placed = ctypes.c_int32()
+    num_scalars = ctypes.c_int32()
+    letter_vocab = ctypes.c_int32()
+    cells = ctypes.c_int32()
+    _lib().scribblez_pre_move_value_move_dims(
+        ctypes.byref(max_placed),
+        ctypes.byref(num_scalars),
+        ctypes.byref(letter_vocab),
+        ctypes.byref(cells),
+    )
+    return max_placed.value, num_scalars.value, letter_vocab.value, cells.value
+
+
+def score_diff_input_layout() -> tuple[int, float]:
+    """(scalar_index, scale) locating the board input's score-diff scalar for
+    this session's arm, so a caller can read a position's pre-move differential
+    in points as input_scalar[scalar_index] * scale."""
+    index = ctypes.c_int32()
+    scale = ctypes.c_float()
+    _lib().scribblez_score_diff_input_layout(_session(), ctypes.byref(index), ctypes.byref(scale))
+    return index.value, scale.value
+
+
+def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[str, np.ndarray]:
+    """Encode a (M,) array of packed 16-byte Move records
+    (scribblez.sim_evidence.sobs.MOVE_DTYPE) into the pre-move value model's
+    move-encoder inputs, via the engine's encoder (the single source of truth,
+    shared with the M_pre agent). `pre_move_score_diffs` is the (M,) per-move
+    mover pre-move score advantage in points, used for the resultant post-move
+    differential feature. Returns letters/squares (M, max_placed) int64, blanks
+    and tile_mask (M, max_placed) bool, and scalars (M, num_scalars) float32.
+    """
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
+    pre_diffs = np.ascontiguousarray(pre_move_score_diffs, dtype=np.int32)
+    n = len(moves)
+    if len(pre_diffs) != n:
+        raise ValueError(f"pre_move_score_diffs length {len(pre_diffs)} != moves length {n}")
+    max_placed, num_scalars, _, _ = move_encoding_dims()
+    letters = np.zeros((n, max_placed), dtype=np.int32)
+    blanks = np.zeros((n, max_placed), dtype=np.uint8)
+    squares = np.zeros((n, max_placed), dtype=np.int32)
+    tile_mask = np.zeros((n, max_placed), dtype=np.uint8)
+    scalars = np.zeros((n, num_scalars), dtype=np.float32)
+    if n:
+        _lib().scribblez_pre_move_value_encode_moves(
+            moves.ctypes.data_as(ctypes.c_void_p),
+            n,
+            pre_diffs.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            letters.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            blanks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            squares.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            tile_mask.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            scalars.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        )
+    return {
+        "letters": letters.astype(np.int64),
+        "blanks": blanks.astype(bool),
+        "squares": squares.astype(np.int64),
+        "tile_mask": tile_mask.astype(bool),
+        "scalars": scalars,
+    }
 
 
 def gcg_sim_evidence(

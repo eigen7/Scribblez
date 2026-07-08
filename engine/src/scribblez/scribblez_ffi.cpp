@@ -16,6 +16,7 @@
 #include "scribblez/max_move_per_lane_task.h"
 #include "scribblez/player_factory.h"
 #include "scribblez/post_move_analysis.h"
+#include "scribblez/pre_move_value_move_encoder.h"
 #include "scribblez/row_encoder.h"
 #include "scribblez/self_play_engine.h"
 #include "scribblez/sim_observation_log.h"
@@ -343,6 +344,37 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out) {
   return s->decode_rows(path, game_idx, turn_idx, n, post_move != 0, out);
+}
+
+void scribblez_pre_move_value_encode_moves(const void* moves, int64_t n,
+                                           const int32_t* pre_move_score_diffs,
+                                           int32_t* out_letters, uint8_t* out_blanks,
+                                           int32_t* out_squares, uint8_t* out_tile_mask,
+                                           float* out_scalars) {
+  namespace pmv = scribblez::pre_move_value;
+  const char* bytes = static_cast<const char*>(moves);
+  // The input is a packed byte buffer of serialized Moves whose alignment the
+  // caller does not guarantee, so copy each into a Move before encoding.
+  for (int64_t i = 0; i < n; ++i) {
+    scribblez::Move m;
+    std::memcpy(&m, bytes + i * sizeof(scribblez::Move), sizeof(scribblez::Move));
+    pmv::encode_move(m, pre_move_score_diffs[i], out_letters + i * pmv::kMoveMaxPlaced,
+                     out_blanks + i * pmv::kMoveMaxPlaced, out_squares + i * pmv::kMoveMaxPlaced,
+                     out_tile_mask + i * pmv::kMoveMaxPlaced, out_scalars + i * pmv::kMoveScalars);
+  }
+}
+
+void scribblez_pre_move_value_move_dims(int32_t* max_placed, int32_t* num_scalars,
+                                        int32_t* letter_vocab, int32_t* cells) {
+  *max_placed = scribblez::pre_move_value::kMoveMaxPlaced;
+  *num_scalars = scribblez::pre_move_value::kMoveScalars;
+  *letter_vocab = scribblez::pre_move_value::kMoveLetterVocab;
+  *cells = scribblez::pre_move_value::kMoveCells;
+}
+
+void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale) {
+  *scalar_index = scribblez::scalar_block_offset(s->spec, scribblez::ScalarBlockId::kScoreDiff);
+  *scale = scribblez::kScoreDiffInputScale;
 }
 
 int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool post_move, char* out,

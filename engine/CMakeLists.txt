@@ -46,6 +46,7 @@ add_library(scribblez_core STATIC
   src/scribblez/sim_runner.cpp
   src/scribblez/sim_observation_log.cpp
   src/scribblez/pre_move_value_target_log.cpp
+  src/scribblez/pre_move_value_move_encoder.cpp
   src/scribblez/player_factory.cpp
   src/scribblez/post_move_analysis.cpp
   src/scribblez/seed_producer.cpp
