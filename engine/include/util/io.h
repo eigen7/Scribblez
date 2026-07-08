@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-namespace util {
+namespace scribblez::util {
 
 // Read an entire file into a string. Returns an empty string if it can't be opened.
 std::string read_file(const std::string& path);
@@ -16,4 +16,4 @@ bool read_n(int fd, void* buf, size_t n);
 // Returns false on error.
 bool write_all(int fd, const void* buf, size_t n);
 
-}  // namespace util
+}  // namespace scribblez::util

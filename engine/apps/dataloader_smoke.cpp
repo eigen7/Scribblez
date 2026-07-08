@@ -8,9 +8,9 @@
 // registers them, then runs one load() over the full window and prints
 // summary stats over the resulting rows.
 
-#include "scribblez/binary_log.h"
-#include "scribblez/data_loader.h"
-#include "scribblez/game_runner.h"
+#include "data/binary_log.h"
+#include "data/data_loader.h"
+#include "selfplay/game_runner.h"
 
 #include <algorithm>
 #include <chrono>

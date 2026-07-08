@@ -6,7 +6,7 @@
 #include <fstream>
 #include <iterator>
 
-namespace util {
+namespace scribblez::util {
 
 std::string read_file(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
@@ -35,4 +35,4 @@ bool write_all(int fd, const void* buf, size_t n) {
   return true;
 }
 
-}  // namespace util
+}  // namespace scribblez::util

@@ -5,10 +5,10 @@
 // hasty-move agent, writing them through BinaryLogWriter into the given
 // output directory. Files are split by `games_per_file`.
 
-#include "scribblez/agent.h"
-#include "scribblez/binary_log.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/game.h"
+#include "agent/agent.h"
+#include "data/binary_log.h"
+#include "game/game.h"
+#include "lexicon/dictionary.h"
 
 #include <cstdlib>
 #include <iostream>

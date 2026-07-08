@@ -9,15 +9,15 @@
 //
 // Output: <dataset>/monte-carlo-sim-results.json, keyed by GCG stem (e.g. "pos-7").
 
-#include "scribblez/cli.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/game_runner.h"
-#include "scribblez/lexicon.h"
-#include "scribblez/monte_carlo_sim.h"
+#include "lexicon/dictionary.h"
+#include "lexicon/lexicon.h"
+#include "selfplay/game_runner.h"
+#include "selfplay/monte_carlo_sim.h"
+#include "util/cli.h"
 #include "util/hardware.h"
 #include "util/io.h"
 #include "util/json.h"
-#include "util/path.h"
+#include "util/string.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
   try {
     std::string dataset_name = "position-eval-test-dataset";
     int games = 10000;
-    int threads = util::default_thread_count();
+    int threads = scribblez::util::default_thread_count();
 
     po::options_description desc("monte_carlo_sim_tool options");
     desc.add_options()("help,h", "show this help and exit")(
@@ -63,13 +63,14 @@ int main(int argc, char** argv) {
     std::vector<fs::path> gcgs;
     for (const auto& entry : fs::directory_iterator(dataset))
       if (entry.path().extension() == ".gcg") gcgs.push_back(entry.path());
-    std::sort(gcgs.begin(), gcgs.end(), util::path_natural_less);
+    std::sort(gcgs.begin(), gcgs.end(), scribblez::util::path_natural_less);
 
     json::object out;
     for (const fs::path& gcg : gcgs) {
       scribblez::MonteCarloPosition pos;
       std::string err;
-      if (!scribblez::parse_monte_carlo_position(util::read_file(gcg.string()), &pos, &err)) {
+      if (!scribblez::parse_monte_carlo_position(scribblez::util::read_file(gcg.string()), &pos,
+                                                 &err)) {
         std::cerr << "  SKIP " << gcg.filename().string() << ": " << err << "\n";
         continue;
       }
@@ -81,7 +82,7 @@ int main(int argc, char** argv) {
 
     const fs::path out_path = dataset / "monte-carlo-sim-results.json";
     std::ofstream os(out_path);
-    util::pretty_print(os, json::value(std::move(out)));
+    scribblez::util::pretty_print(os, json::value(std::move(out)));
     os << "\n";
     std::cerr << "Wrote " << out_path.string() << "\n";
     return 0;

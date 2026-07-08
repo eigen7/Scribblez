@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace util {
+namespace scribblez::util {
 
 namespace json = boost::json;
 
@@ -53,4 +53,4 @@ void pretty_print(std::ostream& os, const json::value& jv) {
   print_indented(os, jv, indent);
 }
 
-}  // namespace util
+}  // namespace scribblez::util

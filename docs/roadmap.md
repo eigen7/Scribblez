@@ -150,7 +150,7 @@ dashboard's Positions tab and in aggregate on the Loss tab (see
 ### 3.4 Agent evaluation: HastyBot + position-evaluation top-K
 
 The most direct measure: an agent that ranks HastyBot's top-K candidates by
-the position evaluation model's value ([NeuralAgent](../engine/include/scribblez/neural_agent.h),
+the position evaluation model's value ([NeuralAgent](../engine/include/agent/neural_agent.h),
 `--player "--type=neural --model=... --top-k=K"`) is pitted against vanilla
 HastyBot via `play_game`. Expected trajectory: an untrained model plays like a
 *diluted* HastyBot and loses; as the position evaluation model approaches static-equity ordering the

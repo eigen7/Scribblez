@@ -6,7 +6,7 @@
 #include <string>
 #include <thread>
 
-namespace util {
+namespace scribblez::util {
 
 // Tracks completed work items across threads and renders a carriage-return
 // progress bar (with rate and ETA) to stderr, refreshed by an internal
@@ -46,4 +46,4 @@ class ProgressMeter {
   std::thread monitor_;
 };
 
-}  // namespace util
+}  // namespace scribblez::util

@@ -19,9 +19,9 @@
 // skip line and exits 0. Pass an explicit directory to reuse a fixture instead:
 //   test_nn_inference_parity <fixture_dir>
 
-#include "scribblez/input_encoder.h"
-#include "scribblez/nn/nn_evaluation_service.h"
-#include "scribblez/nn/trt_util.h"
+#include "encoding/input_encoder.h"
+#include "nn/nn_evaluation_service.h"
+#include "nn/trt_util.h"
 
 #include <algorithm>
 #include <cmath>

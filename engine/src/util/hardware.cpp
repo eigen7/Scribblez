@@ -2,7 +2,7 @@
 
 #include <sched.h>
 
-namespace util {
+namespace scribblez::util {
 
 int default_thread_count() {
   cpu_set_t set;
@@ -11,4 +11,4 @@ int default_thread_count() {
   return CPU_COUNT(&set);
 }
 
-}  // namespace util
+}  // namespace scribblez::util

@@ -16,13 +16,13 @@
 // (npm run dev) and opens the browser at it -- you never run npm by hand. Run
 // py/build.py once first to install the web dependencies.
 
-#include "scribblez/cli.h"
-#include "scribblez/exception.h"
-#include "scribblez/game_runner.h"
-#include "scribblez/hasty_equity.h"
-#include "scribblez/lexicon.h"
-#include "scribblez/player_factory.h"
-#include "scribblez/seed_producer.h"
+#include "agent/player_factory.h"
+#include "lexicon/hasty_equity.h"
+#include "lexicon/lexicon.h"
+#include "selfplay/game_runner.h"
+#include "selfplay/seed_producer.h"
+#include "util/cli.h"
+#include "util/exception.h"
 
 #include <boost/program_options.hpp>
 

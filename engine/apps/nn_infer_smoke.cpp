@@ -9,9 +9,9 @@
 // A successful run confirms the whole engine path -- ONNX parse, engine build +
 // plan cache, host<->device copies, and output decoding -- works end to end.
 
-#include "scribblez/input_encoder.h"
-#include "scribblez/nn/nn_evaluation_service.h"
-#include "scribblez/nn/trt_util.h"
+#include "encoding/input_encoder.h"
+#include "nn/nn_evaluation_service.h"
+#include "nn/trt_util.h"
 
 #include <algorithm>
 #include <cstdlib>

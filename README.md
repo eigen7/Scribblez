@@ -149,7 +149,7 @@ Data flow, formats, and the replay-reconstruction invariant are documented in
 
 Training data is stored as **`.slog`** — a compact binary format holding many
 games per file as initial racks + move/draw sequences, replayed into training
-rows at load time ([binary_log.h](engine/include/scribblez/binary_log.h) is the
+rows at load time ([binary_log.h](engine/include/data/binary_log.h) is the
 authoritative layout).
 
 Human-readable logs use **GCG**, the de-facto standard Scrabble game-log format

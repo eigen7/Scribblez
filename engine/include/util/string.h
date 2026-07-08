@@ -1,10 +1,11 @@
 #pragma once
 
 #include <cctype>
+#include <filesystem>
 #include <sstream>
 #include <string>
 
-namespace util {
+namespace scribblez::util {
 
 // Natural-order ("natural sort") comparison of two strings: like a lexicographic
 // compare, except that maximal runs of digits compare by numeric value (ignoring
@@ -63,4 +64,10 @@ inline std::string fmt_dur(double secs) {
   return o.str();
 }
 
-}  // namespace util
+// Order filesystem paths by their filename in natural-sort order (so "pos-2.gcg"
+// precedes "pos-10.gcg"). Suitable as a std::sort comparator.
+inline bool path_natural_less(const std::filesystem::path& a, const std::filesystem::path& b) {
+  return natural_less(a.filename().string(), b.filename().string());
+}
+
+}  // namespace scribblez::util

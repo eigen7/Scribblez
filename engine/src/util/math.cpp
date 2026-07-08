@@ -2,7 +2,7 @@
 
 #include <Eigen/Core>
 
-namespace util {
+namespace scribblez::util {
 
 int SoftmaxSampler::sample(const std::vector<double>& values, int k, double temperature,
                            std::mt19937_64& rng) {
@@ -26,4 +26,4 @@ int SoftmaxSampler::sample(const std::vector<double>& values, int k, double temp
   return k - 1;
 }
 
-}  // namespace util
+}  // namespace scribblez::util

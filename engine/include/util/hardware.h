@@ -1,6 +1,6 @@
 #pragma once
 
-namespace util {
+namespace scribblez::util {
 
 // The number of logical processors available to this process (its CPU affinity
 // mask, so taskset/cgroup cpusets are respected). This is the project-wide
@@ -9,4 +9,4 @@ namespace util {
 // processor. The Python counterpart is scribblez.hardware.default_thread_count.
 int default_thread_count();
 
-}  // namespace util
+}  // namespace scribblez::util

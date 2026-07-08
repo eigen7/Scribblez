@@ -15,21 +15,21 @@
 //  * temperature controls selection: temperature 0 is the greedy argmax, while a
 //    high temperature samples across the candidates.
 
-#include "scribblez/agent.h"
-#include "scribblez/binary_log.h"
-#include "scribblez/block_decoder.h"
-#include "scribblez/board.h"
-#include "scribblez/data_loader.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/game_state_encoder.h"
-#include "scribblez/glyph.h"
-#include "scribblez/hasty_equity.h"
-#include "scribblez/input_encoder.h"
-#include "scribblez/move.h"
-#include "scribblez/neural_agent.h"
-#include "scribblez/nn/eval_service.h"
-#include "scribblez/rack.h"
-#include "scribblez/tile.h"
+#include "agent/agent.h"
+#include "agent/neural_agent.h"
+#include "data/binary_log.h"
+#include "data/block_decoder.h"
+#include "data/data_loader.h"
+#include "encoding/game_state_encoder.h"
+#include "encoding/input_encoder.h"
+#include "game/board.h"
+#include "game/glyph.h"
+#include "game/move.h"
+#include "game/rack.h"
+#include "game/tile.h"
+#include "lexicon/dictionary.h"
+#include "lexicon/hasty_equity.h"
+#include "nn/eval_service.h"
 
 #include <algorithm>
 #include <array>

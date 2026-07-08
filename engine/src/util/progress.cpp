@@ -4,7 +4,7 @@
 #include <iostream>
 #include <unistd.h>
 
-namespace util {
+namespace scribblez::util {
 
 ProgressMeter::ProgressMeter(uint64_t total, std::string noun)
     : total_(total), noun_(std::move(noun)), start_(std::chrono::steady_clock::now()) {
@@ -52,4 +52,4 @@ void ProgressMeter::finish(const std::string& prefix) {
             << (done() / std::max(s, 1e-9)) << " " << noun_ << "/s)\n";
 }
 
-}  // namespace util
+}  // namespace scribblez::util

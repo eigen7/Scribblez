@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace util {
+namespace scribblez::util {
 
 namespace {
 
@@ -81,4 +81,4 @@ void sha1(const std::string& msg, uint8_t out[20]) {
   sha1_finalize(h, out);
 }
 
-}  // namespace util
+}  // namespace scribblez::util

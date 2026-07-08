@@ -55,7 +55,7 @@ than precomputed as an input. The reasons are architectural and are covered in
   Neither mechanism subsumes the other (see
   [Limitations](#limitations-and-caveats)).
 - **the position evaluation model's `OppNextPlacement` head**
-  ([training_targets.h](../engine/include/scribblez/training_targets.h))
+  ([training_targets.h](../engine/include/training/training_targets.h))
   already predicts a 15×15 mask of where the opponent's next move will place
   tiles. The heads below are that head conjoined with the game outcome — this
   proposal upgrades an auxiliary head into a load-bearing part of the decision
@@ -65,7 +65,7 @@ than precomputed as an input. The reasons are architectural and are covered in
 
 Two 15×15 heads on the value models, each a per-square Bernoulli probability
 (implemented: `OppWinPlacementTarget` / `SelfWinPlacementTarget` in
-[training_targets.h](../engine/include/scribblez/training_targets.h), served
+[training_targets.h](../engine/include/training/training_targets.h), served
 with the marginal placement heads by the shared `mask_conv` stack in
 [model.py](../py/scribblez/position_eval/model.py)):
 
@@ -636,7 +636,7 @@ If the arms' gap looks real but noisy, let the generator run longer and rerun
 | Step | Build | Depends on | Status |
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
-| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/scribblez/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/scribblez/sim_observation_log.h) (the versioned `.sobs` sidecar). |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts (extend the `monte_carlo_sim_tool` rollout core into a reusable `SimRunner`); **common random numbers across candidates at a position** (shared rack samples, fixed bag order) so pairwise covariance targets exist; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/selfplay/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/selfplay/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Done — passed.** Evidence gain of −0.0063 CE at 5.7 SE with clean controls; magnitude bounded by root-readout saturation, and an 8× late-vs-early phase gradient supports the mechanism. Full numbers and conclusions: [sim_obs_experiment_results.md](sim_obs_experiment_results.md). |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
 | 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap Phase 4 | — |

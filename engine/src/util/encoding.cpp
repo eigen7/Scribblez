@@ -1,6 +1,6 @@
 #include "util/encoding.h"
 
-namespace util {
+namespace scribblez::util {
 
 std::string base64(const uint8_t* data, size_t len) {
   static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -17,4 +17,4 @@ std::string base64(const uint8_t* data, size_t len) {
   return out;
 }
 
-}  // namespace util
+}  // namespace scribblez::util

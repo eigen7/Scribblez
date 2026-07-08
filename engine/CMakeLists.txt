@@ -1,56 +1,56 @@
 add_library(scribblez_core STATIC
-  src/scribblez/tile.cpp
-  src/scribblez/tile_counts.cpp
-  src/scribblez/rack.cpp
-  src/scribblez/bag.cpp
-  src/scribblez/board.cpp
-  src/scribblez/move.cpp
-  src/scribblez/dictionary.cpp
-  src/scribblez/movegen.cpp
-  src/scribblez/lane_targets.cpp
-  src/scribblez/lane_analysis.cpp
-  src/scribblez/contingent_map.cpp
-  src/scribblez/input_encoder.cpp
-  src/scribblez/board_planes.cpp
-  src/scribblez/max_move_per_lane_input_encoder.cpp
-  src/scribblez/max_move_per_lane_task.cpp
-  src/scribblez/row_encoder.cpp
-  src/scribblez/game.cpp
-  src/scribblez/gcg_reader.cpp
-  src/scribblez/gcg_writer.cpp
-  src/scribblez/binary_log.cpp
-  src/scribblez/game_state_encoder.cpp
-  src/scribblez/training_targets.cpp
-  src/scribblez/word_map.cpp
-  src/scribblez/training_task.cpp
-  src/scribblez/position_encoder.cpp
-  src/scribblez/streaming_row_buffer.cpp
-  src/scribblez/streaming_game_producer.cpp
-  src/scribblez/block_decoder.cpp
-  src/scribblez/slog_subset.cpp
-  src/scribblez/position_json.cpp
-  src/scribblez/data_loader.cpp
-  src/scribblez/unique_id.cpp
-  src/scribblez/agent.cpp
-  src/scribblez/agent_options.cpp
-  src/scribblez/cli.cpp
-  src/scribblez/self_play_engine.cpp
-  src/scribblez/game_runner.cpp
-  src/scribblez/hasty_equity.cpp
-  src/scribblez/human_web_agent.cpp
-  src/scribblez/instance_ports.cpp
-  src/scribblez/leave_values.cpp
-  src/scribblez/lexicon.cpp
-  src/scribblez/macondo_bot.cpp
-  src/scribblez/monte_carlo_sim.cpp
-  src/scribblez/sim_runner.cpp
-  src/scribblez/sim_observation_log.cpp
-  src/scribblez/move_set_eval_target_log.cpp
-  src/scribblez/move_set_encoder.cpp
-  src/scribblez/player_factory.cpp
-  src/scribblez/position_eval_analysis.cpp
-  src/scribblez/seed_producer.cpp
-  src/scribblez/web_server.cpp
+  src/game/tile.cpp
+  src/game/tile_counts.cpp
+  src/game/rack.cpp
+  src/game/bag.cpp
+  src/game/board.cpp
+  src/game/move.cpp
+  src/lexicon/dictionary.cpp
+  src/game/movegen.cpp
+  src/training/lane_targets.cpp
+  src/training/lane_analysis.cpp
+  src/encoding/contingent_map.cpp
+  src/encoding/input_encoder.cpp
+  src/encoding/board_planes.cpp
+  src/training/max_move_per_lane_input_encoder.cpp
+  src/training/max_move_per_lane_task.cpp
+  src/encoding/row_encoder.cpp
+  src/game/game.cpp
+  src/data/gcg_reader.cpp
+  src/data/gcg_writer.cpp
+  src/data/binary_log.cpp
+  src/encoding/game_state_encoder.cpp
+  src/training/training_targets.cpp
+  src/lexicon/word_map.cpp
+  src/training/training_task.cpp
+  src/encoding/position_encoder.cpp
+  src/data/streaming_row_buffer.cpp
+  src/selfplay/streaming_game_producer.cpp
+  src/data/block_decoder.cpp
+  src/data/slog_subset.cpp
+  src/serve/position_json.cpp
+  src/data/data_loader.cpp
+  src/util/unique_id.cpp
+  src/agent/agent.cpp
+  src/agent/agent_options.cpp
+  src/util/cli.cpp
+  src/selfplay/self_play_engine.cpp
+  src/selfplay/game_runner.cpp
+  src/lexicon/hasty_equity.cpp
+  src/agent/human_web_agent.cpp
+  src/serve/instance_ports.cpp
+  src/lexicon/leave_values.cpp
+  src/lexicon/lexicon.cpp
+  src/agent/macondo_bot.cpp
+  src/selfplay/monte_carlo_sim.cpp
+  src/selfplay/sim_runner.cpp
+  src/selfplay/sim_observation_log.cpp
+  src/training/move_set_eval_target_log.cpp
+  src/training/move_set_encoder.cpp
+  src/agent/player_factory.cpp
+  src/training/position_eval_analysis.cpp
+  src/selfplay/seed_producer.cpp
+  src/serve/web_server.cpp
   src/util/encoding.cpp
   src/util/crypto.cpp
   src/util/hardware.cpp
@@ -64,7 +64,7 @@ add_library(scribblez_core STATIC
 set_target_properties(scribblez_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_core PUBLIC
   include
-  # Engine root: lets headers do `#include "inlines/scribblez/foo.inl"` for
+  # Engine root: lets headers do `#include "inlines/<category>/foo.inl"` for
   # out-of-class inline definitions kept out of the public header.
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -75,15 +75,15 @@ target_link_libraries(scribblez_core PUBLIC Eigen3::Eigen)
 
 # Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
 # so the resulting libscribblez_ffi.so is a single self-contained artifact
-# that exposes only the symbols declared in scribblez/scribblez_ffi.h.
+# that exposes only the symbols declared in serve/scribblez_ffi.h.
 # The streaming pipeline plays self-play games inside the library, so it pulls
 # in the agent/runner code that parses --player specs via Boost.ProgramOptions.
 # player_factory.cpp (in scribblez_core) dispatches to NeuralAgent::from_spec,
 # so the neural agent TUs and scribblez_nn must also be linked here.
 add_library(scribblez_ffi SHARED
-  src/scribblez/scribblez_ffi.cpp
-  src/scribblez/neural_agent.cpp
-  src/scribblez/neural_agent_factory.cpp)
+  src/serve/scribblez_ffi.cpp
+  src/agent/neural_agent.cpp
+  src/agent/neural_agent_factory.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
   scribblez_core
   scribblez_nn
@@ -123,10 +123,10 @@ endif()
 # confined to this library's .cpp files (the public headers are pimpl/free of
 # them), so consumers link it without needing the TensorRT include path.
 add_library(scribblez_nn STATIC
-  src/scribblez/nn/cuda_util.cpp
-  src/scribblez/nn/trt_util.cpp
-  src/scribblez/nn/neural_net.cpp
-  src/scribblez/nn/nn_evaluation_service.cpp)
+  src/nn/cuda_util.cpp
+  src/nn/trt_util.cpp
+  src/nn/neural_net.cpp
+  src/nn/nn_evaluation_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -149,8 +149,8 @@ target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobu
 # (HastyBot, human, greedy) and the runner come from scribblez_core.
 add_executable(play_game
   apps/play_game.cpp
-  src/scribblez/neural_agent.cpp
-  src/scribblez/neural_agent_factory.cpp)
+  src/agent/neural_agent.cpp
+  src/agent/neural_agent_factory.cpp)
 target_link_libraries(play_game PRIVATE
   scribblez_core
   scribblez_nn
@@ -210,8 +210,8 @@ target_link_libraries(harvest_bingo_positions_tool PRIVATE
 
 add_executable(scribblez_tests
   tests/tests_main.cpp
-  src/scribblez/hasty_equity.cpp
-  src/scribblez/leave_values.cpp)
+  src/lexicon/hasty_equity.cpp
+  src/lexicon/leave_values.cpp)
 target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json)
 # Point the tests at the conventional local lexicon path so they cross-validate
 # against the real GADDAG when one is present (the .kwg is not committed; the
@@ -229,9 +229,9 @@ add_test(NAME scribblez_tests COMMAND scribblez_tests)
 # GPU.
 add_executable(test_neural_agent
   tests/test_neural_agent.cpp
-  src/scribblez/neural_agent.cpp
-  src/scribblez/hasty_equity.cpp
-  src/scribblez/leave_values.cpp)
+  src/agent/neural_agent.cpp
+  src/lexicon/hasty_equity.cpp
+  src/lexicon/leave_values.cpp)
 target_link_libraries(test_neural_agent PRIVATE
   scribblez_core Boost::json Threads::Threads)
 add_test(NAME test_neural_agent COMMAND test_neural_agent)

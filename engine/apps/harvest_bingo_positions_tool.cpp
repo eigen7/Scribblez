@@ -16,15 +16,15 @@
 // of up to --per-file GCG blocks. Every block begins with `#character-encoding`,
 // the record boundary the Python wrapper splits on before scoring.
 
-#include "scribblez/cli.h"
-#include "scribblez/dictionary.h"
-#include "scribblez/game.h"
-#include "scribblez/game_runner.h"
-#include "scribblez/gcg_writer.h"
-#include "scribblez/lexicon.h"
-#include "scribblez/macondo_bot.h"
-#include "scribblez/move.h"
-#include "scribblez/tile.h"
+#include "agent/macondo_bot.h"
+#include "data/gcg_writer.h"
+#include "game/game.h"
+#include "game/move.h"
+#include "game/tile.h"
+#include "lexicon/dictionary.h"
+#include "lexicon/lexicon.h"
+#include "selfplay/game_runner.h"
+#include "util/cli.h"
 
 #include <boost/program_options.hpp>
 

@@ -112,8 +112,8 @@ the same E where a large one is fine.
 ## The game-pool producer (C++)
 
 Today each self-play worker thread **owns an agent pair and plays one whole game
-start to finish** ([self_play_engine.h](../engine/include/scribblez/self_play_engine.h),
-[streaming_game_producer.h](../engine/include/scribblez/streaming_game_producer.h)),
+start to finish** ([self_play_engine.h](../engine/include/selfplay/self_play_engine.h),
+[streaming_game_producer.h](../engine/include/selfplay/streaming_game_producer.h)),
 with `next_game_` handing out game indices. The thread count T is fixed at
 construction because agent pairs are preallocated per thread; changing T means
 tearing down and rebuilding the pool.
@@ -373,7 +373,7 @@ per-GPU lock awarded by priority.
   only the CPU split matters. A feedback controller partitions a core budget
   `C = gen + dataloader + torch` using the signals already emitted:
   `producer_blocked_ns` / `consumer_blocked_ns` from the C++ streaming ring
-  buffer ([streaming_row_buffer.h](../engine/include/scribblez/streaming_row_buffer.h)),
+  buffer ([streaming_row_buffer.h](../engine/include/data/streaming_row_buffer.h)),
   an analogous `loader_stats()` to be surfaced from the C++ DataLoader, and the GPU-busy
   fraction as the north star. Consumer-blocked → shift cores toward data;
   producer-blocked → reclaim them for generation; GPU busy > ~90% → hold. The

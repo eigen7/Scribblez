@@ -237,7 +237,7 @@ square along the perpendicular axis), rather than the full cross-check planes.
 
 ## Pointers
 
-- [contingent_map.h](../engine/include/scribblez/contingent_map.h) — the
+- [contingent_map.h](../engine/include/encoding/contingent_map.h) — the
   position evaluation model implementation of the potential map. For the position evaluation model the cost/accuracy
   ladder collapses: the input state is already post-move (rack = leave, board
   includes the move), so one generation per position yields the tier-3-correct
@@ -245,7 +245,7 @@ square along the perpendicular axis), rather than the full cross-check planes.
   rack ∪ {blank} (a play consuming the extra blank designated as `L`,
   rescored at `L`'s face value, is the "drew `L`" play). Encoded as input
   planes 85–87 plus 56 scalars (see
-  [input_encoder.h](../engine/include/scribblez/input_encoder.h)).
+  [input_encoder.h](../engine/include/encoding/input_encoder.h)).
 - [roadmap.md](roadmap.md) — the position evaluation model and the move set evaluation model, the candidate-scoring/selection
   pipeline, the two weaknesses.
 - [architecture.md](architecture.md) — the input encoder and the `.slog`
