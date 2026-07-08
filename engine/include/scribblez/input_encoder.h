@@ -32,12 +32,13 @@
 //                     next-turn plays painted onto their placed cells (see
 //                     contingent_map.h).
 //
-//   Scalar blocks (every value in [0, 1]; POV-visible information only)
+//   Scalar blocks (POV-visible information only; values normalized, most to
+//   [0, 1] -- kScoreDiff is the one signed exception)
 //     kRackCounts     27: the POV rack's raw per-tile counts (A..Z, blank).
 //     kUnseenPool    100: unseen-pool thermometer, one slot per physical tile
 //                     grouped per letter (TILE_COUNTS regions).
-//     kScoreDiff     801: score_active - score_opp thermometer over the
-//                     clipped range [-kScoreDiffClip, +kScoreDiffClip].
+//     kScoreDiff       1: (score_active - score_opp) / kScoreDiffInputScale, a
+//                     signed scalar (not clipped).
 //     kMoveMeta        8: last-2-move metadata (self then opponent): a 3-way
 //                     PLAY/EXCHANGE/PASS one-hot + num_glyphs each.
 //     kContingent     56 (contingent runs only): per drawable tile kind the
@@ -63,7 +64,6 @@
 // flip-invariant.
 
 #include "scribblez/input_encoding_spec.h"
-#include "scribblez/training_targets.h"  // kScoreDiffClip
 
 namespace scribblez {
 
@@ -78,10 +78,12 @@ inline constexpr int kCrossCheckPlanes = kHorizontalCrossCheckPlanes + kVertical
 inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone potential
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
-// One unary slot per integer differential across the same clipped range as the
-// regression target.
-inline constexpr int kScoreDiffThermoBins = 2 * kScoreDiffClip + 1;  // 801
-inline constexpr int kScoreDiffThermoFloats = kScoreDiffThermoBins;
+// Score differential as a single signed scalar: (score_active - score_opp)
+// divided by kScoreDiffInputScale, not clipped. The pre-move value model's
+// resultant-diff move feature shares this representation, so a post-move
+// differential is the pre-move differential plus the move score, a plain sum.
+inline constexpr int kScoreDiffInputFloats = 1;
+inline constexpr float kScoreDiffInputScale = 100.0f;
 inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
@@ -125,7 +127,7 @@ inline constexpr SpatialBlockDef kSpatialBlocks[] = {
 inline constexpr ScalarBlockDef kScalarBlocks[] = {
   {ScalarBlockId::kRackCounts, kRackCountFloats, false},
   {ScalarBlockId::kUnseenPool, kUnseenPoolThermoFloats, false},
-  {ScalarBlockId::kScoreDiff, kScoreDiffThermoFloats, false},
+  {ScalarBlockId::kScoreDiff, kScoreDiffInputFloats, false},
   {ScalarBlockId::kMoveMeta, kMoveMetaFloats, false},
   {ScalarBlockId::kContingent, kContingentScalarFloats, true},
   {ScalarBlockId::kOppLeaveCounts, kOppLeaveCountFloats, false, true},

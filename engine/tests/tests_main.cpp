@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -532,14 +533,9 @@ static void test_encoder_basic_layout() {
   CHECK(pool[pool_region_start(26) + 0] == 0.0f);
   CHECK(pool[pool_region_start(26) + 1] == 0.0f);
 
-  // Score-diff thermometer at kScoreDiffOffset: diff = 50 - 30 = 20.
+  // Score-diff scalar at kScoreDiffOffset: (50 - 30) / kScoreDiffInputScale.
   const float* sd = scalars + kScoreDiffOffset;
-  float sd_sum = 0.0f;
-  for (int i = 0; i < kScoreDiffThermoFloats; ++i) sd_sum += sd[i];
-  CHECK(sd_sum == static_cast<float>(kScoreDiffClip + 20 + 1));  // bins [0..diff+clip]
-  CHECK(sd[0] == 1.0f);                                          // diff >= -clip always
-  CHECK(sd[kScoreDiffClip + 20] == 1.0f);
-  CHECK(sd[kScoreDiffClip + 20 + 1] == 0.0f);
+  CHECK(sd[0] == 20.0f / kScoreDiffInputScale);
 
   // Last-2-move metadata at kMoveMetaOffset: self move (p0's C play) then
   // opponent move (p1's blank-D play); both are 1-glyph PLAYs.
@@ -791,18 +787,16 @@ static void test_encoder_forced_score_diff_isolation() {
                                    /*score_diff=*/123, /*apply_flip=*/false, forced.data());
 
   const int score_lo = kSpatialFloats + kScoreDiffOffset;
-  const int score_hi = score_lo + kScoreDiffThermoFloats;
+  const int score_hi = score_lo + kScoreDiffInputFloats;
 
-  // Only the score-diff thermometer block should differ.
+  // Only the score-diff block should differ.
   for (int i = 0; i < kInputFloats; ++i) {
     if (i >= score_lo && i < score_hi) continue;
     CHECK(normal[i] == forced[i]);
   }
 
-  // Forced block must represent score_diff=123 as a thermometer.
-  const float* sd = forced.data() + score_lo;
-  CHECK(sd[kScoreDiffClip + 123] == 1.0f);
-  CHECK(sd[kScoreDiffClip + 124] == 0.0f);
+  // Forced block must represent score_diff=123 as the normalized scalar.
+  CHECK(forced[score_lo] == 123.0f / kScoreDiffInputScale);
 }
 
 static void test_encoder_nonplay_last_move_metadata() {
@@ -4145,12 +4139,9 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
              /*post_move=*/false, /*output_row_start=*/0, output.data());
 
-  // Thermometer invariant: the number of set slots equals
-  // (clipped_diff + kScoreDiffClip + 1).
+  // The score-diff scalar recovers the differential when rescaled.
   const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
-  int ones = 0;
-  for (int i = 0; i < kScoreDiffThermoBins; ++i) ones += sd[i] > 0.5f ? 1 : 0;
-  return ones - kScoreDiffClip - 1;
+  return static_cast<int>(std::lround(sd[0] * kScoreDiffInputScale));
 }
 
 // A head-start handicap stored in GameMetadata must reach the replayed

@@ -149,15 +149,11 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   return kUnseenPoolThermoFloats;
 }
 
-// Score differential as a thermometer (kScoreDiffThermoFloats floats): slot i is
-// 1.0 iff the clipped diff >= (i - kScoreDiffClip).
-int encode_score_diff_thermometer(int score_diff, float* out) {
-  int clipped = score_diff;
-  if (clipped < -kScoreDiffClip) clipped = -kScoreDiffClip;
-  if (clipped > kScoreDiffClip) clipped = kScoreDiffClip;
-  const int bin = clipped + kScoreDiffClip;  // 0..2*kScoreDiffClip
-  for (int i = 0; i <= bin; ++i) out[i] = 1.0f;
-  return kScoreDiffThermoFloats;
+// Score differential as a single signed scalar (kScoreDiffInputFloats floats):
+// (score_active - score_opp) / kScoreDiffInputScale, not clipped.
+int encode_score_diff_scalar(int score_diff, float* out) {
+  out[0] = static_cast<float>(score_diff) / kScoreDiffInputScale;
+  return kScoreDiffInputFloats;
 }
 
 // Last-2-move metadata (kMoveMetaFloats floats): for the POV player's and then
@@ -201,7 +197,7 @@ int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
     case ScalarBlockId::kUnseenPool:
       return encode_unseen_pool_thermometer(ctx.unseen, out);
     case ScalarBlockId::kScoreDiff:
-      return encode_score_diff_thermometer(ctx.score_diff, out);
+      return encode_score_diff_scalar(ctx.score_diff, out);
     case ScalarBlockId::kMoveMeta:
       return encode_move_meta(ctx.self_move, ctx.opp_move, out);
     case ScalarBlockId::kContingent:
@@ -310,8 +306,7 @@ void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_r
 void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) const {
   float* block =
     input_row + spatial_floats(spec_) + scalar_block_offset(spec_, ScalarBlockId::kScoreDiff);
-  std::memset(block, 0, sizeof(float) * static_cast<size_t>(kScoreDiffThermoFloats));
-  encode_score_diff_thermometer(score_diff, block);
+  encode_score_diff_scalar(score_diff, block);
 }
 
 }  // namespace scribblez
