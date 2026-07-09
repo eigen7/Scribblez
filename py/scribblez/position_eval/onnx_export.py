@@ -8,6 +8,7 @@ is dynamic
 so the same file serves single-position and batched inference.
 """
 
+import os
 import warnings
 from pathlib import Path
 
@@ -96,9 +97,15 @@ def export_onnx(
     opset: int = 17,
 ):
     """Trace `model` and write an ONNX graph to `path` (eval mode, dynamic batch),
-    stamping the input-encoding arm into its metadata_props."""
+    stamping the input-encoding arm into its metadata_props.
+
+    The export is atomic: the graph and its in-place transforms land on a temp
+    file beside `path` first, which is then renamed onto `path` with a single
+    `os.replace`. A reader that sees `path` exist therefore always sees a
+    complete file -- never a partially written or partially transformed one."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
 
     was_training = model.training
     model.eval()
@@ -116,7 +123,7 @@ def export_onnx(
         torch.onnx.export(
             model,
             (dummy_spatial, dummy_scalar),
-            str(path),
+            str(tmp_path),
             input_names=["input_spatial", "input_scalar"],
             output_names=["wld", "score_diff", *MASK_HEAD_NAMES],
             dynamic_axes={
@@ -127,8 +134,12 @@ def export_onnx(
             dynamo=False,
         )
     # Share the frozen compiled-lexicon buffers across generations instead of baking
-    # them into every export (no-op when the model has no lexicon module).
-    _externalize_frozen_lexicon(path, _frozen_lexicon_names(model))
-    _write_model_metadata(path, contingent_features)
+    # them into every export (no-op when the model has no lexicon module). The
+    # external-data location recorded inside the graph is the bare blob filename
+    # (resolved relative to the directory the model file is loaded from, not to the
+    # model file's own name), so it stays correct once tmp_path is renamed to path.
+    _externalize_frozen_lexicon(tmp_path, _frozen_lexicon_names(model))
+    _write_model_metadata(tmp_path, contingent_features)
+    os.replace(tmp_path, path)
     if was_training:
         model.train()

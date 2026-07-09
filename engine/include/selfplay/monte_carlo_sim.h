@@ -30,9 +30,25 @@ struct MonteCarloPosition {
 bool parse_monte_carlo_position(const std::string& gcg_text, MonteCarloPosition* out,
                                 std::string* error);
 
+// Per-square placement counts over the rollouts, from `start_player`'s POV, in
+// board frame (row-major, no input flip). Mirrors the position-evaluation
+// model's four placement heads: over how many rollouts that seat's first move
+// of the rollout placed a tile on the square (a PLAY only; EXCHANGE/PASS place
+// nothing), and (the `*_win` planes) did so in a rollout that seat strictly won
+// (a draw counts as not winning). "opp" is the seat to move first in the rollout
+// (1 - start_player); "self" is start_player. Each `*_win` plane is elementwise
+// at most its `*_next` plane, and every occupied board square stays zero.
+struct PlacementCounts {
+  static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
+  std::array<int, kCells> opp_next{};
+  std::array<int, kCells> self_next{};
+  std::array<int, kCells> opp_win{};
+  std::array<int, kCells> self_win{};
+};
+
 // A Monte-Carlo ground-truth result for one position, from `start_player`'s POV:
-// W/L/D counts (summing to n) and the EXACT final-score-delta histogram (a delta is
-// start_player_final - opponent_final).
+// W/L/D counts (summing to n), the EXACT final-score-delta histogram (a delta is
+// start_player_final - opponent_final), and the per-square placement counts.
 struct MonteCarloResult {
   int start_player = 0;
   int n = 0;
@@ -40,6 +56,7 @@ struct MonteCarloResult {
   int losses = 0;
   int draws = 0;
   std::map<int, int> delta_hist;  // score delta -> number of rollouts with that delta
+  PlacementCounts placement;
 
   boost::json::object to_json() const;
 };

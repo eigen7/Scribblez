@@ -32,12 +32,14 @@ from scribblez.dashboard import db, master_api, plots
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     analyze_gcg,
+    analyze_position_eval_gcg,
     analyze_position_eval_gcg_leave,
     get_input_shapes,
     position_eval_board_json,
 )
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
+from scribblez.position_eval.model import MASK_HEAD_NAMES
 
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
 _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
@@ -290,10 +292,32 @@ def _mc_payload(name: str) -> dict:
     }
 
 
-def position_eval_position_payload(conn, position: int, generation) -> dict:
+def _placement_block(name: str, pred) -> dict | None:
+    """The Positions tab's residual-heat-map payload: for each of the four placement
+    heads, the Monte-Carlo truth (per-square rollout fraction count/n, board frame)
+    paired with the model's on-demand sigmoid prediction (`pred`, or None).
+
+    None when the ground-truth file carries no per-square planes (an older
+    monte-carlo-sim-results.json), so the frontend can hide the overlay."""
+    gt = _mc_ground_truth().get(name, {})
+    planes = gt.get("placement")
+    if planes is None:
+        return None
+    n = gt.get("n", 0)
+    denom = n or 1
+    heads = {}
+    for head in MASK_HEAD_NAMES:
+        truth = (np.asarray(planes[head], dtype=np.float64) / denom).tolist()
+        heads[head] = {"truth": truth, "pred": None if pred is None else pred[head].tolist()}
+    return {"n": n, "heads": heads}
+
+
+def position_eval_position_payload(conn, position: int, generation, tag, task, mount_root) -> dict:
     """The full per-position view: board + leave for rendering, the Monte-Carlo ground
     truth, and the selected generation's model prediction (WLD + score-delta Gaussian)
-    -- or None when no prediction exists for this generation/position."""
+    -- or None when no prediction exists for this generation/position. The `placement`
+    block pairs the per-square Monte-Carlo truth with the model's on-demand
+    placement-head predictions for the residual heat-map overlay."""
     name, bundle = _position_eval_board(position)
     pred = (
         db.read_position_eval_pred(conn, generation, position)
@@ -308,6 +332,7 @@ def position_eval_position_payload(conn, position: int, generation) -> dict:
             "sd_mean": float(pred["sd_mean"]),
             "sd_std": float(pred["sd_std"]),
         }
+    placement_pred = _position_eval_placement_pred(tag, task, mount_root, generation, position)
     return {
         "name": name,
         "start_player": bundle["start_player"],
@@ -323,6 +348,7 @@ def position_eval_position_payload(conn, position: int, generation) -> dict:
         "has_prediction": pred is not None,
         "mc": _mc_payload(name),
         "model": model,
+        "placement": _placement_block(name, placement_pred),
     }
 
 
@@ -350,16 +376,14 @@ def _position_eval_onnx_session(onnx_path: Path):
     return sess
 
 
-def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
-    """Run the exported post-move model on one flat input tensor and decode the value
-    outputs: W/L/D probabilities and the score-delta mean/std.
+def _position_eval_onnx_feed(sess, flat_input: np.ndarray) -> dict:
+    """The ``{input_spatial, input_scalar}`` feed for `sess` from the dashboard
+    session's full flat input row.
 
-    `flat_input` is the dashboard session's full row layout; the model declares
-    its own arm in its ONNX metadata_props ("contingent_features", stamped at
-    export). A baseline model consumes the base layout, whose spatial planes and
-    scalars are prefixes of the full blocks, so its declared input widths select
-    the right slices."""
-    sess = _position_eval_onnx_session(onnx_path)
+    The model declares its own arm in its ONNX metadata_props
+    ("contingent_features", stamped at export). A baseline model consumes the base
+    layout, whose spatial planes and scalars are prefixes of the full blocks, so its
+    declared input widths select the right slices."""
     meta = sess.get_modelmeta().custom_metadata_map
     contingent = meta["contingent_features"] == "true"
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
@@ -367,11 +391,31 @@ def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     scalars = int(model_inputs["input_scalar"][1])
     full_planes = {s.name: s.dims for s in get_input_shapes()}["input_spatial"][0]
     if contingent != (planes == full_planes):
-        raise ValueError(f"{onnx_path}: metadata arm disagrees with the declared input widths")
+        raise ValueError("ONNX metadata arm disagrees with the declared input widths")
     cells = position_eval_analysis.BOARD_SIZE**2
     spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
     scalar = flat_input[full_planes * cells :][:scalars].reshape(1, -1).astype(np.float32)
-    wld, sd = sess.run(["wld", "score_diff"], {"input_spatial": spatial, "input_scalar": scalar})
+    return {"input_spatial": spatial, "input_scalar": scalar}
+
+
+def _position_eval_onnx_fits_encoder(sess) -> bool:
+    """True iff `sess`'s declared input widths fit within the dashboard session's
+    current encoder row -- its planes and scalars are prefixes of the full blocks. A
+    model exported under an earlier, differently sized encoding does not fit and
+    cannot be run on today's inputs."""
+    model_inputs = {i.name: i.shape for i in sess.get_inputs()}
+    full = {s.name: s.dims for s in get_input_shapes()}
+    return (
+        int(model_inputs["input_spatial"][1]) <= full["input_spatial"][0]
+        and int(model_inputs["input_scalar"][1]) <= full["input_scalar"][0]
+    )
+
+
+def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
+    """Run the exported post-move model on one flat input tensor and decode the value
+    outputs: W/L/D probabilities and the score-delta mean/std."""
+    sess = _position_eval_onnx_session(onnx_path)
+    wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(sess, flat_input))
     probs = np.exp(wld[0] - wld[0].max())
     probs /= probs.sum()
     return {
@@ -379,6 +423,57 @@ def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
         "sd_mean": float(sd[0, 0]),
         "sd_std": float(sd[0, 1]),
     }
+
+
+def _run_position_eval_masks(onnx_path: Path, flat_input: np.ndarray) -> dict:
+    """The exported model's four placement-mask heads for one flat input, as
+    board-frame (15, 15) sigmoid-probability arrays keyed by head name.
+
+    The analysis encoder never flips the board (apply_flip=False in
+    position_eval_analysis.cpp), so the convolutional mask heads emit their squares
+    in the same row/col frame as the board -- the frame the Monte-Carlo ground-truth
+    planes use -- and need no transpose."""
+    sess = _position_eval_onnx_session(onnx_path)
+    feed = _position_eval_onnx_feed(sess, flat_input)
+    outs = sess.run(list(MASK_HEAD_NAMES), feed)
+    return {
+        name: 1.0 / (1.0 + np.exp(-out[0])) for name, out in zip(MASK_HEAD_NAMES, outs, strict=True)
+    }
+
+
+@lru_cache(maxsize=256)
+def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
+    """The mask predictions for one on-disk ONNX file + dataset position: board-frame
+    sigmoid (15, 15) arrays keyed by head name, or None when the file's declared input
+    widths don't fit the dashboard session's current encoder (an earlier, differently
+    sized encoding era).
+
+    Cached per (onnx_path, position): an ONNX export is atomic (a temp file renamed
+    into place), so a path that exists is always complete and its content never
+    changes -- the memoized planes never go stale. The fits-encoder=False result is
+    likewise permanent for that path, so caching it is fine too."""
+    onnx_path = Path(onnx_path_str)
+    if not _position_eval_onnx_fits_encoder(_position_eval_onnx_session(onnx_path)):
+        return None
+    gcg = _position_eval_dataset_files()[position]
+    return _run_position_eval_masks(onnx_path, analyze_position_eval_gcg(gcg.read_text()))
+
+
+def _position_eval_placement_pred(tag, task, mount_root, generation, position):
+    """The selected generation's ONNX placement-mask predictions for a dataset
+    position: board-frame sigmoid (15, 15) arrays keyed by head name, or None when
+    the generation has no exported ONNX (or one from an incompatible encoding era).
+
+    File existence is checked uncached on every call: memoizing a miss would pin a
+    null prediction to the generation even if its export appears later. Only once
+    the file exists is the (cacheable) lookup in
+    `_position_eval_placement_pred_for_path` consulted."""
+    if generation is None:
+        return None
+    onnx_path = TagPaths(tag, task, mount_root).onnx_path(generation)
+    if not onnx_path.exists():
+        return None
+    return _position_eval_placement_pred_for_path(str(onnx_path), position)
 
 
 class _Base(tornado.web.RequestHandler):
@@ -620,7 +715,16 @@ class PositionEvalPositionHandler(_Base):
             generation = _resolve_position_eval_generation(
                 conn, self.get_query_argument("generation", "latest")
             )
-            self.write(position_eval_position_payload(conn, position, generation))
+            self.write(
+                position_eval_position_payload(
+                    conn,
+                    position,
+                    generation,
+                    self.get_query_argument("tag"),
+                    self.get_query_argument("task"),
+                    self.mount_root,
+                )
+            )
         except OSError:  # engine unavailable -> can't build the board
             self.set_status(503)
             self.write({"error": "engine unavailable; cannot build board"})

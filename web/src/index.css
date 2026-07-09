@@ -167,6 +167,14 @@ h1 {
   opacity: 0.9;
 }
 
+/* Placement-head residual ring drawn over an unoccupied board square: an
+   inset box-shadow leaves the cell's own background and center content
+   (bonus label, star) fully visible, so only a colored border reads on top. */
+.board-cell-halo {
+  position: absolute;
+  inset: 0;
+}
+
 /* Rack */
 .rack {
   margin-top: 12px;
@@ -974,6 +982,21 @@ h1 {
   color: #1a1f28;
 }
 .lane-controls-row label { display: inline-flex; align-items: center; gap: 6px; }
+
+/* The placement-head residual overlay's radio group: one option per head
+   plus "None", laid out in a single wrapping row next to the board. */
+.radio-group { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.radio-group label { cursor: pointer; }
+.radio-group label.disabled { color: #99a0ab; cursor: not-allowed; }
+/* Vertical variant: options stacked one per line, used when the radio group
+   sits in a sidebar column (e.g. below the Unseen tiles pane) rather than in
+   a horizontal controls row. */
+.radio-group.vertical { flex-direction: column; gap: 6px; }
+
+/* The placement-head picker's column: sits below the Unseen tiles pane, in
+   the same sidebar column as the board. */
+.placement-head-picker { margin-top: 16px; }
+.placement-head-picker-heading { font-size: 13px; font-weight: 600; color: #1a1f28; margin-bottom: 6px; }
 .lane-analysis .seg button {
   border: 1px solid #1f77b4;
   background: white;
@@ -1121,6 +1144,12 @@ h1 {
 .hist-axis .hgl { flex: 1 1 0; text-align: center; font-size: 11px; color: #3a4250; }
 .legend { font-size: 14px; color: #3a4250; margin-top: 8px; }
 .legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin: 0 6px 0 14px; vertical-align: middle; }
+/* Vertical variant: each line (swatch + label, or the ±scale) stacked below
+   the last, used when the legend sits in a sidebar column under the
+   placement-head radio group rather than inline next to it. */
+.legend.vertical { margin-top: 10px; }
+.legend.vertical > div { margin-bottom: 4px; }
+.legend.vertical .sw { margin: 0 6px 0 0; }
 
 /* Generic dashboard card (white rounded content box). */
 .card {

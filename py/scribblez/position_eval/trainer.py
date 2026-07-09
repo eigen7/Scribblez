@@ -85,9 +85,16 @@ def _rows_left(params, state: GenerationalState) -> bool:
 def _checkpoint_and_eval(
     model, optimizer, conn, paths, device, params, state, result, elapsed, ctx
 ):
-    """Record this epoch's metrics + eval (keyed on the checkpoint index, with the
-    rows-clock stored as `positions`), save the rolling checkpoint, export ONNX,
-    and publish the cursor."""
+    """Export ONNX, record this epoch's metrics + eval (keyed on the checkpoint
+    index, with the rows-clock stored as `positions`), save the rolling
+    checkpoint, and publish the cursor.
+
+    ONNX export runs first because the eval step below is what makes this
+    generation visible to the dashboard's Positions tab (it writes the row
+    `db.read_position_eval_generations` reads): a dashboard request landing
+    between that write and a later export would see the generation listed but
+    find no ONNX file yet, so the placement-overlay prediction would come back
+    null."""
     sys.stdout.write("\n")
     avg = result.losses
     ci = state.checkpoint_index
@@ -125,19 +132,18 @@ def _checkpoint_and_eval(
             f"  quality: win_mae={record['eval_win_mae']:.4f} "
             f"sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
         )
+    export_onnx(
+        model,
+        paths.onnx_path(ci),
+        ctx["spatial_planes"],
+        ctx["scalar_size"],
+        contingent_features=params.contingent_features,
+    )
     db.write_metrics(conn, ci, record)
     if ctx["position_eval"] is not None:
         eval_position_eval(model, ctx["position_eval"], device, conn, ci, state.rows_trained)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     _publish_train_state(paths, state)
-    onnx_path = paths.onnx_path(ci)
-    export_onnx(
-        model,
-        onnx_path,
-        ctx["spatial_planes"],
-        ctx["scalar_size"],
-        contingent_features=params.contingent_features,
-    )
     return time.time() - t_eval
 
 

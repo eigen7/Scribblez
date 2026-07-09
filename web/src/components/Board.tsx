@@ -18,6 +18,12 @@ interface BoardProps {
   // view to mark the selected lane. Every cell in it gets the `lane-highlight`
   // class (tiles included), unlike the empty-cell-only `in-direction` cursor hint.
   highlightLane?: { horizontal: boolean; index: number } | null;
+  // Per-cell colored ring overlay, indexed [row][col]. A cell with a non-null
+  // entry gets an inset-ring "halo" div drawn over it (see .board-cell-halo);
+  // `title` becomes that div's hover tooltip. Board renders whatever is given
+  // here without judging occupancy or meaning -- the caller decides which
+  // cells (if any) get an entry and what the ring color and tooltip mean.
+  cellHalos?: ({ color: string; title: string } | null)[][];
 }
 
 const BONUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -36,7 +42,7 @@ const BONUS_LABELS: Record<string, string> = {
 
 const Board: React.FC<BoardProps> = ({
   board, bonuses, candidateTiles, tileScores, cursorRow, cursorCol, cursorDir,
-  interactive, onCellClick, onCellDrop, lastMoveCells, highlightLane,
+  interactive, onCellClick, onCellDrop, lastMoveCells, highlightLane, cellHalos,
 }) => {
   const dim = 15;
 
@@ -142,6 +148,21 @@ const Board: React.FC<BoardProps> = ({
                   ) : isCenter ? (
                     <span className="center-star">★</span>
                   ) : null}
+                  {cellHalos?.[r]?.[c] && (
+                    <div
+                      className="board-cell-halo"
+                      // A thin white fringe on both sides of the colored ring keeps
+                      // it visible on any square background, including bonus squares
+                      // whose color matches the ring's own hue.
+                      style={{
+                        boxShadow:
+                          `inset 0 0 0 1px rgba(255, 255, 255, 0.95), ` +
+                          `inset 0 0 0 4px ${cellHalos[r][c]!.color}, ` +
+                          `inset 0 0 0 5px rgba(255, 255, 255, 0.95)`,
+                      }}
+                      title={cellHalos[r][c]!.title}
+                    />
+                  )}
                 </div>
               );
             })}

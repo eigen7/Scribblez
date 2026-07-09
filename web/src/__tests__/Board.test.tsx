@@ -27,6 +27,7 @@ interface RenderOptions {
   interactive?: boolean;
   onCellClick?: (row: number, col: number) => void;
   onCellDrop?: (row: number, col: number, payload: { letter: string; isBlank: boolean }) => void;
+  cellHalos?: ({ color: string; title: string } | null)[][];
 }
 
 function renderBoard(opts: RenderOptions = {}) {
@@ -41,6 +42,7 @@ function renderBoard(opts: RenderOptions = {}) {
     interactive: opts.interactive ?? true,
     onCellClick: opts.onCellClick ?? vi.fn(),
     onCellDrop: opts.onCellDrop ?? vi.fn(),
+    cellHalos: opts.cellHalos,
   };
   return { ...render(<Board {...props} />), props };
 }
@@ -188,6 +190,27 @@ describe('Board', () => {
     const centre = cellAt(container, 8, 'H');
     expect(centre).not.toHaveTextContent('DW');
     expect(centre).toHaveTextContent('A');
+  });
+
+  it('renders a halo div with the given color and tooltip when cellHalos has an entry', () => {
+    const cellHalos = emptyBoard().map((row) => row.map(() => null)) as ({ color: string; title: string } | null)[][];
+    cellHalos[7][7] = { color: 'rgba(58, 134, 212, 0.500)', title: 'pred 0.032 / sim 0.011 / residual +0.021' };
+    const { container } = renderBoard({ cellHalos });
+    const centre = cellAt(container, 8, 'H');
+    const halo = centre.querySelector('.board-cell-halo');
+    expect(halo).not.toBeNull();
+    expect(halo).toHaveAttribute('title', 'pred 0.032 / sim 0.011 / residual +0.021');
+    expect((halo as HTMLElement).style.boxShadow).toContain('rgba(58, 134, 212, 0.500)');
+  });
+
+  it('renders no halo div on cells without a cellHalos entry, or when the prop is absent', () => {
+    const cellHalos = emptyBoard().map((row) => row.map(() => null)) as ({ color: string; title: string } | null)[][];
+    cellHalos[7][7] = { color: 'red', title: 'x' };
+    const { container: withHalos } = renderBoard({ cellHalos });
+    expect(cellAt(withHalos, 1, 'A').querySelector('.board-cell-halo')).toBeNull();
+
+    const { container: noHalos } = renderBoard();
+    expect(noHalos.querySelectorAll('.board-cell-halo')).toHaveLength(0);
   });
 });
 

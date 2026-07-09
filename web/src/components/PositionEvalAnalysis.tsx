@@ -5,6 +5,14 @@ import Rack from './Rack';
 import UnseenTiles from './UnseenTiles';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
+import {
+  buildPlacementOverlay,
+  HEAD_OPTIONS,
+  OVERESTIMATE_COLOR,
+  UNDERESTIMATE_COLOR,
+  PlacementData,
+  PlacementHeadKey,
+} from '../lib/placementOverlay';
 
 const NO_USED: Set<number> = new Set();
 const MC_COLOR = '#e74c3c'; // Monte-Carlo ground truth (red)
@@ -73,6 +81,10 @@ interface Payload {
   has_prediction: boolean;
   mc: MC;
   model: Model | null;
+  // Ground-truth vs. predicted per-square probabilities for the model's four
+  // placement heads, absent (or null) when the backend hasn't computed them
+  // for this position/generation yet.
+  placement?: PlacementData | null;
 }
 
 interface Generation {
@@ -211,6 +223,64 @@ function ScoreDeltaChart({ mc, model }: { mc: MC; model: Model | null }) {
   );
 }
 
+const NONE_HEAD = 'none' as const;
+type HeadSelection = PlacementHeadKey | typeof NONE_HEAD;
+
+// The "None" / four-head radio group that picks which placement head's
+// residual is overlaid on the board, stacked vertically below the Unseen
+// tiles pane in the board's sidebar column. An option is disabled (with an
+// explanatory tooltip) when the backend hasn't provided a prediction for
+// that head yet -- either because the whole `placement` payload is absent,
+// or because the selected generation has no exported ONNX for that head.
+function PlacementHeadRadios({
+  placement, selected, onChange,
+}: { placement: PlacementData | null | undefined; selected: HeadSelection; onChange: (h: HeadSelection) => void }) {
+  return (
+    <div className="placement-head-picker">
+      <div className="placement-head-picker-heading">Placement residual</div>
+      <span className="radio-group vertical">
+        <label>
+          <input type="radio" name="placement-head" checked={selected === NONE_HEAD} onChange={() => onChange(NONE_HEAD)} />
+          None
+        </label>
+        {HEAD_OPTIONS.map((opt) => {
+          const head = placement?.heads[opt.key];
+          const disabled = !head || !head.pred;
+          const reason = !placement
+            ? 'no placement data for this position'
+            : 'no exported model for this generation';
+          return (
+            <label key={opt.key} className={disabled ? 'disabled' : undefined} title={disabled ? reason : undefined}>
+              <input
+                type="radio"
+                name="placement-head"
+                checked={selected === opt.key}
+                disabled={disabled}
+                onChange={() => onChange(opt.key)}
+              />
+              {opt.label}
+            </label>
+          );
+        })}
+      </span>
+    </div>
+  );
+}
+
+// The two-swatch legend explaining the overlay's diverging color scale,
+// stacked vertically below the radio group whenever a head is selected and
+// rendered. The last line names the normalization: ring intensity is
+// |pred - sim| relative to the board's largest residual for the selected head.
+function PlacementLegend({ maxAbsResidual }: { maxAbsResidual: number }) {
+  return (
+    <div className="legend vertical">
+      <div><span className="sw" style={{ background: OVERESTIMATE_COLOR }} /> model high (pred &gt; sim)</div>
+      <div><span className="sw" style={{ background: UNDERESTIMATE_COLOR }} /> model low (pred &lt; sim)</div>
+      <div>intensity ∝ |pred − sim| (board max {maxAbsResidual.toFixed(3)})</div>
+    </div>
+  );
+}
+
 export default function PositionEvalAnalysis({ task, tag }: { task: string; tag: string | null }) {
   const [positions, setPositions] = useState<string[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
@@ -218,6 +288,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
   const [genIdx, setGenIdx] = useState(0);
   const [latest, setLatest] = useState(true);
   const [payload, setPayload] = useState<Payload | null>(null);
+  const [headSel, setHeadSel] = useState<HeadSelection>(NONE_HEAD);
   const [altOpen, setAltOpen] = useState(false);
   const [altLeave, setAltLeave] = useState('');
   const [altResult, setAltResult] = useState<AltResult | null>(null);
@@ -320,6 +391,21 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     [payload?.last_move],
   );
 
+  // Drop back to "None" if the newly loaded position/generation no longer
+  // has a prediction for the currently selected head (e.g. the generation
+  // changed to one with no exported ONNX), so the radio group never sits on
+  // a disabled option.
+  useEffect(() => {
+    if (headSel === NONE_HEAD) return;
+    const head = payload?.placement?.heads[headSel];
+    if (!head || !head.pred) setHeadSel(NONE_HEAD);
+  }, [payload, headSel]);
+
+  const placementOverlay = useMemo(() => {
+    if (headSel === NONE_HEAD || !payload) return null;
+    return buildPlacementOverlay(payload.placement?.heads, headSel);
+  }, [headSel, payload]);
+
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
     return <div className="muted" style={{ padding: 20 }}>No position-evaluation dataset available.</div>;
@@ -384,11 +470,13 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                 interactive={false}
                 onCellClick={() => {}}
                 onCellDrop={() => {}}
+                cellHalos={placementOverlay?.halos}
               />
             </div>
             {/* The unseen pool the Monte-Carlo samples: 100 tiles minus the board and
                 the POV's leave (i.e. the bag + the opponent's rack). Constrained to the
-                game app's sidebar width so the tiles render at the same size. */}
+                game app's sidebar width so the tiles render at the same size. Below it,
+                in the same column, sits the placement-residual head picker and legend. */}
             <div style={{ width: 320, flexShrink: 0 }}>
               <UnseenTiles
                 state={{
@@ -404,6 +492,8 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                   game_over: false,
                 }}
               />
+              <PlacementHeadRadios placement={payload.placement} selected={headSel} onChange={setHeadSel} />
+              {placementOverlay && <PlacementLegend maxAbsResidual={placementOverlay.maxAbsResidual} />}
             </div>
           </div>
 
