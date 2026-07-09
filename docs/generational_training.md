@@ -1,13 +1,16 @@
 # Generational training
 
-This is the training pipeline — implemented as
-[scripts/position_eval/train.py](../py/scripts/position_eval/train.py) and
-[scripts/max_move_per_lane/train.py](../py/scripts/max_move_per_lane/train.py) —
-plus the C++ and coordination machinery it grows into. The core lifecycle
+This is the training pipeline — implemented as the train roles of the
+position_eval and max_move_per_lane workloads
+([scribblez/position_eval/trainer.py](../py/scribblez/position_eval/trainer.py),
+[scribblez/max_move_per_lane/trainer.py](../py/scribblez/max_move_per_lane/trainer.py))
+— plus the C++ and coordination machinery it grows into. The core lifecycle
 (rows-clock, generations, the sliding window, reuse-driven epochs, restart
-reconciliation, and the live dashboard controls) is built; the game-pool
-producer, the resource-contention manager, and distributed workers described
-below are forward-looking. For the data pipeline it builds on, see
+reconciliation, the live dashboard controls, and distributed game generation
+via the master dashboard's generator workers and generation scheduler — see
+[docs/position_eval_workload.md](position_eval_workload.md)) is built; the
+game-pool producer and the resource-contention manager described below are
+forward-looking. For the data pipeline it builds on, see
 [docs/architecture.md](architecture.md).
 
 ## Motivation
@@ -61,11 +64,12 @@ committed rows rather than wall-clock or epoch count.
 A **generation** is a batch of self-play games written to its own directory:
 
 ```
-tags/<tag>/data/
+tags/<task>/<tag>/data/
+  staging/                   # generator chunks awaiting assignment
   test/                      # frozen ONCE at run start, never regenerated
   generations/
     gen_000042/
-      manifest.json          # {target_games, seed, player_spec, status}
+      manifest.json          # {index, target_games, committed_games, status}
       *.slog
     gen_000043/ ...
 ```
@@ -152,14 +156,14 @@ For the HastyBot (GPU-free) case a "unit of work" can be an entire game — the
 pool structure is identical; only the eval-batching layer differs. The disk
 `GameRunner` path and the streaming ring-buffer path both ride the same pool.
 
-## Producer process model: relaunch-per-generation vs. run-forever
+## Producer process model: relaunch-per-chunk vs. run-forever
 
-The generational trainer currently **relaunches the `play_game` subprocess once
-per generation** ([train.py](../py/scripts/position_eval/train.py)
-via [generate_data.run_games](../py/scripts/generate_data.py)): each generation
-opens its directory, runs `play_game --games N --threads T` into it, and the
-process exits at N games. The thread count is a live control (`CpuController`),
-but it only takes effect at the next launch — **generation-boundary granularity**.
+Generation runs as a fleet of generator workers
+([scribblez/workloads/selfplay_gen.py](../py/scribblez/workloads/selfplay_gen.py)),
+each of which **relaunches the `play_game` subprocess once per chunk**: a cycle
+runs `play_game --games N --threads T` into the worker's work dir and the
+process exits at N games. The thread count is a per-worker-slot setting applied
+at the next spawn — **chunk-boundary granularity**.
 
 A **run-forever** producer — one long-lived process (or in-process game-pool)
 that never exits, is told which generation directory to write to, and is retuned
@@ -240,55 +244,56 @@ boundary-granularity thread tuning already covers most of the need.
 
 ## The lifecycle orchestrator (Python)
 
-The orchestrator lives in the trainer script and drives its per-minibatch step
+The orchestrator is the trainer role and drives its per-minibatch step
 through a shared per-task `run_epoch`
 ([position_eval/train_loop.py](../py/scribblez/position_eval/train_loop.py),
 [max_move_per_lane/train_loop.py](../py/scribblez/max_move_per_lane/train_loop.py)),
 so the gradient step is isolated from the lifecycle. The learning rate is set per
 step from a pure function of the rows-clock (see below).
 
+The trainer is a **pure consumer**: it never generates. Generator workers stage
+whole-file chunks, and the generation scheduler on the controller host assigns
+them to generation directories and marks completion in the manifests (see
+[docs/position_eval_workload.md](position_eval_workload.md) for the protocol).
+The trainer's loop is
+
 ```python
-# train.py (skeleton)
+# the train role (skeleton)
 state = resume_generational(paths, model, optimizer)   # rows_trained, gen_idx, epoch_in_gen
-lr_fn = make_lr_fn(args.lr, args.warmup_rows)
-ensure_frozen_test_split(paths, args)                  # generate ONCE if absent
-refiller = BackgroundRefiller(paths, args) if args.window > 1 else None
+publish_train_state(paths, state)                      # the scheduler's pacing cursor
 
-while args.max_rows == 0 or state.rows_trained < args.max_rows:
-    gen_dir = lifecycle.ensure_generation(paths, state.gen_idx, args, resources)  # (re)fill if partial
-    window  = lifecycle.window_dirs(paths, state.gen_idx, args.window)
-    ds      = SlogDataset(window, num_workers=resources.dataloader_workers())
+while params.max_rows == 0 or state.rows_trained < params.max_rows:
+    wait_for_generation(paths, state.gen_idx)          # poll manifests until complete
+    window = lifecycle.window_dirs(paths, state.gen_idx, params.window)
+    ds     = SlogDataset(window, num_workers=cpu.dataloader_workers)
 
-    if refiller:                                       # fill gen_idx+1 in the background
-        refiller.start(state.gen_idx + 1, resources)
+    for e in range(state.epoch_in_gen, epochs_for_reuse(...)):
+        result = run_epoch(model, optimizer, ds, device, ...,
+                           epoch_index=global_epoch(state, e),
+                           rows_trained=state.rows_trained, lr_fn=lr_fn)
+        checkpoint_eval_and_export(...)                # keyed on rows_trained
+        publish_train_state(paths, state)
 
-    for e in range(state.epoch_in_gen, args.epochs_per_gen):
-        metrics, state.rows_trained = run_epoch(model, optimizer, ds, device, args,
-                                                epoch_index=global_epoch(state, e),
-                                                rows_trained=state.rows_trained, lr_fn=lr_fn, ...)
-        run_probes_and_calibration(...)                # keyed on rows_trained
-        save_generational_checkpoint(paths, ..., epoch_in_gen=e + 1)
-        resources.rebalance(loader_stats=ds.loader_stats(), gpu_busy_frac=meter.gpu_busy_frac())
-
+    lifecycle.evict_beyond_window(paths, state.gen_idx, params.window)
     state.gen_idx += 1
     state.epoch_in_gen = 0
-    if refiller: refiller.promote()
-    else:        lifecycle.evict_beyond_window(paths, state.gen_idx, args.window)
 ```
 
-Knobs: `--games-per-generation`, `--reuse-factor` (derives epochs-per-generation),
-`--window` (W generations kept), `--turns-per-game`, `--warmup-rows`, `--max-rows`.
+Knobs (frozen task params): `games_per_generation`, `test_games`, `open_ahead`,
+`reuse_per_position` (derives epochs-per-generation), `window` (W generations
+kept), `turns_per_game`, `warmup_rows`, `max_rows`.
 
-### Overlap: background refill
+### Overlap: continuous generation with an ahead-limit
 
 A strictly serial *generate a generation, then train on it* idles the GPU during
-generation — the exact resource waste we are trying to escape. `BackgroundRefiller`
-runs generation of `gen_{N+1}` (an out-of-process game-pool producer, or a
-worker; see [Distributed](#distributed-game-generation)) while the trainer reuses
-the current window. When the trainer finishes its passes, the next generation is
-already on disk. This gets the streaming shape's CPU/GPU overlap *and* keeps
-the reuse benefit. How many cores the refiller gets versus the DataLoader is
-exactly what the resource manager arbitrates.
+generation — the exact resource waste we are trying to escape. Instead the
+generator fleet runs continuously while the trainer trains: the scheduler keeps
+the next generation open while its index is within `open_ahead` of the trainer's
+published cursor, and **gates** (parks) the fleet beyond that. When the trainer
+finishes its passes, the next generation is already on disk. This gets the
+streaming shape's CPU/GPU overlap *and* keeps the reuse benefit; how many cores
+generation gets versus the DataLoader is the generator slots' thread counts
+versus the trainer's DataLoader control.
 
 ### Learning rate: a persisted manual control
 
@@ -334,16 +339,15 @@ done is a small **commit-tracking DB** (SQLite, or a per-generation
 - The rolling checkpoint carries `rows_trained`, `generation_index`, and
   `epoch_in_generation` alongside the model/optimizer/scheduler state.
 
-On startup the orchestrator reconciles disk against this state:
+On startup the trainer reconciles disk against this state:
 
-- Latest generation `status: generating`, or game count < `target_games` → a
-  **partial** generation: finish or regenerate it before training. Because
-  `play_game` writes whole `.slog` files atomically per `--games-per-file`,
-  counting complete files against the target is reliable — there are no
-  half-written rows.
+- Cursor generation `status: generating` → wait for the generation scheduler to
+  finish filling it (chunks are whole files assigned by a single writer, so
+  counting committed games against the target is reliable — there are no
+  half-written rows and nothing to regenerate).
 - Checkpoint's `epoch_in_generation < epochs_per_generation` → resume passes over
   the current window.
-- Otherwise → open the next generation.
+- Otherwise → advance to the next generation.
 
 This is the local-single-process version of AlphaZeroArcade's crash tolerance,
 where a `staged/unstaged` commit state machine discards a dead worker's
@@ -405,10 +409,11 @@ was left. The tab holds:
 - **Base learning rate.** Stepped down by hand off the loss plots (see
   [Learning rate](#learning-rate-a-persisted-manual-control)); each change is
   logged as a rows-clock event that annotates the metric curves.
-- **CPU core budget** `C`, split across generation / DataLoader / torch. An
-  "auto-balance" toggle hands the split to the feedback controller, which the tab
-  then merely visualizes (stacked cores over time, overlaid on GPU-busy fraction
-  and the producer/consumer block-ratio); off, sliders pin it manually.
+- **DataLoader workers** and **torch intra-op threads** — the trainer's CPU
+  pools. Generation capacity is not a control here: it belongs to the generator
+  worker slots (threads/vcpus per slot in the master dashboard). A future
+  "auto-balance" toggle could hand the trainer-side split to the feedback
+  controller, which the tab then merely visualizes.
 - Later, **per-domain GPU priorities** for the neural regime's contention lock.
 
 This rides the per-tag dashboard DB the metrics already live in (the `control`
@@ -416,41 +421,29 @@ and `control_event` tables).
 
 ## Distributed game generation
 
-The neural regime makes remote workers attractive: generation that needs a GPU
-can be farmed to other machines so it never contends with the training GPU.
-AlphaZeroArcade's controller/worker split is the reference design.
-
-**The key simplification: on a single host, the on-disk generation directory *is*
-the transport.** AlphaZeroArcade's data path has a localhost special case — when
-a worker runs on the controller's host, the C++ binary writes its data file
-directly to disk and the controller simply moves it; the length-prefixed
-JSON-over-TCP machinery only engages for genuinely remote workers. That localhost
-path is exactly the `.slog`-files-in-`gen_N/` interface above. Therefore:
-
-- The in-process producer, out-of-process local workers, and neural self-play all
-  need **zero networking** — they write `.slog` into the generation directory.
-- Remote workers are a purely additive final step: a control channel plus a
-  file-blob socket bolted onto the *same* generation-directory interface. Nothing
-  upstream changes.
+Game generation is farmed to interchangeable generator workers — local
+subprocesses and rented cloud pods — through the master dashboard; see
+[docs/position_eval_workload.md](position_eval_workload.md) for the built
+protocol. The key simplification, inherited from AlphaZeroArcade's localhost
+special case, is that **the on-disk generation directory is the transport**:
+workers produce whole `.slog` chunks (into a staging area, locally or via the
+results bucket), and the generation scheduler on the controller host assigns
+them to generation directories with plain renames. No worker ever needs to know
+which generation is open, and no networking exists beyond the bucket sync the
+cloud scaffolding already provides.
 
 The controller/worker shape, mapped onto this system:
 
 | AlphaZeroArcade | Here |
 |-----------------|------|
-| LoopController (central: trainer, model, generation clock, contention manager) | the lifecycle orchestrator |
-| SelfPlayServer (thin per-machine launcher) | wrapper that runs a game-pool producer in-process or as a worker |
-| self-play worker (C++ binary, own TCP connection) | game-pool producer writing `.slog` |
-| Per-generation binary relaunch (gen-0 no model → later gens neural) | per-generation regeneration (gen-0 HastyBot → later neural) |
-| Controller pushes new model per generation | controller publishes `gen_N/model.onnx`; workers pull before producing `gen_{N+1}` |
+| LoopController (central: trainer, model, generation clock, contention manager) | the trainer role + the generation scheduler |
+| SelfPlayServer (thin per-machine launcher) | the worker entrypoint running the generate role |
+| self-play worker (C++ binary, own TCP connection) | `play_game` chunks delivered to staging |
+| Controller pushes new model per generation | (neural phase) chunks stamped with their model version; workers pull before producing |
 
-Properties worth adopting when that step comes: **workers dial into the
-controller** (a passive listener), so adding a machine is "point another process
-at host:port" with no controller-side reconfiguration; the **Python supervisor
-holds a durable control connection while the C++ worker holds the data/weights
-connection**, so the binary can be relaunched per generation (config changes like
-no-model gen-0) without losing registration; and **model distribution piggybacks
-on the pause/resume cycle** rather than a bespoke push flow — on a single box that
-cycle is the same GPU-lock handoff the contention manager already performs.
+The neural regime adds the missing piece: generation that needs the current
+model must learn which weights to run. Model distribution can piggyback on the
+scheduler's existing gate/ungate cycle rather than a bespoke push flow.
 
 ## Why a window, not a wipe
 
@@ -478,18 +471,16 @@ not a rewrite.
 
 ## Roadmap
 
-| Step | Build | Networking | GPU contention |
-|------|-------|-----------|----------------|
-| 1 | Game-pool producer (G ≫ T, live `target_threads_`); discrete-generation lifecycle on the rows-clock; commit-tracking DB; shared `run_epoch`; rows-clock LR | none | none (HastyBot) |
-| 2 | CPU budget → `ContentionManager` (resource/domain/priority); sliding row-window; discrete-vs-continuous as a parameter; dashboard control widget | none | abstraction only |
-| 3 | Neural self-play in-process: batched eval on the game-pool; GPU lock (TRAINING > SELF_PLAY + hijack); model reload on resume | none | yes (priority lock) |
-| 4 | Remote workers: control channel + file-blob socket onto the existing generation-directory interface | yes | remote = own GPU, no contention |
+| Step | Build | Status | GPU contention |
+|------|-------|--------|----------------|
+| 1 | Discrete-generation lifecycle on the rows-clock; per-directory manifests; shared `run_epoch`; rows-clock LR | built | none (HastyBot) |
+| 2 | Distributed generation: generator worker fleet + generation scheduler (staging ingest, pacing gate) on the master dashboard | built | none (HastyBot) |
+| 3 | Game-pool producer (G ≫ T, live `target_threads_`); `ContentionManager` (resource/domain/priority); continuous sliding row-window as a parameter | future | abstraction only |
+| 4 | Neural self-play: batched eval on the game-pool; GPU lock (TRAINING > SELF_PLAY + hijack); model-stamped chunks + model distribution to generators | future | yes (priority lock) |
 
-Steps 1 and 2 are load-bearing and painful to retrofit: the game-pool underpins
-all later generation, and keeping "who fills a generation" behind a producer
-interface (plus the resource/domain abstraction) is what makes steps 3 and 4
-additive rather than rewrites. The distributed layer is genuinely deferrable —
-build it only when a second machine exists.
+The game-pool underpins all later generation, and keeping "who fills a
+generation" behind the staging/manifest interface is what makes steps 3 and 4
+additive rather than rewrites.
 
 ## Deliberately out of scope
 

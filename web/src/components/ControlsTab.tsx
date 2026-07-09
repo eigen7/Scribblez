@@ -27,7 +27,6 @@ const CONTROLS: Spec[] = [
     hint: 'Adopted at the next epoch; annotated on the loss plot where it changes.',
     fmt: (v) => v.toExponential(3),
   },
-  { name: 'gen_threads', label: 'Game-generation threads', hint: 'play_game threads, applied at the next generation.', fmt: int },
   { name: 'dataloader_workers', label: 'DataLoader workers', hint: 'C++ decode/shuffle workers, applied at the next generation.', fmt: int },
   { name: 'torch_threads', label: 'PyTorch intra-op threads', hint: 'Applied at the next generation.', fmt: int },
 ];

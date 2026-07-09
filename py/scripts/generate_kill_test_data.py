@@ -2,10 +2,11 @@
 """Data generator for the sim-evidence kill-test (docs/sim_residual_feedback.md).
 
 Runs generation cycles until stopped (Ctrl-C), accumulating .slog/.sobs pairs
-under <mount>/kill_test/<tag>/slogs. The cycle logic and parameter set live in
-scribblez/kill_test_gen.py (shared with the cloud/local worker entrypoint and
-the master dashboard); the parameter flags below are generated from
-KillTestParams, so this CLI cannot drift from the other drivers.
+in the tag's pair store (<mount>/tags/kill_test/<tag>/data/slogs). The cycle
+logic and parameter set live in scribblez/workloads/kill_test.py (shared with
+the cloud/local worker entrypoint and the master dashboard); the parameter
+flags below are generated from KillTestParams, so this CLI cannot drift from
+the other drivers.
 
 Interrupting loses at most the in-flight cycle's unfinished work; a rerun
 resumes exactly where generation left off. Run the 4-armed experiment on the
@@ -21,7 +22,7 @@ import sys
 
 from scribblez import params as params_mod
 from scribblez.hardware import default_thread_count
-from scribblez.kill_test_gen import KillTestParams, run_one_cycle, slog_dir
+from scribblez.workloads.kill_test import KillTestParams, run_one_cycle, slog_dir
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -31,7 +32,7 @@ def main() -> int:
         "-t",
         "--tag",
         required=True,
-        help="run tag; data accumulates under <mount>/kill_test/<tag>/slogs",
+        help="run tag; data accumulates in the tag's data/slogs dir",
     )
     p.add_argument(
         "--threads",

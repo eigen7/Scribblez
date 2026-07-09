@@ -1,12 +1,16 @@
 """Live operator controls shared by the generational trainers.
 
-Every generational trainer (position evaluation, max-move-per-lane) exposes the same
-dashboard-tunable knobs -- a base learning rate and the three CPU-thread pools --
-persisted in the per-tag dashboard DB's control table and restored on restart.
-The controllers here read those controls at their natural cadence (the LR once
-per epoch, the CPU pools once per generation), apply them, and log each change as
+Every generational trainer (position evaluation, max-move-per-lane) exposes the
+same dashboard-tunable knobs -- a base learning rate and two CPU-thread pools
+(C++ DataLoader workers, torch intra-op threads) -- persisted in the per-tag
+dashboard DB's control table and restored on restart. Game-generation capacity
+is deliberately not a control here: generation belongs to the generator worker
+fleet, sized per worker slot from the master dashboard.
+
+The controllers read the controls at their natural cadence (the LR once per
+epoch, the CPU pools once per generation), apply them, and log each change as
 a rows-clock control event so the metric plots can annotate where a knob moved.
-The task-specific orchestrators own only their model, loss, and evaluation.
+The task-specific trainers own only their model, loss, and evaluation.
 """
 
 from __future__ import annotations
@@ -19,12 +23,13 @@ from ..dashboard import db
 from ..train_common import timed_print
 from .lr import make_lr_fn
 
-# Names of the live controls (dashboard Controls tab / DB). The base learning rate
-# plus the three CPU-thread pools the operator can retune between generations.
+# Names of the live controls (dashboard Controls tab / DB).
 CONTROL_BASE_LR = "base_lr"
-CONTROL_GEN_THREADS = "gen_threads"
 CONTROL_DATALOADER_WORKERS = "dataloader_workers"
 CONTROL_TORCH_THREADS = "torch_threads"
+
+# Starting points for the CPU-thread controls when a run first creates them.
+DEFAULT_DATALOADER_WORKERS = 4
 
 
 class LrController:
@@ -35,11 +40,11 @@ class LrController:
     the base since the last epoch, a rows-clock control event is recorded so the
     metric plots can annotate where it changed."""
 
-    def __init__(self, conn, args):
+    def __init__(self, conn, base_lr: float, warmup_rows: int):
         self._conn = conn
-        self._warmup_rows = args.warmup_rows
-        self._default = args.lr
-        self.base = db.read_control(conn, CONTROL_BASE_LR, default=args.lr)
+        self._warmup_rows = warmup_rows
+        self._default = base_lr
+        self.base = db.read_control(conn, CONTROL_BASE_LR, default=base_lr)
 
     def epoch_lr_fn(self, rows_trained: int):
         """The per-step lr_fn for the upcoming epoch, from the current base rate."""
@@ -52,19 +57,18 @@ class LrController:
 
 
 class CpuController:
-    """Serves the live CPU-thread controls -- game-generation threads, C++
-    DataLoader workers, and PyTorch intra-op threads -- from the control table,
-    refreshed once per generation (the natural point to retune, since the
-    generation subprocess and the dataset are rebuilt there). torch's thread count
-    is applied here; the other two are read by the generation and dataset builders
-    via the properties. Changes are recorded as rows-clock control events."""
+    """Serves the live CPU-thread controls -- C++ DataLoader workers and PyTorch
+    intra-op threads -- from the control table, refreshed once per generation
+    (the natural point to retune, since the dataset is rebuilt there). torch's
+    thread count is applied here; the DataLoader count is read by the dataset
+    builder via the property. Changes are recorded as rows-clock control events.
+    """
 
-    def __init__(self, conn, args):
+    def __init__(self, conn):
         self._conn = conn
         self._defaults = {
-            CONTROL_GEN_THREADS: args.gen_threads,
-            CONTROL_DATALOADER_WORKERS: args.dataloader_workers,
-            CONTROL_TORCH_THREADS: args.torch_threads or torch.get_num_threads(),
+            CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
+            CONTROL_TORCH_THREADS: torch.get_num_threads(),
         }
         self._vals: dict = {}
         self.refresh(0)
@@ -84,25 +88,20 @@ class CpuController:
         torch.set_num_threads(vals[CONTROL_TORCH_THREADS])
 
     @property
-    def gen_threads(self) -> int:
-        return self._vals[CONTROL_GEN_THREADS]
-
-    @property
     def dataloader_workers(self) -> int:
         return self._vals[CONTROL_DATALOADER_WORKERS]
 
 
-def init_controls(conn, args):
-    """Seed the four live controls with the CLI-supplied initial values (kept
-    across restarts; retuned from the Controls tab). The --lr / --*-threads flags
-    only set the starting point."""
+def init_controls(conn, base_lr: float):
+    """Seed the live controls with their starting values (kept across restarts;
+    retuned from the Controls tab). The task's lr param only sets the starting
+    point."""
     db.init_control(
         conn,
         {
-            CONTROL_BASE_LR: args.lr,
-            CONTROL_GEN_THREADS: args.gen_threads,
-            CONTROL_DATALOADER_WORKERS: args.dataloader_workers,
-            CONTROL_TORCH_THREADS: args.torch_threads or torch.get_num_threads(),
+            CONTROL_BASE_LR: base_lr,
+            CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
+            CONTROL_TORCH_THREADS: torch.get_num_threads(),
         },
     )
 

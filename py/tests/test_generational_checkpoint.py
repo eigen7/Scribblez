@@ -1,7 +1,5 @@
 """Unit tests for the generational rolling checkpoint (restart state)."""
 
-from types import SimpleNamespace
-
 import torch
 from scribblez.generational.checkpoint import GenerationalState, resume, save
 from scribblez.paths import POSITION_EVAL, TagPaths
@@ -32,7 +30,7 @@ def test_save_resume_roundtrip(tmp_path):
     state = GenerationalState(
         rows_trained=512, generation_index=3, epoch_in_generation=2, checkpoint_index=7
     )
-    save(paths, model, opt, state, SimpleNamespace(lr=0.1, tag="t"))
+    save(paths, model, opt, state, {"lr": 0.1, "tag": "t"})
 
     model2 = torch.nn.Linear(4, 2)
     opt2 = torch.optim.SGD(model2.parameters(), lr=0.9)  # overwritten by the restore

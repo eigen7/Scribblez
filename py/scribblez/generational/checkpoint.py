@@ -36,8 +36,9 @@ class GenerationalState:
     checkpoint_index: int = 0
 
 
-def save(paths: TagPaths, model, optimizer, state: GenerationalState, args):
-    """Persist the rolling checkpoint (model + optimizer + generational cursor)."""
+def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: dict):
+    """Persist the rolling checkpoint (model + optimizer + generational cursor).
+    `config` is the run's frozen task params, recorded for later inspection."""
     path = paths.rolling_checkpoint
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -48,7 +49,7 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, args):
             "checkpoint_index": state.checkpoint_index,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "args": vars(args),
+            "config": config,
         },
         path,
     )

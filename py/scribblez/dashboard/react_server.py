@@ -1,11 +1,10 @@
-"""Launch the React training dashboard: the Python (Tornado) data API plus the Vite
-dev server that serves the React app (``VITE_TOOL=dashboard``).
+"""Launch the master dashboard: the Python (Tornado) data+control API plus the
+Vite dev server that serves the React app (``VITE_TOOL=dashboard``).
 
 This mirrors how the C++ web tools launch Vite (ports injected via env vars), but
-the backend here is the Python data API (``api.py``) rather than a C++ WebSocket
-server -- the dashboard's data lives in Python (SQLite, torch, the engine FFI). The
-existing Bokeh-served dashboard is unaffected and can run alongside this during the
-migration. See docs/react_dashboard.md.
+the backend here is the Python API (``api.py``) rather than a C++ WebSocket
+server -- the dashboard's data lives in Python (SQLite, torch, the engine FFI).
+See docs/master_dashboard.md and docs/react_dashboard.md.
 """
 
 import os
@@ -67,18 +66,17 @@ def _dashboard_banner(url: str) -> str:
 
 
 def spawn(
-    task: str | None,
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
+    workload: str | None = None,
     tag: str | None = None,
 ) -> list[subprocess.Popen]:
-    """Spawn the data API and the Vite dev server in the background; return their
-    processes (so a caller can terminate them on exit). Non-blocking, so a trainer
-    can launch the dashboard alongside training. Any process already holding the
-    API or Vite port is reclaimed first (a stale dashboard from a prior run). When
-    `tag` is given, the printed URL carries `?tag=<tag>` so the dashboard opens on
-    that run."""
+    """Spawn the API and the Vite dev server in the background; return their
+    processes (so a caller can terminate them on exit). Any process already
+    holding the API or Vite port is reclaimed first (a stale dashboard from a
+    prior run). When `workload`/`tag` are given, the printed URL carries them
+    so the dashboard opens on that task."""
     reclaim_port(api_port)
     reclaim_port(dev_port)
     api = subprocess.Popen(
@@ -92,13 +90,9 @@ def spawn(
             str(mount_root),
         ]
     )
-    # fmt: on
-    # With a task, the React app renders that training-task view (the trainers'
-    # auto-spawned dashboards); with task=None it renders the master dashboard.
     env = {
         **os.environ,
         "VITE_TOOL": "dashboard",
-        **({"VITE_TASK": task} if task else {}),
         "VITE_DEV_PORT": str(dev_port),
         "VITE_API_PORT": str(api_port),
     }
@@ -114,22 +108,26 @@ def spawn(
         stderr=subprocess.DEVNULL,
     )
     url = f"http://localhost:{dev_port}"
-    if tag:
-        url += f"/?tag={quote(tag)}"
+    query = [
+        *(["workload=" + quote(workload)] if workload else []),
+        *(["tag=" + quote(tag)] if tag else []),
+    ]
+    if query:
+        url += "/?" + "&".join(query)
     print(_dashboard_banner(url), file=sys.stderr)
     return [api, vite]
 
 
 def launch(
-    task: str | None,
     mount_root: str = "/workspace/mount",
     api_port: int = DEFAULT_API_PORT,
     dev_port: int = DEFAULT_DEV_PORT,
+    workload: str | None = None,
     tag: str | None = None,
 ):
     """Spawn the dashboard and block until interrupted, then tear it down (the CLI
     entry point)."""
-    procs = spawn(task, mount_root, api_port, dev_port, tag)
+    procs = spawn(mount_root, api_port, dev_port, workload, tag)
     try:
         procs[-1].wait()  # the Vite process
     except KeyboardInterrupt:

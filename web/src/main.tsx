@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import AppManual from './AppManual';
 import AppBoard from './AppBoard';
-import AppDashboard from './AppDashboard';
+import MasterApp from './components/master/MasterApp';
 import './index.css';
 
 // The engine injects VITE_TOOL when it launches the dev server, so each tool's
@@ -14,7 +14,7 @@ const tool = import.meta.env.VITE_TOOL ?? params.get('tool');
 const Root =
   tool === 'manual' ? AppManual
   : tool === 'board' ? AppBoard
-  : tool === 'dashboard' ? AppDashboard
+  : tool === 'dashboard' ? MasterApp
   : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

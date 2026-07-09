@@ -1,10 +1,12 @@
-"""Bokeh figures for the kill-test Stats tab.
+"""Bokeh figures for the generic worker Stats tab.
 
 Built from the per-worker stats records (stats/<worker_id>.json under the
-tag's data dir; see the WorkerStats section of py/cloud/worker_entrypoint.py).
-Each builder takes the parsed records and returns a Bokeh model or None when
-there is nothing to plot; the API serializes with json_item for the React
-BokehFigure embed, mirroring the training dashboard's figure path.
+tag's root; see scribblez/workloads/worker.py) and shaped by the role's
+StatsSpec (unit noun + timing phases), so any workload role that publishes
+stats gets the same summary table and figures. Each builder takes the parsed
+records plus the StatsSpec and returns a Bokeh model or None when there is
+nothing to plot; the API serializes with json_item for the React BokehFigure
+embed.
 """
 
 import json
@@ -15,14 +17,15 @@ from bokeh.models import ColumnDataSource, HoverTool
 from bokeh.palettes import Category10
 from bokeh.plotting import figure
 
+from scribblez.workloads.base import StatsSpec
+
 # Worker throughput/breakdown figures average over this many trailing cycles,
 # so they track current behavior rather than the whole run.
 WINDOW = 20
 
 
-def read_stats(data_dir: Path) -> list[dict]:
+def read_stats(stats_dir: Path) -> list[dict]:
     """All worker stats records under the tag, newest-updated first."""
-    stats_dir = data_dir / "stats"
     records = []
     for path in sorted(stats_dir.glob("*.json")) if stats_dir.is_dir() else []:
         records.append(json.loads(path.read_text()))
@@ -33,31 +36,30 @@ def _recent(record: dict) -> list[dict]:
     return record.get("recent", [])[-WINDOW:]
 
 
-def worker_summary(record: dict) -> dict:
+def worker_summary(record: dict, stats: StatsSpec) -> dict:
     """The per-worker roll-up the Stats tab tabulates: recent-window rates and
     cycle-phase means, plus the cumulative counters."""
     recent = _recent(record)
     span = recent[-1]["t"] - recent[0]["t"] if len(recent) > 1 else 0.0
-    pairs_recent = sum(s["pairs"] for s in recent[1:])  # rate over the span between samples
+    units_recent = sum(s["units"] for s in recent[1:])  # rate over the span between samples
     upload_bytes = sum(s["bytes"] for s in recent)
-    upload_s = sum(s["upload_s"] for s in recent)
+    upload_s = sum(s.get("upload_s", 0.0) for s in recent)
 
     def mean(key: str) -> float:
-        return sum(s[key] for s in recent) / len(recent) if recent else 0.0
+        return sum(s.get(key, 0.0) for s in recent) / len(recent) if recent else 0.0
 
     return {
         "worker_id": record["worker_id"],
+        "role": record.get("role"),
         "kind": record["kind"],
         "threads": record.get("threads"),
         "host_arch": record.get("host_arch"),
         "bundle_arch": record.get("bundle_arch"),
-        "pairs_total": record["pairs_total"],
+        "units_total": record["units_total"],
         "cycles_total": record["cycles_total"],
         "updated_at": record["updated_at"],
-        "pairs_per_hour": pairs_recent / span * 3600 if span > 0 else None,
-        "gen_s": mean("gen_s"),
-        "sim_s": mean("sim_s"),
-        "upload_s": mean("upload_s"),
+        "units_per_hour": units_recent / span * 3600 if span > 0 else None,
+        "phases": {p: mean(p) for p in stats.phases},
         "upload_mbps": (upload_bytes / 1e6) / upload_s if upload_s > 0 else None,
     }
 
@@ -76,31 +78,30 @@ def _workers_figure(title: str, workers: list[str], y_label: str):
     return fig
 
 
-def throughput(records: list[dict]):
-    """Pairs/hour per worker over its recent cycles."""
-    rows = [worker_summary(r) for r in records]
-    rows = [r for r in rows if r["pairs_per_hour"] is not None]
+def throughput(records: list[dict], stats: StatsSpec):
+    """Units/hour per worker over its recent cycles."""
+    rows = [worker_summary(r, stats) for r in records]
+    rows = [r for r in rows if r["units_per_hour"] is not None]
     if not rows:
         return None
     workers = [r["worker_id"] for r in rows]
-    fig = _workers_figure("Recent throughput", workers, "pairs / hour")
-    fig.vbar(x=workers, top=[r["pairs_per_hour"] for r in rows], width=0.7, color="#1f77b4")
+    fig = _workers_figure("Recent throughput", workers, f"{stats.unit} / hour")
+    fig.vbar(x=workers, top=[r["units_per_hour"] for r in rows], width=0.7, color="#1f77b4")
     return fig
 
 
-def cycle_breakdown(records: list[dict]):
+def cycle_breakdown(records: list[dict], stats: StatsSpec):
     """Mean seconds per cycle phase, stacked per worker: where each worker's
-    wall time goes (generate vs sim vs upload). A dominant upload share means
-    the worker is network-bound rather than CPU-bound."""
-    rows = [worker_summary(r) for r in records if _recent(r)]
+    wall time goes. A dominant upload share means the worker is network-bound
+    rather than CPU-bound."""
+    rows = [worker_summary(r, stats) for r in records if _recent(r)]
     if not rows:
         return None
-    phases = ["gen_s", "sim_s", "upload_s"]
-    labels = {"gen_s": "self-play", "sim_s": "sim", "upload_s": "upload"}
+    phases = list(stats.phases)
     source = ColumnDataSource(
         {
             "worker": [r["worker_id"] for r in rows],
-            **{p: [r[p] for r in rows] for p in phases},
+            **{p: [r["phases"][p] for r in rows] for p in phases},
         }
     )
     fig = _workers_figure("Cycle time breakdown", [r["worker_id"] for r in rows], "seconds / cycle")
@@ -109,35 +110,35 @@ def cycle_breakdown(records: list[dict]):
         x="worker",
         width=0.7,
         source=source,
-        color=Category10[3],
-        legend_label=[labels[p] for p in phases],
+        color=Category10[max(3, len(phases))][: len(phases)],
+        legend_label=[stats.phases[p] for p in phases],
     )
     fig.add_tools(
         HoverTool(renderers=renderers, tooltips=[("worker", "@worker")]
-                  + [(labels[p], f"@{p}{{0.0}} s") for p in phases])
+                  + [(stats.phases[p], f"@{p}{{0.0}} s") for p in phases])
     )  # fmt: skip
     fig.legend.location = "top_left"
     return fig
 
 
-def pairs_timeline(records: list[dict]):
-    """Cumulative pairs produced per worker, from each record's recent-sample
+def timeline(records: list[dict], stats: StatsSpec):
+    """Cumulative units produced per worker, from each record's recent-sample
     window (older history ages out of the window)."""
     lines = [(r["worker_id"], r.get("recent", [])) for r in records]
     lines = [(w, s) for w, s in lines if len(s) > 1]
     if not lines:
         return None
     fig = figure(
-        title="Pairs over time (recent window)",
+        title=f"{stats.unit.capitalize()} over time (recent window)",
         x_axis_type="datetime",
         height=300,
         sizing_mode="stretch_width",
     )
-    fig.yaxis.axis_label = "cumulative pairs"
+    fig.yaxis.axis_label = f"cumulative {stats.unit}"
     palette = Category10[10]
     for i, (worker, samples) in enumerate(lines):
         xs = [datetime.fromtimestamp(s["t"], tz=UTC) for s in samples]
-        ys = [s["pairs_total"] for s in samples]
+        ys = [s["units_total"] for s in samples]
         fig.line(xs, ys, color=palette[i % 10], legend_label=worker, line_width=2)
     fig.legend.location = "top_left"
     return fig
@@ -146,5 +147,5 @@ def pairs_timeline(records: list[dict]):
 FIGURES = {
     "throughput": throughput,
     "cycle_breakdown": cycle_breakdown,
-    "pairs_timeline": pairs_timeline,
+    "timeline": timeline,
 }

@@ -13,7 +13,7 @@ sim evidence, to make the evidence's effect inspectable head by head:
   - prints each arm's WLD and score-diff heads with evidence zeroed vs.
     supplied, next to the position's committed Monte-Carlo ground truth.
 
-Requires the arms' saved weights (<mount>/kill_test/<tag>/cache/results/
+Requires the arms' saved weights (<mount>/tags/kill_test/<tag>/cache/results/
 <arm>_model.pt), which kill_test.py writes during training.
 
 Usage:
@@ -42,8 +42,7 @@ from scribblez.sim_evidence.sobs import (
     glyph_char,
     move_footprint,
 )
-
-MOUNT_ROOT = Path("/workspace/mount")
+from scribblez.workloads import kill_test as kill_test_workload
 
 
 def square_name(r: int, c: int) -> str:
@@ -165,7 +164,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gcg_path = Path(args.gcg)
     gcg_text = gcg_path.read_text()
-    results_dir = MOUNT_ROOT / "kill_test" / args.tag / "cache" / "results"
+    results_dir = kill_test_workload.SPEC.data_dir(args.tag) / "cache" / "results"
 
     # --- live sim evidence at the decision point ---
     records, played_rank = gcg_sim_evidence(

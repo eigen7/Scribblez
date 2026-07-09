@@ -10,7 +10,10 @@ the local mount.
 Desired state lives in task.json (dashboard/tasks.py); actual state is
 observed live (subprocess poll, pod GET). reconcile() closes the gap: it
 relaunches local workers that should be running (e.g. after a dashboard
-restart) and restarts interruptible pods Runpod reclaimed.
+restart) and restarts interruptible pods Runpod reclaimed. It also runs each
+workload's scheduler tick (generation lifecycle + fleet pacing): a scheduler
+may *gate* a role -- park its workers without touching the operator's desired
+state -- and reconcile enforces the gate alongside everything else.
 
 Cloud operations need <mount>/cloud/credentials.json; credentials load lazily
 so a local-only dashboard works without them.
@@ -24,7 +27,8 @@ import time
 from pathlib import Path
 
 from cloud.bundles import resolve_bundle_id
-from cloud.credentials import CloudCredentials, load_credentials
+from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
+from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
 from scripts.cloud_fleet import pod_create_spec
 
@@ -32,6 +36,7 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.hardware import default_thread_count
+from scribblez.workloads.base import SchedulerHooks
 
 REPO_ROOT = Path("/workspace/repo")
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
@@ -94,13 +99,13 @@ class WorkerManager:
     # ---- local plumbing --------------------------------------------------
 
     def _log_file(self, spec: workloads.WorkloadSpec, tag: str, name: str):
-        log_dir = spec.data_dir(tag) / "logs"
+        log_dir = spec.paths(tag).logs_dir
         log_dir.mkdir(parents=True, exist_ok=True)
         return open(log_dir / f"{name}.log", "ab")
 
     def _spawn_local(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w):
         params = params_mod.validate(spec.params_cls, task.params)
-        env = os.environ | spec.worker_env(task.tag, params) | {
+        env = os.environ | spec.worker_env(task.tag, params, w.role) | {
             "SCZ_SINK": "local",
             "SCZ_THREADS": str(w.threads),
             "SCZ_WORKER_ID": w.worker_id,
@@ -118,34 +123,51 @@ class WorkerManager:
 
     # ---- slot operations -------------------------------------------------
 
-    def add_local(self, spec, task: tasks.TaskRecord, threads: int | None) -> tasks.WorkerRecord:
+    def _check_role(self, spec, task: tasks.TaskRecord, role: str, kind: str):
+        role_spec = spec.role(role)
+        assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
+        if role_spec.singleton:
+            taken = [w.worker_id for w in task.workers if w.role == role]
+            assert not taken, f"role '{role}' already has a worker ({taken[0]})"
+        return role_spec
+
+    def add_local(
+        self, spec, task: tasks.TaskRecord, role: str, threads: int | None
+    ) -> tasks.WorkerRecord:
+        self._check_role(spec, task, role, "local")
         taken = {w.worker_id for w in task.workers}
         n = next(i for i in range(len(taken) + 1) if f"local-{i}" not in taken)
         w = tasks.WorkerRecord(
             worker_id=f"local-{n}",
+            role=role,
             kind="local",
             desired_state="running",
             threads=threads or default_thread_count(),
         )
         task.workers.append(w)
         tasks.save_task(spec, task)
-        self._spawn_local(spec, task, w)
+        if role not in task.gates:
+            self._spawn_local(spec, task, w)
         return w
 
     def add_cloud(
-        self, spec, task: tasks.TaskRecord, count: int, vcpus: int, flavor: str
+        self, spec, task: tasks.TaskRecord, role: str, count: int, vcpus: int, flavor: str
     ) -> list[tasks.WorkerRecord]:
+        role_spec = self._check_role(spec, task, role, "cloud")
+        assert not (role_spec.singleton and count > 1), f"role '{role}' allows one worker"
         creds, client = self._cloud()
         params = params_mod.validate(spec.params_cls, task.params)
         bundle_id = resolve_bundle_id(creds.r2, "latest")
         added = []
         for _ in range(count):
             name, body = pod_create_spec(
-                creds, spec, task.tag, params, bundle_id=bundle_id, vcpus=vcpus, flavor=flavor
-            )
+                creds, spec, task.tag, params, role=role,
+                bundle_id=bundle_id, vcpus=vcpus, flavor=flavor,
+            )  # fmt: skip
             pod = client.create_pod(body)
             w = tasks.WorkerRecord(
                 worker_id=name,
+                role=role,
                 kind="cloud",
                 desired_state="running",
                 vcpus=vcpus,
@@ -163,22 +185,23 @@ class WorkerManager:
         w.desired_state = "running" if run else "paused"
         _accrue(w, run, None)
         tasks.save_task(spec, task)
+        start = run and w.role not in task.gates  # a gated slot starts when released
         if w.kind == "local":
             proc = self._local_proc(spec, task.tag, worker_id)
-            if run and (proc is None or proc.poll() is not None):
+            if start and (proc is None or proc.poll() is not None):
                 self._spawn_local(spec, task, w)
-            elif not run and proc is not None and proc.poll() is None:
+            elif not start and proc is not None and proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
         else:
             _, client = self._cloud()
-            if run:
+            if start:
                 client.start_pod(w.pod_id)
-            else:
+            elif not run:
                 client.stop_pod(w.pod_id)
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Only non-running workers may be removed (pause
-        first), so a removal never discards an in-flight cycle unannounced."""
+        first), so a removal never silently discards an in-flight cycle."""
         w = task.worker(worker_id)
         if w.kind == "local":
             proc = self._local.get(_key(spec, task.tag, worker_id))
@@ -208,8 +231,10 @@ class WorkerManager:
         out = []
         pods = None  # fetched lazily, once, only if the task has cloud slots
         for w in task.workers:
+            gated = w.role in task.gates
             info = {
                 "worker_id": w.worker_id,
+                "role": w.role,
                 "kind": w.kind,
                 "desired_state": w.desired_state,
                 "threads": w.threads,
@@ -217,11 +242,14 @@ class WorkerManager:
                 "flavor": w.flavor,
                 "pod_id": w.pod_id,
             }
+            if gated:
+                info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
                 proc = self._local_proc(spec, task.tag, w.worker_id)
                 running = proc is not None and proc.poll() is None
                 info["state"] = "running" if running else (
-                    "paused" if w.desired_state == "paused" else "exited"
+                    "paused" if w.desired_state == "paused" else
+                    "waiting" if gated else "exited"
                 )  # fmt: skip
                 _accrue(w, running, None)
             else:
@@ -235,7 +263,8 @@ class WorkerManager:
                 else:
                     running = pod.get("desiredStatus") == "RUNNING"
                     info["state"] = "running" if running else (
-                        "paused" if w.desired_state == "paused" else "interrupted"
+                        "paused" if w.desired_state == "paused" else
+                        "waiting" if gated else "interrupted"
                     )  # fmt: skip
                     info["cost_per_hr"] = pod.get("costPerHr")
                     info["public_ip"] = pod.get("publicIp")
@@ -247,37 +276,100 @@ class WorkerManager:
             tasks.save_task(spec, task)
         return out
 
+    # ---- the scheduler's hook surface --------------------------------------
+
+    def _scheduler_hooks(self, spec, task: tasks.TaskRecord) -> SchedulerHooks:
+        def gate(role: str, reason: str | None):
+            changed = (
+                task.gates.pop(role, None) is not None
+                if reason is None
+                else task.gates.get(role) != reason
+            )
+            if reason is not None:
+                task.gates[role] = reason
+            if changed:
+                tasks.save_task(spec, task)
+
+        return SchedulerHooks(gate=gate, mirror=self._make_mirror(spec, task))
+
+    def _make_mirror(self, spec, task: tasks.TaskRecord):
+        """Bucket-side replay of staging ingests: when the scheduler assigns a
+        chunk locally, its bucket object (if any -- the chunk may be
+        local-origin) moves to the matching generation prefix, so the bucket
+        keeps mirroring the local corpus and the sync watcher never
+        re-downloads an ingested chunk. None for tasks without cloud slots."""
+        if not any(w.kind == "cloud" for w in task.workers):
+            return None
+        try:
+            creds, _ = self._cloud()
+        except (CredentialsError, FileNotFoundError):
+            return None
+        r2 = creds.r2
+        staging = bucket_path(r2, spec.name, task.tag, "staging")
+        staged_names: set[str] | None = None  # bucket listing, fetched on first use
+
+        def mirror(chunk_name: str, dest_rel: str):
+            nonlocal staged_names
+            if staged_names is None:
+                res = rclone(r2, "lsf", staging, capture=True)
+                staged_names = set(res.stdout.split()) if res.returncode == 0 else set()
+            if chunk_name not in staged_names:
+                return  # local-origin chunk; nothing to mirror
+            rclone(
+                r2,
+                "moveto",
+                f"{staging}/{chunk_name}",
+                bucket_path(r2, spec.name, task.tag, *dest_rel.split("/"), chunk_name),
+                capture=True,
+            )
+
+        return mirror
+
     # ---- reconciliation ----------------------------------------------------
 
-    def _tasks_with_workers(self):
+    def _all_tasks(self):
         for spec in workloads.WORKLOADS.values():
             for row in tasks.list_tags(spec):
                 if not row["has_task"]:
                     continue
-                task = tasks.load_task(spec, row["tag"])
-                if task.workers:
-                    yield spec, task
+                yield spec, tasks.load_task(spec, row["tag"])
 
     def reconcile(self):
-        """Close desired-vs-actual gaps: respawn local workers that should be
-        running (dashboard restart, crashed process) and restart interruptible
-        pods Runpod reclaimed. Runs at boot and periodically; doubling as a
-        spend-accrual heartbeat (worker_status persists it) even when no
-        browser is polling."""
-        for spec, task in self._tasks_with_workers():
+        """One pass over every task: run the workload's scheduler tick, then
+        close desired-vs-actual gaps -- respawn local workers that should be
+        running (dashboard restart, crashed process), restart interruptible
+        pods Runpod reclaimed, and enforce scheduler gates. Runs at boot and
+        periodically; doubling as a spend-accrual heartbeat (worker_status
+        persists it) even when no browser is polling."""
+        for spec, task in self._all_tasks():
+            if spec.scheduler:
+                try:
+                    workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
+                except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
+                    print(f"scheduler {spec.name}/{task.tag}: {e}")
+            if not task.workers:
+                continue
             status = self.worker_status(spec, task)
             for w, info in zip(task.workers, status, strict=True):
-                if w.desired_state != "running":
-                    continue
-                if w.kind == "local" and info["state"] == "exited":
-                    self._spawn_local(spec, task, w)
-                elif w.kind == "cloud" and info["state"] == "interrupted":
-                    _, client = self._cloud()
-                    client.start_pod(w.pod_id)
+                should_run = w.desired_state == "running" and w.role not in task.gates
+                if should_run:
+                    if w.kind == "local" and info["state"] in ("exited", "waiting"):
+                        self._spawn_local(spec, task, w)
+                    elif w.kind == "cloud" and info["state"] in ("interrupted", "waiting"):
+                        _, client = self._cloud()
+                        client.start_pod(w.pod_id)
+                elif w.role in task.gates and info["state"] == "running":
+                    if w.kind == "local":
+                        proc = self._local_proc(spec, task.tag, w.worker_id)
+                        if proc is not None and proc.poll() is None:
+                            proc.send_signal(signal.SIGTERM)
+                    else:
+                        _, client = self._cloud()
+                        client.stop_pod(w.pod_id)
             self._ensure_sync(spec, task)
 
     def shutdown(self):
-        """Stop owned subprocesses (workers flush completed pairs on SIGTERM);
+        """Stop owned subprocesses (workers flush completed output on SIGTERM);
         pods are unaffected -- cloud work continues across dashboard restarts."""
         for proc in [*self._local.values(), *self._sync.values()]:
             if proc.poll() is None:

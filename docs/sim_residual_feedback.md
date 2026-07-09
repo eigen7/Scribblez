@@ -551,7 +551,7 @@ their inputs.
 ./py/scripts/kill_test.py -t apple
 ```
 
-Data accumulates under `<mount>/kill_test/<tag>/slogs` (`.slog` batches plus
+Data accumulates under `<mount>/tags/kill_test/<tag>/data/slogs` (`.slog` batches plus
 their `.sobs` sidecars, both written atomically — a Ctrl-C loses at most the
 in-flight cycle, and a rerun resumes). `kill_test.py` snapshots whatever
 complete pairs exist, so it can run while generation continues, and rerunning
@@ -598,7 +598,7 @@ distribution is essentially unchanged — the "variant" is an information
 condition on the training/eval tasks, not a different game.
 
 **Reading the results** (summary table at the end; per-arm history in
-`<mount>/kill_test/<tag>/cache/results/<arm>.json`; the decision metric is
+`<mount>/tags/kill_test/<tag>/cache/results/<arm>.json`; the decision metric is
 best held-out `wld_ce`):
 
 - **`full` < `none` by a clear margin** → the hypothesis survives; proceed to

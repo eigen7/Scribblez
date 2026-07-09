@@ -61,20 +61,23 @@ the `json_item`s.
 
 `figure/<name>` dispatches to the builders in `plots.py` (e.g.
 `loss` → `metrics_loss_grid(conn, normalized)`), serialized with `json_item`.
-Both trainers and the standalone launcher (`scripts/dashboard.py`) launch the
-React dashboard.
+The standalone launcher (`scripts/dashboard.py`) starts the master dashboard,
+which hosts these views inside each training task's view.
 
-### Tabs (task-conditional, all in `web/src/AppDashboard.tsx`)
+### Tabs (per workload, registered in `web/src/workloads.tsx`)
 
-| Task | Tabs |
+The training tabs render inside the master dashboard's task view
+(docs/master_dashboard.md), after the generic Overview and Stats tabs:
+
+| Workload | Tabs |
 |---|---|
 | position_eval | Loss · Positions · Training · Controls · Info |
-| max_move_per_lane | Loss · Lane analysis · Info |
+| max_move_per_lane | Loss · Lane analysis · Controls · Info |
 
-`Loss` and `Training` embed an API figure (`loss`, `training_metrics`) and
-re-fetch when their version-token table advances. `Positions` (position-evaluation)
-and `Lane analysis` (max-move-per-lane) are native-React interactive tabs (see
-below).
+`Loss` and `Training` embed an API figure (`loss`, `training_metrics`;
+`web/src/components/TrainingTabs.tsx`) and re-fetch when their version-token
+table advances. `Positions` (position-evaluation) and `Lane analysis`
+(max-move-per-lane) are native-React interactive tabs (see below).
 
 ## The lane-analysis tab
 

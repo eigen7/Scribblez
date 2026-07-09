@@ -6,10 +6,10 @@ conditioning the position evaluation model on Monte-Carlo sim evidence improve
 its outcome prediction? One invocation runs the whole experiment against the data
 accumulated by scripts/generate_kill_test_data.py under the same tag:
 
-  1. Cache build: every complete .slog/.sobs pair under
-     <mount>/kill_test/<tag>/slogs is decoded (each evidence position's
-     post-move training row, addressed by identity) and its evidence set
-     encoded, into one .npz shard per file under <mount>/kill_test/<tag>/cache.
+  1. Cache build: every complete .slog/.sobs pair in the tag's pair store
+     (<mount>/tags/kill_test/<tag>/data/slogs) is decoded (each evidence
+     position's post-move training row, addressed by identity) and its evidence
+     set encoded, into one .npz shard per file under the tag's cache/ dir.
      Shards are cached across invocations; only new files are processed.
      Files alternate into train/holdout round-robin (--holdout-every), so the
      split is by game and cannot leak.
@@ -41,9 +41,8 @@ accumulated by scripts/generate_kill_test_data.py under the same tag:
   records its mode and refuses a mismatch.
 
 The decision metric is best held-out WLD cross-entropy; a comparison table
-prints at the end and per-arm histories land in
-<mount>/kill_test/<tag>/cache/results/. See the doc's kill-test section for
-the decision rubric.
+prints at the end and per-arm histories land in the tag's cache/results/ dir.
+See the doc's kill-test section for the decision rubric.
 
 After the arms, a paired per-position analysis runs automatically (and can be
 rerun without retraining via --analyze): per-position CE deltas with sign
@@ -81,8 +80,8 @@ from scribblez.sim_evidence.sobs import (
     read_sobs,
     read_sobs_flags,
 )
+from scribblez.workloads import kill_test as kill_test_workload
 
-MOUNT_ROOT = Path("/workspace/mount")
 TARGET_KEYS = ("wld", "score_diff", *MASK_HEAD_NAMES)
 ARMS = ("none", "shuffled", "scalar", "full")
 
@@ -549,7 +548,7 @@ def main():
     )
     args = p.parse_args()
 
-    root = MOUNT_ROOT / "kill_test" / args.tag
+    root = kill_test_workload.SPEC.data_dir(args.tag)
     cache = root / "cache"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results_dir = cache / "results"
@@ -562,7 +561,10 @@ def main():
         run_analysis(cache, device, suffix=args.out_suffix)
         return
 
-    build_cache(root / "slogs", cache, args.holdout_every, args.max_k, args.open_leaves)
+    build_cache(
+        kill_test_workload.slog_dir(args.tag), cache, args.holdout_every, args.max_k,
+        args.open_leaves,
+    )  # fmt: skip
     results_dir.mkdir(exist_ok=True)
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]

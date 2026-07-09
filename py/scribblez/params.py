@@ -10,14 +10,16 @@ that single declaration:
     auto-generated config form
   - validation of user-supplied values  (validate)
 
-Supported field kinds: int and bool (bool fields must default to False so the
-argparse mapping to store_true flags stays faithful).
+Supported field kinds: int, float, str, and bool (bool fields must default to
+False so the argparse mapping to store_true flags stays faithful).
 """
 
 import dataclasses
 import os
 
 ENV_PREFIX = "SCZ_"
+
+_KINDS = ("int", "float", "str", "bool")
 
 
 def param(default, help: str) -> dataclasses.Field:
@@ -28,7 +30,7 @@ def param(default, help: str) -> dataclasses.Field:
 @dataclasses.dataclass(frozen=True)
 class ParamField:
     name: str
-    kind: str  # "int" | "bool"
+    kind: str  # one of _KINDS
     default: object
     help: str
 
@@ -41,7 +43,7 @@ def schema(params_cls: type) -> list[ParamField]:
     out = []
     for f in dataclasses.fields(params_cls):
         kind = f.type if isinstance(f.type, str) else f.type.__name__
-        assert kind in ("int", "bool"), f"{params_cls.__name__}.{f.name}: unsupported kind {kind}"
+        assert kind in _KINDS, f"{params_cls.__name__}.{f.name}: unsupported kind {kind}"
         if kind == "bool":
             assert f.default is False, f"{f.name}: bool params must default to False"
         out.append(ParamField(f.name, kind, f.default, f.metadata.get("help", "")))
@@ -60,7 +62,8 @@ def add_arguments(parser, params_cls: type):
         if f.kind == "bool":
             parser.add_argument(flag, action="store_true", help=f.help)
         else:
-            parser.add_argument(flag, type=int, default=f.default, help=f.help)
+            py_type = {"int": int, "float": float, "str": str}[f.kind]
+            parser.add_argument(flag, type=py_type, default=f.default, help=f.help)
 
 
 def from_args(params_cls: type, args):
@@ -85,8 +88,31 @@ def from_env(params_cls: type, env=os.environ):
         raw = env.get(ENV_PREFIX + f.name.upper())
         if raw is None:
             continue
-        kwargs[f.name] = raw == "1" if f.kind == "bool" else int(raw)
+        parse = {"int": int, "float": float, "str": str, "bool": lambda r: r == "1"}[f.kind]
+        kwargs[f.name] = parse(raw)
     return params_cls(**kwargs)
+
+
+def _coerce(f: ParamField, value):
+    """Coerce a JSON-ish value to the field's kind, raising ValueError on mismatch."""
+    if f.kind == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{f.name}: expected a boolean, got {value!r}")
+        return value
+    if f.kind == "str":
+        if not isinstance(value, str):
+            raise ValueError(f"{f.name}: expected a string, got {value!r}")
+        return value
+    if f.kind == "float":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{f.name}: expected a number, got {value!r}")
+        return float(value)
+    if isinstance(value, bool) or not isinstance(value, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{f.name}: expected an integer, got {value!r}") from None
+    return value
 
 
 def validate(params_cls: type, raw: dict):
@@ -98,18 +124,10 @@ def validate(params_cls: type, raw: dict):
     for name, f in fields.items():
         if name not in raw:
             continue
-        value = raw[name]
-        if f.kind == "bool":
-            if not isinstance(value, bool):
-                errors.append(f"{name}: expected a boolean, got {value!r}")
-                continue
-        elif isinstance(value, bool) or not isinstance(value, int):
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                errors.append(f"{name}: expected an integer, got {value!r}")
-                continue
-        kwargs[name] = value
+        try:
+            kwargs[name] = _coerce(f, raw[name])
+        except ValueError as e:
+            errors.append(str(e))
     if errors:
         raise ParamsError(*errors)
     return params_cls(**kwargs)

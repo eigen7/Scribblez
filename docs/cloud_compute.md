@@ -37,9 +37,10 @@ home).
                                                       CPU arch, exec worker entrypoint
                                                    └─ loop: generate cycle, upload pair
                                                           │
- cloud_sync.py ◄──────────────────────────────  R2: kill_test/<tag>/{slogs,params}/
+ cloud_sync.py ◄──────────────────────────────  R2: <workload>/<tag>/{slogs|staging,stats,params}/
       │
- <mount>/kill_test/<tag>/slogs/   ◄── kill_test.py runs here, locally, as always
+ <mount>/tags/<workload>/<tag>/data/   ◄── analysis (kill_test.py) / the generation
+                                           scheduler run here, locally, as always
 ```
 
 Principles:
@@ -81,14 +82,15 @@ touching the image.
 
 ### Worker entrypoint — `py/cloud/worker_entrypoint.py`
 
-Configured entirely by environment variables (see its docstring). Fetches lexica and
-Macondo strategy data from their public upstreams (idempotent; a dev container's populated
-mount short-circuits it), records a provenance manifest at
-`kill_test/<tag>/params/<worker_id>.json` (params, bundle id, arch, fallback status), then
-loops the same `run_one_cycle` the local generator uses, uploading each completed
-`.sobs`/`.slog` pair and deleting the local copy. The `.sobs` uploads first so the bucket
-only ever presents complete pairs plus inert orphans. SIGTERM uploads completed pairs and
-exits.
+Configured entirely by environment variables (see its docstring). Dispatches on
+`(SCZ_WORKLOAD, SCZ_ROLE)` to the role's runner from the workload registry
+(scribblez/workloads/): the runner's declared deps are fetched from their public
+upstreams (idempotent; a dev container's populated mount short-circuits it), a
+provenance manifest lands at `<workload>/<tag>/params/<worker_id>.json` (params, role,
+bundle id, arch), and the runner loops its cycle, delivering whole output files through
+the results sink (`py/cloud/sinks.py`; kill-test pairs upload `.sobs` first so the
+bucket only ever presents complete pairs plus inert orphans). SIGTERM flushes completed
+output and exits.
 
 ### Fleet control — `./py/scripts/cloud_fleet.py`
 
@@ -100,8 +102,12 @@ counts the tag's complete pairs in the bucket. `down` only ever touches `scz-` p
 
 ### Results sync — `./py/scripts/cloud_sync.py`
 
-`-t hello [--watch]` pulls the tag's bucket prefix into `<mount>/kill_test/<tag>/`,
-merging with locally generated data for the same tag. Analysis stays local and unchanged.
+`-t hello [--watch]` pulls the workload's inbound bucket prefixes — its declared data
+dirs (kill_test: `slogs/`; the training workloads: `staging/`) plus `stats/` and
+`params/` — into `<mount>/tags/<workload>/<tag>/`, merging with locally generated data
+for the same tag. Prefixes the controller host itself maintains in the bucket (the
+generation dirs the scheduler's ingest mirroring populates) are deliberately not pulled.
+Analysis stays local and unchanged.
 
 ### Credentials — `<mount>/cloud/credentials.json`
 

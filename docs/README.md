@@ -30,13 +30,16 @@
   rented cloud CPUs (Runpod): the stable dependency-only worker image, per-arch
   code bundles through R2, the fleet CLI, and results syncing back to the
   local mount for unchanged analysis.
-
-## Design proposals
-
-- **[master_dashboard.md](master_dashboard.md)** — evolving the React dashboard
-  into the single entrypoint for all work: a workload registry, a job-control
+- **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
+  single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and cloud workers from the browser), and
   workload-specific analysis tabs.
+- **[position_eval_workload.md](position_eval_workload.md)** — the training
+  workloads on the master dashboard: the workload-spec contract (roles, params,
+  stats, tabs), distributed self-play generation via staging + controller-side
+  ingest, and the trainer as a singleton consumer worker.
+
+## Design proposals
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
   rollout evidence back into the value models for evidence-conditioned
   re-evaluation, and covariance-guided candidate selection. Steps 1–2 of its

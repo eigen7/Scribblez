@@ -1,10 +1,11 @@
 """Control-plane handlers for the master dashboard.
 
 The read-only training data plane lives in api.py; these handlers add the
-master flow: enumerating workloads (with their param schemas, which drive the
-web form), creating tasks, and managing worker slots through the process-wide
-WorkerManager (settings["worker_manager"]). Registered alongside the data
-plane by api.make_app().
+master flow: enumerating workloads (with their param schemas and role
+declarations, which drive the web forms), creating tasks, managing worker
+slots through the process-wide WorkerManager (settings["worker_manager"]), and
+the generic per-role worker Stats data. Registered alongside the data plane by
+api.make_app().
 
 Expected client errors (bad params, unknown tags, missing cloud credentials,
 Runpod failures) return 400 with {"error": ...} rather than a stack trace.
@@ -19,7 +20,7 @@ from cloud.runpod_api import RunpodError
 
 from scribblez import params as params_mod
 from scribblez import workloads
-from scribblez.dashboard import kill_test_figures, tasks
+from scribblez.dashboard import tasks, worker_stats_figures
 
 # Exception types that describe a bad request or unavailable dependency, not a
 # server bug; their message is the response.
@@ -30,6 +31,36 @@ _CLIENT_ERRORS = (
     CredentialsError,
     RunpodError,
 )
+
+
+def _role_payload(role: workloads.RoleSpec) -> dict:
+    return {
+        "name": role.name,
+        "title": role.title,
+        "singleton": role.singleton,
+        "kinds": list(role.kinds),
+        "interruptible": role.interruptible,
+        "stats": ({"unit": role.stats.unit, "phases": role.stats.phases} if role.stats else None),
+    }
+
+
+def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
+    """The Stats tab payload: per-role schemas plus every worker's summary."""
+    records = worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
+    roles = {r.name: r for r in spec.roles if r.stats}
+    summaries = [
+        worker_stats_figures.worker_summary(rec, roles[rec["role"]].stats)
+        for rec in records
+        if rec.get("role") in roles
+    ]
+    return {
+        "roles": {
+            name: {"title": r.title, "unit": r.stats.unit, "phases": r.stats.phases}
+            for name, r in roles.items()
+        },
+        "workers": summaries,
+        "updated_at": max((r["updated_at"] for r in records), default=0),
+    }
 
 
 class _MasterBase(tornado.web.RequestHandler):
@@ -66,8 +97,8 @@ class WorkloadsHandler(_MasterBase):
                     {
                         "name": spec.name,
                         "title": spec.title,
-                        "interruptible": spec.interruptible,
                         "params": params_mod.public_schema(spec.params_cls),
+                        "roles": [_role_payload(r) for r in spec.roles],
                     }
                     for spec in workloads.WORKLOADS.values()
                 ]
@@ -98,7 +129,6 @@ class TaskHandler(_MasterBase):
 
         def info():
             task = tasks.load_task(spec, tag)
-            slogs = spec.data_dir(tag) / "slogs"
             workers = self.manager.worker_status(spec, task) if task else []
             spend = task.retired_spend + sum(w.spend for w in task.workers) if task else 0.0
             return {
@@ -107,7 +137,8 @@ class TaskHandler(_MasterBase):
                 "has_task": task is not None,
                 "params": task.params if task else None,
                 "created_at": task.created_at if task else None,
-                "pairs": sum(1 for _ in slogs.glob("*.sobs")) if slogs.is_dir() else 0,
+                "progress": tasks.progress(spec, tag),
+                "gates": task.gates if task else {},
                 "data_dir": str(spec.data_dir(tag)),
                 "workers": workers,
                 "spend": spend,
@@ -134,12 +165,14 @@ class WorkerAddHandler(_MasterBase):
 
         def add():
             task = self.task_or_fail(spec, body["tag"])
+            role = body.get("role", spec.roles[0].name)
             if body.get("kind") == "local":
-                added = [self.manager.add_local(spec, task, body.get("threads"))]
+                added = [self.manager.add_local(spec, task, role, body.get("threads"))]
             else:
                 added = self.manager.add_cloud(
                     spec,
                     task,
+                    role,
                     count=int(body.get("count", 1)),
                     vcpus=int(body.get("vcpus", 16)),
                     flavor=body.get("flavor", "cpu3c"),
@@ -171,30 +204,30 @@ class WorkerActionHandler(_MasterBase):
         self.guarded(act)
 
 
-class KillTestStatsHandler(_MasterBase):
+class TaskStatsHandler(_MasterBase):
     def get(self):
-        spec = workloads.get("kill_test")
+        spec = self.spec()
         tag = self.get_query_argument("tag")
-
-        def stats():
-            records = kill_test_figures.read_stats(spec.data_dir(tag))
-            return {
-                "workers": [kill_test_figures.worker_summary(r) for r in records],
-                "updated_at": max((r["updated_at"] for r in records), default=0),
-            }
-
-        self.guarded(stats)
+        self.guarded(lambda: _stats_by_role(spec, tag))
 
 
-class KillTestFigureHandler(_MasterBase):
+class TaskFigureHandler(_MasterBase):
     def get(self, name: str):
-        spec = workloads.get("kill_test")
+        spec = self.spec()
         tag = self.get_query_argument("tag")
+        role_name = self.get_query_argument("role")
 
         def build():
-            builder = kill_test_figures.FIGURES.get(name)
+            builder = worker_stats_figures.FIGURES.get(name)
             assert builder is not None, f"unknown figure '{name}'"
-            model = builder(kill_test_figures.read_stats(spec.data_dir(tag)))
+            role = spec.role(role_name)
+            assert role.stats is not None, f"role '{role_name}' publishes no stats"
+            records = [
+                r
+                for r in worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
+                if r.get("role") == role_name
+            ]
+            model = builder(records, role.stats)
             return {"item": json_item(model) if model is not None else None}
 
         self.guarded(build)
@@ -208,6 +241,6 @@ MASTER_ROUTES = [
     (r"/api/task/delete", TaskDeleteHandler),
     (r"/api/task/workers", WorkerAddHandler),
     (r"/api/task/worker_action", WorkerActionHandler),
-    (r"/api/kill_test/stats", KillTestStatsHandler),
-    (r"/api/kill_test/figure/([a-z_]+)", KillTestFigureHandler),
+    (r"/api/task/stats", TaskStatsHandler),
+    (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),
 ]

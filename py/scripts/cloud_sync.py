@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Pull a tag's cloud-generated data down to the local mount dir.
 
-Copies the tag's bucket prefix (slogs/ plus the workers' params/ and stats/
-records) into the workload's local data dir, merging with anything generated
-locally under the same tag -- output filenames are nanosecond timestamps, so
-local and cloud batches coexist in one directory. Never uploads or deletes
-anything; the bucket remains the durable archive. Analysis (kill_test.py) then
-runs on the merged local directory exactly as for purely local data.
+Copies the workload's inbound bucket prefixes -- its declared data dirs (e.g.
+kill_test's slogs/, the training workloads' staging/) plus the workers'
+stats/ and params/ records -- into the tag's local dir, merging with anything
+generated locally under the same tag (output filenames carry per-worker
+suffixes, so local and cloud files coexist). Never uploads or deletes
+anything; the bucket remains the durable archive.
+
+Deliberately NOT synced: prefixes the controller host itself maintains in the
+bucket (the generation dirs the scheduler's ingest mirroring populates) --
+pulling those would re-download data the local mount already holds.
 
 Usage:
     ./py/scripts/cloud_sync.py -t hello            one sync
@@ -16,7 +20,6 @@ Usage:
 import argparse
 import sys
 import time
-from pathlib import Path
 
 from cloud.credentials import load_credentials
 from cloud.r2 import bucket_path, rclone
@@ -24,13 +27,20 @@ from scribblez import workloads
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
-def sync_once(r2, workload: str, tag: str, dest: Path) -> int:
-    res = rclone(r2, "copy", bucket_path(r2, workload, tag), str(dest))
-    if res.returncode != 0:
-        print("sync failed", file=sys.stderr)
-        return res.returncode
-    pairs = sum(1 for s in (dest / "slogs").glob("*.slog") if s.with_suffix(".sobs").exists())
-    print(f"{dest}: {pairs} complete pair(s)")
+def sync_once(r2, spec: workloads.WorkloadSpec, tag: str) -> int:
+    paths = spec.paths(tag)
+    targets = [(sub, paths.data_dir / sub) for sub in spec.sync_data_dirs]
+    targets += [("stats", paths.stats_dir), ("params", paths.root / "params")]
+    for sub, dest in targets:
+        dest.mkdir(parents=True, exist_ok=True)
+        res = rclone(r2, "copy", bucket_path(r2, spec.name, tag, sub), str(dest))
+        if res.returncode != 0:
+            print(f"sync of {sub}/ failed", file=sys.stderr)
+            return res.returncode
+    counts = ", ".join(
+        f"{sub}: {sum(1 for _ in dest.iterdir()) if dest.is_dir() else 0}" for sub, dest in targets
+    )
+    print(f"{paths.root}: {counts}")
     return 0
 
 
@@ -44,10 +54,8 @@ def main() -> int:
 
     spec = workloads.get(args.workload)
     r2 = load_credentials().r2
-    dest = spec.data_dir(args.tag)
-    dest.mkdir(parents=True, exist_ok=True)
     while True:
-        rc = sync_once(r2, spec.name, args.tag, dest)
+        rc = sync_once(r2, spec, args.tag)
         if rc != 0 or not args.watch:
             return rc
         try:

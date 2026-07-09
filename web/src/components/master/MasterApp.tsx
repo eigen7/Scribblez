@@ -4,14 +4,21 @@ import TaskView from './TaskView';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
 // tag (or create one, configuring its parameters via the workload's schema);
-// a tag opens its task view (workers, progress, workload tabs). Rendered by
-// AppDashboard when no training task was requested. See docs/master_dashboard.md.
+// a tag opens its task view (workers, progress, workload tabs). Rendered for
+// VITE_TOOL=dashboard. See docs/master_dashboard.md.
 
-export type ParamField = { name: string; kind: 'int' | 'bool'; default: number | boolean; help: string };
-export type Workload = { name: string; title: string; interruptible: boolean; params: ParamField[] };
+export type ParamField = {
+  name: string; kind: 'int' | 'float' | 'str' | 'bool';
+  default: number | boolean | string; help: string;
+};
+export type Role = {
+  name: string; title: string; singleton: boolean; kinds: string[]; interruptible: boolean;
+  stats: { unit: string; phases: Record<string, string> } | null;
+};
+export type Workload = { name: string; title: string; params: ParamField[]; roles: Role[] };
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
-  workers: number; pairs: number; last_active: number;
+  workers: number; progress: [string, string | number][]; last_active: number;
 };
 
 export function relTime(epochSeconds: number | null): string {
@@ -56,16 +63,26 @@ function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (t
     setValues(Object.fromEntries(workload.params.map((p) => [p.name, p.kind === 'bool' ? false : String(p.default)])));
   }, [workload]);
 
+  const numberOk = (p: ParamField, raw: string) =>
+    p.kind === 'int' ? /^-?\d+$/.test(raw) : !Number.isNaN(parseFloat(raw));
   const tagOk = /^[A-Za-z0-9._-]+$/.test(tag);
-  const badInts = workload.params.filter((p) => p.kind === 'int' && !/^-?\d+$/.test(String(values[p.name] ?? '')));
-  const canCreate = tagOk && badInts.length === 0 && !busy;
+  const badNumbers = workload.params.filter(
+    (p) => (p.kind === 'int' || p.kind === 'float') && !numberOk(p, String(values[p.name] ?? '')),
+  );
+  const canCreate = tagOk && badNumbers.length === 0 && !busy;
+
+  const coerce = (p: ParamField) => {
+    const raw = values[p.name];
+    if (p.kind === 'bool') return Boolean(raw);
+    if (p.kind === 'str') return String(raw ?? '');
+    if (p.kind === 'float') return parseFloat(String(raw));
+    return parseInt(String(raw), 10);
+  };
 
   const create = async () => {
     setBusy(true);
     setError('');
-    const params = Object.fromEntries(workload.params.map((p) => [
-      p.name, p.kind === 'bool' ? Boolean(values[p.name]) : parseInt(String(values[p.name]), 10),
-    ]));
+    const params = Object.fromEntries(workload.params.map((p) => [p.name, coerce(p)]));
     try {
       await postJSON('/api/tasks', { workload: workload.name, tag, params });
       onCreated(tag);
@@ -101,8 +118,8 @@ function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (t
             ) : (
               <input
                 style={{
-                  ...inputStyle, width: 90,
-                  borderColor: badInts.some((b) => b.name === p.name) ? '#b23b3b' : '#b8c4d0',
+                  ...inputStyle, width: p.kind === 'str' ? 160 : 90,
+                  borderColor: badNumbers.some((b) => b.name === p.name) ? '#b23b3b' : '#b8c4d0',
                 }}
                 value={String(values[p.name] ?? '')}
                 onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))}
@@ -174,7 +191,7 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
             <thead>
               <tr style={{ textAlign: 'left', color: '#445063' }}>
                 <th style={{ padding: '4px 14px 4px 0' }}>tag</th>
-                <th style={{ padding: '4px 14px 4px 0' }}>pairs</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>progress</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>workers</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>last ran</th>
                 <th style={{ padding: '4px 14px 4px 0' }} />
@@ -189,7 +206,9 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
                   style={{ cursor: 'pointer', borderTop: '1px solid #e2e8ee' }}
                 >
                   <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{r.tag}</td>
-                  <td style={{ padding: '6px 14px 6px 0' }}>{r.pairs}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>
+                    {r.progress.map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+                  </td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{r.workers}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{relTime(r.last_active)}</td>
                   <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#8494a5' }}>

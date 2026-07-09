@@ -21,7 +21,6 @@ Requires Macondo to be built.
 """
 
 import argparse
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -29,9 +28,8 @@ from pathlib import Path
 from scribblez.ffi import read_file_header
 from scribblez.hardware import default_thread_count
 from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.selfplay import hasty_player_spec, run_games
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
-
-PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
 
 def build_player_spec(args) -> str:
@@ -40,55 +38,11 @@ def build_player_spec(args) -> str:
     With a --model: the neural value agent -- --top-k=0 evaluates every legal
     play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster)."""
     if not args.model:
-        if args.hasty_temperature > 0:
-            return (
-                f"--type=hastybot --temperature={args.hasty_temperature} "
-                f"--top-k={args.hasty_top_k} "
-                f"--temperature-min-bag={args.hasty_temp_min_bag}"
-            )
-        return "--type=hastybot"
+        return hasty_player_spec(args.hasty_temperature, args.hasty_top_k, args.hasty_temp_min_bag)
     return (
         f"--type=neural --model={args.model} --top-k={args.top_k} "
         f"--temperature={args.temperature} --precision={args.precision}"
     )
-
-
-def run_games(
-    out_dir: Path,
-    num_games: int,
-    games_per_file: int,
-    threads: int,
-    player_spec: str,
-    seed: int = 0,
-    random_opening_mean: float = 0.0,
-) -> int:
-    """Run `num_games` self-play games, logging .slog files to out_dir.
-
-    Both seats use `player_spec` (the value of a `--player` flag); each seat is a
-    fresh agent, so two neural seats draw independent sampling seeds. `seed` is
-    the PRNG seed passed to play_game; 0 (the default) lets the binary pick one
-    from std::random_device, so successive default-seeded runs differ.
-    `random_opening_mean` > 0 opens each game with K uniformly-random plies
-    (K ~ round(Exp(mean)) per game) before the agents take over; positions
-    before the last random ply are excluded from the training-eligible region.
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # fmt: off
-    cmd = [
-        PLAY_GAME,
-        "--player", player_spec,
-        "--player", player_spec,
-        "--binary-log-dir", str(out_dir),
-        "--games-per-file", str(games_per_file),
-        "--games", str(num_games),
-        "--threads", str(threads),
-        "--seed", str(seed),
-        "--random-opening-mean", str(random_opening_mean),
-    ]
-    # fmt: on
-    cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
-    print(f"Running: {cmd_str}")
-    return subprocess.run(cmd, capture_output=False).returncode
 
 
 def count_positions(out_dir: Path) -> int:

@@ -16,9 +16,7 @@ def paths(tmp_path: Path) -> TagPaths:
 
 
 def _open(paths: TagPaths, index: int, target_games: int = 100) -> Path:
-    return lc.open_generation(
-        paths, index, target_games=target_games, seed=index, player_spec="--type=hastybot"
-    )
+    return lc.open_generation(paths, index, target_games=target_games)
 
 
 def test_open_generation_writes_generating_manifest(paths):

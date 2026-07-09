@@ -1,22 +1,20 @@
-"""Generation lifecycle: on-disk bookkeeping for the generational trainer.
+"""Generation lifecycle: on-disk bookkeeping for generational training.
 
-A *generation* is one batch of self-play games written to its own directory under
-a tag's data/generations/. The trainer trains over a sliding window of the most
-recent complete generations; older ones are evicted. This module owns creating a
-generation directory and its manifest, marking it complete, selecting the
-training window, and evicting stale generations -- so the orchestrator is
-indifferent to how a generation got filled (in-process producer, local worker,
-or remote worker).
+A *generation* is one batch of self-play games in its own directory under a
+tag's data/generations/; the frozen held-out test split (data/test/) is filled
+through the same machinery. The trainer trains over a sliding window of the
+most recent complete generations; older ones are evicted. This module owns the
+directory manifests, the training-window selection, eviction, and the tiny
+train_state.json cursor the trainer publishes -- so producers (the generation
+scheduler filling directories from staged chunks) and the consumer (the
+trainer) coordinate entirely through these files.
 
-The manifest is the authority for a generation's status: completeness is a
-recorded fact (status + committed game count), never inferred from a file glob.
-A crash mid-generation therefore leaves an incomplete manifest -- detected as a
-partial to regenerate -- rather than a directory that looks finished. Everything
-here reads manifests only (no .slog header I/O), so it stays cheap and free of
-the C++ loader.
+The manifest is the authority for a directory's status: completeness is a
+recorded fact (status + committed game count), never inferred from a file
+glob. Everything here reads manifests only (no .slog header I/O), so it stays
+cheap and free of the C++ loader.
 
-See docs/generational_training.md, "Generations and the sliding window" and
-"Restart and state".
+See docs/position_eval_workload.md for the surrounding protocol.
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ def manifest_path(gen_dir: Path) -> Path:
 
 
 def read_manifest(gen_dir: Path) -> dict | None:
-    """The generation's manifest, or None if absent/unreadable."""
+    """The directory's manifest, or None if absent/unreadable."""
     p = manifest_path(gen_dir)
     if not p.is_file():
         return None
@@ -60,7 +58,7 @@ def read_manifest(gen_dir: Path) -> dict | None:
 
 def write_manifest(gen_dir: Path, manifest: dict):
     """Write the manifest atomically (tmp file + os.replace) so a crash never
-    leaves a half-written manifest that would misclassify the generation."""
+    leaves a half-written manifest that would misclassify the directory."""
     gen_dir.mkdir(parents=True, exist_ok=True)
     tmp = gen_dir / (MANIFEST_NAME + ".tmp")
     tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True))
@@ -68,24 +66,19 @@ def write_manifest(gen_dir: Path, manifest: dict):
 
 
 # ---------------------------------------------------------------------------
-# Generation state transitions
+# State transitions
 # ---------------------------------------------------------------------------
 
 
-def open_generation(
-    paths: TagPaths, index: int, *, target_games: int, seed: int, player_spec: str
-) -> Path:
-    """Create generation `index`'s directory and write its `generating` manifest;
-    return the directory. Overwrites any prior manifest for the index, so this
-    also restarts a partial generation from scratch."""
+def open_generation(paths: TagPaths, index: int, *, target_games: int) -> Path:
+    """Create generation `index`'s directory and write its `generating`
+    manifest; return the directory."""
     gen_dir = paths.generation_dir(index)
     write_manifest(
         gen_dir,
         {
             "index": index,
             "target_games": target_games,
-            "seed": seed,
-            "player_spec": player_spec,
             "status": GENERATING,
             "committed_games": 0,
         },
@@ -93,8 +86,29 @@ def open_generation(
     return gen_dir
 
 
+def open_split(split_dir: Path, *, target_games: int) -> Path:
+    """Create a non-generation fill target (the frozen test split) with a
+    `generating` manifest; return the directory."""
+    write_manifest(
+        split_dir,
+        {"target_games": target_games, "status": GENERATING, "committed_games": 0},
+    )
+    return split_dir
+
+
+def update_committed(gen_dir: Path, committed_games: int):
+    """Record the directory's committed game count (display/bookkeeping; the
+    scheduler recomputes it from file headers, so a stale value self-heals)."""
+    manifest = read_manifest(gen_dir)
+    if manifest is None:
+        raise FileNotFoundError(f"no manifest to update in {gen_dir}")
+    if manifest.get("committed_games") != committed_games:
+        manifest["committed_games"] = committed_games
+        write_manifest(gen_dir, manifest)
+
+
 def mark_complete(gen_dir: Path, committed_games: int):
-    """Flip the generation's manifest to `complete`, recording the authoritative
+    """Flip the directory's manifest to `complete`, recording the authoritative
     committed game count. Raises if there is no manifest to update."""
     manifest = read_manifest(gen_dir)
     if manifest is None:
@@ -152,8 +166,8 @@ def window_dirs(paths: TagPaths, latest_index: int, window: int) -> list[Path]:
 def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list[int]:
     """Delete complete generations older than the window ending at `latest_index`,
     returning the evicted indices. Never touches partial generations or any
-    generation past `latest_index` (e.g. a background refill in progress).
-    `window <= 0` evicts nothing."""
+    generation past `latest_index` (a fill in progress). `window <= 0` evicts
+    nothing."""
     if window <= 0:
         return []
     complete = complete_indices_upto(paths, latest_index)
@@ -164,3 +178,27 @@ def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list
             shutil.rmtree(paths.generation_dir(idx), ignore_errors=True)
             evicted.append(idx)
     return evicted
+
+
+# ---------------------------------------------------------------------------
+# The trainer's published cursor
+# ---------------------------------------------------------------------------
+
+
+def read_train_state(paths: TagPaths) -> dict:
+    """The trainer's cursor ({rows_trained, generation_index, epoch_in_generation,
+    checkpoint_index}), or {} before a trainer has ever checkpointed."""
+    try:
+        return json.loads(paths.train_state_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def write_train_state(paths: TagPaths, state: dict):
+    """Atomically publish the trainer's cursor. The generation scheduler and
+    the dashboard read this instead of parsing the torch checkpoint."""
+    path = paths.train_state_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)

@@ -1,8 +1,8 @@
 """Task records for the master dashboard.
 
 A task is one (workload, tag) pair with a frozen parameter set and a list of
-worker slots, persisted as task.json in the workload's per-tag data dir. Tags
-that predate the dashboard (no task.json) still appear in listings, read-only.
+worker slots, persisted as task.json in the tag's root dir. Tags that predate
+the dashboard (no task.json) still appear in listings, read-only.
 """
 
 import json
@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from scribblez import params as params_mod
-from scribblez.workloads import WorkloadSpec
+from scribblez.workloads import WorkloadSpec, resolve
 
 
 @dataclass
@@ -24,6 +24,7 @@ class WorkerRecord:
     from our own observations)."""
 
     worker_id: str
+    role: str  # which of the workload's roles this slot runs
     kind: str  # "local" | "cloud"
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local: engine thread count
@@ -43,6 +44,10 @@ class TaskRecord:
     params: dict  # raw param values (validated against the workload's schema)
     created_at: float
     workers: list[WorkerRecord] = field(default_factory=list)
+    # Roles the workload's scheduler has parked (role -> reason). Distinct from
+    # operator pause: a gated worker keeps desired_state="running" and resumes
+    # automatically when the scheduler releases the gate.
+    gates: dict = field(default_factory=dict)
     # Estimated spend of worker slots that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
@@ -85,7 +90,7 @@ def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
 
 
 def delete_tag(spec: WorkloadSpec, tag: str):
-    """Delete a tag's local data dir (task record, slogs, stats, logs). Only
+    """Delete a tag's local dir (task record, data, stats, logs). Only
     workerless tags may be deleted. Any cloud archive of the tag in the results
     bucket is deliberately untouched -- purge it manually if truly done with it.
     """
@@ -96,24 +101,34 @@ def delete_tag(spec: WorkloadSpec, tag: str):
     shutil.rmtree(tag_dir)
 
 
-def _pair_count(tag_dir: Path) -> int:
-    return sum(1 for _ in (tag_dir / "slogs").glob("*.sobs"))
+def progress(spec: WorkloadSpec, tag: str) -> list:
+    """The workload's [label, value] progress counters for the tag."""
+    if not spec.progress:
+        return []
+    return [list(pair) for pair in resolve(spec.progress)(spec, tag)]
 
 
 def _last_active(tag_dir: Path) -> float:
+    """The tag's most recent activity: worker stats records update every cycle,
+    and the data subdir mtimes bump whenever files land."""
     stamps = [tag_dir.stat().st_mtime]
-    slogs = tag_dir / "slogs"
-    if slogs.is_dir():
-        stamps += [p.stat().st_mtime for p in slogs.iterdir()]
+    stats = tag_dir / "stats"
+    if stats.is_dir():
+        stamps += [p.stat().st_mtime for p in stats.iterdir()]
+    data = tag_dir / "data"
+    if data.is_dir():
+        stamps.append(data.stat().st_mtime)
+        stamps += [p.stat().st_mtime for p in data.iterdir()]
     return max(stamps)
 
 
 def list_tags(spec: WorkloadSpec) -> list[dict]:
-    """Every tag under the workload's data root, with listing metadata."""
-    if not spec.data_root.is_dir():
+    """Every tag under the workload's tags root, with listing metadata."""
+    tags_root = spec.tags_root
+    if not tags_root.is_dir():
         return []
     out = []
-    for tag_dir in spec.data_root.iterdir():
+    for tag_dir in tags_root.iterdir():
         if not tag_dir.is_dir():
             continue
         task = load_task(spec, tag_dir.name)
@@ -123,7 +138,7 @@ def list_tags(spec: WorkloadSpec) -> list[dict]:
                 "has_task": task is not None,
                 "created_at": task.created_at if task else None,
                 "workers": len(task.workers) if task else 0,
-                "pairs": _pair_count(tag_dir),
+                "progress": progress(spec, tag_dir.name),
                 "last_active": _last_active(tag_dir),
             }
         )
