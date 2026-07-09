@@ -1011,6 +1011,25 @@ h1 {
 }
 .lane-analysis .seg button:first-child { border-radius: 4px 0 0 4px; }
 .lane-analysis .seg button:last-child { border-radius: 0 4px 4px 0; }
+.lane-analysis .seg button:disabled {
+  border-color: #c3cbd4;
+  color: #99a0ab;
+  cursor: not-allowed;
+}
+
+/* The placement overlay's mode control (Residual / Model / Sim), sitting
+   directly below the head radio group in the sidebar column. */
+.placement-mode-seg { display: block; margin-top: 10px; }
+
+/* The placement overlay's legend: fixed color ramps (see overlayColor() in
+   placementOverlay.ts) that always match the board's halos, since both are
+   built from the same scale. */
+.placement-legend-ramp { margin-bottom: 4px; }
+.placement-legend-ramp-label { margin-bottom: 3px; }
+.placement-legend-gradient { height: 14px; border-radius: 2px; border: 1px solid rgba(0, 0, 0, 0.08); }
+.placement-legend-values { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.placement-legend-values span { font-size: 11px; color: #667; }
+.placement-legend-floor { font-size: 12px; color: #8a93a0; font-style: italic; }
 .lane-analysis .arrow {
   border: 1px solid #aab;
   background: white;

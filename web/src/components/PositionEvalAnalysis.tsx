@@ -7,10 +7,16 @@ import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 import {
   buildPlacementOverlay,
+  overlayGradient,
   HEAD_OPTIONS,
-  OVERESTIMATE_COLOR,
-  UNDERESTIMATE_COLOR,
+  MODEL_HUE,
+  SIM_HUE,
+  FLOOR,
+  RESIDUAL_CAP,
+  RAW_CAP,
+  OverlayMode,
   PlacementData,
+  PlacementHeadData,
   PlacementHeadKey,
 } from '../lib/placementOverlay';
 
@@ -226,57 +232,130 @@ function ScoreDeltaChart({ mc, model }: { mc: MC; model: Model | null }) {
 const NONE_HEAD = 'none' as const;
 type HeadSelection = PlacementHeadKey | typeof NONE_HEAD;
 
-// The "None" / four-head radio group that picks which placement head's
-// residual is overlaid on the board, stacked vertically below the Unseen
-// tiles pane in the board's sidebar column. An option is disabled (with an
-// explanatory tooltip) when the backend hasn't provided a prediction for
-// that head yet -- either because the whole `placement` payload is absent,
-// or because the selected generation has no exported ONNX for that head.
+// The "None" / four-head radio group that picks which placement head is
+// overlaid on the board, stacked vertically below the Unseen tiles pane in
+// the board's sidebar column. An option is disabled only when the whole
+// `placement` payload is absent for this position -- every head has a
+// Monte-Carlo truth plane whenever the payload exists, so there's always at
+// least the 'sim' mode to show, even for generations with no exported ONNX.
 function PlacementHeadRadios({
   placement, selected, onChange,
 }: { placement: PlacementData | null | undefined; selected: HeadSelection; onChange: (h: HeadSelection) => void }) {
+  const disabled = !placement;
   return (
     <div className="placement-head-picker">
-      <div className="placement-head-picker-heading">Placement residual</div>
+      <div className="placement-head-picker-heading">Placement overlay</div>
       <span className="radio-group vertical">
         <label>
           <input type="radio" name="placement-head" checked={selected === NONE_HEAD} onChange={() => onChange(NONE_HEAD)} />
           None
         </label>
-        {HEAD_OPTIONS.map((opt) => {
-          const head = placement?.heads[opt.key];
-          const disabled = !head || !head.pred;
-          const reason = !placement
-            ? 'no placement data for this position'
-            : 'no exported model for this generation';
-          return (
-            <label key={opt.key} className={disabled ? 'disabled' : undefined} title={disabled ? reason : undefined}>
-              <input
-                type="radio"
-                name="placement-head"
-                checked={selected === opt.key}
-                disabled={disabled}
-                onChange={() => onChange(opt.key)}
-              />
-              {opt.label}
-            </label>
-          );
-        })}
+        {HEAD_OPTIONS.map((opt) => (
+          <label
+            key={opt.key}
+            className={disabled ? 'disabled' : undefined}
+            title={disabled ? 'no placement data for this position' : undefined}
+          >
+            <input
+              type="radio"
+              name="placement-head"
+              checked={selected === opt.key}
+              disabled={disabled}
+              onChange={() => onChange(opt.key)}
+            />
+            {opt.label}
+          </label>
+        ))}
       </span>
     </div>
   );
 }
 
-// The two-swatch legend explaining the overlay's diverging color scale,
-// stacked vertically below the radio group whenever a head is selected and
-// rendered. The last line names the normalization: ring intensity is
-// |pred - sim| relative to the board's largest residual for the selected head.
-function PlacementLegend({ maxAbsResidual }: { maxAbsResidual: number }) {
+const MODE_OPTIONS: { mode: OverlayMode; label: string }[] = [
+  { mode: 'residual', label: 'Residual' },
+  { mode: 'pred', label: 'Model' },
+  { mode: 'sim', label: 'Sim' },
+];
+
+// The 3-way segmented control that picks the overlay's display mode, sitting
+// directly below the head radio group. Hidden entirely when no head is
+// selected (there's nothing to show a mode for). 'Residual' and 'Model' need
+// an exported model prediction for the selected head, so they're disabled
+// (with an explanatory tooltip) when the head's `pred` is null; 'Sim' reads
+// only the Monte-Carlo truth plane and is always available.
+function PlacementModeControl({
+  head, mode, onChange,
+}: { head: PlacementHeadData | undefined; mode: OverlayMode; onChange: (m: OverlayMode) => void }) {
+  const hasPred = !!head?.pred;
   return (
-    <div className="legend vertical">
-      <div><span className="sw" style={{ background: OVERESTIMATE_COLOR }} /> model high (pred &gt; sim)</div>
-      <div><span className="sw" style={{ background: UNDERESTIMATE_COLOR }} /> model low (pred &lt; sim)</div>
-      <div>intensity ∝ |pred − sim| (board max {maxAbsResidual.toFixed(3)})</div>
+    <span className="seg placement-mode-seg">
+      {MODE_OPTIONS.map((opt) => {
+        const disabled = opt.mode !== 'sim' && !hasPred;
+        return (
+          <button
+            key={opt.mode}
+            type="button"
+            className={mode === opt.mode ? 'active' : undefined}
+            disabled={disabled}
+            title={disabled ? 'no exported model for this generation' : undefined}
+            onClick={() => onChange(opt.mode)}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
+// One color ramp within the legend: a label plus a handful of swatches at
+// increasing raw values, built with the same overlayColor() scale the board
+// uses, so a swatch's apparent intensity always matches a halo of the same
+// value.
+function LegendRamp({ hue, cap, label }: { hue: string; cap: number; label: string }) {
+  return (
+    <div className="placement-legend-ramp">
+      <div className="placement-legend-ramp-label">{label}</div>
+      <div className="placement-legend-gradient" style={{ background: overlayGradient(hue, cap) }} />
+    </div>
+  );
+}
+
+// The endpoint labels under a LegendRamp's gradient, shown once per legend
+// rather than once per ramp: the display floor on the left edge and the
+// saturation cap (everything at or beyond it renders alike) on the right.
+function LegendValues({ cap }: { cap: number }) {
+  return (
+    <div className="placement-legend-values">
+      <span>{FLOOR.toFixed(2)}</span>
+      <span>{cap}+</span>
+    </div>
+  );
+}
+
+// The legend explaining the overlay's fixed color scale for the current
+// mode, stacked below the mode control whenever an overlay is rendered.
+// Every mode's ramp is built from the same fixed caps/floor the board
+// overlay uses (see placementOverlay.ts), so nothing here depends on the
+// position on screen.
+function PlacementLegend({ mode }: { mode: OverlayMode }) {
+  if (mode === 'residual') {
+    return (
+      <div className="legend vertical placement-legend">
+        <LegendRamp hue={MODEL_HUE} cap={RESIDUAL_CAP} label="model high (pred > sim)" />
+        <LegendRamp hue={SIM_HUE} cap={RESIDUAL_CAP} label="model low (pred < sim)" />
+        <LegendValues cap={RESIDUAL_CAP} />
+        <div className="placement-legend-floor">|residual| &lt; {FLOOR.toFixed(2)} not shown</div>
+      </div>
+    );
+  }
+  const hue = mode === 'pred' ? MODEL_HUE : SIM_HUE;
+  const label = mode === 'pred' ? 'model Pr' : 'sim Pr';
+  return (
+    <div className="legend vertical placement-legend">
+      <LegendRamp hue={hue} cap={RAW_CAP} label={label} />
+      <LegendValues cap={RAW_CAP} />
+      <div className="placement-legend-floor">&lt; {FLOOR.toFixed(2)} not shown</div>
     </div>
   );
 }
@@ -289,6 +368,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
   const [latest, setLatest] = useState(true);
   const [payload, setPayload] = useState<Payload | null>(null);
   const [headSel, setHeadSel] = useState<HeadSelection>(NONE_HEAD);
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>('residual');
   const [altOpen, setAltOpen] = useState(false);
   const [altLeave, setAltLeave] = useState('');
   const [altResult, setAltResult] = useState<AltResult | null>(null);
@@ -391,20 +471,28 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     [payload?.last_move],
   );
 
-  // Drop back to "None" if the newly loaded position/generation no longer
-  // has a prediction for the currently selected head (e.g. the generation
-  // changed to one with no exported ONNX), so the radio group never sits on
-  // a disabled option.
+  // Drop back to "None" if the newly loaded position no longer has
+  // placement data at all, so the radio group never sits on a disabled
+  // option.
   useEffect(() => {
     if (headSel === NONE_HEAD) return;
-    const head = payload?.placement?.heads[headSel];
-    if (!head || !head.pred) setHeadSel(NONE_HEAD);
+    if (!payload?.placement?.heads[headSel]) setHeadSel(NONE_HEAD);
   }, [payload, headSel]);
+
+  // Fall back to 'sim' if the current mode needs a prediction the newly
+  // loaded position/generation doesn't have (e.g. the generation changed to
+  // one with no exported ONNX), so the mode control never sits on a
+  // disabled selection.
+  useEffect(() => {
+    if (headSel === NONE_HEAD || overlayMode === 'sim') return;
+    const head = payload?.placement?.heads[headSel];
+    if (!head?.pred) setOverlayMode('sim');
+  }, [payload, headSel, overlayMode]);
 
   const placementOverlay = useMemo(() => {
     if (headSel === NONE_HEAD || !payload) return null;
-    return buildPlacementOverlay(payload.placement?.heads, headSel);
-  }, [headSel, payload]);
+    return buildPlacementOverlay(payload.placement?.heads, headSel, overlayMode, payload.board);
+  }, [headSel, payload, overlayMode]);
 
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
@@ -476,7 +564,8 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
             {/* The unseen pool the Monte-Carlo samples: 100 tiles minus the board and
                 the POV's leave (i.e. the bag + the opponent's rack). Constrained to the
                 game app's sidebar width so the tiles render at the same size. Below it,
-                in the same column, sits the placement-residual head picker and legend. */}
+                in the same column, sits the placement-overlay head picker, mode control,
+                and legend. */}
             <div style={{ width: 320, flexShrink: 0 }}>
               <UnseenTiles
                 state={{
@@ -493,7 +582,14 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                 }}
               />
               <PlacementHeadRadios placement={payload.placement} selected={headSel} onChange={setHeadSel} />
-              {placementOverlay && <PlacementLegend maxAbsResidual={placementOverlay.maxAbsResidual} />}
+              {headSel !== NONE_HEAD && (
+                <PlacementModeControl
+                  head={payload.placement?.heads[headSel]}
+                  mode={overlayMode}
+                  onChange={setOverlayMode}
+                />
+              )}
+              {placementOverlay && <PlacementLegend mode={overlayMode} />}
             </div>
           </div>
 
