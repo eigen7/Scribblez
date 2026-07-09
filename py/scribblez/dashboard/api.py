@@ -14,9 +14,12 @@ See docs/react_dashboard.md for the architecture.
 """
 
 import argparse
+import fcntl
 import json
+import os
 import signal
 import sqlite3
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -809,17 +812,54 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
     )
 
 
+# Held for the process lifetime so the flock is not dropped by garbage
+# collection; the kernel releases it automatically when the process exits.
+_CONTROL_LOCK = None
+
+
+def _acquire_control_lock(mount_root: str):
+    """Guarantee a single dashboard control plane per mount root. The
+    WorkerManager owns local worker processes and reconciles every task's slots
+    against its task.json; two dashboards on the same mount would fight over the
+    same slots -- double-spawning local workers and issuing conflicting
+    pause/gate enforcement. An exclusive advisory lock on <mount>/.dashboard.lock
+    serializes them. Because flock is released by the kernel when its holder
+    dies, a crashed dashboard never leaves a stale lock behind; only a live one
+    blocks a second start. Port reclaim (react_server) only dedups a single
+    port, so a dashboard on another port would otherwise slip through."""
+    global _CONTROL_LOCK
+    path = Path(mount_root) / ".dashboard.lock"
+    path.touch(exist_ok=True)
+    fd = open(path, "r+")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        holder = fd.read().strip() or "unknown"
+        sys.exit(
+            f"A dashboard is already managing {mount_root} (pid {holder}). Stop it first, "
+            f"or point this one at a different --mount-root."
+        )
+    fd.seek(0)
+    fd.truncate()
+    fd.write(str(os.getpid()))
+    fd.flush()
+    _CONTROL_LOCK = fd
+
+
 def run(port: int, mount_root: str):
     """Serve the API on `port` until SIGTERM/interrupt (used by the dashboard
     launcher). Binds to localhost only: the control plane holds cloud
     credentials and launches processes, so it must not be reachable
     off-machine (the browser reaches it through the Vite /api proxy).
 
-    The WorkerManager reconciles worker slots at boot (relaunching local
-    workers that should be running) and every RECONCILE_SECONDS thereafter
-    (restarting interruptible pods Runpod reclaimed). On shutdown, owned local
-    workers get SIGTERM (they flush and exit); cloud pods keep running.
+    Refuses to start if another dashboard already manages this mount root
+    (a single control plane owns the local workers). The WorkerManager
+    reconciles worker slots at boot (relaunching local workers that should be
+    running) and every RECONCILE_SECONDS thereafter (restarting interruptible
+    pods Runpod reclaimed). On shutdown, owned local workers get SIGTERM (they
+    flush and exit); cloud pods keep running.
     """
+    _acquire_control_lock(mount_root)
     manager = WorkerManager()
     make_app(mount_root, manager).listen(port, address="127.0.0.1")
     loop = tornado.ioloop.IOLoop.current()

@@ -12,10 +12,15 @@ import StatsTab from './StatsTab';
 
 type WorkerInfo = {
   worker_id: string; role: string; kind: 'local' | 'cloud'; desired_state: string; state: string;
+  observed_running: boolean;
   threads: number | null; vcpus: number | null; flavor: string | null;
   pod_id: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
   gate_reason?: string;
 };
+
+// A slot mid-transition: its process/pod has not yet caught up to the operator's
+// intent, so its Start/Pause control is disabled and shows a spinner.
+const IN_FLIGHT = new Set(['starting', 'stopping']);
 type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean | string> | null;
   created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
@@ -25,6 +30,7 @@ type TaskInfo = {
 const stateColors: Record<string, string> = {
   running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b',
   interrupted: '#a05a00', terminated: '#b23b3b', waiting: '#a05a00',
+  starting: '#1f77b4', stopping: '#1f77b4',
 };
 
 // The Runpod CPU flavor ids accepted by pod creation (the REST API's fixed
@@ -190,7 +196,11 @@ function WorkersTable({ workers, onAction }: {
       </thead>
       <tbody>
         {workers.map((w) => {
-          const running = w.state === 'running';
+          const inFlight = IN_FLIGHT.has(w.state);
+          // The toggle reflects operator intent, not the momentary state: a
+          // still-winding-down worker keeps showing Pause (disabled) until it
+          // has actually stopped, never a misleading Start.
+          const desiredRunning = w.desired_state === 'running';
           return (
             <tr key={w.worker_id} style={{ borderTop: '1px solid #e2e8ee' }}>
               <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{w.worker_id}</td>
@@ -211,13 +221,14 @@ function WorkersTable({ workers, onAction }: {
               <td style={{ padding: '6px 14px 6px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
                 {w.ssh ?? '—'}
               </td>
-              <td style={{ padding: '6px 0', whiteSpace: 'nowrap', display: 'flex', gap: 6 }}>
-                {running
-                  ? <Button label="Pause" onClick={() => onAction(w.worker_id, 'pause')} />
-                  : <Button label="Start" onClick={() => onAction(w.worker_id, 'start')} />}
-                <span title={running ? 'pause the worker before removing it' : undefined}>
+              <td style={{ padding: '6px 0', whiteSpace: 'nowrap', display: 'flex', gap: 6, alignItems: 'center' }}>
+                {desiredRunning
+                  ? <Button label="Pause" disabled={inFlight} onClick={() => onAction(w.worker_id, 'pause')} />
+                  : <Button label="Start" disabled={inFlight} onClick={() => onAction(w.worker_id, 'start')} />}
+                {inFlight && <span className="scz-spinner" title={w.state} aria-label={w.state} />}
+                <span title={w.observed_running ? 'pause the worker before removing it' : undefined}>
                   <Button
-                    label="Remove" tone="danger" disabled={running}
+                    label="Remove" tone="danger" disabled={w.observed_running || inFlight}
                     onClick={() => onAction(w.worker_id, 'remove')}
                   />
                 </span>
@@ -256,9 +267,12 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
       setError(String(e));
     }
   };
-  const cloudCost = info.workers.reduce((s, w) => s + (w.state === 'running' ? w.cost_per_hr ?? 0 : 0), 0);
-  const anyRunning = info.workers.some((w) => w.state === 'running');
-  const anyStartable = info.workers.some((w) => w.state !== 'running');
+  // Cost accrues while a pod is really up (observed), not merely desired-running.
+  const cloudCost = info.workers.reduce((s, w) => s + (w.observed_running ? w.cost_per_hr ?? 0 : 0), 0);
+  const anyStartable = info.workers.some((w) => w.desired_state !== 'running');
+  const anyPausable = info.workers.some((w) => w.desired_state === 'running');
+  // A worker can only be removed once it is truly stopped (no live process/pod).
+  const anyAlive = info.workers.some((w) => w.observed_running || IN_FLIGHT.has(w.state));
 
   return (
     <>
@@ -289,11 +303,11 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
         <Card title="Workers">
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
-            <Button label="Pause all" disabled={!anyRunning} onClick={() => act({ action: 'pause' })} />
-            <span title={anyRunning ? 'pause all workers before removing them' : undefined}>
+            <Button label="Pause all" disabled={!anyPausable} onClick={() => act({ action: 'pause' })} />
+            <span title={anyAlive ? 'pause all workers before removing them' : undefined}>
               <Button
                 label="Remove all" tone="danger"
-                disabled={anyRunning || info.workers.length === 0}
+                disabled={anyAlive || info.workers.length === 0}
                 onClick={() => act({ action: 'remove' })}
               />
             </span>

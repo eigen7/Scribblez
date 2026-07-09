@@ -28,6 +28,7 @@ class WorkerRecord:
     kind: str  # "local" | "cloud"
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local: engine thread count
+    pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
     vcpus: int | None = None  # cloud: pod size
     flavor: str | None = None  # cloud: Runpod CPU flavor
     pod_id: str | None = None  # cloud: the backing pod

@@ -7,13 +7,17 @@ created through the same pod spec as the fleet CLI. While a task has any cloud
 slots, a cloud_sync --watch subprocess streams that tag's bucket results into
 the local mount.
 
-Desired state lives in task.json (dashboard/tasks.py); actual state is
-observed live (subprocess poll, pod GET). reconcile() closes the gap: it
-relaunches local workers that should be running (e.g. after a dashboard
-restart) and restarts interruptible pods Runpod reclaimed. It also runs each
-workload's scheduler tick (generation lifecycle + fleet pacing): a scheduler
-may *gate* a role -- park its workers without touching the operator's desired
-state -- and reconcile enforces the gate alongside everything else.
+Desired state lives in task.json (dashboard/tasks.py); actual state is observed
+live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
+worker is observable and stoppable no matter which dashboard instance spawned
+it, even across a restart), cloud slots by pod runtime. reconcile() drives
+observed toward desired in both directions: it relaunches local workers that
+should be running (e.g. after a dashboard restart), restarts interruptible pods
+Runpod reclaimed, and stops workers that are running but should not be. It also
+runs each workload's scheduler tick (generation lifecycle + fleet pacing): a
+scheduler may *gate* a role -- park its workers without touching the operator's
+desired state -- and reconcile stops a gated worker just as it stops a paused
+one.
 
 Cloud operations need <mount>/cloud/credentials.json; credentials load lazily
 so a local-only dashboard works without them.
@@ -45,6 +49,68 @@ SYNC_INTERVAL_SECONDS = 30
 
 def _key(spec: workloads.WorkloadSpec, tag: str, worker_id: str = "") -> str:
     return f"{spec.name}/{tag}/{worker_id}"
+
+
+# The entrypoint module name every local worker runs, matched in its /proc
+# cmdline to tell a live worker from a reused pid.
+_WORKER_ENTRYPOINT = "cloud.worker_entrypoint"
+
+
+def _proc_env(pid: int) -> dict[bytes, bytes]:
+    """The process's environment as a byte-keyed dict (empty if unreadable)."""
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return {}
+    return dict(e.split(b"=", 1) for e in raw.split(b"\0") if b"=" in e)
+
+
+def worker_pid_alive(pid: int | None, worker_id: str, tag: str) -> bool:
+    """Whether `pid` is a live worker-entrypoint process for exactly this slot.
+
+    Reads /proc directly rather than a subprocess handle, so liveness is
+    observable no matter which dashboard instance spawned the worker -- and
+    survives a dashboard restart. Confirms both the command and the identifying
+    env (SCZ_WORKER_ID / SCZ_TAG) so a recycled pid (the original worker died
+    and the number was reused) never reads as alive. A zombie's cmdline is
+    empty, so it too reads as dead."""
+    if pid is None:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    if _WORKER_ENTRYPOINT.encode() not in cmdline:
+        return False
+    env = _proc_env(pid)
+    return env.get(b"SCZ_WORKER_ID") == worker_id.encode() and env.get(b"SCZ_TAG") == tag.encode()
+
+
+def _local_state(desired: str, alive: bool, gated: bool) -> str:
+    """The honest display state of a local slot from the two observed axes
+    (operator intent + real liveness) plus scheduler gating. `stopping` is the
+    in-flight state where a paused slot's process has not yet exited; `exited`
+    is an unexpected death of a slot that should be running (reconcile respawns
+    it)."""
+    if gated:
+        return "waiting"
+    if desired == "paused":
+        return "stopping" if alive else "paused"
+    return "running" if alive else "exited"
+
+
+def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str) -> str:
+    """The honest display state of a cloud slot. `alive` is real pod liveness
+    (a running runtime), independent of the pod's own desiredStatus. `stopping`
+    / `starting` are the in-flight states where intent and reality disagree;
+    `interrupted` is a pod Runpod reclaimed out from under a should-run slot."""
+    if gated:
+        return "waiting"
+    if desired == "paused":
+        return "stopping" if alive else "paused"
+    if alive:
+        return "running"
+    return "starting" if desired_status == "RUNNING" else "interrupted"
 
 
 def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
@@ -111,15 +177,34 @@ class WorkerManager:
             "SCZ_WORKER_ID": w.worker_id,
         }  # fmt: skip
         log = self._log_file(spec, task.tag, w.worker_id)
-        self._local[_key(spec, task.tag, w.worker_id)] = subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
+        self._local[_key(spec, task.tag, w.worker_id)] = proc
+        w.pid = proc.pid  # durable, so any instance can observe and stop this worker
+        tasks.save_task(spec, task)
 
-    def _local_proc(self, spec, tag, worker_id) -> subprocess.Popen | None:
-        return self._local.get(_key(spec, tag, worker_id))
+    def _local_alive(self, spec, task: tasks.TaskRecord, w) -> bool:
+        """Whether slot `w`'s worker process is really running. Reaps our own
+        exited child first (so it does not linger as a zombie), then probes by
+        durable pid -- catching workers spawned by a previous or concurrent
+        dashboard instance that this process holds no handle to."""
+        proc = self._local.get(_key(spec, task.tag, w.worker_id))
+        if proc is not None:
+            proc.poll()
+        return worker_pid_alive(w.pid, w.worker_id, task.tag)
+
+    def _stop_local(self, spec, task: tasks.TaskRecord, w):
+        """SIGTERM slot `w`'s worker by durable pid (workers flush completed
+        output and exit cleanly on SIGTERM). No-op if it is not running."""
+        if worker_pid_alive(w.pid, w.worker_id, task.tag):
+            try:
+                os.kill(w.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     # ---- slot operations -------------------------------------------------
 
@@ -187,11 +272,10 @@ class WorkerManager:
         tasks.save_task(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released
         if w.kind == "local":
-            proc = self._local_proc(spec, task.tag, worker_id)
-            if start and (proc is None or proc.poll() is not None):
+            if start and not self._local_alive(spec, task, w):
                 self._spawn_local(spec, task, w)
-            elif not start and proc is not None and proc.poll() is None:
-                proc.send_signal(signal.SIGTERM)
+            elif not run:
+                self._stop_local(spec, task, w)
         else:
             _, client = self._cloud()
             if start:
@@ -204,15 +288,12 @@ class WorkerManager:
         first), so a removal never silently discards an in-flight cycle."""
         w = task.worker(worker_id)
         if w.kind == "local":
-            proc = self._local.get(_key(spec, task.tag, worker_id))
-            assert proc is None or proc.poll() is not None, (
-                f"{worker_id} is running; pause it first"
-            )
+            assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
             self._local.pop(_key(spec, task.tag, worker_id), None)
         else:
             _, client = self._cloud()
             pod = next((p for p in client.list_pods() if p["id"] == w.pod_id), None)
-            assert pod is None or pod.get("desiredStatus") != "RUNNING", (
+            assert pod is None or pod.get("runtime") is None, (
                 f"{worker_id} is running; pause it first"
             )
             if pod is not None:
@@ -245,13 +326,9 @@ class WorkerManager:
             if gated:
                 info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
-                proc = self._local_proc(spec, task.tag, w.worker_id)
-                running = proc is not None and proc.poll() is None
-                info["state"] = "running" if running else (
-                    "paused" if w.desired_state == "paused" else
-                    "waiting" if gated else "exited"
-                )  # fmt: skip
-                _accrue(w, running, None)
+                alive = self._local_alive(spec, task, w)
+                info["state"] = _local_state(w.desired_state, alive, gated)
+                _accrue(w, alive, None)
             else:
                 if pods is None:
                     _, client = self._cloud()
@@ -259,17 +336,19 @@ class WorkerManager:
                 pod = pods.get(w.pod_id)
                 if pod is None:
                     info["state"] = "terminated"
+                    alive = False
                     _accrue(w, False, None)
                 else:
-                    running = pod.get("desiredStatus") == "RUNNING"
-                    info["state"] = "running" if running else (
-                        "paused" if w.desired_state == "paused" else
-                        "waiting" if gated else "interrupted"
-                    )  # fmt: skip
+                    alive = pod.get("runtime") is not None  # real liveness, not desiredStatus
+                    info["state"] = _cloud_state(
+                        w.desired_state, alive, gated, pod.get("desiredStatus", "")
+                    )
                     info["cost_per_hr"] = pod.get("costPerHr")
                     info["public_ip"] = pod.get("publicIp")
                     info["ssh"] = f"ssh {w.pod_id}@ssh.runpod.io"
-                    _accrue(w, running, pod.get("costPerHr"))
+                    _accrue(w, alive, pod.get("costPerHr"))
+            # Real liveness, for reconcile's desired-vs-observed enforcement.
+            info["observed_running"] = alive
             info["spend"] = w.spend
             out.append(info)
         if task.workers:
@@ -336,11 +415,15 @@ class WorkerManager:
 
     def reconcile(self):
         """One pass over every task: run the workload's scheduler tick, then
-        close desired-vs-actual gaps -- respawn local workers that should be
-        running (dashboard restart, crashed process), restart interruptible
-        pods Runpod reclaimed, and enforce scheduler gates. Runs at boot and
-        periodically; doubling as a spend-accrual heartbeat (worker_status
-        persists it) even when no browser is polling."""
+        drive each worker's observed state toward its desired state -- respawn
+        local workers that should be running but are not (dashboard restart,
+        crashed process), restart interruptible pods Runpod reclaimed, and stop
+        workers that are running but should not be (operator pause or a
+        scheduler gate). Enforcement keys off real liveness by durable pid/pod
+        runtime, so it holds a paused worker down even across a dashboard
+        restart or a second dashboard instance. Runs at boot and periodically;
+        doubling as a spend-accrual heartbeat (worker_status persists it) even
+        when no browser is polling."""
         for spec, task in self._all_tasks():
             if spec.scheduler:
                 try:
@@ -352,21 +435,25 @@ class WorkerManager:
             status = self.worker_status(spec, task)
             for w, info in zip(task.workers, status, strict=True):
                 should_run = w.desired_state == "running" and w.role not in task.gates
-                if should_run:
-                    if w.kind == "local" and info["state"] in ("exited", "waiting"):
-                        self._spawn_local(spec, task, w)
-                    elif w.kind == "cloud" and info["state"] in ("interrupted", "waiting"):
-                        _, client = self._cloud()
-                        client.start_pod(w.pod_id)
-                elif w.role in task.gates and info["state"] == "running":
-                    if w.kind == "local":
-                        proc = self._local_proc(spec, task.tag, w.worker_id)
-                        if proc is not None and proc.poll() is None:
-                            proc.send_signal(signal.SIGTERM)
-                    else:
-                        _, client = self._cloud()
-                        client.stop_pod(w.pod_id)
+                self._reconcile_worker(spec, task, w, should_run, info)
             self._ensure_sync(spec, task)
+
+    def _reconcile_worker(self, spec, task: tasks.TaskRecord, w, should_run: bool, info: dict):
+        """Close one slot's desired-vs-observed gap. A cloud pod that is booting
+        (`starting`) is left alone -- it is already on its way up."""
+        alive = info["observed_running"]
+        if w.kind == "local":
+            if should_run and not alive:
+                self._spawn_local(spec, task, w)
+            elif not should_run and alive:
+                self._stop_local(spec, task, w)
+        else:
+            if should_run and info["state"] == "interrupted":
+                _, client = self._cloud()
+                client.start_pod(w.pod_id)
+            elif not should_run and alive:
+                _, client = self._cloud()
+                client.stop_pod(w.pod_id)
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);

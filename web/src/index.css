@@ -1164,3 +1164,18 @@ h1 {
 .gen-slider { display: inline-flex; align-items: center; gap: 12px; }
 .gen-slider input[type="range"] { width: 220px; }
 .gen-latest { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+
+/* Inline spinner for a worker slot mid-transition (starting / stopping): the
+   Start/Pause button is disabled while the process is spun up or wound down. */
+.scz-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #b8c4d0;
+  border-top-color: #1f77b4;
+  border-radius: 50%;
+  animation: scz-spin 0.7s linear infinite;
+}
+@keyframes scz-spin {
+  to { transform: rotate(360deg); }
+}
