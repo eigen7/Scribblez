@@ -45,6 +45,8 @@
   re-evaluation, and picking the next candidate to sim via a learned
   proves-best probability. Steps 1–3 of its implementation roadmap are done
   (the kill-test passed).
+- **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
+  kill-test's numbers, controls, and conclusions.
 - **[lexical_features_for_value.md](lexical_features_for_value.md)** — giving
   the value models lexical foresight through engineered GADDAG-computed input
   features (the contingent-draw potential map, the cross-check delta) instead

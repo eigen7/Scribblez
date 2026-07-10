@@ -48,28 +48,12 @@ capacity).
 | `kv_memory` | frozen word bags | product-key attention over per-word letter bags | (weak; retrieval, lossy) |
 | `anagram` | sorted-anagram DAWG | soft skip/use subset walk over the sorted rack; per-length reachability | order-invariant search (rack longest-length) |
 
-- **`soft_traversal`** — walks the forward DAWG one cell at a time using the
-  network's soft letter query, tracking a sparse top-K node state; reads out
-  acceptance and the legal-continuation mask per cell. The DAWG lives in frozen
-  transition tables. Wins word-validity; useless on an unordered rack.
-- **`straight_through`** — identical, but the per-cell letter is hardened to
-  one-hot in the forward pass (exact single path, no top-K smear) with gradients
-  passed through as if soft. Exact-but-biased vs. `soft_traversal`'s
-  approximate-but-true gradients.
-- **`oracle_crosscheck`** — reads exact, board-derived cross-check legality
-  rather than being queried by the network. It defeats the tool-use premise (it
-  is handed the answer), so it is only ever a ceiling / wiring check, never a
-  legitimate result.
-- **`kv_memory`** — compiles the lexicon into a frozen key-value memory of
-  per-word letter bags and retrieves via product-key attention. Order-invariant
-  but the bag is anagram-invariant and lossy, so it sits near the no-tool
-  baseline in practice.
-- **`anagram`** — compiles the lexicon over each word's *sorted* letters (`CAT` →
-  `ACT`), so a multiset has one canonical key and anagrams collapse. A soft
-  skip/use walk over the sorted rack sums over all subsets, and a word completing
-  on a "use" transition is binned by node depth (= word length, unique because
-  the sorted lexicon is a trie), giving a per-length reachability vector. Wins the
-  order-invariant rack task; requires the rack fed sorted.
+Notes: `straight_through` is exact-but-biased-gradients vs `soft_traversal`'s
+approximate-but-true; `oracle_crosscheck` is handed the answer rather than
+queried, so it is only ever a ceiling / wiring check, never a legitimate
+result; `kv_memory`'s letter bags are anagram-invariant and lossy, so it sits
+near the no-tool baseline; `anagram` collapses anagrams onto one canonical
+sorted key and requires the rack fed sorted.
 
 ## The forward-DAWG constraint (generation)
 

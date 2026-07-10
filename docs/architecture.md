@@ -88,35 +88,30 @@ the pipeline, and it dictates where every value originates:
   [GameLogView](../engine/include/training/training_targets.h) the decoder
   fills in — independent of the replay's running tally.
 
-A practical consequence: any per-game state that must reach the input encoding
-has to be seedable into the replay. A starting-score handicap is stored in
-`GameMetadata` (`initial_score_p0/p1`) and used to seed the `GameStateEncoder`
-at the top of `PositionEncoder::replay_to_sampled`, so the score-diff *input*
-reflects it at every position; because the handicap is also baked into the
-game's final scores, the *targets* stay consistent automatically. The default
-self-play run requests no handicap (`--random-handicap-max 0`), so every game
-starts 0-0 and the feature is dormant unless handicaps are requested.
+A practical consequence: any per-game state that must reach the input
+encoding has to be seedable into the replay. Example: a starting-score
+handicap is stored in `GameMetadata` and seeds the `GameStateEncoder` at
+replay start, so the score-diff *input* reflects it everywhere; because it is
+also baked into the final scores, the *targets* stay consistent
+automatically. Default self-play requests no handicap.
 
 ## Random openings (off-policy state coverage)
 
-With `play_game --random-opening-mean M` (> 0), each game's first K plies are
-played **uniformly at random** — among all legal placements plus all legal
-exchanges (every distinct non-empty sub-multiset of the rack, bag permitting),
-passing only when neither exists — instead of by the seated agents, with K
-drawn per game as `round(Exp(mean M))` from the game seed
-([`SelfPlayEngine`](../engine/src/selfplay/self_play_engine.cpp) →
-[`Game::set_random_opening`](../engine/src/game/game.cpp)). This drives
-self-play into states — especially unusual rack leaves — that agent-vs-agent
-play never visits, so the value model learns to evaluate them.
+With `play_game --random-opening-mean M` (> 0), each game's first
+`K ~ round(Exp(M))` plies are played **uniformly at random** (all legal
+placements plus all legal exchanges; pass only when neither exists) instead
+of by the seated agents
+([`Game::set_random_opening`](../engine/src/game/game.cpp)). This drives
+self-play into states — especially unusual rack leaves — that agent play
+never visits.
 
-Random moves pollute the final-score *targets* of every position they follow,
-so the eligible region starts at `K - 1`: the position right after the last
-random ply is the first one whose remaining game is pure agent play (and is
-itself exactly the kind of unusual state the mechanism exists to cover). The
-random moves are ordinary `TurnBlob`s, so replay reconstruction is unaffected.
-A game that terminates during its random opening (e.g. six consecutive
-pass/exchange plies) has an empty eligible region and is dropped by the writer.
-`position_eval/train.py` generates with `--random-opening-mean 2` by default.
+Random moves pollute the final-score *targets* of every position they
+follow, so the eligible region starts at the position right after the last
+random ply — the first whose remaining game is pure agent play, and itself
+exactly the kind of unusual state the mechanism exists to cover. Random
+moves are ordinary `TurnBlob`s, so replay reconstruction is unaffected; a
+game that ends during its random opening has an empty eligible region and is
+dropped by the writer.
 
 ## Determinism and seeding
 

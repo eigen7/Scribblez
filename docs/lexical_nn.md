@@ -2,145 +2,74 @@
 
 ## Goal
 
-Train a NN whose weights encode knowledge of a Scrabble lexicon.
+Train a NN whose weights encode knowledge of a Scrabble lexicon, via a probe
+task: given a pre-move rack and a board, predict the highest-scoring move and
+its point value. Training data is hasty-vs-hasty self-play (`.slog`, every
+turn a training row, endgame included) under the generational loop.
 
-Existing NN training pipelines like `py/scripts/position_eval/train.py` train a CNN, which
-likely lacks the capability to learn the thousands of commonly occurring Scrabble words.
+## Sub-tasks: one per lane
 
-## Learning Setup
+The problem decomposes into **30 sub-tasks**: the maximal-scoring move in each
+of the 15 rows (best horizontal play) and 15 columns (best vertical play), so
+each sample teaches several "best word here" facts. This is a clean
+partition: every multi-tile play belongs to exactly one lane (its lay
+direction); incidental cross-words do not make it eligible for perpendicular
+lanes. **Single-tile plays** have no lay direction and are classified into a
+lane iff they form a word in that direction (a true cross lands in both
+lanes), with the play's full score attributed to whichever lane(s) it lands
+in.
 
-Similarly to `scripts/position_eval/train.py`, play fast hasty-vs-hasty games in c++ and train over
-the resulting `.slog` games in a generational generate->train loop.
+30 lanes was chosen over the finer 450 per-(square, direction) decomposition
+because the target stays small and a lane's union is *recoverable*: with a
+unique max move, the union tensor is exactly that word's footprint, so the
+consumer can read the move back off the output. The globally best move is a
+structural max over the 30 per-lane scores (no separate loss).
 
-Unlike `scripts/position_eval/train.py`, every turn of a game is a training row, including endgame
-positions.
+## Targets
 
-The learning problem is to take a pre-move rack and a board, and to predict the highest-scoring
-move, along with the point-value of that move. The expectation is that this task will require the NN
-to encode the lexicon in its weights.
+- **Move (union) target**: per lane, a `(27, 15)` tensor — entry `(x, y)` is
+  1 iff some lane-maximal move places tile `x` on the lane's `y`th square
+  (26 letters + 1 uninstantiated blank; only newly placed tiles marked).
+  Masked BCE; a lane with no legal move is fully masked.
+- **Score target**: per lane, 100 score bins (last bin = "≥ 99"), with a
+  PDF loss (cross-entropy) and a CDF loss (discrete CRPS). Masked for
+  no-move lanes.
+- **Has-move**: per lane, BCE over all 30 lanes; gates the structural max so
+  empty lanes can't win it.
 
-### Sub-tasks: one per lane
+## Input encoding
 
-Rather than learn only the globally maximal move, we decompose the problem into **30 sub-tasks**:
-the maximal-scoring move in each of the **15 rows** (best horizontal play in that row) and **15
-columns** (best vertical play in that column). Each sub-task contributes to the loss, so each sample
-teaches the net several "what is the best word here" facts, not just one.
-
-This is a clean partition: every multi-tile play belongs to exactly one lane (the row or column its
-tiles lie along — its *lay direction*), so a lane's target is a single best move (plus any ties).
-Its incidental cross-words do **not** make it eligible for perpendicular lanes.
-
-A 30-lane decomposition is chosen over a finer per-(starting-square, direction) one (which would be
-15x15x2 = 450 sub-tasks) for two reasons: the target stays small and, more importantly, a lane's
-union is *recoverable* — with a unique max move, the union tensor (below) is exactly that word's
-placed-tile footprint, so the consumer can read the move back off the output. The cost is less
-lexical signal per sample than 450 sub-tasks would give; finer granularity can be reintroduced later
-if the net saturates.
-
-**Single-tile plays** have no lay direction. They are classified into a lane only if they *score in
-that direction*: into the row sub-task iff they form a horizontal word, into the column sub-task iff
-they form a vertical word. A true cross (a word in both directions) lands in both lanes; an
-isolated-axis tile lands in the one direction it forms a word. The play's full score (main +
-cross-word points) is attributed identically to whichever lane(s) it lands in — it is one physical
-move with one score.
-
-The globally highest-scoring move is the max over all 30 sub-tasks. The net exposes this via a
-max-pooling output head over the 30 per-lane score predictions; supervision is per-lane only and the
-global max is purely structural (no separate loss on it).
-
-## Encoding a Move
-
-In general, multiple moves can be tied for highest scoring in a lane. We frame each sub-task as
-learning the **union** of all moves that are maximal *for that lane*. A lane's union is a (27, 15)
-tensor: entry (x, y) is 1 iff some maximal move in the lane places tile x on the y'th space of the
-row/column. 27 = 26 letters + 1 (all blank instantiations collapsed to a single uninstantiated
-blank). Stacking the 30 lanes gives a (30, 27, 15) ~= 12k-entry target. Equivalently, this is two
-(15, 15, 27) per-cell tensors (one for the row sub-tasks, one for the columns): cell (r, c) of the
-row tensor holds the tile that row r's best horizontal move places at column c.
-
-Only newly-placed tiles are marked (tiles the move threads through are already on the board, which
-the consumer has). Each entry contributes BCE loss, masked per-lane: a lane with no legal move
-masks out all 15 of its cells.
-
-Possible further compaction, if it yields meaningful gains: specify tiles as rack-indices instead of
-letters (27 -> 7).
-
-## Encoding a Score
-
-Each lane has its own max-score prediction: 100 logit outputs B_0, B_1, ..., B_99, where B_k is an
-indicator of "this lane's max-score is == k" for k < 99, and B_99 is an indicator of "max-score is
->= 99". A lane with no legal move is masked out of the score loss.
-
-We have two loss terms associated with each lane's score: a PDF-loss, and a CDF-loss.
-
-For PDF-loss, we can use sum_{0 <= k <= 99} B(k) log(B_hat(k)).
-
-For CDF-loss, we can use sum_{0 <= k <= 99} (sum_{j <= k} B(j) - B_hat(j))^2.
-
-## Input Encoding
-
-This task needs its own lean input encoder, **not** the one from `scripts/position_eval/train.py`. Two
-points:
-
-- The position evaluation encoder's spatial planes include horizontal/vertical cross-checks (which letters are
-  legal at each empty square) — that is lexicon knowledge, and feeding it to a net whose purpose is
-  to *learn* the lexicon defeats the experiment. Cross-checks must be excluded from the input. (They
-  may instead become an auxiliary *output*/loss term; see Dashboard.)
-- Score differential, unseen-tile pool, and last-move metadata are irrelevant to a single-move
-  lexical task and should be dropped.
-
-A sufficient input is roughly: 26 letter planes + 1 blank-marker plane + premium-square planes
-(word/letter multipliers) + the 27-entry raw rack counts (exact counts matter — "can I play two
+The task has its own lean encoder, deliberately *not* the position-eval one:
+the position-eval encoder's cross-check planes **are lexicon knowledge**, and
+feeding them to a net whose purpose is to learn the lexicon defeats the
+experiment. Score differential, unseen pool, and move history are irrelevant
+and dropped. Sufficient input: letter planes + blank marker + premium-square
+planes + raw 27-entry rack counts (exact counts matter — "can I play two
 R's" is a counting fact).
 
-## NN Architecture
+## Architecture
 
-The model is `py/scribblez/max_move_per_lane/model.py` (`MaxMovePerLaneModel`). It has two stages
-that split the problem into "where" and "what word":
+`py/scribblez/max_move_per_lane/model.py` (`MaxMovePerLaneModel`), split into
+"where" and "what word":
 
-- **Spatial stage (CNN).** A conv trunk -- the `SpatialTrunk` shared with the position evaluation model (stem,
-  rack-scalar injection, a residual tower with KataGo-style global-pooling blocks) -- encodes the
-  board into a `(C, 15, 15)` feature map. Convolution is the natural tool for the spatial facts:
-  premium-square geometry, which tiles sit where, board openness.
+- **Spatial stage**: the `SpatialTrunk` shared with the position evaluation
+  model encodes the board into per-cell features — convolution carries the
+  spatial facts (premium geometry, tile placement, openness).
+- **Lexical stage**: one small transformer encoder run along every lane (rows
+  and columns with transpose-shared weights) over the trunk's per-cell
+  features plus prepended rack tokens. A transformer, not more convolution,
+  carries the lexicon because a word threads *through* existing tiles — its
+  letters are non-adjacent in the lane, and self-attention binds them in one
+  layer — and because FFN width is lexical capacity under the
+  key-value-memory view. Shared weights across axes make main-word scoring
+  and cross-word checking the same operation on two axes.
 
-- **Lexical stage (the lexicon store).** A single small **transformer encoder is run along every
-  lane** -- once per row and once per column, with *transpose-shared weights* -- over the trunk's
-  per-cell features (plus a few rack tokens prepended so the lane can attend rack<->board). This is
-  where the lexicon is learned. The key reasons a transformer, and not more convolution, carries the
-  lexical knowledge: a word threads *through* tiles already on the board, so its letters are
-  non-adjacent in the lane, and self-attention binds those disjoint positions in a single layer
-  (a fixed-width conv cannot); and the dictionary itself lives in the FFN width under the key-value-
-  memory view of a transformer -- attention indexes into it, width *is* lexical capacity. Running the
-  same weights on rows and columns makes main-word scoring and perpendicular cross-word checking the
-  same operation applied on two axes.
-
-**Fusion** is simply that the lane transformer consumes the CNN's per-cell lane features: the conv
-supplies spatially-grounded, premium-aware cell vectors, and the transformer turns each lane's
-sequence of them into word-level judgments. Neither stage alone suffices -- conv can't bind a word's
-non-adjacent letters, and a transformer on raw squares would have to relearn board geometry the conv
-gives for free.
-
-Heads, all shared across the two axes: a per-cell **occupancy** head (`C -> 27`) emits the
-`(30, 15, 27)` union target; a per-lane **score** head reads the pooled (mean+max over cells) lane
-vector and emits 100-bin score logits; a per-lane **has-move** head predicts whether the lane has any
-legal play. The global best-move score is the structural max over the 30 lanes' expected scores,
-gated by the has-move probability so empty (score-unsupervised) lanes can't win the max. Losses:
-masked score-PDF (cross-entropy) + score-CDF (discrete CRPS), masked occupancy BCE, and has-move BCE
-over all 30 lanes.
+Heads (shared across axes): per-cell occupancy → the union target; per-lane
+score bins from the pooled lane vector; per-lane has-move.
 
 ## Dashboard
 
-`scripts/max_move_per_lane/train.py` writes to the same per-tag dashboard the position-evaluation trainer uses;
-the two share the trainer scaffolding (`scribblez/train_common.py`) and the entire dashboard
-(`scribblez/dashboard/`). One metrics record is written per epoch (keyed on positions trained, the
-loss plots' x-axis), and the shared panels are task-agnostic:
-
-- **Train loss** -- the total plus every per-component loss (here: score-PDF, score-CDF, move
-  occupancy, has-move) overlaid on one panel. The dashboard stores metrics in a long format
-  (`metrics(epoch, name, value)`) and the loss panel discovers every `loss`/`loss_<x>` series
-  automatically, so adding an auxiliary loss term needs no schema or front-end change.
-
-- **Train accuracy** -- averaged over each epoch, on the 30 lanes that have a legal move: `move_acc`
-  (the thresholded occupancy union matches the target exactly), `score_acc` (argmax score bin
-  matches), and `has_move_acc` (over all 30 lanes). Any `<x>_acc` series is auto-discovered onto the
-  accuracy panel.
+The trainer shares the per-tag dashboard with the position-eval trainer; the
+loss and accuracy panels auto-discover every `loss_<x>` / `<x>_acc` series,
+so auxiliary loss terms need no schema or front-end change. Accuracy metrics:
+exact union match, argmax score bin match, and has-move accuracy.

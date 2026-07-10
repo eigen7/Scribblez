@@ -40,16 +40,11 @@ Reference points: the label is concentrated (length 5 is 43% of racks, 4–6 is
 91%), so a majority guess scores ~0.43 and everyone's within-1 is ~0.98. The
 no-tool baseline reaches ~0.66 from surface features but cannot be exact.
 
-Three readings:
-
-1. **The order-invariant tool nails it.** `anagram` reaches ~100% exact on
-   held-out racks — with *fewer* parameters than the baseline — by searching
-   subsets of the rack against the lexicon (see `lexical_tools.md`).
-2. **The wrong-shaped tool does nothing.** `soft_traversal`, which scored 1.000
-   on word-validity, is no better than the baseline here: a rack has no order to
-   walk. The predicted failure, and the whole point.
-3. **The win is structure, not capacity.** The starved control (same FFN shrink,
-   no tool) matches the full baseline (0.655 vs 0.656).
+Readings: the order-invariant tool nails it (~100% exact, fewer parameters
+than the baseline); the wrong-shaped tool does nothing (`soft_traversal`,
+1.000 on word-validity, matches the baseline here — a rack has no order to
+walk); and the win is structure, not capacity (the starved control matches
+the full baseline, 0.655 vs 0.656).
 
 **The pair with word-validity.** The two tools trade places:
 

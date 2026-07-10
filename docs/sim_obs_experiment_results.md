@@ -75,42 +75,33 @@ all candidates                  holdout wld_ce = 0.5098
 
 ## Analysis
 
-**The gate is passed, with textbook controls.** The evidence gain is 5.7 SEs
-from zero and holds against `shuffled`, which itself sits at a null vs `none`
-(marginal statistics carry nothing; junk evidence is mildly harmful noise).
-The two evidence arms agree with each other to ±0.0003 — the gain is
+**The gate is passed, with clean controls.** The evidence gain is 5.7 SEs
+from zero and holds against `shuffled`, which itself sits at a null vs
+`none`; the two evidence arms agree to ±0.0003 — the gain is
 position-matched evidence, not artifact.
 
 **The yardstick explains the small magnitude.** A bare logistic over one
 candidate's raw sim scalars — no board, no trunk — matches the fully trained
-baseline (0.5096 vs 0.5110). The trunk and a 200-rollout sim are therefore
-two *roughly equal, highly correlated* estimators of root WLD, and fusing two
-redundant estimators buys little by construction — exactly the observed few
-thousandths. The constraint is information saturation at the root-value
-readout, not fusion capacity. (Incidentally, this also shows the sims are
-well-calibrated outcome predictors despite the uniform-rack bias.)
+baseline (0.5096 vs 0.5110). The trunk and a 200-rollout sim are two roughly
+equal, highly correlated estimators of root WLD, so fusing them buys little
+by construction. The constraint is information saturation at the root-value
+readout, not fusion capacity.
 
-**The phase gradient is the mechanism's fingerprint.** The gain is 8×
-larger in the endgame third (−0.0129) than the opening third (−0.0016) — a
-monotone gradient tracking sim *quality*: near the endgame, rollouts are
-close to exact and the model leans on them; early, a terminal rollout is 20+
-moves of draw luck and adds little. This is direct empirical support for the
-mechanism (the model uses evidence in proportion to its reliability) and
-prices what better sims would buy everywhere: the late-game figure is the
-gain where sims are trustworthy.
+**The phase gradient is the mechanism's fingerprint.** The gain is 8× larger
+in the endgame third (−0.0129) than the opening third (−0.0016), a monotone
+gradient tracking sim *quality* — the model uses evidence in proportion to
+its reliability. The late-game figure prices what trustworthy sims would buy
+everywhere.
 
-**Spatial planes are inert at this readout** (`full` ≡ `scalar` ± 0.0003).
-Expected: the position-level WLD scalar has no use for per-move spatial
-discrimination. The spatial planes' real test is per-move re-ranking (roadmap
-steps 5–6), which this readout structurally cannot exhibit.
+**Spatial planes are inert at this readout** (`full` ≡ `scalar` ± 0.0003), as
+expected: a position-level WLD scalar has no use for per-move spatial
+discrimination. Their real test is per-move re-ranking, which this readout
+structurally cannot exhibit.
 
-**The rack-bias slice is confounded and should not be over-read.** The gain
-being *larger* on rack-biased positions (−0.0069 vs −0.0043) superficially
-argues against the rack-inference-mismatch hypothesis, but the unbiased
-subset (opponent just bingoed / has not yet acted) skews early-game, where
-gains are small for phase reasons. The clean claim is only: there is no
-positive evidence that rack bias is the binding limiter. A phase-controlled
-cross-tab would settle it.
+**The rack-bias slice is confounded.** The gain is larger on rack-biased
+positions, but the unbiased subset skews early-game where gains are small
+for phase reasons. The clean claim: no positive evidence that rack bias is
+the binding limiter. A phase-controlled cross-tab would settle it.
 
 ## Conclusions
 
