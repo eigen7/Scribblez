@@ -114,6 +114,8 @@ independent.
 
 ## The decision procedure
 
+The proposer's job is uniform across rounds: given the sim results for the
+candidates simmed so far (possibly none), pick the next candidate(s) to sim.
 One generic loop, parameterized by a schedule (`B` candidates proposed per
 round, `R` rounds):
 
@@ -125,6 +127,11 @@ round, `R` rounds):
 4. Repeat from 2 until `R` rounds have run (or the sim budget is spent).
 5. Final pick: best move by simulation value over all simmed candidates.
 
+The first sim slot is reserved for a **mechanical anchor** — the
+highest-raw-score move — regardless of the proposer's ranking. It is cheap
+insurance against model blind spots, and its sim is high-value evidence: the
+residual on the obvious move calibrates the rest of the evidence set.
+
 The payoff is **promotion, not re-scoring**: simmed moves are ranked by
 their sims directly; conditioning matters because the next round can promote
 moves no earlier round selected — e.g. the modest play that blocks a
@@ -134,19 +141,27 @@ sensitive to the first batch's composition.
 
 ### The schedule spectrum
 
-- **(B = K, R = 2)** — two batched rounds. Simplest data generation and
-  training distribution; batch diversity for free.
+- **(B = K, R = 2)** — two batched rounds. Coarsest evidence conditioning
+  (two prefix sizes); works with no acquisition mechanism beyond the value
+  ranking plus a footprint-novelty penalty for within-batch diversity.
 - **(B = 1, R = K)** — fully sequential. Every sim is maximally informed by
-  all prior evidence; latency serializes on the sims (the network side is
-  one trunk pass plus `R` cheap incremental passes); a greedy proposer tends
-  to propose near-duplicates of the current best, so an acquisition
-  mechanism ([candidate selection](#candidate-selection)) is load-bearing at
-  small `B`.
+  all prior evidence, and the loop admits early stopping (halt when no
+  unsimmed move is likely to prove best); a greedy proposer tends to propose
+  near-duplicates of the current best, so an acquisition mechanism
+  ([candidate selection](#candidate-selection)) is load-bearing at small
+  `B`.
 - Training must cover every evidence-prefix size (including zero), so data
-  generation records the trajectory that produced each set.
+  generation records the trajectory that produced each set. A sequential
+  trajectory supplies rows at every prefix size.
 
-The recommended starting point is **(B = K, R = 2)**, moving toward smaller
-`B` only if measurement shows targeted sims beat batch diversity.
+Wall-clock barely distinguishes the schedules at the intended sim budgets:
+rollouts parallelize *within* a candidate, and at hundreds-to-thousands of
+rollouts per candidate a single sim saturates the hardware, so total sim
+compute is `K·S` either way and sequential rounds add only `R` cheap
+fusion-and-rescore passes plus barrier waits. The design center is therefore
+**(B = 1, R = K)** — sequential proposal behind the mechanical anchor — with
+batch mode retained as the fallback if the sequential proposer fails to beat
+it.
 
 ## Candidate selection
 
@@ -172,6 +187,26 @@ Option 1 faces some challenges. Defining a target that corresponds to
 covariance seems difficult. It also only helps with requirement B; it is unclear
 how to blend that with requirement A in a principled way. For these reasons, we
 favor Option 2.
+
+Two structural facts about the proves-best target:
+
+- **It is a thin transform of the conditioned value.** "Proves best" is
+  approximately `P(conditioned value of the candidate + sim noise >
+  best-so-far)` — a calibrated comparison of the evidence-conditioned value
+  against a known scalar, at a noise level given by the rollout counts. The
+  hard part is the conditioned value, which dense distillation trains; the
+  head is a thin output on that backbone, fine-tuned on sim outcomes. The
+  head cannot be the sole training path: its labels exist only for simmed
+  candidates — a handful per position, chosen by the data-generation
+  proposer, at thousands of rollout-games each — whereas the distillation
+  oracle labels *any* move under *any* evidence prefix at one forward pass,
+  unbiased over the full move set.
+- **At an empty evidence set it reduces to value ranking.** With best-so-far
+  at the floor, the expected-gain form `E[max(0, p(w) − best)]` collapses to
+  `E[p(w)]` — the value prediction itself (the probability form instead
+  degenerates to 1 for every move). First-round proposal by value score is
+  the empty-evidence special case of the acquisition rule, not a separate
+  mechanism.
 
 Details to be worked out with Option 2:
 
@@ -224,8 +259,33 @@ and are free.
 Distillation from the evidence-conditioned position evaluation model, as in
 Phase 4, with the evidence set present on both sides through the shared
 fusion stage; the label-a-subset/mask-the-loss strategy applies unchanged.
-(Training later rounds directly against sim values instead is coherent but
-departs from the Phase 4 pipeline; open question.)
+The proves-best head is the one output trained directly on sim outcomes
+(see [candidate selection](#candidate-selection)); the value heads train by
+distillation alone.
+
+### Evidence-trajectory generation
+
+The evidence sets in training data come from running the deployment
+schedule itself (anchor slot, then sequential proposal) at labeled
+positions, with exploration noise: the proposer samples from a
+temperature-softmax over its proposal scores rather than taking the argmax,
+and the trajectory length is randomized to spread coverage across prefix
+sizes and best-so-far levels. Uniform-random candidates are poor
+exploration — with thousands of legal moves nearly all terrible, a uniform
+sim spends its rollouts on evidence about moves no proposer will ever
+propose; the region needing coverage is the plausible-but-not-top tail that
+temperature sampling reaches. Generation 0, with no trained proposer, uses
+the hasty-equity top-`K`.
+
+This exploration is bias-free with respect to outcome targets: evidence
+labeling is a side-computation on positions from ordinary self-play, so the
+choice of which candidates to sim never alters the played move or the game
+outcome — unlike move-sampling diversification, which changes the
+trajectory itself. The only cost is sim compute spent on less informative
+evidence. Coverage matters most for the proves-best head, whose labels
+exist only for simmed candidates; temperature exploration is what puts
+labels on the "not the top pick, but proved best" rows that head exists to
+predict.
 
 ### The cost elephant
 
@@ -331,20 +391,17 @@ the condition, so mixing modes within a tag fails loudly.
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Done — passed** (see above). |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
 | 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap Phase 4 | — |
-| 6 | Multi-round agent (the decision procedure above); schedule tuning (`B`, `R`); acquisition — footprint novelty penalty first, then the proves-best head if the small-`B` schedule shows value; match-play eval vs. the one-round agent. | 5 | — |
+| 6 | Multi-round agent (the decision procedure above); the proves-best acquisition head (footprint novelty penalty covers the batch-mode fallback); budget tuning; match-play eval vs. the one-round agent. | 5 | — |
 
 ## Open questions
 
-- **Schedule (`B`, `R`) and budget split** — including whether later rounds
-  should use smaller `S`, and where on the acquisition ladder (novelty
-  penalty → proves-best head) each schedule needs to sit.
+- **Budget split** — whether later sims should use smaller `S`, and the
+  early-stopping threshold for the sequential schedule.
 - **Proves-best head details** — the bulleted list under
   [candidate selection](#candidate-selection).
 - **Evidence-map encoding** — pooled vs spatial; cheap to ablate inside the
   kill-test.
 - **Whether scalar evidence alone captures most of the win** — if so, the
   spatial machinery can be deferred (cheap-before-rich).
-- **Later-round training targets** — evidence-conditioned distillation vs
-  training directly against sim values for simmed candidates.
 - **Sim reuse across rounds** — candidates retained across rounds keep their
   rollouts; whether to top up counts as the evidence set grows.

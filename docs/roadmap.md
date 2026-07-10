@@ -120,8 +120,16 @@ an upfront filter risks dropping a strategically critical move (the modest
 play that blocks a triple-word lane). The one legitimate concern — top-K
 diversity for simulation — is handled *after* scoring, by a cheap
 footprint-level dedup of the ranked handful. Caveat: the `O(N)` argument
-assumes full-set evaluation happens roughly once per decision, at the root;
-a rollout policy invoking it at every ply re-opens the question.
+assumes full-set evaluation happens roughly once per decision, at the root.
+A neural *rollout* policy instead scores only the top-`k` moves by hasty
+equity (small fixed `k`, ~16). Nothing is cached across plies, so the
+per-ply cost is one trunk encode plus `k` move scorings: the pruning caps
+the move-encoding cost that a 20,000-move two-blank position would
+otherwise impose, and the fixed `k` gives static tensor shapes for batching
+plies across concurrent rollouts. Context-blind pruning is second-order
+inside rollouts — both simulated players share the policy, so residual bias
+largely cancels in candidate comparisons — whereas at the root it would
+drop exactly the moves the model exists to find.
 
 ### Training
 
