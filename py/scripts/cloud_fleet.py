@@ -27,6 +27,7 @@ Usage:
 import argparse
 import secrets
 import sys
+from dataclasses import dataclass
 
 from cloud.bundles import resolve_bundle_id
 from cloud.credentials import CloudCredentials, load_credentials
@@ -53,6 +54,34 @@ def r2_env(creds: CloudCredentials) -> dict[str, str]:
     }
 
 
+@dataclass(frozen=True)
+class CpuResources:
+    """A CPU pod's hardware: a Runpod CPU flavor id and a vCPU count."""
+
+    vcpus: int
+    flavor: str
+
+
+@dataclass(frozen=True)
+class GpuResources:
+    """A GPU pod's hardware: a Runpod gpuTypeId and how many of them."""
+
+    gpu_type_id: str
+    gpu_count: int
+
+
+def _compute_fields(resources: CpuResources | GpuResources) -> dict:
+    """The compute-selection part of a POST /pods body: a CPU flavor + vCPU
+    count, or a GPU type + count."""
+    if isinstance(resources, GpuResources):
+        return {
+            "computeType": "GPU",
+            "gpuTypeIds": [resources.gpu_type_id],
+            "gpuCount": resources.gpu_count,
+        }
+    return {"computeType": "CPU", "cpuFlavorIds": [resources.flavor], "vcpuCount": resources.vcpus}
+
+
 def pod_create_spec(
     creds: CloudCredentials,
     spec: workloads.WorkloadSpec,
@@ -61,8 +90,7 @@ def pod_create_spec(
     *,
     role: str,
     bundle_id: str,
-    vcpus: int,
-    flavor: str,
+    resources: CpuResources | GpuResources,
     container_disk_gb: int = 20,
 ) -> tuple[str, dict]:
     """(pod name, POST /pods body) for one cloud worker. Shared by this CLI and
@@ -77,9 +105,7 @@ def pod_create_spec(
     return name, {
         "name": name,
         "imageName": creds.registry.worker_image,
-        "computeType": "CPU",
-        "cpuFlavorIds": [flavor],
-        "vcpuCount": vcpus,
+        **_compute_fields(resources),
         "containerDiskInGb": container_disk_gb,
         "containerRegistryAuthId": creds.runpod.container_registry_auth_id,
         "interruptible": spec.role(role).interruptible,
@@ -100,8 +126,7 @@ def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
             params,
             role=args.role,
             bundle_id=bundle_id,
-            vcpus=args.vcpus,
-            flavor=args.flavor,
+            resources=CpuResources(vcpus=args.vcpus, flavor=args.flavor),
             container_disk_gb=args.container_disk_gb,
         )
         pod = client.create_pod(body)

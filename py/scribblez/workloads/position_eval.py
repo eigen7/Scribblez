@@ -102,6 +102,7 @@ SPEC = WorkloadSpec(
             runner="scribblez.position_eval.trainer:run",
             singleton=True,
             kinds=("local",),
+            gpu=True,
             stats=TRAINER_STATS,
         ),
     ),

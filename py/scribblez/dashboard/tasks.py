@@ -29,8 +29,10 @@ class WorkerRecord:
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local: engine thread count
     pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
-    vcpus: int | None = None  # cloud: pod size
-    flavor: str | None = None  # cloud: Runpod CPU flavor
+    vcpus: int | None = None  # cloud CPU pod: vCPU count
+    flavor: str | None = None  # cloud CPU pod: Runpod CPU flavor
+    gpu_type_id: str | None = None  # cloud GPU pod: Runpod gpuTypeId
+    gpu_count: int | None = None  # cloud GPU pod: number of GPUs
     pod_id: str | None = None  # cloud: the backing pod
     cost_per_hr: float | None = None  # cloud: last observed rental rate
     spend: float = 0.0  # estimated dollars spent by this slot so far

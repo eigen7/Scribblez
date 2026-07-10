@@ -34,7 +34,7 @@ from cloud.bundles import resolve_bundle_id
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from scripts.cloud_fleet import pod_create_spec
+from scripts.cloud_fleet import CpuResources, GpuResources, pod_create_spec
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -111,6 +111,13 @@ def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str) ->
     if alive:
         return "running"
     return "starting" if desired_status == "RUNNING" else "interrupted"
+
+
+def _resource_record_fields(resources: CpuResources | GpuResources) -> dict:
+    """The WorkerRecord cloud-resource fields for a pod's hardware selection."""
+    if isinstance(resources, GpuResources):
+        return {"gpu_type_id": resources.gpu_type_id, "gpu_count": resources.gpu_count}
+    return {"vcpus": resources.vcpus, "flavor": resources.flavor}
 
 
 def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
@@ -208,9 +215,12 @@ class WorkerManager:
 
     # ---- slot operations -------------------------------------------------
 
-    def _check_role(self, spec, task: tasks.TaskRecord, role: str, kind: str):
+    def _check_role(self, spec, task: tasks.TaskRecord, role: str, kind: str, gpu: bool = False):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
+        if kind == "cloud":
+            want = "GPU" if role_spec.gpu else "CPU"
+            assert gpu == role_spec.gpu, f"role '{role}' requires {want} instances"
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
@@ -236,9 +246,15 @@ class WorkerManager:
         return w
 
     def add_cloud(
-        self, spec, task: tasks.TaskRecord, role: str, count: int, vcpus: int, flavor: str
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        count: int,
+        resources: CpuResources | GpuResources,
     ) -> list[tasks.WorkerRecord]:
-        role_spec = self._check_role(spec, task, role, "cloud")
+        gpu = isinstance(resources, GpuResources)
+        role_spec = self._check_role(spec, task, role, "cloud", gpu=gpu)
         assert not (role_spec.singleton and count > 1), f"role '{role}' allows one worker"
         creds, client = self._cloud()
         params = params_mod.validate(spec.params_cls, task.params)
@@ -247,7 +263,7 @@ class WorkerManager:
         for _ in range(count):
             name, body = pod_create_spec(
                 creds, spec, task.tag, params, role=role,
-                bundle_id=bundle_id, vcpus=vcpus, flavor=flavor,
+                bundle_id=bundle_id, resources=resources,
             )  # fmt: skip
             pod = client.create_pod(body)
             w = tasks.WorkerRecord(
@@ -255,9 +271,8 @@ class WorkerManager:
                 role=role,
                 kind="cloud",
                 desired_state="running",
-                vcpus=vcpus,
-                flavor=flavor,
                 pod_id=pod["id"],
+                **_resource_record_fields(resources),
             )
             task.workers.append(w)
             added.append(w)
@@ -321,6 +336,8 @@ class WorkerManager:
                 "threads": w.threads,
                 "vcpus": w.vcpus,
                 "flavor": w.flavor,
+                "gpu_type_id": w.gpu_type_id,
+                "gpu_count": w.gpu_count,
                 "pod_id": w.pod_id,
             }
             if gated:

@@ -14,9 +14,16 @@ type WorkerInfo = {
   worker_id: string; role: string; kind: 'local' | 'cloud'; desired_state: string; state: string;
   observed_running: boolean;
   threads: number | null; vcpus: number | null; flavor: string | null;
+  gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
   gate_reason?: string;
 };
+
+function workerResources(w: WorkerInfo): string {
+  if (w.kind === 'local') return `${w.threads} threads`;
+  if (w.gpu_type_id) return `${w.gpu_count}× ${w.gpu_type_id}`;
+  return `${w.vcpus} vcpu ${w.flavor}`;
+}
 
 // A slot mid-transition: its process/pod has not yet caught up to the operator's
 // intent, so its Start/Pause control is disabled and shows a spinner.
@@ -35,10 +42,74 @@ const stateColors: Record<string, string> = {
 
 // The Runpod CPU flavor ids accepted by pod creation (the REST API's fixed
 // enum -- there is no listing endpoint): generation 3/5, compute- / general- /
-// memory-optimized. Live availability and pricing are only visible in the
-// Runpod console.
+// memory-optimized. Used only as the fallback flavor list when live offers
+// (/api/cloud/offers) are unreachable; otherwise the form shows live pricing.
 const CPU_FLAVORS = ['cpu3c', 'cpu3g', 'cpu3m', 'cpu5c', 'cpu5g', 'cpu5m'];
 const RUNPOD_CONSOLE = 'https://console.runpod.io/deploy';
+
+// The live cloud instance catalog from GET /api/cloud/offers: CPU flavors and
+// GPU types with current pricing and stock, feeding the add-cloud selector.
+type CpuOffer = {
+  id: string; display_name: string; group_name: string;
+  min_vcpu: number; max_vcpu: number; ram_multiplier: number; disk_per_vcpu: number;
+  price_per_vcpu_hr: number | null; stock: string | null;
+};
+type GpuOffer = {
+  id: string; display_name: string; vram_gb: number;
+  secure_price: number | null; community_price: number | null;
+  secure_spot_price: number | null; community_spot_price: number | null;
+  max_gpu_count: number; stock: string | null;
+  min_vcpu: number | null; min_memory_gb: number | null;
+  secure_available: boolean; community_available: boolean;
+};
+type CloudOffers = { cpu: CpuOffer[]; gpu: GpuOffer[] };
+
+// Offers are fetched once per page load and shared across every role's cloud
+// form (a module-level cached promise). A failed fetch clears the cache so a
+// later form retries rather than being stuck on the fallback.
+let offersPromise: Promise<CloudOffers> | null = null;
+function loadOffers(): Promise<CloudOffers> {
+  if (!offersPromise) {
+    offersPromise = getJSON('/api/cloud/offers').catch((e) => {
+      offersPromise = null;
+      throw e;
+    });
+  }
+  return offersPromise;
+}
+
+function useCloudOffers(): { offers: CloudOffers | null; failed: boolean } {
+  const [offers, setOffers] = useState<CloudOffers | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    loadOffers()
+      .then((o) => { if (alive) setOffers(o); })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, []);
+  return { offers, failed };
+}
+
+type Busy = 'local' | 'cloud' | null;
+type AddWorker = (kind: 'local' | 'cloud', body: Record<string, unknown>) => void;
+
+const STOCK_COLORS: Record<string, string> = { High: '#2a7a2a', Medium: '#a05a00', Low: '#b23b3b' };
+function StockBadge({ stock }: { stock: string | null }) {
+  const color = stock ? STOCK_COLORS[stock] ?? '#556070' : '#8494a5';
+  return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{stock ?? '—'}</span>;
+}
+
+const offerTable = { borderCollapse: 'collapse' as const, fontSize: 13 };
+const offerTh = { textAlign: 'left' as const, color: '#445063', padding: '3px 12px 3px 0', fontWeight: 600 };
+const offerTd = { padding: '3px 12px 3px 0', whiteSpace: 'nowrap' as const };
+function offerRowStyle(selected: boolean) {
+  return { cursor: 'pointer', background: selected ? '#dbe9f6' : undefined, borderTop: '1px solid #e2e8ee' };
+}
+
+const money = (v: number | null | undefined, digits = 3) => (v != null ? `$${v.toFixed(digits)}` : '—');
+const clampInt = (raw: number, lo: number, hi: number) =>
+  Number.isNaN(raw) ? lo : Math.min(hi, Math.max(lo, raw));
 
 // Contains a render error to the active tab: a crashing tab shows an inline
 // message instead of unmounting (blanking) the whole dashboard. Reset by
@@ -90,23 +161,290 @@ function KV({ items }: { items: [string, React.ReactNode][] }) {
 
 const numInput = { fontSize: 14, padding: '3px 6px', border: '1px solid #b8c4d0', borderRadius: 4, width: 70 };
 
+const helpText = { fontSize: 12, color: '#556070', marginTop: 6 };
+function ConsoleLink() {
+  return <a href={RUNPOD_CONSOLE} target="_blank" rel="noreferrer">availability &amp; pricing ↗</a>;
+}
+function InterruptibleNote({ role }: { role: Role }) {
+  if (!role.interruptible) return null;
+  return <> — rented interruptible (discounted; auto-restarted if reclaimed)</>;
+}
+
+// The local (threads) add-worker form.
+function LocalForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabled: boolean }) {
+  const [threads, setThreads] = useState('');
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+      <label style={{ fontSize: 13 }}>
+        Local — threads<br />
+        <input
+          style={numInput} value={threads} placeholder="all"
+          onChange={(e) => setThreads(e.target.value)}
+        />
+      </label>
+      <Button
+        label={busy === 'local' ? 'Adding…' : 'Add local'}
+        disabled={disabled}
+        onClick={() => add('local', { threads: threads ? parseInt(threads, 10) : null })}
+      />
+    </div>
+  );
+}
+
+// The CPU-flavor selector: a selectable table of live flavors (price, live RAM
+// for the current vCPU input, disk, stock) plus count/vCPU inputs and a live
+// per-pod cost estimate. The vCPU input is clamped to the selected flavor's
+// min/max.
+function CpuCloudForm({ role, offers, add, busy, disabled }: {
+  role: Role; offers: CpuOffer[]; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  const [count, setCount] = useState('1');
+  const [vcpus, setVcpus] = useState('16');
+  const [flavorId, setFlavorId] = useState(offers.some((f) => f.id === 'cpu3c') ? 'cpu3c' : offers[0].id);
+  const flavor = offers.find((f) => f.id === flavorId) ?? offers[0];
+  const rawV = parseInt(vcpus, 10);
+  const vcpuN = clampInt(rawV, flavor.min_vcpu, flavor.max_vcpu);
+  const n = parseInt(count, 10) || 1;
+  const perPod = flavor.price_per_vcpu_hr != null ? flavor.price_per_vcpu_hr * vcpuN : null;
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Cloud — CPU flavor</div>
+      <table style={offerTable}>
+        <thead>
+          <tr>{['', 'flavor', 'class', '$/vCPU/hr', 'RAM', 'disk/vCPU', 'stock'].map((h) => (
+            <th key={h} style={offerTh}>{h}</th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {offers.map((f) => {
+            const rowVcpu = clampInt(rawV, f.min_vcpu, f.max_vcpu);
+            return (
+              <tr key={f.id} onClick={() => setFlavorId(f.id)} style={offerRowStyle(f.id === flavorId)}>
+                <td style={offerTd}><input type="radio" checked={f.id === flavorId} readOnly /></td>
+                <td style={offerTd}>{f.id}</td>
+                <td style={offerTd}>{f.group_name} {f.display_name}</td>
+                <td style={offerTd}>{money(f.price_per_vcpu_hr)}</td>
+                <td style={offerTd}>{f.ram_multiplier * rowVcpu} GB</td>
+                <td style={offerTd}>{f.disk_per_vcpu} GB</td>
+                <td style={offerTd}><StockBadge stock={f.stock} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginTop: 8 }}>
+        <label style={{ fontSize: 13 }}>
+          count<br />
+          <input style={numInput} value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          vCPUs ({flavor.min_vcpu}–{flavor.max_vcpu})<br />
+          <input style={numInput} value={vcpus} onChange={(e) => setVcpus(e.target.value)} />
+        </label>
+        <span style={{ fontSize: 13, color: '#2c3540', paddingBottom: 4 }}>
+          {perPod != null
+            ? `≈ ${money(perPod)}/hr per pod${n > 1 ? ` · ${money(perPod * n)}/hr for ${n}` : ''}`
+            : 'price unavailable'}
+        </span>
+        <Button
+          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          disabled={disabled}
+          onClick={() => add('cloud', { count: n, vcpus: vcpuN, flavor: flavorId })}
+        />
+      </div>
+      <div style={helpText}>
+        <ConsoleLink /><InterruptibleNote role={role} />
+      </div>
+    </div>
+  );
+}
+
+// The GPU-instance selector: a selectable table of available GPU types (VRAM,
+// on-demand rate, spot rate when the role rents interruptible, max count,
+// stock) plus count/GPU-count inputs and a live per-pod cost estimate. The
+// GPU-count input is clamped to the type's max.
+function GpuCloudForm({ role, offers, add, busy, disabled }: {
+  role: Role; offers: GpuOffer[]; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  const [count, setCount] = useState('1');
+  const [gpuCount, setGpuCount] = useState('1');
+  const [gpuId, setGpuId] = useState(offers[0].id);
+  const gpu = offers.find((g) => g.id === gpuId) ?? offers[0];
+  const gc = clampInt(parseInt(gpuCount, 10), 1, gpu.max_gpu_count);
+  const n = parseInt(count, 10) || 1;
+  const onDemand = (g: GpuOffer) => g.secure_price ?? g.community_price;
+  const spot = (g: GpuOffer) => g.secure_spot_price ?? g.community_spot_price;
+  // A pod is billed at the spot rate exactly when the role rents interruptible.
+  const unit = role.interruptible ? (spot(gpu) ?? onDemand(gpu)) : onDemand(gpu);
+  const perPod = unit != null ? unit * gc : null;
+  const cols = ['', 'GPU', 'VRAM', 'on-demand $/hr', ...(role.interruptible ? ['spot $/hr'] : []), 'max', 'stock'];
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Cloud — GPU instance</div>
+      <table style={offerTable}>
+        <thead>
+          <tr>{cols.map((h) => <th key={h} style={offerTh}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {offers.map((g) => (
+            <tr key={g.id} onClick={() => setGpuId(g.id)} style={offerRowStyle(g.id === gpuId)}>
+              <td style={offerTd}><input type="radio" checked={g.id === gpuId} readOnly /></td>
+              <td style={offerTd}>{g.display_name}</td>
+              <td style={offerTd}>{g.vram_gb} GB</td>
+              <td style={offerTd}>{money(onDemand(g), 2)}</td>
+              {role.interruptible && <td style={offerTd}>{money(spot(g), 2)}</td>}
+              <td style={offerTd}>{g.max_gpu_count}</td>
+              <td style={offerTd}><StockBadge stock={g.stock} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginTop: 8 }}>
+        <label style={{ fontSize: 13 }}>
+          count<br />
+          <input style={numInput} value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          GPUs (1–{gpu.max_gpu_count})<br />
+          <input style={numInput} value={gpuCount} onChange={(e) => setGpuCount(e.target.value)} />
+        </label>
+        <span style={{ fontSize: 13, color: '#2c3540', paddingBottom: 4 }}>
+          {perPod != null
+            ? `≈ ${money(perPod, 2)}/hr per pod${n > 1 ? ` · ${money(perPod * n, 2)}/hr for ${n}` : ''}`
+            : 'price unavailable'}
+        </span>
+        <Button
+          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          disabled={disabled}
+          onClick={() => add('cloud', { count: n, gpu_type_id: gpuId, gpu_count: gc })}
+        />
+      </div>
+      <div style={helpText}>
+        <ConsoleLink /><InterruptibleNote role={role} />
+      </div>
+    </div>
+  );
+}
+
+// Fallback when live offers are unreachable: the static CPU flavor enum in a
+// plain dropdown, with the original help text.
+function CpuFallbackForm({ role, add, busy, disabled }: {
+  role: Role; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  const [count, setCount] = useState('1');
+  const [vcpus, setVcpus] = useState('16');
+  const [flavor, setFlavor] = useState('cpu3c');
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+        <label style={{ fontSize: 13 }}>
+          Cloud — count<br />
+          <input style={numInput} value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          vCPUs<br />
+          <input style={numInput} value={vcpus} onChange={(e) => setVcpus(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          flavor<br />
+          <select value={flavor} onChange={(e) => setFlavor(e.target.value)} style={{ fontSize: 14 }}>
+            {CPU_FLAVORS.map((f) => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+        <Button
+          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          disabled={disabled}
+          onClick={() => add('cloud', {
+            count: parseInt(count, 10) || 1, vcpus: parseInt(vcpus, 10) || 16, flavor,
+          })}
+        />
+      </div>
+      <div style={helpText}>
+        flavors: cpu3/cpu5 = hardware generation; c/g/m = compute/general/memory-optimized.{' '}
+        <ConsoleLink /><InterruptibleNote role={role} />
+      </div>
+    </div>
+  );
+}
+
+// Fallback when live offers are unreachable for a GPU role: pricing is hidden
+// and the operator names the Runpod gpuTypeId directly.
+function GpuFallbackForm({ role, add, busy, disabled }: {
+  role: Role; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  const [count, setCount] = useState('1');
+  const [gpuCount, setGpuCount] = useState('1');
+  const [gpuId, setGpuId] = useState('');
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+        <label style={{ fontSize: 13 }}>
+          Cloud — count<br />
+          <input style={numInput} value={count} onChange={(e) => setCount(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          GPU type id<br />
+          <input
+            style={{ ...numInput, width: 200 }} value={gpuId} placeholder="e.g. NVIDIA A100 80GB PCIe"
+            onChange={(e) => setGpuId(e.target.value)}
+          />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          GPUs<br />
+          <input style={numInput} value={gpuCount} onChange={(e) => setGpuCount(e.target.value)} />
+        </label>
+        <Button
+          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          disabled={disabled || !gpuId.trim()}
+          onClick={() => add('cloud', {
+            count: parseInt(count, 10) || 1,
+            gpu_type_id: gpuId.trim(),
+            gpu_count: parseInt(gpuCount, 10) || 1,
+          })}
+        />
+      </div>
+      <div style={helpText}>
+        pricing unavailable — enter a Runpod GPU type id. <ConsoleLink /><InterruptibleNote role={role} />
+      </div>
+    </div>
+  );
+}
+
+// The cloud add-worker form: live GPU or CPU selector per the role, with a
+// static fallback when the offers fetch fails or returns nothing usable.
+function CloudForm({ role, add, busy, disabled }: {
+  role: Role; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  const { offers, failed } = useCloudOffers();
+  const usable = offers ? (role.gpu ? offers.gpu.length : offers.cpu.length) : 0;
+  if (!offers && !failed) {
+    return <div style={{ fontSize: 13, color: '#556070' }}>Loading instance offers…</div>;
+  }
+  if (!offers || !usable) {
+    return role.gpu
+      ? <GpuFallbackForm role={role} add={add} busy={busy} disabled={disabled} />
+      : <CpuFallbackForm role={role} add={add} busy={busy} disabled={disabled} />;
+  }
+  return role.gpu
+    ? <GpuCloudForm role={role} offers={offers.gpu} add={add} busy={busy} disabled={disabled} />
+    : <CpuCloudForm role={role} offers={offers.cpu} add={add} busy={busy} disabled={disabled} />;
+}
+
 // The add-worker forms for one role: a local form (threads) and/or a cloud
-// form (count x vCPUs x flavor), per the role's declared kinds. A singleton
+// form (a live instance selector), per the role's declared kinds. A singleton
 // role's forms disable once it has a slot.
 function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
   workload: Workload; role: Role; tag: string; taken: boolean;
   onError: (e: string) => void; onChanged: () => void;
 }) {
-  const [threads, setThreads] = useState('');
-  const [count, setCount] = useState('1');
-  const [vcpus, setVcpus] = useState('16');
-  const [flavor, setFlavor] = useState('cpu3c');
   // Which form is mid-request ('local' | 'cloud' | null): its button shows a
   // progress label -- pod creation takes a few seconds.
-  const [busy, setBusy] = useState<'local' | 'cloud' | null>(null);
+  const [busy, setBusy] = useState<Busy>(null);
   const disabled = busy !== null || (role.singleton && taken);
 
-  const add = async (kind: 'local' | 'cloud', body: Record<string, unknown>) => {
+  const add: AddWorker = async (kind, body) => {
     setBusy(kind);
     onError('');
     try {
@@ -122,59 +460,12 @@ function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
   };
 
   return (
-    <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap', marginTop: 12, alignItems: 'flex-end' }}>
-      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 90 }} title={role.singleton ? 'at most one worker' : undefined}>
+    <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap', marginTop: 12, alignItems: 'flex-start' }}>
+      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 90, marginTop: 4 }} title={role.singleton ? 'at most one worker' : undefined}>
         {role.title}{role.singleton ? ' (singleton)' : ''}
       </span>
-      {role.kinds.includes('local') && (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <label style={{ fontSize: 13 }}>
-            Local — threads<br />
-            <input
-              style={numInput} value={threads} placeholder="all"
-              onChange={(e) => setThreads(e.target.value)}
-            />
-          </label>
-          <Button
-            label={busy === 'local' ? 'Adding…' : 'Add local'}
-            disabled={disabled}
-            onClick={() => add('local', { threads: threads ? parseInt(threads, 10) : null })}
-          />
-        </div>
-      )}
-      {role.kinds.includes('cloud') && (
-        <div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-            <label style={{ fontSize: 13 }}>
-              Cloud — count<br />
-              <input style={numInput} value={count} onChange={(e) => setCount(e.target.value)} />
-            </label>
-            <label style={{ fontSize: 13 }}>
-              vCPUs<br />
-              <input style={numInput} value={vcpus} onChange={(e) => setVcpus(e.target.value)} />
-            </label>
-            <label style={{ fontSize: 13 }}>
-              flavor<br />
-              <select value={flavor} onChange={(e) => setFlavor(e.target.value)} style={{ fontSize: 14 }}>
-                {CPU_FLAVORS.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </label>
-            <Button
-              label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
-              disabled={disabled}
-              onClick={() => add('cloud', {
-                count: parseInt(count, 10) || 1, vcpus: parseInt(vcpus, 10) || 16, flavor,
-              })}
-            />
-          </div>
-          <div style={{ fontSize: 12, color: '#556070', marginTop: 6 }}>
-            flavors: cpu3/cpu5 = hardware generation; c/g/m = compute/general/memory-optimized.{' '}
-            <a href={RUNPOD_CONSOLE} target="_blank" rel="noreferrer">availability &amp; pricing ↗</a>
-            {role.interruptible &&
-              ' — rented interruptible (discounted; auto-restarted if reclaimed)'}
-          </div>
-        </div>
-      )}
+      {role.kinds.includes('local') && <LocalForm add={add} busy={busy} disabled={disabled} />}
+      {role.kinds.includes('cloud') && <CloudForm role={role} add={add} busy={busy} disabled={disabled} />}
     </div>
   );
 }
@@ -206,9 +497,7 @@ function WorkersTable({ workers, onAction }: {
               <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{w.worker_id}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>{w.role}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>{w.kind}</td>
-              <td style={{ padding: '6px 14px 6px 0' }}>
-                {w.kind === 'local' ? `${w.threads} threads` : `${w.vcpus} vcpu ${w.flavor}`}
-              </td>
+              <td style={{ padding: '6px 14px 6px 0' }}>{workerResources(w)}</td>
               <td
                 style={{ padding: '6px 14px 6px 0', color: stateColors[w.state] ?? '#1a1f28', fontWeight: 600 }}
                 title={w.gate_reason ? `parked by the scheduler: ${w.gate_reason}` : undefined}

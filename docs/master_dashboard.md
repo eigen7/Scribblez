@@ -23,17 +23,20 @@ trainer shape is described in docs/position_eval_workload.md.
 - **Role** — which of the workload's worker kinds a slot runs (`RoleSpec`): parallel
   interchangeable generators, or a singleton trainer restricted to the local GPU box.
   Each role declares its runner, runtime deps, allowed kinds (local/cloud), whether its
-  cloud pods rent interruptible, and its stats schema.
+  cloud pods rent interruptible, whether it runs on GPU hardware (`gpu`), and its stats
+  schema. A GPU role's cloud form offers GPU instances (a Runpod gpuTypeId + GPU count);
+  a CPU role's offers CPU flavors.
 - **Worker** — a durable *slot* attached to a task: a record in task.json holding
   `worker_id`, role, kind, its resource allocation, and a **desired state**
   (running/paused). Two kinds:
   - **local**: the slot is backed by a subprocess of the dashboard server running the
     same worker loop as the cloud, with a thread-count knob (CPU allocation) and a local
     results sink (files stay in the mount dir; no upload).
-  - **cloud**: the slot is backed by exactly one Runpod CPU pod (vCPU count + flavor),
-    running the worker image + bundle flow of docs/cloud_compute.md and uploading results
-    to R2. While a task has cloud workers, the server keeps a `cloud_sync --watch`
-    subprocess running so cloud results stream into the local mount automatically.
+  - **cloud**: the slot is backed by exactly one Runpod pod — a CPU pod (vCPU count +
+    flavor) for a CPU role, or a GPU pod (gpuTypeId + GPU count) for a GPU role — running
+    the worker image + bundle flow of docs/cloud_compute.md and uploading results to R2.
+    While a task has cloud workers, the server keeps a `cloud_sync --watch` subprocess
+    running so cloud results stream into the local mount automatically.
 
   A slot's *actual* state can diverge from its desired state — a pod the operator paused,
   a local process that exited, or an interruptible pod Runpod reclaimed — and the UI
@@ -60,9 +63,12 @@ trainer shape is described in docs/position_eval_workload.md.
 2. **Task view** — tabs:
    - **Overview**: the frozen params; task-agnostic info (created, progress counters,
      data location, live cloud $/hr); the workers table (worker, role, kind, resources,
-     state, cost, ssh for pods); one add-worker form per role (local: threads; cloud:
-     count × vCPUs × flavor from the Runpod flavor enum; a singleton role's forms
-     disable once it has a slot); buttons: per-worker start/pause/remove and task-level
+     state, cost, ssh for pods); one add-worker form per role (local: threads; cloud: a
+     live instance selector fed by `GET /api/cloud/offers` — a selectable table of CPU
+     flavors (price, RAM, disk, stock) or GPU types (VRAM, on-demand/spot rate, stock)
+     with count and vCPU/GPU-count inputs and a live cost estimate, falling back to the
+     static CPU flavor enum if offers are unreachable; a singleton role's forms disable
+     once it has a slot); buttons: per-worker start/pause/remove and task-level
      Start all / Pause all. Pausing a cloud worker stops the pod (billing drops to
      disk-only); pausing a local worker interrupts the subprocess (the loops are
      interruption-safe by design). Only a non-running worker can be removed, so removal
@@ -105,6 +111,7 @@ GET  /api/task?workload=&tag=            params + progress + gates + workers wit
 POST /api/task/workers                   add worker(s) for a role (local or cloud)
 POST /api/task/worker_action             {action: start|pause|remove, worker_id?};
                                          no worker_id = every slot (Start/Pause all)
+GET  /api/cloud/offers                    live Runpod CPU/GPU instance catalog (cached ~5 min)
 GET  /api/task/stats?workload=&tag=      per-role stats schemas + per-worker summary rows
 GET  /api/task/figure/<name>?workload=&tag=&role=   Bokeh json_items for the Stats tab
 ```

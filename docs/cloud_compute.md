@@ -146,12 +146,36 @@ and the GPU future lands there). The provider surface is one small adapter
 `gcloud compute instances create-with-container` on spot Container-Optimized-OS VMs running
 the same worker image — is worth adding if CPU spend starts to matter.
 
+## Instance discovery (`fetch_cloud_offers`)
+
+`py/cloud/runpod_api.py` exposes the live Runpod instance catalog through the public
+GraphQL endpoint (`api.runpod.io/graphql`), which answers the read-only catalog queries
+with no API key (a User-Agent header is the only requirement). `fetch_cloud_offers()`
+returns `{"cpu": [...], "gpu": [...]}`: the six fixed CPU flavors with on-demand
+`$/vCPU/hr` price, RAM multiplier, disk-per-vCPU, and stock; and the GPU types with
+per-cloud on-demand and spot pricing, VRAM, max GPU count, and stock. GPU types with no
+stock or no price in either the secure or community cloud are dropped, and a per-cloud
+price is reported only for a cloud the type is actually offered in. The REST API used for
+pod CRUD has no discovery or pricing endpoints, so this is the only source. The dashboard
+serves it (cached) at `GET /api/cloud/offers` to drive the add-cloud instance selector;
+the CPU spot rate is not exposed by the API and is not shown.
+
+## GPU pod creation
+
+`pod_create_spec` (scripts/cloud_fleet.py) builds either a CPU spec (`computeType: "CPU"`,
+`cpuFlavorIds`, `vcpuCount`) from `CpuResources`, or a GPU spec (`computeType: "GPU"`,
+`gpuTypeIds`, `gpuCount`) from `GpuResources`. A `RoleSpec` declares `gpu=True` for a role
+that runs on GPU hardware (the trainer roles), and the dashboard offers GPU instances for
+such roles and CPU flavors otherwise. This pod-spec path is forward-looking: no cloud role
+declares `gpu` today, and the worker image is CPU-only, so launching a GPU pod that runs
+the current worker loop is not yet wired end-to-end.
+
 ## Future: GPU workloads
 
-The scaffolding generalizes as-is: a new `SCZ_WORKLOAD` entry in the worker entrypoint's
-registry, a GPU flavor/`gpuTypeIds` path in the fleet CLI, and (if the workload needs CUDA
-at runtime) a worker-image variant on a CUDA runtime base with the same bootstrap contract.
-Bundles and the bucket layout are workload-agnostic.
+The remaining pieces for GPU work in the cloud: a cloud-capable GPU role in the workload
+registry, and (since the workload needs CUDA at runtime) a worker-image variant on a CUDA
+runtime base with the same bootstrap contract. Bundles and the bucket layout are
+workload-agnostic, and the fleet CLI and dashboard already build GPU pod specs.
 
 ## Future: volunteer compute
 

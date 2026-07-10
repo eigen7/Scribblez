@@ -12,11 +12,13 @@ Runpod failures) return 400 with {"error": ...} rather than a stack trace.
 """
 
 import json
+import time
 
 import tornado.web
 from bokeh.embed import json_item
 from cloud.credentials import CredentialsError
-from cloud.runpod_api import RunpodError
+from cloud.runpod_api import RunpodError, fetch_cloud_offers
+from scripts.cloud_fleet import CpuResources, GpuResources
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -40,8 +42,18 @@ def _role_payload(role: workloads.RoleSpec) -> dict:
         "singleton": role.singleton,
         "kinds": list(role.kinds),
         "interruptible": role.interruptible,
+        "gpu": role.gpu,
         "stats": ({"unit": role.stats.unit, "phases": role.stats.phases} if role.stats else None),
     }
+
+
+def _cloud_resources(body: dict) -> CpuResources | GpuResources:
+    """The pod hardware selection from an add-worker request body: a GPU type +
+    count when the form posted a gpu_type_id, otherwise a CPU flavor + vCPUs."""
+    if body.get("gpu_type_id"):
+        gpu_count = int(body.get("gpu_count", 1))
+        return GpuResources(gpu_type_id=body["gpu_type_id"], gpu_count=gpu_count)
+    return CpuResources(vcpus=int(body.get("vcpus", 16)), flavor=body.get("flavor", "cpu3c"))
 
 
 def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
@@ -174,8 +186,7 @@ class WorkerAddHandler(_MasterBase):
                     task,
                     role,
                     count=int(body.get("count", 1)),
-                    vcpus=int(body.get("vcpus", 16)),
-                    flavor=body.get("flavor", "cpu3c"),
+                    resources=_cloud_resources(body),
                 )
             return {"added": [w.worker_id for w in added]}
 
@@ -202,6 +213,25 @@ class WorkerActionHandler(_MasterBase):
             return {"ok": True, "workers": worker_ids}
 
         self.guarded(act)
+
+
+class CloudOffersHandler(_MasterBase):
+    """The live Runpod instance catalog (CPU flavors + GPU types with pricing
+    and stock) backing the add-worker form. Cached in-process for a few minutes
+    so repeatedly opening forms does not hammer the GraphQL endpoint; a fetch
+    failure surfaces as a 400 the form can fall back on."""
+
+    _CACHE_TTL = 300.0
+    _cache: tuple[float, dict] | None = None
+
+    def get(self):
+        self.guarded(self._offers)
+
+    def _offers(self) -> dict:
+        cached = CloudOffersHandler._cache
+        if cached is None or time.time() - cached[0] > CloudOffersHandler._CACHE_TTL:
+            CloudOffersHandler._cache = (time.time(), fetch_cloud_offers())
+        return CloudOffersHandler._cache[1]
 
 
 class TaskStatsHandler(_MasterBase):
@@ -241,6 +271,7 @@ MASTER_ROUTES = [
     (r"/api/task/delete", TaskDeleteHandler),
     (r"/api/task/workers", WorkerAddHandler),
     (r"/api/task/worker_action", WorkerActionHandler),
+    (r"/api/cloud/offers", CloudOffersHandler),
     (r"/api/task/stats", TaskStatsHandler),
     (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),
 ]

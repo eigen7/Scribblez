@@ -50,6 +50,10 @@ class RoleSpec:
     deps: str = ""  # dotted path to a fetch-runtime-deps callable, or ""
     singleton: bool = False  # at most one slot per task (the trainer)
     kinds: tuple[str, ...] = ("local", "cloud")
+    # Whether this role runs on GPU hardware. Cloud pods for a GPU role rent a
+    # GPU instance (a gpuTypeId + gpu count) rather than a CPU flavor, and the
+    # dashboard's add-worker form offers GPU instances instead of CPU flavors.
+    gpu: bool = False
     # Whether cloud pods for this role are rented interruptible (spot):
     # cheaper, but Runpod may stop them at any time. Only for roles that
     # tolerate preemption (the reconcile loop restarts reclaimed pods).

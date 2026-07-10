@@ -13,6 +13,7 @@ export type ParamField = {
 };
 export type Role = {
   name: string; title: string; singleton: boolean; kinds: string[]; interruptible: boolean;
+  gpu: boolean;
   stats: { unit: string; phases: Record<string, string> } | null;
 };
 export type Workload = { name: string; title: string; params: ParamField[]; roles: Role[] };
