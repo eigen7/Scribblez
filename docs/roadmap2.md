@@ -46,7 +46,7 @@ GADDAG generates all N moves
 the move set evaluation model scores all N in one pass    [A]
       │
       ▼
-covariance-guided scheduler picks what to sim         [C]
+proves-best scheduler picks what to sim               [C]
       │
       ▼                     rollout policy ladder      [D]
 sims: racks from belief    ── ply 1..2: our own stack (move set eval + belief)
@@ -61,7 +61,7 @@ sim the promoted moves, pick by sim
 
 The tracks are separable — each has its own experiment and its own fallback —
 but they compound: better belief makes sims sharper, sharper sims make
-evidence and the covariance estimates more trustworthy, a self-model rollout
+evidence and the proves-best labels more trustworthy, a self-model rollout
 policy makes the ply-1 reply distribution (which is what the evidence maps
 actually read) match reality.
 
@@ -70,7 +70,7 @@ actually read) match reality.
 ## Track A: the move set evaluation model — the spine
 
 Everything else attaches to the move set evaluation model: it is the candidate filter, the host of
-the covariance head, the re-ranking surface for evidence, and eventually the
+the proves-best head, the re-ranking surface for evidence, and eventually the
 first plies of the rollout policy. The design (board encoder + move encoder +
 single-pass cross-attention + exchange head) is specified in
 [roadmap.md](roadmap.md) Phase 4 and unchanged.
@@ -136,26 +136,29 @@ preserves CRN. Belief work is therefore *sampling policy*, not sim plumbing.
 
 ## Track C: sim scheduling — spend rollouts where they buy information
 
-From the covariance analysis in
-[sim_residual_feedback.md](sim_residual_feedback.md): candidates are
-correlated arms; the scheduler should exploit that.
+From the candidate-selection analysis in
+[sim_residual_feedback.md](sim_residual_feedback.md): the next candidate to
+sim should be the one most likely to *prove best* — good on its own, and
+different enough from the already-simmed candidates to beat them.
 
 - **C1 — v0 diversity.** Footprint/lane-overlap novelty penalty at top-K
   selection time. Hours of work; also directly improves evidence diversity
   for A5.
-- **C2 — covariance head.** Low-rank per-move embedding φ on the move set evaluation model with
-  `Cov(M, M′) ≈ φφᵀ + diagonal`, trained on the pairwise empirical
-  covariances that CRN sims already produce (a free byproduct sitting in
-  every `.sobs`).
-- **C3 — root posterior + adaptive scheduling.** Thompson sampling (or
-  knowledge gradient) over the Gaussian posterior; evaluate batched (B=K)
-  vs sequential (B=1) schedules. **Readout:** decision quality at a fixed
-  rollout budget (match play), and budget required for fixed decision
-  quality. The prize is real at deployment: sims dominate think time, so a
-  2× budget saving is a 2× stronger agent per second.
+- **C2 — proves-best head.** Per-move head on the evidence-conditioned move set evaluation model
+  predicting the probability that the candidate's sim strictly exceeds the
+  best-so-far. Labels are free from the CRN sims already sitting in every
+  `.sobs`: any evidence prefix plus a held-out simmed candidate is a
+  labeled row.
+- **C3 — adaptive scheduling.** Propose by the proves-best head; evaluate
+  batched (B=K) vs sequential (B=1) schedules. **Readout:** decision quality
+  at a fixed rollout budget (match play), and budget required for fixed
+  decision quality. The prize is real at deployment: sims dominate think
+  time, so a 2× budget saving is a 2× stronger agent per second.
 
-Dependency: C2 wants the move set evaluation model (A3) as the host. A stopgap φ can be prototyped
-from move features alone to validate the posterior machinery earlier.
+Dependency: the proves-best target is a function of the evidence set, so C2
+wants the evidence-conditioned move set evaluation model (A5) as its host. A stopgap head can be
+prototyped earlier on the kill-test's evidence-conditioned position-evaluation
+harness (`sim_evidence/model.py`) to validate the target and labels.
 
 ## Track D: the rollout policy ladder
 
@@ -230,8 +233,8 @@ lead with the spine, interleave the others as experiments block on data).
 |---|---|---|---|
 | 1 | A1 match harness; A2 target-gen prototype | — | E1 fleet lands; **B0 matched-scale hidden + open-leaves runs** |
 | 2 | A3 move-set-evaluation v1 (recall metric) | D1 truncated rollouts (kill-test validated); C1 novelty dedup | E3 re-ranking match experiment (position-evaluation-based) |
-| 3 | A4 move-set-evaluation agent baseline | B1 leave enumeration *if B0 says belief pays*; C2 covariance head on the move set evaluation model | — |
-| 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 posterior scheduling | — |
+| 3 | A4 move-set-evaluation agent baseline | B1 leave enumeration *if B0 says belief pays*; C2 proves-best head (prototyped on the kill-test harness) | — |
+| 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 proves-best scheduling | — |
 | 5 | — | D3 endgame-solver port; B2 accept/reject; B3 learned belief *if the gap to B0's ceiling warrants* | volunteer-compute hardening |
 
 Decision gates, stated so the results can veto the plan:

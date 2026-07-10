@@ -10,7 +10,7 @@
   (built) through self-play diversification and evaluation machinery to
   the move set evaluation model, with per-phase status.
 - **[roadmap2.md](roadmap2.md)** — the forward plan from here: the move set evaluation model, rack
-  inference, covariance-guided sim scheduling, the rollout-policy ladder
+  inference, sim scheduling, the rollout-policy ladder
   (value truncation, self-model plies, endgame solver), and the experiments
   that gate each track.
 
@@ -42,8 +42,9 @@
 ## Design proposals
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
   rollout evidence back into the value models for evidence-conditioned
-  re-evaluation, and covariance-guided candidate selection. Steps 1–2 of its
-  implementation roadmap are built.
+  re-evaluation, and picking the next candidate to sim via a learned
+  proves-best probability. Steps 1–3 of its implementation roadmap are done
+  (the kill-test passed).
 - **[lexical_features_for_value.md](lexical_features_for_value.md)** — giving
   the value models lexical foresight through engineered GADDAG-computed input
   features (the contingent-draw potential map, the cross-check delta) instead
