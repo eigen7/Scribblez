@@ -1,0 +1,3 @@
+[submodule "subtrees/devenv_utils"]
+	path = subtrees/devenv_utils
+	url = https://github.com/eigen7/devenv_utils.git

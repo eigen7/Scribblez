@@ -17,10 +17,10 @@ line-length = 100
 # The dev image ships CPython 3.12; target its syntax for lint/upgrade rules.
 target-version = "py312"
 
-# Vendored subtrees are read-only mirrors (updated only via
-# py/tools/pull_git_subtrees.py); build output lives under target/. Neither is
-# ours to reformat. Ruff already skips target/ via .gitignore, but listing both
-# here keeps the exclusion explicit and independent of git state.
+# subtrees/ holds git submodules -- separate repos formatted by their own
+# tooling; build output lives under target/. Neither is ours to reformat. Ruff
+# already skips target/ via .gitignore, but listing both here keeps the
+# exclusion explicit and independent of git state.
 extend-exclude = ["subtrees", "target"]
 
 [tool.ruff.lint]

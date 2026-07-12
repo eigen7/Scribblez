@@ -2,7 +2,7 @@
 
 The generic host-side machinery (Docker build/run, .env.json, VS Code attach
 config, NVIDIA validation, the setup-wizard scaffold) lives in the
-`subtrees/devenv_utils` git subtree. This module supplies the Scribblez-specific
+`subtrees/devenv_utils` git submodule. This module supplies the Scribblez-specific
 pieces: a `DevenvConfig` factory and the lexica/Macondo constants used by the
 custom wizard steps.
 
@@ -15,7 +15,6 @@ from pathlib import Path
 from subtrees.devenv_utils import (
     DevenvConfig,
     DevTool,
-    SubtreeSpec,
 )
 from subtrees.devenv_utils import (
     check_setup_version as _check_setup_version,
@@ -66,20 +65,13 @@ DEFAULT_LEXICA = ["NWL23", "NWL20", "CSW24", "NSWL23"]
 
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
 
-# Git subtrees vendored under subtrees/. git records neither each subtree's
-# remote URL nor its tracked branch, so they are declared here and consumed by
-# the pull/push tools in py/tools/ via DevTool.
-SUBTREES = [
-    SubtreeSpec(name="devenv_utils", url="https://github.com/eigen7/devenv_utils.git"),
-]
-
 
 def check_setup_version():
     _check_setup_version(make_config())
 
 
 def dev_tool() -> DevTool:
-    """Return the project's dev-workflow helper (clang-format, git subtrees)."""
+    """Return the project's dev-workflow helper (clang-format)."""
     return DevTool(make_config())
 
 
@@ -92,6 +84,5 @@ def make_config() -> DevenvConfig:
         required_ports=REQUIRED_PORTS,
         min_image_version=MINIMUM_REQUIRED_IMAGE_VERSION,
         setup_version=SETUP_VERSION,
-        subtrees=SUBTREES,
         extra_docker_args=GITEA_PORT_ARGS,
     )
