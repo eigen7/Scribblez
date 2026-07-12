@@ -29,7 +29,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -72,28 +71,6 @@ CLOUD_CREDENTIALS_TEMPLATE = {
 
 class ScribblezSetupWizard(SetupWizardTool):
     """Scribblez setup: the generic steps plus lexicon installation."""
-
-    def setup_git_config(self):
-        """Apply the git settings that keep the devenv_utils submodule in sync.
-
-        - submodule.recurse=true: `git pull` / `git checkout` update the
-          submodule working tree to match the commit the superproject records,
-          so a checkout can't silently go stale.
-        - push.recurseSubmodules=check: git refuses to push a commit whose
-          submodule pointer references a commit absent from the submodule's
-          remote, which would break every other clone.
-
-        Also clears core.hooksPath: this repo wires no custom git hooks, so
-        git should use the default .git/hooks.
-        """
-        repo_root = self.config.repo_root
-        for key, value in [
-            ("submodule.recurse", "true"),
-            ("push.recurseSubmodules", "check"),
-        ]:
-            subprocess.run(["git", "config", key, value], cwd=repo_root, check=True)
-        subprocess.run(["git", "config", "--unset", "core.hooksPath"], cwd=repo_root, check=False)
-        print_green("Configured git for the devenv_utils submodule.")
 
     def installed_lexica(self) -> list[str]:
         lex_dir = self.mount_dir / "lexica"

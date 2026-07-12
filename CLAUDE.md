@@ -92,13 +92,11 @@ If you are asked questions regarding Macondo, please look there.
 
 # Git submodules
 
-`submodules/<dir>/` holds git submodules (see submodules/README.md). Each is a full checkout of a
-repo within our complete control, and we regularly modify the code to meet needs of this project.
-Do not treat that code as unmodifiable. To change it: edit in place, commit inside the submodule
-(that commit belongs to the submodule's repo), have the user push it upstream, then commit the
-updated submodule pointer here (`git add submodules/<dir>`). Never commit a pointer to a submodule
-commit that hasn't been pushed upstream — other clones couldn't fetch it
-(`push.recurseSubmodules=check` backstops this at push time).
+`submodules/<dir>/` holds git submodules: full checkouts of repos within our complete control,
+which we regularly modify to meet the needs of this project — do not treat that code as
+unmodifiable. The workflow (changing a submodule, pointer-bump rules, worktree interactions) is
+documented in submodules/devenv_utils/SUBMODULES.md; read it before touching anything under
+submodules/. Submodule commits are pushed upstream by the user, not by you.
 
 # Python code
 
