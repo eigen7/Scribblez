@@ -14,7 +14,7 @@ by you on the host.
 """
 
 from setup_common import check_setup_version, make_config
-from subtrees.devenv_utils import docker_launch
+from submodules.devenv_utils import docker_launch
 
 
 def main():

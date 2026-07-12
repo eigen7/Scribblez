@@ -4,8 +4,10 @@ Unless told otherwise, never make changes directly in /workspace/repo. Work in a
 submit the result as a pull request on the local Gitea instance, which the user reviews from the
 host browser at http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
 
-1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`.
-   Worktrees live under the mount so in-progress work survives container relaunches.
+1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`, then
+   populate its submodule checkout: `git -C /workspace/mount/worktrees/<branch> submodule update
+   --init` (worktrees don't inherit the main checkout's submodules). Worktrees live under the
+   mount so in-progress work survives container relaunches.
 2. Give the worktree a Claude commit identity, so the PR distinguishes Claude's commits from the
    user's:
 
@@ -15,14 +17,26 @@ host browser at http://localhost:3000/ (signed in automatically; see py/tools/gi
 
 3. Make the changes in the worktree. Aim for atomic commits that can be reviewed in isolation.
 4. When ready for review: run `py/tools/gitea_serve.py` (idempotent; starts the server if it isn't
-   running), push the branch to the `gitea` remote, and open a PR via the Gitea API (admin
-   credentials in /workspace/mount/gitea/admin_credentials.json). Point the user at the PR URL:
-   http://localhost:3000/dshin/scribblez/pulls/<n>
+   running), then push the branch and open the PR **as the `claude` Gitea user**, so Gitea shows
+   Claude — not the reviewer — as the pusher and PR author. The `gitea` remote embeds the admin's
+   credentials, so don't push the branch through it; instead use claude's credentials (in
+   /workspace/mount/gitea/claude_credentials.json) for both the push and the PR-creation API call.
+   `<owner>` below is the admin username from /workspace/mount/gitea/admin_credentials.json:
+
+       git push http://claude:<password>@localhost:3001/<owner>/scribblez.git <branch>
+       curl -u claude:<password> -X POST http://localhost:3000/api/v1/repos/<owner>/scribblez/pulls ...
+
+   If the credentials file or the user is missing, first create the user via the admin API (admin
+   credentials in /workspace/mount/gitea/admin_credentials.json): username `claude`, email
+   noreply@anthropic.com (so Gitea links Claude's commits to it), write access on the repo; then
+   write the credentials file. Point the user at the PR URL:
+   http://localhost:3000/<owner>/scribblez/pulls/<n>
 5. Address review comments with follow-up commits, not squashes or force-pushes -- rewriting
    history breaks the reviewer's "changes since last review" view.
 6. Once the user approves: merge the PR (Gitea API), fast-forward the main checkout
    (`git pull gitea main` in /workspace/repo), delete the branch (locally and on the `gitea`
-   remote), and remove the worktree (`git worktree remove`).
+   remote), and remove the worktree (`git worktree remove --force`; `--force` because git
+   refuses to remove a worktree whose submodule is populated).
 
 Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never deleted automatically:
 they may hold uncommitted work. gitea_serve.py prints a report of worktrees idle for 7+ days;
@@ -76,15 +90,13 @@ It is checked out at /workspace/mount/macondo/
 
 If you are asked questions regarding Macondo, please look there.
 
-# Git subtrees
+# Git submodules
 
-`subtrees/<dir>/` holds vendored git subtrees. A post-commit hook blocks any changes to those
-directories.
-
-The repos under the `subtrees/` directory are within our completely control, and we regularly
-modify the code to meet needs of this project. Do not treat that code as unmodifiable. If you need
-a change there, tell the user what you need. The user can then commit it to that repo and then
-run `py/tools/pull_git_subtrees.py` to pull the subtree to the latest.
+`submodules/<dir>/` holds git submodules: full checkouts of repos within our complete control,
+which we regularly modify to meet the needs of this project — do not treat that code as
+unmodifiable. The workflow (changing a submodule, pointer-bump rules, worktree interactions) is
+documented in submodules/devenv_utils/SUBMODULES.md; read it before touching anything under
+submodules/. Submodule commits are pushed upstream by the user, not by you.
 
 # Python code
 

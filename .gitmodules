@@ -1,0 +1,3 @@
+[submodule "submodules/devenv_utils"]
+	path = submodules/devenv_utils
+	url = https://github.com/eigen7/devenv_utils.git
