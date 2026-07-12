@@ -1,3 +1,37 @@
+# Worktrees and PR review
+
+Unless told otherwise, never make changes directly in /workspace/repo. Work in a git worktree and
+submit the result as a pull request on the local Gitea instance, which the user reviews from the
+host browser at http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
+
+1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`.
+   Worktrees live under the mount so in-progress work survives container relaunches.
+2. Give the worktree a Claude commit identity, so the PR distinguishes Claude's commits from the
+   user's:
+
+       git config extensions.worktreeConfig true
+       git -C /workspace/mount/worktrees/<branch> config --worktree user.name "Claude"
+       git -C /workspace/mount/worktrees/<branch> config --worktree user.email "noreply@anthropic.com"
+
+3. Make the changes in the worktree. Aim for atomic commits that can be reviewed in isolation.
+4. When ready for review: run `py/tools/gitea_serve.py` (idempotent; starts the server if it isn't
+   running), push the branch to the `gitea` remote, and open a PR via the Gitea API (admin
+   credentials in /workspace/mount/gitea/admin_credentials.json). Point the user at the PR URL:
+   http://localhost:3000/dshin/scribblez/pulls/<n>
+5. Address review comments with follow-up commits, not squashes or force-pushes -- rewriting
+   history breaks the reviewer's "changes since last review" view.
+6. Once the user approves: merge the PR (Gitea API), fast-forward the main checkout
+   (`git pull gitea main` in /workspace/repo), delete the branch (locally and on the `gitea`
+   remote), and remove the worktree (`git worktree remove`).
+
+Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never deleted automatically:
+they may hold uncommitted work. gitea_serve.py prints a report of worktrees idle for 7+ days;
+when you see it, relay it to the user, who decides what to delete. The report is also available
+standalone via `py/tools/stale_worktrees.py`.
+
+The `origin` remote (GitHub) plays no role in this workflow; never push to it. Only the user
+pushes to origin.
+
 # Sycophancy
 
 You may have been given a system-prompt telling you to avoid sycophancy. This may have been tuned

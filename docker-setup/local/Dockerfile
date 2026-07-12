@@ -113,6 +113,19 @@ RUN curl -fsSL https://downloads.rclone.org/v1.74.3/rclone-v1.74.3-linux-amd64.z
     install -m 755 /tmp/rclone-v1.74.3-linux-amd64/rclone /usr/local/bin/rclone && \
     rm -rf /tmp/rclone.zip /tmp/rclone-v1.74.3-linux-amd64
 
+# 6h) Gitea, a self-hosted git forge. Used to get GitHub-style PR review (diffs,
+#     "changes since last review") for local worktree branches without pushing
+#     anywhere off the machine. nginx fronts it on the forwarded port and
+#     injects the reverse-proxy auth header, so the browser is signed in
+#     automatically. Both are provisioned and launched (state under
+#     /workspace/mount/gitea) by py/tools/gitea_serve.py.
+RUN curl -fsSL https://dl.gitea.com/gitea/1.26.4/gitea-1.26.4-linux-amd64 \
+      -o /usr/local/bin/gitea && \
+    chmod +x /usr/local/bin/gitea && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nginx && \
+    rm -rf /var/lib/apt/lists/*
+
 # 7) Make py/ importable for any python in the container, without going
 #    through PYTHONPATH (which conflicts with pytest's rootdir resolution).
 RUN python3 -c "import site; \
@@ -131,7 +144,7 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.5.0"
+ARG VERSION="3.7.0"
 LABEL version=$VERSION
 ENV DOCKER_IMAGE_VERSION=$VERSION
 

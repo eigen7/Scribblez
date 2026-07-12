@@ -27,12 +27,12 @@ REPO_ROOT = Path(__file__).resolve().parent
 #
 # Increasing the major version (the first number) causes the setup wizard to
 # rm -rf the target/ directory - use this to invalidate existing builds.
-SETUP_VERSION = "2.7.1"
+SETUP_VERSION = "2.9.0"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
 # `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "3.5.0"
+MINIMUM_REQUIRED_IMAGE_VERSION = "3.7.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [
@@ -44,6 +44,13 @@ REQUIRED_PORTS = [
     5180,  # React dashboard: Vite dev server (the page the browser opens)
     8090,  # React dashboard: Tornado data API (proxied by Vite; handy for direct access)
 ]
+
+# Gitea (local git forge for worktree-branch PR review; see
+# py/tools/gitea_serve.py) is published outside REQUIRED_PORTS so it binds
+# 127.0.0.1 on the host instead of 0.0.0.0: its nginx front-end signs every
+# request in as the admin user, so the port must not be reachable from the
+# LAN. Note the fixed host port assumes a single container instance.
+GITEA_PORT_ARGS = ["-p", "127.0.0.1:3000:3000"]
 
 # Lexica we know how to fetch. The KWG files are not in this repo; they are
 # downloaded at setup time from the public liwords URL into the user's mount
@@ -86,4 +93,5 @@ def make_config() -> DevenvConfig:
         min_image_version=MINIMUM_REQUIRED_IMAGE_VERSION,
         setup_version=SETUP_VERSION,
         subtrees=SUBTREES,
+        extra_docker_args=GITEA_PORT_ARGS,
     )
