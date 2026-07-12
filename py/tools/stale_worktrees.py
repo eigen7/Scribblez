@@ -113,11 +113,13 @@ def describe(stale: StaleWorktree) -> str:
         state = "clean, merged into main -- safe to delete"
     else:
         state = "clean, NOT merged into main"
+    # --force unconditionally: git refuses to remove a worktree whose
+    # devenv_utils submodule is populated, which is a worktree's normal state
+    # here. The state line above tells the user what --force would discard.
     return (
         f"  {stale.worktree.path}\n"
         f"    branch {branch}; last activity {age_days} day(s) ago; {state}\n"
-        f"    delete with: git worktree remove"
-        f"{' --force' if stale.changed_files else ''} {stale.worktree.path}"
+        f"    delete with: git worktree remove --force {stale.worktree.path}"
     )
 
 

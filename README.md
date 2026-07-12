@@ -24,7 +24,7 @@ py/tools/           small utilities (lexicon tools, formatters)
 docs/               documentation (see docs/README.md)
 positions/          committed GCG evaluation datasets + Monte-Carlo ground truth
 phonies/            the generated phony lexicon (word-validity experiments)
-subtrees/           vendored git subtrees (read-only; pull via py/tools/)
+subtrees/           git submodules (dev-environment machinery; see subtrees/README.md)
 ```
 
 ## Build
@@ -40,6 +40,9 @@ wizard checks the rest):
 ./setup_wizard.py        # picks a mount dir, clones+builds Macondo, fetches lexica
 ./build_docker_image.py  # builds the local `scribblez` docker image
 ```
+
+A plain `git clone` suffices: the `subtrees/devenv_utils` submodule is
+populated automatically the first time any of these scripts runs.
 
 **Every dev session**, launch the container and build inside it:
 

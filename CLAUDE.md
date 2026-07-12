@@ -4,8 +4,10 @@ Unless told otherwise, never make changes directly in /workspace/repo. Work in a
 submit the result as a pull request on the local Gitea instance, which the user reviews from the
 host browser at http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
 
-1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`.
-   Worktrees live under the mount so in-progress work survives container relaunches.
+1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`, then
+   populate its submodule checkout: `git -C /workspace/mount/worktrees/<branch> submodule update
+   --init` (worktrees don't inherit the main checkout's submodules). Worktrees live under the
+   mount so in-progress work survives container relaunches.
 2. Give the worktree a Claude commit identity, so the PR distinguishes Claude's commits from the
    user's:
 
@@ -22,7 +24,8 @@ host browser at http://localhost:3000/ (signed in automatically; see py/tools/gi
    history breaks the reviewer's "changes since last review" view.
 6. Once the user approves: merge the PR (Gitea API), fast-forward the main checkout
    (`git pull gitea main` in /workspace/repo), delete the branch (locally and on the `gitea`
-   remote), and remove the worktree (`git worktree remove`).
+   remote), and remove the worktree (`git worktree remove --force`; `--force` because git
+   refuses to remove a worktree whose submodule is populated).
 
 Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never deleted automatically:
 they may hold uncommitted work. gitea_serve.py prints a report of worktrees idle for 7+ days;
@@ -76,15 +79,15 @@ It is checked out at /workspace/mount/macondo/
 
 If you are asked questions regarding Macondo, please look there.
 
-# Git subtrees
+# Git submodules
 
-`subtrees/<dir>/` holds vendored git subtrees. A post-commit hook blocks any changes to those
-directories.
-
-The repos under the `subtrees/` directory are within our completely control, and we regularly
-modify the code to meet needs of this project. Do not treat that code as unmodifiable. If you need
-a change there, tell the user what you need. The user can then commit it to that repo and then
-run `py/tools/pull_git_subtrees.py` to pull the subtree to the latest.
+`subtrees/<dir>/` holds git submodules (see subtrees/README.md). Each is a full checkout of a
+repo within our complete control, and we regularly modify the code to meet needs of this project.
+Do not treat that code as unmodifiable. To change it: edit in place, commit inside the submodule
+(that commit belongs to the submodule's repo), have the user push it upstream, then commit the
+updated submodule pointer here (`git add subtrees/<dir>`). Never commit a pointer to a submodule
+commit that hasn't been pushed upstream — other clones couldn't fetch it
+(`push.recurseSubmodules=check` backstops this at push time).
 
 # Python code
 

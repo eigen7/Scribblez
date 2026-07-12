@@ -109,7 +109,7 @@ Treat these areas as high-risk for this project:
 - the training-data pipeline and the .slog replay-reconstruction invariant (inputs recomputed by replaying moves; targets from stored final scores) — see docs/architecture.md
 - checkpoint format and generational lifecycle/scheduler changes
 - cloud worker orchestration and distributed training state (concurrency, shared state across workers)
-- git subtree boundaries (subtrees/<dir>/ is vendored and read-only; changes must go upstream, then be pulled via py/tools/pull_git_subtrees.py)
+- git submodule boundaries (subtrees/<dir>/ is a checkout of a separate repo; commits there belong to that repo and must be pushed upstream before the pointer bump here — see subtrees/README.md)
 - the C++/CUDA build (py/build.py) and GPU dependencies
 - dashboard/user-visible training controls (master_api.py, react_server.py, web/)
 - cross-module behavior between the C++ engine and Python training/dashboard code

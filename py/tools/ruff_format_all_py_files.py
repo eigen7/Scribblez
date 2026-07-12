@@ -6,8 +6,8 @@ reformats in place and applies Ruff's safe lint fixes; ``--check`` reports what
 would change and exits non-zero if anything does, without modifying files.
 
 Ruff reads its configuration from the repo-root pyproject.toml ([tool.ruff]).
-The target paths below are the project's first-party Python; the read-only
-subtrees and the build directory are excluded by that config.
+The target paths below are the project's first-party Python; the submodules
+under subtrees/ and the build directory are excluded by that config.
 """
 
 import argparse
