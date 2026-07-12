@@ -35,6 +35,7 @@ re-provisions from scratch.
 import argparse
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -55,7 +56,6 @@ NGINX_DIR = GITEA_ROOT / "nginx"
 NGINX_CONF = NGINX_DIR / "nginx.conf"
 
 DEFAULT_PORT = 3000  # matches the host publish in setup_common.GITEA_PORT_ARGS
-ADMIN_USERNAME = "dshin"
 REPO_NAME = "scribblez"
 REMOTE_NAME = "gitea"
 
@@ -203,7 +203,20 @@ def git_user_email() -> str:
     result = subprocess.run(
         ["git", "config", "user.email"], capture_output=True, text=True, cwd=REPO_ROOT
     )
-    return result.stdout.strip() or f"{ADMIN_USERNAME}@localhost"
+    return result.stdout.strip() or "dev@localhost"
+
+
+def admin_username() -> str:
+    """The Gitea admin username, derived from the git identity's email.
+
+    The username is part of every Gitea URL (the repo lives under it), so it
+    is personalized rather than fixed. Gitea usernames may contain letters,
+    digits, and ``.-_`` only; anything else in the email's local part is
+    dropped.
+    """
+    local_part = git_user_email().split("@")[0]
+    sanitized = re.sub(r"[^0-9A-Za-z._-]", "", local_part)
+    return sanitized or "dev"
 
 
 def init_database():
@@ -213,7 +226,7 @@ def init_database():
 
 
 def create_admin_user() -> dict:
-    creds = {"username": ADMIN_USERNAME, "password": secrets.token_urlsafe(16)}
+    creds = {"username": admin_username(), "password": secrets.token_urlsafe(16)}
     result = run_gitea(
         "admin",
         "user",
@@ -234,34 +247,45 @@ def create_admin_user() -> dict:
     return creds
 
 
-def write_configs(web_port: int, backend_port: int):
-    """Write app.ini and nginx.conf if absent (Gitea appends generated secrets
-    to app.ini on first start, so existing configs are never overwritten)."""
-    if not APP_INI.exists():
-        GITEA_ROOT.mkdir(parents=True, exist_ok=True)
-        APP_INI.write_text(
-            APP_INI_TEMPLATE.format(root=GITEA_ROOT, web_port=web_port, backend_port=backend_port)
+def write_app_ini(web_port: int, backend_port: int):
+    """Write app.ini if absent (Gitea appends generated secrets to it on first
+    start, so an existing file is never overwritten)."""
+    if APP_INI.exists():
+        return
+    GITEA_ROOT.mkdir(parents=True, exist_ok=True)
+    APP_INI.write_text(
+        APP_INI_TEMPLATE.format(root=GITEA_ROOT, web_port=web_port, backend_port=backend_port)
+    )
+
+
+def write_nginx_conf(web_port: int, backend_port: int, admin_user: str):
+    """Write nginx.conf if absent; it stamps every request with `admin_user`."""
+    if NGINX_CONF.exists():
+        return
+    (NGINX_DIR / "tmp").mkdir(parents=True, exist_ok=True)
+    NGINX_CONF.write_text(
+        NGINX_CONF_TEMPLATE.format(
+            root=GITEA_ROOT,
+            web_port=web_port,
+            backend_port=backend_port,
+            admin_user=admin_user,
         )
-    if not NGINX_CONF.exists():
-        (NGINX_DIR / "tmp").mkdir(parents=True, exist_ok=True)
-        NGINX_CONF.write_text(
-            NGINX_CONF_TEMPLATE.format(
-                root=GITEA_ROOT,
-                web_port=web_port,
-                backend_port=backend_port,
-                admin_user=ADMIN_USERNAME,
-            )
-        )
+    )
 
 
 def provision(web_port: int, backend_port: int) -> dict:
     """One-time instance setup (configs, database, admin user); returns admin credentials."""
-    write_configs(web_port, backend_port)
+    write_app_ini(web_port, backend_port)
     if not DB_PATH.exists():
         init_database()
     if CREDENTIALS_PATH.exists():
-        return json.loads(CREDENTIALS_PATH.read_text())
-    return create_admin_user()
+        creds = json.loads(CREDENTIALS_PATH.read_text())
+    else:
+        creds = create_admin_user()
+    # After credential resolution, so the stamped username always matches the
+    # admin user actually in the database (not just the current git identity).
+    write_nginx_conf(web_port, backend_port, creds["username"])
+    return creds
 
 
 def start_gitea(backend_port: int):
