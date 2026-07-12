@@ -71,19 +71,40 @@ void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::rename(tmp, p);
 }
 
-// The model's input-encoding arm, read from the "contingent_features" entry
-// the exporter stamps into the ONNX metadata_props. Every served model must
-// declare its arm; a missing entry (or unparseable model) throws.
-bool parse_contingent_features(const std::vector<char>& onnx_bytes) {
+// The metadata_props entries the exporter stamps into every ONNX model that
+// the serving side consumes: the input-encoding arm and the architecture
+// signature keying the engine-plan cache.
+struct OnnxMetadata {
+  bool contingent_features = false;
+  std::string architecture_signature;
+};
+
+// Read the serving-side contract out of the model's ONNX metadata_props (see
+// onnx_export.py). Every served model must declare both entries; a missing
+// entry (or unparseable model) throws.
+OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
   if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
     throw std::runtime_error("Failed to parse ONNX model bytes");
   }
+  OnnxMetadata meta;
+  bool have_contingent = false;
   for (int i = 0; i < model.metadata_props_size(); ++i) {
     const auto& kv = model.metadata_props(i);
-    if (kv.key() == "contingent_features") return kv.value() == "true";
+    if (kv.key() == "contingent_features") {
+      meta.contingent_features = kv.value() == "true";
+      have_contingent = true;
+    } else if (kv.key() == "model-architecture-signature") {
+      meta.architecture_signature = kv.value();
+    }
   }
-  throw std::runtime_error("ONNX model missing the contingent_features metadata entry");
+  if (!have_contingent) {
+    throw std::runtime_error("ONNX model missing the contingent_features metadata entry");
+  }
+  if (meta.architecture_signature.empty()) {
+    throw std::runtime_error("ONNX model missing the model-architecture-signature metadata entry");
+  }
+  return meta;
 }
 
 nvinfer1::Dims spatial_dims(int rows, int planes) {
@@ -137,6 +158,12 @@ struct NeuralNet::Impl {
 
   // Build a serialized engine plan from the ONNX bytes (does not touch disk).
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
+
+  // Replace the loaded engine's weights with the ones in the ONNX bytes. Used
+  // after deserializing a cached plan, which shares the model's architecture
+  // but was built from whatever same-architecture checkpoint first populated
+  // the cache.
+  void refit_engine(const std::vector<char>& onnx_bytes);
 
   // Allocate context, stream, and host/device buffers once the engine exists.
   void allocate_buffers();
@@ -210,7 +237,7 @@ void NeuralNet::Impl::deserialize_engine(const std::vector<char>& plan) {
 }
 
 std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_bytes) {
-  std::cerr << "[TRT] Building engine from ONNX (one-time; cached afterward)...\n";
+  std::cerr << "[TRT] Building engine from ONNX (one-time; cached per architecture afterward)...\n";
 
   std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
   std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(0));
@@ -224,6 +251,10 @@ std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_byte
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
   if (params.precision == Precision::kFP16) config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  // The cache is keyed on model architecture, so a cached plan generally holds
+  // a different same-architecture checkpoint's weights; every plan must be
+  // refittable so a cache hit can swap in the loaded model's weights.
+  config->setFlag(nvinfer1::BuilderFlag::kREFIT);
   // Level 0 takes the first working tactic per layer instead of timing the full
   // tactic set, trading inference speed for a far shorter build.
   if (params.fast_build) config->setBuilderOptimizationLevel(0);
@@ -249,6 +280,19 @@ std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_byte
   if (!plan) throw std::runtime_error("TensorRT engine build failed");
   const char* data = static_cast<const char*>(plan->data());
   return std::vector<char>(data, data + plan->size());
+}
+
+void NeuralNet::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
+  std::unique_ptr<nvinfer1::IRefitter> refitter(nvinfer1::createInferRefitter(*engine, logger));
+  std::unique_ptr<nvonnxparser::IParserRefitter> parser_refitter(
+    nvonnxparser::createParserRefitter(*refitter, logger));
+  if (!parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size())) {
+    std::string msg = "Failed to read refit weights from ONNX model";
+    if (parser_refitter->getNbErrors() > 0)
+      msg += std::string(": ") + parser_refitter->getError(0)->desc();
+    throw std::runtime_error(msg);
+  }
+  if (!refitter->refitCudaEngine()) throw std::runtime_error("Failed to refit TensorRT engine");
 }
 
 void NeuralNet::Impl::allocate_buffers() {
@@ -299,14 +343,19 @@ void NeuralNet::load() {
   set_device(impl_->params.cuda_device_id);
 
   std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
-  impl_->contingent_features = parse_contingent_features(onnx_bytes);
-  std::string hash = content_hash(onnx_bytes);
-  std::string cache_path =
-    engine_plan_cache_path(hash, impl_->params.precision, impl_->params.max_batch_size,
-                           impl_->params.fast_build, impl_->params.mount_root);
+  OnnxMetadata meta = parse_onnx_metadata(onnx_bytes);
+  impl_->contingent_features = meta.contingent_features;
+  std::string cache_path = engine_plan_cache_path(
+    meta.architecture_signature, impl_->params.precision, impl_->params.max_batch_size,
+    impl_->params.fast_build, impl_->params.mount_root);
 
+  // The cache is keyed on the model's architecture signature, so a hit yields
+  // a plan with the right structure but (in general) another checkpoint's
+  // weights; refitting swaps in this model's weights, which is far cheaper
+  // than an engine build.
   if (std::filesystem::exists(cache_path)) {
     impl_->deserialize_engine(read_file_bytes(cache_path));
+    impl_->refit_engine(onnx_bytes);
   } else {
     std::vector<char> plan = impl_->build_plan(onnx_bytes);
     write_file_bytes(cache_path, plan.data(), plan.size());

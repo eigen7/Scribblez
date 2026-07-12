@@ -5,9 +5,10 @@
 #include <vector>
 
 // TensorRT-related helpers that do not themselves need the NvInfer headers:
-// precision selection, the FNV-1a content hash used to key cached engine plans,
-// and the on-disk cache-path layout. Keeping these out of neural_net.h lets the
-// agent/service code reason about precision without including <NvInfer.h>.
+// precision selection, an FNV-1a content hash for fingerprinting model files,
+// and the on-disk engine-plan cache-path layout. Keeping these out of
+// neural_net.h lets the agent/service code reason about precision without
+// including <NvInfer.h>.
 
 namespace scribblez {
 namespace nn {
@@ -22,19 +23,25 @@ const char* precision_to_string(Precision precision);
 // only loadable by the same major TensorRT version that built it.
 std::string trt_version_tag();
 
-// 64-bit FNV-1a hash of `bytes`, hex-encoded. Used as a content fingerprint of
-// the ONNX model so structurally identical models reuse a cached plan.
+// 64-bit FNV-1a hash of `bytes`, hex-encoded. Used as an exact-content
+// fingerprint of a model file where weights matter (e.g. tagging generated
+// eval targets with the model that produced them).
 std::string content_hash(const std::vector<char>& bytes);
 
-// Absolute path of the cached engine plan for a model with the given content
-// hash, built at `precision` for `batch_size`. The path also encodes the GPU's
-// compute capability and the TensorRT version, since a plan is invalid across
-// either. Lives under <mount>/TensorRT-cache/.
+// Absolute path of the cached engine plan for a model with the given
+// architecture signature (the "model-architecture-signature" entry the
+// exporter stamps into the ONNX metadata_props), built at `precision` for
+// `batch_size`. Keying on the architecture rather than the file contents lets
+// every checkpoint of one architecture share a single cached plan; the loader
+// refits the plan with the checkpoint's own weights (see NeuralNet::load).
+// The path also encodes the GPU's compute capability and the TensorRT
+// version, since a plan is invalid across either. Lives under
+// <mount>/TensorRT-cache/.
 //
 // `fast_build` engines (TensorRT builder optimization level 0: minimal build
 // effort, much lower inference throughput) are cached under a separate subtree
 // so a fast-built plan can never satisfy a normal full-optimization load.
-std::string engine_plan_cache_path(const std::string& model_hash, Precision precision,
+std::string engine_plan_cache_path(const std::string& architecture_signature, Precision precision,
                                    int batch_size, bool fast_build, const std::string& mount_root);
 
 }  // namespace nn

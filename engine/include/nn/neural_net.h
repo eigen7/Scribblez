@@ -20,10 +20,11 @@ class options_description;
 // is the single source of truth for the encoding layout.
 //
 // load() builds a TensorRT engine from the ONNX file at params.onnx_path (or
-// deserializes a cached plan keyed by the model's content hash + precision +
-// batch size + GPU compute capability + TRT version), then allocates one
-// execution context, one CUDA stream, and pinned host + device buffers sized to
-// max_batch_size.
+// deserializes a cached plan keyed by the model's architecture signature +
+// precision + batch size + GPU compute capability + TRT version, then refits
+// it with this model's weights -- all checkpoints of one architecture share a
+// single cached plan), then allocates one execution context, one CUDA stream,
+// and pinned host + device buffers sized to max_batch_size.
 //
 // predict() is blocking: it copies the host input rows to the GPU, runs the
 // engine, copies the wld and score_diff outputs back, and synchronizes the

@@ -45,12 +45,12 @@ std::string content_hash(const std::vector<char>& bytes) {
   return std::string(buf);
 }
 
-std::string engine_plan_cache_path(const std::string& model_hash, Precision precision,
+std::string engine_plan_cache_path(const std::string& architecture_signature, Precision precision,
                                    int batch_size, bool fast_build, const std::string& mount_root) {
   const std::string build_tag = fast_build ? "/build_fast" : "";
   return mount_root + "/TensorRT-cache/sm_" + sm_tag() + "/trt_" + trt_version_tag() + build_tag +
          "/fp_" + precision_to_string(precision) + "/batch_" + std::to_string(batch_size) + "/" +
-         model_hash + ".engine";
+         architecture_signature + ".engine";
 }
 
 }  // namespace nn

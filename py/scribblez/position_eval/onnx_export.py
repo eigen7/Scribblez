@@ -8,6 +8,7 @@ is dynamic
 so the same file serves single-position and batched inference.
 """
 
+import hashlib
 import os
 import warnings
 from pathlib import Path
@@ -71,15 +72,56 @@ def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
     onnx.save(model, str(path))
 
 
-def _write_model_metadata(path: Path, contingent_features: bool):
-    """Record the model's input-encoding arm and lexicon in the ONNX
-    metadata_props -- the explicit contract serving consumers (the dashboard's
-    what-if runner; C++ agents cross-check it against the declared input dims)
-    recover the InputEncodingSpec from."""
+def _undo_initializer_dedup(path: Path):
+    """torch.onnx.export emits a single initializer for byte-identical parameter
+    tensors (common in a freshly initialized model, where every BatchNorm layer
+    starts from the same gamma/beta/running stats) and aliases the other
+    parameter names to it through Identity nodes. TensorRT's ONNX parser folds
+    weights reached through such aliases into anonymous derived tensors that
+    its refitter cannot map back to any initializer, which breaks refitting a
+    model's weights onto an architecture-shared cached engine plan. Materialize
+    each alias as its own initializer and drop the Identity nodes so every
+    parameter is a plain named initializer."""
+    model = onnx.load(str(path))
+    inits = {i.name: i for i in model.graph.initializer}
+    aliases = [
+        node
+        for node in model.graph.node
+        if node.op_type == "Identity" and node.input[0] in inits and node.output[0] not in inits
+    ]
+    if not aliases:
+        return
+    for node in aliases:
+        dup = onnx.TensorProto()
+        dup.CopyFrom(inits[node.input[0]])
+        dup.name = node.output[0]
+        model.graph.initializer.append(dup)
+        model.graph.node.remove(node)
+    onnx.save(model, str(path))
+
+
+def _architecture_signature(model: torch.nn.Module, opset: int) -> str:
+    """md5 fingerprint of the model's architecture: the module tree's repr (layer
+    structure and shapes, but not weights) plus the export opset and the
+    torch/onnx versions that shape the emitted graph. Two checkpoints of the
+    same architecture produce the same signature; the C++ TensorRT loader keys
+    its engine-plan cache on it, so such checkpoints share one cached plan and
+    load by refitting the plan with their own weights."""
+    components = [str(model), f"opset={opset}", torch.__version__, onnx.__version__]
+    return hashlib.md5("\n".join(components).encode()).hexdigest()
+
+
+def _write_model_metadata(path: Path, contingent_features: bool, architecture_signature: str):
+    """Record the model's input-encoding arm, lexicon, and architecture
+    signature in the ONNX metadata_props -- the explicit contract serving
+    consumers recover model properties from (the dashboard's what-if runner
+    reads the encoding arm; C++ agents cross-check it against the declared
+    input dims and key the TensorRT engine-plan cache on the signature)."""
     m = onnx.load(str(path), load_external_data=False)
     for key, value in (
         ("contingent_features", "true" if contingent_features else "false"),
         ("lexicon", DEFAULT_LEXICON),
+        ("model-architecture-signature", architecture_signature),
     ):
         entry = m.metadata_props.add()
         entry.key, entry.value = key, value
@@ -132,14 +174,20 @@ def export_onnx(
             },
             opset_version=opset,
             dynamo=False,
+            # Constant folding bakes some weights into derived constants that
+            # TensorRT's parser-refitter cannot map back to ONNX initializers,
+            # which breaks weight refit onto an architecture-shared cached
+            # engine plan. Every weight must survive as a plain initializer.
+            do_constant_folding=False,
         )
+    _undo_initializer_dedup(tmp_path)
     # Share the frozen compiled-lexicon buffers across generations instead of baking
     # them into every export (no-op when the model has no lexicon module). The
     # external-data location recorded inside the graph is the bare blob filename
     # (resolved relative to the directory the model file is loaded from, not to the
     # model file's own name), so it stays correct once tmp_path is renamed to path.
     _externalize_frozen_lexicon(tmp_path, _frozen_lexicon_names(model))
-    _write_model_metadata(tmp_path, contingent_features)
+    _write_model_metadata(tmp_path, contingent_features, _architecture_signature(model, opset))
     os.replace(tmp_path, path)
     if was_training:
         model.train()
