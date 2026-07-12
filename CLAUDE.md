@@ -17,8 +17,18 @@ host browser at http://localhost:3000/ (signed in automatically; see py/tools/gi
 
 3. Make the changes in the worktree. Aim for atomic commits that can be reviewed in isolation.
 4. When ready for review: run `py/tools/gitea_serve.py` (idempotent; starts the server if it isn't
-   running), push the branch to the `gitea` remote, and open a PR via the Gitea API (admin
-   credentials in /workspace/mount/gitea/admin_credentials.json). Point the user at the PR URL:
+   running), then push the branch and open the PR **as the `claude` Gitea user**, so Gitea shows
+   Claude — not the reviewer — as the pusher and PR author. The `gitea` remote embeds the admin's
+   credentials, so don't push the branch through it; instead use claude's credentials (in
+   /workspace/mount/gitea/claude_credentials.json) for both the push and the PR-creation API call:
+
+       git push http://claude:<password>@localhost:3001/dshin/scribblez.git <branch>
+       curl -u claude:<password> -X POST http://localhost:3000/api/v1/repos/dshin/scribblez/pulls ...
+
+   If the credentials file or the user is missing, first create the user via the admin API (admin
+   credentials in /workspace/mount/gitea/admin_credentials.json): username `claude`, email
+   noreply@anthropic.com (so Gitea links Claude's commits to it), write access on the repo; then
+   write the credentials file. Point the user at the PR URL:
    http://localhost:3000/dshin/scribblez/pulls/<n>
 5. Address review comments with follow-up commits, not squashes or force-pushes -- rewriting
    history breaks the reviewer's "changes since last review" view.
