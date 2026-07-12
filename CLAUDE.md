@@ -91,11 +91,11 @@ If you are asked questions regarding Macondo, please look there.
 
 # Git submodules
 
-`subtrees/<dir>/` holds git submodules (see subtrees/README.md). Each is a full checkout of a
+`submodules/<dir>/` holds git submodules (see submodules/README.md). Each is a full checkout of a
 repo within our complete control, and we regularly modify the code to meet needs of this project.
 Do not treat that code as unmodifiable. To change it: edit in place, commit inside the submodule
 (that commit belongs to the submodule's repo), have the user push it upstream, then commit the
-updated submodule pointer here (`git add subtrees/<dir>`). Never commit a pointer to a submodule
+updated submodule pointer here (`git add submodules/<dir>`). Never commit a pointer to a submodule
 commit that hasn't been pushed upstream — other clones couldn't fetch it
 (`push.recurseSubmodules=check` backstops this at push time).
 

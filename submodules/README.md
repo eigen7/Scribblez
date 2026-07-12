@@ -2,7 +2,7 @@ This directory contains git submodules.
 
 ## `devenv_utils`
 
-`subtrees/devenv_utils/` is a git submodule of
+`submodules/devenv_utils/` is a git submodule of
 https://github.com/eigen7/devenv_utils.git (the URL is recorded in the
 repo-root `.gitmodules`). The directory is a full checkout of that repo, so it
 cannot silently diverge from upstream: any edit made here is, by construction,
@@ -10,13 +10,13 @@ a change to the devenv_utils repo itself.
 
 * **Change** the code: edit in place, commit inside the submodule, and push to
   the devenv_utils repo. Then commit the updated submodule pointer here
-  (`git add subtrees/devenv_utils`).
+  (`git add submodules/devenv_utils`).
 
 * **Update** to the upstream tip without local changes:
 
   ```
-  git -C subtrees/devenv_utils pull origin main
-  git add subtrees/devenv_utils
+  git -C submodules/devenv_utils pull origin main
+  git add submodules/devenv_utils
   ```
 
 ## Cloning and initialization

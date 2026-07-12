@@ -2,7 +2,7 @@
 
 The generic host-side machinery (Docker build/run, .env.json, VS Code attach
 config, NVIDIA validation, the setup-wizard scaffold) lives in the
-`subtrees/devenv_utils` git submodule. This module supplies the Scribblez-specific
+`submodules/devenv_utils` git submodule. This module supplies the Scribblez-specific
 pieces: a `DevenvConfig` factory and the lexica/Macondo constants used by the
 custom wizard steps.
 
@@ -15,18 +15,18 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-# subtrees/devenv_utils is a git submodule, so a clone made without
+# submodules/devenv_utils is a git submodule, so a clone made without
 # --recurse-submodules leaves its directory empty. Every host-side entry point
 # imports this module before anything else, so populating the submodule here --
 # before the imports below -- makes a plain `git clone` just work.
-if not (REPO_ROOT / "subtrees" / "devenv_utils" / "__init__.py").exists():
+if not (REPO_ROOT / "submodules" / "devenv_utils" / "__init__.py").exists():
     subprocess.run(["git", "submodule", "update", "--init"], cwd=REPO_ROOT, check=True)
 
-from subtrees.devenv_utils import (  # noqa: E402
+from submodules.devenv_utils import (  # noqa: E402
     DevenvConfig,
     DevTool,
 )
-from subtrees.devenv_utils import (  # noqa: E402
+from submodules.devenv_utils import (  # noqa: E402
     check_setup_version as _check_setup_version,
 )
 

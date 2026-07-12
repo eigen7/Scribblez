@@ -16,7 +16,7 @@ Run this *outside* the Docker container. It:
      to Running Container" connects as devuser instead of root.
   5. Builds the Docker image, then validates GPU access inside Docker.
 
-The generic steps live in `subtrees/devenv_utils`; this script only adds the
+The generic steps live in `submodules/devenv_utils`; this script only adds the
 Scribblez-specific lexica step and wires the steps together.
 
 The Macondo checkout and binary are managed by py/build.py, not this wizard.
@@ -38,7 +38,7 @@ from setup_common import (
     LIWORDS_KWG_URL_TEMPLATE,
     make_config,
 )
-from subtrees.devenv_utils import (
+from submodules.devenv_utils import (
     SetupException,
     SetupWizardTool,
     download,
