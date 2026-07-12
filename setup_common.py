@@ -10,23 +10,31 @@ It lives at the repo root (not under py/) so the host-side scripts can
 import it without depending on PYTHONPATH or any in-container Python paths.
 """
 
+import subprocess
 from pathlib import Path
 
-from subtrees.devenv_utils import (
+REPO_ROOT = Path(__file__).resolve().parent
+
+# subtrees/devenv_utils is a git submodule, so a clone made without
+# --recurse-submodules leaves its directory empty. Every host-side entry point
+# imports this module before anything else, so populating the submodule here --
+# before the imports below -- makes a plain `git clone` just work.
+if not (REPO_ROOT / "subtrees" / "devenv_utils" / "__init__.py").exists():
+    subprocess.run(["git", "submodule", "update", "--init"], cwd=REPO_ROOT, check=True)
+
+from subtrees.devenv_utils import (  # noqa: E402
     DevenvConfig,
     DevTool,
 )
-from subtrees.devenv_utils import (
+from subtrees.devenv_utils import (  # noqa: E402
     check_setup_version as _check_setup_version,
 )
-
-REPO_ROOT = Path(__file__).resolve().parent
 
 # Bump SETUP_VERSION manually to force all users to rerun the setup wizard.
 #
 # Increasing the major version (the first number) causes the setup wizard to
 # rm -rf the target/ directory - use this to invalidate existing builds.
-SETUP_VERSION = "2.9.0"
+SETUP_VERSION = "2.10.0"
 
 # Bumped manually whenever the Dockerfile changes in a way that requires users
 # to rebuild. Checked at run_docker.py launch time against the running image's
