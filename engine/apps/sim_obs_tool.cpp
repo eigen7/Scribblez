@@ -84,7 +84,8 @@ struct PositionResult {
 };
 
 uint64_t position_seed(uint64_t run_seed, uint32_t game_idx, uint32_t turn_idx) {
-  return util::mix64(run_seed ^ util::mix64((static_cast<uint64_t>(game_idx) << 20) | turn_idx));
+  return util::splitmix64(run_seed ^
+                          util::splitmix64((static_cast<uint64_t>(game_idx) << 20) | turn_idx));
 }
 
 // Sample --positions-per-game eligible turns of game `gm` (without
@@ -96,7 +97,7 @@ void sample_positions(const GameMetadata& gm, uint32_t game_idx, const Options& 
   if (begin >= end) return;
   std::vector<uint32_t> turns(static_cast<size_t>(end - begin));
   std::iota(turns.begin(), turns.end(), static_cast<uint32_t>(begin));
-  std::mt19937_64 rng(util::mix64(opt.seed ^ util::mix64(0xC0FFEEull + game_idx)));
+  std::mt19937_64 rng(util::splitmix64(opt.seed ^ util::splitmix64(0xC0FFEEull + game_idx)));
   std::shuffle(turns.begin(), turns.end(), rng);
   const int take = std::min<int>(opt.positions_per_game, static_cast<int>(turns.size()));
   for (int i = 0; i < take; ++i) out->push_back({game_idx, turns[i]});
