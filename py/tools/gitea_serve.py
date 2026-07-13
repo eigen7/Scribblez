@@ -348,9 +348,14 @@ def get_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main():
-    args = get_args()
-    web_port = args.port if args.port is not None else DEFAULT_PORT + port_offset()
+def ensure_serving(web_port: int | None = None) -> tuple[dict, int, int]:
+    """Provision (if needed) and start the Gitea stack, idempotently.
+
+    Returns (admin credentials, web port, backend port) for callers that go on
+    to talk to the API or push over git -- e.g. py/tools/pr.py.
+    """
+    if web_port is None:
+        web_port = DEFAULT_PORT + port_offset()
     backend_port = web_port + 1
     creds = provision(web_port, backend_port)
     if not gitea_running(backend_port):
@@ -360,6 +365,12 @@ def main():
     ensure_remote(remote_url(creds, backend_port))
     if not server_repo_exists(creds, backend_port):
         push_main()
+    return creds, web_port, backend_port
+
+
+def main():
+    args = get_args()
+    creds, web_port, _ = ensure_serving(args.port)
     print(f"Gitea:  http://localhost:{web_port}/{creds['username']}/{REPO_NAME}")
     print(f"Signed in automatically as {creds['username']}; no login needed.")
     print_stale_report()
