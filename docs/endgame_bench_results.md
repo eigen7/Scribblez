@@ -90,31 +90,34 @@ mode's wall-time cost roughly tracks spread mode's at the same budget:
 (`--mode=games --games=200 --seed=7 --threads=1`, with and without `--wld`;
 single-shard, illustrative rather than a strength-grade sample.)
 
-Strength, pooling 6 seed shards x 800 games = 4800 games per budget (same
-paired-seat protocol as the spread-mode table above):
+Strength, both modes on identical seeds: 6 shards x 800 games = 4800 games
+per budget and mode, same paired-seat protocol as the spread-mode table above.
+Under wld the mean spread shrinks by construction (the solver stops maximizing
+margin once a win is proven), so the W/D/L record is the number that judges
+wld strength:
 
-| `--endgame-nodes` | mean eg spread (wld) | W | D | L |
-|---|---|---|---|---|
-| 200 | +0.20 +/- 0.02 pts/game | 2398 | 17 | 2385 |
-| 400 | +0.47 +/- 0.06 | 2399 | 24 | 2377 |
-| 1600 | +2.44 +/- 0.08 | 2471 | 17 | 2312 |
+| `--endgame-nodes` | mode | mean eg spread | W | D | L | W-L margin |
+|---|---|---|---|---|---|---|
+| 200 | spread | +0.43 +/- 0.02 | 2399 | 17 | 2384 | +0.31pp |
+| 200 | wld | +0.20 +/- 0.02 | 2398 | 17 | 2385 | +0.27pp |
+| 400 | spread | +0.86 +/- 0.06 | 2400 | 24 | 2376 | +0.50pp |
+| 400 | wld | +0.47 +/- 0.06 | 2399 | 24 | 2377 | +0.46pp |
+| 1600 | spread | +4.61 +/- 0.11 | 2479 | 18 | 2303 | +3.67pp |
+| 1600 | wld | +2.44 +/- 0.08 | 2471 | 17 | 2312 | +3.31pp |
 
-For comparison, spread mode at the same budgets: 200 = 2.00x/+0.40 +/- 0.03,
-400 = 4.5x/+0.85 +/- 0.07, 1600 = 21x/+4.96 +/- 0.19 (from the table above).
-
-Under wld the mean spread is **expected to shrink by construction**: the
-solver stops maximizing point margin once it has proven a win, so it no
-longer plays for the same spread among winning lines. The number to judge wld
-strength by is the **W/D/L record**, not the spread column. By that measure
-wld mode still beats plain HastyBot at every budget (win rate exceeds loss
-rate by +0.3pp at 200, +0.5pp at 400, +3.3pp at 1600 games), with the same
-qualitative budget-dependence as spread mode -- the margin over greedy play
-grows with budget -- but a visibly smaller edge than spread mode's win/loss
-margin would likely show at the same budget, since wld mode's own root-move
-choice among wins is unoptimized for spread and thus for many wins-that-stay-
-wins style positional pressure. Budget 1600 remains the clearest win; the
-sub-1% margins at 200 and 400 should not be read as more than "does not
-lose ground," given the shard-level standard error is itself on that order.
+The comparison is one-sided: **at a fixed node budget, wld mode is dominated
+by spread mode** -- equal-or-worse W/D/L at every budget (well within noise at
+200/400, slightly behind at 1600) while banking roughly half the spread, at
+the same wall-time cost. This follows from the budget semantics: a hard node
+cap spends the whole budget regardless of window width, so the narrow window
+only redistributes nodes toward depth rather than saving anything, and the
+deeper-but-margin-blind search does not convert into extra wins against this
+opponent. First-win search pays off under *completion-based* budgets, where a
+narrow window finishes its proof sooner and returns the saved time (the
+regime pre-endgame solvers run endgames in); under this solver's node cap it
+has no winning operating point, and spread mode is the right default. The
+mode remains available for callers that need cheap win/loss proofs and pair
+it with an early exit on proof.
 
 ## Reproducing
 

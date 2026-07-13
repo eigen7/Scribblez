@@ -615,15 +615,6 @@ TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
     }
   }
   ASSERT_GT(checked, 10);
-  if (wins > 0) {
-    ASSERT_GT(wins, 0);
-  }
-  if (draws > 0) {
-    ASSERT_GT(draws, 0);
-  }
-  if (losses > 0) {
-    ASSERT_GT(losses, 0);
-  }
   std::cout << "  wld-checked " << checked << " endgames: " << wins << " win, " << draws
             << " draw, " << losses << " loss\n";
 }
