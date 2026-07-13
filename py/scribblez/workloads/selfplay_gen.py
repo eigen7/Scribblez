@@ -31,7 +31,7 @@ GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_
 
 def player_spec(params) -> str:
     return hasty_player_spec(
-        params.hasty_temperature, params.hasty_top_k, params.hasty_temp_min_bag
+        params.hasty_temperature, params.hasty_top_k, params.hasty_temp_min_bag, endgame=True
     )
 
 
