@@ -39,9 +39,9 @@ ZobristTable build_zobrist() {
   uint64_t s = 0xE3D1F0A2B4C6D8E9ULL;
   for (auto& sq : z.square)
     for (auto& letter : sq)
-      for (auto& blank : letter) blank = util::mix64(++s);
-  for (auto& v : z.scoreless) v = util::mix64(++s);
-  z.solving_to_move = util::mix64(++s);
+      for (auto& blank : letter) blank = util::splitmix64(++s);
+  for (auto& v : z.scoreless) v = util::splitmix64(++s);
+  z.solving_to_move = util::splitmix64(++s);
   return z;
 }
 
@@ -105,7 +105,7 @@ void EndgameSolver::xor_play_hash(const Move& move) {
 uint64_t EndgameSolver::node_hash() const {
   const ZobristTable& z = zobrist();
   uint64_t h = board_hash_;
-  h ^= util::mix64(racks_[stm_].bits());
+  h ^= util::splitmix64(racks_[stm_].bits());
   if (stm_ == 0) h ^= z.solving_to_move;
   h ^= z.scoreless[scoreless_];
   return h;
@@ -331,10 +331,8 @@ int32_t EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply) 
   return best;
 }
 
-int32_t EndgameSolver::run_root(int depth, std::vector<std::pair<Move, int32_t>>& root_moves,
-                                Move* best_out) {
-  int32_t alpha = -kInf;
-  const int32_t beta = kInf;
+int32_t EndgameSolver::run_root(int depth, int32_t alpha, int32_t beta,
+                                std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out) {
   int32_t best = -kInf;
   Move best_move = root_moves[0].first;
   for (auto& rm : root_moves) {
@@ -361,7 +359,8 @@ int32_t EndgameSolver::run_root(int depth, std::vector<std::pair<Move, int32_t>>
 
 EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
                                    const Rack& opp_rack, int my_score, int opp_score,
-                                   int scoreless_turns, uint64_t node_budget, int max_plies) {
+                                   int scoreless_turns, uint64_t node_budget, int max_plies,
+                                   bool first_win) {
   board_ = board;
   board_.ensure_movegen_caches(dict);
   dict_ = &dict;
@@ -395,9 +394,11 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   // and fall back to their own move policy -- rather than spending the whole
   // budget on a fraction of the root.
   if (root_moves.size() > node_budget) return result;
+  const int32_t root_alpha = first_win ? kFirstWinAlpha : -kInf;
+  const int32_t root_beta = first_win ? kFirstWinBeta : kInf;
   for (int depth = 1; depth <= max_plies; ++depth) {
     Move best_move = root_moves[0].first;
-    const int32_t value = run_root(depth, root_moves, &best_move);
+    const int32_t value = run_root(depth, root_alpha, root_beta, root_moves, &best_move);
     if (aborting_) {
       // Budget exhausted mid-iteration: the last completed iteration's result
       // stands. When not even the first iteration finished, fall back to the

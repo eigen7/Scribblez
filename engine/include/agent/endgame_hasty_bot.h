@@ -43,14 +43,22 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   // game time: 400 gives +0.85 at 4.5x, 1600 gives +5.0 at 21x.
   static constexpr uint64_t kDefaultEndgameNodes = 200;
 
-  // HastyBot configuration plus the two endgame-solver knobs.
+  // HastyBot configuration plus the endgame-solver knobs.
   //   endgame_nodes : per-turn solver node budget; 0 disables the solver
   //                   entirely (the agent then plays pure HastyBot all game).
   //   endgame_plies : iterative-deepening depth cap for the solver.
+  //   endgame_wld   : solve with the first-win window -- resolve only the
+  //                   win/draw/loss class, not the exact spread. Searches get
+  //                   much cheaper; the played move preserves the achievable
+  //                   WLD class but stops maximizing spread, and a
+  //                   proven-lost position falls back to HastyBot's move
+  //                   (spread still matters to the final-score log even when
+  //                   the game is lost).
   struct Params {
     HastyBotAgent::Params hasty;
     uint64_t endgame_nodes = kDefaultEndgameNodes;
     int endgame_plies = 25;
+    bool endgame_wld = false;
   };
 
   explicit EndgameHastyBotAgent(const Params& params);
@@ -61,8 +69,9 @@ class EndgameHastyBotAgent : public HastyBotAgent {
 
   // Build an EndgameHastyBotAgent from `--player "--type=hastybot-endgame
   // [options]"` tokens (after the factory has stripped --type and --name).
-  // Accepts every HastyBot option plus --endgame-nodes=N (0 disables the solver)
-  // and --endgame-plies=P. Throws on bad input.
+  // Accepts every HastyBot option plus --endgame-nodes=N (0 disables the
+  // solver), --endgame-plies=P, and --endgame-wld (first-win window). Throws
+  // on bad input.
   static std::unique_ptr<EndgameHastyBotAgent> from_spec(const std::vector<std::string>& tokens,
                                                          int thread_id, const std::string& name);
 
@@ -72,6 +81,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
  private:
   uint64_t endgame_nodes_;
   int endgame_plies_;
+  bool endgame_wld_;
   int scoreless_turns_ = 0;  // consecutive zero-score turns, tracked from observe_move
   EndgameSolver solver_;
 };

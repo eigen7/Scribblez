@@ -219,15 +219,27 @@ AgentFactory hasty_factory() {
   };
 }
 
-AgentFactory endgame_factory(uint64_t budget, int plies) {
-  return [budget, plies](int tid) -> std::unique_ptr<Agent> {
+AgentFactory endgame_factory(uint64_t budget, int plies, bool wld) {
+  return [budget, plies, wld](int tid) -> std::unique_ptr<Agent> {
     EndgameHastyBotAgent::Params p;
     p.hasty = HastyBotAgent::Params{.thread_id = tid, .name = "EndgameHastyBot"};
     p.endgame_nodes = budget;
     p.endgame_plies = plies;
+    p.endgame_wld = wld;
     return std::make_unique<EndgameHastyBotAgent>(p);
   };
 }
+
+// Head-to-head aggregate: the endgame bot's mean final spread plus its
+// win/draw/loss record. In first-win mode the spread is expected to shrink
+// (winning positions stop maximizing it); the W/D/L record is the metric that
+// must hold up.
+struct H2H {
+  double spread = 0.0;
+  int wins = 0;
+  int draws = 0;
+  int losses = 0;
+};
 
 // Play `games` seeded games of the endgame bot against a plain HastyBot and
 // return the endgame bot's mean final spread (its score minus the opponent's).
@@ -237,10 +249,11 @@ AgentFactory endgame_factory(uint64_t budget, int plies) {
 // variance. A positive value is the head-to-head strength signal: points the
 // endgame solver wins over greedy play. Single-threaded so the per-game spreads
 // are deterministic in `base_seed`.
-double endgame_vs_hasty_spread(const Dictionary& dict, uint64_t base_seed, int games,
-                               uint64_t budget, int plies) {
-  const AgentFactory eg = endgame_factory(budget, plies);
+H2H endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, int games, uint64_t budget,
+                     int plies, bool wld) {
+  const AgentFactory eg = endgame_factory(budget, plies, wld);
   const AgentFactory hb = hasty_factory();
+  H2H h;
   long total_spread = 0;
   int played = 0;
   for (int i = 0; i < (games + 1) / 2; ++i) {
@@ -250,11 +263,19 @@ double endgame_vs_hasty_spread(const Dictionary& dict, uint64_t base_seed, int g
       std::unique_ptr<Agent> p1 = eg_seat == 0 ? hb(0) : eg(0);
       Game g(*p0, *p1, dict, seed);
       g.play();
-      total_spread += g.score(eg_seat) - g.score(1 - eg_seat);
+      const int spread = g.score(eg_seat) - g.score(1 - eg_seat);
+      total_spread += spread;
       ++played;
+      if (spread > 0)
+        ++h.wins;
+      else if (spread < 0)
+        ++h.losses;
+      else
+        ++h.draws;
     }
   }
-  return played ? static_cast<double>(total_spread) / played : 0.0;
+  h.spread = played ? static_cast<double>(total_spread) / played : 0.0;
+  return h;
 }
 
 void print_games_row(const char* config, const std::string& budget, double total_s, int games,
@@ -264,8 +285,9 @@ void print_games_row(const char* config, const std::string& budget, double total
 }
 
 void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
-                    const std::vector<uint64_t>& budgets, int plies) {
-  std::printf("games mode: %d games/config, threads=%d, plies=%d\n\n", games, threads, plies);
+                    const std::vector<uint64_t>& budgets, int plies, bool wld) {
+  std::printf("games mode: %d games/config, threads=%d, plies=%d, wld=%d\n\n", games, threads,
+              plies, wld ? 1 : 0);
   std::printf("%-22s %11s %10s %10s %10s %10s\n", "config", "budget", "total s", "s/game",
               "games/s", "ratio");
 
@@ -273,20 +295,22 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
     run_config(dict, base_seed, games, threads, hasty_factory(), hasty_factory());
   print_games_row("hasty-vs-hasty", "-", base_s, games, 1.0);
 
+  const char* eg_label = wld ? "endgamewld-vs-endgamewld" : "endgame-vs-endgame";
   for (uint64_t b : budgets) {
-    const AgentFactory f = endgame_factory(b, plies);
+    const AgentFactory f = endgame_factory(b, plies, wld);
     const double s = run_config(dict, base_seed, games, threads, f, f);
-    print_games_row("endgame-vs-endgame", std::to_string(b), s, games, s / base_s);
+    print_games_row(eg_label, std::to_string(b), s, games, s / base_s);
   }
 
-  // Strength evidence: the endgame bot's mean spread against a plain HastyBot,
-  // alternating seats so any first-move/board advantage averages out. Run
-  // single-threaded for deterministic per-game spreads.
-  std::printf("\nhead-to-head (endgame-vs-hasty, alternating seats):\n");
-  std::printf("%11s %16s\n", "budget", "mean eg spread");
+  // Strength evidence: the endgame bot's mean spread and W/D/L record against a
+  // plain HastyBot, seats mirrored per seed. Run single-threaded so the
+  // per-game results are deterministic in base_seed.
+  std::printf("\nhead-to-head (endgame-vs-hasty, mirrored seats):\n");
+  std::printf("%11s %16s %8s %8s %8s\n", "budget", "mean eg spread", "W", "D", "L");
   for (uint64_t b : budgets) {
-    const double spread = endgame_vs_hasty_spread(dict, base_seed, games, b, plies);
-    std::printf("%11llu %16.2f\n", static_cast<unsigned long long>(b), spread);
+    const H2H h = endgame_vs_hasty(dict, base_seed, games, b, plies, wld);
+    std::printf("%11llu %16.2f %8d %8d %8d\n", static_cast<unsigned long long>(b), h.spread, h.wins,
+                h.draws, h.losses);
   }
 }
 
@@ -308,6 +332,7 @@ int main(int argc, char** argv) {
     uint64_t seed = 1;
     int plies = 25;
     int threads = 1;
+    bool wld = false;
     std::string budgets_csv = "1000,3000,10000,30000,100000,300000";
     std::string leaves_file;
     std::string peg_file;
@@ -327,6 +352,8 @@ int main(int argc, char** argv) {
                        "solver iterative-deepening depth cap");
     desc.add_options()("threads", po::value<int>(&threads)->default_value(threads),
                        "games-mode parallelism (per-thread agents)");
+    desc.add_options()("wld", po::bool_switch(&wld),
+                       "games mode: endgame agents use the first-win (WLD) window");
     desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
                        "path to leaves.klv2 (optional; defaults to the active lexicon's)");
     desc.add_options()("peg-file", po::value<std::string>(&peg_file)->default_value(""),
@@ -343,7 +370,7 @@ int main(int argc, char** argv) {
     if (mode == "solves") {
       scribblez::run_solves_mode(dict, seed, games, budgets, plies);
     } else if (mode == "games") {
-      scribblez::run_games_mode(dict, seed, games, threads, budgets, plies);
+      scribblez::run_games_mode(dict, seed, games, threads, budgets, plies, wld);
     } else {
       std::cerr << "unknown --mode '" << mode << "' (expected solves or games)\n";
       return 1;

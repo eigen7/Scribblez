@@ -39,6 +39,15 @@ struct EndgameResult {
 // value). At solve entry the caller's real scoreless-turn count is rebased to 1
 // when positive and 0 otherwise. Any play resets the internal count to 0,
 // mirroring the real game (even a zero-scoring play).
+//
+// TODO(multithreading): when single-game (non-parallel-self-play) settings
+// arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
+// atomic uint64 words (the lockless Hyatt scheme MAGPIE uses, which also
+// shrinks the entry), then run shared-TT lazy-SMP -- helper threads search at
+// staggered depths with jittered root orderings and only populate the TT,
+// while the main thread owns the PV. Keep 1 thread the default: both Macondo
+// ("~2x with 3 threads, degrades beyond") and MAGPIE found endgame SMP's
+// returns modest, so stop at lazy-SMP unless a profile says otherwise.
 class EndgameSolver {
  public:
   // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
@@ -46,8 +55,17 @@ class EndgameSolver {
 
   // Solve the position for the side holding my_rack (to move). Both racks must
   // be the actual remaining tiles (bag empty). scoreless_turns is the number of
-  // consecutive zero-score turns already played in the real game. The search
-  // looks at most max_plies deep, and node_budget is a hard cap on nodes spent
+  // consecutive zero-score turns already played in the real game.
+  //
+  // With first_win, the root alpha-beta window is pinned to
+  // (kFirstWinAlpha, kFirstWinBeta) around an even final spread, so the search
+  // only resolves the win/draw/loss class instead of the exact spread -- proofs
+  // arrive far cheaper, at the price of an arbitrary (not spread-maximal)
+  // winning move. A result value >= kFirstWinBeta proves a win to the searched
+  // depth, <= kFirstWinAlpha proves every move loses (the best move is then
+  // meaningless), and 0 holds a draw.
+  //
+  // The search looks at most max_plies deep, and node_budget is a hard cap on nodes spent
   // (exceeded by at most one greedy playout's plies before the abort lands).
   // A position with more root moves than node_budget provably cannot complete
   // its first iteration, so the solve is declined immediately after root move
@@ -57,7 +75,12 @@ class EndgameSolver {
   // estimate-ordered top root move.
   EndgameResult solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
                       const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
-                      uint64_t node_budget, int max_plies);
+                      uint64_t node_budget, int max_plies, bool first_win = false);
+
+  // The first-win root window: a final spread >= kFirstWinBeta is a win,
+  // <= kFirstWinAlpha a loss, 0 a draw.
+  static constexpr int32_t kFirstWinAlpha = -1;
+  static constexpr int32_t kFirstWinBeta = 1;
 
   // Invalidate every transposition-table entry (call between games; entries are
   // spread-rebased and thus reusable across turns within one game, but not
@@ -96,7 +119,8 @@ class EndgameSolver {
   };
 
   // --- Iterative deepening / search ---------------------------------------
-  int32_t run_root(int depth, std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
+  int32_t run_root(int depth, int32_t alpha, int32_t beta,
+                   std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
   int32_t negamax(int depth, int32_t alpha, int32_t beta, int ply);
   int32_t greedy_playout(uint64_t node_key, int ply);
 
