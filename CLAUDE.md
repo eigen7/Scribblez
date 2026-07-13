@@ -28,8 +28,9 @@ http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
 py/tools/pr.py drives the lifecycle:
 
 1. `py/tools/pr.py worktree <branch>` -- creates
-   /workspace/mount/worktrees/<branch> on a new branch, with submodules
-   populated (from the main checkout's copies) and a Claude commit identity,
+   /workspace/mount/worktrees/scribblez/<branch> on a new branch, with
+   submodules populated (from the main checkout's copies) and a Claude commit
+   identity,
    so the PR distinguishes Claude's commits from the user's. Worktrees live
    under the mount so in-progress work survives container relaunches.
 2. Make the changes in the worktree. Aim for atomic commits that can be
@@ -95,7 +96,8 @@ Layout -- where data lives and what provisions it:
     pre-endgame table that `HastyEquity::default_leaves_path()` /
     `default_peg_path()` read.
   - gitea/ -- Gitea state, admin_credentials.json, claude_credentials.json.
-  - worktrees/ -- working worktrees (see the PR workflow above).
+  - worktrees/<project>/ -- per-project working worktrees (see the PR
+    workflow above).
 
 # Common commands
 
@@ -127,7 +129,9 @@ If you are asked questions regarding Macondo, please look there.
 which we regularly modify to meet the needs of this project — do not treat that code as
 unmodifiable. The workflow (changing a submodule, pointer-bump rules, worktree interactions) is
 documented in submodules/devenv_utils/SUBMODULES.md; read it before touching anything under
-submodules/. Submodule commits are pushed upstream by the user, not by you.
+submodules/. Submodule commits are pushed upstream by the user, not by you: end any task that
+touched a submodule by asking the user to run `python3 submodules/devenv_utils/push_upstream.py`
+from the host (it pushes the submodule commits, then prints the superproject push to run next).
 
 # Python code
 
