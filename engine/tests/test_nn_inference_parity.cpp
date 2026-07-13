@@ -15,13 +15,16 @@
 //   test_nn_inference_parity
 // It generates a fresh fixture into a temp dir (by invoking the Python
 // generator at the build-time SCRIBBLEZ_PY_DIR), runs the comparison, and
-// cleans up. If the fixture cannot be generated (no torch/onnx) it prints a
-// skip line and exits 0. Pass an explicit directory to reuse a fixture instead:
+// cleans up. If the fixture cannot be generated (no torch/onnx) the test is
+// reported as skipped. Pass an explicit directory as the first non-gtest
+// argument to reuse a fixture instead:
 //   test_nn_inference_parity <fixture_dir>
 
 #include "encoding/input_encoder.h"
 #include "nn/nn_evaluation_service.h"
 #include "nn/trt_util.h"
+
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
@@ -53,11 +56,15 @@ constexpr int kFieldsPerRow = 6;
 constexpr float kProbTol = 1e-3f;      // bounds the four probability fields
 constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
 
+// Fixture directory given on the command line (first non-gtest argument);
+// empty means self-generate one.
+static std::string g_fixture_dir;
+
 static std::vector<float> read_floats(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
   if (!f) {
-    std::cerr << "cannot open " << path << "\n";
-    std::exit(2);
+    ADD_FAILURE() << "cannot open " << path;
+    return {};
   }
   const std::streamsize bytes = f.tellg();
   f.seekg(0);
@@ -76,10 +83,11 @@ static void pack(const Eval& e, float* dst) {
   dst[5] = e.score_diff_std;
 }
 
-// Evaluate every row under `precision` and report the worst per-field deviation
-// from the PyTorch reference. Returns false (and prints) if any deviation
-// exceeds kProbTol (probability fields) or kScoreDiffTol (score-diff mean).
-static bool check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
+// Evaluate every row under `precision` and check the worst per-field deviation
+// from the PyTorch reference: kProbTol bounds the probability fields, and
+// kScoreDiffTol the score-diff mean and std. Prints the actual max deviations
+// so the tolerances can be tuned against a future model.
+static void check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
                             const char* label, const std::vector<float>& inputs,
                             const std::vector<float>& expected, int n) {
   scribblez::nn::NeuralNetParams params;
@@ -106,11 +114,10 @@ static bool check_precision(const std::string& onnx_path, scribblez::nn::Precisi
     max_sd_err = std::max(max_sd_err, std::abs(got[5] - exp[5]));  // std
   }
 
-  const bool ok = max_prob_err <= kProbTol && max_sd_err <= kScoreDiffTol;
   std::cout << "  [" << label << "] max prob err = " << max_prob_err << " (tol " << kProbTol
-            << "), max score_diff_mean err = " << max_sd_err << " (tol " << kScoreDiffTol << ") -> "
-            << (ok ? "OK" : "FAIL") << "\n";
-  return ok;
+            << "), max score_diff_mean err = " << max_sd_err << " (tol " << kScoreDiffTol << ")\n";
+  EXPECT_LE(max_prob_err, kProbTol);
+  EXPECT_LE(max_sd_err, kScoreDiffTol);
 }
 
 #ifdef SCRIBBLEZ_PY_DIR
@@ -135,57 +142,56 @@ static bool generate_fixture(const std::string& out_dir) {
 }
 #endif
 
-int main(int argc, char** argv) {
-  // Use a caller-provided fixture if given; otherwise self-generate one into a
-  // temp dir (cleaned up on exit).
-  std::string dir;
-  std::filesystem::path scratch;  // non-empty iff we created the fixture
-  if (argc >= 2) {
-    dir = argv[1];
-  } else {
+// Resolves the fixture directory: the one passed on the command line if any,
+// else a self-generated scratch dir (removed on teardown, and skipping the
+// test when the Python generator is unavailable).
+class NnInferenceParityTest : public ::testing::Test {
+ protected:
+  void SetUp() override;
+  void TearDown() override {
+    if (!scratch_.empty()) std::filesystem::remove_all(scratch_);
+  }
+
+  std::string dir_;
+  std::filesystem::path scratch_;  // non-empty iff this test created the fixture
+};
+
+void NnInferenceParityTest::SetUp() {
+  if (!g_fixture_dir.empty()) {
+    dir_ = g_fixture_dir;
+    return;
+  }
 #ifdef SCRIBBLEZ_PY_DIR
-    scratch = make_scratch_dir();
-    dir = scratch.string();
-    if (!generate_fixture(dir)) {
-      std::cout << "test_nn_inference_parity: SKIPPED (could not generate fixture; "
-                   "is torch/onnx installed?)\n";
-      std::filesystem::remove_all(scratch);
-      return 0;
-    }
+  scratch_ = make_scratch_dir();
+  dir_ = scratch_.string();
+  if (!generate_fixture(dir_)) {
+    GTEST_SKIP() << "could not generate fixture; is torch/onnx installed?";
+  }
 #else
-    std::cout << "test_nn_inference_parity: SKIPPED (built without SCRIBBLEZ_PY_DIR; "
-                 "pass a fixture dir as argv[1])\n";
-    return 0;
+  GTEST_SKIP() << "built without SCRIBBLEZ_PY_DIR; pass a fixture dir on the command line";
 #endif
-  }
+}
 
-  const std::string onnx_path = dir + "/model.onnx";
-  std::vector<float> inputs = read_floats(dir + "/inputs.bin");
-  std::vector<float> expected = read_floats(dir + "/expected.bin");
+TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
+  const std::string onnx_path = dir_ + "/model.onnx";
+  std::vector<float> inputs = read_floats(dir_ + "/inputs.bin");
+  std::vector<float> expected = read_floats(dir_ + "/expected.bin");
 
-  bool ok = inputs.size() % kFixtureInputFloats == 0;
-  if (!ok) {
-    std::cerr << "inputs.bin size " << inputs.size() << " not a multiple of the full input width "
-              << kFixtureInputFloats << "\n";
-  }
-  const int n = ok ? static_cast<int>(inputs.size() / kFixtureInputFloats) : 0;
-  if (ok && expected.size() != static_cast<size_t>(n) * kFieldsPerRow) {
-    std::cerr << "expected.bin has " << expected.size() << " floats; want " << n * kFieldsPerRow
-              << " (N=" << n << ")\n";
-    ok = false;
-  }
+  ASSERT_EQ(inputs.size() % kFixtureInputFloats, 0u)
+    << "inputs.bin size " << inputs.size() << " not a multiple of the full input width "
+    << kFixtureInputFloats;
+  const int n = static_cast<int>(inputs.size() / kFixtureInputFloats);
+  ASSERT_GT(n, 0);
+  ASSERT_EQ(expected.size(), static_cast<size_t>(n) * kFieldsPerRow) << "(N=" << n << ")";
 
-  if (ok) {
-    std::cout << "test_nn_inference_parity: " << n << " rows from " << dir << "\n";
-    ok &= check_precision(onnx_path, scribblez::nn::Precision::kFP16, "FP16", inputs, expected, n);
-  }
+  std::cout << "  " << n << " rows from " << dir_ << "\n";
+  check_precision(onnx_path, scribblez::nn::Precision::kFP16, "FP16", inputs, expected, n);
+}
 
-  if (!scratch.empty()) std::filesystem::remove_all(scratch);
-
-  if (!ok) {
-    std::cerr << "test_nn_inference_parity FAILED\n";
-    return 1;
-  }
-  std::cout << "test_nn_inference_parity passed\n";
-  return 0;
+// Custom main (instead of gtest_main): InitGoogleTest strips the gtest flags,
+// and the first remaining argument, if any, names a fixture directory to reuse.
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  if (argc >= 2) g_fixture_dir = argv[1];
+  return RUN_ALL_TESTS();
 }

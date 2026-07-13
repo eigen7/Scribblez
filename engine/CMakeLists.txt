@@ -239,13 +239,14 @@ gtest_discover_tests(test_neural_agent)
 # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
 # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
 # (skips cleanly if torch/onnx is absent) and needs a GPU at run time. A fixture
-# directory may be passed as argv[1] to reuse one instead.
+# directory may be passed as the first non-gtest argument to reuse one instead,
+# so this binary carries its own main() and links GTest::gtest, not gtest_main.
 add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
 target_link_libraries(test_nn_inference_parity PRIVATE
-  scribblez_nn scribblez_core Threads::Threads)
+  scribblez_nn scribblez_core Threads::Threads GTest::gtest)
 target_compile_definitions(test_nn_inference_parity PRIVATE
   SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-add_test(NAME test_nn_inference_parity COMMAND test_nn_inference_parity)
+gtest_discover_tests(test_nn_inference_parity)
 
 # Standalone ad-hoc driver for the binary-log DataLoader. Lets us point it at
 # a directory of .slog files and verify load() produces well-formed rows.
