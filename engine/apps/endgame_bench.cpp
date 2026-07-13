@@ -230,27 +230,32 @@ AgentFactory endgame_factory(uint64_t budget, int plies) {
   };
 }
 
-// Play `games` seeded games of the endgame bot against a plain HastyBot,
-// alternating which seat the endgame bot takes each game (so board-position and
-// first-move advantages average out), and return the endgame bot's mean final
-// spread (its score minus the opponent's), averaged over games. A positive value
-// is the head-to-head strength signal: points the endgame solver wins over greedy
-// play. Single-threaded so the per-game spreads are deterministic in `base_seed`.
+// Play `games` seeded games of the endgame bot against a plain HastyBot and
+// return the endgame bot's mean final spread (its score minus the opponent's).
+// Each seed is played twice with the seats mirrored, and the pair's two spreads
+// are averaged: the same tile-draw sequence serves both bots symmetrically, so
+// per-seed draw luck (who gets the blanks) cancels instead of dominating the
+// variance. A positive value is the head-to-head strength signal: points the
+// endgame solver wins over greedy play. Single-threaded so the per-game spreads
+// are deterministic in `base_seed`.
 double endgame_vs_hasty_spread(const Dictionary& dict, uint64_t base_seed, int games,
                                uint64_t budget, int plies) {
   const AgentFactory eg = endgame_factory(budget, plies);
   const AgentFactory hb = hasty_factory();
   long total_spread = 0;
-  for (int i = 0; i < games; ++i) {
-    const bool eg_first = (i % 2) == 0;
-    std::unique_ptr<Agent> p0 = eg_first ? eg(0) : hb(0);
-    std::unique_ptr<Agent> p1 = eg_first ? hb(0) : eg(0);
-    Game g(*p0, *p1, dict, base_seed + static_cast<uint64_t>(i));
-    g.play();
-    const int eg_seat = eg_first ? 0 : 1;
-    total_spread += g.score(eg_seat) - g.score(1 - eg_seat);
+  int played = 0;
+  for (int i = 0; i < (games + 1) / 2; ++i) {
+    const uint64_t seed = base_seed + static_cast<uint64_t>(i);
+    for (int eg_seat = 0; eg_seat < 2; ++eg_seat) {
+      std::unique_ptr<Agent> p0 = eg_seat == 0 ? eg(0) : hb(0);
+      std::unique_ptr<Agent> p1 = eg_seat == 0 ? hb(0) : eg(0);
+      Game g(*p0, *p1, dict, seed);
+      g.play();
+      total_spread += g.score(eg_seat) - g.score(1 - eg_seat);
+      ++played;
+    }
   }
-  return games ? static_cast<double>(total_spread) / games : 0.0;
+  return played ? static_cast<double>(total_spread) / played : 0.0;
 }
 
 void print_games_row(const char* config, const std::string& budget, double total_s, int games,
