@@ -204,17 +204,21 @@ target_link_libraries(harvest_bingo_positions_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# gtest_discover_tests registers each TEST() in a binary as its own ctest
+# entry, so ctest reports and filters at single-test granularity.
+include(GoogleTest)
+
 add_executable(scribblez_tests
   tests/tests_main.cpp
   src/lexicon/hasty_equity.cpp
   src/lexicon/leave_values.cpp)
-target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json)
+target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
 # Point the tests at the conventional local lexicon path so they cross-validate
 # against the real GADDAG when one is present (the .kwg is not committed; the
 # test skips gracefully if absent).
 target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="${CMAKE_SOURCE_DIR}/data/lexica/NWL23.kwg")
-add_test(NAME scribblez_tests COMMAND scribblez_tests)
+gtest_discover_tests(scribblez_tests)
 
 # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
 # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
