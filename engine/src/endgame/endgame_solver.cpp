@@ -265,7 +265,7 @@ int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
 int32_t EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply) {
   if (aborting_) return 0;
   ++nodes_;
-  if (cur_id_depth_ > 1 && nodes_ > budget_) {
+  if (nodes_ > budget_) {
     aborting_ = true;
     return 0;
   }
@@ -342,7 +342,7 @@ int32_t EndgameSolver::run_root(int depth, std::vector<std::pair<Move, int32_t>>
       if (alpha < value && value < beta) value = -negamax(depth - 1, -beta, -alpha, 1);
     }
     unmake(0);
-    if (aborting_) return best;
+    if (aborting_) break;  // the aborted subtree's value is meaningless; keep best-so-far
     rm.second = value;
     if (value > best) {
       best = value;
@@ -385,10 +385,20 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   EndgameResult result;
   result.best = root_moves[0].first;
   for (int depth = 1; depth <= max_plies; ++depth) {
-    cur_id_depth_ = depth;
-    Move best_move;
+    Move best_move = root_moves[0].first;
     const int32_t value = run_root(depth, root_moves, &best_move);
-    if (aborting_) break;
+    if (aborting_) {
+      // Budget exhausted mid-iteration: the last completed iteration's result
+      // stands. When not even the first iteration finished, fall back to the
+      // best fully-searched root move of the partial pass -- root moves are
+      // estimate-ordered, so the strongest candidates were searched first --
+      // or, when no root move completed, the estimate-ordered first move.
+      if (result.depth_completed == 0 && value > -kInf) {
+        result.best = best_move;
+        result.value = value;
+      }
+      break;
+    }
     result.best = best_move;
     result.value = value;
     result.depth_completed = depth;

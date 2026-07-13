@@ -19,6 +19,7 @@ struct EndgameResult {
   int32_t value = 0;        // optimal final spread (solving score - opponent
                             // score, after end-of-game adjustments)
   int depth_completed = 0;  // deepest fully-completed iterative-deepening depth
+                            // (0: the budget ran out inside the first iteration)
   uint64_t nodes = 0;       // negamax entries + greedy-playout plies spent
 };
 
@@ -44,8 +45,11 @@ class EndgameSolver {
   // Solve the position for the side holding my_rack (to move). Both racks must
   // be the actual remaining tiles (bag empty). scoreless_turns is the number of
   // consecutive zero-score turns already played in the real game. The search
-  // spends at most node_budget nodes and looks at most max_plies deep; depth 1
-  // always completes so a legal move is always returned.
+  // looks at most max_plies deep, and node_budget is a hard cap on nodes spent
+  // (exceeded by at most one greedy playout's plies before the abort lands). A
+  // legal move is always returned: the last completed iteration's best, else the
+  // best fully-searched root move of the partial first iteration, else the
+  // estimate-ordered top root move.
   EndgameResult solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
                       const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
                       uint64_t node_budget, int max_plies);
@@ -123,10 +127,9 @@ class EndgameSolver {
 
   std::vector<Frame> frames_;  // make/unmake stack, indexed by path length
 
-  // Budget / iterative-deepening control.
+  // Budget control.
   uint64_t nodes_ = 0;
   uint64_t budget_ = 0;
-  int cur_id_depth_ = 0;  // depth of the running iterative-deepening iteration
   bool aborting_ = false;
 
   std::vector<TTEntry> tt_;

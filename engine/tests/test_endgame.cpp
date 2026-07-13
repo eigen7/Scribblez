@@ -482,29 +482,37 @@ TEST(EndgameSolver, Determinism) {
   }
 }
 
-// A node budget of 1 still returns a legal best move (depth 1 always completes),
-// and larger budgets never complete a shallower depth than smaller ones.
+// The node budget is a hard cap: nodes spent never exceed it by more than one
+// greedy playout's plies (the overshoot before the next negamax entry detects
+// exhaustion), a legal move comes back even at absurdly small budgets (where
+// depth_completed may be 0), and depth/nodes are monotone in the budget.
 TEST(EndgameSolver, NodeBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xB0DA711Eu);
-  const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
   EndgameSolver solver;
+  // One playout can run past the cap before the abort lands (kMaxPlayout = 40
+  // plies), plus the detecting node itself.
+  constexpr uint64_t kSlack = 41;
 
-  solver.clear();
-  const EndgameResult tiny = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                          p.opp_score, 0, /*node_budget=*/1, 12);
-  EXPECT_GE(tiny.depth_completed, 1);  // a move is always returned
-
-  int prev_depth = 0;
-  uint64_t prev_nodes = 0;
-  for (uint64_t budget : {1ull, 50ull, 500ull, 5000ull, 200000ull}) {
-    solver.clear();
-    const EndgameResult r =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget, 12);
-    EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
-    EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
-    prev_depth = r.depth_completed;
-    prev_nodes = r.nodes;
+  for (int i = 0; i < 10; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/4);
+    const std::set<std::string> legal = key_set(MoveGenerator(p.board, d).generate(p.my_rack));
+    int prev_depth = 0;
+    uint64_t prev_nodes = 0;
+    for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull, 200000ull}) {
+      solver.clear();
+      const EndgameResult r =
+        solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget, 12);
+      EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
+      EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
+      EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
+      // The returned move is always legal: a pass or a generated play.
+      if (r.best.type() != MoveType::PASS) {
+        EXPECT_TRUE(legal.count(move_key(r.best)) > 0) << "budget " << budget << " position " << i;
+      }
+      prev_depth = r.depth_completed;
+      prev_nodes = r.nodes;
+    }
   }
 }
 
