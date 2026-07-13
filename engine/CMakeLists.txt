@@ -176,6 +176,17 @@ target_link_libraries(board_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# Endgame-solver cost / whole-game-throughput benchmark (docs: phase-B endgame
+# solver). Pure CPU: no neural path, so it does not link scribblez_nn.
+add_executable(endgame_bench apps/endgame_bench.cpp)
+target_link_libraries(endgame_bench PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 # One-off Monte-Carlo ground-truth generator for the position-evaluation test dataset.
 add_executable(monte_carlo_sim_tool apps/monte_carlo_sim_tool.cpp)
 target_link_libraries(monte_carlo_sim_tool PRIVATE
