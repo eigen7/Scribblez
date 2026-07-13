@@ -220,6 +220,16 @@ target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
 gtest_discover_tests(scribblez_tests)
 
+# Endgame solver tests: Board make/unmake round-trips and EndgameSolver
+# correctness (brute-force differential, oracle positions, determinism, node
+# budget, cross-turn transposition-table reuse). Gated lexicon cases read the
+# same container mount as scribblez_tests and skip gracefully when it is absent.
+add_executable(test_endgame tests/test_endgame.cpp)
+target_link_libraries(test_endgame PRIVATE scribblez_core GTest::gtest_main)
+target_compile_definitions(test_endgame PRIVATE
+  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+gtest_discover_tests(test_endgame)
+
 # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
 # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
 # parity. Compiles the agent's selection TU (not the factory) directly. The

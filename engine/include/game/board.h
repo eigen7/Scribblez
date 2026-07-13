@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 
@@ -58,6 +59,42 @@ struct CrossCheck {
   bool has_neighbor = false;        // true iff a perpendicular run touches this square
 };
 
+// Records everything Board::apply(move, undo) changes so Board::unapply(undo)
+// can revert it exactly: each overwritten square, each overwritten cache entry
+// (cross-check or GADDAG anchor, per orientation), and the prior validity flag.
+// Every mutation is logged as (location, old value) in write order, so undo
+// restores them in reverse -- correct even when one apply touches a location
+// more than once. The first move on an empty board rewrites every cache entry
+// (a full recompute), so the entry lists are std::vectors rather than a
+// fixed-capacity buffer sized for one incremental update region.
+struct BoardUndo {
+  struct SquareRec {
+    uint16_t idx;
+    Glyph old;
+  };
+  struct CrossRec {
+    uint8_t transposed;
+    uint16_t idx;
+    CrossCheck old;
+  };
+  struct AnchorRec {
+    uint8_t transposed;
+    uint16_t idx;
+    bool old;
+  };
+
+  std::vector<SquareRec> squares;
+  std::vector<CrossRec> crosses;
+  std::vector<AnchorRec> anchors;
+  bool prev_caches_valid = false;
+
+  void clear() {
+    squares.clear();
+    crosses.clear();
+    anchors.clear();
+  }
+};
+
 class Board {
  public:
   Board();
@@ -73,6 +110,17 @@ class Board {
   // valid, they are updated incrementally for the placed tiles; otherwise they
   // are left invalid for a later full rebuild via ensure_movegen_caches().
   void apply(const Move& move);
+
+  // As apply(move), but records every square, cache entry, and validity-flag
+  // change into `undo` so a subsequent unapply(undo) restores the exact prior
+  // state (squares, both cross-check tables, both anchor tables, and the
+  // caches-valid flag). This is the make half of the endgame solver's
+  // make/unmake; there is no draw/rack bookkeeping here -- that is the caller's.
+  void apply(const Move& move, BoardUndo* undo);
+
+  // Revert the changes recorded in `undo` by a prior apply(move, &undo),
+  // restoring the board and its move-generation caches bit-for-bit.
+  void unapply(const BoardUndo& undo);
 
   // Pretty-print the board to a string.
   std::string to_string() const;
@@ -118,6 +166,11 @@ class Board {
   void recompute_all_caches() const;
   void update_caches_after_place(const std::pair<int, int>* placed, int n) const;
 
+  // Cache-entry writers that log the prior value to `recorder_` when one is
+  // active, so make/unmake captures exactly the entries an update touches.
+  void set_cross_(int transposed, int idx, const CrossCheck& cc) const;
+  void set_anchor_(int transposed, int idx, bool value) const;
+
   std::array<Glyph, BOARD_SIZE * BOARD_SIZE> squares_{};
 
   // Cache state. Mutable so const accessors (used on const Board&) can lazily
@@ -126,6 +179,10 @@ class Board {
   mutable bool caches_valid_ = false;
   mutable std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE> cross_[2];
   mutable std::array<bool, BOARD_SIZE * BOARD_SIZE> ganchor_[2]{};
+
+  // When non-null, the setters below log each overwritten cache entry here so
+  // apply(move, &undo) can be reverted. Only set for the duration of one apply.
+  mutable BoardUndo* recorder_ = nullptr;
 };
 
 }  // namespace scribblez

@@ -65,7 +65,13 @@ bool Board::empty_board() const {
   return true;
 }
 
-void Board::apply(const Move& move) {
+void Board::apply(const Move& move) { apply(move, nullptr); }
+
+void Board::apply(const Move& move, BoardUndo* undo) {
+  if (undo) {
+    undo->clear();
+    undo->prev_caches_valid = caches_valid_;
+  }
   if (move.type() != MoveType::PLAY) return;
   const bool had_caches = caches_valid_;
   const bool was_empty = empty_board();
@@ -79,19 +85,49 @@ void Board::apply(const Move& move) {
     const int r = horizontal ? start : along;
     const int c = horizontal ? along : start;
     if (!in_bounds(r, c)) break;
+    const int idx = r * BOARD_SIZE + c;
+    if (undo) undo->squares.push_back({static_cast<uint16_t>(idx), squares_[idx]});
     set(r, c, move.glyph(np));  // clears caches_valid_
     placed[np++] = {r, c};
   }
   if (np == 0 || !had_caches) return;  // nothing placed, or caches were stale anyway
 
   // Keep the caches in sync without a full rescan. The first move (empty board
-  // becoming non-empty) flips the anchor model, so just rebuild once.
+  // becoming non-empty) flips the anchor model, so just rebuild once. All cache
+  // writes flow through set_cross_/set_anchor_ so `undo` captures exactly the
+  // entries touched.
+  recorder_ = undo;
   if (was_empty) {
     recompute_all_caches();
   } else {
     update_caches_after_place(placed.data(), np);
   }
+  recorder_ = nullptr;
   caches_valid_ = true;
+}
+
+void Board::unapply(const BoardUndo& undo) {
+  for (auto it = undo.crosses.rbegin(); it != undo.crosses.rend(); ++it)
+    cross_[it->transposed][it->idx] = it->old;
+  for (auto it = undo.anchors.rbegin(); it != undo.anchors.rend(); ++it)
+    ganchor_[it->transposed][it->idx] = it->old;
+  for (auto it = undo.squares.rbegin(); it != undo.squares.rend(); ++it)
+    squares_[it->idx] = it->old;
+  caches_valid_ = undo.prev_caches_valid;
+}
+
+void Board::set_cross_(int transposed, int idx, const CrossCheck& cc) const {
+  if (recorder_)
+    recorder_->crosses.push_back(
+      {static_cast<uint8_t>(transposed), static_cast<uint16_t>(idx), cross_[transposed][idx]});
+  cross_[transposed][idx] = cc;
+}
+
+void Board::set_anchor_(int transposed, int idx, bool value) const {
+  if (recorder_)
+    recorder_->anchors.push_back(
+      {static_cast<uint8_t>(transposed), static_cast<uint16_t>(idx), ganchor_[transposed][idx]});
+  ganchor_[transposed][idx] = value;
 }
 
 std::string Board::to_string() const {
@@ -220,37 +256,40 @@ bool Board::gaddag_anchor_at(bool t, int r, int c) const {
 void Board::recompute_all_caches() const {
   const bool empty = empty_board();
   for (int t = 0; t < 2; ++t) {
-    auto& cross = cross_[t];
-    auto& anchor = ganchor_[t];
     for (int r = 0; r < BOARD_SIZE; ++r)
-      for (int c = 0; c < BOARD_SIZE; ++c) cross[r * BOARD_SIZE + c] = cross_check_at(t, r, c);
+      for (int c = 0; c < BOARD_SIZE; ++c)
+        set_cross_(t, r * BOARD_SIZE + c, cross_check_at(t, r, c));
     if (empty) {
-      anchor.fill(false);
-      anchor[CENTER * BOARD_SIZE + CENTER] = true;  // sole opening anchor
+      // A full rebuild of an empty board never runs under an undo recorder
+      // (the first placed tile makes the board non-empty before this branch),
+      // so the anchor reset is a direct write.
+      ganchor_[t].fill(false);
+      ganchor_[t][CENTER * BOARD_SIZE + CENTER] = true;  // sole opening anchor
     } else {
       for (int r = 0; r < BOARD_SIZE; ++r)
-        for (int c = 0; c < BOARD_SIZE; ++c) anchor[r * BOARD_SIZE + c] = gaddag_anchor_at(t, r, c);
+        for (int c = 0; c < BOARD_SIZE; ++c)
+          set_anchor_(t, r * BOARD_SIZE + c, gaddag_anchor_at(t, r, c));
     }
   }
 }
 
 void Board::update_caches_after_place(const std::pair<int, int>* placed, int n) const {
   for (int t = 0; t < 2; ++t) {
-    auto& cross = cross_[t];
     for (int i = 0; i < n; ++i) {
       // View coordinates of the placed square in this orientation.
       const int vr = t ? placed[i].second : placed[i].first;
       const int vc = t ? placed[i].first : placed[i].second;
       // The placed square is now filled; its cross-check is unused.
-      cross[vr * BOARD_SIZE + vc] = CrossCheck{};
+      set_cross_(t, vr * BOARD_SIZE + vc, CrossCheck{});
       // Only the empty squares at the two ends of the (now extended)
       // perpendicular run through column vc can change.
       int top = vr;
       while (top - 1 >= 0 && !oriented_at(top - 1, vc, t).is_empty()) --top;
       int bot = vr;
       while (bot + 1 < BOARD_SIZE && !oriented_at(bot + 1, vc, t).is_empty()) ++bot;
-      if (top - 1 >= 0) cross[(top - 1) * BOARD_SIZE + vc] = cross_check_at(t, top - 1, vc);
-      if (bot + 1 < BOARD_SIZE) cross[(bot + 1) * BOARD_SIZE + vc] = cross_check_at(t, bot + 1, vc);
+      if (top - 1 >= 0) set_cross_(t, (top - 1) * BOARD_SIZE + vc, cross_check_at(t, top - 1, vc));
+      if (bot + 1 < BOARD_SIZE)
+        set_cross_(t, (bot + 1) * BOARD_SIZE + vc, cross_check_at(t, bot + 1, vc));
     }
   }
 
@@ -265,7 +304,7 @@ void Board::update_caches_after_place(const std::pair<int, int>* placed, int n) 
       for (int t = 0; t < 2; ++t) {
         const int vr = t ? ac : ar;
         const int vc = t ? ar : ac;
-        ganchor_[t][vr * BOARD_SIZE + vc] = gaddag_anchor_at(t, vr, vc);
+        set_anchor_(t, vr * BOARD_SIZE + vc, gaddag_anchor_at(t, vr, vc));
       }
     }
   }
