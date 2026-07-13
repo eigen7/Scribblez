@@ -144,8 +144,4 @@ COPY entrypoint.sh    /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-ARG VERSION="3.7.0"
-LABEL version=$VERSION
-ENV DOCKER_IMAGE_VERSION=$VERSION
-
 CMD ["bash"]

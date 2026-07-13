@@ -60,6 +60,3 @@ ENV PYTHONUNBUFFERED=1
 
 COPY bootstrap.py /opt/scribblez/bootstrap.py
 ENTRYPOINT ["python3", "/opt/scribblez/bootstrap.py"]
-
-ARG VERSION="1.0.0"
-LABEL version=$VERSION

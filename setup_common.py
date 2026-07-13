@@ -30,16 +30,13 @@ from submodules.devenv_utils import (  # noqa: E402
     check_setup_version as _check_setup_version,
 )
 
-# Bump SETUP_VERSION manually to force all users to rerun the setup wizard.
+# Bump SETUP_VERSION manually to force all users to rerun the setup wizard --
+# in particular whenever docker-setup/ changes in a way that requires users to
+# rebuild the image, since the wizard rebuilds it.
 #
 # Increasing the major version (the first number) causes the setup wizard to
 # rm -rf the target/ directory - use this to invalidate existing builds.
 SETUP_VERSION = "2.10.0"
-
-# Bumped manually whenever the Dockerfile changes in a way that requires users
-# to rebuild. Checked at run_docker.py launch time against the running image's
-# `version` label.
-MINIMUM_REQUIRED_IMAGE_VERSION = "3.7.0"
 
 # Ports forwarded host -> container by run_docker.py.
 REQUIRED_PORTS = [
@@ -90,7 +87,6 @@ def make_config() -> DevenvConfig:
         repo_root=REPO_ROOT,
         docker_context=REPO_ROOT / "docker-setup" / "local",
         required_ports=REQUIRED_PORTS,
-        min_image_version=MINIMUM_REQUIRED_IMAGE_VERSION,
         setup_version=SETUP_VERSION,
         extra_docker_args=GITEA_PORT_ARGS,
     )
