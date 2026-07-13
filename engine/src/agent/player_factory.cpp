@@ -1,6 +1,7 @@
 #include "agent/player_factory.h"
 
 #include "agent/agent.h"
+#include "agent/endgame_hasty_bot.h"
 #include "agent/human_web_agent.h"
 #include "agent/macondo_bot.h"
 #include "agent/neural_agent.h"
@@ -36,10 +37,10 @@ namespace po = boost::program_options;
 // share one source of truth.
 po::options_description universal_player_options(std::string& type_str, std::string& name) {
   po::options_description desc;
-  desc.add_options()                                         //
-    ("type", po::value<std::string>(&type_str)->required(),  //
-     "player type: greedy | human | hastybot")               //
-    ("name", po::value<std::string>(&name),                  //
+  desc.add_options()                                               //
+    ("type", po::value<std::string>(&type_str)->required(),        //
+     "player type: greedy | human | hastybot | hastybot-endgame")  //
+    ("name", po::value<std::string>(&name),                        //
      "display name shown in the UI");
   return desc;
 }
@@ -72,9 +73,9 @@ PlayerSpec parse_player_spec(const std::string& spec) {
 
   out.type = boost::to_lower_copy(type_str);
   if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
-      out.type != "neural") {
+      out.type != "hastybot-endgame" && out.type != "neural") {
     throw std::runtime_error("bad --player spec \"" + spec + "\": unknown type '" + type_str +
-                             "' (expected greedy, human, hastybot, or neural)");
+                             "' (expected greedy, human, hastybot, hastybot-endgame, or neural)");
   }
   return out;
 }
@@ -88,6 +89,9 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
   }
   if (spec.type == "hastybot") {
     return HastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
+  }
+  if (spec.type == "hastybot-endgame") {
+    return EndgameHastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "neural") {
     return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name);
@@ -104,6 +108,7 @@ std::string PlayerSpec::display_name() const {
   if (!name.empty()) return name;
   if (type == "human") return "You";
   if (type == "hastybot") return "HastyBot";
+  if (type == "hastybot-endgame") return "EndgameHastyBot";
   if (type == "greedy") return "Greedy";
   if (type == "neural") return "Neural";
   return type;  // unknown types: fall back to the literal type string
@@ -148,6 +153,8 @@ std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
   o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
+  o << "--player \"--type=hastybot-endgame [options]\"\n"
+    << EndgameHastyBotAgent::options_help() << "\n";
   o << "--player \"--type=neural [options]\"\n" << NeuralAgent::options_help() << "\n";
   o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
   std::string type_str, name;  // scratch binding targets; never read here

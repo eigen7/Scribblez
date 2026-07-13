@@ -41,6 +41,7 @@ add_library(scribblez_core STATIC
   src/lexicon/leave_values.cpp
   src/lexicon/lexicon.cpp
   src/agent/macondo_bot.cpp
+  src/agent/endgame_hasty_bot.cpp
   src/selfplay/monte_carlo_sim.cpp
   src/selfplay/sim_runner.cpp
   src/selfplay/sim_observation_log.cpp
@@ -225,8 +226,9 @@ gtest_discover_tests(scribblez_tests)
 # correctness (brute-force differential, oracle positions, determinism, node
 # budget, cross-turn transposition-table reuse). Gated lexicon cases read the
 # same container mount as scribblez_tests and skip gracefully when it is absent.
-add_executable(test_endgame tests/test_endgame.cpp)
-target_link_libraries(test_endgame PRIVATE scribblez_core GTest::gtest_main)
+add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
+target_link_libraries(test_endgame PRIVATE
+  scribblez_core Boost::program_options GTest::gtest_main)
 target_compile_definitions(test_endgame PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
 gtest_discover_tests(test_endgame)
