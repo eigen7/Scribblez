@@ -416,7 +416,6 @@ TEST(Board, CachesIncrementalMatchesFull) {
 // failed) when the define is absent or the file is missing -- the .kwg binary
 // is not committed.
 TEST(Dictionary, RealKwgCrossValidation) {
-#ifdef SCRIBBLEZ_DEFAULT_KWG
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) {
     GTEST_SKIP() << "no lexicon at " << path;
@@ -427,9 +426,6 @@ TEST(Dictionary, RealKwgCrossValidation) {
   ASSERT_TRUE(d.contains("PARTIED"));
   ASSERT_FALSE(d.contains("QXZ"));
   cross_validate(d, "real-kwg", 99u, /*games=*/6, /*steps_per_game=*/8);
-#else
-  GTEST_SKIP() << "SCRIBBLEZ_DEFAULT_KWG undefined";
-#endif
 }
 
 // ===========================================================================
@@ -1963,15 +1959,11 @@ TEST(Game, EndRackOutBonus) {
   // is the normal end condition. Skip gracefully if no real lexicon is
   // available -- the stalemate test below still covers Game::play()'s other
   // end-of-game arithmetic.
-#ifdef SCRIBBLEZ_DEFAULT_KWG
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) {
     GTEST_SKIP() << "no lexicon at " << path;
   }
   Dictionary dict = Dictionary::load_kwg(path);
-#else
-  GTEST_SKIP() << "SCRIBBLEZ_DEFAULT_KWG undefined";
-#endif
 
   bool found_out = false;
   for (uint64_t seed = 0; seed < 20 && !found_out; ++seed) {
@@ -3018,16 +3010,14 @@ TEST(LeaveValues, Synthetic) {
 }
 
 TEST(LeaveValues, RealKwg) {
-  // Use the real NWL23 KLV if available; skip otherwise.
-  // The default leaves file lives alongside the KWG.
-  std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
-  std::filesystem::path klv_path = std::filesystem::path(kwg_path).parent_path().parent_path() /
-                                   "strategy" / "NWL23" / "leaves.klv2";
+  // The real NWL23 leave values ship with the Macondo checkout; skip if that
+  // is not installed.
+  const std::string klv_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::filesystem::exists(klv_path)) {
     GTEST_SKIP() << "no leaves.klv2 at " << klv_path;
   }
 
-  LeaveValues lv = LeaveValues::load(klv_path.string());
+  LeaveValues lv = LeaveValues::load(klv_path);
 
   // Single blank is a well-known leave with strongly positive value.
   Rack blank_leave;
@@ -3436,22 +3426,10 @@ class ShadowCheckAgent : public scribblez::Agent {
 
 TEST(HastyEquity, ShadowMatchesReference) {
   namespace fs = std::filesystem;
-  std::string kwg;
-  for (const char* cand : {
-#ifdef SCRIBBLEZ_DEFAULT_KWG
-         SCRIBBLEZ_DEFAULT_KWG,
-#endif
-         "/workspace/mount/lexica/NWL23.kwg",
-         "/workspace/mount/macondo/data/lexica/gaddag/NWL23.kwg"}) {
-    std::error_code ec;
-    if (fs::exists(cand, ec)) {
-      kwg = cand;
-      break;
-    }
-  }
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves = scribblez::HastyEquity::default_leaves_path("NWL23");
   const std::string peg = scribblez::HastyEquity::default_peg_path();
-  if (kwg.empty() || !fs::exists(leaves)) {
+  if (!fs::exists(kwg) || !fs::exists(leaves)) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
   scribblez::Dictionary dict = scribblez::Dictionary::load_kwg(kwg);
@@ -3564,22 +3542,10 @@ class CapturingAgent : public scribblez::Agent {
 TEST(WordMap, MatchesGaddagRealLexicon) {
   namespace fs = std::filesystem;
   using namespace scribblez;
-  std::string kwg;
-  for (const char* cand : {
-#ifdef SCRIBBLEZ_DEFAULT_KWG
-         SCRIBBLEZ_DEFAULT_KWG,
-#endif
-         "/workspace/mount/lexica/NWL23.kwg",
-         "/workspace/mount/macondo/data/lexica/gaddag/NWL23.kwg"}) {
-    std::error_code ec;
-    if (fs::exists(cand, ec)) {
-      kwg = cand;
-      break;
-    }
-  }
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves = HastyEquity::default_leaves_path("NWL23");
   const std::string peg = HastyEquity::default_peg_path();
-  if (kwg.empty() || !fs::exists(leaves)) {
+  if (!fs::exists(kwg) || !fs::exists(leaves)) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
   Dictionary dict = Dictionary::load_kwg(kwg);
