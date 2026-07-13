@@ -213,11 +213,11 @@ add_executable(scribblez_tests
   src/lexicon/hasty_equity.cpp
   src/lexicon/leave_values.cpp)
 target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
-# Point the tests at the conventional local lexicon path so they cross-validate
-# against the real GADDAG when one is present (the .kwg is not committed; the
-# test skips gracefully if absent).
+# Point the tests at the container's lexicon mount (populated by
+# setup_wizard.py) so they cross-validate against the real GADDAG when it is
+# installed (the .kwg is not committed; the tests skip gracefully if absent).
 target_compile_definitions(scribblez_tests PRIVATE
-  SCRIBBLEZ_DEFAULT_KWG="${CMAKE_SOURCE_DIR}/data/lexica/NWL23.kwg")
+  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
 gtest_discover_tests(scribblez_tests)
 
 # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
