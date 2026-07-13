@@ -1,0 +1,136 @@
+#pragma once
+
+#include "game/board.h"
+#include "game/move.h"
+#include "game/rack.h"
+
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+namespace scribblez {
+
+class Dictionary;
+
+// Result of a single endgame solve, from the perspective of the side to move
+// at the solved position ("the solving side").
+struct EndgameResult {
+  Move best;                // best move for the solving side
+  int32_t value = 0;        // optimal final spread (solving score - opponent
+                            // score, after end-of-game adjustments)
+  int depth_completed = 0;  // deepest fully-completed iterative-deepening depth
+  uint64_t nodes = 0;       // negamax entries + greedy-playout plies spent
+};
+
+// Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
+// racks known. It is a self-contained negamax search (alpha-beta + principal
+// variation search + iterative deepening + a transposition table) with a greedy
+// leaf playout, and depends only on (board, dictionary, racks, scores) -- no
+// equity model or leave tables.
+//
+// Scoreless-turn handling is compressed relative to the full game rule (six
+// consecutive zero-score turns end the game as a stalemate). Because a pass
+// leaves the position unchanged, a chain of passes beyond the first adds no new
+// information to the search, so the solver ends the game after an internal cap
+// of two consecutive scoreless turns (each side then subtracts its own rack
+// value). At solve entry the caller's real scoreless-turn count is rebased to 1
+// when positive and 0 otherwise. Any play resets the internal count to 0,
+// mirroring the real game (even a zero-scoring play).
+class EndgameSolver {
+ public:
+  // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
+  explicit EndgameSolver(int tt_log2_entries = 18);
+
+  // Solve the position for the side holding my_rack (to move). Both racks must
+  // be the actual remaining tiles (bag empty). scoreless_turns is the number of
+  // consecutive zero-score turns already played in the real game. The search
+  // spends at most node_budget nodes and looks at most max_plies deep; depth 1
+  // always completes so a legal move is always returned.
+  EndgameResult solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
+                      const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
+                      uint64_t node_budget, int max_plies);
+
+  // Wipe the transposition table (call between games; entries are spread-rebased
+  // and thus reusable across turns within one game, but not across games).
+  void clear();
+
+ private:
+  enum TTFlag : uint8_t { kEmpty = 0, kExact, kLower, kUpper };
+
+  // A transposition-table entry (32 bytes): the full hash (to reject index
+  // collisions), the best move for ordering, the search value stored relative
+  // to the node's spread (so it is reusable at any absolute score), and the
+  // bound flag + search depth that produced it.
+  struct TTEntry {
+    uint64_t hash = 0;
+    Move best;
+    int32_t score_rel = 0;
+    uint8_t flag = kEmpty;
+    uint8_t depth = 0;
+  };
+
+  // Everything one make() changes, so unmake() can restore it: the board undo,
+  // both scores, the scoreless count, the game-over flag, the incremental board
+  // hash, the side that moved, and the move (to return its tiles to the rack).
+  struct Frame {
+    BoardUndo board_undo;
+    int32_t scores[2] = {0, 0};
+    int scoreless = 0;
+    bool game_over = false;
+    uint64_t board_hash = 0;
+    int mover = 0;
+    Move move;
+  };
+
+  // --- Iterative deepening / search ---------------------------------------
+  int32_t run_root(int depth, std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
+  int32_t negamax(int depth, int32_t alpha, int32_t beta, int ply);
+  int32_t greedy_playout(uint64_t node_key, int ply);
+
+  // --- Make / unmake ------------------------------------------------------
+  void make(const Move& move, int ply);
+  void unmake(int ply);
+  void xor_play_hash(const Move& move);
+
+  // --- Position keys / evaluation helpers ---------------------------------
+  uint64_t compute_board_hash() const;
+  uint64_t node_hash() const;
+  int32_t spread_stm() const { return scores_[stm_] - scores_[1 - stm_]; }
+
+  // --- Move ordering / greedy choice --------------------------------------
+  int32_t order_estimate(const Move& move, const Move& tt_move, bool have_tt_move) const;
+  void order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
+                   bool have_tt_move) const;
+  const Move& greedy_pick(const std::vector<Move>& plays) const;
+  double playout_adjusted(const Move& move) const;
+  int placed_face_value(const Move& move) const;
+
+  // --- Transposition table ------------------------------------------------
+  TTEntry* tt_probe(uint64_t hash);
+  void tt_store(uint64_t hash, int32_t score_rel, uint8_t flag, const Move& best, int depth);
+  void tt_store_playout(uint64_t hash, int32_t score_rel);
+
+  // Search position (one scratch board reused across the whole solve) and the
+  // side-to-move state that make/unmake maintain alongside it.
+  Board board_;
+  const Dictionary* dict_ = nullptr;
+  Rack racks_[2];
+  int32_t scores_[2] = {0, 0};
+  int scoreless_ = 0;
+  int stm_ = 0;  // seat to move; 0 is the solving side at the root
+  bool game_over_ = false;
+  uint64_t board_hash_ = 0;
+
+  std::vector<Frame> frames_;  // make/unmake stack, indexed by path length
+
+  // Budget / iterative-deepening control.
+  uint64_t nodes_ = 0;
+  uint64_t budget_ = 0;
+  int cur_id_depth_ = 0;  // depth of the running iterative-deepening iteration
+  bool aborting_ = false;
+
+  std::vector<TTEntry> tt_;
+  uint64_t tt_mask_ = 0;
+};
+
+}  // namespace scribblez

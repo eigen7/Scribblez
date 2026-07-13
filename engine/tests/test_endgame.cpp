@@ -3,6 +3,7 @@
 //   - EndgameSolver correctness against a brute-force reference plus oracle
 //     positions, determinism, node-budget behavior, and cross-turn TT reuse.
 
+#include "endgame/endgame_solver.h"
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/move.h"
@@ -32,6 +33,17 @@ Dictionary tiny_dict() {
                                        "TO",  "ON",   "NO",     "IT",     "IS",  "OAT",  "OATS",
                                        "HAT", "HATS", "RAT",    "RATS",   "DOG", "GOD",  "GO",
                                        "OD",  "DO",   "AERIES", "PARTIED"});
+}
+
+Rack rack_from(const std::string& s) {
+  Rack r;
+  for (char c : s) {
+    if (c == '?')
+      r.add(BLANK);
+    else
+      r.add(Tile::from_char(c));
+  }
+  return r;
 }
 
 Rack random_rack(std::mt19937& rng) {
@@ -170,6 +182,136 @@ void roundtrip_random_games(const Dictionary& d, unsigned seed, int games, int s
   }
 }
 
+// ---------------------------------------------------------------------------
+// Brute-force reference: exact endgame value with no transposition table, move
+// ordering, PVS, or leaf playout. Given a depth larger than any possible line
+// length, every leaf is a real game end, so this is the exact optimal final
+// spread from the side-to-move's perspective. It mirrors EndgameSolver's end
+// rules exactly: the out bonus, the internal scoreless cap of 2, and the
+// scoreless rebase at entry.
+// ---------------------------------------------------------------------------
+
+struct RefState {
+  Board board;
+  Rack racks[2];
+  int scores[2];
+  int scoreless;
+  int stm;
+};
+
+// Apply `m` (a play or a pass) to `s` for the side to move, returning the next
+// state and setting `over` when the move ends the game.
+RefState ref_apply(const RefState& s, const Move& m, bool& over) {
+  const int mover = s.stm, opp = 1 - s.stm;
+  RefState ns = s;
+  ns.stm = opp;
+  over = false;
+  if (m.type() == MoveType::PLAY) {
+    ns.board.apply(m);
+    for (int i = 0; i < m.num_glyphs(); ++i) ns.racks[mover].remove(m.glyph(i).rack_tile());
+    ns.scores[mover] += m.score();
+    ns.scoreless = 0;
+    if (ns.racks[mover].empty()) {
+      ns.scores[mover] += 2 * ns.racks[opp].point_value();
+      over = true;
+    }
+  } else {
+    ns.scoreless = s.scoreless + 1;
+    if (ns.scoreless >= 2) {
+      ns.scores[mover] -= ns.racks[mover].point_value();
+      ns.scores[opp] -= ns.racks[opp].point_value();
+      over = true;
+    }
+  }
+  return ns;
+}
+
+int32_t ref_negamax(const RefState& s, const Dictionary& d, int depth) {
+  if (depth == 0) return s.scores[s.stm] - s.scores[1 - s.stm];
+  std::vector<Move> moves = MoveGenerator(s.board, d).generate(s.racks[s.stm]);
+  moves.push_back(Move::pass());
+  const int mover = s.stm, opp = 1 - s.stm;
+  int32_t best = -2'000'000;
+  for (const Move& m : moves) {
+    bool over = false;
+    const RefState ns = ref_apply(s, m, over);
+    const int32_t v = over ? (ns.scores[mover] - ns.scores[opp]) : -ref_negamax(ns, d, depth - 1);
+    best = std::max(best, v);
+  }
+  return best;
+}
+
+RefState make_ref_state(const Board& b, const Rack& my, const Rack& opp, int my_score,
+                        int opp_score, int scoreless_turns) {
+  RefState s;
+  s.board = b;
+  s.racks[0] = my;
+  s.racks[1] = opp;
+  s.scores[0] = my_score;
+  s.scores[1] = opp_score;
+  s.scoreless = scoreless_turns > 0 ? 1 : 0;
+  s.stm = 0;
+  return s;
+}
+
+int32_t ref_solve(const Board& b, const Dictionary& d, const Rack& my, const Rack& opp,
+                  int my_score, int opp_score, int scoreless_turns, int depth) {
+  return ref_negamax(make_ref_state(b, my, opp, my_score, opp_score, scoreless_turns), d, depth);
+}
+
+// Exact value of forcing `first` as the solving side's first move, then optimal
+// play by both sides -- used to prove a specific first move is suboptimal.
+int32_t ref_value_after_first(const Board& b, const Dictionary& d, const Rack& my, const Rack& opp,
+                              int my_score, int opp_score, int scoreless_turns, const Move& first,
+                              int depth) {
+  const RefState s = make_ref_state(b, my, opp, my_score, opp_score, scoreless_turns);
+  bool over = false;
+  const RefState ns = ref_apply(s, first, over);
+  if (over) return ns.scores[0] - ns.scores[1];
+  return -ref_negamax(ns, d, depth);
+}
+
+// A small endgame position: a board seeded with a few random plays, two short
+// racks drawn from a curated tiny-dict letter set (so plays exist but branching
+// stays low), and small random scores.
+struct EndgamePos {
+  Board board;
+  Rack my_rack;
+  Rack opp_rack;
+  int my_score;
+  int opp_score;
+};
+
+EndgamePos random_endgame(std::mt19937& rng, const Dictionary& d, int rack_tiles) {
+  static const char kLetters[] = "ATSOCHEBDGRINO";
+  EndgamePos p;
+  const int setup = std::uniform_int_distribution<int>(1, 3)(rng);
+  for (int k = 0; k < setup; ++k) {
+    const Rack seed = random_rack(rng);
+    const std::vector<Move> plays = MoveGenerator(p.board, d).generate(seed);
+    if (plays.empty()) break;
+    p.board.apply(plays[std::uniform_int_distribution<size_t>(0, plays.size() - 1)(rng)]);
+  }
+  std::uniform_int_distribution<int> letter(0, static_cast<int>(sizeof(kLetters) - 2));
+  for (int i = 0; i < rack_tiles; ++i) {
+    p.my_rack.add(Tile::from_char(kLetters[letter(rng)]));
+    p.opp_rack.add(Tile::from_char(kLetters[letter(rng)]));
+  }
+  p.my_score = std::uniform_int_distribution<int>(0, 40)(rng);
+  p.opp_score = std::uniform_int_distribution<int>(0, 40)(rng);
+  return p;
+}
+
+// The generated move that empties `rack` (goes out) in one, or nullptr.
+const Move* find_out_move(const std::vector<Move>& moves, const Rack& rack) {
+  for (const Move& m : moves)
+    if (m.type() == MoveType::PLAY && m.num_glyphs() == rack.size()) return &m;
+  return nullptr;
+}
+
+constexpr int kRefDepth = 24;  // > any small-endgame line length
+constexpr uint64_t kBigBudget = 1ull << 40;
+
 }  // namespace
 
 TEST(EndgameBoardUndo, RoundtripTinyDict) {
@@ -183,4 +325,215 @@ TEST(EndgameBoardUndo, RoundtripRealLexicon) {
   }
   Dictionary d = Dictionary::load_kwg(path);
   roundtrip_random_games(d, 0xBEEF01u, /*games=*/8, /*steps=*/14);
+}
+
+// The solver's exact value must match the brute-force reference over many
+// randomized small endgames, for both sides to move. With max_plies >= kRefDepth
+// every line resolves to a real game end, so the leaf playout is never consulted
+// and the two searches must agree exactly.
+TEST(EndgameSolver, DifferentialVsBruteForce) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x5EED1234u);
+  int checked = 0;
+  for (int i = 0; i < 120; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
+    solver.clear();
+    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                                         /*scoreless_turns=*/0, kBigBudget, kRefDepth);
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(r.value, ref) << "position " << i << " (solving side to move)";
+
+    // Other parity: opponent's rack/score becomes the side to move.
+    solver.clear();
+    const EndgameResult r2 = solver.solve(p.board, d, p.opp_rack, p.my_rack, p.opp_score,
+                                          p.my_score, 0, kBigBudget, kRefDepth);
+    const int32_t ref2 =
+      ref_solve(p.board, d, p.opp_rack, p.my_rack, p.opp_score, p.my_score, 0, kRefDepth);
+    ASSERT_EQ(r2.value, ref2) << "position " << i << " (opponent to move)";
+    checked += 2;
+  }
+  std::cout << "  differential-checked " << checked << " endgames\n";
+}
+
+// A hand-picked position where an out-in-one exists and its 2x-remaining bonus
+// makes it the optimal play. Verifies the exact value arithmetic and that the
+// chosen move empties the rack.
+TEST(EndgameSolver, OutInOneOptimal) {
+  Dictionary d = tiny_dict();
+  Board b;  // empty board: "GO" opens across the center and empties the rack
+
+  const Rack my = rack_from("GO");
+  const Rack opp = rack_from("BD");  // no tiny-dict word: opponent is stuck
+  const int my_score = 30, opp_score = 25;
+
+  const std::vector<Move> plays = MoveGenerator(b, d).generate(my);
+  const Move* out = find_out_move(plays, my);
+  ASSERT_NE(out, nullptr);
+  const int32_t expected = (my_score + out->score() + 2 * opp.point_value()) - opp_score;
+
+  EndgameSolver solver;
+  const EndgameResult r = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 8);
+  EXPECT_EQ(r.value, expected);
+  EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
+  ASSERT_EQ(r.best.type(), MoveType::PLAY);
+  EXPECT_EQ(r.best.num_glyphs(), my.size());  // the out play
+}
+
+// Neither side can play: two passes end the game as a stalemate, and each side
+// subtracts its own remaining tiles.
+TEST(EndgameSolver, StalematePassPass) {
+  Dictionary d = tiny_dict();
+  Board b;
+  const Rack my = rack_from("VV");   // V appears in no tiny-dict word
+  const Rack opp = rack_from("WW");  // W appears in no tiny-dict word
+  const int my_score = 40, opp_score = 12;
+
+  ASSERT_TRUE(MoveGenerator(b, d).generate(my).empty());
+  ASSERT_TRUE(MoveGenerator(b, d).generate(opp).empty());
+
+  const int32_t expected = (my_score - my.point_value()) - (opp_score - opp.point_value());
+  EndgameSolver solver;
+  const EndgameResult r = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 6);
+  EXPECT_EQ(r.value, expected);
+  EXPECT_EQ(r.best.type(), MoveType::PASS);
+  EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
+}
+
+// One side is stuck while the other plays out over more than one turn. The
+// solver's exact value matches the reference and beats what any single move can
+// secure, since going out requires multiple plays.
+TEST(EndgameSolver, StuckOpponentMultiTurnOut) {
+  Dictionary d = tiny_dict();
+  Board b;
+  const Rack my = rack_from("CATS");  // needs multiple turns to shed all tiles
+  const Rack opp = rack_from("VW");   // stuck: no legal play, ever
+  const int my_score = 10, opp_score = 8;
+
+  ASSERT_TRUE(MoveGenerator(b, d).generate(opp).empty());
+
+  EndgameSolver solver;
+  const EndgameResult deep = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 12);
+  const int32_t ref = ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth);
+  EXPECT_EQ(deep.value, ref);
+  // No single opening play empties this 4-tile rack (the longest tiny-dict word
+  // reachable here is 4 letters only via the board), so the optimal line spans
+  // multiple turns; confirm the value strictly beats a here-and-now pass.
+  const int32_t pass_now = (my_score - my.point_value()) - (opp_score - opp.point_value());
+  EXPECT_GT(deep.value, pass_now);
+}
+
+// Depth-1 play is greedy; deeper search can find a higher-value hold-back. Scan
+// randomized positions for one where the greedy first move is provably
+// suboptimal (optimal play after it yields less than the true optimum) and
+// assert the deep solve's exact value matches the reference.
+TEST(EndgameSolver, GreedyHoldbackSuboptimal) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xA5A5F00Du);
+  bool found = false;
+  for (int i = 0; i < 400 && !found; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    solver.clear();
+    const EndgameResult deep = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                            p.opp_score, 0, kBigBudget, kRefDepth);
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(deep.value, ref);
+
+    solver.clear();
+    const EndgameResult greedy = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                              p.opp_score, 0, kBigBudget, /*max_plies=*/1);
+    ASSERT_EQ(greedy.depth_completed, 1);
+    const int32_t greedy_true = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                      p.opp_score, 0, greedy.best, kRefDepth);
+    if (greedy_true < ref) {
+      // The greedy first move genuinely forfeits value a deeper hold-back keeps.
+      EXPECT_NE(greedy.best, deep.best);
+      found = true;
+    }
+  }
+  ASSERT_TRUE(found) << "no greedy-suboptimal position found in the scan";
+}
+
+// Identical inputs and budget must produce identical results, both across a
+// clear() on the same solver and against a freshly constructed solver.
+TEST(EndgameSolver, Determinism) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xD37E211Du);
+  for (int i = 0; i < 20; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    EndgameSolver s1;
+    const EndgameResult a =
+      s1.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    s1.clear();
+    const EndgameResult b =
+      s1.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    EndgameSolver s2;
+    const EndgameResult c =
+      s2.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    ASSERT_EQ(a.value, b.value);
+    ASSERT_EQ(a.value, c.value);
+    ASSERT_EQ(a.depth_completed, b.depth_completed);
+    ASSERT_EQ(a.nodes, b.nodes);
+    ASSERT_EQ(a.nodes, c.nodes);
+    ASSERT_TRUE(a.best == b.best && a.best == c.best);
+  }
+}
+
+// A node budget of 1 still returns a legal best move (depth 1 always completes),
+// and larger budgets never complete a shallower depth than smaller ones.
+TEST(EndgameSolver, NodeBudget) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xB0DA711Eu);
+  const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+  EndgameSolver solver;
+
+  solver.clear();
+  const EndgameResult tiny = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                          p.opp_score, 0, /*node_budget=*/1, 12);
+  EXPECT_GE(tiny.depth_completed, 1);  // a move is always returned
+
+  int prev_depth = 0;
+  uint64_t prev_nodes = 0;
+  for (uint64_t budget : {1ull, 50ull, 500ull, 5000ull, 200000ull}) {
+    solver.clear();
+    const EndgameResult r =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget, 12);
+    EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
+    EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
+    prev_depth = r.depth_completed;
+    prev_nodes = r.nodes;
+  }
+}
+
+// The transposition table is spread-rebased, so entries survive across turns. A
+// solve, then applying the PV move plus a reply, then solving again must not
+// crash and must return consistent values: the child position's value from the
+// opponent's perspective equals the negated parent value when the parent solve
+// was exact.
+TEST(EndgameSolver, TTReuseAcrossTurns) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0x7700FACEu);
+  EndgameSolver solver;
+  for (int i = 0; i < 20; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    const EndgameResult parent = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                              p.opp_score, 0, kBigBudget, kRefDepth);
+
+    // Apply the parent's best move; if it ends the game there is no child solve.
+    RefState s = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
+    bool over = false;
+    const RefState after = ref_apply(s, parent.best, over);
+    if (over) continue;
+
+    // Reuse the warm TT: solve the child from the opponent's perspective.
+    const EndgameResult child =
+      solver.solve(after.board, d, after.racks[1], after.racks[0], after.scores[1], after.scores[0],
+                   after.scoreless, kBigBudget, kRefDepth);
+    // The child's optimal value (opponent to move) is the negation of the value
+    // the parent assigned to reaching it, i.e. the parent's optimum.
+    EXPECT_EQ(child.value, -parent.value);
+  }
 }
