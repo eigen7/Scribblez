@@ -1982,10 +1982,13 @@ TEST(Game, EndRackOutBonus) {
     const TurnRecord& last = log.turns.back();
     const int winner = last.player;  // out-going player
     const int loser = 1 - winner;
-    const int penalty = log.final_racks[loser].point_value();
+    // Game applies the modern tournament convention: the out-going player
+    // gains twice the opponent's remaining tile values, and the opponent's
+    // score is left unchanged.
+    const int bonus = 2 * log.final_racks[loser].point_value();
 
-    ASSERT_EQ(log.final_scores[winner], last.cumulative_scores[winner] + penalty);
-    ASSERT_EQ(log.final_scores[loser], last.cumulative_scores[loser] - penalty);
+    ASSERT_EQ(log.final_scores[winner], last.cumulative_scores[winner] + bonus);
+    ASSERT_EQ(log.final_scores[loser], last.cumulative_scores[loser]);
     ASSERT_TRUE(log.final_racks[winner].empty());
   }
   ASSERT_TRUE(found_out);
