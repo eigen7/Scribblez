@@ -34,7 +34,10 @@ py/tools/pr.py drives the lifecycle:
    so the PR distinguishes Claude's commits from the user's. Worktrees live
    under the mount so in-progress work survives container relaunches.
 2. Make the changes in the worktree. Aim for atomic commits that can be
-   reviewed in isolation.
+   reviewed in isolation. For C++ work, run py/build.py in the worktree before
+   trusting IDE diagnostics there: .clangd resolves the compile database at
+   the checkout's own target/, so clangd flags every include as missing in a
+   worktree that has never been built.
 3. Before opening the PR: the engine must build, the affected test suites must
    pass (py/run_tests.py --cpp-only for C++ changes, --python-only for
    Python), and changed files must be clang-format/ruff clean. Say what was
