@@ -233,8 +233,8 @@ add_executable(test_neural_agent
   src/lexicon/hasty_equity.cpp
   src/lexicon/leave_values.cpp)
 target_link_libraries(test_neural_agent PRIVATE
-  scribblez_core Boost::json Threads::Threads)
-add_test(NAME test_neural_agent COMMAND test_neural_agent)
+  scribblez_core Boost::json Threads::Threads GTest::gtest_main)
+gtest_discover_tests(test_neural_agent)
 
 # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
 # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR

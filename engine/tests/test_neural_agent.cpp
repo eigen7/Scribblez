@@ -31,6 +31,8 @@
 #include "lexicon/hasty_equity.h"
 #include "nn/eval_service.h"
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -42,14 +44,6 @@
 #include <numeric>
 #include <string>
 #include <vector>
-
-#define CHECK(cond)                                                                \
-  do {                                                                             \
-    if (!(cond)) {                                                                 \
-      std::cerr << "CHECK failed: " #cond " at " __FILE__ ":" << __LINE__ << "\n"; \
-      std::exit(1);                                                                \
-    }                                                                              \
-  } while (0)
 
 using namespace scribblez;
 
@@ -148,15 +142,25 @@ struct OpeningPosition {
   }
 };
 
-// Write a synthetic Macondo .klv2 leave file (blank=12.0, A=1.5, B=-2.5; every
-// other leave looks up as 0) and initialize the HastyEquity singleton from it,
-// so the agent's candidate ranking works. Returns the temp dir to remove.
-static std::filesystem::path init_equity() {
-  namespace fs = std::filesystem;
-  fs::path tmp = fs::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
-  fs::create_directories(tmp);
+// Fixture for the selection tests, which rank candidates by HastyBot equity:
+// writes a synthetic Macondo .klv2 leave file (blank=12.0, A=1.5, B=-2.5;
+// every other leave looks up as 0) into a temp dir and initializes the
+// HastyEquity singleton from it. The temp dir is removed on teardown, pass or
+// fail.
+class NeuralAgentEquityTest : public ::testing::Test {
+ protected:
+  void SetUp() override;
+  void TearDown() override { std::filesystem::remove_all(tmp_); }
 
-  fs::path klv = tmp / "synthetic.klv2";
+  std::filesystem::path tmp_;
+};
+
+void NeuralAgentEquityTest::SetUp() {
+  namespace fs = std::filesystem;
+  tmp_ = fs::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
+  fs::create_directories(tmp_);
+
+  fs::path klv = tmp_ / "synthetic.klv2";
   std::ofstream f(klv, std::ios::binary | std::ios::trunc);
   auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
   auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
@@ -169,13 +173,12 @@ static std::filesystem::path init_equity() {
   write_f32(12.0f);
   write_f32(1.5f);
   write_f32(-2.5f);
-  CHECK(f);
+  ASSERT_TRUE(f.good());
   f.close();  // flush to disk before HastyEquity::init reopens the file to read
 
-  fs::path peg = tmp / "peg.json";
+  fs::path peg = tmp_ / "peg.json";
   std::ofstream(peg) << "[]";
   HastyEquity::init(klv.string(), peg.string());
-  return tmp;
 }
 
 // An EvalService that returns pre-set evals, one per candidate in *per-call*
@@ -232,17 +235,15 @@ static nn::Eval eval_with(float score_diff_mean, float win_prob) {
 
 static nn::Eval sd(float score_diff_mean) { return eval_with(score_diff_mean, 0.0f); }
 
-static void test_topk_selection_uses_objective() {
-  std::filesystem::path tmp = init_equity();
-
+TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
   // Real opening plays for CARETS, ranked by HastyBot equity exactly as the
   // agent ranks them. top_k=2 keeps the two highest-equity plays; the order
   // below is [highest-equity, second].
   OpeningPosition pos("CARETS");
-  CHECK(pos.plays.size() >= 3);  // > top_k, so the equity filter actually drops plays
+  ASSERT_GE(pos.plays.size(), 3u);  // > top_k, so the equity filter actually drops plays
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
-  CHECK(static_cast<int>(order.size()) == top_k);
+  ASSERT_EQ(static_cast<int>(order.size()), top_k);
   const MoveRequest req = pos.request();
 
   // Value head prefers the SECOND-ranked equity candidate -> the agent overrides
@@ -258,7 +259,7 @@ static void test_topk_selection_uses_objective() {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
-    CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
+    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[1]]));
   }
 
   // Value head prefers the top equity candidate -> the agent agrees with HastyBot.
@@ -273,7 +274,7 @@ static void test_topk_selection_uses_objective() {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(9.0f), sd(1.0f)};
-    CHECK(same_move(agent.make_move(req), pos.plays[order[0]]));
+    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[0]]));
   }
 
   // The win-prob objective reads win_prob, not score_diff_mean.
@@ -288,21 +289,16 @@ static void test_topk_selection_uses_objective() {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
-    CHECK(same_move(agent.make_move(req), pos.plays[order[1]]));
+    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[1]]));
   }
-
-  std::filesystem::remove_all(tmp);
-  std::cout << "test_topk_selection_uses_objective passed\n";
 }
 
-static void test_topk_excludes_low_equity_play() {
-  std::filesystem::path tmp = init_equity();
-
+TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
   // top_k=2 keeps the two highest-equity plays and drops the rest before any
   // evaluation -- so even with more than two legal plays, only two reach the
   // model, and the agent plays a survivor (never a dropped lower-equity play).
   OpeningPosition pos("CARETS");
-  CHECK(pos.plays.size() >= 3);
+  ASSERT_GE(pos.plays.size(), 3u);
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
   const MoveRequest req = pos.request();
@@ -319,29 +315,24 @@ static void test_topk_excludes_low_equity_play() {
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
-  CHECK(sp->total_rows == top_k);              // only the top-2 were evaluated, not every play
-
-  std::filesystem::remove_all(tmp);
-  std::cout << "test_topk_excludes_low_equity_play passed\n";
+  ASSERT_TRUE(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
+  ASSERT_EQ(sp->total_rows, top_k);  // only the top-2 were evaluated, not every play
 }
 
-static void test_all_moves_evaluated() {
-  std::filesystem::path tmp = init_equity();
-
+TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
   // top_k = 0: every legal play is evaluated with no equity pre-filter, in
   // generation order. The stub prefers the LOWEST-equity play -- a move a
   // small-top-K agent would never even see -- so the agent plays it.
   OpeningPosition pos("CARETS");
   const int n = static_cast<int>(pos.plays.size());
-  CHECK(n >= 3);
+  ASSERT_GE(n, 3);
 
   int lo = 0, hi = 0;
   for (int i = 1; i < n; ++i) {
     if (pos.equities[i] < pos.equities[lo]) lo = i;
     if (pos.equities[i] > pos.equities[hi]) hi = i;
   }
-  CHECK(pos.equities[lo] < pos.equities[hi]);  // a meaningful override needs distinct equities
+  ASSERT_LT(pos.equities[lo], pos.equities[hi]);  // a meaningful override needs distinct equities
   const MoveRequest req = pos.request();
 
   auto stub = std::make_unique<CountingStubEvalService>();
@@ -357,22 +348,17 @@ static void test_all_moves_evaluated() {
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
-  CHECK(sp->total_rows == n);            // every legal play was evaluated
-
-  std::filesystem::remove_all(tmp);
-  std::cout << "test_all_moves_evaluated passed\n";
+  ASSERT_TRUE(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
+  ASSERT_EQ(sp->total_rows, n);                // every legal play was evaluated
 }
 
-static void test_chunked_evaluation() {
-  std::filesystem::path tmp = init_equity();
-
+TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   // All plays scored with a batch limit of 2 -> the agent scores them across
   // multiple evaluate() calls, yet still picks the single globally best-rated
   // candidate.
   OpeningPosition pos("CARETS");
   const int n = static_cast<int>(pos.plays.size());
-  CHECK(n >= 3);             // needs at least two chunks at max_batch = 2
+  ASSERT_GE(n, 3);           // needs at least two chunks at max_batch = 2
   const int target = n - 1;  // a candidate in the final chunk
   const MoveRequest req = pos.request();
 
@@ -389,13 +375,10 @@ static void test_chunked_evaluation() {
   agent.begin_game();
 
   Move got = agent.make_move(req);
-  CHECK(same_move(got, pos.plays[target]));  // the globally best-rated candidate
-  CHECK(sp->total_rows == n);                // every play scored
-  CHECK(sp->max_chunk <= 2);                 // never exceeded the batch limit
-  CHECK(sp->calls == (n + 1) / 2);           // ceil(n / 2) chunks
-
-  std::filesystem::remove_all(tmp);
-  std::cout << "test_chunked_evaluation passed (n=" << n << ", calls=" << sp->calls << ")\n";
+  ASSERT_TRUE(same_move(got, pos.plays[target]));  // the globally best-rated candidate
+  ASSERT_EQ(sp->total_rows, n);                    // every play scored
+  ASSERT_LE(sp->max_chunk, 2);                     // never exceeded the batch limit
+  ASSERT_EQ(sp->calls, (n + 1) / 2);               // ceil(n / 2) chunks
 }
 
 // Remove a play's tiles from a rack copy (the leave the encoder sees).
@@ -405,7 +388,7 @@ static Rack leave_after(const Rack& rack, const Move& mv) {
   return leave;
 }
 
-static void test_encode_candidate_matches_replay() {
+TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   // A short move history applied to both the agent (via observe_move) and an
   // independent reference encoder.
   Move move_a = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
@@ -446,8 +429,8 @@ static void test_encode_candidate_matches_replay() {
   post.apply_move(candidate);
   post.encode_input(my_seat, leave_after(my_rack, candidate), /*apply_flip=*/false, ref_row.data());
 
-  for (size_t i = 0; i < agent_row.size(); ++i) CHECK(agent_row[i] == ref_row[i]);
-  std::cout << "test_encode_candidate_matches_replay passed (" << kInputFloats << " floats)\n";
+  for (size_t i = 0; i < agent_row.size(); ++i)
+    ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
 }
 
 // Append the raw bytes of a trivially-copyable value to a byte buffer.
@@ -482,7 +465,7 @@ static std::vector<char> build_slog(const binlog::InitialRacks& ir,
   return buf;
 }
 
-static void test_encode_candidate_matches_training_decoder() {
+TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
   // A three-turn game. The sampled turn (2, post-move) is player 0's, so the
   // decoded POV is player 0 and both players already have a prior move, which
   // exercises the last-self / last-opp placement-plane features.
@@ -538,21 +521,17 @@ static void test_encode_candidate_matches_training_decoder() {
 
   bool any_nonzero = false;
   for (int i = 0; i < kInputFloats; ++i) {
-    CHECK(agent_row[i] == dec_row[i]);
+    ASSERT_EQ(agent_row[i], dec_row[i]) << "input float " << i;
     any_nonzero = any_nonzero || agent_row[i] != 0.0f;
   }
-  CHECK(any_nonzero);  // guard against a vacuous all-zero match
-  std::cout << "test_encode_candidate_matches_training_decoder passed (" << kInputFloats
-            << " floats)\n";
+  ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
 }
 
-static void test_temperature_sampling_spreads() {
-  std::filesystem::path tmp = init_equity();
-
+TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
   // top_k=2 keeps the two highest-equity plays; the stub rates processing-pos 0
   // above pos 1 (order[0] above order[1]).
   OpeningPosition pos("CARETS");
-  CHECK(pos.plays.size() >= 3);
+  ASSERT_GE(pos.plays.size(), 3u);
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
   const MoveRequest req = pos.request();
@@ -570,7 +549,7 @@ static void test_temperature_sampling_spreads() {
                        std::move(stub));
     greedy.begin_game();
     gp->scripted = {sd(2.0f), sd(0.0f)};
-    for (int i = 0; i < 50; ++i) CHECK(same_move(greedy.make_move(req), pos.plays[order[0]]));
+    for (int i = 0; i < 50; ++i) ASSERT_TRUE(same_move(greedy.make_move(req), pos.plays[order[0]]));
   }
 
   // High temperature -> both candidates are sampled, but the higher-rated one
@@ -596,23 +575,8 @@ static void test_temperature_sampling_spreads() {
       else if (same_move(got, pos.plays[order[1]]))
         ++low;
     }
-    CHECK(high > 0 && low > 0);  // both arms explored
-    CHECK(high > low);           // higher-valued arm dominates
-    std::cout << "test_temperature_sampling_spreads passed (high=" << high << " low=" << low
-              << ")\n";
+    ASSERT_GT(high, 0);  // both arms explored
+    ASSERT_GT(low, 0);
+    ASSERT_GT(high, low);  // higher-valued arm dominates
   }
-
-  std::filesystem::remove_all(tmp);
-}
-
-int main() {
-  test_topk_selection_uses_objective();
-  test_topk_excludes_low_equity_play();
-  test_all_moves_evaluated();
-  test_chunked_evaluation();
-  test_encode_candidate_matches_replay();
-  test_encode_candidate_matches_training_decoder();
-  test_temperature_sampling_spreads();
-  std::cout << "All neural-agent tests passed.\n";
-  return 0;
 }
