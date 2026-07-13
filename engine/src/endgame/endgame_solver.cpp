@@ -5,6 +5,7 @@
 #include "game/movegen.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <array>
@@ -24,13 +25,6 @@ constexpr int32_t kInf = 1'000'000;
 // far shorter than this.
 constexpr int kMaxPlayout = 40;
 
-uint64_t splitmix64(uint64_t x) {
-  x += 0x9E3779B97F4A7C15ULL;
-  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-  return x ^ (x >> 31);
-}
-
 // Zobrist keys for every (square, letter, is-blank) placement, plus the keys
 // mixed in at node level: one per internal scoreless count (0..2) and one for
 // the solving side being to move. Deterministically derived from a fixed seed.
@@ -45,9 +39,9 @@ ZobristTable build_zobrist() {
   uint64_t s = 0xE3D1F0A2B4C6D8E9ULL;
   for (auto& sq : z.square)
     for (auto& letter : sq)
-      for (auto& blank : letter) blank = splitmix64(++s);
-  for (auto& v : z.scoreless) v = splitmix64(++s);
-  z.solving_to_move = splitmix64(++s);
+      for (auto& blank : letter) blank = util::mix64(++s);
+  for (auto& v : z.scoreless) v = util::mix64(++s);
+  z.solving_to_move = util::mix64(++s);
   return z;
 }
 
@@ -111,7 +105,7 @@ void EndgameSolver::xor_play_hash(const Move& move) {
 uint64_t EndgameSolver::node_hash() const {
   const ZobristTable& z = zobrist();
   uint64_t h = board_hash_;
-  h ^= splitmix64(racks_[stm_].bits());
+  h ^= util::mix64(racks_[stm_].bits());
   if (stm_ == 0) h ^= z.solving_to_move;
   h ^= z.scoreless[scoreless_];
   return h;

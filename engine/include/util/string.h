@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace scribblez::util {
 
@@ -19,6 +20,9 @@ inline std::string& to_lower(std::string& s);
 
 // Compact human-readable duration: "6h32m", "45m12s", or "30s".
 inline std::string fmt_dur(double secs);
+
+// Split s on delim, dropping empty tokens ("a,,b" -> {"a", "b"}).
+inline std::vector<std::string> split(const std::string& s, char delim);
 
 // Order filesystem paths by their filename in natural-sort order (so "pos-2.gcg"
 // precedes "pos-10.gcg"). Suitable as a std::sort comparator.

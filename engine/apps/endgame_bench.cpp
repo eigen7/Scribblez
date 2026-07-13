@@ -17,6 +17,9 @@
 //   endgame_bench [--mode=solves|games] [--games N] [--seed N]
 //                 [--budgets 1000,3000,...] [--plies P] [--threads N]
 //                 [--lexicon NAME] [--leaves-file PATH] [--peg-file PATH]
+//
+// Measured results (cost ratios, strength-vs-budget, and methodology) are
+// summarized in docs/endgame_bench_results.md.
 
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
@@ -32,6 +35,7 @@
 #include "selfplay/game_runner.h"
 #include "util/exception.h"
 #include "util/misc.h"
+#include "util/string.h"
 
 #include <boost/program_options.hpp>
 
@@ -44,7 +48,6 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -100,11 +103,7 @@ class CapturingHastyBot : public Agent {
 // Parse a comma-separated budget list ("1000,3000,10000") into node counts.
 std::vector<uint64_t> parse_budgets(const std::string& csv) {
   std::vector<uint64_t> out;
-  std::stringstream ss(csv);
-  std::string tok;
-  while (std::getline(ss, tok, ',')) {
-    if (!tok.empty()) out.push_back(std::stoull(tok));
-  }
+  for (const std::string& tok : util::split(csv, ',')) out.push_back(std::stoull(tok));
   return out;
 }
 

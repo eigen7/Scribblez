@@ -2,6 +2,19 @@
 
 namespace scribblez::util {
 
+// Split s on delim, dropping empty tokens ("a,,b" -> {"a", "b"}).
+inline std::vector<std::string> split(const std::string& s, char delim) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  while (start <= s.size()) {
+    size_t end = s.find(delim, start);
+    if (end == std::string::npos) end = s.size();
+    if (end > start) out.push_back(s.substr(start, end - start));
+    start = end + 1;
+  }
+  return out;
+}
+
 // Natural-order ("natural sort") comparison of two strings: like a lexicographic
 // compare, except that maximal runs of digits compare by numeric value (ignoring
 // leading zeros). So "pos-2" orders before "pos-10", unlike a plain string sort.
