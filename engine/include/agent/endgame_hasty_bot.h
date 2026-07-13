@@ -14,8 +14,16 @@ namespace scribblez {
 // bag holds tiles it plays exactly like HastyBotAgent (static-equity greedy or
 // softmax sampling). Once the bag empties and both racks are fully known, it runs
 // an EndgameSolver -- a negamax search with iterative deepening -- on the
-// position and plays the solver's best move instead, so it converts won endgames
-// and defends lost ones optimally rather than greedily.
+// position and plays the solver's best move, so it converts won endgames and
+// defends lost ones optimally rather than greedily.
+//
+// The solver's answer is trusted only when its first iteration completed, i.e.
+// every root move was evaluated by a full greedy playout. Below that -- the
+// solve was declined as too rich for the budget, or cut off mid-iteration --
+// its answer reflects an arbitrary fraction of the root, and the agent plays
+// HastyBot's static-equity move instead, the stronger policy at that price. The
+// node budget therefore tunes how often endgames get a real search, never how
+// noisy a search is.
 //
 // The solver needs the running consecutive-scoreless-turn count (six such turns
 // end the game), which no MoveRequest carries, so the agent tracks it from
@@ -26,13 +34,19 @@ namespace scribblez {
 // solver is single-threaded, so there is no sharing to guard.
 class EndgameHastyBotAgent : public HastyBotAgent {
  public:
+  // Default per-solve node budget, tuned with `endgame_bench --mode=games`: the
+  // largest budget whose endgame-vs-endgame games stay within ~2x the plain
+  // HastyBot-vs-HastyBot game time on the NWL23 lexicon, while still winning
+  // points head-to-head against greedy HastyBot.
+  static constexpr uint64_t kDefaultEndgameNodes = 50000;
+
   // HastyBot configuration plus the two endgame-solver knobs.
   //   endgame_nodes : per-turn solver node budget; 0 disables the solver
   //                   entirely (the agent then plays pure HastyBot all game).
   //   endgame_plies : iterative-deepening depth cap for the solver.
   struct Params {
     HastyBotAgent::Params hasty;
-    uint64_t endgame_nodes = 50000;
+    uint64_t endgame_nodes = kDefaultEndgameNodes;
     int endgame_plies = 25;
   };
 

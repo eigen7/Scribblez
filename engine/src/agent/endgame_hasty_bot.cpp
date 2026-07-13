@@ -10,21 +10,6 @@
 
 namespace scribblez {
 
-namespace {
-
-// True if `m` is a move the agent may legally play in `req`: a pass (always legal
-// in the endgame, where the bag is empty and exchanging is not) or one of the
-// generated legal plays. The solver returns its moves from exactly this set, so
-// this only guards against a solver defect -- a safety net, not an expected path.
-bool solver_move_playable(const Move& m, const MoveRequest& req) {
-  if (m.type() == MoveType::PASS) return true;
-  for (const Move& legal : generate_legal_plays(req))
-    if (m == legal) return true;
-  return false;
-}
-
-}  // namespace
-
 EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
     : HastyBotAgent(params.hasty),
       endgame_nodes_(params.endgame_nodes),
@@ -32,13 +17,17 @@ EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
 
 Move EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   // Endgame: the bag is empty and both racks are fully known, so hand the
-  // position to the exact solver (unless the solver is disabled). If the solver
-  // ever hands back a move that is not legal here, fall through to HastyBot.
+  // position to the exact solver (unless the solver is disabled). The solver's
+  // move is used only when it completed at least its first iteration -- every
+  // root move backed by a full greedy playout. Below that (the solve was
+  // declined as too rich for the budget, or the budget ran out mid-iteration)
+  // its answer reflects an arbitrary fraction of the root, and HastyBot's
+  // static-equity argmax is the stronger policy.
   if (req.bag_size == 0 && endgame_nodes_ > 0) {
     const EndgameResult r =
       solver_.solve(req.board, req.dict, req.my_rack, req.opp_rack, req.my_score, req.opp_score,
                     scoreless_turns_, endgame_nodes_, endgame_plies_);
-    if (solver_move_playable(r.best, req)) return r.best;
+    if (r.depth_completed >= 1) return r.best;
   }
   return HastyBotAgent::make_move(req);
 }
@@ -81,7 +70,7 @@ boost::program_options::options_description endgame_options(uint64_t& endgame_no
 
 std::unique_ptr<EndgameHastyBotAgent> EndgameHastyBotAgent::from_spec(
   const std::vector<std::string>& tokens, int thread_id, const std::string& name) {
-  uint64_t endgame_nodes = 50000;
+  uint64_t endgame_nodes = kDefaultEndgameNodes;
   int endgame_plies = 25;
   boost::program_options::options_description extra = endgame_options(endgame_nodes, endgame_plies);
 
@@ -94,7 +83,7 @@ std::unique_ptr<EndgameHastyBotAgent> EndgameHastyBotAgent::from_spec(
 }
 
 std::string EndgameHastyBotAgent::options_help() {
-  uint64_t endgame_nodes = 50000;
+  uint64_t endgame_nodes = kDefaultEndgameNodes;
   int endgame_plies = 25;  // scratch binding targets; never read here
   const std::string endgame = agent_options_help(
     "  HastyBot that solves the endgame once the bag empties: it plays HastyBot's\n"

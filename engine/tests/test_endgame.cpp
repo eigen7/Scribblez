@@ -516,6 +516,34 @@ TEST(EndgameSolver, NodeBudget) {
   }
 }
 
+// A position with more root moves than the node budget provably cannot complete
+// its first iteration, so solve() declines it up front: no nodes are spent,
+// depth_completed is 0, and the returned move is the statically best-estimated
+// root move (still legal).
+TEST(EndgameSolver, DeclinesRichPositionsBeyondBudget) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xDEC11983u);
+  EndgameSolver solver;
+  int checked = 0;
+  for (int i = 0; i < 20; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/4);
+    const std::vector<Move> plays = MoveGenerator(p.board, d).generate(p.my_rack);
+    if (plays.empty()) continue;
+    solver.clear();
+    // Root moves are the plays plus the pass, so a budget of plays.size() falls
+    // one node short of the first iteration.
+    const EndgameResult r =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, plays.size(), 12);
+    EXPECT_EQ(r.depth_completed, 0) << "position " << i;
+    EXPECT_EQ(r.nodes, 0u) << "position " << i;
+    if (r.best.type() != MoveType::PASS) {
+      EXPECT_TRUE(key_set(plays).count(move_key(r.best)) > 0) << "position " << i;
+    }
+    ++checked;
+  }
+  ASSERT_GT(checked, 0);
+}
+
 // The transposition table is spread-rebased, so entries survive across turns. A
 // solve, then applying the PV move plus a reply, then solving again must not
 // crash and must return consistent values: the child position's value from the

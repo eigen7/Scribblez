@@ -70,7 +70,15 @@ EndgameSolver::EndgameSolver(int tt_log2_entries)
   static_assert(sizeof(TTEntry) == 32, "transposition-table entry should pack into 32 bytes");
 }
 
-void EndgameSolver::clear() { std::fill(tt_.begin(), tt_.end(), TTEntry{}); }
+void EndgameSolver::clear() {
+  ++tt_gen_;
+  if (tt_gen_ == 0) {
+    // Generation counter wrapped: entries written 2^16 generations ago would
+    // read as current, so this one time the table really is wiped.
+    std::fill(tt_.begin(), tt_.end(), TTEntry{});
+    tt_gen_ = 1;
+  }
+}
 
 uint64_t EndgameSolver::compute_board_hash() const {
   const ZobristTable& z = zobrist();
@@ -212,7 +220,7 @@ const Move& EndgameSolver::greedy_pick(const std::vector<Move>& plays) const {
 
 EndgameSolver::TTEntry* EndgameSolver::tt_probe(uint64_t hash) {
   TTEntry& e = tt_[hash & tt_mask_];
-  if (e.flag != kEmpty && e.hash == hash) return &e;
+  if (e.gen == tt_gen_ && e.flag != kEmpty && e.hash == hash) return &e;
   return nullptr;
 }
 
@@ -224,17 +232,20 @@ void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t flag, con
   e.score_rel = score_rel;
   e.flag = flag;
   e.depth = static_cast<uint8_t>(depth);
+  e.gen = tt_gen_;
 }
 
 void EndgameSolver::tt_store_playout(uint64_t hash, int32_t score_rel) {
   TTEntry& e = tt_[hash & tt_mask_];
-  // Never overwrite a real (deeper) search result with a depth-0 playout value.
-  if (e.flag != kEmpty && e.depth > 0) return;
+  // Never overwrite a current-generation real (deeper) search result with a
+  // depth-0 playout value.
+  if (e.gen == tt_gen_ && e.flag != kEmpty && e.depth > 0) return;
   e.hash = hash;
   e.best = Move::pass();
   e.score_rel = score_rel;
   e.flag = kExact;
   e.depth = 0;
+  e.gen = tt_gen_;
 }
 
 int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
@@ -384,6 +395,12 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
 
   EndgameResult result;
   result.best = root_moves[0].first;
+  // Searching a root move costs at least one node, so a position with more
+  // root moves than the budget provably cannot complete its first iteration.
+  // Decline it up front -- callers treat depth_completed == 0 as "unsolved"
+  // and fall back to their own move policy -- rather than spending the whole
+  // budget on a fraction of the root.
+  if (root_moves.size() > node_budget) return result;
   for (int depth = 1; depth <= max_plies; ++depth) {
     Move best_move = root_moves[0].first;
     const int32_t value = run_root(depth, root_moves, &best_move);

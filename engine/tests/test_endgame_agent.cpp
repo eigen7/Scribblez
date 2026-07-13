@@ -235,6 +235,30 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
   ASSERT_TRUE(found) << "no solver-beats-greedy endgame found in the scan";
 }
 
+// When the node budget cannot cover even the solver's first iteration (here: a
+// single node against multi-move positions), the solve is declined and the agent
+// plays exactly HastyBot's static-equity move -- shallow searches never replace
+// the greedy policy with a noisier one.
+TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xFA11BACCu);
+
+  EndgameHastyBotAgent tiny(endgame_params(/*nodes=*/1, kSolvePlies));
+  HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
+  int checked = 0;
+  for (int i = 0; i < 30; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    // Pass-only positions fit any budget; only multi-move roots exercise the
+    // decline-and-fall-back path.
+    if (MoveGenerator(p.board, d).generate(p.my_rack).empty()) continue;
+    const MoveRequest req = endgame_request(p, d);
+    EXPECT_EQ(tiny.make_move(req), hasty.make_move(req)) << "position " << i;
+    ++checked;
+  }
+  ASSERT_GT(checked, 0);
+}
+
 // Every endgame move the agent returns is legal: a pass, or one of the moves the
 // generator produces for its rack.
 TEST(EndgameAgent, EndgameMoveIsLegal) {

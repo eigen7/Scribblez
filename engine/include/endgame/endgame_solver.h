@@ -19,7 +19,9 @@ struct EndgameResult {
   int32_t value = 0;        // optimal final spread (solving score - opponent
                             // score, after end-of-game adjustments)
   int depth_completed = 0;  // deepest fully-completed iterative-deepening depth
-                            // (0: the budget ran out inside the first iteration)
+                            // (0: the solve was declined up front or the budget
+                            // ran out inside the first iteration, so `best` is
+                            // only the statically best-estimated root move)
   uint64_t nodes = 0;       // negamax entries + greedy-playout plies spent
 };
 
@@ -40,13 +42,16 @@ struct EndgameResult {
 class EndgameSolver {
  public:
   // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
-  explicit EndgameSolver(int tt_log2_entries = 18);
+  explicit EndgameSolver(int tt_log2_entries = 16);
 
   // Solve the position for the side holding my_rack (to move). Both racks must
   // be the actual remaining tiles (bag empty). scoreless_turns is the number of
   // consecutive zero-score turns already played in the real game. The search
   // looks at most max_plies deep, and node_budget is a hard cap on nodes spent
-  // (exceeded by at most one greedy playout's plies before the abort lands). A
+  // (exceeded by at most one greedy playout's plies before the abort lands).
+  // A position with more root moves than node_budget provably cannot complete
+  // its first iteration, so the solve is declined immediately after root move
+  // generation rather than burning the budget on a fraction of the root. A
   // legal move is always returned: the last completed iteration's best, else the
   // best fully-searched root move of the partial first iteration, else the
   // estimate-ordered top root move.
@@ -54,8 +59,10 @@ class EndgameSolver {
                       const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
                       uint64_t node_budget, int max_plies);
 
-  // Wipe the transposition table (call between games; entries are spread-rebased
-  // and thus reusable across turns within one game, but not across games).
+  // Invalidate every transposition-table entry (call between games; entries are
+  // spread-rebased and thus reusable across turns within one game, but not
+  // across games). O(1): it bumps the table's generation counter, and probes
+  // treat entries from older generations as empty.
   void clear();
 
  private:
@@ -63,14 +70,16 @@ class EndgameSolver {
 
   // A transposition-table entry (32 bytes): the full hash (to reject index
   // collisions), the best move for ordering, the search value stored relative
-  // to the node's spread (so it is reusable at any absolute score), and the
-  // bound flag + search depth that produced it.
+  // to the node's spread (so it is reusable at any absolute score), the bound
+  // flag + search depth that produced it, and the table generation that wrote
+  // it (entries from older generations read as empty; see clear()).
   struct TTEntry {
     uint64_t hash = 0;
     Move best;
     int32_t score_rel = 0;
     uint8_t flag = kEmpty;
     uint8_t depth = 0;
+    uint16_t gen = 0;
   };
 
   // Everything one make() changes, so unmake() can restore it: the board undo,
@@ -134,6 +143,7 @@ class EndgameSolver {
 
   std::vector<TTEntry> tt_;
   uint64_t tt_mask_ = 0;
+  uint16_t tt_gen_ = 1;  // current generation; entries with gen != this are empty
 };
 
 }  // namespace scribblez
