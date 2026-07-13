@@ -102,6 +102,16 @@ If the task is mostly searching, reading, editing, testing, or verifying, it bel
 If the task involves intent, design, tradeoffs, risk, disagreement, or final approval, it belongs to the chief.
 </boundary>
 
+<delegation_ops>
+Delegated work must stay observable; manage it by evidence, not trust.
+
+- Instruct delegates to work inline in their own context. A background child spawned by a delegate breaks the completion-notification chain (the child's result routes to the top-level session while the delegate waits forever on work it will never see).
+- Compute that must outlive any single agent's turn (benchmark sweeps, tuning runs, batch jobs) is launched by the session that will consume the result, as a harness-tracked background command -- never from inside a delegate, where it dies with the delegate's session.
+- A delegate's claim that background work is running is a checkable assertion, not a status: verify with ps, output-file mtimes, or commits before waiting on it.
+- Detect stalls from artifacts: a delegate that is "waiting" while its worktree, output files, and the process table have not changed in many minutes is stuck. Poke it once with a concrete instruction; if that fails, take the work over rather than re-delegating blind.
+- Structure delegated implementation as phase commits in a worktree, so a dead delegate loses only its in-flight phase and the chief resumes from the last commit.
+</delegation_ops>
+
 <risk>
 Treat these areas as high-risk for this project:
 
