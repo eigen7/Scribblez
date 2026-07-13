@@ -40,5 +40,9 @@ find_package(Boost REQUIRED COMPONENTS program_options json filesystem system)
 find_package(Threads REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+# GoogleTest for the C++ test binaries (system libgtest-dev; the Docker image
+# ships it prebuilt with its CMake config).
+find_package(GTest REQUIRED)
+
 enable_testing()
 add_subdirectory(engine)
