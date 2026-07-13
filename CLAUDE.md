@@ -1,50 +1,66 @@
+# Project
+
+Scribblez is a Scrabble AI: a C++ engine (move generation, self-play,
+training-data logging, TensorRT inference) in engine/, Python training and
+tooling in py/, and a React web UI in web/. The long-term goal is an engine
+that beats existing AIs by replacing their context-blind static evaluation
+with learned, belief-aware evaluation.
+
+Read docs when the task touches their subject, not up front:
+
+- docs/design.md -- the north-star design; read it for engine/model strategy
+  work.
+- docs/architecture.md -- how self-play games become encoded training tensors:
+  the component chain, the `.slog` format, and the replay-reconstruction
+  invariant (inputs are recomputed by replaying moves; targets come from
+  stored final scores).
+- docs/roadmap.md and docs/roadmap2.md -- the model roadmap and rationale.
+- docs/README.md -- the index of all documentation.
+
+Routine build/refactor/tooling tasks rarely need any of them.
+
 # Worktrees and PR review
 
-Unless told otherwise, never make changes directly in /workspace/repo. Work in a git worktree and
-submit the result as a pull request on the local Gitea instance, which the user reviews from the
-host browser at http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
+Unless told otherwise, never make changes directly in /workspace/repo. Work in
+a git worktree and submit the result as a pull request on the local Gitea
+instance, which the user reviews from the host browser at
+http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
+py/tools/pr.py drives the lifecycle:
 
-1. Create a worktree: `git worktree add /workspace/mount/worktrees/<branch> -b <branch>`, then
-   populate its submodule checkout: `git -C /workspace/mount/worktrees/<branch> submodule update
-   --init` (worktrees don't inherit the main checkout's submodules). Worktrees live under the
-   mount so in-progress work survives container relaunches.
-2. Give the worktree a Claude commit identity, so the PR distinguishes Claude's commits from the
-   user's:
+1. `py/tools/pr.py worktree <branch>` -- creates
+   /workspace/mount/worktrees/scribblez/<branch> on a new branch, with
+   submodules populated (from the main checkout's copies) and a Claude commit
+   identity,
+   so the PR distinguishes Claude's commits from the user's. Worktrees live
+   under the mount so in-progress work survives container relaunches.
+2. Make the changes in the worktree. Aim for atomic commits that can be
+   reviewed in isolation. For C++ work, run py/build.py in the worktree before
+   trusting IDE diagnostics there: .clangd resolves the compile database at
+   the checkout's own target/, so clangd flags every include as missing in a
+   worktree that has never been built.
+3. Before opening the PR: the engine must build, the affected test suites must
+   pass (py/run_tests.py --cpp-only for C++ changes, --python-only for
+   Python), and changed files must be clang-format/ruff clean. Say what was
+   run in the PR body.
+4. `py/tools/pr.py create <branch> --title ... --body-file ...` -- starts the
+   Gitea stack if needed, then pushes the branch and opens the PR as the
+   `claude` Gitea user (provisioned automatically on first use), so Gitea
+   shows Claude -- not the reviewer -- as the pusher and PR author. Point the
+   user at the printed URL.
+5. Address review comments with follow-up commits, not squashes or
+   force-pushes -- rewriting history breaks the reviewer's "changes since last
+   review" view.
+6. Once the user approves: `py/tools/pr.py merge <N>` -- merges the PR,
+   fast-forwards the main checkout, and deletes the branch and worktree.
 
-       git config extensions.worktreeConfig true
-       git -C /workspace/mount/worktrees/<branch> config --worktree user.name "Claude"
-       git -C /workspace/mount/worktrees/<branch> config --worktree user.email "noreply@anthropic.com"
+Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never
+deleted automatically: they may hold uncommitted work. gitea_serve.py prints a
+report of worktrees idle for 7+ days; when you see it, relay it to the user,
+who decides what to delete. The report is also available standalone via
+`py/tools/stale_worktrees.py`.
 
-3. Make the changes in the worktree. Aim for atomic commits that can be reviewed in isolation.
-4. When ready for review: run `py/tools/gitea_serve.py` (idempotent; starts the server if it isn't
-   running), then push the branch and open the PR **as the `claude` Gitea user**, so Gitea shows
-   Claude — not the reviewer — as the pusher and PR author. The `gitea` remote embeds the admin's
-   credentials, so don't push the branch through it; instead use claude's credentials (in
-   /workspace/mount/gitea/claude_credentials.json) for both the push and the PR-creation API call.
-   `<owner>` below is the admin username from /workspace/mount/gitea/admin_credentials.json:
-
-       git push http://claude:<password>@localhost:3001/<owner>/scribblez.git <branch>
-       curl -u claude:<password> -X POST http://localhost:3000/api/v1/repos/<owner>/scribblez/pulls ...
-
-   If the credentials file or the user is missing, first create the user via the admin API (admin
-   credentials in /workspace/mount/gitea/admin_credentials.json): username `claude`, email
-   noreply@anthropic.com (so Gitea links Claude's commits to it), write access on the repo; then
-   write the credentials file. Point the user at the PR URL:
-   http://localhost:3000/<owner>/scribblez/pulls/<n>
-5. Address review comments with follow-up commits, not squashes or force-pushes -- rewriting
-   history breaks the reviewer's "changes since last review" view.
-6. Once the user approves: merge the PR (Gitea API), fast-forward the main checkout
-   (`git pull gitea main` in /workspace/repo), delete the branch (locally and on the `gitea`
-   remote), and remove the worktree (`git worktree remove --force`; `--force` because git
-   refuses to remove a worktree whose submodule is populated).
-
-Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never deleted automatically:
-they may hold uncommitted work. gitea_serve.py prints a report of worktrees idle for 7+ days;
-when you see it, relay it to the user, who decides what to delete. The report is also available
-standalone via `py/tools/stale_worktrees.py`.
-
-The `origin` remote (GitHub) plays no role in this workflow; never push to it. Only the user
-pushes to origin.
+The `origin` remote (GitHub) plays no role in this workflow; never push to it.
+Only the user pushes to origin.
 
 # Sycophancy
 
@@ -62,19 +78,39 @@ behavior.
 
 # Environment
 
-You can assume unless otherwise told that you are inside of a Docker container launched by
-`run_docker.py`, and that the one-time setup `setup_wizard.py` was run beforehand. You can always
-assume that the machine has GPU/NVIDIA/CUDA availability.
+You can assume unless otherwise told that you are inside of a Docker container
+launched by `run_docker.py`, and that the one-time setup `setup_wizard.py` was
+run beforehand. You can always assume that the machine has GPU/NVIDIA/CUDA
+availability.
 
-# Doc
+Layout -- where data lives and what provisions it:
 
-Please reference docs/design.md to understand the overall goal of this project.
+- /workspace/repo -- this repo (bind mount).
+  - target/archs/\<arch\>/ -- one CMake build tree per CPU microarchitecture
+    (created by py/build.py); target/engine is a symlink to this host's arch
+    build.
+- /workspace/mount -- large + persistent data (bind mount; survives container
+  relaunches):
+  - lexica/ -- .kwg lexicon files, installed by setup_wizard.py from the
+    public Woogles/liwords repo (copyrighted wordlists; never committed).
+    SCRIBBLEZ_DEFAULT_KWG points at NWL23.kwg here.
+  - macondo/ -- Macondo checkout, cloned at a pinned tag by py/build.py. It
+    bundles the leave values (data/strategy/\<lexicon\>/leaves.klv2) and
+    pre-endgame table that `HastyEquity::default_leaves_path()` /
+    `default_peg_path()` read.
+  - gitea/ -- Gitea state, admin_credentials.json, claude_credentials.json.
+  - worktrees/<project>/ -- per-project working worktrees (see the PR
+    workflow above).
 
-For how training data flows from self-play to encoded tensors — the component
-chain, the `.slog` format, and the replay-reconstruction invariant (inputs are
-recomputed by replaying moves; targets come from stored final scores) — see
-docs/architecture.md. docs/roadmap.md covers the model roadmap and rationale.
-docs/README.md is the index of all documentation.
+# Common commands
+
+- Full build: `py/build.py` (host arch, Release; `--debug`, `--clean`, `-j N`).
+- Rebuild one target:
+  `cmake --build "$(dirname "$(readlink -f target/engine)")" --target <name> -j`
+- All tests: `py/run_tests.py [--cpp-only | --python-only | --web-only]`
+  (C++ tests run through ctest).
+- One C++ test case: `./target/engine/scribblez_tests --gtest_filter=<Suite>.<Name>`
+  (same for the other test binaries under target/engine).
 
 # Comments and documentation
 
@@ -96,7 +132,9 @@ If you are asked questions regarding Macondo, please look there.
 which we regularly modify to meet the needs of this project — do not treat that code as
 unmodifiable. The workflow (changing a submodule, pointer-bump rules, worktree interactions) is
 documented in submodules/devenv_utils/SUBMODULES.md; read it before touching anything under
-submodules/. Submodule commits are pushed upstream by the user, not by you.
+submodules/. Submodule commits are pushed upstream by the user, not by you: end any task that
+touched a submodule by asking the user to run `python3 submodules/devenv_utils/push_upstream.py`
+from the host (it pushes the submodule commits, then prints the superproject push to run next).
 
 # Python code
 
