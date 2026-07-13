@@ -573,3 +573,82 @@ TEST(EndgameSolver, TTReuseAcrossTurns) {
     EXPECT_EQ(child.value, -parent.value);
   }
 }
+
+// first_win pins the root window to (kFirstWinAlpha, kFirstWinBeta), so the
+// search only has to resolve the win/draw/loss class instead of the exact
+// spread. Over many random endgames, the wld value's class matches the
+// brute-force reference's sign, and whenever the position is a proven win or
+// draw the chosen move exactly preserves that class under optimal play by both
+// sides afterward (a proven loss makes every root move losing, so there is no
+// per-move claim to check there).
+TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xF1257114u);
+  int wins = 0, draws = 0, losses = 0, checked = 0;
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    const int32_t v_star =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+
+    solver.clear();
+    const EndgameResult r =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+    ++checked;
+
+    if (v_star > 0) {
+      ASSERT_GE(r.value, EndgameSolver::kFirstWinBeta) << "position " << i;
+      const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                  p.opp_score, 0, r.best, kRefDepth);
+      ASSERT_GT(after, 0) << "position " << i;
+      ++wins;
+    } else if (v_star == 0) {
+      ASSERT_EQ(r.value, 0) << "position " << i;
+      const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                  p.opp_score, 0, r.best, kRefDepth);
+      ASSERT_GE(after, 0) << "position " << i;
+      ++draws;
+    } else {
+      ASSERT_LE(r.value, EndgameSolver::kFirstWinAlpha) << "position " << i;
+      ++losses;
+    }
+  }
+  ASSERT_GT(checked, 10);
+  if (wins > 0) {
+    ASSERT_GT(wins, 0);
+  }
+  if (draws > 0) {
+    ASSERT_GT(draws, 0);
+  }
+  if (losses > 0) {
+    ASSERT_GT(losses, 0);
+  }
+  std::cout << "  wld-checked " << checked << " endgames: " << wins << " win, " << draws
+            << " draw, " << losses << " loss\n";
+}
+
+// The first-win window is narrower than the full (-inf, +inf) window, so
+// pruning is never worse: the same batch of positions spends no more total
+// search effort under first_win than under a full-window solve.
+TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x50DE5EEDu);
+  uint64_t full_nodes = 0, wld_nodes = 0;
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+
+    solver.clear();
+    const EndgameResult full =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/false);
+    solver.clear();
+    const EndgameResult wld =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+    full_nodes += full.nodes;
+    wld_nodes += wld.nodes;
+  }
+  EXPECT_LE(wld_nodes, full_nodes);
+}

@@ -336,3 +336,42 @@ TEST(EndgameAgent, FromSpecParsing) {
                std::runtime_error);
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
+
+// --endgame-wld parses (with or without other endgame options present).
+TEST(EndgameAgent, WldFromSpec) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-wld", "--endgame-nodes=777"}, 0, "W"),
+            nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-nodes=777"}, 0, "V"), nullptr);
+}
+
+// In wld mode, once the solver proves the position lost (every root move
+// loses), the agent discards the solver's arbitrary choice among losing moves
+// and plays HastyBot's static-equity move instead -- the same move a plain
+// HastyBotAgent would play on the identical request.
+TEST(EndgameAgent, WldProvenLossFallsBackToHasty) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0x105510FFu);
+
+  EndgameSolver ref;
+  HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
+  EndgameHastyBotAgent::Params wp = endgame_params(kSolveBudget, kSolvePlies);
+  wp.endgame_wld = true;
+  EndgameHastyBotAgent wld(wp);
+
+  bool found = false;
+  for (int i = 0; i < 200 && !found; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    ref.clear();
+    const EndgameResult r = ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                                      /*scoreless_turns=*/0, kSolveBudget, kSolvePlies);
+    if (r.value >= 0) continue;  // not a loss for the solving side; keep scanning
+
+    const MoveRequest req = endgame_request(p, d);
+    EXPECT_EQ(wld.make_move(req), hasty.make_move(req)) << "position " << i;
+    found = true;
+  }
+  ASSERT_TRUE(found) << "no proven-loss endgame found in the scan";
+}
