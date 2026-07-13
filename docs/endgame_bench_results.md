@@ -6,6 +6,9 @@ Release build). They characterize the `hastybot-endgame` agent's cost/strength
 tradeoff as a function of its `--endgame-nodes` budget and are the basis for
 the shipped default of 200.
 
+**Hardware**: Intel Core i7-13850HX (28 hardware threads), 64 GB RAM, inside
+the project's Docker container, Release build.
+
 ## Methodology
 
 - **Cost** (`--mode=games`): mean wall-time per game of
@@ -56,13 +59,72 @@ Solves are movegen-bound (roughly 35-80k nodes/s; each node and each greedy
 playout ply runs a full move generation), so per-solve cost tracks nodes spent
 almost linearly once positions stop being declined.
 
+## First-win (WLD) mode
+
+`--endgame-wld` (agent: `EndgameHastyBotAgent::Params.endgame_wld`) pins the
+solver's root alpha-beta window to `(EndgameSolver::kFirstWinAlpha,
+EndgameSolver::kFirstWinBeta)` = `(-1, +1)` instead of the full
+`(-inf, +inf)` spread window. The search then only has to resolve which side
+of an even final spread the position falls on -- win, draw, or loss -- rather
+than the exact point margin, so proofs land with far less search effort per
+ply of true difficulty. The tradeoff is that among winning root moves the
+solver returns an arbitrary one instead of the spread-maximal one, and a
+proven-lost position (`value <= kFirstWinAlpha`) is meaningless to compare
+move-by-move, so `EndgameHastyBotAgent` discards it and plays HastyBot's
+static-equity move instead -- final spread still matters to the game log even
+in a lost position.
+
+At a fixed `--endgame-nodes` budget, cost is governed by the budget itself
+(iterative deepening spends the budget regardless of window width), so wld
+mode's wall-time cost roughly tracks spread mode's at the same budget:
+
+| `--endgame-nodes` | spread-mode cost | wld-mode cost |
+|---|---|---|
+| 50 | 1.07x | 1.04x |
+| 100 | 1.26x | 1.22x |
+| 200 | 1.97x | 1.89x |
+| 400 | 6.13x | 5.90x |
+| 800 | 16.70x | 16.26x |
+| 1600 | 29.72x | 31.33x |
+
+(`--mode=games --games=200 --seed=7 --threads=1`, with and without `--wld`;
+single-shard, illustrative rather than a strength-grade sample.)
+
+Strength, pooling 6 seed shards x 800 games = 4800 games per budget (same
+paired-seat protocol as the spread-mode table above):
+
+| `--endgame-nodes` | mean eg spread (wld) | W | D | L |
+|---|---|---|---|---|
+| 200 | +0.20 +/- 0.02 pts/game | 2398 | 17 | 2385 |
+| 400 | +0.47 +/- 0.06 | 2399 | 24 | 2377 |
+| 1600 | +2.44 +/- 0.08 | 2471 | 17 | 2312 |
+
+For comparison, spread mode at the same budgets: 200 = 2.00x/+0.40 +/- 0.03,
+400 = 4.5x/+0.85 +/- 0.07, 1600 = 21x/+4.96 +/- 0.19 (from the table above).
+
+Under wld the mean spread is **expected to shrink by construction**: the
+solver stops maximizing point margin once it has proven a win, so it no
+longer plays for the same spread among winning lines. The number to judge wld
+strength by is the **W/D/L record**, not the spread column. By that measure
+wld mode still beats plain HastyBot at every budget (win rate exceeds loss
+rate by +0.3pp at 200, +0.5pp at 400, +3.3pp at 1600 games), with the same
+qualitative budget-dependence as spread mode -- the margin over greedy play
+grows with budget -- but a visibly smaller edge than spread mode's win/loss
+margin would likely show at the same budget, since wld mode's own root-move
+choice among wins is unoptimized for spread and thus for many wins-that-stay-
+wins style positional pressure. Budget 1600 remains the clearest win; the
+sub-1% margins at 200 and 400 should not be read as more than "does not
+lose ground," given the shard-level standard error is itself on that order.
+
 ## Reproducing
 
 ```
-target/engine/endgame_bench --mode=games  --games=800 --seed=S --budgets=B --threads=1
+target/engine/endgame_bench --mode=games  --games=800 --seed=S --budgets=B --threads=1 [--wld]
 target/engine/endgame_bench --mode=solves --games=30  --seed=42 --budgets=100,200,400,1600,5000,20000
 ```
 
 For strength numbers, run several `--seed` shards per budget and pool them;
 single-shard head-to-head spreads carry a few points of standard error even
-with seat mirroring.
+with seat mirroring. `--wld` applies to `--mode=games` only; it makes both the
+endgame-vs-endgame cost sweep and the endgame-vs-hasty head-to-head use the
+first-win window.
