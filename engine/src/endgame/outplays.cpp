@@ -1,4 +1,4 @@
-#include "endgame/outplay_threat.h"
+#include "endgame/outplays.h"
 
 #include "game/glyph.h"
 #include "game/tile.h"
@@ -69,6 +69,10 @@ TileCounts move_used_counts(const Move& m) {
   return used;
 }
 
+bool by_entry_score_desc(const OutplayEntry& a, const OutplayEntry& b) {
+  return a.move.score() > b.move.score();
+}
+
 }  // namespace
 
 OutplayHalo build_outplay_halo(const Board& board, const Move& o) {
@@ -117,54 +121,65 @@ uint8_t canonical_used_mask(const Rack& rack, const TileCounts& used) {
   return mask;
 }
 
-OutplayThreats::OutplayThreats(const Board& board, const Rack& rack, const std::vector<Move>& plays)
-    : board_(board),
-      rack_(rack),
-      plays_(plays),
-      rack_counts_(rack.counts()),
-      halos_(plays.size()),
-      halo_ready_(plays.size(), 0) {
-  play_mask_.reserve(plays.size());
-  for (const Move& p : plays) play_mask_.push_back(canonical_used_mask(rack, move_used_counts(p)));
-}
+LazyHalos::LazyHalos(const Board& board, const std::vector<Move>& plays)
+    : board_(board), plays_(plays), halos_(plays.size()), ready_(plays.size(), 0) {}
 
-const OutplayHalo& OutplayThreats::halo(int play_index) {
-  if (!halo_ready_[play_index]) {
+const OutplayHalo& LazyHalos::operator[](int play_index) {
+  if (!ready_[play_index]) {
     halos_[play_index] = build_outplay_halo(board_, plays_[play_index]);
-    halo_ready_[play_index] = 1;
+    ready_[play_index] = 1;
   }
   return halos_[play_index];
 }
 
-int32_t OutplayThreats::threat_after(const Move& m) {
-  if (m.type() != MoveType::PLAY) return kNoThreat;  // a pass leaves the full rack
+int32_t best_surviving_score(const OutplaySet& set, const Move& m) {
+  for (const OutplayEntry& e : set) {
+    if (!move_touches_halo(e.halo, m)) return e.move.score();
+  }
+  return kNoOutplaySurvivor;
+}
 
-  // The leave after m, and its canonical mask: the bucket key of m's out-plays.
+void assign_surviving(const OutplaySet& parent, const Move& m, OutplaySet& out) {
+  out.clear();
+  for (const OutplayEntry& e : parent) {
+    if (!move_touches_halo(e.halo, m)) out.push_back(e);
+  }
+}
+
+void collect_rack_outplays(const Board& board, const std::vector<Move>& plays, int rack_size,
+                           OutplaySet& out) {
+  out.clear();
+  for (const Move& m : plays) {
+    if (m.type() == MoveType::PLAY && m.num_glyphs() == rack_size)
+      out.push_back({m, build_outplay_halo(board, m)});
+  }
+  std::sort(out.begin(), out.end(), by_entry_score_desc);
+}
+
+LeaveOutplays::LeaveOutplays(const Board& board, const Rack& rack, const std::vector<Move>& plays)
+    : rack_(rack), plays_(plays), rack_counts_(rack.counts()), halos_(board, plays) {
+  play_mask_.reserve(plays.size());
+  for (const Move& p : plays) play_mask_.push_back(canonical_used_mask(rack, move_used_counts(p)));
+}
+
+void LeaveOutplays::collect_after(const Move& m, OutplaySet& out) {
+  out.clear();
+
+  // The leave after m, and its canonical mask: the bucket key of m's leave's
+  // out-plays. A pass subtracts nothing, so its bucket is the full rack's.
   TileCounts leave = rack_counts_;
   for (int i = 0; i < m.num_glyphs(); ++i) leave.remove(m.glyph(i).rack_tile());
-  if (leave.empty()) return kNoThreat;  // m empties the rack: it is itself an out-play
+  if (leave.empty()) return;  // m empties the rack: the game ends with it
   const uint8_t key = canonical_used_mask(rack_, leave);
 
   // Out-plays of the leave that survive m (m does not touch their halo). m's own
   // placement always touches its own halo, so it drops out here naturally.
-  survivors_.clear();
   for (int j = 0; j < static_cast<int>(plays_.size()); ++j) {
     if (play_mask_[j] != key) continue;
-    if (move_touches_halo(halo(j), m)) continue;
-    survivors_.push_back(j);
+    if (move_touches_halo(halos_[j], m)) continue;
+    out.push_back({plays_[j], halos_[j]});
   }
-
-  // The unblockable pair with the largest guaranteed smaller score.
-  int32_t best = kNoThreat;
-  for (size_t a = 0; a < survivors_.size(); ++a) {
-    for (size_t b = a + 1; b < survivors_.size(); ++b) {
-      if (!halos_unblockable(halo(survivors_[a]), halo(survivors_[b]))) continue;
-      const int32_t smaller =
-        std::min<int32_t>(plays_[survivors_[a]].score(), plays_[survivors_[b]].score());
-      best = std::max(best, smaller);
-    }
-  }
-  return best;
+  std::sort(out.begin(), out.end(), by_entry_score_desc);
 }
 
 }  // namespace scribblez

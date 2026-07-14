@@ -1,5 +1,6 @@
 #pragma once
 
+#include "endgame/outplays.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -11,6 +12,7 @@
 namespace scribblez {
 
 class Dictionary;
+class LeaveOutplays;
 
 // Result of a single endgame solve, from the perspective of the side to move
 // at the solved position ("the solving side").
@@ -56,21 +58,37 @@ struct EndgameResult {
 // entry, propagated through the negamax recursion (a node is proven only if the
 // child searches its verdict rests on are all proven).
 //
-// Outplay-threat futility pruning cuts opponent replies at interior nodes. When
-// the side to move plays m and the leave it keeps holds two out-plays that no
-// single opponent reply can both block (see outplay_threat.h), the opponent
-// cannot stop it from going out next turn. So in the child node, any opponent
-// reply r that does not itself empty the opponent's rack, scoring g, admits a
-// guaranteed continuation whose value to the opponent is at most
-//   U(g) = s_opp + 3*g - o_min - 2*opp_pv,
-// where s_opp is the opponent's spread at the child, opp_pv its rack value
-// there, and o_min the smaller score of the unblockable out-play pair. (The 3*g
-// arises because the reply's leftover rack is worth at least opp_pv - g, and the
-// guaranteed out doubles that leftover as its end-of-game bonus.) A reply with
-// U(g) <= alpha cannot improve the node, so it is skipped. The guaranteed line
-// is terminal, so the skip is proven-grade and never clears the node's proven
-// bit. Out-play replies are never pruned; a test can disable the whole scheme
-// (set_threat_pruning) to A/B that it changes no value or best move.
+// Opponent-outplay futility pruning cuts the mover's own moves at interior
+// nodes. Each node knows the current out-play set of the side that will reply
+// (see outplays.h): every entry is a play that would empty the replier's rack,
+// still legal at its recorded score. A mover move m scoring g that leaves the
+// replier a turn and places no tile in the halo of such an out-play scoring p
+// lets the replier end the game at once, so
+//   U(m) = s + g - p - 2*(pv - face(m))
+// -- s the mover's spread at the node, pv its rack value, face(m) the face
+// value of m's placed tiles -- is a sound upper bound on m's search value. The
+// surviving out-play is just one replier option: out-plays the set is missing
+// (kill-filter false drops; ones m newly enables) only lower m's true value,
+// and halo conservatism only discards bounds, so the bound never overreaches
+// downward. The best surviving out-play gives the tightest bound; a move with
+// U(m) <= alpha is skipped (proven-grade, since the guaranteed line is
+// terminal, so the skip never clears the node's proven bit), and U(m) also caps
+// the move-ordering estimate so provably weak moves sink. Moves that end the
+// game themselves -- an out-play, or a pass that trips the internal scoreless
+// cap -- give the replier no turn and are never pruned. A test can disable the
+// scheme (set_outplay_futility) to A/B that it changes no value or best move.
+//
+// The out-play sets are maintained incrementally rather than recomputed per
+// node, since a per-node move generation for the replier's rack would cost as
+// much as the search work it saves. The opponent's root set costs one extra
+// move generation per solve; after that, making a move m by side s hands the
+// child (a) for side s, the out-plays of m's leave -- read out of the node's
+// own legal-play list by used-tile bucketing (LeaveOutplays), since any play of
+// a rack subset is in that list -- and (b) for the other side, the parent's set
+// filtered to the entries whose halo m does not touch. Halos are built on the
+// board of the node that collected the entry and stay sound kill triggers as
+// the board grows (see OutplayEntry). Greedy playouts neither consult nor
+// maintain the sets.
 //
 // TODO(multithreading): when single-game (non-parallel-self-play) settings
 // arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
@@ -120,10 +138,10 @@ class EndgameSolver {
   // treat entries from older generations as empty.
   void clear();
 
-  // Enable or disable outplay-threat futility pruning (on by default). Exists so
-  // a test can A/B the two modes and assert the pruning never changes a solve's
-  // value or best move; production always leaves it on.
-  void set_threat_pruning(bool on) { threat_pruning_ = on; }
+  // Enable or disable opponent-outplay futility pruning (on by default). Exists
+  // so a test can A/B the two modes and assert the pruning never changes a
+  // solve's value or best move; production always leaves it on.
+  void set_outplay_futility(bool on) { outplay_futility_ = on; }
 
   // Enable or disable the proven-verdict deepening short-circuit (on by
   // default). Exists so tests and the benchmark can A/B how many nodes the
@@ -182,22 +200,29 @@ class EndgameSolver {
   SearchResult run_root(int depth, int32_t alpha, int32_t beta,
                         std::vector<std::pair<Move, int32_t>>& root_moves,
                         const std::vector<Move>& plays, Move* best_out);
-  // `threat` is the outplay-threat (o_min, or OutplayThreats::kNoThreat) the
-  // parent hands this node, licensing futility pruning of dominated replies.
-  SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply, int32_t threat);
+  SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
   // Search one child at (alpha, beta) and return its value from the parent's
   // perspective (negated) with the child's proven bit, using a full window for
   // the first child and a scout-plus-conditional-re-search for the rest (PVS).
-  // `threat` is forwarded to the child (the same for scout and re-search).
-  SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply, bool first,
-                            int32_t threat);
+  SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply,
+                            bool first);
   int32_t greedy_playout(uint64_t node_key, int ply);
 
-  // Sound upper bound on the mover's value from playing reply `m` when the parent
-  // handed down outplay threat `threat`: the opponent otherwise goes out next
-  // turn. Returns kInf when no threat is active or `m` empties the mover's rack
-  // (the threat is void), so such replies are never pruned.
-  int32_t threat_reply_bound(const Move& m, int32_t threat) const;
+  // Sound upper bound on the mover's value from playing `m` at the current node,
+  // derived from the best out-play in `replier_outs` that `m` provably leaves
+  // intact (see the class comment for the formula). Returns kInf when no
+  // out-play survives `m` or `m` ends the game itself (the replier then never
+  // gets a turn), so such moves are never pruned.
+  int32_t outplay_futility_bound(const Move& m, const OutplaySet& replier_outs) const;
+
+  // Derive the out-play sets the child reached by the mover's move `m` sees
+  // (see the class comment), writing them into ply_sets_[child_ply] and
+  // pointing cur_sets_ at them; restore_outplay_sets undoes the pointer swap.
+  // `leave_outs` is the node's bucketing of its own play list. No-ops (and
+  // returns cleanly) when the futility scheme is disabled.
+  void push_outplay_sets(const Move& m, LeaveOutplays* leave_outs, int child_ply,
+                         OutplaySet* saved[2]);
+  void restore_outplay_sets(OutplaySet* const saved[2]);
 
   // --- Make / unmake ------------------------------------------------------
   void make(const Move& move, int ply);
@@ -211,8 +236,10 @@ class EndgameSolver {
 
   // --- Move ordering / greedy choice --------------------------------------
   int32_t order_estimate(const Move& move, const Move& tt_move, bool have_tt_move) const;
+  // `replier_outs` (when non-null) caps each estimate by the move's futility
+  // bound, sinking provably weak moves.
   void order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
-                   bool have_tt_move) const;
+                   bool have_tt_move, const OutplaySet* replier_outs) const;
   const Move& greedy_pick(const std::vector<Move>& plays) const;
   double playout_adjusted(const Move& move) const;
   int placed_face_value(const Move& move) const;
@@ -241,9 +268,21 @@ class EndgameSolver {
   uint64_t budget_ = 0;
   bool aborting_ = false;
 
-  // Outplay-threat futility pruning, on except when a test disables it to A/B
-  // the two modes (see set_threat_pruning).
-  bool threat_pruning_ = true;
+  // Opponent-outplay futility pruning, on except when a test disables it to A/B
+  // the two modes (see set_outplay_futility).
+  bool outplay_futility_ = true;
+
+  // The out-play sets each ply's children read their futility bounds from. A
+  // node's mover writes its children's sets into ply_sets_[child ply] (one slot
+  // per depth, so siblings reuse it) and points cur_sets_ there; cur_sets_[s]
+  // is always seat s's current set, rooted at root_sets_ (the solving side's
+  // slot stays empty: the root node itself is never futility-pruned).
+  struct PlyOutplaySets {
+    OutplaySet mover, other;
+  };
+  OutplaySet root_sets_[2];
+  std::vector<PlyOutplaySets> ply_sets_;  // indexed by the child's ply
+  OutplaySet* cur_sets_[2] = {nullptr, nullptr};
 
   bool proof_early_exit_ = true;
   std::vector<TTEntry> tt_;
