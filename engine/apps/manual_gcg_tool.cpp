@@ -849,16 +849,29 @@ class ManualGame {
     return true;
   }
 
-  RackSlots next_known_rack_before(int player, int from_ply, const RackSlots& fallback) const {
+  // The waiting player's rack at `from_ply` as recorded before their next turn:
+  // their rack does not change until they move again, so that turn's
+  // rack_before is their current hand. Nullopt when they have no later recorded
+  // turn with a known rack (an unspecified rack, shown as a full hidden "?"
+  // rack instead).
+  std::optional<RackSlots> next_known_rack_before(int player, int from_ply) const {
     for (int i = from_ply; i < static_cast<int>(turns_.size()); ++i) {
       const ManualTurn& t = turns_[i];
       if (t.record.player != player) continue;
       if (has_known_tiles(t.rack_before_slots)) return t.rack_before_slots;
     }
-    return fallback;
+    return std::nullopt;
+  }
+
+  // How an empty slot of `slots` renders: a rack whose tiles we know is
+  // complete, so an empty slot holds no tile (EMPTY); a rack with no known
+  // tiles is an unspecified full hand whose slots are hidden ("?" / UNKNOWN).
+  static RackSlotState hidden_state_for(const RackSlots& slots) {
+    return has_known_tiles(slots) ? RackSlotState::EMPTY : RackSlotState::UNKNOWN;
   }
 
   RackDisplay post_move_rack_from_turn(const ManualTurn& t) const {
+    const RackSlotState hidden = hidden_state_for(t.rack_before_slots);
     std::array<RackSlotState, kRackSlots> state;
     std::array<std::optional<Tile>, kRackSlots> letters;
     for (int i = 0; i < kRackSlots; ++i) {
@@ -866,7 +879,7 @@ class ManualGame {
         state[i] = RackSlotState::KNOWN;
         letters[i] = t.rack_before_slots[i].value();
       } else {
-        state[i] = RackSlotState::UNKNOWN;
+        state[i] = hidden;
         letters[i].reset();
       }
     }
@@ -923,8 +936,14 @@ class ManualGame {
     const int waiting = 1 - mover;
 
     out[mover] = post_move_rack_from_turn(viewed);
-    out[waiting] = display_from_slots(next_known_rack_before(waiting, view_ply, fallback[waiting]),
-                                      RackSlotState::UNKNOWN);
+    if (const auto rack = next_known_rack_before(waiting, view_ply)) {
+      // A known rack is complete: it holds exactly its tiles, so slots past them
+      // are empty (e.g. an endgame hand the bag could not refill to seven),
+      // never a hidden "?".
+      out[waiting] = display_from_slots(*rack, RackSlotState::EMPTY);
+    } else {
+      out[waiting] = display_from_slots(fallback[waiting], RackSlotState::UNKNOWN);
+    }
 
     // At the final position, the player who didn't go out still holds their
     // leftover tiles. These survive only in the end-of-game adjustment (the
