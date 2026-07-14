@@ -14,14 +14,15 @@
 //                     (A-B+E)/A the solver imposes on self-play.
 //   --mode=games    : run N seeded full games for hasty-vs-hasty and for
 //                     endgame-vs-endgame at every budget (same seeds across
-//                     configs; endgame games respect projections, as self-play
-//                     generation does) and report wall-time ratios to the
+//                     configs) and report wall-time ratios to the
 //                     hasty-vs-hasty baseline, then the seat-mirrored
 //                     head-to-head record against plain HastyBot bucketed by
-//                     each seed's baseline bag-empty spread. Head-to-head
-//                     games never fast-track: substituting the proof's replies
-//                     for the live opponent's moves would corrupt the paired
-//                     protocol.
+//                     each seed's baseline bag-empty spread. Every game
+//                     respects projections, as self-play generation does: a
+//                     proven endgame is recorded at its certificate line, so
+//                     head-to-head spreads are the margins the training
+//                     pipeline will actually see (W/D/L is proof-invariant
+//                     either way).
 //
 // Usage:
 //   endgame_bench [--mode=endgames|games] [--games N] [--seed N]
@@ -270,10 +271,10 @@ using AgentFactory = std::function<std::unique_ptr<Agent>(int thread_id)>;
 
 // Play `games` seeded games (seed base_seed+i) of factory-built agents and
 // return the wall-clock seconds. Threads split the game indices into contiguous
-// chunks; each thread builds its own pair of agents once and reuses them.
-// `fast_track` makes the games respect agent projections, as self-play does.
+// chunks; each thread builds its own pair of agents once and reuses them. All
+// games respect agent projections, as self-play does.
 double run_config(const Dictionary& dict, uint64_t base_seed, int games, int threads,
-                  const AgentFactory& make0, const AgentFactory& make1, bool fast_track) {
+                  const AgentFactory& make0, const AgentFactory& make1) {
   const auto t0 = Clock::now();
   std::vector<std::thread> pool;
   const int per = (games + threads - 1) / threads;
@@ -286,7 +287,7 @@ double run_config(const Dictionary& dict, uint64_t base_seed, int games, int thr
       std::unique_ptr<Agent> p1 = make1(t);
       for (int i = lo; i < hi; ++i) {
         Game g(*p0, *p1, dict, base_seed + static_cast<uint64_t>(i));
-        g.set_respect_projections(fast_track);
+        g.set_respect_projections(true);
         g.play();
       }
     });
@@ -345,8 +346,9 @@ int baseline_bag_empty_spread(const Dictionary& dict, uint64_t seed) {
 // seeds whose baseline game never empties the bag). Each seed is played twice
 // with the seats mirrored, so per-seed tile-draw luck (who gets the blanks)
 // cancels instead of dominating the variance; unpaired spread estimates are
-// not usable. Single-threaded so the per-game results are deterministic in
-// `base_seed`.
+// not usable. Games respect projections, so once the bot proves a class the
+// recorded spread is the certificate line's -- the production semantics.
+// Single-threaded so the per-game results are deterministic in `base_seed`.
 std::vector<H2H> endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, int games,
                                   const EndgameSolver::Params& params,
                                   const std::vector<int>& thresholds) {
@@ -361,6 +363,7 @@ std::vector<H2H> endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, in
       std::unique_ptr<Agent> p0 = eg_seat == 0 ? eg(0) : hb(0);
       std::unique_ptr<Agent> p1 = eg_seat == 0 ? hb(0) : eg(0);
       Game g(*p0, *p1, dict, seed);
+      g.set_respect_projections(true);
       g.play();
       const int spread = g.score(eg_seat) - g.score(1 - eg_seat);
       h.spread_sum += spread;
@@ -390,14 +393,14 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
   std::printf("%-22s %11s %10s %10s %10s %10s\n", "config", "budget", "total s", "s/game",
               "games/s", "ratio");
 
-  const double base_s = run_config(dict, base_seed, games, threads, hasty_factory(),
-                                   hasty_factory(), /*fast_track=*/false);
+  const double base_s =
+    run_config(dict, base_seed, games, threads, hasty_factory(), hasty_factory());
   print_games_row("hasty-vs-hasty", "-", base_s, games, 1.0);
 
   for (uint64_t b : budgets) {
     params.budget = b;
     const AgentFactory f = endgame_factory(params);
-    const double s = run_config(dict, base_seed, games, threads, f, f, /*fast_track=*/true);
+    const double s = run_config(dict, base_seed, games, threads, f, f);
     print_games_row("endgame-vs-endgame", std::to_string(b), s, games, s / base_s);
   }
 

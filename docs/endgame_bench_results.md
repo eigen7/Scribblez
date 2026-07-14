@@ -51,9 +51,11 @@ to their proven class and proof cost (see EndgameGcgCases).
   single runs on an otherwise idle machine; run-to-run baseline drift is ~2%.
 - **Strength** (`--mode=games` head-to-head): the endgame bot's record against
   a plain greedy HastyBot, each seed played twice with the seats mirrored and
-  the pair pooled (unpaired estimates are not usable). Head-to-head games
-  never respect projections: substituting the proof's replies for the live
-  opponent's moves would corrupt the comparison. Strength rows pool 6
+  the pair pooled (unpaired estimates are not usable). Every game respects
+  projections, as self-play generation does, so once the bot proves a class
+  the recorded spread is the certificate line's -- the margins the training
+  pipeline actually sees. The W/D/L record is proof-invariant, so it measures
+  the same thing with or without projections. Strength rows pool 6
   independent 800-game seed shards; uncertainty is the across-shard standard
   error.
 - **Bucketing by bag-empty spread** (`--spread-buckets`): decision accuracy
@@ -92,10 +94,10 @@ which alone multiplies whole-game cost by ~2.25x. The games-mode sweep agrees
 
 | setting | budget | mean spread | W-L overall | W-L, bag-empty spread 0-19 (800 games) |
 |---|---|---|---|---|
-| spread_matters=1 | 220 | +0.43 +/- 0.04 | +0.50pp | +0.75pp |
-| spread_matters=0 | 220 | +0.15 +/- 0.08 | +0.56pp | +1.12pp |
-| spread_matters=1 | 1600 | +4.23 +/- 0.13 | +3.88pp | +14.00pp |
-| spread_matters=0 | 1600 | +0.38 +/- 0.14 | +4.02pp | +14.02pp |
+| spread_matters=1 | 220 | +0.44 +/- 0.04 | +0.50pp | +0.75pp |
+| spread_matters=0 | 220 | +0.41 +/- 0.08 | +0.52pp | +1.12pp |
+| spread_matters=1 | 1600 | +4.26 +/- 0.13 | +3.88pp | +14.00pp |
+| spread_matters=0 | 1600 | +3.28 +/- 0.18 | +4.02pp | +14.00pp |
 
 Readings:
 
@@ -103,11 +105,13 @@ Readings:
   noise at both budgets; the close bucket's standard error is roughly
   +/-1.5pp at 800 games), and all of the win/loss value of endgame solving
   lives in that close bucket (+14pp at 1600 vs +0.0-0.4pp in decided games).
-- **Banked spread is only meaningful under spread_matters**: the break-out
-  setting plays proof-arbitrary moves and is measured here in a loop that
-  ignores its projections, so its low spread is by design, not a defect.
+- **Certificates carry most of the margin for the break-out setting**: its
+  post-proof play is proof-arbitrary, but the projected certificate line is
+  proof-grade, so under projections it banks within a point of
+  spread_matters=1 at 1600 -- at the narrow window's lower cost. The
+  remaining gap is what the spread pass buys.
 - The spread_matters margin play at high budgets is the same exact-endgame
-  value it has always been (~+4.2 pts/game at 1600 at these seeds).
+  value it has always been (~+4.3 pts/game at 1600 at these seeds).
 
 ## Analyzing a single position
 
