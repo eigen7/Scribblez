@@ -845,12 +845,11 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
 }
 
-// A nonempty continuation is a valid proof certificate: starting from the
-// returned best move, every entry is legal in its position (regenerated and
-// matched exactly), the line ends the game under the solver's rules, and the
-// final spread's class is the proven class. Checked across objectives and
-// budgets; the certificate must also actually get produced (nonempty for a
-// clear majority of proven solves).
+// Every class-proven solve carries a valid proof certificate: starting from
+// the returned best move, every entry is legal in its position (regenerated
+// and matched exactly), the line ends the game under the solver's rules, and
+// the final spread's class is the proven class. Checked across objectives and
+// budgets.
 TEST(EndgameSolver, ContinuationCertificateIsSound) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -870,12 +869,17 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
       continue;
     }
     ++class_proven;
-    if (r.continuation.empty()) continue;
-    ++with_certificate;
 
     RefState st = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
     bool over = false;
     st = ref_apply(st, r.best, over);
+    // A best move that itself ends the game needs no continuation; otherwise
+    // the certificate must be present and finish the game.
+    if (!over) {
+      ASSERT_FALSE(r.continuation.empty())
+        << "position " << i << ": class proven but no certificate";
+      ++with_certificate;
+    }
     for (const Move& m : r.continuation) {
       ASSERT_FALSE(over) << "position " << i << ": continuation past the game end";
       if (m.type() == MoveType::PLAY) {
@@ -885,15 +889,14 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
       }
       st = ref_apply(st, m, over);
     }
-    ASSERT_TRUE(over) << "position " << i << ": continuation does not end the game";
+    ASSERT_TRUE(over) << "position " << i << ": certified line does not end the game";
     const int32_t final_spread = st.scores[0] - st.scores[1];
     ASSERT_EQ((final_spread > 0) - (final_spread < 0), r.proven_class) << "position " << i;
   }
   ASSERT_GT(class_proven, 0);
-  ASSERT_GT(with_certificate * 3, class_proven * 2)
-    << "certificates fired on only " << with_certificate << "/" << class_proven;
+  ASSERT_GT(with_certificate, 0);
   std::cout << "  certificates " << with_certificate << "/" << class_proven
-            << " class-proven endgames\n";
+            << " class-proven endgames (the rest end with the chosen move)\n";
 }
 
 // At a budget large enough to prove everything, the lexicographic objective is

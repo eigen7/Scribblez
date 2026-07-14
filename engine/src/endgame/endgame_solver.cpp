@@ -514,6 +514,10 @@ EndgameResult EndgameSolver::run_iterative(int32_t alpha, int32_t beta, bool fir
     result.value = sr.value;
     result.depth_completed = depth;
     result.proven = sr.proven;
+    if (trace_) {
+      *trace_ << "  depth " << depth << ": best " << trace_move(best_move) << ", value " << sr.value
+              << (sr.proven ? " (proven)" : " (estimate)") << ", nodes " << nodes_ << "\n";
+    }
     // A proven iteration has resolved the search exactly: in the full window the
     // value is the true game spread, and in the first-win window a proven verdict
     // always settles the win/draw/loss class (a proven bound is itself true).
@@ -567,6 +571,7 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   // insurance premium this objective pays for class protection.
   const uint64_t full_budget = budget_;
   budget_ = full_budget / 2;
+  if (trace_) *trace_ << "class pass (narrow window, budget " << budget_ << "):\n";
   const EndgameResult first =
     run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays, max_plies);
   budget_ = full_budget;
@@ -575,6 +580,7 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   if (!first.proven || first.depth_completed < 1) {
     // No class proof in budget: margin-maximizing play is the class-robust
     // fallback (margin is slack against estimate error), over the warm table.
+    if (trace_) *trace_ << "no class proof; spread fallback pass:\n";
     const EndgameResult spread =
       run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
     return spread.depth_completed >= 1 ? spread : first;
@@ -588,6 +594,12 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   // pass a narrow-window probe of its chosen child, and on any failure the
   // proven-class move from the first pass stands.
   const int cls = class_of(first.value);
+  if (trace_)
+    *trace_ << "class proven: "
+            << (cls > 0   ? "WIN"
+                : cls < 0 ? "LOSS"
+                          : "DRAW")
+            << "; spread pass on the remaining budget:\n";
   EndgameResult result = first;
   result.proven_class = cls;
   const EndgameResult spread =
@@ -602,31 +614,140 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   return result;
 }
 
-void EndgameSolver::extract_continuation(EndgameResult& result) {
-  make(result.best, 0);
-  int ply = 1;
-  while (!game_over_ && ply < kMaxPlayout) {
-    // Prefer the table's best move; a proof search leaves entries along its
-    // spine, but cut nodes truncate lines and later writes evict entries, so
-    // gaps and stale moves are normal. Any gap -- and any entry whose move is
-    // not legal here (regenerated and matched byte-for-byte) -- falls back to
-    // the greedy playout move. The terminal class check below is the sole
-    // arbiter of the line's validity, so the fallback costs soundness nothing.
-    const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
-    Move next = plays.empty() ? Move::pass() : greedy_pick(plays);
-    if (TTEntry* e = tt_probe(node_hash())) {
-      const Move& tt_move = e->best;
-      if (tt_move.type() != MoveType::PLAY ||
-          std::find(plays.begin(), plays.end(), tt_move) != plays.end()) {
-        next = tt_move;
+void EndgameSolver::set_trace(std::ostream* os,
+                              std::function<std::string(const Board&, const Move&)> fmt) {
+  trace_ = os;
+  trace_fmt_ = fmt ? std::move(fmt) : [](const Board&, const Move&) { return std::string("?"); };
+}
+
+void EndgameSolver::trace_root_view(const std::vector<RankedMove>& root_moves) {
+  std::ostream& os = *trace_;
+  const OutplaySet& outs = root_sets_[1];
+  os << "replier out-plays on the current board (" << outs.size() << "):\n";
+  for (const OutplayEntry& e : outs)
+    os << "  " << trace_move(e.move) << " +" << e.move.score() << "\n";
+  if (outs.empty()) {
+    os << "  (none: no futility bounds apply at the root)\n";
+    return;
+  }
+
+  // The block-or-outscore view of every root move m scoring g with leftover
+  // face value L, against the strongest out-play (+p) m fails to block:
+  //   final spread <= U(m) = s + g - p - 2L,
+  // so m must either block every out-play or score at least p + 2L - s to
+  // reach a draw. kInf bounds are annotated with why no bound applies.
+  const int32_t s_root = spread_stm();
+  int32_t best_bound = -kInf;
+  bool any_unbounded = false;
+  os << "root moves (spread " << (s_root >= 0 ? "+" : "") << s_root << "):\n";
+  for (const RankedMove& rm : root_moves) {
+    const Move& m = rm.move;
+    os << "  " << trace_move(m);
+    if (m.type() == MoveType::PLAY) os << " +" << m.score();
+    const int32_t u = outplay_futility_bound(m, outs);
+    if (u == kInf) {
+      any_unbounded = true;
+      const bool ends = (m.type() == MoveType::PLAY && m.num_glyphs() == racks_[stm_].size()) ||
+                        (m.type() == MoveType::PASS && scoreless_ >= 1);
+      os << (ends ? ": ends the game itself; no bound\n" : ": blocks every out-play; no bound\n");
+      continue;
+    }
+    best_bound = std::max(best_bound, u);
+    const Move* survivor = nullptr;
+    for (const OutplayEntry& e : outs) {
+      if (!move_touches_halo(e.halo, m)) {
+        survivor = &e.move;
+        break;
       }
     }
+    const int32_t leftover = racks_[stm_].point_value() - placed_face_value(m);
+    os << ": leaves " << trace_move(*survivor) << " (+" << best_surviving_score(outs, m)
+       << ") alive; bound " << s_root << " + " << m.score() << " - "
+       << best_surviving_score(outs, m) << " - 2*" << leftover << " = " << u << " (needs >= +"
+       << best_surviving_score(outs, m) + 2 * leftover - s_root << " to reach a draw)\n";
+  }
+  if (!any_unbounded) {
+    os << "no root move blocks every out-play or ends the game; best achievable bound "
+       << best_bound << (best_bound < 0 ? " -> provably losing, pending search confirmation" : "")
+       << "\n";
+  }
+}
+
+bool EndgameSolver::reprove_walk_move(int ply, int req_class, Move* out) {
+  for (int depth = 1; depth <= kMaxPlayout; ++depth) {
+    const SearchResult sr = negamax(depth, kFirstWinAlpha, kFirstWinBeta, ply);
+    if (!sr.proven || !settles_first_win_class(sr.value) || class_of(sr.value) != req_class)
+      continue;
+    // The proof's root entry (just stored, or the hit that answered it) holds
+    // the class-preserving move; revalidate it against a fresh generation.
+    TTEntry* e = tt_probe(node_hash());
+    if (e == nullptr) return false;
+    const Move m = e->best;
+    if (m.type() == MoveType::PLAY) {
+      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+      if (std::find(plays.begin(), plays.end(), m) == plays.end()) return false;
+    }
+    *out = m;
+    return true;
+  }
+  return false;
+}
+
+void EndgameSolver::extract_continuation(EndgameResult& result) {
+  if (trace_) *trace_ << "certificate walk: " << trace_move(result.best) << " (chosen move)\n";
+
+  // Reconstruction runs after the search proper, outside the node budget and
+  // with futility pruning off (the incremental out-play sets are not
+  // maintained along the walk, so its re-searches must not consult them).
+  const uint64_t nodes_before = nodes_;
+  const uint64_t budget_before = budget_;
+  const bool aborting_before = aborting_;
+  const bool futility_before = outplay_futility_;
+  budget_ = UINT64_MAX / 2;
+  aborting_ = false;
+  outplay_futility_ = false;
+
+  make(result.best, 0);
+  int ply = 1;
+  bool ok = true;
+  while (!game_over_ && ply < kMaxPlayout) {
+    // The class from the current mover's perspective, under the walk invariant:
+    // the winner's moves are re-proven below and the doomed side's moves cannot
+    // change the class, so every position on the walk keeps the root's class.
+    const int req_class = stm_ == 0 ? result.proven_class : -result.proven_class;
+    Move next = Move::pass();
+    if (req_class >= 0) {
+      // This side must preserve a win or hold a draw: take a freshly-proven
+      // class-preserving move.
+      if (!reprove_walk_move(ply, req_class, &next)) {
+        ok = false;
+        break;
+      }
+    } else {
+      // This side is proven lost: no move of theirs changes the class, so the
+      // greedy playout move stands in for their optimal play.
+      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+      if (!plays.empty()) next = greedy_pick(plays);
+    }
+    if (trace_) *trace_ << "  " << trace_move(next) << "\n";
     result.continuation.push_back(next);
     make(next, ply++);
   }
-  const bool ok = game_over_ && class_of(scores_[0] - scores_[1]) == result.proven_class;
+  const int32_t final_spread = scores_[0] - scores_[1];
+  ok = ok && game_over_ && class_of(final_spread) == result.proven_class;
   for (int d = ply - 1; d >= 0; --d) unmake(d);
+  if (trace_) {
+    *trace_ << "certificate " << (ok ? "valid" : "REJECTED") << ": final spread " << final_spread
+            << " (class " << class_of(final_spread) << "), proven class " << result.proven_class
+            << "\n";
+  }
   if (!ok) result.continuation.clear();
+
+  result.certificate_nodes = nodes_ - nodes_before;
+  nodes_ = nodes_before;
+  budget_ = budget_before;
+  aborting_ = aborting_before;
+  outplay_futility_ = futility_before;
 }
 
 EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
@@ -648,7 +769,9 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   aborting_ = false;
   budget_ = node_budget;
 
-  const size_t needed = static_cast<size_t>(max_plies) + kMaxPlayout + 2;
+  // Sized for the deepest search stack plus a certificate walk that runs its
+  // re-searches (and their playouts) on top of the walked plies.
+  const size_t needed = static_cast<size_t>(max_plies) + 3 * kMaxPlayout + 2;
   if (frames_.size() < needed) frames_.resize(needed);
   const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
   if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
@@ -681,6 +804,14 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   if (outplay_futility_) {
     collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
                           root_sets_[1]);
+  }
+  if (trace_) {
+    *trace_ << "solve: objective " << endgame_objective_name(objective) << ", budget "
+            << node_budget << ", scores " << my_score << "-" << opp_score << " (spread "
+            << (my_score - opp_score >= 0 ? "+" : "") << my_score - opp_score
+            << "), mover rack value " << my_rack.point_value() << ", replier rack value "
+            << opp_rack.point_value() << "\n";
+    trace_root_view(root_moves);
   }
   switch (objective) {
     case EndgameObjective::kSpread:

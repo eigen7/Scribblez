@@ -6,6 +6,8 @@
 #include "game/rack.h"
 
 #include <cstdint>
+#include <functional>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -78,13 +80,17 @@ struct EndgameResult {
                                      // of the game on
   // The proof-certificate line after `best`: the remaining moves of the game,
   // both sides alternating, ending the game (under the solver's compressed
-  // scoreless rule) at the proven class. Reconstructed from the transposition
-  // table and validated move-by-move, so it is best-effort: empty when no
-  // class was proven or the reconstruction failed a validation, never wrong.
-  // The opponent's entries are the PROOF's optimal replies, so playing the
-  // line out records a game-theoretic continuation rather than what the
-  // opposing agent would have chosen.
+  // scoreless rule) at the proven class. Present for every solve that proves
+  // the class: the class-critical side's moves come from fresh narrow-window
+  // proofs at each position, so the line lands on the proven class by
+  // construction (and a terminal check still gates it). The doomed side's
+  // entries are proof-grade optimal-play stand-ins, not what the opposing
+  // agent would have chosen.
   std::vector<Move> continuation;
+  // Nodes the certificate reconstruction's re-searches spent. Tracked apart
+  // from `nodes`: reconstruction runs after the search proper and is exempt
+  // from node_budget (its cost is bounded in practice by the warm table).
+  uint64_t certificate_nodes = 0;
 };
 
 // Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
@@ -188,6 +194,14 @@ class EndgameSolver {
   // treat entries from older generations as empty.
   void clear();
 
+  // Stream a human-readable trace of each solve to `os`: the position summary,
+  // the replier's out-play set, every root move's futility bound (the
+  // block-or-outscore view), each iteration's verdict, and the certificate
+  // walk. `fmt` renders a move against the board it is about to be played on
+  // (the endgame tool binds GCG notation). Pass nullptr to disable (the
+  // default).
+  void set_trace(std::ostream* os, std::function<std::string(const Board&, const Move&)> fmt);
+
   // Enable or disable opponent-outplay futility pruning (on by default). Exists
   // so a test can A/B the two modes and assert the pruning never changes a
   // solve's value or best move; production always leaves it on.
@@ -271,11 +285,27 @@ class EndgameSolver {
   // the solving side: a narrow-window iterative probe of the child position,
   // sharing the solve budget. False when the proof does not land in budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
-  // Fill result.continuation by walking transposition-table best moves from
-  // result.best, validating each against the position's legal moves and the
-  // terminal class against result.proven_class; leaves it empty on any miss.
-  // Post-search reconstruction: spends a few move generations, no search nodes.
+  // Render `m` with the trace formatter against the solver's current board.
+  std::string trace_move(const Move& m) const { return trace_fmt_(board_, m); }
+  // The root block-or-outscore view: the replier's out-plays and, per root
+  // move, the futility bound and the strongest out-play it fails to block.
+  void trace_root_view(const std::vector<RankedMove>& root_moves);
+
+  // Fill result.continuation with a proof-certificate line for result.best:
+  // at every turn of a side that must preserve the proven class (the winner's
+  // turns; both sides' in a draw) the move comes from a fresh narrow-window
+  // proof of the current position, re-searched over the warm table outside the
+  // node budget; the doomed side's turns take the greedy playout move, which
+  // cannot change the class. Succeeds for every proven class; the terminal
+  // class check is kept as a hard gate. Reconstruction cost lands in
+  // result.certificate_nodes.
   void extract_continuation(EndgameResult& result);
+  // The proven class-preserving move for the side to move at the current walk
+  // position (`req_class` is the class from the mover's perspective), from an
+  // iterative narrow-window proof rooted at walk ply `ply`. Returns false only
+  // if no proof lands within kMaxPlayout depths (impossible for a true class,
+  // kept as the never-wrong gate).
+  bool reprove_walk_move(int ply, int req_class, Move* out);
   SearchResult run_root(int depth, int32_t alpha, int32_t beta, std::vector<RankedMove>& root_moves,
                         const std::vector<Move>& plays, Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
@@ -363,6 +393,12 @@ class EndgameSolver {
   OutplaySet* cur_sets_[2] = {nullptr, nullptr};
 
   bool proof_early_exit_ = true;
+
+  // Trace sink and move renderer; tracing is active iff trace_ is non-null
+  // (set_trace installs a fallback renderer when none is given).
+  std::ostream* trace_ = nullptr;
+  std::function<std::string(const Board&, const Move&)> trace_fmt_;
+
   std::vector<TTEntry> tt_;
   uint64_t tt_mask_ = 0;
   uint16_t tt_gen_ = 1;  // current generation; entries with gen != this are empty

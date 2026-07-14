@@ -162,7 +162,9 @@ struct SolveSample {
   int depth;
   bool differ;        // solver's move differs from the captured HastyBot move
   bool class_proven;  // the solve proved the win/draw/loss class
-  bool certificate;   // the solve reconstructed a proof-certificate continuation
+  bool certificate;   // the proof can fast-track the game: it carries a
+                      // certificate continuation, or its chosen move itself
+                      // ends the game (nothing remains to project)
   bool proven;        // the solve's final value is proven
 };
 
@@ -182,11 +184,14 @@ std::vector<SolveSample> solve_positions(const Dictionary& dict,
     const EndgameResult r = solver.solve(p.board, dict, p.my_rack, p.opp_rack, p.my_score,
                                          p.opp_score, p.scoreless, budget, plies, objective);
     const auto t1 = std::chrono::steady_clock::now();
+    const bool class_proven = r.proven_class != EndgameResult::kClassUnknown;
+    const bool best_ends_game =
+      (r.best.type() == MoveType::PLAY && r.best.num_glyphs() == p.my_rack.size()) ||
+      (r.best.type() == MoveType::PASS && p.scoreless >= 1);
     samples.push_back({bucket_of(std::abs(p.my_score - p.opp_score), thresholds),
                        std::chrono::duration<double>(t1 - t0).count() * 1e6, r.nodes,
-                       r.depth_completed, !(r.best == p.hasty_move),
-                       r.proven_class != EndgameResult::kClassUnknown, !r.continuation.empty(),
-                       r.proven});
+                       r.depth_completed, !(r.best == p.hasty_move), class_proven,
+                       class_proven && (best_ends_game || !r.continuation.empty()), r.proven});
   }
   return samples;
 }

@@ -177,6 +177,17 @@ target_link_libraries(board_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# Solve one GCG endgame position with a verbose trace of the solver's
+# reasoning (out-play futility view, iteration verdicts, certificate walk).
+add_executable(endgame_tool apps/endgame_tool.cpp)
+target_link_libraries(endgame_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 # Endgame-solver cost / whole-game-throughput benchmark (docs: phase-B endgame
 # solver). Pure CPU: no neural path, so it does not link scribblez_nn.
 add_executable(endgame_bench apps/endgame_bench.cpp)

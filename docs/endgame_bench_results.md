@@ -142,20 +142,28 @@ agent's `projected_remaining_moves`, and a projection-respecting game loop
 (self-play generation; `--fast-track` in the games-mode cost sweep) plays it
 out instead of prompting agents for the rest of the game.
 
-Certificate yield is the current bottleneck (solves mode, first-win, 256
-positions): at budget 220, 24% of solves prove the class but only 6%
-reconstruct a certificate; at 1600, 42% vs 15%. Off the searched proof spine
-the walk leans on greedy moves, which can forfeit the class and fail the final
-check -- the check keeps certificates *sound*, at the price of yield.
-Measured end-to-end (20 real-lexicon self-play games at budget 1600),
-fast-track skips ~2% of agent prompts, and the games-mode cost sweep with
-`--fast-track` is at throughput parity with it off. Two levers would raise the
-yield: tracking the certificate during the search itself instead of
-reconstructing it afterward, and re-searching gap positions at the narrow
-window under a small reconstruction budget. Beyond yield, the ceiling is
-structural: proofs land near the end of the endgame, so the prompts a
-certificate can skip are the game's last few -- fast-track can never touch the
-mid-game cost of an already-decided game.
+Certificate coverage is total: every class proof can fast-track (solves mode,
+first-win, 256 positions -- `% cert` equals `% class` in every bucket: 24% of
+solves at budget 220, 42% at 1600; a proof whose chosen move itself ends the
+game needs no continuation and counts as covered). The class-critical side's
+moves come from fresh narrow-window re-proofs at each walk position, run over
+the warm transposition table outside the node budget
+(`EndgameResult::certificate_nodes` carries the cost, which is negligible:
+mean solve time is unchanged).
+
+The throughput effect remains bounded by a structural ceiling: proofs land
+near the end of the endgame, so the prompts a certificate can skip are the
+game's last few. Measured end-to-end (20 real-lexicon self-play games at
+budget 1600), fast-track skips ~4% of agent prompts -- the cheap tail solves
+-- and the games-mode cost sweep with `--fast-track` sits at 2.09x vs 2.10x
+(220) and 33.2x vs 33.3x (1600). The break-out's value is therefore about
+where compute goes (a decided game asks for no further solves), not about the
+2x point.
+
+`endgame_tool --gcg FILE` solves one GCG endgame position with a verbose trace
+of this machinery: the replier's out-play set, every root move's
+block-or-outscore futility bound, each deepening iteration's verdict, the
+certificate walk, and the projected line.
 
 ## Per-solve accuracy view (lexicographic, `--mode=solves`, 256 positions)
 

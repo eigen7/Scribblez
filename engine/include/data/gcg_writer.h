@@ -52,6 +52,12 @@ struct GcgWriteOptions {
   std::optional<std::string> initial_rack2;
 };
 
+// One move in GCG event notation against the board it is about to be played
+// on: "POS WORD" for a play (row-first position for horizontal, column-first
+// for vertical; '.' marks a played-through square, lowercase a designated
+// blank), "-TILES" for an exchange, "-" for a pass.
+std::string move_notation(const Board& board_before, const Move& m);
+
 std::string game_log_to_gcg(const GameLog& log);
 std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options);
 void write_game_log_gcg(const GameLog& log, std::ostream& out);
