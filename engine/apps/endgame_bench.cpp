@@ -160,12 +160,13 @@ struct SolveSample {
   double us;
   uint64_t nodes;
   int depth;
-  bool differ;        // solver's move differs from the captured HastyBot move
-  bool class_proven;  // the solve proved the win/draw/loss class
-  bool certificate;   // the proof can fast-track the game: it carries a
-                      // certificate continuation, or its chosen move itself
-                      // ends the game (nothing remains to project)
-  bool proven;        // the solve's final value is proven
+  uint64_t cert_nodes;  // nodes the certificate reconstruction re-searches spent
+  bool differ;          // solver's move differs from the captured HastyBot move
+  bool class_proven;    // the solve proved the win/draw/loss class
+  bool certificate;     // the proof can fast-track the game: it carries a
+                        // certificate continuation, or its chosen move itself
+                        // ends the game (nothing remains to project)
+  bool proven;          // the solve's final value is proven
 };
 
 // Solve every captured position once at (budget, objective), tagging each
@@ -190,8 +191,9 @@ std::vector<SolveSample> solve_positions(const Dictionary& dict,
       (r.best.type() == MoveType::PASS && p.scoreless >= 1);
     samples.push_back({bucket_of(std::abs(p.my_score - p.opp_score), thresholds),
                        std::chrono::duration<double>(t1 - t0).count() * 1e6, r.nodes,
-                       r.depth_completed, !(r.best == p.hasty_move), class_proven,
-                       class_proven && (best_ends_game || !r.continuation.empty()), r.proven});
+                       r.depth_completed, r.certificate_nodes, !(r.best == p.hasty_move),
+                       class_proven, class_proven && (best_ends_game || !r.continuation.empty()),
+                       r.proven});
   }
   return samples;
 }
@@ -276,6 +278,23 @@ void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
       print_solve_row(b, bucket_label(k, thresholds), s);
     }
     print_solve_row(b, "all", aggregate_stats(samples, -1, b));
+    // Reconstruction cost, reported against the search nodes of the same
+    // proven solves: what the 100%-certificate guarantee actually costs.
+    uint64_t cert_nodes = 0, proven_nodes = 0;
+    size_t proven_count = 0;
+    for (const SolveSample& sm : samples) {
+      if (!sm.class_proven) continue;
+      ++proven_count;
+      cert_nodes += sm.cert_nodes;
+      proven_nodes += sm.nodes;
+    }
+    if (proven_count > 0) {
+      std::printf(
+        "%10s certificate reconstruction: %.0f nodes/proof, %.1f%% of the proven solves' "
+        "search nodes\n",
+        "", static_cast<double>(cert_nodes) / static_cast<double>(proven_count),
+        100.0 * static_cast<double>(cert_nodes) / static_cast<double>(proven_nodes));
+    }
   }
 }
 
