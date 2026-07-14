@@ -101,6 +101,7 @@ class GcgReader {
     while (std::getline(in, raw)) {
       if (raw.empty()) continue;
       if (TryParsePlayerDecl(raw)) continue;
+      if (TryParseRackPragma(raw)) continue;
       if (raw[0] != '>') continue;
       ParseTurnLine(raw);
     }
@@ -110,6 +111,7 @@ class GcgReader {
       return false;
     }
 
+    ApplyResumeRacks();
     FillResult(out_game);
     return true;
   }
@@ -120,7 +122,10 @@ class GcgReader {
     nick_to_player_.clear();
     board_ = Board();
     scores_ = {0, 0};
-    for (int p = 0; p < 2; ++p) ClearRackSlots(p);
+    for (int p = 0; p < 2; ++p) {
+      ClearRackSlots(p);
+      resume_racks_[p].reset();
+    }
     bag_ = full_bag();
     turns_.clear();
     snapshots_.clear();
@@ -139,6 +144,36 @@ class GcgReader {
       return true;
     }
     return false;
+  }
+
+  // Parse the manual tool's own rack pragmata, "#Rack1 <tiles>" / "#Rack2
+  // <tiles>". Before any event line the pragma gives a player's current
+  // ("resume") rack, held for the final position; after an event it gives their
+  // rack just after that event. Standard tournament GCG spells the starting
+  // rack in lowercase ("#rack1"), which carries different semantics and is left
+  // for the turn lines to supply, so only the capitalized form is consumed here.
+  bool TryParseRackPragma(const std::string& line) {
+    int player = 0;
+    if (line.rfind("#Rack1", 0) == 0) {
+      player = 0;
+    } else if (line.rfind("#Rack2", 0) == 0) {
+      player = 1;
+    } else {
+      return false;
+    }
+
+    const std::size_t space = line.find(' ');
+    const std::string token = space == std::string::npos ? "" : line.substr(space + 1);
+    const ParsedRackSlots slots = SlotsFromRackToken(token);
+
+    if (!saw_turn_) {
+      resume_racks_[player] = slots;
+    } else {
+      racks_[player] = slots;
+      snapshots_.back().racks[player] = slots;
+      turns_.back().racks_after_turn[player] = slots;
+    }
+    return true;
   }
 
   void ParsePlayerDecl(const std::string& line, int player) {
@@ -373,8 +408,10 @@ class GcgReader {
     for (int i = 0; i < RACK_SIZE; ++i) racks_[player][i].reset();
   }
 
-  void SetRackSlotsFromToken(int player, const std::string& rack_token) {
-    ClearRackSlots(player);
+  // Parse a rack token into slots: 'A'..'Z' are tiles, '?'/'*'/lowercase are
+  // blanks, '_' marks a present-but-unknown slot, '.' is skipped.
+  static ParsedRackSlots SlotsFromRackToken(const std::string& rack_token) {
+    ParsedRackSlots slots;
     int slot = 0;
     for (char ch : rack_token) {
       if (slot >= RACK_SIZE) break;
@@ -385,12 +422,26 @@ class GcgReader {
         continue;
       }
       if (up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z')) {
-        racks_[player][slot++] = BLANK;
+        slots[slot++] = BLANK;
         continue;
       }
       if (up >= 'A' && up <= 'Z') {
-        racks_[player][slot++] = Tile::from_char(up);
+        slots[slot++] = Tile::from_char(up);
       }
+    }
+    return slots;
+  }
+
+  void SetRackSlotsFromToken(int player, const std::string& rack_token) {
+    racks_[player] = SlotsFromRackToken(rack_token);
+  }
+
+  // Install the resume racks parsed from top-of-file "#Rack1"/"#Rack2" pragmata
+  // onto the final position, so a fully-recorded game reopens with each player's
+  // recorded current rack rather than an unknown hand.
+  void ApplyResumeRacks() {
+    for (int p = 0; p < 2; ++p) {
+      if (resume_racks_[p].has_value()) snapshots_.back().racks[p] = *resume_racks_[p];
     }
   }
 
@@ -426,6 +477,7 @@ class GcgReader {
   Board board_;
   std::array<int, 2> scores_ = {0, 0};
   std::array<ParsedRackSlots, 2> racks_;
+  std::array<std::optional<ParsedRackSlots>, 2> resume_racks_;
   TileCounts bag_;
   std::vector<ParsedGcgTurn> turns_;
   std::vector<ParsedGcgSnapshot> snapshots_;
