@@ -2,195 +2,166 @@
 
 Measurements from `endgame_bench` (see `engine/apps/endgame_bench.cpp`) on the
 development machine (Docker container, single-threaded runs, NWL23 lexicon,
-Release build). They characterize the `hastybot-endgame` agent's cost/strength
-tradeoff as a function of its `--endgame-nodes` budget and are the basis for
-the shipped default of 220.
+Release build). They characterize the `hastybot-endgame` agent's cost and
+strength as a function of its `--endgame-nodes` budget and its
+`--endgame-objective` (see `EndgameObjective` in endgame_solver.h), and are the
+basis for the shipped defaults (budget 220, lexicographic objective).
 
 **Hardware**: Intel Core i7-13850HX (28 hardware threads), 64 GB RAM, inside
 the project's Docker container, Release build.
 
+## The objectives, and what each is for
+
+- **lexicographic** (agent default): prove the win/draw/loss class first (a
+  narrow-window pass capped at half the budget), then spend the rest
+  maximizing spread, playing the spread move only when it provably preserves a
+  proven class. Never trades the class for points; the right objective for
+  games played to their end.
+- **first-win**: the break-out objective for self-play generation. It only
+  resolves the class and stops the moment the class is proven, exposing the
+  proof as `EndgameResult::proven_class` -- a proven class means the rest of
+  the game is not worth computing, and the saved budget belongs to other
+  games. Among winning moves it returns an arbitrary one.
+- **spread**: the pure margin objective, full window for the exact final
+  spread. Exact spread play is class-optimal by construction (a positive final
+  spread IS a win); its class risk is confined to unproven estimates.
+
 ## Methodology
 
-- **Cost** (`--mode=games`): mean wall-time per game of
-  endgame-vs-endgame self-play, as a ratio to the hasty-vs-hasty baseline
-  (~5 ms/game, ~210 games/s single-threaded), same seeds across configs.
-  Cost rows come from dedicated single runs on an otherwise idle machine
-  (`--games=200 --seed=7 --threads=1`); wall-clock ratios from parallel or
-  loaded runs are not comparable.
-- **Strength** (`--mode=games` head-to-head): the endgame bot's mean final
-  spread against a plain greedy HastyBot. Each seed is played twice with the
-  seats mirrored and the pair averaged, which cancels per-seed tile-draw luck --
-  the dominant variance source. Unpaired spread estimates swing by +/- 5+
-  points below ~1000 games and are not usable.
-- Strength rows below pool 6 independent 800-game seed shards per budget
-  (4800 games per row); the quoted uncertainty is the standard error across
-  shards.
+- **Cost** (`--mode=games`): mean wall-time per game of endgame-vs-endgame
+  self-play, as a ratio to the hasty-vs-hasty baseline (~5 ms/game, ~215
+  games/s single-threaded), same seeds across configs. Cost rows come from
+  dedicated single runs on an otherwise idle machine (`--games=200 --seed=7
+  --threads=1`); run-to-run baseline drift is ~2%, and wall-clock ratios from
+  parallel or loaded runs are not comparable.
+- **Strength** (`--mode=games` head-to-head): the endgame bot's record against
+  a plain greedy HastyBot. Each seed is played twice with the seats mirrored
+  and the pair pooled, which cancels per-seed tile-draw luck -- the dominant
+  variance source; unpaired estimates are not usable. Strength rows pool 6
+  independent 800-game seed shards (4800 games per cell); quoted uncertainty
+  is the standard error across shards.
+- **Bucketing by bag-empty spread**: every analysis is conditioned on the
+  absolute score spread when the bag empties, because the two things worth
+  measuring live in opposite buckets. *Decision accuracy* only shows up in
+  close endgames -- in decided games every objective converts equally, so
+  their games contribute pure noise to a win/loss record (measured below:
+  W-L +0.0pp in the 60+ bucket at budget 220, for every objective, 2608
+  games). *Break-out efficiency* -- prove the decided game's class fast and
+  hand the budget back -- is only meaningful in those same decided games.
+  Head-to-head games are bucketed by the seed's *baseline hasty-vs-hasty*
+  bag-empty spread, a deterministic conditioning variable that is identical
+  across objectives, budgets, and seats; solves-mode positions are bucketed by
+  their own decision-point spread.
+- **Which metric judges what**: W-L margin in the small-spread buckets judges
+  class play (what the lexicographic and first-win objectives protect); mean
+  spread judges margin play and the value-target quality the training pipeline
+  consumes; class-proof rate and %-of-budget-spent in the large-spread buckets
+  judge the break-out imperative.
 
-**Why mean spread is the headline strength metric.** The default (full-window)
-solver maximizes the exact final spread, and the training pipeline consumes
-final scores as value targets (see docs/architecture.md), so points/game
-measures both the objective the agent optimizes and the currency the project
-cares about. It also accumulates signal in every game: in an endgame that is
-already decided, a win/loss record saturates (greedy play converts a big lead
-just fine) while optimal play still banks extra points. The W/D/L record is
-kept as a sanity column -- exact spread-maximal play in a won position never
-un-wins it, so a spread gain paired with a W-L loss would flag a bug -- and it
-becomes the primary metric only for the first-win (`--wld`) mode, whose window
-deliberately stops maximizing spread. Note the complementary blind spot: on the
-self-play distribution most endgames are decided, so neither metric isolates
-"conversion skill in close positions"; conditioning the paired analysis on the
-bag-empty position (e.g. |spread at bag-empty| <= 20), not on the outcome,
-would measure that without engineering artificial states.
+## Cost vs node budget, per objective
 
-## Cost and strength vs node budget
+| `--endgame-nodes` | lexicographic | spread | first-win |
+|---|---|---|---|
+| 100 | 1.24x | 1.24x | 1.25x |
+| **220 (default)** | **2.01x** | 2.13x | 2.11x |
+| 400 | 5.28x | 5.89x | 5.87x |
+| 1600 | 28.2x | 31.8x | 33.5x |
 
-| `--endgame-nodes` | game-time cost | head-to-head vs greedy HastyBot |
-|---|---|---|
-| 50 | 1.04x | -- |
-| 100 | 1.18x | +0.22 +/- 0.02 pts/game |
-| 200 | 1.83x | +0.47 +/- 0.03 |
-| **220 (default)** | **2.02x** | **+0.54 +/- 0.04** |
-| 240 | 2.19x | -- |
-| 300 | 2.98x | -- |
-| 400 | 5.58x | +0.88 +/- 0.04 |
-| 800 | 15.5x | -- |
-| 1600 | 30.0x | +4.81 +/- 0.14 |
-| 5000 | ~84x | +5.69 +/- 0.19 |
-| 20000 | ~224x | +5.62 +/- 0.19 |
+The lexicographic objective is the cheapest at every real budget: its class
+pass proves the easy positions at the narrow window's price and warms the
+transposition table for its spread pass. The default budget of 220 keeps the
+default objective's endgame-vs-endgame games at ~2x the hasty-vs-hasty game
+time.
 
-The default of 220 is the largest budget whose endgame-vs-endgame games stay
-within ~2x the hasty-vs-hasty game time.
+## Strength vs greedy HastyBot (6x800 paired games per cell)
 
-Strength saturates at roughly **+5.6 points/game -- the full value of exact
-endgame play over greedy static-equity play** in hasty-level self-play. Budget
-1600 captures ~85% of the ceiling at a small fraction of the cost.
+Budget 220:
 
-Strength rises superlinearly through the low budgets because the budget gates
-*engagement*, not search noise: a solve is declined up front when its root move
-count exceeds the budget, and the agent falls back to HastyBot's static-equity
-move unless the solver completed its first iteration. Raising the budget
-admits richer (more consequential) endgames to a real search; it never makes
-an admitted search noisier.
+| objective | mean spread | W-L overall | W-L, bag-empty spread 0-19 (800 games) |
+|---|---|---|---|
+| lexicographic | +0.43 +/- 0.04 | +0.50pp | +0.75pp |
+| spread | +0.53 +/- 0.04 | +0.60pp | +1.38pp |
+| first-win | +0.34 +/- 0.08 | +0.52pp | +1.12pp |
 
-## Per-solve cost (`--mode=solves`, 80 captured bag-empty positions)
+Budget 1600:
 
-| budget | mean us | p50 us | p95 us | mean depth | % differ | % proven | exit save (nodes) |
-|---|---|---|---|---|---|---|---|
-| 100 | 433 | 178 | 1549 | 0.4 | 36% | 16% | 35% |
-| 200 | 1109 | 321 | 4435 | 0.6 | 36% | 21% | 30% |
-| 400 | 3761 | 1250 | 17488 | 0.8 | 39% | 24% | 24% |
-| 1600 | 39493 | 17678 | 154802 | 1.6 | 41% | 36% | 20% |
-| 5000 | 138489 | 59816 | 824729 | 2.3 | 45% | 51% | 24% |
+| objective | mean spread | W-L overall | W-L, bag-empty spread 0-19 (800 games) |
+|---|---|---|---|
+| lexicographic | +4.23 +/- 0.13 | +3.88pp | +14.00pp |
+| spread | +4.81 +/- 0.14 | +4.33pp | +14.75pp |
+| first-win | +2.20 +/- 0.16 | +4.02pp | +14.00pp |
 
-Solves are movegen-bound (roughly 20-60k nodes/s; each node and each greedy
-playout ply runs a full move generation), so per-solve cost tracks nodes spent
-almost linearly once positions stop being declined. "Mean depth" reads low
-because proven positions report the depth that proved them and stop there.
-"Exit save" is the node share the proven short-circuit avoids versus letting
-deepening run on the same positions -- note it overstates the wall-time
-saving: the avoided nodes are the cheapest in the system (shallow
-re-iterations over tiny terminal-heavy trees with a warm table), while the
-unprovable rich positions own most of the wall time.
+Readings:
 
-## Proven verdicts and outplay-futility pruning
+- **Class play is equal across objectives within noise** (the 0-19 bucket's
+  W-L standard error is roughly +/-1.5pp at 800 games): under a hard node cap,
+  proofs land where they land regardless of what the objective does with them,
+  and the close games the objectives could disagree on are rarer still. The
+  bucket structure itself is the loud signal: all of the win/loss value of
+  endgame solving lives in the close bucket (+14pp at 1600), and none in the
+  decided ones (+0.0-0.4pp) -- an unconditioned W-L record dilutes the signal
+  by the bucket ratio.
+- **The lexicographic insurance premium is ~0.1-0.6 pts/game of banked
+  spread** (vs the spread objective) at equal-or-lower cost. What it buys is
+  the guarantee -- enforced by test, not measured by these samples -- that a
+  proven class is never traded for points.
+- **first-win banks roughly half the spread** (arbitrary winning moves) at the
+  same class play; as an agent objective for full games it is dominated, and
+  its value is the break-out signal below.
+- At high budgets the spread objective's margin play still owns the frontier
+  it has always owned (~+5.6 pts/game plateau at budgets 5000-20000, measured
+  under this objective).
 
-Two search mechanisms shape where the budget goes:
+## Break-out efficiency (first-win, `--mode=solves`, 256 positions)
 
-- **Proven verdicts**: a result is proven when it rests entirely on real game
-  ends (no greedy-playout leaf). Iterative deepening stops the moment an
-  iteration returns a proven verdict -- the exact spread in the full window, a
-  settled win/draw/loss class in the first-win window -- so small positions
-  stop at the depth that proves them instead of iterating to the budget.
-- **Opponent-outplay futility pruning**: a mover move that provably leaves an
-  opponent out-play intact (halo geometry, conservative toward not firing) is
-  bounded by the terminal spread of that reply; moves bounded below alpha are
-  skipped without recursion, and the bound also demotes provably weak moves in
-  the move ordering. The out-play sets are maintained incrementally down the
-  search path (one extra move generation per solve, none per node); see
-  endgame_solver.h and outplays.h. Sound (A/B-identical values over the
-  randomized suites, with any divergent best move verified as an equal-valued
-  tie) and proven-grade. Disabling it (`--no-futility` in solves mode) roughly
-  doubles the nodes the fixed test batch spends (a 49% cut, per
-  EndgameSolver.OutplayFutilityCutsNodes) and drops the % proven column
-  substantially (36% -> 29% at budget 1600, 51% -> 30% at 5000).
+Per (budget, |spread| bucket): class-proof rate and the share of the node
+budget actually spent (what a self-play generator would NOT get back).
 
-Their measured effect on the cost/strength frontier is **small**, and the
-reason is structural: both mechanisms fire hardest exactly where positions are
-cheap (small, provable ones), while the positions that dominate wall time
-cannot be proven within these budgets and still burn to the node cap. Since
-strength at a fixed budget is engagement-gated (see above) and pruning does
-not change which positions pass the decline gate, the head-to-head numbers at
-a fixed budget are unchanged within noise; the node and proof gains instead
-buy the frontier's price points (the ~2x point sits at budget 220) and the
-structural benefits -- proofs make first-win exits sound and are the
-foundation for proof caching across turns.
+| budget | \|spread\| | positions | % class proven | % budget spent |
+|---|---|---|---|---|
+| 220 | 0-19 | 34 | 21% | 38% |
+| 220 | 20-59 | 71 | 21% | 31% |
+| 220 | 60+ | 151 | 27% | 30% |
+| 1600 | 0-19 | 34 | 41% | 47% |
+| 1600 | 20-59 | 71 | 44% | 59% |
+| 1600 | 60+ | 151 | 41% | 58% |
 
-## First-win (WLD) mode
+At the default budget, a quarter of decided bag-empty positions prove their
+class while spending ~30% of the cap; proofs deepen with budget (41% at
+1600). This is the solver-side half of self-play break-out; the game-runner
+half (terminating a generation game on `proven_class` and logging the proven
+result) is not built yet.
 
-`--endgame-wld` (agent: `EndgameHastyBotAgent::Params.endgame_wld`) pins the
-solver's root alpha-beta window to `(EndgameSolver::kFirstWinAlpha,
-EndgameSolver::kFirstWinBeta)` = `(-1, +1)` instead of the full
-`(-inf, +inf)` spread window. The search then only has to resolve which side
-of an even final spread the position falls on -- win, draw, or loss -- rather
-than the exact point margin, so proofs land with far less search effort per
-ply of true difficulty. The tradeoff is that among winning root moves the
-solver returns an arbitrary one instead of the spread-maximal one, and a
-proven-lost position (`value <= kFirstWinAlpha`) is meaningless to compare
-move-by-move, so `EndgameHastyBotAgent` discards it and plays HastyBot's
-static-equity move instead -- final spread still matters to the game log even
-in a lost position.
+## Per-solve accuracy view (lexicographic, `--mode=solves`, 256 positions)
 
-At a fixed `--endgame-nodes` budget, cost is governed by the budget itself
-(iterative deepening spends the budget regardless of window width), so wld
-mode's wall-time cost roughly tracks spread mode's at the same budget:
-
-| `--endgame-nodes` | spread-mode cost | wld-mode cost |
-|---|---|---|
-| 50 | 1.04x | 1.08x |
-| 100 | 1.18x | 1.26x |
-| 200 | 1.83x | 1.91x |
-| 400 | 5.58x | 5.92x |
-| 800 | 15.5x | 16.4x |
-| 1600 | 30.0x | 32.2x |
-
-Strength, both modes on identical seeds: 6 shards x 800 games = 4800 games
-per budget and mode, same paired-seat protocol as the spread-mode table above.
-Under wld the mean spread shrinks by construction (the solver stops maximizing
-margin once a win is proven), so the W/D/L record is the number that judges
-wld strength:
-
-| `--endgame-nodes` | mode | mean eg spread | W | D | L | W-L margin |
+| budget | \|spread\| | mean us | mean depth | % differ | % class | % value proven |
 |---|---|---|---|---|---|---|
-| 200 | spread | +0.47 +/- 0.03 | 2410 | 6 | 2384 | +0.54pp |
-| 200 | wld | +0.25 +/- 0.01 | 2406 | 6 | 2388 | +0.38pp |
-| 400 | spread | +0.88 +/- 0.04 | 2420 | 6 | 2374 | +0.96pp |
-| 400 | wld | +0.49 +/- 0.04 | 2416 | 6 | 2378 | +0.79pp |
-| 1600 | spread | +4.81 +/- 0.14 | 2497 | 14 | 2289 | +4.33pp |
-| 1600 | wld | +2.60 +/- 0.13 | 2488 | 13 | 2299 | +3.94pp |
+| 220 | 0-19 | 1529 | 0.4 | 32% | 18% | 15% |
+| 220 | 20-59 | 1504 | 0.4 | 32% | 17% | 17% |
+| 220 | 60+ | 1309 | 0.5 | 38% | 17% | 17% |
+| 1600 | 0-19 | 46500 | 1.3 | 44% | 32% | 32% |
+| 1600 | 20-59 | 88583 | 1.0 | 39% | 34% | 32% |
+| 1600 | 60+ | 45206 | 1.2 | 42% | 37% | 34% |
 
-The comparison is one-sided: **at a fixed node budget, wld mode is dominated
-by spread mode** -- equal-or-worse W/D/L at every budget while banking roughly
-half the spread, at the same wall-time cost. This follows from the budget
-semantics: a hard node cap spends the whole budget regardless of window width,
-so the narrow window only redistributes nodes toward depth rather than saving
-anything, and the deeper-but-margin-blind search does not convert into extra
-wins against this opponent. First-win search pays off under *completion-based*
-budgets, where a narrow window finishes its proof sooner and returns the saved
-time (the regime pre-endgame solvers run endgames in); under this solver's
-node cap it has no winning operating point, and spread mode is the right
-default. The mode remains available for callers that need cheap win/loss
-proofs and pair it with an early exit on proof.
+"% differ" counts solves whose move differs from greedy HastyBot's. The
+lexicographic class rate runs slightly below the first-win table's: its class
+pass is capped at half the budget (the reserved half guarantees the margin
+fallback is a real search; an uncapped class pass returns margin-blind moves
+on every position it fails to prove, which measurably forfeits spread).
 
 ## Reproducing
 
 ```
-target/engine/endgame_bench --mode=games  --games=800 --seed=S --budgets=B --threads=1 [--wld]
-target/engine/endgame_bench --mode=solves --games=30  --seed=42 --budgets=100,200,400,1600,5000
+target/engine/endgame_bench --mode=games  --games=800 --seed=S --budgets=B --threads=1 \
+    --objective=lexicographic|first-win|spread [--spread-buckets 20,60]
+target/engine/endgame_bench --mode=solves --games=100 --seed=42 --budgets=220,1600 \
+    --objective=... [--no-futility]
 ```
 
 For strength numbers, run several `--seed` shards per budget and pool them;
 single-shard head-to-head spreads carry a few points of standard error even
-with seat mirroring. For cost numbers, run one config at a time on an idle
-machine. `--wld` applies to `--mode=games` only; it makes both the
-endgame-vs-endgame cost sweep and the endgame-vs-hasty head-to-head use the
-first-win window.
+with seat mirroring, and W-L margins in the close bucket need pooled shards to
+mean anything. For cost numbers, run one config at a time on an idle machine.
+`--no-futility` (solves mode) A/Bs the opponent-outplay futility pruning; on a
+fixed 60-position batch it cuts ~49% of nodes and lifts the proof-rate columns
+(see EndgameSolver.OutplayFutilityCutsNodes for the in-tree guard).

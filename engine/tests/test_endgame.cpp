@@ -663,7 +663,7 @@ TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
     solver.clear();
     const EndgameResult r =
       solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
     ++checked;
 
     if (v_star > 0) {
@@ -702,11 +702,11 @@ TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
     solver.clear();
     const EndgameResult full =
       solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/false);
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kSpread);
     solver.clear();
     const EndgameResult wld =
       solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
     full_nodes += full.nodes;
     wld_nodes += wld.nodes;
   }
@@ -828,7 +828,7 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
     solver.clear();
     const EndgameResult wld =
       solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
     solver.clear();
     const EndgameResult full = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
                                             p.opp_score, 0, kBigBudget, kRefDepth);
@@ -843,6 +843,111 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   }
   ASSERT_GT(proven, 0) << "no wld solve proved a class";
   std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
+}
+
+// At a budget large enough to prove everything, the lexicographic objective is
+// exactly the spread objective: the class pass proves the class, the spread
+// pass proves the exact optimum, and an exact optimum's sign is its class. The
+// two must agree on value, on the proven class (which must match the
+// brute-force reference's sign), and on the move up to equal-valued ties.
+TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0x1E0C0DE5u);
+  for (int i = 0; i < 80; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    EndgameSolver lex_solver, spread_solver;
+    const EndgameResult lex =
+      lex_solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget,
+                       kRefDepth, EndgameObjective::kLexicographic);
+    const EndgameResult spread =
+      spread_solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget,
+                          kRefDepth, EndgameObjective::kSpread);
+    ASSERT_EQ(lex.value, spread.value) << "position " << i;
+    ASSERT_TRUE(lex.proven) << "position " << i;
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(lex.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
+    if (!(lex.best == spread.best)) {
+      EXPECT_EQ(forced_move_value(d, p, lex.best, spread_solver), spread.value)
+        << "position " << i << ": divergent best move is not a tie";
+    }
+  }
+}
+
+// THE gate for "never sacrifice the class for points": under constrained
+// budgets, whenever a lexicographic solve reports a proven class, the move it
+// returns preserves that class under optimal play by both sides afterward (a
+// proven loss exempts itself: every move loses). The scan also checks the
+// proven class against the brute-force reference.
+TEST(EndgameSolver, LexicographicPreservesProvenClass) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xC1A55E5Fu);
+  int class_proven = 0, checked = 0;
+  for (int i = 0; i < 120; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = 60 + 140 * (i % 5);  // 60..620: from starved to roomy
+    solver.clear();
+    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                                         0, budget, kRefDepth, EndgameObjective::kLexicographic);
+    ++checked;
+    if (r.depth_completed == 0 || r.proven_class == EndgameResult::kClassUnknown) continue;
+    ++class_proven;
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(r.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
+    if (r.proven_class == -1) continue;
+    const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                p.opp_score, 0, r.best, kRefDepth);
+    ASSERT_EQ((after > 0) - (after < 0), r.proven_class)
+      << "position " << i << " budget " << budget << ": played move forfeits the proven class";
+  }
+  ASSERT_GT(class_proven, checked / 4) << "class proofs fired too rarely to gate anything";
+  std::cout << "  lexicographic class-proven " << class_proven << "/" << checked << " endgames\n";
+}
+
+// The node budget stays a hard cap across every pass a lexicographic solve
+// runs (class pass, spread pass, verification probes), with the same
+// one-playout overshoot allowance as a single-pass solve.
+TEST(EndgameSolver, LexicographicRespectsBudget) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xB1DBEEFu);
+  constexpr uint64_t kSlack = 41;  // one playout past the cap, plus the detecting node
+  for (int i = 0; i < 10; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/4);
+    for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull}) {
+      solver.clear();
+      const EndgameResult r =
+        solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget,
+                     kRefDepth, EndgameObjective::kLexicographic);
+      EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
+    }
+  }
+}
+
+// proven_class is reported consistently across objectives: at full budget both
+// the spread and first-win objectives prove these tiny endgames, and the class
+// each reports matches the brute-force reference's sign.
+TEST(EndgameSolver, ProvenClassMatchesReference) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xC1A5537Du);
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    const int ref_class = (ref > 0) - (ref < 0);
+    for (EndgameObjective objective : {EndgameObjective::kSpread, EndgameObjective::kFirstWin}) {
+      solver.clear();
+      const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                           p.opp_score, 0, kBigBudget, kRefDepth, objective);
+      if (r.proven) {
+        ASSERT_EQ(r.proven_class, ref_class)
+          << "position " << i << " objective " << static_cast<int>(objective);
+      }
+    }
+  }
 }
 
 // THE soundness gate for outplay-threat futility pruning: over a large random

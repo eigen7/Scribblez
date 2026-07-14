@@ -12,6 +12,8 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
+#include <string>
 
 namespace scribblez {
 
@@ -47,13 +49,7 @@ ZobristTable build_zobrist() {
   return z;
 }
 
-// Descending order on a (move, estimated-value) pair's value: the comparator
-// both the search and the root iterative-deepening loop sort candidate moves by.
-bool by_value_desc(const std::pair<Move, int32_t>& a, const std::pair<Move, int32_t>& b) {
-  return a.second > b.second;
-}
-
-// In the first_win window a proven result settles the win/draw/loss class iff
+// In the first-win window a proven result settles the win/draw/loss class iff
 // its value is a proven win bound (>= kFirstWinBeta), a proven loss bound
 // (<= kFirstWinAlpha), or a proven draw (0). A proven verdict in this window is
 // always one of these, so this holds whenever the result is proven.
@@ -62,12 +58,35 @@ bool settles_first_win_class(int32_t value) {
          value == 0;
 }
 
+// The win/draw/loss class of a settled value: +1 win, 0 draw, -1 loss.
+int class_of(int32_t value) { return (value > 0) - (value < 0); }
+
 const ZobristTable& zobrist() {
   static const ZobristTable table = build_zobrist();
   return table;
 }
 
 }  // namespace
+
+const char* endgame_objective_name(EndgameObjective objective) {
+  switch (objective) {
+    case EndgameObjective::kSpread:
+      return "spread";
+    case EndgameObjective::kFirstWin:
+      return "first-win";
+    case EndgameObjective::kLexicographic:
+      return "lexicographic";
+  }
+  return "?";
+}
+
+EndgameObjective parse_endgame_objective(const std::string& name) {
+  if (name == "lexicographic") return EndgameObjective::kLexicographic;
+  if (name == "first-win") return EndgameObjective::kFirstWin;
+  if (name == "spread") return EndgameObjective::kSpread;
+  throw std::runtime_error("bad endgame objective '" + name +
+                           "' (expected lexicographic, first-win, or spread)");
+}
 
 EndgameSolver::EndgameSolver(int tt_log2_entries)
     : tt_(static_cast<size_t>(1) << tt_log2_entries),
@@ -195,19 +214,19 @@ int32_t EndgameSolver::order_estimate(const Move& move, const Move& tt_move,
   return est;
 }
 
-void EndgameSolver::order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
+void EndgameSolver::order_moves(std::vector<RankedMove>& moves, const Move& tt_move,
                                 bool have_tt_move, const OutplaySet* replier_outs) const {
-  for (auto& m : moves) {
-    m.second = order_estimate(m.first, tt_move, have_tt_move);
+  for (RankedMove& m : moves) {
+    m.rank = order_estimate(m.move, tt_move, have_tt_move);
     if (replier_outs == nullptr) continue;
     // A finite futility bound is a proven cap on the move's value. Rebasing it
     // to the current spread puts it in the same points-denominated units as the
     // estimates, and taking the min sinks provably weak moves -- including a
     // stale TT move whose payoff a replier out-play now caps.
-    const int32_t u = outplay_futility_bound(m.first, *replier_outs);
-    if (u < kInf) m.second = std::min(m.second, u - spread_stm());
+    const int32_t u = outplay_futility_bound(m.move, *replier_outs);
+    if (u < kInf) m.rank = std::min(m.rank, u - spread_stm());
   }
-  std::sort(moves.begin(), moves.end(), by_value_desc);
+  std::sort(moves.begin(), moves.end(), by_rank_desc);
 }
 
 double EndgameSolver::playout_adjusted(const Move& move) const {
@@ -365,10 +384,10 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   if (depth == 0) return {greedy_playout(hash, ply), false};  // a playout leaf is an estimate
 
   std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
-  std::vector<std::pair<Move, int32_t>> moves;
+  std::vector<RankedMove> moves;
   moves.reserve(plays.size() + 1);
-  for (const Move& m : plays) moves.emplace_back(m, 0);
-  moves.emplace_back(Move::pass(), 0);
+  for (const Move& m : plays) moves.push_back({m, 0});
+  moves.push_back({Move::pass(), 0});
 
   // The replier's maintained out-play set: every mover move that provably
   // leaves one of its entries intact is capped by its futility bound, first in
@@ -386,8 +405,8 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   bool all_proven = true;   // AND over every scanned child's verdict
   bool cut = false;         // a beta cutoff fired
   bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
-  for (auto& entry : moves) {
-    const Move& move = entry.first;
+  for (RankedMove& entry : moves) {
+    const Move& move = entry.move;
     // Futility: a move a surviving replier out-play caps below alpha cannot
     // raise alpha. The bound comes from a terminal line, so skipping the move
     // neither changes the value nor clears the node's proven bit; fold the
@@ -431,9 +450,10 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   return {best, proven};
 }
 
-EndgameSolver::SearchResult EndgameSolver::run_root(
-  int depth, int32_t alpha, int32_t beta, std::vector<std::pair<Move, int32_t>>& root_moves,
-  const std::vector<Move>& plays, Move* best_out) {
+EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, int32_t beta,
+                                                    std::vector<RankedMove>& root_moves,
+                                                    const std::vector<Move>& plays,
+                                                    Move* best_out) {
   // The root is the solving side's node; it hands its children out-play sets
   // just as an interior node does, but is itself never futility-pruned: every
   // root move needs its exact value for the re-ordering between iterations.
@@ -441,22 +461,22 @@ EndgameSolver::SearchResult EndgameSolver::run_root(
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
 
   int32_t best = -kInf;
-  Move best_move = root_moves[0].first;
+  Move best_move = root_moves[0].move;
   bool all_proven = true;    // AND over every root child's verdict
   bool best_proven = false;  // proven bit of the child that set `best`
-  for (auto& rm : root_moves) {
+  for (RankedMove& rm : root_moves) {
     OutplaySet* saved_sets[2];
-    push_outplay_sets(rm.first, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
-    make(rm.first, 0);
+    push_outplay_sets(rm.move, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
+    make(rm.move, 0);
     const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf);
     unmake(0);
     restore_outplay_sets(saved_sets);
     if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
-    rm.second = child.value;
+    rm.rank = child.value;
     all_proven = all_proven && child.proven;
     if (child.value > best) {
       best = child.value;
-      best_move = rm.first;
+      best_move = rm.move;
       best_proven = child.proven;
     }
     alpha = std::max(alpha, best);
@@ -470,10 +490,122 @@ EndgameSolver::SearchResult EndgameSolver::run_root(
   return {best, proven};
 }
 
+EndgameResult EndgameSolver::run_iterative(int32_t alpha, int32_t beta, bool first_win,
+                                           std::vector<RankedMove>& root_moves,
+                                           const std::vector<Move>& plays, int max_plies) {
+  EndgameResult result;
+  result.best = root_moves[0].move;
+  for (int depth = 1; depth <= max_plies; ++depth) {
+    Move best_move = root_moves[0].move;
+    const SearchResult sr = run_root(depth, alpha, beta, root_moves, plays, &best_move);
+    if (aborting_) {
+      // Budget exhausted mid-iteration: the last completed iteration's result
+      // stands. When not even the first iteration finished, fall back to the
+      // best fully-searched root move of the partial pass -- root moves are
+      // estimate-ordered, so the strongest candidates were searched first --
+      // or, when no root move completed, the estimate-ordered first move.
+      if (result.depth_completed == 0 && sr.value > -kInf) {
+        result.best = best_move;
+        result.value = sr.value;
+      }
+      break;
+    }
+    result.best = best_move;
+    result.value = sr.value;
+    result.depth_completed = depth;
+    result.proven = sr.proven;
+    // A proven iteration has resolved the search exactly: in the full window the
+    // value is the true game spread, and in the first-win window a proven verdict
+    // always settles the win/draw/loss class (a proven bound is itself true).
+    // Deepening cannot change the answer, so stop.
+    if (proof_early_exit_ && sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
+    // Re-order root moves by their returned values for the next depth.
+    std::sort(root_moves.begin(), root_moves.end(), by_rank_desc);
+  }
+  result.nodes = nodes_;
+  return result;
+}
+
+bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<Move>& plays,
+                                      int max_plies) {
+  std::optional<LeaveOutplays> leave_outs;
+  if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
+  OutplaySet* saved_sets[2];
+  push_outplay_sets(m, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
+  make(m, 0);
+  bool verified = false;
+  if (game_over_) {
+    // m ended the game: the final spread's class is exact.
+    verified = class_of(scores_[0] - scores_[1]) == cls;
+  } else {
+    // The child is searched from the opponent's perspective, so parent class
+    // `cls` needs a proven child verdict of class -cls. Iterative deepening at
+    // the narrow window, over the warm table, until the proof lands or the
+    // shared budget runs out.
+    for (int depth = 1; depth <= max_plies && !aborting_; ++depth) {
+      const SearchResult sr = negamax(depth, kFirstWinAlpha, kFirstWinBeta, 1);
+      if (aborting_) break;
+      if (sr.proven && settles_first_win_class(sr.value)) {
+        verified = -class_of(sr.value) == cls;
+        break;
+      }
+    }
+  }
+  unmake(0);
+  restore_outplay_sets(saved_sets);
+  return verified;
+}
+
+EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_moves,
+                                                 const std::vector<Move>& plays, int max_plies) {
+  // First pass: prove the win/draw/loss class as cheaply as possible. The pass
+  // is capped at half the budget: on a position whose class is not provable
+  // within it, an uncapped pass would burn the entire cap and leave the margin
+  // fallback below no budget at all -- the narrow-window move it would return
+  // is margin-blind, the worst of both objectives. Class proofs are cheap when
+  // they land, so the cap loses few of them; the reserved half is the
+  // insurance premium this objective pays for class protection.
+  const uint64_t full_budget = budget_;
+  budget_ = full_budget / 2;
+  const EndgameResult first =
+    run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays, max_plies);
+  budget_ = full_budget;
+  aborting_ = false;  // a class pass stopped by its half-cap frees the rest
+
+  if (!first.proven || first.depth_completed < 1) {
+    // No class proof in budget: margin-maximizing play is the class-robust
+    // fallback (margin is slack against estimate error), over the warm table.
+    const EndgameResult spread =
+      run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
+    return spread.depth_completed >= 1 ? spread : first;
+  }
+
+  // The class is settled; the rest of the budget maximizes spread. Every move
+  // of a proven-lost position is class-equal, so there the spread answer is
+  // pure defense and needs no check. In a proven win or draw the spread answer
+  // is played only if it provably preserves the class: a proven spread pass
+  // implies that (the exact optimum's sign is the class), an unproven one must
+  // pass a narrow-window probe of its chosen child, and on any failure the
+  // proven-class move from the first pass stands.
+  const int cls = class_of(first.value);
+  EndgameResult result = first;
+  result.proven_class = cls;
+  const EndgameResult spread =
+    run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
+  if (spread.depth_completed < 1) return result;
+  if (cls != -1 && !spread.proven && !verify_move_class(spread.best, cls, plays, max_plies))
+    return result;
+  result.best = spread.best;
+  result.value = spread.value;
+  result.depth_completed = spread.depth_completed;
+  result.proven = spread.proven;
+  return result;
+}
+
 EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
                                    const Rack& opp_rack, int my_score, int opp_score,
                                    int scoreless_turns, uint64_t node_budget, int max_plies,
-                                   bool first_win) {
+                                   EndgameObjective objective) {
   board_ = board;
   board_.ensure_movegen_caches(dict);
   dict_ = &dict;
@@ -495,14 +627,14 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
 
   std::vector<Move> plays = MoveGenerator(board_, dict).generate(my_rack);
-  std::vector<std::pair<Move, int32_t>> root_moves;
+  std::vector<RankedMove> root_moves;
   root_moves.reserve(plays.size() + 1);
-  for (const Move& m : plays) root_moves.emplace_back(m, 0);
-  root_moves.emplace_back(Move::pass(), 0);
+  for (const Move& m : plays) root_moves.push_back({m, 0});
+  root_moves.push_back({Move::pass(), 0});
   order_moves(root_moves, Move::pass(), /*have_tt_move=*/false, /*replier_outs=*/nullptr);
 
   EndgameResult result;
-  result.best = root_moves[0].first;
+  result.best = root_moves[0].move;
   // Searching a root move costs at least one node, so a position with more
   // root moves than the budget provably cannot complete its first iteration.
   // Decline it up front -- callers treat depth_completed == 0 as "unsolved"
@@ -523,35 +655,23 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
     collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
                           root_sets_[1]);
   }
-  const int32_t root_alpha = first_win ? kFirstWinAlpha : -kInf;
-  const int32_t root_beta = first_win ? kFirstWinBeta : kInf;
-  for (int depth = 1; depth <= max_plies; ++depth) {
-    Move best_move = root_moves[0].first;
-    const SearchResult sr = run_root(depth, root_alpha, root_beta, root_moves, plays, &best_move);
-    if (aborting_) {
-      // Budget exhausted mid-iteration: the last completed iteration's result
-      // stands. When not even the first iteration finished, fall back to the
-      // best fully-searched root move of the partial pass -- root moves are
-      // estimate-ordered, so the strongest candidates were searched first --
-      // or, when no root move completed, the estimate-ordered first move.
-      if (result.depth_completed == 0 && sr.value > -kInf) {
-        result.best = best_move;
-        result.value = sr.value;
-      }
+  switch (objective) {
+    case EndgameObjective::kSpread:
+      result = run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
       break;
-    }
-    result.best = best_move;
-    result.value = sr.value;
-    result.depth_completed = depth;
-    result.proven = sr.proven;
-    // A proven iteration has resolved the search exactly: in the full window the
-    // value is the true game spread, and in the first_win window a proven verdict
-    // always settles the win/draw/loss class (a proven bound is itself true).
-    // Deepening cannot change the answer, so stop.
-    if (proof_early_exit_ && sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
-    // Re-order root moves by their exact returned values for the next depth.
-    std::sort(root_moves.begin(), root_moves.end(), by_value_desc);
+    case EndgameObjective::kFirstWin:
+      result = run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays,
+                             max_plies);
+      break;
+    case EndgameObjective::kLexicographic:
+      result = solve_lexicographic(root_moves, plays, max_plies);
+      break;
   }
+  // A proven value's sign is the position's class; kLexicographic may already
+  // carry a class proven by its first pass even when its final value is an
+  // unproven spread refinement.
+  if (result.proven && result.proven_class == EndgameResult::kClassUnknown)
+    result.proven_class = class_of(result.value);
   result.nodes = nodes_;
   return result;
 }

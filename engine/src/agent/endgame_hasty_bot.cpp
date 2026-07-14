@@ -5,6 +5,7 @@
 
 #include <boost/program_options.hpp>
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -14,7 +15,7 @@ EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
     : HastyBotAgent(params.hasty),
       endgame_nodes_(params.endgame_nodes),
       endgame_plies_(params.endgame_plies),
-      endgame_wld_(params.endgame_wld) {}
+      endgame_objective_(params.endgame_objective) {}
 
 Move EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   // Endgame: the bag is empty and both racks are fully known, so hand the
@@ -27,12 +28,14 @@ Move EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   if (req.bag_size == 0 && endgame_nodes_ > 0) {
     const EndgameResult r =
       solver_.solve(req.board, req.dict, req.my_rack, req.opp_rack, req.my_score, req.opp_score,
-                    scoreless_turns_, endgame_nodes_, endgame_plies_, endgame_wld_);
-    // In first-win mode a value at or below the loss bound means every move
-    // loses: the solver's move is then arbitrary, and HastyBot's static-equity
-    // move shapes the final spread better.
-    const bool proven_lost = endgame_wld_ && r.value <= EndgameSolver::kFirstWinAlpha;
-    if (r.depth_completed >= 1 && !proven_lost) return r.best;
+                    scoreless_turns_, endgame_nodes_, endgame_plies_, endgame_objective_);
+    // A proven-lost first-win result carries an arbitrary move (every move
+    // loses, and that objective refines no further), so HastyBot's
+    // static-equity move shapes the final spread better. The lexicographic
+    // objective spread-defends lost positions itself.
+    const bool arbitrary_loss =
+      endgame_objective_ == EndgameObjective::kFirstWin && r.proven_class == -1;
+    if (r.depth_completed >= 1 && !arbitrary_loss) return r.best;
   }
   return HastyBotAgent::make_move(req);
 }
@@ -56,21 +59,28 @@ void EndgameHastyBotAgent::begin_game() {
 
 namespace {
 
-// The endgame-solver --player options, binding the two knobs to the given
-// storage. from_spec() builds this to extend the HastyBot option parse;
-// options_help() builds it against scratch defaults to document the same flags.
-boost::program_options::options_description endgame_options(uint64_t& endgame_nodes,
-                                                            int& endgame_plies, bool& endgame_wld) {
+// The --player option values endgame_options() binds: from_spec() parses a
+// token list into one, options_help() documents the same flags against its
+// defaults.
+struct EndgameOptionValues {
+  uint64_t nodes = EndgameHastyBotAgent::kDefaultEndgameNodes;
+  int plies = 25;
+  std::string objective = endgame_objective_name(EndgameObjective::kLexicographic);
+};
+
+boost::program_options::options_description endgame_options(EndgameOptionValues& values) {
   namespace po = boost::program_options;
   po::options_description desc("hastybot-endgame options");
   desc.add_options()  //
-    ("endgame-nodes", po::value<uint64_t>(&endgame_nodes)->default_value(endgame_nodes),
+    ("endgame-nodes", po::value<uint64_t>(&values.nodes)->default_value(values.nodes),
      "per-turn endgame-solver node budget (0 disables the solver)")  //
-    ("endgame-plies", po::value<int>(&endgame_plies)->default_value(endgame_plies),
+    ("endgame-plies", po::value<int>(&values.plies)->default_value(values.plies),
      "endgame-solver iterative-deepening depth cap")  //
-    ("endgame-wld", po::bool_switch(&endgame_wld),
-     "first-win window: resolve only the win/draw/loss class (cheaper searches; "
-     "the move preserves the WLD class instead of maximizing spread)");
+    ("endgame-objective",
+     po::value<std::string>(&values.objective)->default_value(values.objective),
+     "what the solver optimizes: lexicographic (prove win/draw/loss, then maximize "
+     "spread without trading the class for points), first-win (class proof only; the "
+     "self-play break-out objective), or spread (pure margin)");
   return desc;
 }
 
@@ -78,31 +88,26 @@ boost::program_options::options_description endgame_options(uint64_t& endgame_no
 
 std::unique_ptr<EndgameHastyBotAgent> EndgameHastyBotAgent::from_spec(
   const std::vector<std::string>& tokens, int thread_id, const std::string& name) {
-  uint64_t endgame_nodes = kDefaultEndgameNodes;
-  int endgame_plies = 25;
-  bool endgame_wld = false;
-  boost::program_options::options_description extra =
-    endgame_options(endgame_nodes, endgame_plies, endgame_wld);
+  EndgameOptionValues values;
+  boost::program_options::options_description extra = endgame_options(values);
 
   Params params;
   params.hasty =
     HastyBotAgent::parse_hasty_params(tokens, thread_id, name, extra, "hastybot-endgame");
-  params.endgame_nodes = endgame_nodes;
-  params.endgame_plies = endgame_plies;
-  params.endgame_wld = endgame_wld;
+  params.endgame_nodes = values.nodes;
+  params.endgame_plies = values.plies;
+  params.endgame_objective = parse_endgame_objective(values.objective);
   return std::make_unique<EndgameHastyBotAgent>(params);
 }
 
 std::string EndgameHastyBotAgent::options_help() {
-  uint64_t endgame_nodes = kDefaultEndgameNodes;
-  int endgame_plies = 25;
-  bool endgame_wld = false;  // scratch binding targets; never read here
+  EndgameOptionValues values;  // scratch binding targets; only the defaults are read
   const std::string endgame = agent_options_help(
     "  HastyBot that solves the endgame once the bag empties: it plays HastyBot's\n"
     "  static-equity move while tiles remain, then hands the fully-known endgame\n"
     "  to an iterative-deepening negamax solver. Accepts every hastybot option\n"
     "  (listed below) in addition to these:\n",
-    endgame_options(endgame_nodes, endgame_plies, endgame_wld));
+    endgame_options(values));
   return endgame + HastyBotAgent::options_help();
 }
 

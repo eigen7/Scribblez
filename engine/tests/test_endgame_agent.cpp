@@ -337,20 +337,26 @@ TEST(EndgameAgent, FromSpecParsing) {
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
 
-// --endgame-wld parses (with or without other endgame options present).
-TEST(EndgameAgent, WldFromSpec) {
+// --endgame-objective parses each objective name and rejects unknown ones.
+TEST(EndgameAgent, ObjectiveFromSpec) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-wld", "--endgame-nodes=777"}, 0, "W"),
+  EXPECT_NE(EndgameHastyBotAgent::from_spec(
+              {"--endgame-objective=first-win", "--endgame-nodes=777"}, 0, "W"),
             nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=lexicographic"}, 0, "X"),
+            nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=spread"}, 0, "Y"), nullptr);
   EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-nodes=777"}, 0, "V"), nullptr);
+  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-objective=wld"}, 0, "B"),
+               std::runtime_error);
 }
 
-// In wld mode, once the solver proves the position lost (every root move
-// loses), the agent discards the solver's arbitrary choice among losing moves
-// and plays HastyBot's static-equity move instead -- the same move a plain
-// HastyBotAgent would play on the identical request.
-TEST(EndgameAgent, WldProvenLossFallsBackToHasty) {
+// Under the first-win objective, once the solver proves the position lost
+// (every root move loses), the agent discards the solver's arbitrary choice
+// among losing moves and plays HastyBot's static-equity move instead -- the
+// same move a plain HastyBotAgent would play on the identical request.
+TEST(EndgameAgent, FirstWinProvenLossFallsBackToHasty) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x105510FFu);
@@ -358,7 +364,7 @@ TEST(EndgameAgent, WldProvenLossFallsBackToHasty) {
   EndgameSolver ref;
   HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
   EndgameHastyBotAgent::Params wp = endgame_params(kSolveBudget, kSolvePlies);
-  wp.endgame_wld = true;
+  wp.endgame_objective = EndgameObjective::kFirstWin;
   EndgameHastyBotAgent wld(wp);
 
   bool found = false;
