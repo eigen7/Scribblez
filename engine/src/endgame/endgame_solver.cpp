@@ -1,7 +1,7 @@
 #include "endgame/endgame_solver.h"
 
 #include "agent/macondo_bot.h"
-#include "endgame/outplay_threat.h"
+#include "endgame/outplays.h"
 #include "game/glyph.h"
 #include "game/movegen.h"
 #include "game/tile.h"
@@ -196,15 +196,15 @@ int32_t EndgameSolver::order_estimate(const Move& move, const Move& tt_move,
 }
 
 void EndgameSolver::order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
-                                bool have_tt_move, OpponentOutplays* opp_outs) const {
+                                bool have_tt_move, const OutplaySet* replier_outs) const {
   for (auto& m : moves) {
     m.second = order_estimate(m.first, tt_move, have_tt_move);
-    if (opp_outs == nullptr) continue;
+    if (replier_outs == nullptr) continue;
     // A finite futility bound is a proven cap on the move's value. Rebasing it
     // to the current spread puts it in the same points-denominated units as the
     // estimates, and taking the min sinks provably weak moves -- including a
-    // stale TT move whose payoff an opponent out-play now caps.
-    const int32_t u = outplay_futility_bound(m.first, *opp_outs);
+    // stale TT move whose payoff a replier out-play now caps.
+    const int32_t u = outplay_futility_bound(m.first, *replier_outs);
     if (u < kInf) m.second = std::min(m.second, u - spread_stm());
   }
   std::sort(moves.begin(), moves.end(), by_value_desc);
@@ -288,30 +288,28 @@ int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
 }
 
 EndgameSolver::SearchResult EndgameSolver::search_child(int child_depth, int32_t alpha,
-                                                        int32_t beta, int child_ply, bool first,
-                                                        int32_t threat) {
+                                                        int32_t beta, int child_ply, bool first) {
   SearchResult r;
   if (first) {
-    r = negamax(child_depth, -beta, -alpha, child_ply, threat);
+    r = negamax(child_depth, -beta, -alpha, child_ply);
   } else {
-    r = negamax(child_depth, -alpha - 1, -alpha, child_ply, threat);
-    if (alpha < -r.value && -r.value < beta)
-      r = negamax(child_depth, -beta, -alpha, child_ply, threat);
+    r = negamax(child_depth, -alpha - 1, -alpha, child_ply);
+    if (alpha < -r.value && -r.value < beta) r = negamax(child_depth, -beta, -alpha, child_ply);
   }
   // Return the value from the parent's perspective; the proven bit is a property
   // of the search that produced the child's final verdict, not of the sign.
   return {-r.value, r.proven};
 }
 
-int32_t EndgameSolver::outplay_futility_bound(const Move& m, OpponentOutplays& opp_outs) const {
+int32_t EndgameSolver::outplay_futility_bound(const Move& m, const OutplaySet& replier_outs) const {
   const int mover = stm_;
   // A move that ends the game -- an out-play, or a pass that trips the internal
-  // scoreless cap -- gives the opponent no turn, so no out-play bounds it.
+  // scoreless cap -- gives the replier no turn, so no out-play bounds it.
   if (m.type() == MoveType::PLAY && m.num_glyphs() == racks_[mover].size()) return kInf;
   if (m.type() == MoveType::PASS && scoreless_ >= 1) return kInf;
-  const int32_t p = opp_outs.best_surviving_score(m);
-  if (p == OpponentOutplays::kNoSurvivor) return kInf;
-  // The opponent can answer m with the surviving out-play: it scores p and banks
+  const int32_t p = best_surviving_score(replier_outs, m);
+  if (p == kNoOutplaySurvivor) return kInf;
+  // The replier can answer m with the surviving out-play: it scores p and banks
   // twice the face value of the mover's post-m leftover as its end-of-game
   // bonus, capping m's value at the resulting terminal spread. See the class
   // comment for the derivation and why missed out-plays keep the bound sound.
@@ -319,20 +317,25 @@ int32_t EndgameSolver::outplay_futility_bound(const Move& m, OpponentOutplays& o
   return spread_stm() + m.score() - p - 2 * leftover;
 }
 
-int32_t EndgameSolver::threat_reply_bound(const Move& m, int32_t threat) const {
-  if (threat == OutplayThreats::kNoThreat) return kInf;
-  const int mover = stm_;
-  const bool empties = m.type() == MoveType::PLAY && m.num_glyphs() == racks_[mover].size();
-  if (empties) return kInf;  // an out-play reply ends the game first: the threat is void
-  // The reply scores g and its post-play leftover is worth at least (pv - g), so
-  // the guaranteed out (scoring >= threat, with a 2x bonus on that leftover)
-  // caps the mover's value here. See the class comment for the derivation.
-  const int32_t g = m.score();
-  return spread_stm() + 3 * g - threat - 2 * racks_[mover].point_value();
+void EndgameSolver::push_outplay_sets(const Move& m, LeaveOutplays* leave_outs, int child_ply,
+                                      OutplaySet* saved[2]) {
+  saved[0] = cur_sets_[0];
+  saved[1] = cur_sets_[1];
+  if (leave_outs == nullptr) return;  // futility disabled: the sets are never read
+  PlyOutplaySets& slot = ply_sets_[child_ply];
+  leave_outs->collect_after(m, slot.mover);
+  assign_surviving(*cur_sets_[1 - stm_], m, slot.other);
+  cur_sets_[stm_] = &slot.mover;
+  cur_sets_[1 - stm_] = &slot.other;
 }
 
-EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply,
-                                                   int32_t threat) {
+void EndgameSolver::restore_outplay_sets(OutplaySet* const saved[2]) {
+  cur_sets_[0] = saved[0];
+  cur_sets_[1] = saved[1];
+}
+
+EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta,
+                                                   int ply) {
   if (aborting_) return {0, false};
   ++nodes_;
   if (nodes_ > budget_) {
@@ -367,21 +370,15 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   for (const Move& m : plays) moves.emplace_back(m, 0);
   moves.emplace_back(Move::pass(), 0);
 
-  // The opponent's out-plays on the current board (one extra move generation):
-  // every mover move that provably leaves one intact is capped by its futility
-  // bound, first in the ordering below and then as a pruning cutoff in the scan.
-  std::optional<OpponentOutplays> opp_outs;
-  if (outplay_futility_) {
-    opp_outs.emplace(board_, MoveGenerator(board_, *dict_).generate(racks_[1 - stm_]),
-                     racks_[1 - stm_].size());
-    if (opp_outs->empty()) opp_outs.reset();
-  }
-  order_moves(moves, tt_move, have_tt_move, opp_outs ? &*opp_outs : nullptr);
-
-  // Threats handed to children: only worthwhile when the mover keeps >= 2 tiles,
-  // so a leave with an out-play pair can survive the move.
-  std::optional<OutplayThreats> threats;
-  if (threat_pruning_ && racks_[stm_].size() >= 2) threats.emplace(board_, racks_[stm_], plays);
+  // The replier's maintained out-play set: every mover move that provably
+  // leaves one of its entries intact is capped by its futility bound, first in
+  // the ordering below and then as a pruning cutoff in the scan. LeaveOutplays
+  // buckets this node's own play list to derive the children's mover-side sets.
+  const OutplaySet* replier_outs = nullptr;
+  if (outplay_futility_ && !cur_sets_[1 - stm_]->empty()) replier_outs = cur_sets_[1 - stm_];
+  std::optional<LeaveOutplays> leave_outs;
+  if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
+  order_moves(moves, tt_move, have_tt_move, replier_outs);
 
   int32_t best = -kInf;
   Move best_move = Move::pass();
@@ -391,22 +388,21 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
   for (auto& entry : moves) {
     const Move& move = entry.first;
-    // Futility: a move the parent's out-play threat dominates, or one a
-    // surviving opponent out-play caps below alpha, cannot raise alpha. Both
-    // bounds come from terminal lines, so skipping the move neither changes the
-    // value nor clears the node's proven bit; fold the bound in so a fail-low
-    // value stays sound even if every move is pruned.
-    int32_t ubound = threat_reply_bound(move, threat);
-    if (opp_outs) ubound = std::min(ubound, outplay_futility_bound(move, *opp_outs));
+    // Futility: a move a surviving replier out-play caps below alpha cannot
+    // raise alpha. The bound comes from a terminal line, so skipping the move
+    // neither changes the value nor clears the node's proven bit; fold the
+    // bound in so a fail-low value stays sound even if every move is pruned.
+    const int32_t ubound = replier_outs ? outplay_futility_bound(move, *replier_outs) : kInf;
     if (ubound <= alpha) {
       best = std::max(best, ubound);
       continue;
     }
-    const int32_t child_threat = threats ? threats->threat_after(move) : OutplayThreats::kNoThreat;
+    OutplaySet* saved_sets[2];
+    push_outplay_sets(move, leave_outs ? &*leave_outs : nullptr, ply + 1, saved_sets);
     make(move, ply);
-    const SearchResult child =
-      search_child(depth - 1, alpha, beta, ply + 1, !searched, child_threat);
+    const SearchResult child = search_child(depth - 1, alpha, beta, ply + 1, !searched);
     unmake(ply);
+    restore_outplay_sets(saved_sets);
     if (aborting_) return {best, false};  // an aborted scan proves nothing
     searched = true;
     all_proven = all_proven && child.proven;
@@ -438,21 +434,23 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
 EndgameSolver::SearchResult EndgameSolver::run_root(
   int depth, int32_t alpha, int32_t beta, std::vector<std::pair<Move, int32_t>>& root_moves,
   const std::vector<Move>& plays, Move* best_out) {
-  // The root is the solving side's node; it hands its children out-play threats
-  // just as an interior node does, but has no incoming threat of its own.
-  std::optional<OutplayThreats> threats;
-  if (threat_pruning_ && racks_[stm_].size() >= 2) threats.emplace(board_, racks_[stm_], plays);
+  // The root is the solving side's node; it hands its children out-play sets
+  // just as an interior node does, but is itself never futility-pruned: every
+  // root move needs its exact value for the re-ordering between iterations.
+  std::optional<LeaveOutplays> leave_outs;
+  if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
 
   int32_t best = -kInf;
   Move best_move = root_moves[0].first;
   bool all_proven = true;    // AND over every root child's verdict
   bool best_proven = false;  // proven bit of the child that set `best`
   for (auto& rm : root_moves) {
-    const int32_t child_threat =
-      threats ? threats->threat_after(rm.first) : OutplayThreats::kNoThreat;
+    OutplaySet* saved_sets[2];
+    push_outplay_sets(rm.first, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
     make(rm.first, 0);
-    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf, child_threat);
+    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf);
     unmake(0);
+    restore_outplay_sets(saved_sets);
     if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
     rm.second = child.value;
     all_proven = all_proven && child.proven;
@@ -493,6 +491,21 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
 
   const size_t needed = static_cast<size_t>(max_plies) + kMaxPlayout + 2;
   if (frames_.size() < needed) frames_.resize(needed);
+  const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
+  if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
+
+  // Seed the incremental out-play sets (see the class comment): the opponent's
+  // from one move generation against its rack, the solving side's empty -- the
+  // root node itself is never futility-pruned, and its children's mover-side
+  // sets come from bucketing the root play list.
+  root_sets_[0].clear();
+  root_sets_[1].clear();
+  cur_sets_[0] = &root_sets_[0];
+  cur_sets_[1] = &root_sets_[1];
+  if (outplay_futility_) {
+    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
+                          root_sets_[1]);
+  }
 
   std::vector<Move> plays = MoveGenerator(board_, dict).generate(my_rack);
   std::vector<std::pair<Move, int32_t>> root_moves;
