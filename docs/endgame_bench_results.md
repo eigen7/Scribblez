@@ -44,13 +44,13 @@ final column is the hasty baseline's own win% at that margin.
 |---|---|---|---|---|---|
 | -100 | +0.0% | +0.0% | +0.0% | +0.0% | 2.5% |
 | -80 | +0.0% | +0.0% | +0.0% | +0.0% | 8.0% |
-| -60 | +0.0% | +0.0% | +0.0% | +2.5% | 10.0% |
-| -40 | +0.0% | +1.0% | +1.0% | +9.0% | 19.5% |
-| -20 | +0.0% | +0.0% | +0.5% | +10.0% | 40.5% |
-| 0 | +0.5% | +1.0% | +1.0% | +8.0% | 75.5% |
-| 20 | +0.0% | +0.0% | +0.0% | +3.0% | 91.0% |
-| 40 | +0.0% | +0.0% | +0.0% | +1.0% | 96.0% |
-| 60 | +0.0% | +0.0% | +0.0% | +2.0% | 97.0% |
+| -60 | +0.0% | +1.0% | +1.0% | +2.5% | 10.0% |
+| -40 | +4.0% | +5.0% | +8.0% | +12.0% | 19.5% |
+| -20 | +8.0% | +11.5% | +14.0% | +19.5% | 40.5% |
+| 0 | +6.5% | +9.5% | +9.5% | +11.5% | 75.5% |
+| 20 | +1.0% | +2.0% | +3.0% | +2.0% | 91.0% |
+| 40 | +1.0% | +1.0% | +1.0% | +1.0% | 96.0% |
+| 60 | +0.0% | +0.0% | +1.0% | +2.0% | 97.0% |
 | 80 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
 | 100 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
 
@@ -58,49 +58,50 @@ Readings:
 
 - Skill concentrates at contested margins and vanishes at both extremes --
   decided games are converted equally by everyone.
-- The peak sits at slightly-losing margins (+10% at margin -20, budget
+- The peak sits at slightly-losing margins (+19.5% at margin -20, budget
   1600): the solver rescues games hasty loses more than it protects games
   hasty already wins, since hasty's baseline is already 91%+ at winning
   margins.
-- Low budgets add little anywhere: a solve is declined when the position has
-  more root moves than the budget, so the budget gates engagement.
+- Skill is meaningful even at the smallest budget (+8.0% at margin -20,
+  budget 100).
 
 ## Modeled cost vs hasty
 
 Same margin axis; modeled solver-seat endgame ms per playout (see
-Methodology). Calibration for this run: a = 109.6 us/movegen, mean per-run
-relative error 116% -- the error reflects per-playout fixed overheads that
+Methodology). Calibration for this run: a = 108.2 us/movegen, mean per-run
+relative error 133% -- the error reflects per-playout fixed overheads that
 the one-term model folds into a, so treat the table as relative structure
 more than absolute ms.
 
 | margin | 100 | 220 | 400 | 1600 |
 |---|---|---|---|---|
-| -100 | 2.47 | 7.84 | 18.59 | 124.8 |
-| -80 | 2.47 | 7.84 | 18.59 | 124.2 |
-| -60 | 2.47 | 7.83 | 18.59 | 123.6 |
-| -40 | 2.43 | 7.62 | 17.78 | 119.0 |
-| -20 | 2.37 | 7.38 | 17.09 | 115.9 |
-| 0 | 2.23 | 6.82 | 16.00 | 111.0 |
-| 20 | 2.15 | 6.58 | 15.61 | 109.6 |
-| 40 | 2.19 | 6.65 | 15.71 | 109.8 |
-| 60 | 2.19 | 6.65 | 15.70 | 109.7 |
-| 80 | 2.19 | 6.65 | 15.69 | 110.0 |
-| 100 | 2.19 | 6.65 | 15.69 | 110.0 |
+| -100 | 2.44 | 7.74 | 18.36 | 122.1 |
+| -80 | 2.44 | 7.57 | 18.04 | 119.2 |
+| -60 | 2.44 | 7.38 | 17.69 | 116.7 |
+| -40 | 2.24 | 6.58 | 15.33 | 102.7 |
+| -20 | 2.06 | 4.80 | 10.80 | 66.7 |
+| 0 | 1.17 | 3.40 | 7.64 | 34.0 |
+| 20 | 0.98 | 2.70 | 7.89 | 44.5 |
+| 40 | 0.84 | 2.84 | 8.91 | 53.8 |
+| 60 | 0.84 | 2.83 | 9.12 | 57.6 |
+| 80 | 0.84 | 2.85 | 9.31 | 58.7 |
+| 100 | 0.84 | 2.86 | 9.04 | 57.5 |
 
 Readings:
 
-- Cost falls toward decided margins: class proofs land sooner and short-
-  circuit deepening.
-- Proving the opponent's win is systematically dearer than proving our own
-  (margin -100 vs +100 at budget 1600: 124.8 vs 110.0 ms, ~14%), because a
-  loss proof must refute every root move while a win proof needs a single
-  winning line.
+- Cost is lowest near the middle and at winning margins, and peaks steeply
+  at deep-losing margins (margin -100 vs +100 at budget 1600: 122 vs 58 ms,
+  ~2x).
+- A win verdict rests on a single winning line, so the root scan cuts off
+  the moment one is found; a loss proof must refute every root move, and at
+  the endgame's first positions both racks are full, so the out-play
+  futility sets are empty and nothing prunes the refutation.
 
 ## Whole-game throughput
 
 `--mode=games` (projections respected, as self-play generation runs) times
 endgame-vs-endgame self-play against the hasty-vs-hasty baseline (~5
-ms/game): budget 100 -> 1.25x, 220 -> 2.11x, 400 -> 5.93x, 1600 -> 33.7x.
+ms/game): budget 100 -> 1.15x, 220 -> 1.57x, 400 -> 4.24x, 1600 -> 22.9x.
 The same mode's head-to-head table reports each budget's win% and W/D/L
 record against plain hasty (no spread column).
 
