@@ -83,9 +83,6 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
 
-  // Parse an --endgame-objective value; throws std::runtime_error on bad input.
-  static EndgameObjective parse_objective(const std::string& name);
-
  private:
   uint64_t endgame_nodes_;
   int endgame_plies_;

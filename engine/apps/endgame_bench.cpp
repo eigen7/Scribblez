@@ -140,18 +140,6 @@ std::string bucket_label(int k, const std::vector<int>& thresholds) {
   return std::to_string(lo) + "-" + std::to_string(thresholds[k] - 1);
 }
 
-const char* objective_name(EndgameObjective objective) {
-  switch (objective) {
-    case EndgameObjective::kSpread:
-      return "spread";
-    case EndgameObjective::kFirstWin:
-      return "first-win";
-    case EndgameObjective::kLexicographic:
-      return "lexicographic";
-  }
-  return "?";
-}
-
 // Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return every
 // bag-empty position they passed through.
 std::vector<CapturedPosition> capture_positions(const Dictionary& dict, uint64_t base_seed,
@@ -165,92 +153,119 @@ std::vector<CapturedPosition> capture_positions(const Dictionary& dict, uint64_t
   return positions;
 }
 
-// Aggregate over one solve of each position in one (budget, spread-bucket)
-// cell.
+// One position's solve outcome, tagged with its |spread| bucket so any bucket
+// (or the whole batch) can be aggregated after the fact.
+struct SolveSample {
+  int bucket;
+  double us;
+  uint64_t nodes;
+  int depth;
+  bool differ;        // solver's move differs from the captured HastyBot move
+  bool class_proven;  // the solve proved the win/draw/loss class
+  bool proven;        // the solve's final value is proven
+};
+
+// Solve every captured position once at (budget, objective), tagging each
+// sample with its decision-point |spread| bucket.
+std::vector<SolveSample> solve_positions(const Dictionary& dict,
+                                         const std::vector<CapturedPosition>& positions,
+                                         uint64_t budget, int plies, EndgameObjective objective,
+                                         bool futility, const std::vector<int>& thresholds) {
+  EndgameSolver solver;
+  solver.set_outplay_futility(futility);
+  std::vector<SolveSample> samples;
+  samples.reserve(positions.size());
+  for (const CapturedPosition& p : positions) {
+    solver.clear();  // independent samples: don't let one solve warm the next
+    const auto t0 = std::chrono::steady_clock::now();
+    const EndgameResult r = solver.solve(p.board, dict, p.my_rack, p.opp_rack, p.my_score,
+                                         p.opp_score, p.scoreless, budget, plies, objective);
+    const auto t1 = std::chrono::steady_clock::now();
+    samples.push_back({bucket_of(std::abs(p.my_score - p.opp_score), thresholds),
+                       std::chrono::duration<double>(t1 - t0).count() * 1e6, r.nodes,
+                       r.depth_completed, !(r.best == p.hasty_move),
+                       r.proven_class != EndgameResult::kClassUnknown, r.proven});
+  }
+  return samples;
+}
+
+// Aggregate over one (budget, spread-bucket) cell of solve samples.
 struct SolveStats {
   size_t positions;
   double mean_us;
   double median_us;
   double nodes_per_s;
   double mean_depth;
-  double pct_differ;  // solver's move differs from the captured HastyBot move
-  double pct_class;   // solves that proved the win/draw/loss class
-  double pct_proven;  // solves whose final value is proven
+  double pct_differ;
+  double pct_class;
+  double pct_proven;
   double pct_budget;  // mean share of the node budget actually spent: the
                       // complement of what proof early exits hand back
 };
 
-SolveStats solve_all(const Dictionary& dict, const std::vector<const CapturedPosition*>& positions,
-                     uint64_t budget, int plies, EndgameObjective objective, bool futility) {
-  EndgameSolver solver;
-  solver.set_outplay_futility(futility);
+// Aggregate the samples in bucket `bucket`, or every sample when bucket < 0.
+SolveStats aggregate_stats(const std::vector<SolveSample>& samples, int bucket, uint64_t budget) {
   std::vector<double> per_us;
-  per_us.reserve(positions.size());
-  double total_s = 0.0;
+  double total_us = 0.0;
   uint64_t total_nodes = 0;
   long total_depth = 0;
-  double budget_share = 0.0;
-  size_t differ = 0;
-  size_t class_proven = 0;
-  size_t proven = 0;
-  for (const CapturedPosition* p : positions) {
-    solver.clear();  // independent samples: don't let one solve warm the next
-    const auto t0 = std::chrono::steady_clock::now();
-    const EndgameResult r = solver.solve(p->board, dict, p->my_rack, p->opp_rack, p->my_score,
-                                         p->opp_score, p->scoreless, budget, plies, objective);
-    const auto t1 = std::chrono::steady_clock::now();
-    const double s = std::chrono::duration<double>(t1 - t0).count();
-    per_us.push_back(s * 1e6);
-    total_s += s;
-    total_nodes += r.nodes;
-    total_depth += r.depth_completed;
-    budget_share += static_cast<double>(r.nodes) / static_cast<double>(budget);
-    if (!(r.best == p->hasty_move)) ++differ;
-    if (r.proven_class != EndgameResult::kClassUnknown) ++class_proven;
-    if (r.proven) ++proven;
+  size_t differ = 0, class_proven = 0, proven = 0;
+  for (const SolveSample& sm : samples) {
+    if (bucket >= 0 && sm.bucket != bucket) continue;
+    per_us.push_back(sm.us);
+    total_us += sm.us;
+    total_nodes += sm.nodes;
+    total_depth += sm.depth;
+    differ += sm.differ ? 1 : 0;
+    class_proven += sm.class_proven ? 1 : 0;
+    proven += sm.proven ? 1 : 0;
   }
-
   std::sort(per_us.begin(), per_us.end());
   const size_t n = per_us.size();
-  SolveStats st;
+  SolveStats st{};
   st.positions = n;
-  st.mean_us = n ? std::accumulate(per_us.begin(), per_us.end(), 0.0) / n : 0.0;
-  st.median_us = n ? per_us[n / 2] : 0.0;
-  st.nodes_per_s = total_s > 0 ? static_cast<double>(total_nodes) / total_s : 0.0;
-  st.mean_depth = n ? static_cast<double>(total_depth) / n : 0.0;
-  st.pct_differ = n ? 100.0 * static_cast<double>(differ) / n : 0.0;
-  st.pct_class = n ? 100.0 * static_cast<double>(class_proven) / n : 0.0;
-  st.pct_proven = n ? 100.0 * static_cast<double>(proven) / n : 0.0;
-  st.pct_budget = n ? 100.0 * budget_share / static_cast<double>(n) : 0.0;
+  if (n == 0) return st;
+  st.mean_us = total_us / static_cast<double>(n);
+  st.median_us = per_us[n / 2];
+  st.nodes_per_s = total_us > 0 ? 1e6 * static_cast<double>(total_nodes) / total_us : 0.0;
+  st.mean_depth = static_cast<double>(total_depth) / static_cast<double>(n);
+  st.pct_differ = 100.0 * static_cast<double>(differ) / static_cast<double>(n);
+  st.pct_class = 100.0 * static_cast<double>(class_proven) / static_cast<double>(n);
+  st.pct_proven = 100.0 * static_cast<double>(proven) / static_cast<double>(n);
+  st.pct_budget = 100.0 * static_cast<double>(total_nodes) /
+                  (static_cast<double>(budget) * static_cast<double>(n));
   return st;
+}
+
+void print_solve_row(uint64_t budget, const std::string& bucket, const SolveStats& s) {
+  std::printf("%10llu %8s %9zu %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %8.1f%% %8.1f%%\n",
+              static_cast<unsigned long long>(budget), bucket.c_str(), s.positions, s.mean_us,
+              s.median_us, s.nodes_per_s, s.mean_depth, s.pct_differ, s.pct_class, s.pct_proven,
+              s.pct_budget);
 }
 
 void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
                      const std::vector<uint64_t>& budgets, int plies, EndgameObjective objective,
                      const std::vector<int>& thresholds, bool futility) {
   const std::vector<CapturedPosition> positions = capture_positions(dict, base_seed, games);
-  // Bucket the positions by their absolute score spread at the decision point:
-  // the small buckets measure decision accuracy, the large ones the break-out
-  // imperative (prove the decided game's class and hand the budget back).
-  std::vector<std::vector<const CapturedPosition*>> buckets(thresholds.size() + 1);
-  for (const CapturedPosition& p : positions)
-    buckets[bucket_of(std::abs(p.my_score - p.opp_score), thresholds)].push_back(&p);
-
   std::printf(
     "solves mode: %d games, %zu bag-empty positions, plies=%d, objective=%s, futility=%d\n\n",
-    games, positions.size(), plies, objective_name(objective), futility ? 1 : 0);
+    games, positions.size(), plies, endgame_objective_name(objective), futility ? 1 : 0);
   std::printf("%10s %8s %9s %11s %11s %13s %10s %9s %8s %9s %9s\n", "budget", "|spread|",
               "positions", "mean us", "p50 us", "nodes/s", "mean depth", "%% differ", "%% class",
               "%% proven", "%% budget");
+  // Per budget: one solve of every position, then per-bucket rows (small
+  // buckets: decision accuracy; large: the break-out imperative) and an "all"
+  // row for the single overall number.
   for (uint64_t b : budgets) {
-    for (int k = 0; k < static_cast<int>(buckets.size()); ++k) {
-      if (buckets[k].empty()) continue;
-      const SolveStats s = solve_all(dict, buckets[k], b, plies, objective, futility);
-      std::printf("%10llu %8s %9zu %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %8.1f%% %8.1f%%\n",
-                  static_cast<unsigned long long>(b), bucket_label(k, thresholds).c_str(),
-                  s.positions, s.mean_us, s.median_us, s.nodes_per_s, s.mean_depth, s.pct_differ,
-                  s.pct_class, s.pct_proven, s.pct_budget);
+    const std::vector<SolveSample> samples =
+      solve_positions(dict, positions, b, plies, objective, futility, thresholds);
+    for (int k = 0; k <= static_cast<int>(thresholds.size()); ++k) {
+      const SolveStats s = aggregate_stats(samples, k, b);
+      if (s.positions == 0) continue;
+      print_solve_row(b, bucket_label(k, thresholds), s);
     }
+    print_solve_row(b, "all", aggregate_stats(samples, -1, b));
   }
 }
 
@@ -372,7 +387,7 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
                     const std::vector<uint64_t>& budgets, int plies, EndgameObjective objective,
                     const std::vector<int>& thresholds) {
   std::printf("games mode: %d games/config, threads=%d, plies=%d, objective=%s\n\n", games, threads,
-              plies, objective_name(objective));
+              plies, endgame_objective_name(objective));
   std::printf("%-22s %11s %10s %10s %10s %10s\n", "config", "budget", "total s", "s/game",
               "games/s", "ratio");
 
@@ -397,8 +412,14 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
   for (uint64_t b : budgets) {
     const std::vector<H2H> buckets =
       endgame_vs_hasty(dict, base_seed, games, b, plies, objective, thresholds);
+    H2H total;
     for (size_t k = 0; k < buckets.size(); ++k) {
       const H2H& h = buckets[k];
+      total.spread_sum += h.spread_sum;
+      total.games += h.games;
+      total.wins += h.wins;
+      total.draws += h.draws;
+      total.losses += h.losses;
       if (h.games == 0) continue;
       const std::string label =
         k + 1 == buckets.size() ? "none" : bucket_label(static_cast<int>(k), thresholds);
@@ -406,6 +427,9 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
                   label.c_str(), h.games, static_cast<double>(h.spread_sum) / h.games, h.wins,
                   h.draws, h.losses);
     }
+    std::printf("%11llu %9s %8d %16.2f %8d %8d %8d\n", static_cast<unsigned long long>(b), "all",
+                total.games, static_cast<double>(total.spread_sum) / total.games, total.wins,
+                total.draws, total.losses);
   }
 }
 
@@ -470,8 +494,7 @@ int main(int argc, char** argv) {
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     const std::vector<uint64_t> budgets = scribblez::parse_budgets(budgets_csv);
     const std::vector<int> thresholds = scribblez::parse_thresholds(buckets_csv);
-    const scribblez::EndgameObjective objective =
-      scribblez::EndgameHastyBotAgent::parse_objective(objective_str);
+    const scribblez::EndgameObjective objective = scribblez::parse_endgame_objective(objective_str);
     if (threads < 1) threads = 1;
 
     if (mode == "solves") {

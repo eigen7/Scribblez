@@ -6,6 +6,7 @@
 #include "game/rack.h"
 
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,14 @@ class LeaveOutplays;
 // budget, the spread pass's margin-maximizing answer is the class-robust
 // fallback: margin is slack against estimate error.
 enum class EndgameObjective : uint8_t { kSpread, kFirstWin, kLexicographic };
+
+// The objective's CLI/config string form ("spread", "first-win",
+// "lexicographic") and its inverse; parse_endgame_objective throws
+// std::runtime_error on an unknown name.
+// TODO(enum-strings): generate this pair with a framework like magic_enum
+// instead of hand-maintaining the mapping.
+const char* endgame_objective_name(EndgameObjective objective);
+EndgameObjective parse_endgame_objective(const std::string& name);
 
 // Result of a single endgame solve, from the perspective of the side to move
 // at the solved position ("the solving side").
@@ -215,6 +224,15 @@ class EndgameSolver {
     bool proven = false;
   };
 
+  // A candidate move with the value the search currently ranks it by: an
+  // order_estimate() before its first root search, thereafter the value its
+  // last root search returned.
+  struct RankedMove {
+    Move move;
+    int32_t rank = 0;
+  };
+  static bool by_rank_desc(const RankedMove& a, const RankedMove& b) { return a.rank > b.rank; }
+
   // Everything one make() changes, so unmake() can restore it: the board undo,
   // both scores, the scoreless count, the game-over flag, the incremental board
   // hash, the side that moved, and the move (to return its tiles to the rack).
@@ -235,17 +253,16 @@ class EndgameSolver {
   // spread for the full window, a settled class for the first-win window
   // (`first_win` selects which exit test applies).
   EndgameResult run_iterative(int32_t alpha, int32_t beta, bool first_win,
-                              std::vector<std::pair<Move, int32_t>>& root_moves,
-                              const std::vector<Move>& plays, int max_plies);
+                              std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
+                              int max_plies);
   // The kLexicographic driver over run_iterative passes; see EndgameObjective.
-  EndgameResult solve_lexicographic(std::vector<std::pair<Move, int32_t>>& root_moves,
+  EndgameResult solve_lexicographic(std::vector<RankedMove>& root_moves,
                                     const std::vector<Move>& plays, int max_plies);
   // True iff playing `m` at the root provably preserves game class `cls` for
   // the solving side: a narrow-window iterative probe of the child position,
   // sharing the solve budget. False when the proof does not land in budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
-  SearchResult run_root(int depth, int32_t alpha, int32_t beta,
-                        std::vector<std::pair<Move, int32_t>>& root_moves,
+  SearchResult run_root(int depth, int32_t alpha, int32_t beta, std::vector<RankedMove>& root_moves,
                         const std::vector<Move>& plays, Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
   // Search one child at (alpha, beta) and return its value from the parent's
@@ -285,8 +302,8 @@ class EndgameSolver {
   int32_t order_estimate(const Move& move, const Move& tt_move, bool have_tt_move) const;
   // `replier_outs` (when non-null) caps each estimate by the move's futility
   // bound, sinking provably weak moves.
-  void order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
-                   bool have_tt_move, const OutplaySet* replier_outs) const;
+  void order_moves(std::vector<RankedMove>& moves, const Move& tt_move, bool have_tt_move,
+                   const OutplaySet* replier_outs) const;
   const Move& greedy_pick(const std::vector<Move>& plays) const;
   double playout_adjusted(const Move& move) const;
   int placed_face_value(const Move& move) const;
