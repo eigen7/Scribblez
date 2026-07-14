@@ -541,14 +541,23 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
 
 EndgameResult EndgameSolver::solve_lexicographic(std::vector<std::pair<Move, int32_t>>& root_moves,
                                                  const std::vector<Move>& plays, int max_plies) {
-  // First pass: prove the win/draw/loss class as cheaply as possible.
+  // First pass: prove the win/draw/loss class as cheaply as possible. The pass
+  // is capped at half the budget: on a position whose class is not provable
+  // within it, an uncapped pass would burn the entire cap and leave the margin
+  // fallback below no budget at all -- the narrow-window move it would return
+  // is margin-blind, the worst of both objectives. Class proofs are cheap when
+  // they land, so the cap loses few of them; the reserved half is the
+  // insurance premium this objective pays for class protection.
+  const uint64_t full_budget = budget_;
+  budget_ = full_budget / 2;
   const EndgameResult first =
     run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays, max_plies);
+  budget_ = full_budget;
+  aborting_ = false;  // a class pass stopped by its half-cap frees the rest
+
   if (!first.proven || first.depth_completed < 1) {
     // No class proof in budget: margin-maximizing play is the class-robust
-    // fallback (margin is slack against estimate error). Any remaining budget
-    // runs the full window over the warm table.
-    if (aborting_) return first;
+    // fallback (margin is slack against estimate error), over the warm table.
     const EndgameResult spread =
       run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
     return spread.depth_completed >= 1 ? spread : first;
@@ -564,7 +573,6 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<std::pair<Move, int
   const int cls = class_of(first.value);
   EndgameResult result = first;
   result.proven_class = cls;
-  if (aborting_) return result;
   const EndgameResult spread =
     run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
   if (spread.depth_completed < 1) return result;
