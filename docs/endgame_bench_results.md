@@ -67,10 +67,11 @@ to their proven class and proof cost (see EndgameGcgCases).
   deterministic conditioning variable identical across configurations and
   seats.
 - **Which metric judges what**: W-L margin in the small buckets judges class
-  play; mean spread judges margin play (and the value-target currency the
-  training pipeline consumes) -- but only under spread_matters, since the
-  break-out setting deliberately stops maximizing it; the endgames-mode
-  multipliers judge what the solver does to self-play throughput.
+  play; mean spread judges the value-target currency the training pipeline
+  consumes -- under spread_matters the bot's own margin play, under the
+  break-out setting the certificate lines' proof-grade margins; the
+  endgames-mode multipliers judge what the solver does to self-play
+  throughput.
 
 ## What the solver does to self-play throughput (`--mode=endgames`, 300 games)
 
