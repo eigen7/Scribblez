@@ -4,8 +4,10 @@
 import sys
 from pathlib import Path
 
-# Put py/ on sys.path so `setup_check` resolves when this script is run
-# directly from outside the dev container (inside, scribblez.pth handles it).
+# Put this checkout's py/ first on sys.path: `setup_check` otherwise resolves
+# only through the container's main-checkout .pth entry (and not at all on the
+# host), so this script run from a git worktree would silently import -- and
+# operate on -- the main checkout instead of its own.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from setup_check import import_setup_common
