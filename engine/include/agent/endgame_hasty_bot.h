@@ -36,11 +36,11 @@ class EndgameHastyBotAgent : public HastyBotAgent {
  public:
   // Default per-solve node budget, tuned with `endgame_bench --mode=games` on
   // NWL23: the largest budget whose endgame-vs-endgame games stay within ~2x
-  // the plain HastyBot-vs-HastyBot game time (measured 2.00x, with a
-  // +0.40 +/- 0.03 points/game head-to-head edge over greedy HastyBot across
+  // the plain HastyBot-vs-HastyBot game time (measured ~1.9x, with a
+  // +0.40 +/- 0.04 points/game head-to-head edge over greedy HastyBot across
   // 4800 seat-mirrored games). Strength keeps rising superlinearly with the
   // budget -- richer positions pass the decline gate -- at proportionally more
-  // game time: 400 gives +0.85 at 4.5x, 1600 gives +5.0 at 21x.
+  // game time; see docs/endgame_bench_results.md for the measured curve.
   static constexpr uint64_t kDefaultEndgameNodes = 200;
 
   // HastyBot configuration plus the endgame-solver knobs.

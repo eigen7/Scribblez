@@ -26,12 +26,12 @@ the project's Docker container, Release build.
 
 | `--endgame-nodes` | game-time cost | head-to-head vs greedy HastyBot |
 |---|---|---|
-| 100 | 1.15x | +0.15 +/- 0.02 pts/game |
-| **200 (default)** | **2.00x** | **+0.40 +/- 0.03** |
-| 400 | 4.5x | +0.85 +/- 0.07 |
-| 1600 | 21x | +4.96 +/- 0.19 |
-| 5000 | 73x | +5.48 +/- 0.22 |
-| 20000 | 202x | +5.58 +/- 0.35 |
+| 100 | 1.19x | +0.15 +/- 0.02 pts/game |
+| **200 (default)** | **1.85x** | **+0.40 +/- 0.04** |
+| 400 | 5.7x | +0.97 +/- 0.05 |
+| 1600 | 30x | +4.83 +/- 0.08 |
+| 5000 | ~73x | +5.48 +/- 0.22 |
+| 20000 | ~202x | +5.58 +/- 0.35 |
 
 Strength saturates at roughly **+5.5 points/game — the full value of exact
 endgame play over greedy static-equity play** in hasty-level self-play. Budget
@@ -58,6 +58,32 @@ an admitted search noisier.
 Solves are movegen-bound (roughly 35-80k nodes/s; each node and each greedy
 playout ply runs a full move generation), so per-solve cost tracks nodes spent
 almost linearly once positions stop being declined.
+
+## Proven verdicts and outplay-threat pruning
+
+Two search mechanisms shape where the budget goes:
+
+- **Proven verdicts**: a result is proven when it rests entirely on real game
+  ends (no greedy-playout leaf). Iterative deepening stops the moment an
+  iteration returns a proven verdict -- the exact spread in the full window, a
+  settled win/draw/loss class in the first-win window -- so small positions
+  stop at the depth that proves them instead of iterating to the budget. This
+  is why the solves-mode "mean depth" column reads low: proven positions
+  report their proving depth.
+- **Outplay-threat pruning**: when the mover's leave keeps two out-plays that
+  no single reply can block (halo geometry over rows/columns, conservative
+  toward not firing), opponent replies scoring too little to beat the
+  guaranteed out-line are skipped without recursion. Sound (A/B-identical
+  values and best moves over the randomized suite) and proven-grade.
+
+Measured effect at the budgets that matter: **small**. Cost at the 2x point
+dropped from ~1.97x to ~1.85x and strength there is unchanged (+0.40); the
+node cut from threat pruning is 2-4%. The mechanics fire exactly where
+positions are cheap (small, provable ones); the positions that dominate cost
+cannot be proven within these budgets and still burn to the cap. The
+mechanisms matter structurally -- proofs make first-win exits and future
+proof-caching sound -- but they do not move the cost/strength frontier by
+themselves.
 
 ## First-win (WLD) mode
 
