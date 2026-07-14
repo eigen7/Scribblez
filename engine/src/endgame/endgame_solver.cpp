@@ -494,25 +494,12 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
   if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
 
-  // Seed the incremental out-play sets (see the class comment): the opponent's
-  // from one move generation against its rack, the solving side's empty -- the
-  // root node itself is never futility-pruned, and its children's mover-side
-  // sets come from bucketing the root play list.
-  root_sets_[0].clear();
-  root_sets_[1].clear();
-  cur_sets_[0] = &root_sets_[0];
-  cur_sets_[1] = &root_sets_[1];
-  if (outplay_futility_) {
-    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
-                          root_sets_[1]);
-  }
-
   std::vector<Move> plays = MoveGenerator(board_, dict).generate(my_rack);
   std::vector<std::pair<Move, int32_t>> root_moves;
   root_moves.reserve(plays.size() + 1);
   for (const Move& m : plays) root_moves.emplace_back(m, 0);
   root_moves.emplace_back(Move::pass(), 0);
-  order_moves(root_moves, Move::pass(), /*have_tt_move=*/false, /*opp_outs=*/nullptr);
+  order_moves(root_moves, Move::pass(), /*have_tt_move=*/false, /*replier_outs=*/nullptr);
 
   EndgameResult result;
   result.best = root_moves[0].first;
@@ -522,6 +509,20 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   // and fall back to their own move policy -- rather than spending the whole
   // budget on a fraction of the root.
   if (root_moves.size() > node_budget) return result;
+
+  // Seed the incremental out-play sets (see the class comment): the opponent's
+  // from one move generation against its rack, the solving side's empty -- the
+  // root node itself is never futility-pruned, and its children's mover-side
+  // sets come from bucketing the root play list. Seeded only once the solve is
+  // sure to run, so a declined position pays nothing.
+  root_sets_[0].clear();
+  root_sets_[1].clear();
+  cur_sets_[0] = &root_sets_[0];
+  cur_sets_[1] = &root_sets_[1];
+  if (outplay_futility_) {
+    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
+                          root_sets_[1]);
+  }
   const int32_t root_alpha = first_win ? kFirstWinAlpha : -kInf;
   const int32_t root_beta = first_win ? kFirstWinBeta : kInf;
   for (int depth = 1; depth <= max_plies; ++depth) {
