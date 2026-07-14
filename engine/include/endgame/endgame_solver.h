@@ -56,6 +56,22 @@ struct EndgameResult {
 // entry, propagated through the negamax recursion (a node is proven only if the
 // child searches its verdict rests on are all proven).
 //
+// Outplay-threat futility pruning cuts opponent replies at interior nodes. When
+// the side to move plays m and the leave it keeps holds two out-plays that no
+// single opponent reply can both block (see outplay_threat.h), the opponent
+// cannot stop it from going out next turn. So in the child node, any opponent
+// reply r that does not itself empty the opponent's rack, scoring g, admits a
+// guaranteed continuation whose value to the opponent is at most
+//   U(g) = s_opp + 3*g - o_min - 2*opp_pv,
+// where s_opp is the opponent's spread at the child, opp_pv its rack value
+// there, and o_min the smaller score of the unblockable out-play pair. (The 3*g
+// arises because the reply's leftover rack is worth at least opp_pv - g, and the
+// guaranteed out doubles that leftover as its end-of-game bonus.) A reply with
+// U(g) <= alpha cannot improve the node, so it is skipped. The guaranteed line
+// is terminal, so the skip is proven-grade and never clears the node's proven
+// bit. Out-play replies are never pruned; a test can disable the whole scheme
+// (set_threat_pruning) to A/B that it changes no value or best move.
+//
 // TODO(multithreading): when single-game (non-parallel-self-play) settings
 // arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
 // atomic uint64 words (the lockless Hyatt scheme MAGPIE uses, which also
@@ -103,6 +119,11 @@ class EndgameSolver {
   // across games). O(1): it bumps the table's generation counter, and probes
   // treat entries from older generations as empty.
   void clear();
+
+  // Enable or disable outplay-threat futility pruning (on by default). Exists so
+  // a test can A/B the two modes and assert the pruning never changes a solve's
+  // value or best move; production always leaves it on.
+  void set_threat_pruning(bool on) { threat_pruning_ = on; }
 
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
@@ -154,14 +175,24 @@ class EndgameSolver {
 
   // --- Iterative deepening / search ---------------------------------------
   SearchResult run_root(int depth, int32_t alpha, int32_t beta,
-                        std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
-  SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
+                        std::vector<std::pair<Move, int32_t>>& root_moves,
+                        const std::vector<Move>& plays, Move* best_out);
+  // `threat` is the outplay-threat (o_min, or OutplayThreats::kNoThreat) the
+  // parent hands this node, licensing futility pruning of dominated replies.
+  SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply, int32_t threat);
   // Search one child at (alpha, beta) and return its value from the parent's
   // perspective (negated) with the child's proven bit, using a full window for
   // the first child and a scout-plus-conditional-re-search for the rest (PVS).
-  SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply,
-                            bool first);
+  // `threat` is forwarded to the child (the same for scout and re-search).
+  SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply, bool first,
+                            int32_t threat);
   int32_t greedy_playout(uint64_t node_key, int ply);
+
+  // Sound upper bound on the mover's value from playing reply `m` when the parent
+  // handed down outplay threat `threat`: the opponent otherwise goes out next
+  // turn. Returns kInf when no threat is active or `m` empties the mover's rack
+  // (the threat is void), so such replies are never pruned.
+  int32_t threat_reply_bound(const Move& m, int32_t threat) const;
 
   // --- Make / unmake ------------------------------------------------------
   void make(const Move& move, int ply);
@@ -204,6 +235,10 @@ class EndgameSolver {
   uint64_t nodes_ = 0;
   uint64_t budget_ = 0;
   bool aborting_ = false;
+
+  // Outplay-threat futility pruning, on except when a test disables it to A/B
+  // the two modes (see set_threat_pruning).
+  bool threat_pruning_ = true;
 
   std::vector<TTEntry> tt_;
   uint64_t tt_mask_ = 0;

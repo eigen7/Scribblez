@@ -1,6 +1,7 @@
 #include "endgame/endgame_solver.h"
 
 #include "agent/macondo_bot.h"
+#include "endgame/outplay_threat.h"
 #include "game/glyph.h"
 #include "game/movegen.h"
 #include "game/tile.h"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace scribblez {
 
@@ -277,21 +279,35 @@ int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
 }
 
 EndgameSolver::SearchResult EndgameSolver::search_child(int child_depth, int32_t alpha,
-                                                        int32_t beta, int child_ply, bool first) {
+                                                        int32_t beta, int child_ply, bool first,
+                                                        int32_t threat) {
   SearchResult r;
   if (first) {
-    r = negamax(child_depth, -beta, -alpha, child_ply);
+    r = negamax(child_depth, -beta, -alpha, child_ply, threat);
   } else {
-    r = negamax(child_depth, -alpha - 1, -alpha, child_ply);
-    if (alpha < -r.value && -r.value < beta) r = negamax(child_depth, -beta, -alpha, child_ply);
+    r = negamax(child_depth, -alpha - 1, -alpha, child_ply, threat);
+    if (alpha < -r.value && -r.value < beta)
+      r = negamax(child_depth, -beta, -alpha, child_ply, threat);
   }
   // Return the value from the parent's perspective; the proven bit is a property
   // of the search that produced the child's final verdict, not of the sign.
   return {-r.value, r.proven};
 }
 
-EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta,
-                                                   int ply) {
+int32_t EndgameSolver::threat_reply_bound(const Move& m, int32_t threat) const {
+  if (threat == OutplayThreats::kNoThreat) return kInf;
+  const int mover = stm_;
+  const bool empties = m.type() == MoveType::PLAY && m.num_glyphs() == racks_[mover].size();
+  if (empties) return kInf;  // an out-play reply ends the game first: the threat is void
+  // The reply scores g and its post-play leftover is worth at least (pv - g), so
+  // the guaranteed out (scoring >= threat, with a 2x bonus on that leftover)
+  // caps the mover's value here. See the class comment for the derivation.
+  const int32_t g = m.score();
+  return spread_stm() + 3 * g - threat - 2 * racks_[mover].point_value();
+}
+
+EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply,
+                                                   int32_t threat) {
   if (aborting_) return {0, false};
   ++nodes_;
   if (nodes_ > budget_) {
@@ -327,20 +343,39 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   moves.emplace_back(Move::pass(), 0);
   order_moves(moves, tt_move, have_tt_move);
 
+  // Threats handed to children: only worthwhile when the mover keeps >= 2 tiles,
+  // so a leave with an out-play pair can survive the move.
+  std::optional<OutplayThreats> threats;
+  if (threat_pruning_ && racks_[stm_].size() >= 2) threats.emplace(board_, racks_[stm_], plays);
+
   int32_t best = -kInf;
   Move best_move = Move::pass();
+  bool searched = false;    // at least one child was actually searched (for PVS)
   bool all_proven = true;   // AND over every scanned child's verdict
   bool cut = false;         // a beta cutoff fired
   bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
-  for (size_t i = 0; i < moves.size(); ++i) {
-    make(moves[i].first, ply);
-    const SearchResult child = search_child(depth - 1, alpha, beta, ply + 1, i == 0);
+  for (auto& entry : moves) {
+    const Move& move = entry.first;
+    // Futility: a reply the parent's out-play threat dominates cannot raise
+    // alpha. Its bound comes from a terminal line, so skipping it neither
+    // changes the value nor clears the node's proven bit; fold the bound in so a
+    // fail-low value stays sound even if every reply is pruned.
+    const int32_t ubound = threat_reply_bound(move, threat);
+    if (ubound <= alpha) {
+      best = std::max(best, ubound);
+      continue;
+    }
+    const int32_t child_threat = threats ? threats->threat_after(move) : OutplayThreats::kNoThreat;
+    make(move, ply);
+    const SearchResult child =
+      search_child(depth - 1, alpha, beta, ply + 1, !searched, child_threat);
     unmake(ply);
     if (aborting_) return {best, false};  // an aborted scan proves nothing
+    searched = true;
     all_proven = all_proven && child.proven;
     if (child.value > best) {
       best = child.value;
-      best_move = moves[i].first;
+      best_move = move;
     }
     alpha = std::max(alpha, best);
     if (alpha >= beta) {
@@ -351,7 +386,8 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   }
 
   // A fail-high is proven by its single witness; an exact or fail-low verdict
-  // needs every child's contribution to be proven.
+  // needs every child's contribution to be proven (pruned replies contribute a
+  // proven terminal bound, so they leave all_proven untouched).
   const bool proven = cut ? cut_proven : all_proven;
   uint8_t bound = kExact;
   if (best <= alpha_orig)
@@ -364,14 +400,21 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
 
 EndgameSolver::SearchResult EndgameSolver::run_root(
   int depth, int32_t alpha, int32_t beta, std::vector<std::pair<Move, int32_t>>& root_moves,
-  Move* best_out) {
+  const std::vector<Move>& plays, Move* best_out) {
+  // The root is the solving side's node; it hands its children out-play threats
+  // just as an interior node does, but has no incoming threat of its own.
+  std::optional<OutplayThreats> threats;
+  if (threat_pruning_ && racks_[stm_].size() >= 2) threats.emplace(board_, racks_[stm_], plays);
+
   int32_t best = -kInf;
   Move best_move = root_moves[0].first;
   bool all_proven = true;    // AND over every root child's verdict
   bool best_proven = false;  // proven bit of the child that set `best`
   for (auto& rm : root_moves) {
+    const int32_t child_threat =
+      threats ? threats->threat_after(rm.first) : OutplayThreats::kNoThreat;
     make(rm.first, 0);
-    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf);
+    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf, child_threat);
     unmake(0);
     if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
     rm.second = child.value;
@@ -433,7 +476,7 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   const int32_t root_beta = first_win ? kFirstWinBeta : kInf;
   for (int depth = 1; depth <= max_plies; ++depth) {
     Move best_move = root_moves[0].first;
-    const SearchResult sr = run_root(depth, root_alpha, root_beta, root_moves, &best_move);
+    const SearchResult sr = run_root(depth, root_alpha, root_beta, root_moves, plays, &best_move);
     if (aborting_) {
       // Budget exhausted mid-iteration: the last completed iteration's result
       // stands. When not even the first iteration finished, fall back to the

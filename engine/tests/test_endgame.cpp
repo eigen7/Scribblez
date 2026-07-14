@@ -4,6 +4,7 @@
 //     positions, determinism, node-budget behavior, and cross-turn TT reuse.
 
 #include "endgame/endgame_solver.h"
+#include "endgame/outplay_threat.h"
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/move.h"
@@ -311,6 +312,45 @@ const Move* find_out_move(const std::vector<Move>& moves, const Rack& rack) {
 
 constexpr int kRefDepth = 24;  // > any small-endgame line length
 constexpr uint64_t kBigBudget = 1ull << 40;
+
+// A synthetic PLAY placing dummy tiles at the given lane positions, for exercising
+// the halo geometry directly (build_outplay_halo reads only the move's shape and
+// the board, never the dictionary, so the glyphs' identity is irrelevant).
+Move lane_play(bool horizontal, int line, const std::vector<int>& along) {
+  uint16_t mask = 0;
+  std::vector<Glyph> glyphs;
+  for (int p : along) {
+    mask |= static_cast<uint16_t>(1u << p);
+    glyphs.push_back(Glyph::of(Tile::of(0)));  // an 'A'; value is unused here
+  }
+  return Move::play(horizontal, line, mask, 0, glyphs.data(), static_cast<int>(glyphs.size()));
+}
+Move horiz_play(int row, const std::vector<int>& cols) { return lane_play(true, row, cols); }
+Move vert_play(int col, const std::vector<int>& rows) { return lane_play(false, col, rows); }
+
+// A/B one batch of random endgames with threat pruning on vs off at full window
+// and kRefDepth (so every line resolves and no playout leaf is consulted): the
+// pruning must not change the value or best move, and must not raise node count.
+// Accumulates total nodes and counts any mismatch (via EXPECT, so all are
+// reported).
+void check_pruning_ab(const Dictionary& d, unsigned seed, int count, uint64_t& pruned_nodes,
+                      uint64_t& unpruned_nodes) {
+  std::mt19937 rng(seed);
+  for (int i = 0; i < count; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));  // 2..4 tiles
+    EndgameSolver on, off;
+    off.set_threat_pruning(false);
+    const EndgameResult a = on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                     kBigBudget, kRefDepth);
+    const EndgameResult b = off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                      kBigBudget, kRefDepth);
+    EXPECT_EQ(a.value, b.value) << "seed " << seed << " position " << i;
+    EXPECT_TRUE(a.best == b.best) << "seed " << seed << " position " << i;
+    EXPECT_LE(a.nodes, b.nodes) << "seed " << seed << " position " << i;
+    pruned_nodes += a.nodes;
+    unpruned_nodes += b.nodes;
+  }
+}
 
 }  // namespace
 
@@ -732,4 +772,92 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   }
   ASSERT_GT(proven, 0) << "no wld solve proved a class";
   std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
+}
+
+// THE soundness gate for outplay-threat futility pruning: over a large random
+// batch (tiny dictionary, and the real lexicon when installed), solving with
+// pruning on and off must agree exactly on value and best move, and pruning must
+// never search more nodes. A wrong halo classification or a wrong U(g) bound
+// would drop a reply that mattered and change one of these.
+TEST(EndgameSolver, ThreatPruningIsSound) {
+  uint64_t pruned = 0, unpruned = 0;
+  const Dictionary tiny = tiny_dict();
+  check_pruning_ab(tiny, 0x7A5C0DE1u, 200, pruned, unpruned);
+
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (std::ifstream(path).good()) {
+    const Dictionary real = Dictionary::load_kwg(path);
+    check_pruning_ab(real, 0x1E51C04Du, 60, pruned, unpruned);
+  } else {
+    std::cout << "  (no lexicon at " << path << "; real-lexicon batch skipped)\n";
+  }
+  ASSERT_GT(unpruned, 0u);
+  std::cout << "  threat-pruning nodes: " << pruned << " pruned vs " << unpruned << " unpruned\n";
+}
+
+// The halo of a candidate out-play covers every cell whose occupation by a reply
+// could stop it: its own squares, the cross-word neighbors of its placed tiles,
+// and the in-line cell just beyond each end of its word.
+TEST(OutplayHalo, CoversBlockingCells) {
+  Board b;  // empty: the span never extends through existing tiles here
+  const OutplayHalo h = build_outplay_halo(b, horiz_play(7, {7, 8}));
+  EXPECT_TRUE(h.contains(7, 7));  // placed square
+  EXPECT_TRUE(h.contains(7, 8));  // placed square
+  EXPECT_TRUE(h.contains(6, 7));  // cross-word neighbor above a placed tile
+  EXPECT_TRUE(h.contains(8, 8));  // cross-word neighbor below a placed tile
+  EXPECT_TRUE(h.contains(7, 6));  // in-line cell before the word
+  EXPECT_TRUE(h.contains(7, 9));  // in-line cell after the word
+}
+
+// The pair-disjointness test fires (declares unblockable) only when no single
+// reply can touch both halos. Each blocking mechanism -- occupying a square,
+// poisoning a cross word from an adjacent column, extending a word in line --
+// leaves a shared row or column that keeps the pair blockable.
+TEST(OutplayHalo, PairUnblockableOnlyWhenDisjoint) {
+  Board b;
+  // Opposite corners share no row or column: a single reply cannot reach both.
+  EXPECT_TRUE(halos_unblockable(build_outplay_halo(b, horiz_play(0, {0, 1})),
+                                build_outplay_halo(b, horiz_play(14, {13, 14}))));
+  // (a) Same row: a reply there can occupy a square of either out-play.
+  EXPECT_FALSE(halos_unblockable(build_outplay_halo(b, horiz_play(7, {2, 3})),
+                                 build_outplay_halo(b, horiz_play(7, {10, 11}))));
+  // (b) One out-play's cross-word column is the other's word column: a vertical
+  // reply there poisons one while building along the other.
+  EXPECT_FALSE(halos_unblockable(build_outplay_halo(b, horiz_play(7, {7})),
+                                 build_outplay_halo(b, vert_play(7, {2, 3}))));
+  // (c) The in-line extension cell of one out-play lies in the other's column.
+  EXPECT_FALSE(halos_unblockable(build_outplay_halo(b, horiz_play(7, {7, 8})),
+                                 build_outplay_halo(b, vert_play(9, {2, 3}))));
+}
+
+// A visible-in-output regression guard: on a fixed batch, pruning must cut the
+// total node count. The A/B soundness above already checks per-position value
+// and best; this pins the search-cost win so a regression that silently defeats
+// the pruning is caught. It prefers the real lexicon, whose richer boards make
+// the pruning bite harder, and falls back to the tiny dictionary (a smaller but
+// still positive cut) so the guard runs without a lexicon installed.
+TEST(EndgameSolver, ThreatPruningCutsNodes) {
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  const bool have_real = std::ifstream(path).good();
+  const Dictionary d = have_real ? Dictionary::load_kwg(path) : tiny_dict();
+  const int rack_tiles = have_real ? 4 : 3;
+  std::mt19937 rng(0xC0FFEE42u);
+  uint64_t pruned = 0, unpruned = 0;
+  for (int i = 0; i < 60; ++i) {
+    const EndgamePos p = random_endgame(rng, d, rack_tiles);
+    EndgameSolver on, off;
+    off.set_threat_pruning(false);
+    const EndgameResult a = on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                     kBigBudget, kRefDepth);
+    const EndgameResult b = off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                      kBigBudget, kRefDepth);
+    EXPECT_EQ(a.value, b.value) << "position " << i;  // sound at full resolution
+    pruned += a.nodes;
+    unpruned += b.nodes;
+  }
+  std::printf("  threat-pruning node count (%s): %llu pruned vs %llu unpruned (%.1f%% cut)\n",
+              have_real ? "real lexicon" : "tiny dict", static_cast<unsigned long long>(pruned),
+              static_cast<unsigned long long>(unpruned),
+              100.0 * (1.0 - static_cast<double>(pruned) / static_cast<double>(unpruned)));
+  EXPECT_LT(pruned, unpruned);
 }
