@@ -2,6 +2,7 @@
 
 #include "game/tile.h"
 #include "serve/web_server.h"
+#include "util/exception.h"
 
 #include <algorithm>
 #include <cassert>
@@ -479,6 +480,63 @@ Rack retained_leave(const ParsedGcgGame& game, int player) {
     return leave;
   }
   return Rack{};
+}
+
+std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
+  const std::string want = "#rack" + std::to_string(player + 1);
+  std::istringstream lines(gcg_text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (line.size() < want.size() + 1) continue;
+    std::string head = line.substr(0, want.size());
+    for (char& c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (head != want || line[want.size()] != ' ') continue;
+    Rack rack;
+    for (size_t i = want.size() + 1; i < line.size(); ++i) {
+      const char c = line[i];
+      if (c == ' ' || c == '\r') continue;
+      rack.add(c == '?' ? BLANK : Tile::from_char(c));
+    }
+    return rack;
+  }
+  return std::nullopt;
+}
+
+bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
+                      std::string* error_message) {
+  ParsedGcgGame game;
+  if (!read_gcg_text(gcg_text, &game, error_message)) return false;
+  if (game.snapshots.empty()) {
+    *error_message = "GCG contains no positions";
+    return false;
+  }
+  const ParsedGcgSnapshot& snapshot = game.snapshots.back();
+  const int mover = snapshot.turn_player;
+
+  const std::optional<Rack> mover_rack = pragma_rack(gcg_text, mover);
+  if (!mover_rack.has_value()) {
+    *error_message =
+      "the mover's rack is unknown: add a #Rack" + std::to_string(mover + 1) + " pragma";
+    return false;
+  }
+  std::optional<Rack> opp_rack = pragma_rack(gcg_text, 1 - mover);
+  if (!opp_rack.has_value()) {
+    try {
+      opp_rack = snapshot.board.hidden_rack(*mover_rack);
+    } catch (const Exception& e) {
+      *error_message = e.what();
+      return false;
+    }
+  }
+
+  out->board = snapshot.board;
+  out->racks[mover] = *mover_rack;
+  out->racks[1 - mover] = *opp_rack;
+  out->scores = snapshot.scores;
+  out->mover = mover;
+  out->player_names = game.player_names;
+  out->turns = static_cast<int>(game.turns.size());
+  return true;
 }
 
 }  // namespace scribblez

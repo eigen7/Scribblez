@@ -1,6 +1,6 @@
 // GoogleTest suite for EndgameHastyBotAgent: pre-endgame delegation to plain
 // HastyBot, endgame takeover by the solver (and its disablement at
-// endgame_nodes=0), legality of returned endgame moves, full-game integration,
+// budget=0), legality of returned endgame moves, full-game integration,
 // and --type=hastybot-endgame from_spec parsing.
 
 #include "agent/endgame_hasty_bot.h"
@@ -178,11 +178,11 @@ class PromptCountingAgent : public Agent {
   Agent& inner_;
 };
 
-EndgameHastyBotAgent::Params endgame_params(uint64_t nodes, int plies) {
+EndgameHastyBotAgent::Params endgame_params(uint64_t budget, int plies) {
   EndgameHastyBotAgent::Params p;
   p.hasty = HastyBotAgent::Params{.thread_id = 0, .name = "EndgameHastyBot"};
-  p.endgame_nodes = nodes;
-  p.endgame_plies = plies;
+  p.solver.budget = budget;
+  p.solver.plies = plies;
   return p;
 }
 
@@ -220,7 +220,7 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
 
 // On an endgame where the exact solver's move differs from HastyBot's greedy
 // move, the agent plays the solver's move; with the solver disabled
-// (endgame_nodes = 0) it plays the greedy move instead.
+// (solver budget 0) it plays the greedy move instead.
 TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -232,9 +232,12 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     const MoveRequest req = endgame_request(p, d);
     const Move greedy = hasty_best_move_wmp(req);
+    // The reference solve mirrors the agent's default configuration
+    // (spread_matters off), so the moves must match exactly.
     ref.clear();
-    const EndgameResult r = ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                      /*scoreless_turns=*/0, kSolveBudget, kSolvePlies);
+    const EndgameResult r = ref.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kSolveBudget, kSolvePlies, false});
     if (r.best == greedy) continue;
 
     // Solver takes over: the agent (with a matching budget/plies) plays the
@@ -334,19 +337,19 @@ TEST(EndgameAgent, FromSpecParsing) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
   EXPECT_NE(EndgameHastyBotAgent::from_spec(
-              {"--endgame-nodes=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
+              {"--endgame-budget=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
             nullptr);
   EXPECT_NE(
     EndgameHastyBotAgent::from_spec({"--top-k=5", "--temperature=1.5", "--seed=42"}, 0, "Y"),
     nullptr);
 
-  // A parsed --endgame-nodes=0 disables the solver: the agent plays the greedy
+  // A parsed --endgame-budget=0 disables the solver: the agent plays the greedy
   // move on a bag-empty request.
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x0FF5E7u);
   const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
   const MoveRequest req = endgame_request(p, d);
-  auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-nodes=0"}, 0, "Z");
+  auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-budget=0"}, 0, "Z");
   EXPECT_EQ(disabled->make_move(req).move, hasty_best_move_wmp(req));
 
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-plies=notanint"}, 0, "B"),
@@ -354,18 +357,16 @@ TEST(EndgameAgent, FromSpecParsing) {
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
 
-// --endgame-objective parses each objective name and rejects unknown ones.
-TEST(EndgameAgent, ObjectiveFromSpec) {
+// --endgame-spread-matters parses both settings and rejects non-boolean input.
+TEST(EndgameAgent, SpreadMattersFromSpec) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
-  EXPECT_NE(EndgameHastyBotAgent::from_spec(
-              {"--endgame-objective=first-win", "--endgame-nodes=777"}, 0, "W"),
-            nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=lexicographic"}, 0, "X"),
-            nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=spread"}, 0, "Y"), nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-nodes=777"}, 0, "V"), nullptr);
-  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-objective=wld"}, 0, "B"),
+  EXPECT_NE(
+    EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=1", "--endgame-budget=777"}, 0, "W"),
+    nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=0"}, 0, "X"), nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-budget=777"}, 0, "V"), nullptr);
+  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=maybe"}, 0, "B"),
                std::runtime_error);
 }
 
@@ -384,16 +385,16 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
   EndgameSolver ref;
   HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
   EndgameHastyBotAgent::Params wp = endgame_params(kSolveBudget, kSolvePlies);
-  wp.endgame_objective = EndgameObjective::kFirstWin;
+  wp.solver.spread_matters = false;
   EndgameHastyBotAgent wld(wp);
 
   int projected = 0, loss_fallbacks = 0, checked = 0;
   for (int i = 0; i < 200; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     ref.clear();
-    const EndgameResult r =
-      ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                /*scoreless_turns=*/0, kSolveBudget, kSolvePlies, EndgameObjective::kFirstWin);
+    const EndgameResult r = ref.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kSolveBudget, kSolvePlies, false});
     if (r.depth_completed < 1) continue;
     ++checked;
 
@@ -434,7 +435,7 @@ TEST(EndgameAgent, FastTrackReducesPrompts) {
   for (int mode = 0; mode < 2; ++mode) {
     const bool respect = mode == 0;
     EndgameHastyBotAgent::Params params = endgame_params(1600, 25);
-    params.endgame_objective = EndgameObjective::kFirstWin;
+    params.solver.spread_matters = false;
     EndgameHastyBotAgent inner0(params), inner1(params);
     PromptCountingAgent a0(inner0), a1(inner1);
     for (int i = 0; i < 20; ++i) {

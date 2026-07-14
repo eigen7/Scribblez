@@ -8,6 +8,8 @@
 #include "lexicon/dictionary.h"
 #include "util/math.h"
 
+#include <boost/program_options.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -30,12 +32,11 @@ constexpr int32_t kInf = 1'000'000;
 constexpr int kMaxPlayout = 40;
 
 // Zobrist keys for every (square, letter, is-blank) placement, plus the keys
-// mixed in at node level: one per internal scoreless count (0..2) and one for
-// the solving side being to move. Deterministically derived from a fixed seed.
+// mixed in at node level, one per internal scoreless count (0..2).
+// Deterministically derived from a fixed seed.
 struct ZobristTable {
   std::array<std::array<std::array<uint64_t, 2>, 26>, BOARD_SIZE * BOARD_SIZE> square;
   std::array<uint64_t, 3> scoreless;
-  uint64_t solving_to_move;
 };
 
 ZobristTable build_zobrist() {
@@ -45,7 +46,6 @@ ZobristTable build_zobrist() {
     for (auto& letter : sq)
       for (auto& blank : letter) blank = util::splitmix64(++s);
   for (auto& v : z.scoreless) v = util::splitmix64(++s);
-  z.solving_to_move = util::splitmix64(++s);
   return z;
 }
 
@@ -68,24 +68,19 @@ const ZobristTable& zobrist() {
 
 }  // namespace
 
-const char* endgame_objective_name(EndgameObjective objective) {
-  switch (objective) {
-    case EndgameObjective::kSpread:
-      return "spread";
-    case EndgameObjective::kFirstWin:
-      return "first-win";
-    case EndgameObjective::kLexicographic:
-      return "lexicographic";
-  }
-  return "?";
-}
-
-EndgameObjective parse_endgame_objective(const std::string& name) {
-  if (name == "lexicographic") return EndgameObjective::kLexicographic;
-  if (name == "first-win") return EndgameObjective::kFirstWin;
-  if (name == "spread") return EndgameObjective::kSpread;
-  throw std::runtime_error("bad endgame objective '" + name +
-                           "' (expected lexicographic, first-win, or spread)");
+void EndgameSolver::Params::add_options(boost::program_options::options_description& desc,
+                                        const std::string& prefix) {
+  namespace po = boost::program_options;
+  desc.add_options()  //
+    ((prefix + "budget").c_str(), po::value<uint64_t>(&budget)->default_value(budget),
+     "per-solve node budget (0 disables solving)")  //
+    ((prefix + "plies").c_str(), po::value<int>(&plies)->default_value(plies),
+     "iterative-deepening depth cap")  //
+    ((prefix + "spread-matters").c_str(),
+     po::value<bool>(&spread_matters)->default_value(spread_matters),
+     "false: resolve only the win/draw/loss class and stop at its proof (the self-play "
+     "break-out setting); true: prove the class first, then maximize spread without ever "
+     "trading the class for points");
 }
 
 EndgameSolver::EndgameSolver(int tt_log2_entries)
@@ -135,8 +130,15 @@ void EndgameSolver::xor_play_hash(const Move& move) {
 uint64_t EndgameSolver::node_hash() const {
   const ZobristTable& z = zobrist();
   uint64_t h = board_hash_;
+  // The mover's and opponent's racks enter asymmetrically, so a physical
+  // position hashes identically no matter which seat a solve was rooted at --
+  // the property that lets both seats of one game share a table. Stored
+  // values are relative to the mover's spread, so they are equally
+  // seat-agnostic. (Equal racks make the two mover assignments collide, but
+  // those are true transpositions: same board, same racks, same
+  // mover-relative value.)
   h ^= util::splitmix64(racks_[stm_].bits());
-  if (stm_ == 0) h ^= z.solving_to_move;
+  h ^= util::splitmix64(~racks_[1 - stm_].bits());
   h ^= z.scoreless[scoreless_];
   return h;
 }
@@ -750,18 +752,18 @@ void EndgameSolver::extract_continuation(EndgameResult& result) {
   outplay_futility_ = futility_before;
 }
 
-EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
-                                   const Rack& opp_rack, int my_score, int opp_score,
-                                   int scoreless_turns, uint64_t node_budget, int max_plies,
-                                   EndgameObjective objective) {
-  board_ = board;
+EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& params) {
+  const Dictionary& dict = *state.dict;
+  const uint64_t node_budget = params.budget;
+  const int max_plies = params.plies;
+  board_ = state.board;
   board_.ensure_movegen_caches(dict);
   dict_ = &dict;
-  racks_[0] = my_rack;
-  racks_[1] = opp_rack;
-  scores_[0] = my_score;
-  scores_[1] = opp_score;
-  scoreless_ = scoreless_turns > 0 ? 1 : 0;
+  racks_[0] = state.my_rack;
+  racks_[1] = state.opp_rack;
+  scores_[0] = state.my_score;
+  scores_[1] = state.opp_score;
+  scoreless_ = state.scoreless_turns > 0 ? 1 : 0;
   stm_ = 0;
   game_over_ = false;
   board_hash_ = compute_board_hash();
@@ -776,7 +778,7 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
   if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
 
-  std::vector<Move> plays = MoveGenerator(board_, dict).generate(my_rack);
+  std::vector<Move> plays = MoveGenerator(board_, dict).generate(state.my_rack);
   std::vector<RankedMove> root_moves;
   root_moves.reserve(plays.size() + 1);
   for (const Move& m : plays) root_moves.push_back({m, 0});
@@ -802,28 +804,23 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   cur_sets_[0] = &root_sets_[0];
   cur_sets_[1] = &root_sets_[1];
   if (outplay_futility_) {
-    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(opp_rack), opp_rack.size(),
-                          root_sets_[1]);
+    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(state.opp_rack),
+                          state.opp_rack.size(), root_sets_[1]);
   }
   if (trace_) {
-    *trace_ << "solve: objective " << endgame_objective_name(objective) << ", budget "
-            << node_budget << ", scores " << my_score << "-" << opp_score << " (spread "
-            << (my_score - opp_score >= 0 ? "+" : "") << my_score - opp_score
-            << "), mover rack value " << my_rack.point_value() << ", replier rack value "
-            << opp_rack.point_value() << "\n";
+    *trace_ << "solve: spread-matters " << (params.spread_matters ? "true" : "false") << ", budget "
+            << node_budget << ", scores " << state.my_score << "-" << state.opp_score << " (spread "
+            << (state.my_score - state.opp_score >= 0 ? "+" : "")
+            << state.my_score - state.opp_score << "), mover rack value "
+            << state.my_rack.point_value() << ", replier rack value "
+            << state.opp_rack.point_value() << "\n";
     trace_root_view(root_moves);
   }
-  switch (objective) {
-    case EndgameObjective::kSpread:
-      result = run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
-      break;
-    case EndgameObjective::kFirstWin:
-      result = run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays,
-                             max_plies);
-      break;
-    case EndgameObjective::kLexicographic:
-      result = solve_lexicographic(root_moves, plays, max_plies);
-      break;
+  if (params.spread_matters) {
+    result = solve_lexicographic(root_moves, plays, max_plies);
+  } else {
+    result = run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays,
+                           max_plies);
   }
   // A proven value's sign is the position's class; kLexicographic may already
   // carry a class proven by its first pass even when its final value is an

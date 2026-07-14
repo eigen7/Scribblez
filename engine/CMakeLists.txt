@@ -253,7 +253,8 @@ add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
 target_link_libraries(test_endgame PRIVATE
   scribblez_core Boost::program_options GTest::gtest_main)
 target_compile_definitions(test_endgame PRIVATE
-  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+  SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 gtest_discover_tests(test_endgame)
 
 # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes

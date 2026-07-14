@@ -12,44 +12,30 @@
 #include <utility>
 #include <vector>
 
+// Forward-declared so Params::add_options() can register options without
+// pulling boost::program_options into every consumer of this header.
+namespace boost::program_options {
+class options_description;
+}
+
 namespace scribblez {
 
 class Dictionary;
 class LeaveOutplays;
 
-// What a solve optimizes, given as EndgameSolver::solve's `objective`.
-//
-// kSpread searches the full window for the exact final spread. Exact spread
-// play is also class-optimal (a positive spread IS a win), so this objective
-// only "risks" the win/draw/loss class where its answer is an unproven
-// estimate.
-//
-// kFirstWin pins the root window to (kFirstWinAlpha, kFirstWinBeta) around an
-// even final spread, so the search only resolves the win/draw/loss class:
-// proofs land far cheaper, and iterative deepening stops the moment the class
-// is proven -- the break-out mode for self-play generation, where a proven
-// class means the rest of the game is not worth computing. Among winning root
-// moves it returns an arbitrary one, and a proven-loss best move is
-// meaningless (every move loses).
-//
-// kLexicographic never trades the class for points: it first runs a kFirstWin
-// pass to prove the class, then spends the remaining budget on a spread pass.
-// With a proven win or draw, the spread pass's move is played only if it
-// provably preserves the class (verified with a narrow-window probe when the
-// spread pass is itself unproven; the proven-class move is the fallback). A
-// proven loss makes every move class-equal, so the spread pass is pure defense
-// (maximize the final spread of a lost game). When no class proof lands within
-// budget, the spread pass's margin-maximizing answer is the class-robust
-// fallback: margin is slack against estimate error.
-enum class EndgameObjective : uint8_t { kSpread, kFirstWin, kLexicographic };
-
-// The objective's CLI/config string form ("spread", "first-win",
-// "lexicographic") and its inverse; parse_endgame_objective throws
-// std::runtime_error on an unknown name.
-// TODO(enum-strings): generate this pair with a framework like magic_enum
-// instead of hand-maintaining the mapping.
-const char* endgame_objective_name(EndgameObjective objective);
-EndgameObjective parse_endgame_objective(const std::string& name);
+// One bag-empty position for EndgameSolver::solve: `my_rack` belongs to the
+// side to move, both racks are the actual remaining tiles, and
+// scoreless_turns counts the consecutive zero-score turns already played in
+// the real game.
+struct EndgameState {
+  const Dictionary* dict = nullptr;  // lexicon the position is played under
+  Board board;
+  Rack my_rack;
+  Rack opp_rack;
+  int my_score = 0;
+  int opp_score = 0;
+  int scoreless_turns = 0;
+};
 
 // Result of a single endgame solve, from the perspective of the side to move
 // at the solved position ("the solving side").
@@ -116,8 +102,7 @@ struct EndgameResult {
 // settled. Proven-ness rides along every search result and every
 // transposition-table entry, propagated through the negamax recursion (a node
 // is proven only if the child searches its verdict rests on are all proven).
-// What a solve does with proofs is the objective's business: see
-// EndgameObjective.
+// What a solve does with proofs is Params::spread_matters' business.
 //
 // Opponent-outplay futility pruning cuts the mover's own moves at interior
 // nodes. Each node knows the current out-play set of the side that will reply
@@ -164,24 +149,44 @@ class EndgameSolver {
   // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
   explicit EndgameSolver(int tt_log2_entries = 16);
 
-  // Solve the position for the side holding my_rack (to move) under
-  // `objective` (see EndgameObjective). Both racks must be the actual
-  // remaining tiles (bag empty). scoreless_turns is the number of consecutive
-  // zero-score turns already played in the real game.
+  // Solve-time configuration.
   //
-  // The search looks at most max_plies deep, and node_budget is a hard cap on
-  // nodes spent across every pass the objective runs (exceeded by at most one
-  // greedy playout's plies before the abort lands). A position with more root
-  // moves than node_budget provably cannot complete a first iteration, so the
-  // solve is declined immediately after root move generation rather than
-  // burning the budget on a fraction of the root. A legal move is always
+  // spread_matters selects what a solve optimizes. false: resolve only the
+  // win/draw/loss class (narrow root window; iterative deepening stops the
+  // moment the class is proven, and among winning moves an arbitrary one is
+  // returned) -- the self-play break-out setting, where a proven class means
+  // the rest of the game is not worth computing. true: never trade the class
+  // for points -- a class pass capped at half the budget, then a spread pass
+  // on the remainder whose move is played only when it provably preserves a
+  // proven win or draw (a proven spread pass implies that; an unproven one is
+  // checked with a narrow-window probe, falling back to the proven-class
+  // move); a proven loss makes every move class-equal, so the spread pass is
+  // pure defense; and with no class proof in budget, margin-maximizing play
+  // is the class-robust fallback (margin is slack against estimate error).
+  struct Params {
+    // Hard cap on nodes spent across every pass a solve runs (exceeded by at
+    // most one greedy playout's plies before the abort lands). A position
+    // with more root moves than the budget provably cannot complete a first
+    // iteration and is declined up front. The default is tuned with
+    // `endgame_bench` on NWL23 as the largest budget whose endgame-vs-endgame
+    // games stay within ~2x the plain HastyBot-vs-HastyBot game time; see
+    // docs/endgame_bench_results.md.
+    uint64_t budget = 220;
+    int plies = 25;  // iterative-deepening depth cap
+    bool spread_matters = false;
+
+    // Register --<prefix>budget, --<prefix>plies, and
+    // --<prefix>spread-matters, bound to this object's fields; the current
+    // field values become the option defaults.
+    void add_options(boost::program_options::options_description& desc,
+                     const std::string& prefix = "");
+  };
+
+  // Solve `state` for the side holding its my_rack. A legal move is always
   // returned: the last completed iteration's best, else the best
   // fully-searched root move of the partial first iteration, else the
   // estimate-ordered top root move.
-  EndgameResult solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
-                      const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
-                      uint64_t node_budget, int max_plies,
-                      EndgameObjective objective = EndgameObjective::kSpread);
+  EndgameResult solve(const EndgameState& state, const Params& params);
 
   // The first-win root window: a final spread >= kFirstWinBeta is a win,
   // <= kFirstWinAlpha a loss, 0 a draw.
@@ -278,7 +283,7 @@ class EndgameSolver {
   EndgameResult run_iterative(int32_t alpha, int32_t beta, bool first_win,
                               std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
                               int max_plies);
-  // The kLexicographic driver over run_iterative passes; see EndgameObjective.
+  // The spread_matters driver over run_iterative passes; see Params.
   EndgameResult solve_lexicographic(std::vector<RankedMove>& root_moves,
                                     const std::vector<Move>& plays, int max_plies);
   // True iff playing `m` at the root provably preserves game class `cls` for

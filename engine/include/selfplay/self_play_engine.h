@@ -31,9 +31,10 @@ class SelfPlayEngine {
     double random_opening_mean = 0.0;
     // Respect agents' projected_remaining_moves annotations (see
     // MoveDecision): a proven endgame fast-tracks to its end instead of
-    // prompting agents turn by turn. On by default -- generation compute
-    // belongs to undecided games.
-    bool respect_projections = true;
+    // prompting agents turn by turn. Off by default; self-play generation is
+    // the special case that turns it on -- its compute belongs to undecided
+    // games, and its logs tolerate proof-line stand-ins for agent moves.
+    bool respect_projections = false;
   };
 
   // Builds `params.threads` agent pairs (downgrading to 1, with a warning, if

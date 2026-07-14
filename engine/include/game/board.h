@@ -1,6 +1,7 @@
 #pragma once
 
 #include "game/glyph.h"
+#include "game/rack.h"
 
 #include <array>
 #include <cstdint>
@@ -124,6 +125,13 @@ class Board {
 
   // Pretty-print the board to a string.
   std::string to_string() const;
+
+  // The tiles absent from both this board and `known` under the full tile
+  // distribution -- with an empty bag, exactly the other player's rack (a
+  // board blank counts as a blank tile). Throws when the remainder exceeds a
+  // rackful (the bag is not empty) or when board + known overdraw the
+  // distribution.
+  Rack hidden_rack(const Rack& known) const;
 
   // ---- Persistent move-generation state ---------------------------------
   // Cross-checks and GADDAG anchors are computed once for the current board
