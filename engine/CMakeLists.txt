@@ -234,6 +234,12 @@ target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
 gtest_discover_tests(scribblez_tests)
 
+# GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction
+# that reopens a recorded game.
+add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
+target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
+gtest_discover_tests(test_gcg_reader)
+
 # Endgame solver tests: Board make/unmake round-trips and EndgameSolver
 # correctness (brute-force differential, oracle positions, determinism, node
 # budget, cross-turn transposition-table reuse). Gated lexicon cases read the
