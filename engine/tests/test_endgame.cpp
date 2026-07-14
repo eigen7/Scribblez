@@ -809,6 +809,20 @@ TEST(OutplayHalo, CoversBlockingCells) {
   EXPECT_TRUE(h.contains(7, 9));  // in-line cell after the word
 }
 
+// When a placed cell sits at the end of an existing perpendicular run, the
+// cross-word it forms includes the whole run, so the cells a reply can rewrite
+// that cross-word from are the run's far ends -- not the (occupied) immediate
+// neighbors. The halo must reach past the run.
+TEST(OutplayHalo, CoversPerpendicularRunEnds) {
+  Board b;
+  b.apply(vert_play(7, {3, 4, 5}));  // an existing run at rows 3-5 of column 7
+  // The out-play places at (6, 7), directly beneath the run: its cross-word
+  // there is rows 3-6 of column 7.
+  const OutplayHalo h = build_outplay_halo(b, horiz_play(6, {7}));
+  EXPECT_TRUE(h.contains(2, 7));  // just past the run's far (top) end
+  EXPECT_TRUE(h.contains(7, 7));  // just past the near (bottom) end
+}
+
 // The pair-disjointness test fires (declares unblockable) only when no single
 // reply can touch both halos. Each blocking mechanism -- occupying a square,
 // poisoning a cross word from an adjacent column, extending a word in line --

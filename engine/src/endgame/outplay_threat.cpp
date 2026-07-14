@@ -37,18 +37,29 @@ void add_lane_cell(OutplayHalo& h, bool horizontal, int line, int p) {
   halo_add(h, r, c);
 }
 
-// Add the two cells perpendicular to lane position `p` (the cross-word neighbors
-// of a placed tile).
-void add_perp_cells(OutplayHalo& h, bool horizontal, int line, int p) {
+// Add the cells just beyond each end of the maximal existing perpendicular run
+// through lane position `p`. The cross-word o forms at a placed cell is that
+// run plus the placed tile, and a tile can only join it at the run's ends -- so
+// those end cells are exactly where a reply can rewrite the cross-word's
+// legality or score. With no existing run the ends are the immediate
+// orthogonal neighbors.
+void add_cross_run_ends(OutplayHalo& h, const Board& board, bool horizontal, int line, int p) {
   int r, c;
   lane_cell(horizontal, line, p, r, c);
-  if (horizontal) {
-    halo_add(h, r - 1, c);
-    halo_add(h, r + 1, c);
-  } else {
-    halo_add(h, r, c - 1);
-    halo_add(h, r, c + 1);
+  const int dr = horizontal ? 1 : 0;
+  const int dc = horizontal ? 0 : 1;
+  int ra = r - dr, ca = c - dc;
+  while (ra >= 0 && ca >= 0 && board.at(ra, ca).has_letter()) {
+    ra -= dr;
+    ca -= dc;
   }
+  halo_add(h, ra, ca);
+  int rb = r + dr, cb = c + dc;
+  while (rb < BOARD_SIZE && cb < BOARD_SIZE && board.at(rb, cb).has_letter()) {
+    rb += dr;
+    cb += dc;
+  }
+  halo_add(h, rb, cb);
 }
 
 // The used-tile multiset of a play (each blank counts as a blank tile).
@@ -65,14 +76,16 @@ OutplayHalo build_outplay_halo(const Board& board, const Move& o) {
   const bool horizontal = o.horizontal();
   const int line = o.start();
 
-  // Placed extent along the lane, plus each placed tile's cross-word neighbors.
+  // Placed extent along the lane, plus the end cells of each placed tile's
+  // existing perpendicular run (the only cells a reply can rewrite that
+  // tile's cross-word from).
   int lo = BOARD_SIZE, hi = -1;
   uint16_t mask = o.square_mask();
   for (int p = 0; mask; ++p, mask >>= 1) {
     if ((mask & 1u) == 0) continue;
     lo = std::min(lo, p);
     hi = std::max(hi, p);
-    add_perp_cells(h, horizontal, line, p);
+    add_cross_run_ends(h, board, horizontal, line, p);
   }
 
   // Extend the span through contiguous existing tiles: those played-through
