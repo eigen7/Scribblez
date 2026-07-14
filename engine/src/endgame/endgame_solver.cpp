@@ -51,6 +51,15 @@ bool by_value_desc(const std::pair<Move, int32_t>& a, const std::pair<Move, int3
   return a.second > b.second;
 }
 
+// In the first_win window a proven result settles the win/draw/loss class iff
+// its value is a proven win bound (>= kFirstWinBeta), a proven loss bound
+// (<= kFirstWinAlpha), or a proven draw (0). A proven verdict in this window is
+// always one of these, so this holds whenever the result is proven.
+bool settles_first_win_class(int32_t value) {
+  return value >= EndgameSolver::kFirstWinBeta || value <= EndgameSolver::kFirstWinAlpha ||
+         value == 0;
+}
+
 const ZobristTable& zobrist() {
   static const ZobristTable table = build_zobrist();
   return table;
@@ -218,13 +227,13 @@ EndgameSolver::TTEntry* EndgameSolver::tt_probe(uint64_t hash) {
   return nullptr;
 }
 
-void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t flag, const Move& best,
-                             int depth) {
+void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t bound, bool proven,
+                             const Move& best, int depth) {
   TTEntry& e = tt_[hash & tt_mask_];
   e.hash = hash;
   e.best = best;
   e.score_rel = score_rel;
-  e.flag = flag;
+  e.flag = tt_pack(bound, proven);
   e.depth = static_cast<uint8_t>(depth);
   e.gen = tt_gen_;
 }
@@ -267,14 +276,29 @@ int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
   return value;
 }
 
-int32_t EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply) {
-  if (aborting_) return 0;
+EndgameSolver::SearchResult EndgameSolver::search_child(int child_depth, int32_t alpha,
+                                                        int32_t beta, int child_ply, bool first) {
+  SearchResult r;
+  if (first) {
+    r = negamax(child_depth, -beta, -alpha, child_ply);
+  } else {
+    r = negamax(child_depth, -alpha - 1, -alpha, child_ply);
+    if (alpha < -r.value && -r.value < beta) r = negamax(child_depth, -beta, -alpha, child_ply);
+  }
+  // Return the value from the parent's perspective; the proven bit is a property
+  // of the search that produced the child's final verdict, not of the sign.
+  return {-r.value, r.proven};
+}
+
+EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta,
+                                                   int ply) {
+  if (aborting_) return {0, false};
   ++nodes_;
   if (nodes_ > budget_) {
     aborting_ = true;
-    return 0;
+    return {0, false};
   }
-  if (game_over_) return spread_stm();
+  if (game_over_) return {spread_stm(), true};  // a real game end is proven
 
   const uint64_t hash = node_hash();
   const int32_t alpha_orig = alpha;
@@ -285,14 +309,16 @@ int32_t EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply) 
     tt_move = e->best;
     if (e->depth >= depth) {
       const int32_t score = e->score_rel + spread_stm();
-      if (e->flag == kExact) return score;
-      if (e->flag == kLower) alpha = std::max(alpha, score);
-      if (e->flag == kUpper) beta = std::min(beta, score);
-      if (alpha >= beta) return score;
+      const bool proven = tt_is_proven(e->flag);
+      const uint8_t bound = tt_bound(e->flag);
+      if (bound == kExact) return {score, proven};
+      if (bound == kLower) alpha = std::max(alpha, score);
+      if (bound == kUpper) beta = std::min(beta, score);
+      if (alpha >= beta) return {score, proven};
     }
   }
 
-  if (depth == 0) return greedy_playout(hash, ply);
+  if (depth == 0) return {greedy_playout(hash, ply), false};  // a playout leaf is an estimate
 
   std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
   std::vector<std::pair<Move, int32_t>> moves;
@@ -303,58 +329,67 @@ int32_t EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta, int ply) 
 
   int32_t best = -kInf;
   Move best_move = Move::pass();
+  bool all_proven = true;   // AND over every scanned child's verdict
+  bool cut = false;         // a beta cutoff fired
+  bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
   for (size_t i = 0; i < moves.size(); ++i) {
     make(moves[i].first, ply);
-    int32_t value;
-    if (i == 0) {
-      value = -negamax(depth - 1, -beta, -alpha, ply + 1);
-    } else {
-      value = -negamax(depth - 1, -alpha - 1, -alpha, ply + 1);
-      if (alpha < value && value < beta) value = -negamax(depth - 1, -beta, -alpha, ply + 1);
-    }
+    const SearchResult child = search_child(depth - 1, alpha, beta, ply + 1, i == 0);
     unmake(ply);
-    if (aborting_) return best;
-    if (value > best) {
-      best = value;
+    if (aborting_) return {best, false};  // an aborted scan proves nothing
+    all_proven = all_proven && child.proven;
+    if (child.value > best) {
+      best = child.value;
       best_move = moves[i].first;
     }
     alpha = std::max(alpha, best);
-    if (alpha >= beta) break;
+    if (alpha >= beta) {
+      cut = true;
+      cut_proven = child.proven;  // the fail-high rests on this one witness
+      break;
+    }
   }
 
-  uint8_t flag = kExact;
+  // A fail-high is proven by its single witness; an exact or fail-low verdict
+  // needs every child's contribution to be proven.
+  const bool proven = cut ? cut_proven : all_proven;
+  uint8_t bound = kExact;
   if (best <= alpha_orig)
-    flag = kUpper;
+    bound = kUpper;
   else if (best >= beta)
-    flag = kLower;
-  tt_store(hash, best - spread_stm(), flag, best_move, depth);
-  return best;
+    bound = kLower;
+  tt_store(hash, best - spread_stm(), bound, proven, best_move, depth);
+  return {best, proven};
 }
 
-int32_t EndgameSolver::run_root(int depth, int32_t alpha, int32_t beta,
-                                std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out) {
+EndgameSolver::SearchResult EndgameSolver::run_root(
+  int depth, int32_t alpha, int32_t beta, std::vector<std::pair<Move, int32_t>>& root_moves,
+  Move* best_out) {
   int32_t best = -kInf;
   Move best_move = root_moves[0].first;
+  bool all_proven = true;    // AND over every root child's verdict
+  bool best_proven = false;  // proven bit of the child that set `best`
   for (auto& rm : root_moves) {
     make(rm.first, 0);
-    int32_t value;
-    if (best == -kInf) {
-      value = -negamax(depth - 1, -beta, -alpha, 1);
-    } else {
-      value = -negamax(depth - 1, -alpha - 1, -alpha, 1);
-      if (alpha < value && value < beta) value = -negamax(depth - 1, -beta, -alpha, 1);
-    }
+    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf);
     unmake(0);
-    if (aborting_) break;  // the aborted subtree's value is meaningless; keep best-so-far
-    rm.second = value;
-    if (value > best) {
-      best = value;
+    if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
+    rm.second = child.value;
+    all_proven = all_proven && child.proven;
+    if (child.value > best) {
+      best = child.value;
       best_move = rm.first;
+      best_proven = child.proven;
     }
     alpha = std::max(alpha, best);
   }
   *best_out = best_move;
-  return best;
+  // The root never applies a beta cutoff, but the returned value can still be a
+  // fail-high bound when alpha rose to beta (a narrow first_win window): then the
+  // "value >= beta" verdict rests on the single best-achieving child, so its
+  // proven bit alone settles it. Otherwise every child must be proven.
+  const bool proven = best >= beta ? best_proven : all_proven;
+  return {best, proven};
 }
 
 EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
@@ -398,22 +433,28 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   const int32_t root_beta = first_win ? kFirstWinBeta : kInf;
   for (int depth = 1; depth <= max_plies; ++depth) {
     Move best_move = root_moves[0].first;
-    const int32_t value = run_root(depth, root_alpha, root_beta, root_moves, &best_move);
+    const SearchResult sr = run_root(depth, root_alpha, root_beta, root_moves, &best_move);
     if (aborting_) {
       // Budget exhausted mid-iteration: the last completed iteration's result
       // stands. When not even the first iteration finished, fall back to the
       // best fully-searched root move of the partial pass -- root moves are
       // estimate-ordered, so the strongest candidates were searched first --
       // or, when no root move completed, the estimate-ordered first move.
-      if (result.depth_completed == 0 && value > -kInf) {
+      if (result.depth_completed == 0 && sr.value > -kInf) {
         result.best = best_move;
-        result.value = value;
+        result.value = sr.value;
       }
       break;
     }
     result.best = best_move;
-    result.value = value;
+    result.value = sr.value;
     result.depth_completed = depth;
+    result.proven = sr.proven;
+    // A proven iteration has resolved the search exactly: in the full window the
+    // value is the true game spread, and in the first_win window a proven verdict
+    // always settles the win/draw/loss class (a proven bound is itself true).
+    // Deepening cannot change the answer, so stop.
+    if (sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
     // Re-order root moves by their exact returned values for the next depth.
     std::sort(root_moves.begin(), root_moves.end(), by_value_desc);
   }

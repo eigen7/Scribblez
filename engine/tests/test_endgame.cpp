@@ -643,3 +643,93 @@ TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
   }
   EXPECT_LE(wld_nodes, full_nodes);
 }
+
+// Whenever a full-window solve reports its value as proven, that value is the
+// exact game-theoretic spread and must equal the brute-force reference. The
+// tiny endgames here terminate well within kRefDepth, so the proof fires on the
+// clear majority of them -- the bit is not vacuously false.
+TEST(EndgameSolver, ProvenMatchesBruteForce) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x9E3779B9u);
+  int proven = 0, checked = 0;
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
+    solver.clear();
+    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                                         /*scoreless_turns=*/0, kBigBudget, kRefDepth);
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    if (r.proven) {
+      ASSERT_EQ(r.value, ref) << "position " << i;
+      ++proven;
+    }
+    ++checked;
+  }
+  ASSERT_GE(proven * 2, checked) << "proven fired on only " << proven << "/" << checked;
+  std::cout << "  proven " << proven << "/" << checked << " endgames\n";
+}
+
+// The iterative-deepening early exit returns exactly what stopping at the proof
+// depth would: capping max_plies at the early-exit run's depth_completed runs
+// the identical iterations, so value, best move, and node count all match. And
+// because the proof depth is far below the kRefDepth horizon, the full-horizon
+// solve spends no more nodes than the shallow depth-capped one -- the proof
+// truncated the deepening.
+TEST(EndgameSolver, EarlyExitPreservesResults) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x1234ABCDu);
+  int truncated = 0, checked = 0;
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
+
+    solver.clear();
+    const EndgameResult early = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                             p.opp_score, 0, kBigBudget, kRefDepth);
+    ASSERT_GE(early.depth_completed, 1) << "position " << i;
+    solver.clear();
+    const EndgameResult ctrl = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                            p.opp_score, 0, kBigBudget, early.depth_completed);
+    ASSERT_EQ(early.value, ctrl.value) << "position " << i;
+    ASSERT_TRUE(early.best == ctrl.best) << "position " << i;
+    ASSERT_EQ(early.nodes, ctrl.nodes) << "position " << i;
+    if (early.proven && early.depth_completed < kRefDepth) ++truncated;
+    ++checked;
+  }
+  ASSERT_GT(truncated, 0) << "no proven solve truncated below the horizon";
+  std::cout << "  early-exit truncated " << truncated << "/" << checked << " solves\n";
+}
+
+// In the first_win window a proven early exit settles the win/draw/loss class:
+// the wld value's sign matches the brute-force reference's, and the narrower
+// window plus its earlier proof never search more nodes than the full window.
+TEST(EndgameSolver, WldEarlyExitSettlesClass) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xC0DEC0DEu);
+  int proven = 0, checked = 0;
+  for (int i = 0; i < 40; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+
+    solver.clear();
+    const EndgameResult wld =
+      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, /*first_win=*/true);
+    solver.clear();
+    const EndgameResult full = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                            p.opp_score, 0, kBigBudget, kRefDepth);
+    if (wld.proven) {
+      const int wld_sign = (wld.value > 0) - (wld.value < 0);
+      const int ref_sign = (ref > 0) - (ref < 0);
+      ASSERT_EQ(wld_sign, ref_sign) << "position " << i;
+      ++proven;
+    }
+    ASSERT_LE(wld.nodes, full.nodes) << "position " << i;
+    ++checked;
+  }
+  ASSERT_GT(proven, 0) << "no wld solve proved a class";
+  std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
+}

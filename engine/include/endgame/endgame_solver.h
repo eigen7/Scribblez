@@ -23,6 +23,13 @@ struct EndgameResult {
                             // ran out inside the first iteration, so `best` is
                             // only the statically best-estimated root move)
   uint64_t nodes = 0;       // negamax entries + greedy-playout plies spent
+  bool proven = false;      // true iff `value` rests entirely on real game ends,
+                            // with no greedy-playout leaf in the lines that
+                            // determined it: then `value` is the exact
+                            // game-theoretic spread (in first_win mode, a true
+                            // win/draw/loss verdict), not a depth-limited
+                            // estimate. Declined solves (depth_completed == 0)
+                            // are never proven.
 };
 
 // Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
@@ -39,6 +46,15 @@ struct EndgameResult {
 // value). At solve entry the caller's real scoreless-turn count is rebased to 1
 // when positive and 0 otherwise. Any play resets the internal count to 0,
 // mirroring the real game (even a zero-scoring play).
+//
+// A search result is "proven" when its value was derived entirely from real
+// game ends -- no greedy-playout leaf entered the lines that determined it. A
+// proven full-window value is the exact game-theoretic spread, so iterative
+// deepening stops the moment an iteration returns one; a proven first_win value
+// is a true win/draw/loss verdict, so deepening stops once the class is settled.
+// Proven-ness rides along every search result and every transposition-table
+// entry, propagated through the negamax recursion (a node is proven only if the
+// child searches its verdict rests on are all proven).
 //
 // TODO(multithreading): when single-game (non-parallel-self-play) settings
 // arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
@@ -89,13 +105,24 @@ class EndgameSolver {
   void clear();
 
  private:
+  // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
+  // never-written slot. Every stored entry carries a real bound (>= kExact), so a
+  // nonzero flag byte always means "occupied".
   enum TTFlag : uint8_t { kEmpty = 0, kExact, kLower, kUpper };
+  static constexpr uint8_t kBoundMask = 0x03;  // bits 0-1: the TTFlag bound type
+  static constexpr uint8_t kProvenBit = 0x04;  // bit 2: the stored value is proven
+  static constexpr uint8_t tt_bound(uint8_t flag) { return flag & kBoundMask; }
+  static constexpr bool tt_is_proven(uint8_t flag) { return (flag & kProvenBit) != 0; }
+  static constexpr uint8_t tt_pack(uint8_t bound, bool proven) {
+    return static_cast<uint8_t>(bound | (proven ? kProvenBit : 0));
+  }
 
   // A transposition-table entry (32 bytes): the full hash (to reject index
   // collisions), the best move for ordering, the search value stored relative
-  // to the node's spread (so it is reusable at any absolute score), the bound
-  // flag + search depth that produced it, and the table generation that wrote
-  // it (entries from older generations read as empty; see clear()).
+  // to the node's spread (so it is reusable at any absolute score), the flag
+  // byte (bound type in bits 0-1, proven bit in bit 2), the search depth that
+  // produced it, and the table generation that wrote it (entries from older
+  // generations read as empty; see clear()).
   struct TTEntry {
     uint64_t hash = 0;
     Move best;
@@ -103,6 +130,13 @@ class EndgameSolver {
     uint8_t flag = kEmpty;
     uint8_t depth = 0;
     uint16_t gen = 0;
+  };
+
+  // A negamax return: the search value together with whether it is proven (rests
+  // entirely on real game ends, so it is exact rather than a playout estimate).
+  struct SearchResult {
+    int32_t value = 0;
+    bool proven = false;
   };
 
   // Everything one make() changes, so unmake() can restore it: the board undo,
@@ -119,9 +153,14 @@ class EndgameSolver {
   };
 
   // --- Iterative deepening / search ---------------------------------------
-  int32_t run_root(int depth, int32_t alpha, int32_t beta,
-                   std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
-  int32_t negamax(int depth, int32_t alpha, int32_t beta, int ply);
+  SearchResult run_root(int depth, int32_t alpha, int32_t beta,
+                        std::vector<std::pair<Move, int32_t>>& root_moves, Move* best_out);
+  SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
+  // Search one child at (alpha, beta) and return its value from the parent's
+  // perspective (negated) with the child's proven bit, using a full window for
+  // the first child and a scout-plus-conditional-re-search for the rest (PVS).
+  SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply,
+                            bool first);
   int32_t greedy_playout(uint64_t node_key, int ply);
 
   // --- Make / unmake ------------------------------------------------------
@@ -144,7 +183,8 @@ class EndgameSolver {
 
   // --- Transposition table ------------------------------------------------
   TTEntry* tt_probe(uint64_t hash);
-  void tt_store(uint64_t hash, int32_t score_rel, uint8_t flag, const Move& best, int depth);
+  void tt_store(uint64_t hash, int32_t score_rel, uint8_t bound, bool proven, const Move& best,
+                int depth);
   void tt_store_playout(uint64_t hash, int32_t score_rel);
 
   // Search position (one scratch board reused across the whole solve) and the
