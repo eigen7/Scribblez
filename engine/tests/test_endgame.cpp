@@ -811,7 +811,18 @@ TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
     const EndgameResult b = off.solve(
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 25, true});
     ASSERT_EQ(a.value, b.value) << "position " << i;
-    ASSERT_TRUE(a.best == b.best) << "position " << i;
+    if (!(a.best == b.best)) {
+      // The short-circuit changes how many narrow-window class-pass iterations
+      // run before the spread pass, and a root beta cutoff leaves the moves it
+      // skips stale-ranked, so a different iteration count can reorder the root
+      // and settle on a different equal-optimal move. A divergent best is
+      // accepted only if a fresh control solver credits it with the same exact
+      // value when forced (a true tie); a fresh solver keeps the measured
+      // solvers' warm tables untouched.
+      EndgameSolver control;
+      EXPECT_EQ(forced_move_value(d, p, a.best, control), b.value)
+        << "position " << i << ": divergent best move is not a tie";
+    }
     nodes_on += a.nodes;
     nodes_off += b.nodes;
     ++checked;
@@ -1178,6 +1189,83 @@ TEST(EndgameSolver, OutplayFutilityCutsNodes) {
               static_cast<unsigned long long>(unpruned),
               100.0 * (1.0 - static_cast<double>(pruned) / static_cast<double>(unpruned)));
   EXPECT_LT(pruned, unpruned);
+}
+
+// THE soundness gate for the root beta cutoff: over a large random batch of
+// first-win (spread_matters=false) solves, whenever the solve proves a class it
+// must equal the brute-force reference's sign, and for a proven win or draw the
+// returned move must preserve that class under optimal play by both sides
+// afterward (a proven loss makes every move class-equal, so there is no per-move
+// claim to check). The cutoff stops a root scan the instant a fail-high settles
+// the class, so a cutoff that dropped a move that mattered would surface here as
+// a wrong class or a class-forfeiting best move.
+TEST(EndgameSolver, RootCutoffPreservesVerdicts) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x2000C0DEu);
+  int class_proven = 0, checked = 0;
+  for (int i = 0; i < 120; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    solver.clear();
+    const EndgameResult r =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {budget, kRefDepth, /*spread_matters=*/false});
+    ++checked;
+    if (r.proven_class == EndgameResult::kClassUnknown) continue;
+    ++class_proven;
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(r.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
+    if (r.proven_class == -1) continue;
+    const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                p.opp_score, 0, r.best, kRefDepth);
+    ASSERT_EQ((after > 0) - (after < 0), r.proven_class)
+      << "position " << i << " budget " << budget << ": played move forfeits the proven class";
+  }
+  ASSERT_GT(class_proven, checked / 4) << "class proofs fired too rarely to gate anything";
+  std::cout << "  root-cutoff class-proven " << class_proven << "/" << checked << " endgames\n";
+}
+
+// The root cutoff demonstrably pays on won blowouts: scan for random endgames
+// the reference scores as a decisive win, where a top-ordered winning root move
+// fails high early and the cutoff skips the rest of the root. A solver with the
+// cutoff disabled scans every root move at every depth instead. The cutoff is
+// never worse per position (it only ever skips work), it strictly wins on most
+// of the batch, and it cuts the aggregate node count. A blowout can tie when its
+// fail-high lands on the last-scanned root move at the proving depth (nothing
+// left to skip), which is why the strict claim is the batch total, not each
+// position. Both solvers must still prove the same (won) class.
+TEST(EndgameSolver, RootCutoffSavesNodes) {
+  Dictionary d = tiny_dict();
+  EndgameSolver on, off;
+  off.set_root_cutoff(false);
+  std::mt19937 rng(0x2C07A5EDu);
+  uint64_t nodes_on = 0, nodes_off = 0;
+  int blowouts = 0, improved = 0;
+  for (int i = 0; i < 400 && blowouts < 20; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    if (ref < 30) continue;  // want a decisive win whose fail-high lands early
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    on.clear();
+    off.clear();
+    const EndgameResult a = on.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
+    const EndgameResult b = off.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
+    ASSERT_EQ(a.proven_class, 1) << "position " << i;  // a blowout is a proven win
+    ASSERT_EQ(b.proven_class, a.proven_class) << "position " << i;
+    nodes_on += a.nodes;
+    nodes_off += b.nodes;
+    EXPECT_LE(a.nodes, b.nodes) << "position " << i;  // the cutoff never costs more
+    if (a.nodes < b.nodes) ++improved;
+    ++blowouts;
+  }
+  ASSERT_GT(blowouts, 0) << "no won-blowout positions found in the scan";
+  EXPECT_GT(improved, blowouts / 2) << "the cutoff should strictly win on most blowouts";
+  EXPECT_LT(nodes_on, nodes_off);
+  std::cout << "  root-cutoff on " << blowouts << " won blowouts (" << improved
+            << " strictly fewer): nodes " << nodes_on << " vs " << nodes_off << " without cutoff\n";
 }
 
 namespace {

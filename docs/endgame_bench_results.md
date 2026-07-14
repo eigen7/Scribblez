@@ -1,118 +1,118 @@
 # Endgame solver benchmark results
 
 Measurements from `endgame_bench` (see `engine/apps/endgame_bench.cpp`) on the
-development machine (Docker container, single-threaded runs, NWL23 lexicon,
-Release build). They characterize the `hastybot-endgame` agent's cost and
-strength as a function of `EndgameSolver::Params` -- the per-solve node
-`budget` (default 220) and `spread_matters` -- and are the basis for those
-defaults.
+development machine (Docker container, NWL23 lexicon, Release build). They
+characterize the `hastybot-endgame` agent as a function of the solver's node
+budget (default 220).
 
 **Hardware**: Intel Core i7-13850HX (28 hardware threads), 64 GB RAM, inside
 the project's Docker container, Release build.
 
-## The two settings
-
-- **spread_matters = false** (default): resolve only the win/draw/loss class
-  and stop the moment it is proven, exposing the proof as
-  `EndgameResult::proven_class` and a full proof-certificate line as the
-  agent's projected continuation. The self-play break-out setting: a decided
-  game is not worth more compute, and a projection-respecting game loop plays
-  the certificate out instead of prompting the agents. It presumes such a
-  loop -- among winning (or losing) moves it plays a proof-arbitrary one, so
-  in a loop that ignores projections it concedes margin it never tries to
-  keep.
-- **spread_matters = true**: never trade the class for points. A class pass
-  capped at half the budget, then a spread pass on the remainder whose move is
-  played only when it provably preserves a proven win or draw; a proven loss
-  makes the spread pass pure defense; with no proof, margin play is the
-  class-robust fallback. The setting for games played to their end.
-
-Every class proof carries a valid certificate: the class-critical side's
-moves come from fresh narrow-window re-proofs at each position of the walk
-(over the warm table, outside the node budget, cost tracked in
-`EndgameResult::certificate_nodes` and negligible in practice), and the line
-is gated on replaying to the proven class. The test suite asserts a
-certificate for every proven solve whose chosen move does not itself end the
-game, and curated GCG endgames under engine/tests/data/ pin known positions
-to their proven class and proof cost (see EndgameGcgCases).
-
 ## Methodology
 
-- **Endgame-phase cost** (`--mode=endgames`): play N HastyBot-vs-HastyBot
-  games, timing each whole game (A) and its endgame phase (B: from the first
-  bag-empty decision to the end); then play each captured endgame out with
-  solver agents on both seats, projections respected, timing the whole
-  endgame (E). E/B is the endgame-phase multiplier, (A-B+E)/A the whole-game
-  (self-play throughput) multiplier.
-- **Whole-game cost** (`--mode=games`): mean wall-time per game of
-  endgame-vs-endgame self-play (projections respected, as generation runs),
-  as a ratio to the hasty-vs-hasty baseline (~5 ms/game, ~215 games/s
-  single-threaded), same seeds across configs. Cost rows come from dedicated
-  single runs on an otherwise idle machine; run-to-run baseline drift is ~2%.
-- **Strength** (`--mode=games` head-to-head): the endgame bot's record against
-  a plain greedy HastyBot, each seed played twice with the seats mirrored and
-  the pair pooled (unpaired estimates are not usable). Every game respects
-  projections, as self-play generation does, so once the bot proves a class
-  the recorded spread is the certificate line's -- the margins the training
-  pipeline actually sees. The W/D/L record is proof-invariant, so it measures
-  the same thing with or without projections. Strength rows pool 6
-  independent 800-game seed shards; uncertainty is the across-shard standard
-  error.
-- **Bucketing by bag-empty spread** (`--spread-buckets`): decision accuracy
-  only shows up in close endgames -- in decided games every configuration
-  converts equally, so their games contribute pure noise to a win/loss record
-  (measured below: W-L +0.0pp in the 60+ bucket at budget 220, 2608 games) --
-  while break-out throughput matters most exactly there. Head-to-head games
-  are bucketed by the seed's *baseline hasty-vs-hasty* bag-empty spread, a
-  deterministic conditioning variable identical across configurations and
-  seats.
-- **Which metric judges what**: W-L margin in the small buckets judges class
-  play; mean spread judges the value-target currency the training pipeline
-  consumes -- under spread_matters the bot's own margin play, under the
-  break-out setting the certificate lines' proof-grade margins; the
-  endgames-mode multipliers judge what the solver does to self-play
-  throughput.
+We measure the endgame solver along two dimensions: **speed** and **skill**.
 
-## What the solver does to self-play throughput (`--mode=endgames`, 300 games)
+- **Speed**: how fast is the endgame solver, in terms of impact on self-play
+  game throughput relative to a hasty-vs-hasty baseline?
+- **Skill**: how much does enabling the endgame solver improve WDL stats
+  against hasty?
 
-Baseline: A ~= 4.4 ms/game, of which the endgame phase is B ~= 0.47 ms (~11%).
-"all" bucket rows, spread_matters=0:
+Skill is measured by capturing each seeded hasty-vs-hasty game's first
+bag-empty position, then sweeping a synthetic score margin m from -N to +N
+(the first actor's point of view; scores are set to (m, 0)). Both agent
+types decide off spread alone, so the margin fully defines the position, and
+comparing the solver seat's win% against the hasty baseline's from the
+identical seat isolates the solver's effect; HastyBot's moves are
+score-independent, so one hasty playout per game fixes the baseline at every
+margin.
 
-| budget | solver endgame ms (E) | endgame multiplier E/B | whole-game multiplier |
-|---|---|---|---|
-| 100 | 2.1 | 4.5x | 1.37x |
-| **220 (default)** | 6.0 | 12.8x | **2.25x** |
-| 400 | 22.5 | 48x | 5.98x |
-| 1600 | 153 | 326x | 35.4x |
+Speed uses an operation-count model: modeled time = a x logical move
+generations, with a calibrated single-threaded against real playouts, and
+the model's mean per-run relative error reported alongside. All reported
+numbers are deterministic, so per-game multithreading and the tool's reuse
+optimizations (descending-budget reuse, the solver's move-generation memo)
+cannot distort them.
 
-The whole-game multiplier is the self-play throughput number to keep tabs on:
-at the default budget the solver makes the endgame phase ~13x more expensive,
-which alone multiplies whole-game cost by ~2.25x. The games-mode sweep agrees
-(same seeds, hasty baseline 1.00x): 100 -> 1.25x, 220 -> 2.11x, 400 -> 5.93x,
-1600 -> 33.7x.
+## Skill vs hasty
 
-## Strength vs greedy HastyBot (6x800 paired games per cell)
+100 games, seed 1. y is the solver seat's win% minus the hasty baseline's
+win% at the same margin -- e.g. "+10%" means the solver's win% is 10 points
+above hasty's from the identical seat (a win counts 1, a draw 0.5). The
+final column is the hasty baseline's own win% at that margin.
 
-| setting | budget | mean spread | W-L overall | W-L, bag-empty spread 0-19 (800 games) |
-|---|---|---|---|---|
-| spread_matters=1 | 220 | +0.44 +/- 0.04 | +0.50pp | +0.75pp |
-| spread_matters=0 | 220 | +0.41 +/- 0.08 | +0.52pp | +1.12pp |
-| spread_matters=1 | 1600 | +4.26 +/- 0.13 | +3.88pp | +14.00pp |
-| spread_matters=0 | 1600 | +3.28 +/- 0.18 | +4.02pp | +14.00pp |
+| margin | budget 100 | 220 | 400 | 1600 | hasty win% |
+|---|---|---|---|---|---|
+| -100 | +0.0% | +0.0% | +0.0% | +0.0% | 2.5% |
+| -80 | +0.0% | +0.0% | +0.0% | +0.0% | 8.0% |
+| -60 | +0.0% | +0.0% | +0.0% | +2.5% | 10.0% |
+| -40 | +0.0% | +1.0% | +1.0% | +9.0% | 19.5% |
+| -20 | +0.0% | +0.0% | +0.5% | +10.0% | 40.5% |
+| 0 | +0.5% | +1.0% | +1.0% | +8.0% | 75.5% |
+| 20 | +0.0% | +0.0% | +0.0% | +3.0% | 91.0% |
+| 40 | +0.0% | +0.0% | +0.0% | +1.0% | 96.0% |
+| 60 | +0.0% | +0.0% | +0.0% | +2.0% | 97.0% |
+| 80 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
+| 100 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
 
 Readings:
 
-- **Class play is identical across the two settings** (equal W/D/L within
-  noise at both budgets; the close bucket's standard error is roughly
-  +/-1.5pp at 800 games), and all of the win/loss value of endgame solving
-  lives in that close bucket (+14pp at 1600 vs +0.0-0.4pp in decided games).
-- **Certificates carry most of the margin for the break-out setting**: its
-  post-proof play is proof-arbitrary, but the projected certificate line is
-  proof-grade, so under projections it banks within a point of
-  spread_matters=1 at 1600 -- at the narrow window's lower cost. The
-  remaining gap is what the spread pass buys.
-- The spread_matters margin play at high budgets is the same exact-endgame
-  value it has always been (~+4.3 pts/game at 1600 at these seeds).
+- Skill concentrates at contested margins and vanishes at both extremes --
+  decided games are converted equally by everyone.
+- The peak sits at slightly-losing margins (+10% at margin -20, budget
+  1600): the solver rescues games hasty loses more than it protects games
+  hasty already wins, since hasty's baseline is already 91%+ at winning
+  margins.
+- Low budgets add little anywhere: a solve is declined when the position has
+  more root moves than the budget, so the budget gates engagement.
+
+## Modeled cost vs hasty
+
+Same margin axis; modeled solver-seat endgame ms per playout (see
+Methodology). Calibration for this run: a = 109.6 us/movegen, mean per-run
+relative error 116% -- the error reflects per-playout fixed overheads that
+the one-term model folds into a, so treat the table as relative structure
+more than absolute ms.
+
+| margin | 100 | 220 | 400 | 1600 |
+|---|---|---|---|---|
+| -100 | 2.47 | 7.84 | 18.59 | 124.8 |
+| -80 | 2.47 | 7.84 | 18.59 | 124.2 |
+| -60 | 2.47 | 7.83 | 18.59 | 123.6 |
+| -40 | 2.43 | 7.62 | 17.78 | 119.0 |
+| -20 | 2.37 | 7.38 | 17.09 | 115.9 |
+| 0 | 2.23 | 6.82 | 16.00 | 111.0 |
+| 20 | 2.15 | 6.58 | 15.61 | 109.6 |
+| 40 | 2.19 | 6.65 | 15.71 | 109.8 |
+| 60 | 2.19 | 6.65 | 15.70 | 109.7 |
+| 80 | 2.19 | 6.65 | 15.69 | 110.0 |
+| 100 | 2.19 | 6.65 | 15.69 | 110.0 |
+
+Readings:
+
+- Cost falls toward decided margins: class proofs land sooner and short-
+  circuit deepening.
+- Proving the opponent's win is systematically dearer than proving our own
+  (margin -100 vs +100 at budget 1600: 124.8 vs 110.0 ms, ~14%), because a
+  loss proof must refute every root move while a win proof needs a single
+  winning line.
+
+## Whole-game throughput
+
+`--mode=games` (projections respected, as self-play generation runs) times
+endgame-vs-endgame self-play against the hasty-vs-hasty baseline (~5
+ms/game): budget 100 -> 1.25x, 220 -> 2.11x, 400 -> 5.93x, 1600 -> 33.7x.
+The same mode's head-to-head table reports each budget's win% and W/D/L
+record against plain hasty (no spread column).
+
+## Proof certificates
+
+Every class proof carries a certificate: the class-critical side's moves
+come from fresh narrow-window re-proofs at each position of the walk, run
+over the warm transposition table outside the node budget (tracked in
+`EndgameResult::certificate_nodes`, negligible in practice), gated on a
+terminal check that the walk lands on the proven class. This is enforced by
+the test suite, plus curated GCG endgames under `engine/tests/data/` pinned
+to their proven class and proof cost by `EndgameGcgCases`.
 
 ## Analyzing a single position
 
@@ -125,14 +125,10 @@ deepening iteration's verdict, the certificate walk, and the projected line.
 ## Reproducing
 
 ```
-target/engine/endgame_bench --mode=endgames --games=300 --seed=42 --budgets=100,220,400,1600
-target/engine/endgame_bench --mode=games    --games=200 --seed=7  --threads=1 --budgets=...
-target/engine/endgame_bench --mode=games    --games=800 --seed=S  --threads=1 --budget=B \
-    --spread-matters=0|1     # strength shards; pool several seeds S
+target/engine/endgame_bench --mode=endgames --games=100 --seed=1 \
+    --budgets=100,220,400,1600 --margin-max=100 --margin-step=20 \
+    --threads=8
+target/engine/endgame_bench --mode=games --games=200 --seed=7 \
+    --threads=1 --budgets=100,220,400,1600
 target/engine/endgame_tool  --gcg engine/tests/data/FOE.gcg
 ```
-
-For strength numbers, pool several seed shards; single-shard head-to-head
-spreads carry a few points of standard error even with seat mirroring, and
-close-bucket W-L margins need pooled shards to mean anything. For cost
-numbers, run one config at a time on an idle machine.

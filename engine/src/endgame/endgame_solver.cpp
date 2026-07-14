@@ -473,8 +473,10 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
                                                     const std::vector<Move>& plays,
                                                     Move* best_out) {
   // The root is the solving side's node; it hands its children out-play sets
-  // just as an interior node does, but is itself never futility-pruned: every
-  // root move needs its exact value for the re-ordering between iterations.
+  // just as an interior node does, but is itself never futility-pruned: under
+  // the full window every root move needs its exact value for the re-ordering
+  // between iterations. It does apply a beta cutoff (only reachable under the
+  // narrow first-win window; see the scan below).
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
 
@@ -498,12 +500,25 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
       best_proven = child.proven;
     }
     alpha = std::max(alpha, best);
+    // Root beta cutoff. Under the full window (spread pass / lexicographic
+    // second pass) beta is +infinity, so this never fires and the whole root is
+    // scanned as before. Under the narrow first-win window a root fail-high
+    // (best >= beta means value >= kFirstWinBeta, the win verdict) settles
+    // everything the window can express, so scanning further root moves adds
+    // nothing to the class verdict. alpha rises only through best, so the child
+    // that just pushed alpha to beta is the one that set best last -- best_move
+    // and best_proven already hold its move and proven bit, the exact witness
+    // the fail-high rests on. Root moves left unscanned keep their prior rank,
+    // so the next iteration's re-sort orders them by stale values; that is
+    // acceptable, since a proven cutoff ends the deepening and an unproven one
+    // only reorders candidates.
+    if (root_cutoff_ && alpha >= beta) break;
   }
   *best_out = best_move;
-  // The root never applies a beta cutoff, but the returned value can still be a
-  // fail-high bound when alpha rose to beta (a narrow first_win window): then the
-  // "value >= beta" verdict rests on the single best-achieving child, so its
-  // proven bit alone settles it. Otherwise every child must be proven.
+  // A root fail-high (best >= beta, reachable only under the narrow first-win
+  // window) rests on the single best-achieving child -- the cutoff witness when
+  // the scan broke early, or the last child to raise best otherwise -- so its
+  // proven bit alone settles the verdict. Otherwise every child must be proven.
   const bool proven = best >= beta ? best_proven : all_proven;
   return {best, proven};
 }

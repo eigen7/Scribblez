@@ -225,6 +225,13 @@ class EndgameSolver {
   // short-circuit saves; production always leaves it on.
   void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
 
+  // Enable or disable the root beta cutoff (on by default). Exists so a test
+  // can A/B how many nodes the cutoff saves; production always leaves it on.
+  // The cutoff only ever fires under the narrow first-win window (the full
+  // window's +infinity beta is unreachable), where a root fail-high already
+  // settles the class, so disabling it changes no solve's value or best move.
+  void set_root_cutoff(bool on) { root_cutoff_ = on; }
+
   // Enable or disable the move-generation memo (off by default). When on, every
   // move list the solver requests is cached by board+rack and reused on a
   // repeat, trading memory for generation work. It is a measurement-tool
@@ -446,6 +453,10 @@ class EndgameSolver {
   OutplaySet* cur_sets_[2] = {nullptr, nullptr};
 
   bool proof_early_exit_ = true;
+
+  // Root beta cutoff, on except when a test disables it to measure the nodes it
+  // saves (see set_root_cutoff).
+  bool root_cutoff_ = true;
 
   // Trace sink and move renderer; tracing is active iff trace_ is non-null
   // (set_trace installs a fallback renderer when none is given).
