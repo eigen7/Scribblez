@@ -125,6 +125,11 @@ class EndgameSolver {
   // value or best move; production always leaves it on.
   void set_threat_pruning(bool on) { threat_pruning_ = on; }
 
+  // Enable or disable the proven-verdict deepening short-circuit (on by
+  // default). Exists so tests and the benchmark can A/B how many nodes the
+  // short-circuit saves; production always leaves it on.
+  void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
+
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
   // never-written slot. Every stored entry carries a real bound (>= kExact), so a
@@ -240,6 +245,7 @@ class EndgameSolver {
   // the two modes (see set_threat_pruning).
   bool threat_pruning_ = true;
 
+  bool proof_early_exit_ = true;
   std::vector<TTEntry> tt_;
   uint64_t tt_mask_ = 0;
   uint16_t tt_gen_ = 1;  // current generation; entries with gen != this are empty

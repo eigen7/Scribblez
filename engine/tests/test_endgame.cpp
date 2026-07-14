@@ -741,6 +741,48 @@ TEST(EndgameSolver, EarlyExitPreservesResults) {
   std::cout << "  early-exit truncated " << truncated << "/" << checked << " solves\n";
 }
 
+// The short-circuit demonstrably fires and demonstrably pays: on positions
+// whose whole game tree ends within a few plies (1-tile racks: every line is
+// an out, a pass-out, or a pass-pass stalemate), the solve is proven at a
+// shallow depth, and an identical solve with the short-circuit disabled keeps
+// deepening over the same tiny tree -- same value, same move, strictly more
+// nodes. Random 2-tile endgames then quantify the aggregate saving.
+TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
+  Dictionary d = tiny_dict();
+  EndgameSolver on;
+  EndgameSolver off;
+  off.set_proof_early_exit(false);
+
+  std::mt19937 rng(0x5C1Fu);
+  uint64_t nodes_on = 0, nodes_off = 0;
+  int proven = 0, checked = 0;
+  for (int i = 0; i < 30; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/(i % 2) ? 1 : 2);
+    on.clear();
+    off.clear();
+    const EndgameResult a =
+      on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 25);
+    const EndgameResult b =
+      off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 25);
+    ASSERT_EQ(a.value, b.value) << "position " << i;
+    ASSERT_TRUE(a.best == b.best) << "position " << i;
+    nodes_on += a.nodes;
+    nodes_off += b.nodes;
+    ++checked;
+    if (!a.proven) continue;
+    ++proven;
+    // The proof landed well below the horizon and the disabled control kept
+    // deepening past it: the short-circuit saved real nodes on this position.
+    EXPECT_LT(a.depth_completed, 25) << "position " << i;
+    EXPECT_LT(a.nodes, b.nodes) << "position " << i;
+    EXPECT_EQ(b.depth_completed, 25) << "position " << i;
+  }
+  ASSERT_GT(proven, checked / 2) << "shallow endgames should mostly be provable";
+  EXPECT_LT(nodes_on * 2, nodes_off);  // the short-circuit at least halves the batch
+  std::cout << "  proof short-circuit: " << proven << "/" << checked << " proven, nodes "
+            << nodes_on << " vs " << nodes_off << " without early exit\n";
+}
+
 // In the first_win window a proven early exit settles the win/draw/loss class:
 // the wld value's sign matches the brute-force reference's, and the narrower
 // window plus its earlier proof never search more nodes than the full window.

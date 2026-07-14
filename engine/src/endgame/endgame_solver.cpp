@@ -497,7 +497,7 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
     // value is the true game spread, and in the first_win window a proven verdict
     // always settles the win/draw/loss class (a proven bound is itself true).
     // Deepening cannot change the answer, so stop.
-    if (sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
+    if (proof_early_exit_ && sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
     // Re-order root moves by their exact returned values for the next depth.
     std::sort(root_moves.begin(), root_moves.end(), by_value_desc);
   }

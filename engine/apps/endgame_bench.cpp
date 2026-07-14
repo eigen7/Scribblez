@@ -130,17 +130,24 @@ struct SolveStats {
   double nodes_per_s;
   double mean_depth;
   double pct_differ;
+  double pct_proven;      // solves whose verdict rested entirely on game ends
+  double pct_exit_saved;  // nodes the proven short-circuit saved vs deepening on
+                          // (1 - nodes_with_exit / nodes_without, same positions)
 };
 
 SolveStats solve_all(const Dictionary& dict, const std::vector<CapturedPosition>& positions,
                      uint64_t budget, int plies) {
   EndgameSolver solver;
+  EndgameSolver no_exit;
+  no_exit.set_proof_early_exit(false);
   std::vector<double> per_us;
   per_us.reserve(positions.size());
   double total_s = 0.0;
   uint64_t total_nodes = 0;
+  uint64_t total_nodes_no_exit = 0;
   long total_depth = 0;
   size_t differ = 0;
+  size_t proven = 0;
   for (const CapturedPosition& p : positions) {
     solver.clear();  // independent samples: don't let one solve warm the next
     const auto t0 = std::chrono::steady_clock::now();
@@ -153,6 +160,14 @@ SolveStats solve_all(const Dictionary& dict, const std::vector<CapturedPosition>
     total_nodes += r.nodes;
     total_depth += r.depth_completed;
     if (!(r.best == p.hasty_move)) ++differ;
+    if (r.proven) ++proven;
+    // The same solve with the proven short-circuit disabled, to measure the
+    // nodes the short-circuit saves (untimed: only node counts are compared).
+    no_exit.clear();
+    total_nodes_no_exit += no_exit
+                             .solve(p.board, dict, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                                    p.scoreless, budget, plies)
+                             .nodes;
   }
 
   std::sort(per_us.begin(), per_us.end());
@@ -166,6 +181,11 @@ SolveStats solve_all(const Dictionary& dict, const std::vector<CapturedPosition>
   st.nodes_per_s = total_s > 0 ? static_cast<double>(total_nodes) / total_s : 0.0;
   st.mean_depth = n ? static_cast<double>(total_depth) / n : 0.0;
   st.pct_differ = n ? 100.0 * static_cast<double>(differ) / n : 0.0;
+  st.pct_proven = n ? 100.0 * static_cast<double>(proven) / n : 0.0;
+  st.pct_exit_saved =
+    total_nodes_no_exit
+      ? 100.0 * (1.0 - static_cast<double>(total_nodes) / static_cast<double>(total_nodes_no_exit))
+      : 0.0;
   return st;
 }
 
@@ -174,13 +194,14 @@ void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
   const std::vector<CapturedPosition> positions = capture_positions(dict, base_seed, games);
   std::printf("solves mode: %d games, %zu bag-empty positions, plies=%d\n\n", games,
               positions.size(), plies);
-  std::printf("%10s %9s %11s %11s %11s %13s %10s %9s\n", "budget", "positions", "mean us", "p50 us",
-              "p95 us", "nodes/s", "mean depth", "%% differ");
+  std::printf("%10s %9s %11s %11s %11s %13s %10s %9s %8s %10s\n", "budget", "positions", "mean us",
+              "p50 us", "p95 us", "nodes/s", "mean depth", "%% differ", "%% proven", "exit save");
   for (uint64_t b : budgets) {
     const SolveStats s = solve_all(dict, positions, b, plies);
-    std::printf("%10llu %9zu %11.1f %11.1f %11.1f %13.0f %10.2f %8.1f%%\n",
+    std::printf("%10llu %9zu %11.1f %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %9.1f%%\n",
                 static_cast<unsigned long long>(s.budget), s.positions, s.mean_us, s.median_us,
-                s.p95_us, s.nodes_per_s, s.mean_depth, s.pct_differ);
+                s.p95_us, s.nodes_per_s, s.mean_depth, s.pct_differ, s.pct_proven,
+                s.pct_exit_saved);
   }
 }
 

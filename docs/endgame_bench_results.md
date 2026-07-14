@@ -46,18 +46,22 @@ an admitted search noisier.
 
 ## Per-solve cost (`--mode=solves`, 80 captured bag-empty positions)
 
-| budget | mean us | p50 us | p95 us | mean depth | % differ from hasty |
-|---|---|---|---|---|---|
-| 100 | 445 | 217 | 1552 | 1.6 | 38% |
-| 200 | 1144 | 421 | 4293 | 2.6 | 38% |
-| 400 | 3911 | 2591 | 17548 | 3.9 | 44% |
-| 1600 | 37727 | 18456 | 140045 | 6.2 | 48% |
-| 5000 | 121492 | 62604 | 412281 | 8.2 | 45% |
-| 20000 | 405068 | 206320 | 1663822 | 9.7 | 49% |
+| budget | mean us | p50 us | p95 us | mean depth | % differ | % proven | exit save (nodes) |
+|---|---|---|---|---|---|---|---|
+| 100 | 406 | 161 | 1503 | 0.4 | 36% | 14% | 33% |
+| 200 | 1054 | 304 | 4088 | 0.6 | 38% | 19% | 25% |
+| 400 | 3590 | 1419 | 16691 | 0.8 | 39% | 22% | 22% |
+| 1600 | 36348 | 18123 | 139361 | 1.5 | 45% | 30% | 16% |
 
-Solves are movegen-bound (roughly 35-80k nodes/s; each node and each greedy
+Solves are movegen-bound (roughly 30-70k nodes/s; each node and each greedy
 playout ply runs a full move generation), so per-solve cost tracks nodes spent
-almost linearly once positions stop being declined.
+almost linearly once positions stop being declined. "Mean depth" reads low
+because proven positions report the depth that proved them and stop there.
+"Exit save" is the node share the proven short-circuit avoids versus letting
+deepening run on the same positions -- note it overstates the wall-time
+saving (~8% at budget 200): the avoided nodes are the cheapest in the system
+(shallow re-iterations over tiny terminal-heavy trees with a warm table),
+while the unprovable rich positions own most of the wall time.
 
 ## Proven verdicts and outplay-threat pruning
 
