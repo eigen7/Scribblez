@@ -283,12 +283,25 @@ void EndgameSolver::tt_store_playout(uint64_t hash, int32_t score_rel) {
   e.gen = tt_gen_;
 }
 
+const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack) {
+  ++movegens_;
+  if (!movegen_memo_) {
+    movegen_scratch_ = MoveGenerator(board_, *dict_).generate(rack);
+    return movegen_scratch_;
+  }
+  const uint64_t key = board_hash_ ^ util::splitmix64(rack.bits());
+  const auto it = movegen_memo_map_.find(key);
+  if (it != movegen_memo_map_.end()) return it->second;
+  if (movegen_memo_map_.size() >= kMovegenMemoCap) movegen_memo_map_.clear();
+  return movegen_memo_map_.emplace(key, MoveGenerator(board_, *dict_).generate(rack)).first->second;
+}
+
 int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
   const int solving_seat = stm_;
   const int32_t node_spread = spread_stm();
   int made = 0;
   while (!game_over_ && made < kMaxPlayout) {
-    const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+    const std::vector<Move>& plays = generate_moves(racks_[stm_]);
     const Move chosen = plays.empty() ? Move::pass() : greedy_pick(plays);
     ++nodes_;
     make(chosen, ply + made);
@@ -385,7 +398,10 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
 
   if (depth == 0) return {greedy_playout(hash, ply), false};  // a playout leaf is an estimate
 
-  std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+  // Owned copy: LeaveOutplays below holds a reference to this list, and the
+  // child searches in the scan run nested generate_moves calls that may insert
+  // into the memo, so an owned vector keeps the list stable across the loop.
+  std::vector<Move> plays = generate_moves(racks_[stm_]);
   std::vector<RankedMove> moves;
   moves.reserve(plays.size() + 1);
   for (const Move& m : plays) moves.push_back({m, 0});
@@ -686,7 +702,7 @@ bool EndgameSolver::reprove_walk_move(int ply, int req_class, Move* out) {
     if (e == nullptr) return false;
     const Move m = e->best;
     if (m.type() == MoveType::PLAY) {
-      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+      const std::vector<Move>& plays = generate_moves(racks_[stm_]);
       if (std::find(plays.begin(), plays.end(), m) == plays.end()) return false;
     }
     *out = m;
@@ -728,7 +744,7 @@ void EndgameSolver::extract_continuation(EndgameResult& result) {
     } else {
       // This side is proven lost: no move of theirs changes the class, so the
       // greedy playout move stands in for their optimal play.
-      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+      const std::vector<Move>& plays = generate_moves(racks_[stm_]);
       if (!plays.empty()) next = greedy_pick(plays);
     }
     if (trace_) *trace_ << "  " << trace_move(next) << "\n";
@@ -768,6 +784,7 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   game_over_ = false;
   board_hash_ = compute_board_hash();
   nodes_ = 0;
+  movegens_ = 0;
   aborting_ = false;
   budget_ = node_budget;
 
@@ -778,7 +795,10 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
   if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
 
-  std::vector<Move> plays = MoveGenerator(board_, dict).generate(state.my_rack);
+  // Owned copy: `plays` is handed by const reference to run_iterative and on to
+  // LeaveOutplays, so it must outlive every nested search (and any memo insert
+  // those searches make) for the whole solve.
+  std::vector<Move> plays = generate_moves(racks_[0]);
   std::vector<RankedMove> root_moves;
   root_moves.reserve(plays.size() + 1);
   for (const Move& m : plays) root_moves.push_back({m, 0});
@@ -792,7 +812,10 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   // Decline it up front -- callers treat depth_completed == 0 as "unsolved"
   // and fall back to their own move policy -- rather than spending the whole
   // budget on a fraction of the root.
-  if (root_moves.size() > node_budget) return result;
+  if (root_moves.size() > node_budget) {
+    result.movegens = movegens_;
+    return result;
+  }
 
   // Seed the incremental out-play sets (see the class comment): the opponent's
   // from one move generation against its rack, the solving side's empty -- the
@@ -804,8 +827,8 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   cur_sets_[0] = &root_sets_[0];
   cur_sets_[1] = &root_sets_[1];
   if (outplay_futility_) {
-    collect_rack_outplays(board_, MoveGenerator(board_, dict).generate(state.opp_rack),
-                          state.opp_rack.size(), root_sets_[1]);
+    const std::vector<Move>& opp_plays = generate_moves(state.opp_rack);
+    collect_rack_outplays(board_, opp_plays, state.opp_rack.size(), root_sets_[1]);
   }
   if (trace_) {
     *trace_ << "solve: spread-matters " << (params.spread_matters ? "true" : "false") << ", budget "
@@ -830,6 +853,7 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   if (result.proven_class != EndgameResult::kClassUnknown && result.depth_completed >= 1)
     extract_continuation(result);
   result.nodes = nodes_;
+  result.movegens = movegens_;
   return result;
 }
 

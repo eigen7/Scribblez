@@ -5,6 +5,7 @@
 
 #include <boost/program_options.hpp>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -53,6 +54,13 @@ MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
     const EndgameResult r = solver_->solve({&req.dict, req.board, req.my_rack, req.opp_rack,
                                             req.my_score, req.opp_score, scoreless_turns_},
                                            solver_params_);
+    // Every solve the agent runs contributes to the operation totals, whether or
+    // not its move ends up used.
+    ++solve_totals_.solves;
+    solve_totals_.nodes += r.nodes;
+    solve_totals_.movegens += r.movegens;
+    solve_totals_.certificate_nodes += r.certificate_nodes;
+    solve_totals_.max_solve_nodes = std::max(solve_totals_.max_solve_nodes, r.nodes);
     // A proven-lost class-only result carries an arbitrary move (every move
     // loses, and that setting refines no further). With a certificate the
     // break-out takes priority -- the class-only setting exists to stop
@@ -80,6 +88,7 @@ void EndgameHastyBotAgent::observe_move(const Move& move) {
 
 void EndgameHastyBotAgent::begin_game() {
   scoreless_turns_ = 0;
+  solve_totals_ = {};
   solver_->clear();
   HastyBotAgent::begin_game();
 }

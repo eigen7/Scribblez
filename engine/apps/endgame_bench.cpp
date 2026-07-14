@@ -1,33 +1,35 @@
-// endgame_bench: measures what the endgame solver costs and what it buys,
-// with results bucketed by bag-empty spread -- small buckets measure decision
-// accuracy (the endgame still decides those games), large buckets are already
-// decided, the regime the break-out machinery exists for.
+// endgame_bench: measures what the endgame solver costs and what it buys.
 //
 // Two modes:
-//   --mode=endgames : play N HastyBot-vs-HastyBot games, timing each whole
-//                     game (A) and its endgame phase (B, from the first
-//                     bag-empty decision to the end). Then play each captured
-//                     endgame out with solver agents on both seats,
-//                     projections respected, timing the whole endgame (E).
-//                     Reports, per (budget, |spread| bucket): the endgame-
-//                     phase multiplier E/B and the whole-game multiplier
-//                     (A-B+E)/A the solver imposes on self-play.
+//   --mode=endgames : play N HastyBot-vs-HastyBot games and capture each one's
+//                     first bag-empty position. Then, for every captured
+//                     position, synthetically sweep the score margin at the
+//                     start of the endgame from -M to +M (from the point of
+//                     view of the first player to act once the bag is empty),
+//                     and for every (margin, budget) report two tables:
+//                       skill -- mean over games of the solver seat's game-value
+//                                minus a plain-HastyBot baseline's, in win%
+//                                points (a win is 1, a draw 0.5, a loss 0);
+//                       perf  -- mean over games of the solver seat's modeled
+//                                endgame runtime in ms, from an operation-count
+//                                model (see calibrate()).
+//                     Absolute score level is irrelevant -- both agent types
+//                     decide off the spread alone -- so each margin sets the
+//                     first actor's scores to (margin, 0).
 //   --mode=games    : run N seeded full games for hasty-vs-hasty and for
 //                     endgame-vs-endgame at every budget (same seeds across
 //                     configs) and report wall-time ratios to the
 //                     hasty-vs-hasty baseline, then the seat-mirrored
-//                     head-to-head record against plain HastyBot bucketed by
-//                     each seed's baseline bag-empty spread. Every game
-//                     respects projections, as self-play generation does: a
-//                     proven endgame is recorded at its certificate line, so
-//                     head-to-head spreads are the margins the training
-//                     pipeline will actually see (W/D/L is proof-invariant
-//                     either way).
+//                     head-to-head win% and W/D/L record against plain HastyBot
+//                     bucketed by each seed's baseline bag-empty spread. Every
+//                     game respects projections, as self-play generation does.
 //
 // Usage:
 //   endgame_bench [--mode=endgames|games] [--games N] [--seed N]
 //                 [--budget N | --budgets 100,220,...] [--plies P]
-//                 [--spread-matters 0|1] [--spread-buckets 20,60]
+//                 [--spread-matters 0|1] [--threads N]
+//                 [--margin-max M] [--margin-step S]         (endgames mode)
+//                 [--spread-buckets 20,60]                   (games mode)
 //                 [--lexicon NAME] [--leaves-file PATH] [--peg-file PATH]
 //
 // Measured results (cost ratios, strength-vs-budget, and methodology) are
@@ -54,6 +56,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +66,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -75,8 +79,8 @@ double seconds_since(Clock::time_point t0) {
 }
 
 // The first bag-empty decision point of one HastyBot self-play game --
-// everything needed to replay the endgame with solver agents -- plus the
-// baseline game's timings around it.
+// everything needed to replay the endgame with either agent type. The first
+// actor once the bag empties holds my_rack; opp_rack is the reply rack.
 struct CapturedEndgame {
   Board board;
   Rack my_rack;
@@ -84,28 +88,24 @@ struct CapturedEndgame {
   int my_score = 0;
   int opp_score = 0;
   int scoreless = 0;
-  double game_s = 0.0;     // whole hasty-vs-hasty game (A)
-  double endgame_s = 0.0;  // its endgame phase: first bag-empty decision to end (B)
 };
 
 // A HastyBot that records the game's first bag-empty position it is asked to
-// move on, with the moment it was asked (the endgame phase's start). It tracks
-// the consecutive-scoreless-turn count from observe_move exactly as the game
-// loop does.
+// move on. It tracks the consecutive-scoreless-turn count from observe_move
+// exactly as the game loop does, so each captured position carries the solver's
+// scoreless input.
 class FirstEndgameCapturer : public Agent {
  public:
   FirstEndgameCapturer(int thread_id, const std::string& name, CapturedEndgame& sink,
-                       bool& captured, Clock::time_point& endgame_start)
+                       bool& captured)
       : Agent(thread_id, name),
         bot_({.thread_id = thread_id, .name = name}),
         sink_(sink),
-        captured_(captured),
-        endgame_start_(endgame_start) {}
+        captured_(captured) {}
 
   MoveDecision make_move(const MoveRequest& req) override {
     if (req.bag_size == 0 && !captured_) {
       captured_ = true;
-      endgame_start_ = Clock::now();
       sink_.board = req.board;
       sink_.my_rack = req.my_rack;
       sink_.opp_rack = req.opp_rack;
@@ -129,7 +129,6 @@ class FirstEndgameCapturer : public Agent {
   HastyBotAgent bot_;
   CapturedEndgame& sink_;
   bool& captured_;
-  Clock::time_point& endgame_start_;
   int scoreless_ = 0;
 };
 
@@ -161,33 +160,28 @@ std::string bucket_label(int k, const std::vector<int>& thresholds) {
   return std::to_string(lo) + "-" + std::to_string(thresholds[k] - 1);
 }
 
-// Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return each
-// game that reached an endgame, with its baseline timings.
+// Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return the
+// first bag-empty position of each game that reached one.
 std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t base_seed,
                                               int games) {
   std::vector<CapturedEndgame> out;
   for (int i = 0; i < games; ++i) {
     CapturedEndgame cap;
     bool captured = false;
-    Clock::time_point endgame_start;
-    FirstEndgameCapturer a0(0, "A", cap, captured, endgame_start);
-    FirstEndgameCapturer a1(0, "B", cap, captured, endgame_start);
-    const auto t0 = Clock::now();
+    FirstEndgameCapturer a0(0, "A", cap, captured);
+    FirstEndgameCapturer a1(0, "B", cap, captured);
     Game g(a0, a1, dict, base_seed + static_cast<uint64_t>(i));
     g.play();
-    const auto t1 = Clock::now();
-    cap.game_s = std::chrono::duration<double>(t1 - t0).count();
-    if (!captured) continue;  // the game never emptied the bag
-    cap.endgame_s = std::chrono::duration<double>(t1 - endgame_start).count();
-    out.push_back(cap);
+    if (captured) out.push_back(cap);
   }
   return out;
 }
 
-// The bag of tiles unseen from the captured endgame: empty, since the board
-// and both racks account for the full distribution.
-Bag empty_pool(const CapturedEndgame& cap, uint64_t seed) {
-  Bag pool(seed);
+// The bag of tiles unseen from the captured endgame: empty, since the board and
+// both racks account for the full distribution. play_from then draws nothing,
+// so both racks stay exactly as captured.
+Bag empty_pool(const CapturedEndgame& cap) {
+  Bag pool(/*seed=*/1);
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       const Glyph g = cap.board.at(r, c);
@@ -199,73 +193,306 @@ Bag empty_pool(const CapturedEndgame& cap, uint64_t seed) {
   return pool;
 }
 
-// One (budget, bucket) cell of endgame playouts: baseline and solver timings.
-struct EndgameTimings {
-  int games = 0;
-  double game_s = 0.0;     // sum of baseline whole-game times (A)
-  double endgame_s = 0.0;  // sum of baseline endgame-phase times (B)
-  double solver_s = 0.0;   // sum of solver-agent endgame playout times (E)
+// Game value of a finished endgame from the first actor's seat: a win is 1, a
+// draw 0.5, a loss 0.
+double win_fraction(int spread) {
+  if (spread > 0) return 1.0;
+  if (spread < 0) return 0.0;
+  return 0.5;
+}
+
+// --- Margin sweep -----------------------------------------------------------
+
+// One solver-seat endgame playout's deterministic result: the first actor's
+// final spread plus the operation count that feeds the timing model.
+struct SolverOutcome {
+  int spread = 0;
+  uint64_t movegens = 0;
 };
 
-// Play each captured endgame to completion with solver agents on both seats,
-// projections respected (the self-play configuration), and accumulate the
-// timings per bucket. The last bucket aggregates everything.
-std::vector<EndgameTimings> play_endgames(const Dictionary& dict,
-                                          const std::vector<CapturedEndgame>& captured,
-                                          const EndgameSolver::Params& params,
-                                          const std::vector<int>& thresholds) {
-  EndgameHastyBotAgent::Params agent_params;
-  agent_params.hasty = HastyBotAgent::Params{.thread_id = 0, .name = "EndgameHastyBot"};
-  agent_params.solver = params;
-  EndgameHastyBotAgent a0(agent_params), a1(agent_params);
+// A solver-seat playout's outcome together with the solver's full totals (the
+// caller needs max_solve_nodes for the budget-nesting skip).
+struct SolverPlayout {
+  int spread = 0;
+  EndgameHastyBotAgent::SolveTotals totals;
+};
 
-  std::vector<EndgameTimings> buckets(thresholds.size() + 2);
-  for (const CapturedEndgame& cap : captured) {
-    const int k = bucket_of(std::abs(cap.my_score - cap.opp_score), thresholds);
-    const Bag pool = empty_pool(cap, /*seed=*/1);
-    Game g(a0, a1, dict, /*seed=*/1);  // the empty pool leaves nothing to draw
-    g.set_respect_projections(true);
+// Play one captured endgame with an EndgameHastyBot on the first-actor seat
+// (scores set to {margin, 0}) and a plain HastyBot on the reply seat,
+// projections respected, and return the first actor's final spread and the
+// solver's operation totals. Agents are rebuilt per call with a fixed
+// thread_id/name so greedy HastyBot's deterministic tie-breaks make the result
+// a pure function of the position, margin, and budget (threading cannot perturb
+// it). `memo` toggles the solver's move-generation memo, which changes only
+// speed, never the logical operation counts.
+SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
+                                 const EndgameSolver::Params& params, int thread_id, bool memo) {
+  EndgameHastyBotAgent::Params ep;
+  ep.hasty = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
+  ep.solver = params;
+  EndgameHastyBotAgent eg(ep);
+  eg.set_movegen_memo(memo);
+  HastyBotAgent opp(HastyBotAgent::Params{.thread_id = thread_id, .name = "HastyBot"});
+
+  const Bag pool = empty_pool(cap);
+  Game g(eg, opp, dict, /*seed=*/1);
+  g.set_respect_projections(true);
+  g.play_from(cap.board, {margin, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
+
+  SolverPlayout out;
+  out.spread = g.score(0) - g.score(1);
+  out.totals = eg.solve_totals();
+  return out;
+}
+
+// The change in the first actor's spread over a plain HastyBot-vs-HastyBot
+// playout of the captured endgame (scores start at 0). HastyBot's moves never
+// read scores, so this one delta fixes the baseline at every margin: the
+// baseline final spread at margin m is m + delta, and the baseline win fraction
+// is win_fraction(m + delta).
+int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int thread_id) {
+  HastyBotAgent a0(HastyBotAgent::Params{.thread_id = thread_id, .name = "A"});
+  HastyBotAgent a1(HastyBotAgent::Params{.thread_id = thread_id, .name = "B"});
+  const Bag pool = empty_pool(cap);
+  Game g(a0, a1, dict, /*seed=*/1);
+  g.play_from(cap.board, {0, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
+  return g.score(0) - g.score(1);
+}
+
+// The playout-time model: time_us ~= a * movegens, with a the aggregate rate
+//   a = (total wall time over the calibration playouts) / (total movegens).
+// Move generations are the single cost carrier: they span search, greedy
+// playouts, and certificate reconstruction, and the counter is memo-invariant.
+// The other counters (nodes, certificate nodes) track movegens almost
+// one-for-one by construction -- roughly one generation per node -- so they
+// carry no independent timing signal.
+struct TimingModel {
+  double a = 0.0;             // us per logical move generation
+  double mean_rel_error = 0;  // mean |predicted - measured| / measured over the fit runs
+};
+
+// One timed calibration playout: its wall time and the move generations it ran.
+struct CalibSample {
+  double us = 0;
+  double movegens = 0;
+};
+
+double modeled_ms(const TimingModel& m, uint64_t movegens) {
+  return m.a * static_cast<double>(movegens) / 1000.0;
+}
+
+// Fit the aggregate movegen rate over the calibration playouts and record the
+// single-term model's mean per-run relative error, which contextualizes its
+// fidelity in the calibration line.
+TimingModel fit_timing_model(const std::vector<CalibSample>& samples) {
+  double sum_us = 0, sum_movegens = 0;
+  for (const CalibSample& c : samples) {
+    sum_us += c.us;
+    sum_movegens += c.movegens;
+  }
+  TimingModel m;
+  m.a = sum_movegens > 0.0 ? sum_us / sum_movegens : 0.0;
+  double rel = 0;
+  int n = 0;
+  for (const CalibSample& c : samples) {
+    if (c.us <= 0.0) continue;
+    rel += std::fabs(m.a * c.movegens - c.us) / c.us;
+    ++n;
+  }
+  m.mean_rel_error = n > 0 ? rel / n : 0.0;
+  return m;
+}
+
+// Calibrate the timing model on the first ~30 captured games, single-threaded
+// at the largest requested budget and each game's natural margin. Calibration
+// runs the solver with the move-generation memo OFF, so it does real work and
+// its wall times reflect real cost; sweep playouts run with the memo ON, and
+// because the logical operation counts are memo-invariant the modeled cost is
+// identical either way -- the point of modeling off counts rather than timing
+// the fast runs directly.
+TimingModel calibrate(const Dictionary& dict, const std::vector<CapturedEndgame>& caps,
+                      EndgameSolver::Params params, uint64_t max_budget, int& runs_out) {
+  params.budget = max_budget;
+  const int n = std::min<int>(30, static_cast<int>(caps.size()));
+  runs_out = n;
+  std::vector<CalibSample> samples;
+  samples.reserve(n);
+  for (int g = 0; g < n; ++g) {
+    const int natural = caps[g].my_score - caps[g].opp_score;
     const auto t0 = Clock::now();
-    g.play_from(cap.board, {cap.my_score, cap.opp_score}, {cap.my_rack, cap.opp_rack}, pool,
-                /*to_move=*/0);
-    const double e = seconds_since(t0);
-    for (EndgameTimings* cell : {&buckets[k], &buckets.back()}) {
-      ++cell->games;
-      cell->game_s += cap.game_s;
-      cell->endgame_s += cap.endgame_s;
-      cell->solver_s += e;
-    }
+    const SolverPlayout p =
+      run_solver_playout(dict, caps[g], natural, params, /*thread_id=*/0, /*memo=*/false);
+    samples.push_back({1e6 * seconds_since(t0), static_cast<double>(p.totals.movegens)});
   }
-  return buckets;
+  return fit_timing_model(samples);
 }
 
-void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games,
-                       const std::vector<uint64_t>& budgets, EndgameSolver::Params params,
-                       const std::vector<int>& thresholds) {
-  const std::vector<CapturedEndgame> captured = capture_endgames(dict, base_seed, games);
-  std::printf("endgames mode: %d games, %zu reached an endgame, plies=%d, spread-matters=%d\n\n",
-              games, captured.size(), params.plies, params.spread_matters ? 1 : 0);
-  std::printf("%10s %8s %7s %12s %15s %14s %11s %9s\n", "budget", "|spread|", "games",
-              "game ms (A)", "endgame ms (B)", "solver ms (E)", "endgame x", "game x");
-  for (uint64_t b : budgets) {
-    params.budget = b;
-    const std::vector<EndgameTimings> buckets = play_endgames(dict, captured, params, thresholds);
-    for (size_t k = 0; k < buckets.size(); ++k) {
-      const EndgameTimings& t = buckets[k];
-      if (t.games == 0) continue;
-      const std::string label =
-        k + 1 == buckets.size() ? "all" : bucket_label(static_cast<int>(k), thresholds);
-      const double n = t.games;
-      // The solver's endgame phase replaces the baseline's: E/B is the
-      // endgame-phase multiplier, (A - B + E) / A the whole-game (self-play
-      // throughput) multiplier.
-      std::printf("%10llu %8s %7d %12.2f %15.2f %14.2f %10.2fx %8.2fx\n",
-                  static_cast<unsigned long long>(b), label.c_str(), t.games, 1e3 * t.game_s / n,
-                  1e3 * t.endgame_s / n, 1e3 * t.solver_s / n, t.solver_s / t.endgame_s,
-                  (t.game_s - t.endgame_s + t.solver_s) / t.game_s);
+// The ascending margins the sweep covers: -max, -max+step, ..., up to +max.
+std::vector<int> margin_axis(int margin_max, int margin_step) {
+  std::vector<int> margins;
+  for (int m = -margin_max; m <= margin_max; m += margin_step) margins.push_back(m);
+  return margins;
+}
+
+// Solve every (game, margin, budget) cell for games [lo, hi), writing outcomes
+// into `grid` (indexed (g*Ms + mi)*Bs + bi) and per-game baseline deltas into
+// `d0`. Budgets are processed in DESCENDING order per (game, margin) so the
+// budget-nesting skip can reuse a larger budget's bit-identical result: once a
+// run's max_solve_nodes is <= a smaller budget b', re-running at b' changes
+// nothing (no solve hit the larger cap, and any solve declined for having more
+// root moves than the larger budget stays declined at b'). The skip is unsound
+// when spread_matters (its half-budget class pass makes behavior depend on the
+// budget value itself), so it is disabled there. `skipped` counts the cells the
+// skip filled without a playout.
+void sweep_game_range(const Dictionary& dict, const std::vector<CapturedEndgame>& caps,
+                      const std::vector<int>& margins,
+                      const std::vector<std::pair<uint64_t, int>>& desc_budgets,
+                      EndgameSolver::Params params, int n_budgets, int thread_id, int lo, int hi,
+                      std::vector<int>& d0, std::vector<SolverOutcome>& grid, uint64_t& skipped) {
+  const int ms = static_cast<int>(margins.size());
+  const bool skip_enabled = !params.spread_matters;
+  for (int g = lo; g < hi; ++g) {
+    d0[g] = baseline_delta(dict, caps[g], thread_id);
+    for (int mi = 0; mi < ms; ++mi) {
+      SolverOutcome last;
+      uint64_t last_max_nodes = 0;
+      bool have_last = false;
+      for (const std::pair<uint64_t, int>& bd : desc_budgets) {
+        const size_t cell = (static_cast<size_t>(g) * ms + mi) * n_budgets + bd.second;
+        if (skip_enabled && have_last && last_max_nodes <= bd.first) {
+          grid[cell] = last;
+          ++skipped;
+          continue;
+        }
+        params.budget = bd.first;
+        const SolverPlayout p =
+          run_solver_playout(dict, caps[g], margins[mi], params, thread_id, /*memo=*/true);
+        last = {p.spread, p.totals.movegens};
+        last_max_nodes = p.totals.max_solve_nodes;
+        have_last = true;
+        grid[cell] = last;
+      }
     }
   }
 }
+
+std::string join_budgets(const std::vector<uint64_t>& budgets) {
+  std::string s;
+  for (size_t i = 0; i < budgets.size(); ++i) {
+    if (i) s += ',';
+    s += std::to_string(budgets[i]);
+  }
+  return s;
+}
+
+// Print the two margin-sweep tables from the filled grid: skill (solver win%
+// minus baseline win%, plus a trailing baseline win% column) and perf (modeled
+// ms), margins as ascending rows and budgets as columns.
+void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
+                        const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
+                        const TimingModel& model) {
+  const int ms = static_cast<int>(margins.size());
+  const int bs = static_cast<int>(budgets.size());
+  const int games = static_cast<int>(d0.size());
+
+  std::printf(
+    "\nskill: solver win%% minus hasty win%% (first actor's seat), by margin x budget:\n");
+  std::printf("%8s", "margin");
+  for (uint64_t b : budgets) std::printf(" %10llu", static_cast<unsigned long long>(b));
+  std::printf(" %12s\n", "hasty win%");
+  for (int mi = 0; mi < ms; ++mi) {
+    std::printf("%8d", margins[mi]);
+    double base_win = 0;
+    for (int g = 0; g < games; ++g) base_win += win_fraction(margins[mi] + d0[g]);
+    base_win /= games;
+    for (int bi = 0; bi < bs; ++bi) {
+      double skill = 0;
+      for (int g = 0; g < games; ++g) {
+        const SolverOutcome& o = grid[(static_cast<size_t>(g) * ms + mi) * bs + bi];
+        skill += win_fraction(o.spread) - win_fraction(margins[mi] + d0[g]);
+      }
+      std::printf(" %+10.1f", 100.0 * skill / games);
+    }
+    std::printf(" %11.1f\n", 100.0 * base_win);
+  }
+
+  std::printf("\nperf: solver-seat modeled endgame ms, by margin x budget:\n");
+  std::printf("%8s", "margin");
+  for (uint64_t b : budgets) std::printf(" %10llu", static_cast<unsigned long long>(b));
+  std::printf("\n");
+  for (int mi = 0; mi < ms; ++mi) {
+    std::printf("%8d", margins[mi]);
+    for (int bi = 0; bi < bs; ++bi) {
+      double perf = 0;
+      for (int g = 0; g < games; ++g) {
+        const SolverOutcome& o = grid[(static_cast<size_t>(g) * ms + mi) * bs + bi];
+        perf += modeled_ms(model, o.movegens);
+      }
+      std::printf(" %10.3f", perf / games);
+    }
+    std::printf("\n");
+  }
+}
+
+void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
+                       const std::vector<uint64_t>& budgets, EndgameSolver::Params params,
+                       int margin_max, int margin_step) {
+  const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games);
+  const int g_count = static_cast<int>(caps.size());
+  const std::vector<int> margins = margin_axis(margin_max, margin_step);
+  const int ms = static_cast<int>(margins.size());
+  const int bs = static_cast<int>(budgets.size());
+
+  std::printf(
+    "endgames mode (margin sweep): %d games, %d captured, margins %d..%d step %d, budgets=%s, "
+    "spread-matters=%d, threads=%d\n",
+    games, g_count, -margin_max, margin_max, margin_step, join_budgets(budgets).c_str(),
+    params.spread_matters ? 1 : 0, threads);
+  if (g_count == 0) {
+    std::printf("no game reached an endgame; nothing to sweep\n");
+    return;
+  }
+
+  int calib_runs = 0;
+  const uint64_t max_budget = *std::max_element(budgets.begin(), budgets.end());
+  const TimingModel model = calibrate(dict, caps, params, max_budget, calib_runs);
+  std::printf("calibration: a=%.4f us/movegen, mean rel err %.1f%% over %d runs\n", model.a,
+              100.0 * model.mean_rel_error, calib_runs);
+
+  std::vector<std::pair<uint64_t, int>> desc_budgets;
+  for (int bi = 0; bi < bs; ++bi) desc_budgets.emplace_back(budgets[bi], bi);
+  std::sort(desc_budgets.begin(), desc_budgets.end(),
+            [](const std::pair<uint64_t, int>& a, const std::pair<uint64_t, int>& b) {
+              return a.first > b.first;
+            });
+
+  std::vector<int> d0(g_count, 0);
+  std::vector<SolverOutcome> grid(static_cast<size_t>(g_count) * ms * bs);
+  std::vector<uint64_t> skip_per(threads, 0);
+  std::vector<std::thread> pool;
+  const int per = (g_count + threads - 1) / threads;
+  for (int t = 0; t < threads; ++t) {
+    const int lo = t * per;
+    const int hi = std::min(g_count, lo + per);
+    if (lo >= hi) break;
+    pool.emplace_back([&, t, lo, hi] {
+      sweep_game_range(dict, caps, margins, desc_budgets, params, bs, t, lo, hi, d0, grid,
+                       skip_per[t]);
+    });
+  }
+  for (std::thread& th : pool) th.join();
+
+  uint64_t skipped = 0;
+  for (uint64_t s : skip_per) skipped += s;
+  const uint64_t total_cells = static_cast<uint64_t>(g_count) * ms * bs;
+  std::printf("budget-nesting skip: %llu of %llu solver playouts avoided\n",
+              static_cast<unsigned long long>(skipped),
+              static_cast<unsigned long long>(total_cells));
+
+  print_sweep_tables(margins, budgets, d0, grid, model);
+}
+
+// --- Games mode -------------------------------------------------------------
 
 using AgentFactory = std::function<std::unique_ptr<Agent>(int thread_id)>;
 
@@ -312,12 +539,9 @@ AgentFactory endgame_factory(const EndgameSolver::Params& params) {
   };
 }
 
-// Head-to-head aggregate for one bag-empty-spread bucket: the endgame bot's
-// summed final spread plus its win/draw/loss record. Without spread_matters
-// the spread shrinks by construction (winning positions stop maximizing it);
-// the W/D/L record is the metric that must hold up.
+// Head-to-head record for one bag-empty-spread bucket: the endgame bot's
+// win/draw/loss counts against a plain HastyBot.
 struct H2H {
-  long spread_sum = 0;
   int games = 0;
   int wins = 0;
   int draws = 0;
@@ -332,9 +556,8 @@ struct H2H {
 int baseline_bag_empty_spread(const Dictionary& dict, uint64_t seed) {
   CapturedEndgame cap;
   bool captured = false;
-  Clock::time_point endgame_start;
-  FirstEndgameCapturer a0(0, "A", cap, captured, endgame_start);
-  FirstEndgameCapturer a1(0, "B", cap, captured, endgame_start);
+  FirstEndgameCapturer a0(0, "A", cap, captured);
+  FirstEndgameCapturer a1(0, "B", cap, captured);
   Game g(a0, a1, dict, seed);
   g.play();
   if (!captured) return -1;
@@ -366,7 +589,6 @@ std::vector<H2H> endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, in
       g.set_respect_projections(true);
       g.play();
       const int spread = g.score(eg_seat) - g.score(1 - eg_seat);
-      h.spread_sum += spread;
       ++h.games;
       if (spread > 0)
         ++h.wins;
@@ -383,6 +605,14 @@ void print_games_row(const char* config, const std::string& budget, double total
                      double ratio) {
   std::printf("%-22s %11s %10.3f %10.4f %10.3f %9.2fx\n", config, budget.c_str(), total_s,
               total_s / games, games / total_s, ratio);
+}
+
+// One head-to-head row: the endgame bot's win% ((W + 0.5*D)/games) and its
+// W/D/L counts for a bucket.
+void print_h2h_row(uint64_t budget, const std::string& label, const H2H& h) {
+  const double winpct = 100.0 * (h.wins + 0.5 * h.draws) / h.games;
+  std::printf("%11llu %9s %8d %9.1f%% %8d %8d %8d\n", static_cast<unsigned long long>(budget),
+              label.c_str(), h.games, winpct, h.wins, h.draws, h.losses);
 }
 
 void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
@@ -404,21 +634,20 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
     print_games_row("endgame-vs-endgame", std::to_string(b), s, games, s / base_s);
   }
 
-  // Strength evidence: the endgame bot's mean spread and W/D/L record against
-  // a plain HastyBot, seats mirrored per seed and bucketed by the seed's
-  // baseline bag-empty spread -- accuracy shows up in the small buckets, where
-  // the endgame still decides the game. Run single-threaded so the per-game
-  // results are deterministic in base_seed.
+  // Strength evidence: the endgame bot's win% and W/D/L record against a plain
+  // HastyBot, seats mirrored per seed and bucketed by the seed's baseline
+  // bag-empty spread -- accuracy shows up in the small buckets, where the
+  // endgame still decides the game. Run single-threaded so the per-game results
+  // are deterministic in base_seed.
   std::printf("\nhead-to-head (endgame-vs-hasty, mirrored seats, by baseline bag-empty spread):\n");
-  std::printf("%11s %9s %8s %16s %8s %8s %8s\n", "budget", "|spread|", "games", "mean eg spread",
-              "W", "D", "L");
+  std::printf("%11s %9s %8s %10s %8s %8s %8s\n", "budget", "|spread|", "games", "win%", "W", "D",
+              "L");
   for (uint64_t b : budgets) {
     params.budget = b;
     const std::vector<H2H> buckets = endgame_vs_hasty(dict, base_seed, games, params, thresholds);
     H2H total;
     for (size_t k = 0; k < buckets.size(); ++k) {
       const H2H& h = buckets[k];
-      total.spread_sum += h.spread_sum;
       total.games += h.games;
       total.wins += h.wins;
       total.draws += h.draws;
@@ -426,13 +655,9 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
       if (h.games == 0) continue;
       const std::string label =
         k + 1 == buckets.size() ? "none" : bucket_label(static_cast<int>(k), thresholds);
-      std::printf("%11llu %9s %8d %16.2f %8d %8d %8d\n", static_cast<unsigned long long>(b),
-                  label.c_str(), h.games, static_cast<double>(h.spread_sum) / h.games, h.wins,
-                  h.draws, h.losses);
+      print_h2h_row(b, label, h);
     }
-    std::printf("%11llu %9s %8d %16.2f %8d %8d %8d\n", static_cast<unsigned long long>(b), "all",
-                total.games, static_cast<double>(total.spread_sum) / total.games, total.wins,
-                total.draws, total.losses);
+    print_h2h_row(b, "all", total);
   }
 }
 
@@ -453,6 +678,8 @@ int main(int argc, char** argv) {
     int games = 100;
     uint64_t seed = 1;
     int threads = 1;
+    int margin_max = 100;
+    int margin_step = 10;
     scribblez::EndgameSolver::Params params;
     std::string budgets_csv;
     std::string buckets_csv = "20,60";
@@ -472,11 +699,15 @@ int main(int argc, char** argv) {
     desc.add_options()("budgets", po::value<std::string>(&budgets_csv),
                        "comma-separated budget sweep; overrides --budget when given");
     desc.add_options()("threads,t", po::value<int>(&threads)->default_value(threads),
-                       "games-mode parallelism (per-thread agents)");
-    desc.add_options()(
-      "spread-buckets", po::value<std::string>(&buckets_csv)->default_value(buckets_csv),
-      "ascending |spread| thresholds bucketing endgames (and head-to-head games) by "
-      "their bag-empty spread");
+                       "parallelism (games-mode configs; endgames-mode games)");
+    desc.add_options()("margin-max", po::value<int>(&margin_max)->default_value(margin_max),
+                       "endgames mode: sweep the start-of-endgame margin over [-M, +M]");
+    desc.add_options()("margin-step", po::value<int>(&margin_step)->default_value(margin_step),
+                       "endgames mode: step between swept margins");
+    desc.add_options()("spread-buckets",
+                       po::value<std::string>(&buckets_csv)->default_value(buckets_csv),
+                       "games mode: ascending |spread| thresholds bucketing head-to-head games by "
+                       "their baseline bag-empty spread");
     desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
                        "path to leaves.klv2 (optional; defaults to the active lexicon's)");
     desc.add_options()("peg-file", po::value<std::string>(&peg_file)->default_value(""),
@@ -492,9 +723,11 @@ int main(int argc, char** argv) {
                                             : scribblez::parse_budgets(budgets_csv);
     const std::vector<int> thresholds = scribblez::parse_thresholds(buckets_csv);
     if (threads < 1) threads = 1;
+    if (margin_step < 1) margin_step = 1;
 
     if (mode == "endgames") {
-      scribblez::run_endgames_mode(dict, seed, games, budgets, params, thresholds);
+      scribblez::run_endgames_mode(dict, seed, games, threads, budgets, params, margin_max,
+                                   margin_step);
     } else if (mode == "games") {
       scribblez::run_games_mode(dict, seed, games, threads, budgets, params, thresholds);
     } else {

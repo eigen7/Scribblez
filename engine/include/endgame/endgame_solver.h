@@ -9,6 +9,7 @@
 #include <functional>
 #include <ostream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -77,6 +78,13 @@ struct EndgameResult {
   // from `nodes`: reconstruction runs after the search proper and is exempt
   // from node_budget (its cost is bounded in practice by the warm table).
   uint64_t certificate_nodes = 0;
+  // The number of logical move generations the solve performed across search,
+  // greedy playouts, and certificate reconstruction. Certificate
+  // reconstruction runs inside solve(), so its generations land in this same
+  // count. A move-generation memo hit counts the same as a real generation, so
+  // the number reflects what an isolated, memo-less solve would compute -- a
+  // deterministic operation count a benchmark can convert into modeled time.
+  uint64_t movegens = 0;
 };
 
 // Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
@@ -217,6 +225,15 @@ class EndgameSolver {
   // short-circuit saves; production always leaves it on.
   void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
 
+  // Enable or disable the move-generation memo (off by default). When on, every
+  // move list the solver requests is cached by board+rack and reused on a
+  // repeat, trading memory for generation work. It is a measurement-tool
+  // accelerator, not a production default: the logical `movegens` count is
+  // unchanged (a cache hit still counts as one generation), so a memo-on and a
+  // memo-off solve return bit-identical results including movegens. Exists so a
+  // benchmark can accelerate deterministic-operation-count runs.
+  void set_movegen_memo(bool on) { movegen_memo_ = on; }
+
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
   // never-written slot. Every stored entry carries a real bound (>= kExact), so a
@@ -321,6 +338,21 @@ class EndgameSolver {
                             bool first);
   int32_t greedy_playout(uint64_t node_key, int ply);
 
+  // Return the legal move list for `rack` on the current board, counting one
+  // logical move generation (movegens_). With the memo off it generates fresh
+  // into a scratch buffer; with the memo on it keys by the current board_hash_
+  // mixed with rack.bits() and returns a cached list on a hit, else generates,
+  // stores, and returns. A 64-bit key collision with matching content would
+  // return a wrong move list -- the same accepted collision model as the
+  // transposition table -- but the map stores the full key, so its bucket
+  // (index) collisions are resolved by key equality and only a genuine hash
+  // collision can misfire. The returned reference stays valid while the caller
+  // uses it even across nested make/unmake and further memo insertions:
+  // std::unordered_map never invalidates references to mapped values on rehash
+  // (only iterators), and the scratch buffer is overwritten only by a later
+  // call, never during the current caller's use.
+  const std::vector<Move>& generate_moves(const Rack& rack);
+
   // Sound upper bound on the mover's value from playing `m` at the current node,
   // derived from the best out-play in `replier_outs` that `m` provably leaves
   // intact (see the class comment for the formula). Returns kInf when no
@@ -380,6 +412,22 @@ class EndgameSolver {
   uint64_t nodes_ = 0;
   uint64_t budget_ = 0;
   bool aborting_ = false;
+
+  // Logical move generations the current solve has performed (see
+  // EndgameResult::movegens). Reset at solve() entry, copied into the result at
+  // the end; a memo hit increments it just as a real generation does.
+  uint64_t movegens_ = 0;
+
+  // Move-generation memo, off by default (see set_movegen_memo). Keyed by the
+  // full 64-bit key mixing board_hash_ with the rack bits. It survives clear()
+  // -- its keys are board+rack content, independent of scores and table
+  // generations -- but is capped: once it exceeds kMovegenMemoCap entries the
+  // whole map is erased before the next insert (a crude bound; the memo is a
+  // measurement accelerator, not a production default).
+  static constexpr size_t kMovegenMemoCap = static_cast<size_t>(1) << 20;
+  bool movegen_memo_ = false;
+  std::unordered_map<uint64_t, std::vector<Move>> movegen_memo_map_;
+  std::vector<Move> movegen_scratch_;  // return buffer when the memo is off
 
   // Opponent-outplay futility pruning, on except when a test disables it to A/B
   // the two modes (see set_outplay_futility).

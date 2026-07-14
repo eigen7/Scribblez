@@ -1232,3 +1232,48 @@ TEST(EndgameGcgCases, ProvenClassAndCost) {
               << ", certificate length " << r.continuation.size() << "\n";
   }
 }
+
+// The move-generation memo is fully transparent: a memo-on solver and a
+// memo-off solver return bit-identical results -- value, best move, proven
+// class, nodes, and the logical movegens count -- on the same positions. Each
+// solver runs a run of solves without clear() between them, so the memo-on
+// solver reuses cached move lists across positions (and revisits of the same
+// board+rack) while the memo-off solver regenerates every time; the counts
+// still match because a memo hit counts as one logical generation. Both solvers
+// carry their warm transposition table across the run in lockstep.
+TEST(EndgameSolver, MovegenMemoIsTransparent) {
+  Dictionary d = tiny_dict();
+  EndgameSolver memo, plain;
+  memo.set_movegen_memo(true);
+  std::mt19937 rng(0x3E3D0BADu);
+  for (int i = 0; i < 60; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    const bool spread_matters = (i % 4) < 2;
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    const EndgameResult a = memo.solve(state, {budget, kRefDepth, spread_matters});
+    const EndgameResult b = plain.solve(state, {budget, kRefDepth, spread_matters});
+    EXPECT_EQ(a.value, b.value) << "position " << i;
+    EXPECT_TRUE(a.best == b.best) << "position " << i;
+    EXPECT_EQ(a.proven_class, b.proven_class) << "position " << i;
+    EXPECT_EQ(a.nodes, b.nodes) << "position " << i;
+    EXPECT_EQ(a.movegens, b.movegens) << "position " << i;
+  }
+}
+
+// The logical movegens count is nonzero for any real solve and never shrinks
+// with a larger budget on a fixed position: a bigger budget searches a superset
+// of the smaller budget's deterministic work (each requests a move list at the
+// same points), so it performs at least as many generations.
+TEST(EndgameSolver, MovegensCounted) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xB16B00B5u);
+  const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/4);
+  const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+
+  EndgameSolver small_solver, big_solver;
+  const EndgameResult small = small_solver.solve(state, {/*budget=*/500, kRefDepth, true});
+  const EndgameResult big = big_solver.solve(state, {kBigBudget, kRefDepth, true});
+  EXPECT_GT(small.movegens, 0u);
+  EXPECT_GE(big.movegens, small.movegens);
+}

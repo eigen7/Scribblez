@@ -57,6 +57,32 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   void observe_move(const Move& move) override;
   void begin_game() override;
 
+  // Deterministic operation totals accumulated across a game, one contribution
+  // per make_move that ran the solver: the number of such solves plus the
+  // nodes, logical move generations, and certificate nodes each EndgameResult
+  // reported. A benchmark reads these to convert deterministic operation counts
+  // into modeled time. Reset by begin_game().
+  //
+  // max_solve_nodes is the largest single solve's nodes across the game. A
+  // budget-sweep benchmark uses it to decide when a smaller-budget run would be
+  // bit-identical: if no solve of a game spent more than a smaller budget b',
+  // then re-running the game at b' changes nothing (no solve hit the larger
+  // cap, and any solve declined for having more root moves than the larger
+  // budget is declined at b' too).
+  struct SolveTotals {
+    uint64_t solves = 0;
+    uint64_t nodes = 0;
+    uint64_t movegens = 0;
+    uint64_t certificate_nodes = 0;
+    uint64_t max_solve_nodes = 0;
+  };
+  const SolveTotals& solve_totals() const { return solve_totals_; }
+
+  // Enable or disable the solver's move-generation memo (off by default),
+  // forwarding to the underlying solver. Because the two seats of a thread share
+  // one pooled solver, this setting applies to both seat-mates.
+  void set_movegen_memo(bool on) { solver_->set_movegen_memo(on); }
+
   // Build an EndgameHastyBotAgent from `--player "--type=hastybot-endgame
   // [options]"` tokens (after the factory has stripped --type and --name).
   // Accepts every HastyBot option plus the solver Params under an "endgame-"
@@ -72,6 +98,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   EndgameSolver::Params solver_params_;
   int scoreless_turns_ = 0;  // consecutive zero-score turns, tracked from observe_move
   std::shared_ptr<EndgameSolver> solver_;  // shared with the seat-mate; see the class comment
+  SolveTotals solve_totals_;               // accumulated across the game; reset by begin_game()
 };
 
 }  // namespace scribblez
