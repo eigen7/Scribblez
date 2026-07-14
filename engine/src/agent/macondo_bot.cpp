@@ -401,8 +401,9 @@ Move HastyBotAgent::make_move(const MoveRequest& req) {
 
 Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }
 
-std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        int thread_id, const std::string& name) {
+HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
+  const std::vector<std::string>& tokens, int thread_id, const std::string& name,
+  boost::program_options::options_description& extra, const char* type_label) {
   namespace po = boost::program_options;
 
   // The equity tables (leaves + pre-endgame) are process-wide: a play_game
@@ -416,6 +417,7 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
   bool have_seed = false;
 
   po::options_description desc = hastybot_options(top_k, temperature, temperature_min_bag, seed);
+  desc.add(extra);
 
   try {
     po::variables_map vm;
@@ -423,18 +425,24 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=hastybot options: ") + e.what());
+    throw std::runtime_error(std::string("bad --type=") + type_label + " options: " + e.what());
   }
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
+  return HastyBotAgent::Params{.thread_id = thread_id,
+                               .name = name,
+                               .top_k = top_k,
+                               .temperature = temperature,
+                               .seed = resolved_seed,
+                               .temperature_min_bag = temperature_min_bag};
+}
+
+std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
+                                                        int thread_id, const std::string& name) {
+  boost::program_options::options_description no_extra;
   return std::make_unique<HastyBotAgent>(
-    HastyBotAgent::Params{.thread_id = thread_id,
-                          .name = name,
-                          .top_k = top_k,
-                          .temperature = temperature,
-                          .seed = resolved_seed,
-                          .temperature_min_bag = temperature_min_bag});
+    parse_hasty_params(tokens, thread_id, name, no_extra, "hastybot"));
 }
 
 std::string HastyBotAgent::options_help() {

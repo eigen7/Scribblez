@@ -233,8 +233,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
       board,   dict, rack, hidden_opp, encoder.enc().score(mover), encoder.enc().score(1 - mover),
       bag_size};
     const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
-    std::mt19937_64 rng(
-      util::mix64(opt.seed ^ util::mix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
+    std::mt19937_64 rng(util::splitmix64(
+      opt.seed ^ util::splitmix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
     MoveSet item;
     item.pos = w;
     item.candidates = sample_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
@@ -333,7 +333,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
     } else {
       std::vector<uint32_t> turns(static_cast<size_t>(end - begin));
       std::iota(turns.begin(), turns.end(), static_cast<uint32_t>(begin));
-      std::mt19937_64 rng(util::mix64(opt.seed ^ util::mix64(0xC0FFEEull + g)));
+      std::mt19937_64 rng(util::splitmix64(opt.seed ^ util::splitmix64(0xC0FFEEull + g)));
       std::shuffle(turns.begin(), turns.end(), rng);
       const int take = std::min<int>(opt.positions_per_game, static_cast<int>(turns.size()));
       for (int i = 0; i < take; ++i) work.push_back({g, turns[i]});

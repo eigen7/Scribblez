@@ -9,6 +9,10 @@
 #include <string>
 #include <vector>
 
+namespace boost::program_options {
+class options_description;
+}
+
 namespace scribblez {
 
 // Total order on (equity, move) used to pick HastyBot's move: higher equity
@@ -89,6 +93,19 @@ class HastyBotAgent : public Agent {
 
   // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
+
+  // Parse the shared HastyBot options (--top-k, --temperature,
+  // --temperature-min-bag, --seed) out of `tokens`, together with any extra
+  // options the caller registered in `extra` (parsed in the same pass), into a
+  // Params. `thread_id`/`name` set the returned identity; the seed defaults to
+  // SeedProducer when --seed is absent, and the equity tables are lazily loaded
+  // for the active lexicon. `type_label` names the type in parse-error text.
+  // Derived agents call this to reuse HastyBot's option set without duplicating
+  // it, extending the parse with their own flags via `extra`.
+  static Params parse_hasty_params(const std::vector<std::string>& tokens, int thread_id,
+                                   const std::string& name,
+                                   boost::program_options::options_description& extra,
+                                   const char* type_label);
 
  private:
   int top_k_;

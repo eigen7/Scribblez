@@ -7,6 +7,8 @@ add_library(scribblez_core STATIC
   src/game/move.cpp
   src/lexicon/dictionary.cpp
   src/game/movegen.cpp
+  src/endgame/endgame_solver.cpp
+  src/endgame/outplay_threat.cpp
   src/training/lane_targets.cpp
   src/training/lane_analysis.cpp
   src/encoding/contingent_map.cpp
@@ -40,6 +42,7 @@ add_library(scribblez_core STATIC
   src/lexicon/leave_values.cpp
   src/lexicon/lexicon.cpp
   src/agent/macondo_bot.cpp
+  src/agent/endgame_hasty_bot.cpp
   src/selfplay/monte_carlo_sim.cpp
   src/selfplay/sim_runner.cpp
   src/selfplay/sim_observation_log.cpp
@@ -174,6 +177,17 @@ target_link_libraries(board_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# Endgame-solver cost / whole-game-throughput benchmark (docs: phase-B endgame
+# solver). Pure CPU: no neural path, so it does not link scribblez_nn.
+add_executable(endgame_bench apps/endgame_bench.cpp)
+target_link_libraries(endgame_bench PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 # One-off Monte-Carlo ground-truth generator for the position-evaluation test dataset.
 add_executable(monte_carlo_sim_tool apps/monte_carlo_sim_tool.cpp)
 target_link_libraries(monte_carlo_sim_tool PRIVATE
@@ -219,6 +233,17 @@ target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::
 target_compile_definitions(scribblez_tests PRIVATE
   SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
 gtest_discover_tests(scribblez_tests)
+
+# Endgame solver tests: Board make/unmake round-trips and EndgameSolver
+# correctness (brute-force differential, oracle positions, determinism, node
+# budget, cross-turn transposition-table reuse). Gated lexicon cases read the
+# same container mount as scribblez_tests and skip gracefully when it is absent.
+add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
+target_link_libraries(test_endgame PRIVATE
+  scribblez_core Boost::program_options GTest::gtest_main)
+target_compile_definitions(test_endgame PRIVATE
+  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+gtest_discover_tests(test_endgame)
 
 # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
 # (with a scripted EvalService stub), chunked evaluation, and encode_candidate

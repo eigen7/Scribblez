@@ -11,15 +11,21 @@ from pathlib import Path
 PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
 
-def hasty_player_spec(temperature: float = 0.0, top_k: int = 10, temp_min_bag: int = 0) -> str:
+def hasty_player_spec(
+    temperature: float = 0.0, top_k: int = 10, temp_min_bag: int = 0, endgame: bool = False
+) -> str:
     """The `--player` value for a HastyBot seat, optionally temperature-sampled
-    over equity (temperature > 0) for exploration."""
+    over equity (temperature > 0) for exploration. `endgame` selects the
+    hastybot-endgame agent, which plays identically until the bag empties and
+    then hands the position to the endgame solver at the engine's default
+    node budget."""
+    bot_type = "hastybot-endgame" if endgame else "hastybot"
     if temperature > 0:
         return (
-            f"--type=hastybot --temperature={temperature} "
+            f"--type={bot_type} --temperature={temperature} "
             f"--top-k={top_k} --temperature-min-bag={temp_min_bag}"
         )
-    return "--type=hastybot"
+    return f"--type={bot_type}"
 
 
 def run_games(

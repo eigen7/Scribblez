@@ -14,7 +14,7 @@ inline uint64_t round_up_pow2(uint64_t n) { return std::bit_ceil(n); }
 
 // splitmix64 finalizer: decorrelates structured integers (file/game/turn
 // triples, seeds) into well-mixed 64-bit values.
-constexpr uint64_t mix64(uint64_t x) {
+constexpr uint64_t splitmix64(uint64_t x) {
   x += 0x9E3779B97F4A7C15ull;
   x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
   x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
