@@ -136,9 +136,11 @@ struct SolveStats {
 };
 
 SolveStats solve_all(const Dictionary& dict, const std::vector<CapturedPosition>& positions,
-                     uint64_t budget, int plies) {
+                     uint64_t budget, int plies, bool futility) {
   EndgameSolver solver;
   EndgameSolver no_exit;
+  solver.set_outplay_futility(futility);
+  no_exit.set_outplay_futility(futility);
   no_exit.set_proof_early_exit(false);
   std::vector<double> per_us;
   per_us.reserve(positions.size());
@@ -190,14 +192,14 @@ SolveStats solve_all(const Dictionary& dict, const std::vector<CapturedPosition>
 }
 
 void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
-                     const std::vector<uint64_t>& budgets, int plies) {
+                     const std::vector<uint64_t>& budgets, int plies, bool futility) {
   const std::vector<CapturedPosition> positions = capture_positions(dict, base_seed, games);
-  std::printf("solves mode: %d games, %zu bag-empty positions, plies=%d\n\n", games,
-              positions.size(), plies);
+  std::printf("solves mode: %d games, %zu bag-empty positions, plies=%d, futility=%d\n\n", games,
+              positions.size(), plies, futility ? 1 : 0);
   std::printf("%10s %9s %11s %11s %11s %13s %10s %9s %8s %10s\n", "budget", "positions", "mean us",
               "p50 us", "p95 us", "nodes/s", "mean depth", "%% differ", "%% proven", "exit save");
   for (uint64_t b : budgets) {
-    const SolveStats s = solve_all(dict, positions, b, plies);
+    const SolveStats s = solve_all(dict, positions, b, plies, futility);
     std::printf("%10llu %9zu %11.1f %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %9.1f%%\n",
                 static_cast<unsigned long long>(s.budget), s.positions, s.mean_us, s.median_us,
                 s.p95_us, s.nodes_per_s, s.mean_depth, s.pct_differ, s.pct_proven,
@@ -354,6 +356,7 @@ int main(int argc, char** argv) {
     int plies = 25;
     int threads = 1;
     bool wld = false;
+    bool no_futility = false;
     std::string budgets_csv = "1000,3000,10000,30000,100000,300000";
     std::string leaves_file;
     std::string peg_file;
@@ -375,6 +378,8 @@ int main(int argc, char** argv) {
                        "games-mode parallelism (per-thread agents)");
     desc.add_options()("wld", po::bool_switch(&wld),
                        "games mode: endgame agents use the first-win (WLD) window");
+    desc.add_options()("no-futility", po::bool_switch(&no_futility),
+                       "solves mode: disable outplay-futility pruning, to A/B its effect");
     desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
                        "path to leaves.klv2 (optional; defaults to the active lexicon's)");
     desc.add_options()("peg-file", po::value<std::string>(&peg_file)->default_value(""),
@@ -389,7 +394,7 @@ int main(int argc, char** argv) {
     if (threads < 1) threads = 1;
 
     if (mode == "solves") {
-      scribblez::run_solves_mode(dict, seed, games, budgets, plies);
+      scribblez::run_solves_mode(dict, seed, games, budgets, plies, !no_futility);
     } else if (mode == "games") {
       scribblez::run_games_mode(dict, seed, games, threads, budgets, plies, wld);
     } else {
