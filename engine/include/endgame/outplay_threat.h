@@ -50,6 +50,52 @@ bool move_touches_halo(const OutplayHalo& halo, const Move& m);
 // leave obtained by subtracting them from the rack map consistently.
 uint8_t canonical_used_mask(const Rack& rack, const TileCounts& used);
 
+// Lazily built halos for a fixed list of candidate out-plays on one board:
+// operator[] builds build_outplay_halo(board, plays[i]) on first use and caches
+// it, so a caller that only ever queries a few of the plays never pays for the
+// rest.
+class LazyHalos {
+ public:
+  LazyHalos(const Board& board, const std::vector<Move>& plays);
+
+  const OutplayHalo& operator[](int play_index);
+
+ private:
+  const Board& board_;
+  const std::vector<Move>& plays_;
+  std::vector<OutplayHalo> halos_;  // valid iff ready_[i]
+  std::vector<char> ready_;
+};
+
+// The out-plays one side could make on the current board, queried from a node
+// where the OTHER side is to move: the source of futility bounds on that
+// mover's own moves. For a candidate mover move m, an out-play whose halo none
+// of m's placed cells touches is still legal at its same score after m, so its
+// owner can end the game with it on the very next turn -- which caps m's search
+// value (see EndgameSolver::outplay_futility_bound). Out-plays are kept sorted
+// by descending score, so a query usually stops at its first (best) survivor.
+class OpponentOutplays {
+ public:
+  // best_surviving_score's result when the queried move disturbs every out-play.
+  static constexpr int32_t kNoSurvivor = -1;
+
+  // `plays` are the out-playing side's legal plays on `board`; the constructor
+  // keeps only those that empty its `rack_size`-tile rack.
+  OpponentOutplays(const Board& board, const std::vector<Move>& plays, int rack_size);
+
+  bool empty() const { return outs_.empty(); }
+
+  // The highest score among out-plays that survive `m` (none of whose halo
+  // cells `m` places a tile on), or kNoSurvivor when none does. A pass places
+  // nothing, so it survives them all.
+  int32_t best_surviving_score(const Move& m);
+
+ private:
+  std::vector<Move> outs_;  // rack-emptying plays by descending score; must
+                            // precede halos_, which holds a reference to it
+  LazyHalos halos_;
+};
+
 // Computes, for the side to move at one search node, the out-play threat to hand
 // each child node. The threat exists when the leave a move leaves behind holds
 // two out-plays that no single opponent reply can both block: the opponent then
@@ -74,15 +120,11 @@ class OutplayThreats {
   int32_t threat_after(const Move& m);
 
  private:
-  const OutplayHalo& halo(int play_index);
-
-  const Board& board_;
   const Rack& rack_;
   const std::vector<Move>& plays_;
   TileCounts rack_counts_;
   std::vector<uint8_t> play_mask_;  // canonical used-mask of each play
-  std::vector<OutplayHalo> halos_;  // built lazily; valid iff halo_ready_[i]
-  std::vector<char> halo_ready_;
+  LazyHalos halos_;
   std::vector<int> survivors_;  // scratch: candidates surviving the query move
 };
 

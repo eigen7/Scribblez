@@ -11,6 +11,7 @@
 namespace scribblez {
 
 class Dictionary;
+class OpponentOutplays;
 
 // Result of a single endgame solve, from the perspective of the side to move
 // at the solved position ("the solving side").
@@ -72,6 +73,26 @@ struct EndgameResult {
 // bit. Out-play replies are never pruned; a test can disable the whole scheme
 // (set_threat_pruning) to A/B that it changes no value or best move.
 //
+// Opponent-outplay futility pruning is that scheme's dual: it cuts the mover's
+// own moves at interior nodes. Before scanning them, the node enumerates the
+// opponent's out-plays on the current board (one extra move generation per
+// interior node). A mover move m scoring g that leaves the opponent a turn and
+// places no tile in the halo of some opponent out-play scoring p lets the
+// opponent end the game at once, so
+//   U(m) = s + g - p - 2*(pv - face(m))
+// -- s the mover's spread at the node, pv its rack value, face(m) the face
+// value of m's placed tiles -- is a sound upper bound on m's search value. The
+// surviving out-play is just one opponent option: out-plays the enumeration
+// misses (e.g. ones m newly enables) only lower m's true value, and halo
+// conservatism only discards bounds, so the bound never overreaches downward.
+// The best surviving out-play gives the tightest bound; a move with
+// U(m) <= alpha is skipped (proven-grade, since the guaranteed line is
+// terminal), and U(m) also caps the move-ordering estimate so provably weak
+// moves sink. Moves that end the game themselves -- an out-play, or a pass
+// that trips the internal scoreless cap -- give the opponent no turn and are
+// never pruned. A test can disable the scheme (set_outplay_futility) to A/B
+// that it changes no value or best move.
+//
 // TODO(multithreading): when single-game (non-parallel-self-play) settings
 // arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
 // atomic uint64 words (the lockless Hyatt scheme MAGPIE uses, which also
@@ -124,6 +145,11 @@ class EndgameSolver {
   // a test can A/B the two modes and assert the pruning never changes a solve's
   // value or best move; production always leaves it on.
   void set_threat_pruning(bool on) { threat_pruning_ = on; }
+
+  // Enable or disable opponent-outplay futility pruning (on by default). Exists
+  // so a test can A/B the two modes and assert the pruning never changes a
+  // solve's value or best move; production always leaves it on.
+  void set_outplay_futility(bool on) { outplay_futility_ = on; }
 
   // Enable or disable the proven-verdict deepening short-circuit (on by
   // default). Exists so tests and the benchmark can A/B how many nodes the
@@ -199,6 +225,13 @@ class EndgameSolver {
   // (the threat is void), so such replies are never pruned.
   int32_t threat_reply_bound(const Move& m, int32_t threat) const;
 
+  // Sound upper bound on the mover's value from playing `m` at the current node,
+  // derived from the best opponent out-play `m` provably leaves intact (see the
+  // class comment for the formula). Returns kInf when no out-play survives `m`
+  // or `m` ends the game itself (the opponent then never gets a turn), so such
+  // moves are never pruned.
+  int32_t outplay_futility_bound(const Move& m, OpponentOutplays& opp_outs) const;
+
   // --- Make / unmake ------------------------------------------------------
   void make(const Move& move, int ply);
   void unmake(int ply);
@@ -211,8 +244,10 @@ class EndgameSolver {
 
   // --- Move ordering / greedy choice --------------------------------------
   int32_t order_estimate(const Move& move, const Move& tt_move, bool have_tt_move) const;
+  // `opp_outs` (when non-null) caps each estimate by the move's futility bound,
+  // sinking provably weak moves.
   void order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
-                   bool have_tt_move) const;
+                   bool have_tt_move, OpponentOutplays* opp_outs) const;
   const Move& greedy_pick(const std::vector<Move>& plays) const;
   double playout_adjusted(const Move& move) const;
   int placed_face_value(const Move& move) const;
@@ -244,6 +279,10 @@ class EndgameSolver {
   // Outplay-threat futility pruning, on except when a test disables it to A/B
   // the two modes (see set_threat_pruning).
   bool threat_pruning_ = true;
+
+  // Opponent-outplay futility pruning, on except when a test disables it to A/B
+  // the two modes (see set_outplay_futility).
+  bool outplay_futility_ = true;
 
   bool proof_early_exit_ = true;
   std::vector<TTEntry> tt_;

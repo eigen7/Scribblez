@@ -196,8 +196,17 @@ int32_t EndgameSolver::order_estimate(const Move& move, const Move& tt_move,
 }
 
 void EndgameSolver::order_moves(std::vector<std::pair<Move, int32_t>>& moves, const Move& tt_move,
-                                bool have_tt_move) const {
-  for (auto& m : moves) m.second = order_estimate(m.first, tt_move, have_tt_move);
+                                bool have_tt_move, OpponentOutplays* opp_outs) const {
+  for (auto& m : moves) {
+    m.second = order_estimate(m.first, tt_move, have_tt_move);
+    if (opp_outs == nullptr) continue;
+    // A finite futility bound is a proven cap on the move's value. Rebasing it
+    // to the current spread puts it in the same points-denominated units as the
+    // estimates, and taking the min sinks provably weak moves -- including a
+    // stale TT move whose payoff an opponent out-play now caps.
+    const int32_t u = outplay_futility_bound(m.first, *opp_outs);
+    if (u < kInf) m.second = std::min(m.second, u - spread_stm());
+  }
   std::sort(moves.begin(), moves.end(), by_value_desc);
 }
 
@@ -294,6 +303,22 @@ EndgameSolver::SearchResult EndgameSolver::search_child(int child_depth, int32_t
   return {-r.value, r.proven};
 }
 
+int32_t EndgameSolver::outplay_futility_bound(const Move& m, OpponentOutplays& opp_outs) const {
+  const int mover = stm_;
+  // A move that ends the game -- an out-play, or a pass that trips the internal
+  // scoreless cap -- gives the opponent no turn, so no out-play bounds it.
+  if (m.type() == MoveType::PLAY && m.num_glyphs() == racks_[mover].size()) return kInf;
+  if (m.type() == MoveType::PASS && scoreless_ >= 1) return kInf;
+  const int32_t p = opp_outs.best_surviving_score(m);
+  if (p == OpponentOutplays::kNoSurvivor) return kInf;
+  // The opponent can answer m with the surviving out-play: it scores p and banks
+  // twice the face value of the mover's post-m leftover as its end-of-game
+  // bonus, capping m's value at the resulting terminal spread. See the class
+  // comment for the derivation and why missed out-plays keep the bound sound.
+  const int32_t leftover = racks_[mover].point_value() - placed_face_value(m);
+  return spread_stm() + m.score() - p - 2 * leftover;
+}
+
 int32_t EndgameSolver::threat_reply_bound(const Move& m, int32_t threat) const {
   if (threat == OutplayThreats::kNoThreat) return kInf;
   const int mover = stm_;
@@ -341,7 +366,17 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   moves.reserve(plays.size() + 1);
   for (const Move& m : plays) moves.emplace_back(m, 0);
   moves.emplace_back(Move::pass(), 0);
-  order_moves(moves, tt_move, have_tt_move);
+
+  // The opponent's out-plays on the current board (one extra move generation):
+  // every mover move that provably leaves one intact is capped by its futility
+  // bound, first in the ordering below and then as a pruning cutoff in the scan.
+  std::optional<OpponentOutplays> opp_outs;
+  if (outplay_futility_) {
+    opp_outs.emplace(board_, MoveGenerator(board_, *dict_).generate(racks_[1 - stm_]),
+                     racks_[1 - stm_].size());
+    if (opp_outs->empty()) opp_outs.reset();
+  }
+  order_moves(moves, tt_move, have_tt_move, opp_outs ? &*opp_outs : nullptr);
 
   // Threats handed to children: only worthwhile when the mover keeps >= 2 tiles,
   // so a leave with an out-play pair can survive the move.
@@ -356,11 +391,13 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
   for (auto& entry : moves) {
     const Move& move = entry.first;
-    // Futility: a reply the parent's out-play threat dominates cannot raise
-    // alpha. Its bound comes from a terminal line, so skipping it neither
-    // changes the value nor clears the node's proven bit; fold the bound in so a
-    // fail-low value stays sound even if every reply is pruned.
-    const int32_t ubound = threat_reply_bound(move, threat);
+    // Futility: a move the parent's out-play threat dominates, or one a
+    // surviving opponent out-play caps below alpha, cannot raise alpha. Both
+    // bounds come from terminal lines, so skipping the move neither changes the
+    // value nor clears the node's proven bit; fold the bound in so a fail-low
+    // value stays sound even if every move is pruned.
+    int32_t ubound = threat_reply_bound(move, threat);
+    if (opp_outs) ubound = std::min(ubound, outplay_futility_bound(move, *opp_outs));
     if (ubound <= alpha) {
       best = std::max(best, ubound);
       continue;
@@ -462,7 +499,7 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   root_moves.reserve(plays.size() + 1);
   for (const Move& m : plays) root_moves.emplace_back(m, 0);
   root_moves.emplace_back(Move::pass(), 0);
-  order_moves(root_moves, Move::pass(), /*have_tt_move=*/false);
+  order_moves(root_moves, Move::pass(), /*have_tt_move=*/false, /*opp_outs=*/nullptr);
 
   EndgameResult result;
   result.best = root_moves[0].first;
