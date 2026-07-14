@@ -50,6 +50,7 @@ class GameRunner : public GameSink {
                                        // P points, P uniform in [0, this], each game
     double random_opening_mean = 0.0;  // if > 0, open each game with K uniformly-
                                        // random plies, K ~ round(Exp(this mean))
+    bool respect_projections = true;   // fast-track games whose end an agent proved
     int progress_secs = 10;            // print a games-done/rate/ETA line to stderr
                                        // every this many seconds (0 disables); only
                                        // active in the parallel batch loop

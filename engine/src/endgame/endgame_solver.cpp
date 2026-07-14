@@ -602,6 +602,35 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   return result;
 }
 
+void EndgameSolver::extract_continuation(EndgameResult& result) {
+  make(result.best, 0);
+  int ply = 1;
+  bool ok = true;
+  while (!game_over_ && ply < kMaxPlayout) {
+    TTEntry* e = tt_probe(node_hash());
+    if (e == nullptr) {
+      ok = false;
+      break;
+    }
+    const Move next = e->best;
+    if (next.type() == MoveType::PLAY) {
+      // A stale or colliding entry can hold a move that is not legal here;
+      // regenerate and match byte-for-byte (the entry's move came from the
+      // same generator, so a legal move matches exactly).
+      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+      if (std::find(plays.begin(), plays.end(), next) == plays.end()) {
+        ok = false;
+        break;
+      }
+    }
+    result.continuation.push_back(next);
+    make(next, ply++);
+  }
+  ok = ok && game_over_ && class_of(scores_[0] - scores_[1]) == result.proven_class;
+  for (int d = ply - 1; d >= 0; --d) unmake(d);
+  if (!ok) result.continuation.clear();
+}
+
 EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
                                    const Rack& opp_rack, int my_score, int opp_score,
                                    int scoreless_turns, uint64_t node_budget, int max_plies,
@@ -672,6 +701,8 @@ EndgameResult EndgameSolver::solve(const Board& board, const Dictionary& dict, c
   // unproven spread refinement.
   if (result.proven && result.proven_class == EndgameResult::kClassUnknown)
     result.proven_class = class_of(result.value);
+  if (result.proven_class != EndgameResult::kClassUnknown && result.depth_completed >= 1)
+    extract_continuation(result);
   result.nodes = nodes_;
   return result;
 }

@@ -80,7 +80,7 @@ class HastyBotAgent : public Agent {
 
   explicit HastyBotAgent(const Params& params);
 
-  Move make_move(const MoveRequest& req) override;
+  MoveDecision make_move(const MoveRequest& req) override;
   bool supports_parallelism() const override { return true; }
 
   // Build a HastyBotAgent from `--player "--type=hastybot [options]"` tokens

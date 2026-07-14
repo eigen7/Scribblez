@@ -113,7 +113,7 @@ HumanWebAgent::~HumanWebAgent() {
   if (session_) session_->linger_after_final_message();
 }
 
-Move HumanWebAgent::make_move(const MoveRequest& req) {
+MoveDecision HumanWebAgent::make_move(const MoveRequest& req) {
   // The UI's move list shows every legal play plus -- when exchanging is even
   // possible (bag has a full rack to draw from) -- every distinct exchange, so
   // the human can see whether HastyBot would rather swap tiles than play a

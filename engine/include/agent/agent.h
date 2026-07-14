@@ -53,6 +53,25 @@ std::vector<Move> generate_legal_plays(const MoveRequest& req);
 // is illegal.
 std::vector<Move> generate_legal_exchanges(const MoveRequest& req);
 
+// An agent's answer for one turn: the move to play now, optionally annotated
+// with a projection of the entire remainder of the game. An agent sets
+// projected_remaining_moves when it can PROVE how the rest of the game goes
+// (the endgame solver's proof certificate): the moves after `move`, both sides
+// alternating, through the final position. A game loop configured to respect
+// projections (Game::set_respect_projections) plays them out directly instead
+// of prompting the agents further -- the self-play break-out that stops
+// spending compute on a decided game. The projection is best-effort: when the
+// game is not over after the list is exhausted, the loop resumes prompting.
+struct MoveDecision {
+  Move move;
+  std::vector<Move> projected_remaining_moves;
+
+  // Intentionally implicit: a bare move is a decision with no projection, so
+  // agents without proof machinery return their Move directly.
+  MoveDecision(const Move& m) : move(m) {}
+  MoveDecision(const Move& m, std::vector<Move> projected);
+};
+
 // Pick a move for the active player uniformly at random among all legal PLAYs
 // and all legal EXCHANGEs; passes only when neither exists. Used by Game's
 // random-opening mode to reach off-policy positions that agent self-play would
@@ -74,7 +93,7 @@ class Agent {
   // thread share the resource while different threads never contend.
   int thread_id() const { return thread_id_; }
 
-  virtual Move make_move(const MoveRequest& req) = 0;
+  virtual MoveDecision make_move(const MoveRequest& req) = 0;
 
   // Called once at the start of each game, before any make_move() on it. Lets a
   // stateful agent reset to a clean starting position. The same Agent instance
@@ -116,7 +135,7 @@ class GreedyAgent : public Agent {
   explicit GreedyAgent(int thread_id, const std::string& name = "Greedy");
   GreedyAgent(int thread_id, const std::string& name, uint64_t seed);
 
-  Move make_move(const MoveRequest& req) override;
+  MoveDecision make_move(const MoveRequest& req) override;
 
   // Build a GreedyAgent from `--player "--type=greedy [options]"` tokens
   // (after the factory has stripped --type and --name). `name` is the resolved

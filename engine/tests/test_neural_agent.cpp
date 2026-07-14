@@ -198,7 +198,7 @@ class StubEvalService : public nn::EvalService {
 };
 
 // An EvalService that returns pre-set evals indexed in *global* candidate order
-// across however many chunked evaluate() calls a single make_move() makes, and
+// across however many chunked evaluate() calls a single make_move().move makes, and
 // records the total rows seen, the largest chunk, and the call count. Suits the
 // all-moves and chunking tests (one make_move per agent).
 class CountingStubEvalService : public nn::EvalService {
@@ -259,7 +259,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
-    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[1]]));
+    ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
 
   // Value head prefers the top equity candidate -> the agent agrees with HastyBot.
@@ -274,7 +274,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(9.0f), sd(1.0f)};
-    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[0]]));
+    ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[0]]));
   }
 
   // The win-prob objective reads win_prob, not score_diff_mean.
@@ -289,7 +289,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
-    ASSERT_TRUE(same_move(agent.make_move(req), pos.plays[order[1]]));
+    ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
 }
 
@@ -314,7 +314,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
                     std::move(stub));
   agent.begin_game();
 
-  Move got = agent.make_move(req);
+  Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
   ASSERT_EQ(sp->total_rows, top_k);  // only the top-2 were evaluated, not every play
 }
@@ -347,7 +347,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
                     std::move(stub));
   agent.begin_game();
 
-  Move got = agent.make_move(req);
+  Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
   ASSERT_EQ(sp->total_rows, n);                // every legal play was evaluated
 }
@@ -374,7 +374,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
                     std::move(stub), /*max_batch=*/2);
   agent.begin_game();
 
-  Move got = agent.make_move(req);
+  Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[target]));  // the globally best-rated candidate
   ASSERT_EQ(sp->total_rows, n);                    // every play scored
   ASSERT_LE(sp->max_chunk, 2);                     // never exceeded the batch limit
@@ -549,7 +549,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                        std::move(stub));
     greedy.begin_game();
     gp->scripted = {sd(2.0f), sd(0.0f)};
-    for (int i = 0; i < 50; ++i) ASSERT_TRUE(same_move(greedy.make_move(req), pos.plays[order[0]]));
+    for (int i = 0; i < 50; ++i) ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
   }
 
   // High temperature -> both candidates are sampled, but the higher-rated one
@@ -569,7 +569,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
     sp->scripted = {sd(2.0f), sd(0.0f)};
     int high = 0, low = 0;
     for (int i = 0; i < 400; ++i) {
-      const Move got = sampler.make_move(req);
+      const Move got = sampler.make_move(req).move;
       if (same_move(got, pos.plays[order[0]]))
         ++high;
       else if (same_move(got, pos.plays[order[1]]))

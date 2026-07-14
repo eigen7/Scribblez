@@ -17,7 +17,7 @@ EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
       endgame_plies_(params.endgame_plies),
       endgame_objective_(params.endgame_objective) {}
 
-Move EndgameHastyBotAgent::make_move(const MoveRequest& req) {
+MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   // Endgame: the bag is empty and both racks are fully known, so hand the
   // position to the exact solver (unless the solver is disabled). The solver's
   // move is used only when it completed at least its first iteration -- every
@@ -25,17 +25,25 @@ Move EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   // declined as too rich for the budget, or the budget ran out mid-iteration)
   // its answer reflects an arbitrary fraction of the root, and HastyBot's
   // static-equity argmax is the stronger policy.
+  //
+  // A solve that proved the game's class carries the proof-certificate line as
+  // its continuation; it rides along as the decision's projection, so a
+  // projection-respecting loop (self-play generation) fast-tracks the game to
+  // its proven end instead of prompting for the remaining turns.
   if (req.bag_size == 0 && endgame_nodes_ > 0) {
     const EndgameResult r =
       solver_.solve(req.board, req.dict, req.my_rack, req.opp_rack, req.my_score, req.opp_score,
                     scoreless_turns_, endgame_nodes_, endgame_plies_, endgame_objective_);
     // A proven-lost first-win result carries an arbitrary move (every move
-    // loses, and that objective refines no further), so HastyBot's
-    // static-equity move shapes the final spread better. The lexicographic
-    // objective spread-defends lost positions itself.
-    const bool arbitrary_loss =
-      endgame_objective_ == EndgameObjective::kFirstWin && r.proven_class == -1;
-    if (r.depth_completed >= 1 && !arbitrary_loss) return r.best;
+    // loses, and that objective refines no further). With a certificate the
+    // break-out takes priority -- first-win exists to stop spending compute on
+    // decided games, and it presumes a projection-respecting loop. Without
+    // one, HastyBot's static-equity move shapes the final spread better than
+    // an arbitrary losing move. The lexicographic objective spread-defends
+    // lost positions itself.
+    const bool arbitrary_loss = endgame_objective_ == EndgameObjective::kFirstWin &&
+                                r.proven_class == -1 && r.continuation.empty();
+    if (r.depth_completed >= 1 && !arbitrary_loss) return {r.best, r.continuation};
   }
   return HastyBotAgent::make_move(req);
 }

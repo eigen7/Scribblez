@@ -80,6 +80,14 @@ class Game {
   // before play(); asserts that no move has been made yet.
   void set_initial_scores(std::array<int, 2> initial_scores);
 
+  // Respect agents' projected_remaining_moves annotations (see MoveDecision):
+  // when the acting agent proves the rest of the game, the loop plays the
+  // projected moves directly instead of prompting the agents further. Enabled
+  // by self-play generation, where a decided game is not worth more agent
+  // compute; off by default so interactive play and head-to-head strength
+  // benchmarks always exercise the agents. Must be called before play().
+  void set_respect_projections(bool on);
+
   // Play the first `plies` turns of the game uniformly at random (via
   // pick_uniform_random_play, seeded from the game seed) instead of asking the
   // seated agents, to reach off-policy positions -- especially unusual rack
@@ -129,15 +137,16 @@ class Game {
   GameLogStorage log_;
   int random_opening_plies_ = 0;
   std::mt19937_64 opening_rng_;  // drives the random-opening move choices
+  bool respect_projections_ = false;
 
   // Draw from the bag until the player's rack is at RACK_SIZE. If
   // `drawn_out` is non-null, the drawn tiles are added to it.
   void refill_rack(int p, Rack* drawn_out);
 
-  // The move for the current turn: a uniformly-random one while the turn index
-  // is within the random opening (tallying it in the log), the seated agent's
-  // choice otherwise.
-  Move choose_move(int player, const MoveRequest& req);
+  // The decision for the current turn: a uniformly-random move while the turn
+  // index is within the random opening (tallying it in the log), the seated
+  // agent's choice otherwise.
+  MoveDecision choose_move(int player, const MoveRequest& req);
 
   // The turn loop shared by play() and play_from(): `start_player` moves first,
   // play continues until the standard end (out / stalemate / max-turns) with the

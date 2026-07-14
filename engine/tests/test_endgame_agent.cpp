@@ -195,7 +195,7 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
     const Rack my = random_rack(rng);
     const Rack opp = random_rack(rng);
     const MoveRequest req{b, d, my, opp, 0, 0, /*bag_size=*/50};
-    EXPECT_EQ(eg.make_move(req), hasty.make_move(req)) << "position " << i;
+    EXPECT_EQ(eg.make_move(req).move, hasty.make_move(req).move) << "position " << i;
     ++checked;
   }
   ASSERT_GT(checked, 0);
@@ -223,12 +223,12 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
     // Solver takes over: the agent (with a matching budget/plies) plays the
     // solver's move, not the greedy one.
     EndgameHastyBotAgent solving(endgame_params(kSolveBudget, kSolvePlies));
-    EXPECT_EQ(solving.make_move(req), r.best);
-    EXPECT_NE(solving.make_move(req), greedy);
+    EXPECT_EQ(solving.make_move(req).move, r.best);
+    EXPECT_NE(solving.make_move(req).move, greedy);
 
     // Solver disabled: the agent falls back to the greedy move.
     EndgameHastyBotAgent disabled(endgame_params(/*nodes=*/0, kSolvePlies));
-    EXPECT_EQ(disabled.make_move(req), greedy);
+    EXPECT_EQ(disabled.make_move(req).move, greedy);
 
     found = true;
   }
@@ -253,7 +253,7 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
     // decline-and-fall-back path.
     if (MoveGenerator(p.board, d).generate(p.my_rack).empty()) continue;
     const MoveRequest req = endgame_request(p, d);
-    EXPECT_EQ(tiny.make_move(req), hasty.make_move(req)) << "position " << i;
+    EXPECT_EQ(tiny.make_move(req).move, hasty.make_move(req).move) << "position " << i;
     ++checked;
   }
   ASSERT_GT(checked, 0);
@@ -271,7 +271,7 @@ TEST(EndgameAgent, EndgameMoveIsLegal) {
   for (int i = 0; i < 60; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     const MoveRequest req = endgame_request(p, d);
-    const Move m = agent.make_move(req);
+    const Move m = agent.make_move(req).move;
     if (m.type() == MoveType::PASS) {
       ++checked;
       continue;
@@ -330,7 +330,7 @@ TEST(EndgameAgent, FromSpecParsing) {
   const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
   const MoveRequest req = endgame_request(p, d);
   auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-nodes=0"}, 0, "Z");
-  EXPECT_EQ(disabled->make_move(req), hasty_best_move_wmp(req));
+  EXPECT_EQ(disabled->make_move(req).move, hasty_best_move_wmp(req));
 
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-plies=notanint"}, 0, "B"),
                std::runtime_error);
@@ -352,11 +352,14 @@ TEST(EndgameAgent, ObjectiveFromSpec) {
                std::runtime_error);
 }
 
-// Under the first-win objective, once the solver proves the position lost
-// (every root move loses), the agent discards the solver's arbitrary choice
-// among losing moves and plays HastyBot's static-equity move instead -- the
-// same move a plain HastyBotAgent would play on the identical request.
-TEST(EndgameAgent, FirstWinProvenLossFallsBackToHasty) {
+// The first-win agent's contract per solve outcome, checked against a
+// reference solver run on the same position: a proof-certificate continuation
+// rides along as the decision's projection (break-out takes priority even in a
+// proven-lost position -- the game's class is settled, so stop spending
+// compute); a proven loss WITHOUT a certificate falls back to HastyBot's
+// static-equity move, which shapes the final spread better than an arbitrary
+// losing move.
+TEST(EndgameAgent, FirstWinProjectsCertificates) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x105510FFu);
@@ -367,17 +370,35 @@ TEST(EndgameAgent, FirstWinProvenLossFallsBackToHasty) {
   wp.endgame_objective = EndgameObjective::kFirstWin;
   EndgameHastyBotAgent wld(wp);
 
-  bool found = false;
-  for (int i = 0; i < 200 && !found; ++i) {
+  int projected = 0, loss_fallbacks = 0, checked = 0;
+  for (int i = 0; i < 200; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     ref.clear();
-    const EndgameResult r = ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                      /*scoreless_turns=*/0, kSolveBudget, kSolvePlies);
-    if (r.value >= 0) continue;  // not a loss for the solving side; keep scanning
+    const EndgameResult r =
+      ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
+                /*scoreless_turns=*/0, kSolveBudget, kSolvePlies, EndgameObjective::kFirstWin);
+    if (r.depth_completed < 1) continue;
+    ++checked;
 
+    // Reset the agent per position: its solver's transposition table is only
+    // cleared between games, and a warm table would make its capped solve
+    // diverge from the freshly-cleared reference solve above.
+    wld.begin_game();
     const MoveRequest req = endgame_request(p, d);
-    EXPECT_EQ(wld.make_move(req), hasty.make_move(req)) << "position " << i;
-    found = true;
+    const MoveDecision decision = wld.make_move(req);
+    if (r.proven_class == -1 && r.continuation.empty()) {
+      EXPECT_EQ(decision.move, hasty.make_move(req).move) << "position " << i;
+      EXPECT_TRUE(decision.projected_remaining_moves.empty()) << "position " << i;
+      ++loss_fallbacks;
+    } else {
+      EXPECT_EQ(decision.move, r.best) << "position " << i;
+      EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size())
+        << "position " << i;
+      if (!decision.projected_remaining_moves.empty()) ++projected;
+    }
   }
-  ASSERT_TRUE(found) << "no proven-loss endgame found in the scan";
+  ASSERT_GT(checked, 50);
+  ASSERT_GT(projected, 0) << "no solve produced a projected certificate";
+  std::cout << "  first-win decisions: " << projected << " projected, " << loss_fallbacks
+            << " loss fallbacks, " << checked << " checked\n";
 }

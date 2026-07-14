@@ -85,8 +85,8 @@ class CapturingHastyBot : public Agent {
   CapturingHastyBot(int thread_id, const std::string& name, std::vector<CapturedPosition>& sink)
       : Agent(thread_id, name), bot_({.thread_id = thread_id, .name = name}), sink_(sink) {}
 
-  Move make_move(const MoveRequest& req) override {
-    const Move m = bot_.make_move(req);
+  MoveDecision make_move(const MoveRequest& req) override {
+    const Move m = bot_.make_move(req).move;
     if (req.bag_size == 0) {
       sink_.push_back(
         {req.board, req.my_rack, req.opp_rack, req.my_score, req.opp_score, scoreless_, m});
@@ -275,7 +275,7 @@ using AgentFactory = std::function<std::unique_ptr<Agent>(int thread_id)>;
 // return the wall-clock seconds. Threads split the game indices into contiguous
 // chunks; each thread builds its own pair of agents once and reuses them.
 double run_config(const Dictionary& dict, uint64_t base_seed, int games, int threads,
-                  const AgentFactory& make0, const AgentFactory& make1) {
+                  const AgentFactory& make0, const AgentFactory& make1, bool fast_track) {
   const auto t0 = std::chrono::steady_clock::now();
   std::vector<std::thread> pool;
   const int per = (games + threads - 1) / threads;
@@ -288,6 +288,7 @@ double run_config(const Dictionary& dict, uint64_t base_seed, int games, int thr
       std::unique_ptr<Agent> p1 = make1(t);
       for (int i = lo; i < hi; ++i) {
         Game g(*p0, *p1, dict, base_seed + static_cast<uint64_t>(i));
+        g.set_respect_projections(fast_track);
         g.play();
       }
     });
@@ -385,19 +386,22 @@ void print_games_row(const char* config, const std::string& budget, double total
 
 void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
                     const std::vector<uint64_t>& budgets, int plies, EndgameObjective objective,
-                    const std::vector<int>& thresholds) {
-  std::printf("games mode: %d games/config, threads=%d, plies=%d, objective=%s\n\n", games, threads,
-              plies, endgame_objective_name(objective));
+                    const std::vector<int>& thresholds, bool fast_track) {
+  std::printf("games mode: %d games/config, threads=%d, plies=%d, objective=%s, fast-track=%d\n\n",
+              games, threads, plies, endgame_objective_name(objective), fast_track ? 1 : 0);
   std::printf("%-22s %11s %10s %10s %10s %10s\n", "config", "budget", "total s", "s/game",
               "games/s", "ratio");
 
-  const double base_s =
-    run_config(dict, base_seed, games, threads, hasty_factory(), hasty_factory());
+  const double base_s = run_config(dict, base_seed, games, threads, hasty_factory(),
+                                   hasty_factory(), /*fast_track=*/false);
   print_games_row("hasty-vs-hasty", "-", base_s, games, 1.0);
 
+  // The cost sweep honors --fast-track (a self-play generator's configuration);
+  // the head-to-head strength protocol below never does -- fast-tracking would
+  // substitute the proof's optimal replies for the live opponent's moves.
   for (uint64_t b : budgets) {
     const AgentFactory f = endgame_factory(b, plies, objective);
-    const double s = run_config(dict, base_seed, games, threads, f, f);
+    const double s = run_config(dict, base_seed, games, threads, f, f, fast_track);
     print_games_row("endgame-vs-endgame", std::to_string(b), s, games, s / base_s);
   }
 
@@ -452,6 +456,7 @@ int main(int argc, char** argv) {
     int plies = 25;
     int threads = 1;
     std::string objective_str = "lexicographic";
+    bool fast_track = false;
     bool no_futility = false;
     std::string budgets_csv = "1000,3000,10000,30000,100000,300000";
     std::string buckets_csv = "20,60";
@@ -480,6 +485,9 @@ int main(int argc, char** argv) {
       "spread-buckets", po::value<std::string>(&buckets_csv)->default_value(buckets_csv),
       "ascending |spread| thresholds bucketing bag-empty positions (solves mode) and "
       "head-to-head games by their baseline bag-empty spread (games mode)");
+    desc.add_options()("fast-track", po::bool_switch(&fast_track),
+                       "games mode: the cost sweep's games respect agent projections (the "
+                       "self-play break-out); head-to-head games never do");
     desc.add_options()("no-futility", po::bool_switch(&no_futility),
                        "solves mode: disable outplay-futility pruning, to A/B its effect");
     desc.add_options()("leaves-file", po::value<std::string>(&leaves_file),
@@ -501,7 +509,8 @@ int main(int argc, char** argv) {
       scribblez::run_solves_mode(dict, seed, games, budgets, plies, objective, thresholds,
                                  !no_futility);
     } else if (mode == "games") {
-      scribblez::run_games_mode(dict, seed, games, threads, budgets, plies, objective, thresholds);
+      scribblez::run_games_mode(dict, seed, games, threads, budgets, plies, objective, thresholds,
+                                fast_track);
     } else {
       std::cerr << "unknown --mode '" << mode << "' (expected solves or games)\n";
       return 1;

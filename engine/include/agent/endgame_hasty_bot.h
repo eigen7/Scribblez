@@ -68,7 +68,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
 
   explicit EndgameHastyBotAgent(const Params& params);
 
-  Move make_move(const MoveRequest& req) override;
+  MoveDecision make_move(const MoveRequest& req) override;
   void observe_move(const Move& move) override;
   void begin_game() override;
 

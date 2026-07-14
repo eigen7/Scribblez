@@ -33,6 +33,11 @@ Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
   log_.player_names = {players_[0]->name(), players_[1]->name()};
 }
 
+void Game::set_respect_projections(bool on) {
+  assert(log_.turns.empty());  // must be set before play() begins
+  respect_projections_ = on;
+}
+
 void Game::set_initial_scores(std::array<int, 2> initial_scores) {
   assert(log_.turns.empty());  // must be set before play() begins
   scores_ = initial_scores;
@@ -91,7 +96,7 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   play_loop(to_move);
 }
 
-Move Game::choose_move(int player, const MoveRequest& req) {
+MoveDecision Game::choose_move(int player, const MoveRequest& req) {
   if (static_cast<int>(log_.turns.size()) < random_opening_plies_) {
     ++log_.num_random_opening_plies;
     return pick_uniform_random_play(req, opening_rng_);
@@ -105,14 +110,31 @@ void Game::play_loop(int start_player) {
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
   constexpr int kMaxTurns = 400;          // safety net
 
+  // Moves an earlier decision projected for the rest of the game (see
+  // MoveDecision); while any are queued, the loop plays them instead of
+  // prompting the agents. The projecting agent has proven the game's course,
+  // so its moves are trusted exactly as an agent's own move is.
+  std::vector<Move> projected;
+  size_t projected_next = 0;
+
   while ((int)log_.turns.size() < kMaxTurns) {
     // The game loop no longer generates moves; each agent generates the moves
     // it needs from the board + dictionary on its own turn. The board's
     // cross-check/anchor caches still live on board_ and are maintained
     // incrementally as moves are applied.
-    MoveRequest ctx{board_,           dict_,      racks_[cur], racks_[1 - cur], scores_[cur],
-                    scores_[1 - cur], bag_.size()};
-    Move m = choose_move(cur, ctx);
+    Move m;
+    if (projected_next < projected.size()) {
+      m = projected[projected_next++];
+    } else {
+      MoveRequest ctx{board_,           dict_,      racks_[cur], racks_[1 - cur], scores_[cur],
+                      scores_[1 - cur], bag_.size()};
+      MoveDecision decision = choose_move(cur, ctx);
+      m = decision.move;
+      if (respect_projections_ && !decision.projected_remaining_moves.empty()) {
+        projected = std::move(decision.projected_remaining_moves);
+        projected_next = 0;
+      }
+    }
 
     TurnRecord rec;
     rec.player = cur;

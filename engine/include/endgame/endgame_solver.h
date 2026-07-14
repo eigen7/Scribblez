@@ -76,6 +76,15 @@ struct EndgameResult {
                                      // 0 draw, -1 loss), or kClassUnknown; the
                                      // signal a self-play caller can break out
                                      // of the game on
+  // The proof-certificate line after `best`: the remaining moves of the game,
+  // both sides alternating, ending the game (under the solver's compressed
+  // scoreless rule) at the proven class. Reconstructed from the transposition
+  // table and validated move-by-move, so it is best-effort: empty when no
+  // class was proven or the reconstruction failed a validation, never wrong.
+  // The opponent's entries are the PROOF's optimal replies, so playing the
+  // line out records a game-theoretic continuation rather than what the
+  // opposing agent would have chosen.
+  std::vector<Move> continuation;
 };
 
 // Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
@@ -262,6 +271,11 @@ class EndgameSolver {
   // the solving side: a narrow-window iterative probe of the child position,
   // sharing the solve budget. False when the proof does not land in budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
+  // Fill result.continuation by walking transposition-table best moves from
+  // result.best, validating each against the position's legal moves and the
+  // terminal class against result.proven_class; leaves it empty on any miss.
+  // Post-search reconstruction: spends a few move generations, no search nodes.
+  void extract_continuation(EndgameResult& result);
   SearchResult run_root(int depth, int32_t alpha, int32_t beta, std::vector<RankedMove>& root_moves,
                         const std::vector<Move>& plays, Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
