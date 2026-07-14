@@ -162,6 +162,7 @@ struct SolveSample {
   int depth;
   bool differ;        // solver's move differs from the captured HastyBot move
   bool class_proven;  // the solve proved the win/draw/loss class
+  bool certificate;   // the solve reconstructed a proof-certificate continuation
   bool proven;        // the solve's final value is proven
 };
 
@@ -184,7 +185,8 @@ std::vector<SolveSample> solve_positions(const Dictionary& dict,
     samples.push_back({bucket_of(std::abs(p.my_score - p.opp_score), thresholds),
                        std::chrono::duration<double>(t1 - t0).count() * 1e6, r.nodes,
                        r.depth_completed, !(r.best == p.hasty_move),
-                       r.proven_class != EndgameResult::kClassUnknown, r.proven});
+                       r.proven_class != EndgameResult::kClassUnknown, !r.continuation.empty(),
+                       r.proven});
   }
   return samples;
 }
@@ -198,6 +200,7 @@ struct SolveStats {
   double mean_depth;
   double pct_differ;
   double pct_class;
+  double pct_cert;
   double pct_proven;
   double pct_budget;  // mean share of the node budget actually spent: the
                       // complement of what proof early exits hand back
@@ -209,7 +212,7 @@ SolveStats aggregate_stats(const std::vector<SolveSample>& samples, int bucket, 
   double total_us = 0.0;
   uint64_t total_nodes = 0;
   long total_depth = 0;
-  size_t differ = 0, class_proven = 0, proven = 0;
+  size_t differ = 0, class_proven = 0, certificates = 0, proven = 0;
   for (const SolveSample& sm : samples) {
     if (bucket >= 0 && sm.bucket != bucket) continue;
     per_us.push_back(sm.us);
@@ -218,6 +221,7 @@ SolveStats aggregate_stats(const std::vector<SolveSample>& samples, int bucket, 
     total_depth += sm.depth;
     differ += sm.differ ? 1 : 0;
     class_proven += sm.class_proven ? 1 : 0;
+    certificates += sm.certificate ? 1 : 0;
     proven += sm.proven ? 1 : 0;
   }
   std::sort(per_us.begin(), per_us.end());
@@ -231,6 +235,7 @@ SolveStats aggregate_stats(const std::vector<SolveSample>& samples, int bucket, 
   st.mean_depth = static_cast<double>(total_depth) / static_cast<double>(n);
   st.pct_differ = 100.0 * static_cast<double>(differ) / static_cast<double>(n);
   st.pct_class = 100.0 * static_cast<double>(class_proven) / static_cast<double>(n);
+  st.pct_cert = 100.0 * static_cast<double>(certificates) / static_cast<double>(n);
   st.pct_proven = 100.0 * static_cast<double>(proven) / static_cast<double>(n);
   st.pct_budget = 100.0 * static_cast<double>(total_nodes) /
                   (static_cast<double>(budget) * static_cast<double>(n));
@@ -238,10 +243,10 @@ SolveStats aggregate_stats(const std::vector<SolveSample>& samples, int bucket, 
 }
 
 void print_solve_row(uint64_t budget, const std::string& bucket, const SolveStats& s) {
-  std::printf("%10llu %8s %9zu %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %8.1f%% %8.1f%%\n",
-              static_cast<unsigned long long>(budget), bucket.c_str(), s.positions, s.mean_us,
-              s.median_us, s.nodes_per_s, s.mean_depth, s.pct_differ, s.pct_class, s.pct_proven,
-              s.pct_budget);
+  std::printf(
+    "%10llu %8s %9zu %11.1f %11.1f %13.0f %10.2f %8.1f%% %7.1f%% %7.1f%% %8.1f%% %8.1f%%\n",
+    static_cast<unsigned long long>(budget), bucket.c_str(), s.positions, s.mean_us, s.median_us,
+    s.nodes_per_s, s.mean_depth, s.pct_differ, s.pct_class, s.pct_cert, s.pct_proven, s.pct_budget);
 }
 
 void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
@@ -251,9 +256,9 @@ void run_solves_mode(const Dictionary& dict, uint64_t base_seed, int games,
   std::printf(
     "solves mode: %d games, %zu bag-empty positions, plies=%d, objective=%s, futility=%d\n\n",
     games, positions.size(), plies, endgame_objective_name(objective), futility ? 1 : 0);
-  std::printf("%10s %8s %9s %11s %11s %13s %10s %9s %8s %9s %9s\n", "budget", "|spread|",
+  std::printf("%10s %8s %9s %11s %11s %13s %10s %9s %8s %8s %9s %9s\n", "budget", "|spread|",
               "positions", "mean us", "p50 us", "nodes/s", "mean depth", "%% differ", "%% class",
-              "%% proven", "%% budget");
+              "%% cert", "%% proven", "%% budget");
   // Per budget: one solve of every position, then per-bucket rows (small
   // buckets: decision accuracy; large: the break-out imperative) and an "all"
   // row for the single overall number.

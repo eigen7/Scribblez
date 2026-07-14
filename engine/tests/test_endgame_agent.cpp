@@ -161,6 +161,23 @@ void check_log_consistency(const GameLog& log) {
 constexpr uint64_t kSolveBudget = 1ull << 20;
 constexpr int kSolvePlies = 24;
 
+// Forwards to an inner agent while counting how often the game loop prompts
+// it, to observe projection fast-tracking from the outside.
+class PromptCountingAgent : public Agent {
+ public:
+  PromptCountingAgent(Agent& inner) : Agent(inner.thread_id(), inner.name()), inner_(inner) {}
+  MoveDecision make_move(const MoveRequest& req) override {
+    ++prompts;
+    return inner_.make_move(req);
+  }
+  void observe_move(const Move& move) override { inner_.observe_move(move); }
+  void begin_game() override { inner_.begin_game(); }
+  int prompts = 0;
+
+ private:
+  Agent& inner_;
+};
+
 EndgameHastyBotAgent::Params endgame_params(uint64_t nodes, int plies) {
   EndgameHastyBotAgent::Params p;
   p.hasty = HastyBotAgent::Params{.thread_id = 0, .name = "EndgameHastyBot"};
@@ -401,4 +418,36 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
   ASSERT_GT(projected, 0) << "no solve produced a projected certificate";
   std::cout << "  first-win decisions: " << projected << " projected, " << loss_fallbacks
             << " loss fallbacks, " << checked << " checked\n";
+}
+
+// Integration: in real-lexicon self-play, respected projections reduce agent
+// prompts (proven endgames fast-track to their end) while every game still
+// reaches a natural conclusion with identical rules. Runs the same seeds both
+// ways and compares total prompt counts.
+TEST(EndgameAgent, FastTrackReducesPrompts) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
+  Dictionary d = Dictionary::load_kwg(path);
+
+  int prompts_with = 0, prompts_without = 0, fast_tracked = 0;
+  for (int mode = 0; mode < 2; ++mode) {
+    const bool respect = mode == 0;
+    EndgameHastyBotAgent::Params params = endgame_params(1600, 25);
+    params.endgame_objective = EndgameObjective::kFirstWin;
+    EndgameHastyBotAgent inner0(params), inner1(params);
+    PromptCountingAgent a0(inner0), a1(inner1);
+    for (int i = 0; i < 20; ++i) {
+      Game g(a0, a1, d, /*seed=*/9000 + i);
+      g.set_respect_projections(respect);
+      g.play();
+      const GameLogStorage log = g.extract_log();
+      ASSERT_NE(log.end_reason, "max_turns") << "seed " << 9000 + i;
+    }
+    (respect ? prompts_with : prompts_without) = a0.prompts + a1.prompts;
+  }
+  fast_tracked = prompts_without - prompts_with;
+  std::cout << "  prompts: " << prompts_with << " with fast-track vs " << prompts_without
+            << " without (" << fast_tracked << " skipped)\n";
+  EXPECT_LT(prompts_with, prompts_without);
 }

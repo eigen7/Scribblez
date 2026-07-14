@@ -132,6 +132,31 @@ class while spending ~30% of the cap; proofs deepen with budget (41% at
 half (terminating a generation game on `proven_class` and logging the proven
 result) is not built yet.
 
+## Fast-track: certificates and their throughput effect
+
+A solve that proves the class also tries to reconstruct a **proof
+certificate** (`EndgameResult::continuation`): the game's remaining moves,
+walked out of the transposition table with greedy fallbacks and accepted only
+if the line replays to the proven class. The certificate rides along as the
+agent's `projected_remaining_moves`, and a projection-respecting game loop
+(self-play generation; `--fast-track` in the games-mode cost sweep) plays it
+out instead of prompting agents for the rest of the game.
+
+Certificate yield is the current bottleneck (solves mode, first-win, 256
+positions): at budget 220, 24% of solves prove the class but only 6%
+reconstruct a certificate; at 1600, 42% vs 15%. Off the searched proof spine
+the walk leans on greedy moves, which can forfeit the class and fail the final
+check -- the check keeps certificates *sound*, at the price of yield.
+Measured end-to-end (20 real-lexicon self-play games at budget 1600),
+fast-track skips ~2% of agent prompts, and the games-mode cost sweep with
+`--fast-track` is at throughput parity with it off. Two levers would raise the
+yield: tracking the certificate during the search itself instead of
+reconstructing it afterward, and re-searching gap positions at the narrow
+window under a small reconstruction budget. Beyond yield, the ceiling is
+structural: proofs land near the end of the endgame, so the prompts a
+certificate can skip are the game's last few -- fast-track can never touch the
+mid-game cost of an already-decided game.
+
 ## Per-solve accuracy view (lexicographic, `--mode=solves`, 256 positions)
 
 | budget | \|spread\| | mean us | mean depth | % differ | % class | % value proven |

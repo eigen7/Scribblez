@@ -605,28 +605,26 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
 void EndgameSolver::extract_continuation(EndgameResult& result) {
   make(result.best, 0);
   int ply = 1;
-  bool ok = true;
   while (!game_over_ && ply < kMaxPlayout) {
-    TTEntry* e = tt_probe(node_hash());
-    if (e == nullptr) {
-      ok = false;
-      break;
-    }
-    const Move next = e->best;
-    if (next.type() == MoveType::PLAY) {
-      // A stale or colliding entry can hold a move that is not legal here;
-      // regenerate and match byte-for-byte (the entry's move came from the
-      // same generator, so a legal move matches exactly).
-      const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
-      if (std::find(plays.begin(), plays.end(), next) == plays.end()) {
-        ok = false;
-        break;
+    // Prefer the table's best move; a proof search leaves entries along its
+    // spine, but cut nodes truncate lines and later writes evict entries, so
+    // gaps and stale moves are normal. Any gap -- and any entry whose move is
+    // not legal here (regenerated and matched byte-for-byte) -- falls back to
+    // the greedy playout move. The terminal class check below is the sole
+    // arbiter of the line's validity, so the fallback costs soundness nothing.
+    const std::vector<Move> plays = MoveGenerator(board_, *dict_).generate(racks_[stm_]);
+    Move next = plays.empty() ? Move::pass() : greedy_pick(plays);
+    if (TTEntry* e = tt_probe(node_hash())) {
+      const Move& tt_move = e->best;
+      if (tt_move.type() != MoveType::PLAY ||
+          std::find(plays.begin(), plays.end(), tt_move) != plays.end()) {
+        next = tt_move;
       }
     }
     result.continuation.push_back(next);
     make(next, ply++);
   }
-  ok = ok && game_over_ && class_of(scores_[0] - scores_[1]) == result.proven_class;
+  const bool ok = game_over_ && class_of(scores_[0] - scores_[1]) == result.proven_class;
   for (int d = ply - 1; d >= 0; --d) unmake(d);
   if (!ok) result.continuation.clear();
 }
