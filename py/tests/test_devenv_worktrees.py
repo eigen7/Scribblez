@@ -113,3 +113,61 @@ def test_delete_local_branch_reraises_real_errors(repo: Path):
     # rather than be swallowed as idempotency.
     with pytest.raises(subprocess.CalledProcessError):
         pr_flow.delete_local_branch(repo, "feature", force=False)
+
+
+def git_out(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def init_repo_with_commit(root: Path, content: str):
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.name", "Test")
+    git(root, "config", "user.email", "test@example.com")
+    (root / "f.txt").write_text(content)
+    git(root, "add", "f.txt")
+    git(root, "commit", "-q", "-m", content)
+
+
+def test_sync_submodules_fetches_pointer_from_gitea(tmp_path: Path):
+    """cmd_merge's submodule sync must pull a freshly referenced commit from
+    gitea, not the submodule's upstream origin -- origin does not have it yet
+    (its push is a later host-side step). Reproduces the exact merge failure:
+    the recorded pointer lives only on gitea, absent from origin and from the
+    superproject's own submodule clone.
+    """
+    allow = ["-c", "protocol.file.allow=always"]
+    origin_sub = tmp_path / "origin_sub.git"
+    gitea_sub = tmp_path / "gitea_sub.git"
+    git(tmp_path, "init", "-q", "--bare", str(origin_sub))
+    git(tmp_path, "init", "-q", "--bare", str(gitea_sub))
+
+    # Submodule commit C1, published to origin; then C2, published only to gitea.
+    seed = tmp_path / "seed"
+    init_repo_with_commit(seed, "c1")
+    git(seed, "remote", "add", "origin", str(origin_sub))
+    git(seed, "push", "-q", "origin", "main")
+    (seed / "f.txt").write_text("c2")
+    git(seed, "add", "f.txt")
+    git(seed, "commit", "-q", "-m", "c2")
+    c2 = git_out(seed, "rev-parse", "HEAD")
+    git(seed, "remote", "add", "gitea", str(gitea_sub))
+    git(seed, "push", "-q", "gitea", "main")
+
+    # Superproject with the submodule at C1, then bump the recorded pointer to
+    # C2 without the superproject's clone ever obtaining C2.
+    sup = tmp_path / "sup"
+    init_repo_with_commit(sup, "root")
+    git(sup, *allow, "submodule", "add", str(origin_sub), "submodules/dev")
+    git(sup, "commit", "-q", "-m", "add submodule")
+    sub = sup / "submodules" / "dev"
+    git(sub, "remote", "add", "gitea", str(gitea_sub))
+    git(sup, "update-index", "--cacheinfo", f"160000,{c2},submodules/dev")
+    git(sup, "commit", "-q", "-m", "bump pointer to c2")
+
+    assert not pr_flow.commit_present(sub, c2)  # missing before the sync
+    pr_flow.sync_submodules(sup)
+    # Working tree advanced to C2, sourced from gitea (origin never had it).
+    assert git_out(sub, "rev-parse", "HEAD") == c2
