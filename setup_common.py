@@ -2,9 +2,9 @@
 
 The generic host-side machinery (Docker build/run, .env.json, VS Code attach
 config, NVIDIA validation, the setup-wizard scaffold) lives in the
-`submodules/devenv_utils` git submodule. This module supplies the Scribblez-specific
-pieces: a `DevenvConfig` factory and the lexica/Macondo constants used by the
-custom wizard steps.
+`submodules/devenv_utils` git submodule. The static DevenvConfig fields live as
+data in the repo-root `devenv.toml`; this module loads them and adds the
+Scribblez-specific lexica/Macondo constants used by the custom wizard steps.
 
 It lives at the repo root (not under py/) so the host-side scripts can
 import it without depending on PYTHONPATH or any in-container Python paths.
@@ -25,36 +25,11 @@ if not (REPO_ROOT / "submodules" / "devenv_utils" / "__init__.py").exists():
 from submodules.devenv_utils import (  # noqa: E402
     DevenvConfig,
     DevTool,
+    load_config,
 )
 from submodules.devenv_utils import (  # noqa: E402
     check_setup_version as _check_setup_version,
 )
-
-# Bump SETUP_VERSION manually to force all users to rerun the setup wizard --
-# in particular whenever docker-setup/ changes in a way that requires users to
-# rebuild the image, since the wizard rebuilds it.
-#
-# Increasing the major version (the first number) causes the setup wizard to
-# rm -rf the target/ directory - use this to invalidate existing builds.
-SETUP_VERSION = "2.10.0"
-
-# Ports forwarded host -> container by run_docker.py.
-REQUIRED_PORTS = [
-    5173,  # Vite dev server (browser UI)
-    5174,  # Vite dev server (browser UI)
-    5175,  # Vite dev server (browser UI)
-    8080,  # engine WebSocket (default human_web_agent --port)
-    5006,  # Bokeh training-metrics dashboard
-    5180,  # React dashboard: Vite dev server (the page the browser opens)
-    8090,  # React dashboard: Tornado data API (proxied by Vite; handy for direct access)
-]
-
-# Gitea (local git forge for worktree-branch PR review; see
-# py/tools/gitea_serve.py) is published outside REQUIRED_PORTS so it binds
-# 127.0.0.1 on the host instead of 0.0.0.0: its nginx front-end signs every
-# request in as the admin user, so the port must not be reachable from the
-# LAN. Note the fixed host port assumes a single container instance.
-GITEA_PORT_ARGS = ["-p", "127.0.0.1:3000:3000"]
 
 # Lexica we know how to fetch. The KWG files are not in this repo; they are
 # downloaded at setup time from the public liwords URL into the user's mount
@@ -81,12 +56,6 @@ def dev_tool() -> DevTool:
 
 
 def make_config() -> DevenvConfig:
-    """Build the Scribblez DevenvConfig consumed by every host-side script."""
-    return DevenvConfig(
-        name="scribblez",
-        repo_root=REPO_ROOT,
-        docker_context=REPO_ROOT / "docker-setup" / "local",
-        required_ports=REQUIRED_PORTS,
-        setup_version=SETUP_VERSION,
-        extra_docker_args=GITEA_PORT_ARGS,
-    )
+    """The Scribblez DevenvConfig consumed by every host-side script, loaded
+    from the repo-root devenv.toml."""
+    return load_config(REPO_ROOT)

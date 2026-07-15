@@ -1,0 +1,31 @@
+# Declarative devenv configuration for Scribblez, read by
+# submodules/devenv_utils load_config() into a DevenvConfig. Every key is a
+# DevenvConfig field; path-valued keys are resolved relative to this file's
+# directory (the repo root).
+
+name = "scribblez"
+docker_context = "docker-setup/local"
+
+# Bump manually to force all users back through the setup wizard -- in
+# particular after a docker-setup/ change that needs an image rebuild (the
+# wizard rebuilds the image). Increasing the major (first) number additionally
+# wipes the target/ build trees.
+setup_version = "2.10.0"
+
+# Ports forwarded host -> container by run_docker.py. For instance N these are
+# each shifted up by the per-instance stride (see instances.py).
+required_ports = [
+    5173,  # Vite dev server (browser UI)
+    5174,  # Vite dev server (browser UI)
+    5175,  # Vite dev server (browser UI)
+    8080,  # engine WebSocket (default human_web_agent --port)
+    5006,  # Bokeh training-metrics dashboard
+    5180,  # React dashboard: Vite dev server (the page the browser opens)
+    8090,  # React dashboard: Tornado data API (proxied by Vite; handy direct)
+]
+
+# Publishes the Gitea front-end port bound to 127.0.0.1 on the host instead of
+# 0.0.0.0: its nginx front-end signs every request in as the admin user, so the
+# port must not be reachable from the LAN. The fixed host port assumes a single
+# container instance.
+extra_docker_args = ["-p", "127.0.0.1:3000:3000"]
