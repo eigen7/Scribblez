@@ -50,31 +50,26 @@ submodules/devenv_utils/pr_flow.py drives the lifecycle:
 5. Address review comments with follow-up commits, not squashes or
    force-pushes -- rewriting history breaks the reviewer's "changes since last
    review" view.
-6. Once the user approves: `submodules/devenv_utils/pr_flow.py merge <N>` -- merges the PR,
-   fast-forwards the main checkout, and deletes the branch and worktree. It is
-   idempotent: if it fails partway (a network blip mid-cleanup, say), re-run it
-   to finish.
+6. Once the user approves, they merge each PR on its Gitea page in the browser
+   (or, in the container, `submodules/devenv_utils/gitea_merge.py <repo> <N>`).
+   Then, on the host, they run `git publish`, which fast-forwards the main
+   checkout, publishes to GitHub, and removes the merged worktree. A change that
+   spans a submodule has a PR in each repo: merge the submodule's first (see
+   SUBMODULES.md), then the consumer's, then `git publish` once.
 
-When a PR bumps a submodule pointer, the submodule change is reviewed as its own
-Gitea PR (see SUBMODULES.md); merge that one first, then the consumer PR. `merge`
-fetches the submodule from Gitea while fast-forwarding, so the referenced
-submodule commit only has to be on Gitea (it is, once its PR is merged) -- it
-need not have reached GitHub `origin` yet. Publishing to `origin` is the single
-host-side step at the very end: after both PRs are merged, the user runs
-`python3 submodules/devenv_utils/push_upstream.py` (submodule first, then the
-superproject). So the two merges happen back-to-back in the container and
-publishing is one step at the end.
+Merging only advances Gitea's `main`; nothing reaches the local checkout or
+GitHub until `git publish`. `git publish` runs on the host (the GitHub
+credentials live there) and is the only host step; it reads the merge from Gitea
+over the web port, so a referenced submodule commit needs only to be on Gitea,
+not yet on GitHub. A pre-push hook redirects a stray bare `git push` to `git
+publish` and refuses origin pushes from inside the container.
 
-Every `submodules/devenv_utils/pr_flow.py` subcommand resolves the main checkout itself and runs its
-git operations there, so it behaves the same whether invoked from the main
-checkout or from inside a feature worktree. All of it runs in the container: the
-container is the sole authority for worktree plumbing. The only host-side git
-step in the whole workflow is `push_upstream.py` (submodule publishing), and it
-operates on the main checkout, never a worktree -- so the container-absolute
-paths baked into worktree metadata never have to resolve on the host, and you
-should never run git against a worktree from the host. If you must intervene by
-hand, do it in the container against the main checkout (`git -C /workspace/repo
-...`).
+Everything else runs in the container. `git publish` is the one exception that
+touches worktrees from the host, and it does so with rm + prune -- not `git
+worktree remove`, which chokes on the container-absolute paths baked into
+worktree metadata. So you should still never run `git worktree` against a
+worktree from the host; to intervene by hand, do it in the container against the
+main checkout (`git -C /workspace/repo ...`).
 
 Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never
 deleted automatically: they may hold uncommitted work. gitea_serve.py prints a
@@ -84,8 +79,9 @@ who decides what to delete. The report is also available standalone via
 `submodules/devenv_utils/pr_flow.py abandon <branch>` -- it removes the worktree and its branch
 (even if unmerged) with no Gitea interaction.
 
-The `origin` remote (GitHub) plays no role in this workflow; never push to it.
-Only the user pushes to origin.
+Agents never push to `origin` (GitHub) -- the pre-push hook blocks it from the
+container. Publishing to origin happens only through `git publish`, run by the
+user on the host.
 
 # Sycophancy
 
