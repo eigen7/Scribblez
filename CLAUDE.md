@@ -55,6 +55,16 @@ py/tools/pr.py drives the lifecycle:
    idempotent: if it fails partway (a network blip mid-cleanup, say), re-run it
    to finish.
 
+When a PR bumps a submodule pointer, the submodule change is reviewed as its own
+Gitea PR (see SUBMODULES.md); merge that one first, then the consumer PR. `merge`
+fetches the submodule from Gitea while fast-forwarding, so the referenced
+submodule commit only has to be on Gitea (it is, once its PR is merged) -- it
+need not have reached GitHub `origin` yet. Publishing to `origin` is the single
+host-side step at the very end: after both PRs are merged, the user runs
+`python3 submodules/devenv_utils/push_upstream.py` (submodule first, then the
+superproject). So the two merges happen back-to-back in the container and
+publishing is one step at the end.
+
 Every `py/tools/pr.py` subcommand resolves the main checkout itself and runs its
 git operations there, so it behaves the same whether invoked from the main
 checkout or from inside a feature worktree. All of it runs in the container: the
