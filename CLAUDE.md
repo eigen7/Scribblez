@@ -19,69 +19,32 @@ Read docs when the task touches their subject, not up front:
 
 Routine build/refactor/tooling tasks rarely need any of them.
 
+# Git submodules
+
+`submodules/<dir>/` holds git submodules: full checkouts of repos within our
+complete control — notably `devenv_utils`, which provides the dev-container
+setup and the worktree/PR/publish tooling. We regularly modify submodule code to
+meet this project's needs; do not treat it as unmodifiable. The rules for
+changing one (commit-in-place, pointer-bump rules, publishing order, worktree
+interactions) live in submodules/devenv_utils/SUBMODULES.md — read it before
+touching anything under submodules/.
+
 # Worktrees and PR review
 
-Unless told otherwise, never make changes directly in /workspace/repo. Work in
-a git worktree and submit the result as a pull request on the local Gitea
-instance, which the user reviews from the host browser at
-http://localhost:3000/ (signed in automatically; see submodules/devenv_utils/gitea_serve.py).
-submodules/devenv_utils/pr_flow.py drives the lifecycle:
+Unless told otherwise, never make changes directly in /workspace/repo: work in a
+git worktree and land it through a Gitea pull request. The full workflow —
+worktree → PR (`submodules/devenv_utils/pr_flow.py`) → browser review/merge →
+`git publish` on the host — is documented in
+**submodules/devenv_utils/WORKFLOW.md**; follow it, and relay the review/merge
+handoff `pr_flow.py create` prints.
 
-1. `submodules/devenv_utils/pr_flow.py worktree <branch>` -- creates
-   /workspace/mount/worktrees/scribblez/<branch> on a new branch, with
-   submodules populated (from the main checkout's copies) and a Claude commit
-   identity,
-   so the PR distinguishes Claude's commits from the user's. Worktrees live
-   under the mount so in-progress work survives container relaunches.
-2. Make the changes in the worktree. Aim for atomic commits that can be
-   reviewed in isolation. For C++ work, run py/build.py in the worktree before
-   trusting IDE diagnostics there: .clangd resolves the compile database at
-   the checkout's own target/, so clangd flags every include as missing in a
-   worktree that has never been built.
-3. Before opening the PR: the engine must build, the affected test suites must
-   pass (py/run_tests.py --cpp-only for C++ changes, --python-only for
-   Python), and changed files must be clang-format/ruff clean. Say what was
-   run in the PR body.
-4. `submodules/devenv_utils/pr_flow.py create <branch> --title ... --body-file ...` -- starts the
-   Gitea stack if needed, then pushes the branch and opens the PR as the
-   `claude` Gitea user (provisioned automatically on first use), so Gitea
-   shows Claude -- not the reviewer -- as the pusher and PR author. Point the
-   user at the printed URL.
-5. Address review comments with follow-up commits, not squashes or
-   force-pushes -- rewriting history breaks the reviewer's "changes since last
-   review" view.
-6. Once the user approves, they merge each PR on its Gitea page in the browser
-   (or, in the container, `submodules/devenv_utils/gitea_merge.py <repo> <N>`).
-   Then, on the host, they run `git publish`, which fast-forwards the main
-   checkout, publishes to GitHub, and removes the merged worktree. A change that
-   spans a submodule has a PR in each repo: merge the submodule's first (see
-   SUBMODULES.md), then the consumer's, then `git publish` once.
-
-Merging only advances Gitea's `main`; nothing reaches the local checkout or
-GitHub until `git publish`. `git publish` runs on the host (the GitHub
-credentials live there) and is the only host step; it reads the merge from Gitea
-over the web port, so a referenced submodule commit needs only to be on Gitea,
-not yet on GitHub. A pre-push hook redirects a stray bare `git push` to `git
-publish` and refuses origin pushes from inside the container.
-
-Everything else runs in the container. `git publish` is the one exception that
-touches worktrees from the host, and it does so with rm + prune -- not `git
-worktree remove`, which chokes on the container-absolute paths baked into
-worktree metadata. So you should still never run `git worktree` against a
-worktree from the host; to intervene by hand, do it in the container against the
-main checkout (`git -C /workspace/repo ...`).
-
-Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never
-deleted automatically: they may hold uncommitted work. gitea_serve.py prints a
-report of worktrees idle for 7+ days; when you see it, relay it to the user,
-who decides what to delete. The report is also available standalone via
-`submodules/devenv_utils/stale_worktrees.py`. To delete one the user has cleared, run
-`submodules/devenv_utils/pr_flow.py abandon <branch>` -- it removes the worktree and its branch
-(even if unmerged) with no Gitea interaction.
-
-Agents never push to `origin` (GitHub) -- the pre-push hook blocks it from the
-container. Publishing to origin happens only through `git publish`, run by the
-user on the host.
+Scribblez specifics for that workflow:
+- For C++ work, run py/build.py in the worktree before trusting IDE diagnostics:
+  .clangd resolves the compile database at the checkout's own target/, so clangd
+  flags every include as missing in a worktree that has never been built.
+- Before opening a PR: the engine must build, the affected suites must pass
+  (py/run_tests.py --cpp-only for C++ changes, --python-only for Python), and
+  changed files must be clang-format/ruff clean. Say what was run in the PR body.
 
 # Sycophancy
 
@@ -146,16 +109,6 @@ what it used to do or how it got here — that history belongs in commit message
 It is checked out at /workspace/mount/macondo/
 
 If you are asked questions regarding Macondo, please look there.
-
-# Git submodules
-
-`submodules/<dir>/` holds git submodules: full checkouts of repos within our complete control,
-which we regularly modify to meet the needs of this project — do not treat that code as
-unmodifiable. The workflow (changing a submodule, pointer-bump rules, worktree interactions) is
-documented in submodules/devenv_utils/SUBMODULES.md; read it before touching anything under
-submodules/. Submodule commits are pushed upstream by the user, not by you: end any task that
-touched a submodule by asking the user to run `python3 submodules/devenv_utils/push_upstream.py`
-from the host (it pushes the submodule commits, then prints the superproject push to run next).
 
 # Python code
 
