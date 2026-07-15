@@ -51,13 +51,28 @@ py/tools/pr.py drives the lifecycle:
    force-pushes -- rewriting history breaks the reviewer's "changes since last
    review" view.
 6. Once the user approves: `py/tools/pr.py merge <N>` -- merges the PR,
-   fast-forwards the main checkout, and deletes the branch and worktree.
+   fast-forwards the main checkout, and deletes the branch and worktree. It is
+   idempotent: if it fails partway (a network blip mid-cleanup, say), re-run it
+   to finish.
+
+Every `py/tools/pr.py` subcommand resolves the main checkout itself and runs its
+git operations there, so it behaves the same whether invoked from the main
+checkout or from inside a feature worktree. All of it runs in the container: the
+container is the sole authority for worktree plumbing. The only host-side git
+step in the whole workflow is `push_upstream.py` (submodule publishing), and it
+operates on the main checkout, never a worktree -- so the container-absolute
+paths baked into worktree metadata never have to resolve on the host, and you
+should never run git against a worktree from the host. If you must intervene by
+hand, do it in the container against the main checkout (`git -C /workspace/repo
+...`).
 
 Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never
 deleted automatically: they may hold uncommitted work. gitea_serve.py prints a
 report of worktrees idle for 7+ days; when you see it, relay it to the user,
 who decides what to delete. The report is also available standalone via
-`py/tools/stale_worktrees.py`.
+`py/tools/stale_worktrees.py`. To delete one the user has cleared, run
+`py/tools/pr.py abandon <branch>` -- it removes the worktree and its branch
+(even if unmerged) with no Gitea interaction.
 
 The `origin` remote (GitHub) plays no role in this workflow; never push to it.
 Only the user pushes to origin.
