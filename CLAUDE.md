@@ -24,10 +24,10 @@ Routine build/refactor/tooling tasks rarely need any of them.
 Unless told otherwise, never make changes directly in /workspace/repo. Work in
 a git worktree and submit the result as a pull request on the local Gitea
 instance, which the user reviews from the host browser at
-http://localhost:3000/ (signed in automatically; see py/tools/gitea_serve.py).
-py/tools/pr.py drives the lifecycle:
+http://localhost:3000/ (signed in automatically; see submodules/devenv_utils/gitea_serve.py).
+submodules/devenv_utils/pr_flow.py drives the lifecycle:
 
-1. `py/tools/pr.py worktree <branch>` -- creates
+1. `submodules/devenv_utils/pr_flow.py worktree <branch>` -- creates
    /workspace/mount/worktrees/scribblez/<branch> on a new branch, with
    submodules populated (from the main checkout's copies) and a Claude commit
    identity,
@@ -42,7 +42,7 @@ py/tools/pr.py drives the lifecycle:
    pass (py/run_tests.py --cpp-only for C++ changes, --python-only for
    Python), and changed files must be clang-format/ruff clean. Say what was
    run in the PR body.
-4. `py/tools/pr.py create <branch> --title ... --body-file ...` -- starts the
+4. `submodules/devenv_utils/pr_flow.py create <branch> --title ... --body-file ...` -- starts the
    Gitea stack if needed, then pushes the branch and opens the PR as the
    `claude` Gitea user (provisioned automatically on first use), so Gitea
    shows Claude -- not the reviewer -- as the pusher and PR author. Point the
@@ -50,7 +50,7 @@ py/tools/pr.py drives the lifecycle:
 5. Address review comments with follow-up commits, not squashes or
    force-pushes -- rewriting history breaks the reviewer's "changes since last
    review" view.
-6. Once the user approves: `py/tools/pr.py merge <N>` -- merges the PR,
+6. Once the user approves: `submodules/devenv_utils/pr_flow.py merge <N>` -- merges the PR,
    fast-forwards the main checkout, and deletes the branch and worktree. It is
    idempotent: if it fails partway (a network blip mid-cleanup, say), re-run it
    to finish.
@@ -65,7 +65,7 @@ host-side step at the very end: after both PRs are merged, the user runs
 superproject). So the two merges happen back-to-back in the container and
 publishing is one step at the end.
 
-Every `py/tools/pr.py` subcommand resolves the main checkout itself and runs its
+Every `submodules/devenv_utils/pr_flow.py` subcommand resolves the main checkout itself and runs its
 git operations there, so it behaves the same whether invoked from the main
 checkout or from inside a feature worktree. All of it runs in the container: the
 container is the sole authority for worktree plumbing. The only host-side git
@@ -80,8 +80,8 @@ Abandoned worktrees (e.g. a task's chat was closed mid-flight) are never
 deleted automatically: they may hold uncommitted work. gitea_serve.py prints a
 report of worktrees idle for 7+ days; when you see it, relay it to the user,
 who decides what to delete. The report is also available standalone via
-`py/tools/stale_worktrees.py`. To delete one the user has cleared, run
-`py/tools/pr.py abandon <branch>` -- it removes the worktree and its branch
+`submodules/devenv_utils/stale_worktrees.py`. To delete one the user has cleared, run
+`submodules/devenv_utils/pr_flow.py abandon <branch>` -- it removes the worktree and its branch
 (even if unmerged) with no Gitea interaction.
 
 The `origin` remote (GitHub) plays no role in this workflow; never push to it.
