@@ -30,53 +30,64 @@ namespace scribblez {
 // observe_move exactly as the game loop does: any play resets it, a pass or
 // exchange increments it.
 //
-// Each agent instance owns one EndgameSolver. Agents are per-thread and the
-// solver is single-threaded, so there is no sharing to guard.
+// The two seats of a GameRunner thread share one EndgameSolver, obtained
+// from a per-thread pool keyed by thread_id: the solver's node hash is
+// seat-agnostic, so the second seat's solves reuse the transposition entries
+// the first seat's solves of the same game tree just wrote instead of
+// recomputing them. A thread's game loop runs its two agents sequentially,
+// so the shared solver never sees concurrent use; distinct threads get
+// distinct solvers. Construction and begin_game() both clear the shared
+// table, so a fresh agent pair always starts from a cold table.
 class EndgameHastyBotAgent : public HastyBotAgent {
  public:
-  // Default per-solve node budget, tuned with `endgame_bench --mode=games` on
-  // NWL23: the largest budget whose endgame-vs-endgame games stay within ~2x
-  // the plain HastyBot-vs-HastyBot game time (measured 2.02x, with a
-  // +0.54 +/- 0.04 points/game head-to-head edge over greedy HastyBot across
-  // 4800 seat-mirrored games). Strength keeps rising superlinearly with the
-  // budget -- richer positions pass the decline gate -- at proportionally more
-  // game time; see docs/endgame_bench_results.md for the measured curve.
-  static constexpr uint64_t kDefaultEndgameNodes = 220;
-
-  // HastyBot configuration plus the endgame-solver knobs.
-  //   endgame_nodes     : per-turn solver node budget; 0 disables the solver
-  //                       entirely (the agent then plays pure HastyBot all
-  //                       game).
-  //   endgame_plies     : iterative-deepening depth cap for the solver.
-  //   endgame_objective : what the solver optimizes (see EndgameObjective).
-  //                       kLexicographic -- prove the win/draw/loss class
-  //                       first, then maximize spread without ever trading the
-  //                       class for points -- is the default, the right
-  //                       objective for games played to their end. kFirstWin
-  //                       is the break-out objective for self-play generation:
-  //                       it stops at the class proof (exposed as
-  //                       EndgameResult::proven_class), and a proven-lost
-  //                       result falls back to HastyBot's move, which shapes
-  //                       the final spread better than an arbitrary losing
-  //                       move. kSpread is the pure margin objective.
+  // HastyBot configuration plus the endgame solver's own Params. A solver
+  // budget of 0 disables endgame solving entirely (the agent then plays pure
+  // HastyBot all game). solver.spread_matters defaults to false -- the
+  // self-play break-out setting, which stops at the class proof and presumes
+  // a projection-respecting game loop; pass true for games played to their
+  // end, where points still matter.
   struct Params {
     HastyBotAgent::Params hasty;
-    uint64_t endgame_nodes = kDefaultEndgameNodes;
-    int endgame_plies = 25;
-    EndgameObjective endgame_objective = EndgameObjective::kLexicographic;
+    EndgameSolver::Params solver;
   };
 
   explicit EndgameHastyBotAgent(const Params& params);
 
-  Move make_move(const MoveRequest& req) override;
+  MoveDecision make_move(const MoveRequest& req) override;
   void observe_move(const Move& move) override;
   void begin_game() override;
 
+  // Deterministic operation totals accumulated across a game, one contribution
+  // per make_move that ran the solver: the number of such solves plus the
+  // nodes, logical move generations, and certificate nodes each EndgameResult
+  // reported. A benchmark reads these to convert deterministic operation counts
+  // into modeled time. Reset by begin_game().
+  //
+  // max_solve_nodes is the largest single solve's nodes across the game. A
+  // budget-sweep benchmark uses it to decide when a smaller-budget run would be
+  // bit-identical: if no solve of a game spent more than a smaller budget b',
+  // then re-running the game at b' changes nothing (no solve hit the larger
+  // cap, and any solve declined for having more root moves than the larger
+  // budget is declined at b' too).
+  struct SolveTotals {
+    uint64_t solves = 0;
+    uint64_t nodes = 0;
+    uint64_t movegens = 0;
+    uint64_t certificate_nodes = 0;
+    uint64_t max_solve_nodes = 0;
+  };
+  const SolveTotals& solve_totals() const { return solve_totals_; }
+
+  // Enable or disable the solver's move-generation memo (off by default),
+  // forwarding to the underlying solver. Because the two seats of a thread share
+  // one pooled solver, this setting applies to both seat-mates.
+  void set_movegen_memo(bool on) { solver_->set_movegen_memo(on); }
+
   // Build an EndgameHastyBotAgent from `--player "--type=hastybot-endgame
   // [options]"` tokens (after the factory has stripped --type and --name).
-  // Accepts every HastyBot option plus --endgame-nodes=N (0 disables the
-  // solver), --endgame-plies=P, and
-  // --endgame-objective=lexicographic|first-win|spread. Throws on bad input.
+  // Accepts every HastyBot option plus the solver Params under an "endgame-"
+  // prefix: --endgame-budget=N (0 disables the solver), --endgame-plies=P,
+  // --endgame-spread-matters=0|1. Throws on bad input.
   static std::unique_ptr<EndgameHastyBotAgent> from_spec(const std::vector<std::string>& tokens,
                                                          int thread_id, const std::string& name);
 
@@ -84,11 +95,10 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   static std::string options_help();
 
  private:
-  uint64_t endgame_nodes_;
-  int endgame_plies_;
-  EndgameObjective endgame_objective_;
+  EndgameSolver::Params solver_params_;
   int scoreless_turns_ = 0;  // consecutive zero-score turns, tracked from observe_move
-  EndgameSolver solver_;
+  std::shared_ptr<EndgameSolver> solver_;  // shared with the seat-mate; see the class comment
+  SolveTotals solve_totals_;               // accumulated across the game; reset by begin_game()
 };
 
 }  // namespace scribblez

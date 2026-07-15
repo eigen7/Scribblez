@@ -94,7 +94,10 @@ GreedyAgent::GreedyAgent(int thread_id, const std::string& name)
 GreedyAgent::GreedyAgent(int thread_id, const std::string& name, uint64_t seed)
     : Agent(thread_id, name), rng_(seed) {}
 
-Move GreedyAgent::make_move(const MoveRequest& req) {
+MoveDecision::MoveDecision(const Move& m, std::vector<Move> projected)
+    : move(m), projected_remaining_moves(std::move(projected)) {}
+
+MoveDecision GreedyAgent::make_move(const MoveRequest& req) {
   const std::vector<Move> plays = generate_legal_plays(req);
   if (!plays.empty()) {
     int best = plays.front().score();

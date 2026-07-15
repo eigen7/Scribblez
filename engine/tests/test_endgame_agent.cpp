@@ -1,6 +1,6 @@
 // GoogleTest suite for EndgameHastyBotAgent: pre-endgame delegation to plain
 // HastyBot, endgame takeover by the solver (and its disablement at
-// endgame_nodes=0), legality of returned endgame moves, full-game integration,
+// budget=0), legality of returned endgame moves, full-game integration,
 // and --type=hastybot-endgame from_spec parsing.
 
 #include "agent/endgame_hasty_bot.h"
@@ -161,11 +161,28 @@ void check_log_consistency(const GameLog& log) {
 constexpr uint64_t kSolveBudget = 1ull << 20;
 constexpr int kSolvePlies = 24;
 
-EndgameHastyBotAgent::Params endgame_params(uint64_t nodes, int plies) {
+// Forwards to an inner agent while counting how often the game loop prompts
+// it, to observe projection fast-tracking from the outside.
+class PromptCountingAgent : public Agent {
+ public:
+  PromptCountingAgent(Agent& inner) : Agent(inner.thread_id(), inner.name()), inner_(inner) {}
+  MoveDecision make_move(const MoveRequest& req) override {
+    ++prompts;
+    return inner_.make_move(req);
+  }
+  void observe_move(const Move& move) override { inner_.observe_move(move); }
+  void begin_game() override { inner_.begin_game(); }
+  int prompts = 0;
+
+ private:
+  Agent& inner_;
+};
+
+EndgameHastyBotAgent::Params endgame_params(uint64_t budget, int plies) {
   EndgameHastyBotAgent::Params p;
   p.hasty = HastyBotAgent::Params{.thread_id = 0, .name = "EndgameHastyBot"};
-  p.endgame_nodes = nodes;
-  p.endgame_plies = plies;
+  p.solver.budget = budget;
+  p.solver.plies = plies;
   return p;
 }
 
@@ -195,7 +212,7 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
     const Rack my = random_rack(rng);
     const Rack opp = random_rack(rng);
     const MoveRequest req{b, d, my, opp, 0, 0, /*bag_size=*/50};
-    EXPECT_EQ(eg.make_move(req), hasty.make_move(req)) << "position " << i;
+    EXPECT_EQ(eg.make_move(req).move, hasty.make_move(req).move) << "position " << i;
     ++checked;
   }
   ASSERT_GT(checked, 0);
@@ -203,7 +220,7 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
 
 // On an endgame where the exact solver's move differs from HastyBot's greedy
 // move, the agent plays the solver's move; with the solver disabled
-// (endgame_nodes = 0) it plays the greedy move instead.
+// (solver budget 0) it plays the greedy move instead.
 TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -215,20 +232,23 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     const MoveRequest req = endgame_request(p, d);
     const Move greedy = hasty_best_move_wmp(req);
+    // The reference solve mirrors the agent's default configuration
+    // (spread_matters off), so the moves must match exactly.
     ref.clear();
-    const EndgameResult r = ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                      /*scoreless_turns=*/0, kSolveBudget, kSolvePlies);
+    const EndgameResult r = ref.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kSolveBudget, kSolvePlies, false});
     if (r.best == greedy) continue;
 
     // Solver takes over: the agent (with a matching budget/plies) plays the
     // solver's move, not the greedy one.
     EndgameHastyBotAgent solving(endgame_params(kSolveBudget, kSolvePlies));
-    EXPECT_EQ(solving.make_move(req), r.best);
-    EXPECT_NE(solving.make_move(req), greedy);
+    EXPECT_EQ(solving.make_move(req).move, r.best);
+    EXPECT_NE(solving.make_move(req).move, greedy);
 
     // Solver disabled: the agent falls back to the greedy move.
     EndgameHastyBotAgent disabled(endgame_params(/*nodes=*/0, kSolvePlies));
-    EXPECT_EQ(disabled.make_move(req), greedy);
+    EXPECT_EQ(disabled.make_move(req).move, greedy);
 
     found = true;
   }
@@ -253,7 +273,7 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
     // decline-and-fall-back path.
     if (MoveGenerator(p.board, d).generate(p.my_rack).empty()) continue;
     const MoveRequest req = endgame_request(p, d);
-    EXPECT_EQ(tiny.make_move(req), hasty.make_move(req)) << "position " << i;
+    EXPECT_EQ(tiny.make_move(req).move, hasty.make_move(req).move) << "position " << i;
     ++checked;
   }
   ASSERT_GT(checked, 0);
@@ -271,7 +291,7 @@ TEST(EndgameAgent, EndgameMoveIsLegal) {
   for (int i = 0; i < 60; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     const MoveRequest req = endgame_request(p, d);
-    const Move m = agent.make_move(req);
+    const Move m = agent.make_move(req).move;
     if (m.type() == MoveType::PASS) {
       ++checked;
       continue;
@@ -317,46 +337,47 @@ TEST(EndgameAgent, FromSpecParsing) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
   EXPECT_NE(EndgameHastyBotAgent::from_spec(
-              {"--endgame-nodes=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
+              {"--endgame-budget=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
             nullptr);
   EXPECT_NE(
     EndgameHastyBotAgent::from_spec({"--top-k=5", "--temperature=1.5", "--seed=42"}, 0, "Y"),
     nullptr);
 
-  // A parsed --endgame-nodes=0 disables the solver: the agent plays the greedy
+  // A parsed --endgame-budget=0 disables the solver: the agent plays the greedy
   // move on a bag-empty request.
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x0FF5E7u);
   const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
   const MoveRequest req = endgame_request(p, d);
-  auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-nodes=0"}, 0, "Z");
-  EXPECT_EQ(disabled->make_move(req), hasty_best_move_wmp(req));
+  auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-budget=0"}, 0, "Z");
+  EXPECT_EQ(disabled->make_move(req).move, hasty_best_move_wmp(req));
 
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-plies=notanint"}, 0, "B"),
                std::runtime_error);
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
 
-// --endgame-objective parses each objective name and rejects unknown ones.
-TEST(EndgameAgent, ObjectiveFromSpec) {
+// --endgame-spread-matters parses both settings and rejects non-boolean input.
+TEST(EndgameAgent, SpreadMattersFromSpec) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
-  EXPECT_NE(EndgameHastyBotAgent::from_spec(
-              {"--endgame-objective=first-win", "--endgame-nodes=777"}, 0, "W"),
-            nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=lexicographic"}, 0, "X"),
-            nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-objective=spread"}, 0, "Y"), nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-nodes=777"}, 0, "V"), nullptr);
-  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-objective=wld"}, 0, "B"),
+  EXPECT_NE(
+    EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=1", "--endgame-budget=777"}, 0, "W"),
+    nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=0"}, 0, "X"), nullptr);
+  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-budget=777"}, 0, "V"), nullptr);
+  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=maybe"}, 0, "B"),
                std::runtime_error);
 }
 
-// Under the first-win objective, once the solver proves the position lost
-// (every root move loses), the agent discards the solver's arbitrary choice
-// among losing moves and plays HastyBot's static-equity move instead -- the
-// same move a plain HastyBotAgent would play on the identical request.
-TEST(EndgameAgent, FirstWinProvenLossFallsBackToHasty) {
+// The first-win agent's contract per solve outcome, checked against a
+// reference solver run on the same position: a proof-certificate continuation
+// rides along as the decision's projection (break-out takes priority even in a
+// proven-lost position -- the game's class is settled, so stop spending
+// compute); a proven loss WITHOUT a certificate falls back to HastyBot's
+// static-equity move, which shapes the final spread better than an arbitrary
+// losing move.
+TEST(EndgameAgent, FirstWinProjectsCertificates) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x105510FFu);
@@ -364,20 +385,70 @@ TEST(EndgameAgent, FirstWinProvenLossFallsBackToHasty) {
   EndgameSolver ref;
   HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
   EndgameHastyBotAgent::Params wp = endgame_params(kSolveBudget, kSolvePlies);
-  wp.endgame_objective = EndgameObjective::kFirstWin;
+  wp.solver.spread_matters = false;
   EndgameHastyBotAgent wld(wp);
 
-  bool found = false;
-  for (int i = 0; i < 200 && !found; ++i) {
+  int projected = 0, loss_fallbacks = 0, checked = 0;
+  for (int i = 0; i < 200; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     ref.clear();
-    const EndgameResult r = ref.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                      /*scoreless_turns=*/0, kSolveBudget, kSolvePlies);
-    if (r.value >= 0) continue;  // not a loss for the solving side; keep scanning
+    const EndgameResult r = ref.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kSolveBudget, kSolvePlies, false});
+    if (r.depth_completed < 1) continue;
+    ++checked;
 
+    // Reset the agent per position: its solver's transposition table is only
+    // cleared between games, and a warm table would make its capped solve
+    // diverge from the freshly-cleared reference solve above.
+    wld.begin_game();
     const MoveRequest req = endgame_request(p, d);
-    EXPECT_EQ(wld.make_move(req), hasty.make_move(req)) << "position " << i;
-    found = true;
+    const MoveDecision decision = wld.make_move(req);
+    if (r.proven_class == -1 && r.continuation.empty()) {
+      EXPECT_EQ(decision.move, hasty.make_move(req).move) << "position " << i;
+      EXPECT_TRUE(decision.projected_remaining_moves.empty()) << "position " << i;
+      ++loss_fallbacks;
+    } else {
+      EXPECT_EQ(decision.move, r.best) << "position " << i;
+      EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size())
+        << "position " << i;
+      if (!decision.projected_remaining_moves.empty()) ++projected;
+    }
   }
-  ASSERT_TRUE(found) << "no proven-loss endgame found in the scan";
+  ASSERT_GT(checked, 50);
+  ASSERT_GT(projected, 0) << "no solve produced a projected certificate";
+  std::cout << "  first-win decisions: " << projected << " projected, " << loss_fallbacks
+            << " loss fallbacks, " << checked << " checked\n";
+}
+
+// Integration: in real-lexicon self-play, respected projections reduce agent
+// prompts (proven endgames fast-track to their end) while every game still
+// reaches a natural conclusion with identical rules. Runs the same seeds both
+// ways and compares total prompt counts.
+TEST(EndgameAgent, FastTrackReducesPrompts) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
+  Dictionary d = Dictionary::load_kwg(path);
+
+  int prompts_with = 0, prompts_without = 0, fast_tracked = 0;
+  for (int mode = 0; mode < 2; ++mode) {
+    const bool respect = mode == 0;
+    EndgameHastyBotAgent::Params params = endgame_params(1600, 25);
+    params.solver.spread_matters = false;
+    EndgameHastyBotAgent inner0(params), inner1(params);
+    PromptCountingAgent a0(inner0), a1(inner1);
+    for (int i = 0; i < 20; ++i) {
+      Game g(a0, a1, d, /*seed=*/9000 + i);
+      g.set_respect_projections(respect);
+      g.play();
+      const GameLogStorage log = g.extract_log();
+      ASSERT_NE(log.end_reason, "max_turns") << "seed " << 9000 + i;
+    }
+    (respect ? prompts_with : prompts_without) = a0.prompts + a1.prompts;
+  }
+  fast_tracked = prompts_without - prompts_with;
+  std::cout << "  prompts: " << prompts_with << " with fast-track vs " << prompts_without
+            << " without (" << fast_tracked << " skipped)\n";
+  EXPECT_LT(prompts_with, prompts_without);
 }

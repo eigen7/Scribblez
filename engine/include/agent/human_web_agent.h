@@ -37,7 +37,7 @@ class HumanWebAgent : public Agent {
                 const std::string& opp_name);
   ~HumanWebAgent() override;
 
-  Move make_move(const MoveRequest& req) override;
+  MoveDecision make_move(const MoveRequest& req) override;
 
   // Surfaces the final board to the user and prompts them with Play Again /
   // Quit buttons; blocks until the browser responds, then returns the

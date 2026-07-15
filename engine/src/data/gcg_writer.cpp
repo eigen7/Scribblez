@@ -189,6 +189,21 @@ void write_gcg_endgame_adjustments(std::ostringstream& o, const GameLog& log,
 
 }  // namespace
 
+std::string move_notation(const Board& board_before, const Move& m) {
+  switch (m.type()) {
+    case MoveType::PLAY:
+      return position(board_before, m) + " " + played_word(board_before, m);
+    case MoveType::EXCHANGE: {
+      std::string tiles;
+      for (int i = 0; i < m.num_glyphs(); ++i) tiles.push_back(m.glyph(i).rack_tile().to_char());
+      return "-" + tiles;
+    }
+    case MoveType::PASS:
+      return "-";
+  }
+  return "?";
+}
+
 std::string game_log_to_gcg(const GameLog& log) { return game_log_to_gcg(log, GcgWriteOptions{}); }
 
 std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) {

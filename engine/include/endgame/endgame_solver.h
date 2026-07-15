@@ -6,48 +6,37 @@
 #include "game/rack.h"
 
 #include <cstdint>
+#include <functional>
+#include <ostream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
+// Forward-declared so Params::add_options() can register options without
+// pulling boost::program_options into every consumer of this header.
+namespace boost::program_options {
+class options_description;
+}
 
 namespace scribblez {
 
 class Dictionary;
 class LeaveOutplays;
 
-// What a solve optimizes, given as EndgameSolver::solve's `objective`.
-//
-// kSpread searches the full window for the exact final spread. Exact spread
-// play is also class-optimal (a positive spread IS a win), so this objective
-// only "risks" the win/draw/loss class where its answer is an unproven
-// estimate.
-//
-// kFirstWin pins the root window to (kFirstWinAlpha, kFirstWinBeta) around an
-// even final spread, so the search only resolves the win/draw/loss class:
-// proofs land far cheaper, and iterative deepening stops the moment the class
-// is proven -- the break-out mode for self-play generation, where a proven
-// class means the rest of the game is not worth computing. Among winning root
-// moves it returns an arbitrary one, and a proven-loss best move is
-// meaningless (every move loses).
-//
-// kLexicographic never trades the class for points: it first runs a kFirstWin
-// pass to prove the class, then spends the remaining budget on a spread pass.
-// With a proven win or draw, the spread pass's move is played only if it
-// provably preserves the class (verified with a narrow-window probe when the
-// spread pass is itself unproven; the proven-class move is the fallback). A
-// proven loss makes every move class-equal, so the spread pass is pure defense
-// (maximize the final spread of a lost game). When no class proof lands within
-// budget, the spread pass's margin-maximizing answer is the class-robust
-// fallback: margin is slack against estimate error.
-enum class EndgameObjective : uint8_t { kSpread, kFirstWin, kLexicographic };
-
-// The objective's CLI/config string form ("spread", "first-win",
-// "lexicographic") and its inverse; parse_endgame_objective throws
-// std::runtime_error on an unknown name.
-// TODO(enum-strings): generate this pair with a framework like magic_enum
-// instead of hand-maintaining the mapping.
-const char* endgame_objective_name(EndgameObjective objective);
-EndgameObjective parse_endgame_objective(const std::string& name);
+// One bag-empty position for EndgameSolver::solve: `my_rack` belongs to the
+// side to move, both racks are the actual remaining tiles, and
+// scoreless_turns counts the consecutive zero-score turns already played in
+// the real game.
+struct EndgameState {
+  const Dictionary* dict = nullptr;  // lexicon the position is played under
+  Board board;
+  Rack my_rack;
+  Rack opp_rack;
+  int my_score = 0;
+  int opp_score = 0;
+  int scoreless_turns = 0;
+};
 
 // Result of a single endgame solve, from the perspective of the side to move
 // at the solved position ("the solving side").
@@ -76,6 +65,26 @@ struct EndgameResult {
                                      // 0 draw, -1 loss), or kClassUnknown; the
                                      // signal a self-play caller can break out
                                      // of the game on
+  // The proof-certificate line after `best`: the remaining moves of the game,
+  // both sides alternating, ending the game (under the solver's compressed
+  // scoreless rule) at the proven class. Present for every solve that proves
+  // the class: the class-critical side's moves come from fresh narrow-window
+  // proofs at each position, so the line lands on the proven class by
+  // construction (and a terminal check still gates it). The doomed side's
+  // entries are proof-grade optimal-play stand-ins, not what the opposing
+  // agent would have chosen.
+  std::vector<Move> continuation;
+  // Nodes the certificate reconstruction's re-searches spent. Tracked apart
+  // from `nodes`: reconstruction runs after the search proper and is exempt
+  // from node_budget (its cost is bounded in practice by the warm table).
+  uint64_t certificate_nodes = 0;
+  // The number of logical move generations the solve performed across search,
+  // greedy playouts, and certificate reconstruction. Certificate
+  // reconstruction runs inside solve(), so its generations land in this same
+  // count. A move-generation memo hit counts the same as a real generation, so
+  // the number reflects what an isolated, memo-less solve would compute -- a
+  // deterministic operation count a benchmark can convert into modeled time.
+  uint64_t movegens = 0;
 };
 
 // Exact/near-exact endgame solver for a pre-endgame position: bag empty and both
@@ -101,8 +110,7 @@ struct EndgameResult {
 // settled. Proven-ness rides along every search result and every
 // transposition-table entry, propagated through the negamax recursion (a node
 // is proven only if the child searches its verdict rests on are all proven).
-// What a solve does with proofs is the objective's business: see
-// EndgameObjective.
+// What a solve does with proofs is Params::spread_matters' business.
 //
 // Opponent-outplay futility pruning cuts the mover's own moves at interior
 // nodes. Each node knows the current out-play set of the side that will reply
@@ -149,24 +157,44 @@ class EndgameSolver {
   // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
   explicit EndgameSolver(int tt_log2_entries = 16);
 
-  // Solve the position for the side holding my_rack (to move) under
-  // `objective` (see EndgameObjective). Both racks must be the actual
-  // remaining tiles (bag empty). scoreless_turns is the number of consecutive
-  // zero-score turns already played in the real game.
+  // Solve-time configuration.
   //
-  // The search looks at most max_plies deep, and node_budget is a hard cap on
-  // nodes spent across every pass the objective runs (exceeded by at most one
-  // greedy playout's plies before the abort lands). A position with more root
-  // moves than node_budget provably cannot complete a first iteration, so the
-  // solve is declined immediately after root move generation rather than
-  // burning the budget on a fraction of the root. A legal move is always
+  // spread_matters selects what a solve optimizes. false: resolve only the
+  // win/draw/loss class (narrow root window; iterative deepening stops the
+  // moment the class is proven, and among winning moves an arbitrary one is
+  // returned) -- the self-play break-out setting, where a proven class means
+  // the rest of the game is not worth computing. true: never trade the class
+  // for points -- a class pass capped at half the budget, then a spread pass
+  // on the remainder whose move is played only when it provably preserves a
+  // proven win or draw (a proven spread pass implies that; an unproven one is
+  // checked with a narrow-window probe, falling back to the proven-class
+  // move); a proven loss makes every move class-equal, so the spread pass is
+  // pure defense; and with no class proof in budget, margin-maximizing play
+  // is the class-robust fallback (margin is slack against estimate error).
+  struct Params {
+    // Hard cap on nodes spent across every pass a solve runs (exceeded by at
+    // most one greedy playout's plies before the abort lands). A position
+    // with more root moves than the budget provably cannot complete a first
+    // iteration and is declined up front. The default is tuned with
+    // `endgame_bench` on NWL23 as the largest budget whose endgame-vs-endgame
+    // games stay within ~2x the plain HastyBot-vs-HastyBot game time; see
+    // docs/endgame_bench_results.md.
+    uint64_t budget = 220;
+    int plies = 25;  // iterative-deepening depth cap
+    bool spread_matters = false;
+
+    // Register --<prefix>budget, --<prefix>plies, and
+    // --<prefix>spread-matters, bound to this object's fields; the current
+    // field values become the option defaults.
+    void add_options(boost::program_options::options_description& desc,
+                     const std::string& prefix = "");
+  };
+
+  // Solve `state` for the side holding its my_rack. A legal move is always
   // returned: the last completed iteration's best, else the best
   // fully-searched root move of the partial first iteration, else the
   // estimate-ordered top root move.
-  EndgameResult solve(const Board& board, const Dictionary& dict, const Rack& my_rack,
-                      const Rack& opp_rack, int my_score, int opp_score, int scoreless_turns,
-                      uint64_t node_budget, int max_plies,
-                      EndgameObjective objective = EndgameObjective::kSpread);
+  EndgameResult solve(const EndgameState& state, const Params& params);
 
   // The first-win root window: a final spread >= kFirstWinBeta is a win,
   // <= kFirstWinAlpha a loss, 0 a draw.
@@ -179,6 +207,14 @@ class EndgameSolver {
   // treat entries from older generations as empty.
   void clear();
 
+  // Stream a human-readable trace of each solve to `os`: the position summary,
+  // the replier's out-play set, every root move's futility bound (the
+  // block-or-outscore view), each iteration's verdict, and the certificate
+  // walk. `fmt` renders a move against the board it is about to be played on
+  // (the endgame tool binds GCG notation). Pass nullptr to disable (the
+  // default).
+  void set_trace(std::ostream* os, std::function<std::string(const Board&, const Move&)> fmt);
+
   // Enable or disable opponent-outplay futility pruning (on by default). Exists
   // so a test can A/B the two modes and assert the pruning never changes a
   // solve's value or best move; production always leaves it on.
@@ -188,6 +224,22 @@ class EndgameSolver {
   // default). Exists so tests and the benchmark can A/B how many nodes the
   // short-circuit saves; production always leaves it on.
   void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
+
+  // Enable or disable the root beta cutoff (on by default). Exists so a test
+  // can A/B how many nodes the cutoff saves; production always leaves it on.
+  // The cutoff only ever fires under the narrow first-win window (the full
+  // window's +infinity beta is unreachable), where a root fail-high already
+  // settles the class, so disabling it changes no solve's value or best move.
+  void set_root_cutoff(bool on) { root_cutoff_ = on; }
+
+  // Enable or disable the move-generation memo (off by default). When on, every
+  // move list the solver requests is cached by board+rack and reused on a
+  // repeat, trading memory for generation work. It is a measurement-tool
+  // accelerator, not a production default: the logical `movegens` count is
+  // unchanged (a cache hit still counts as one generation), so a memo-on and a
+  // memo-off solve return bit-identical results including movegens. Exists so a
+  // benchmark can accelerate deterministic-operation-count runs.
+  void set_movegen_memo(bool on) { movegen_memo_ = on; }
 
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
@@ -255,13 +307,34 @@ class EndgameSolver {
   EndgameResult run_iterative(int32_t alpha, int32_t beta, bool first_win,
                               std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
                               int max_plies);
-  // The kLexicographic driver over run_iterative passes; see EndgameObjective.
+  // The spread_matters driver over run_iterative passes; see Params.
   EndgameResult solve_lexicographic(std::vector<RankedMove>& root_moves,
                                     const std::vector<Move>& plays, int max_plies);
   // True iff playing `m` at the root provably preserves game class `cls` for
   // the solving side: a narrow-window iterative probe of the child position,
   // sharing the solve budget. False when the proof does not land in budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
+  // Render `m` with the trace formatter against the solver's current board.
+  std::string trace_move(const Move& m) const { return trace_fmt_(board_, m); }
+  // The root block-or-outscore view: the replier's out-plays and, per root
+  // move, the futility bound and the strongest out-play it fails to block.
+  void trace_root_view(const std::vector<RankedMove>& root_moves);
+
+  // Fill result.continuation with a proof-certificate line for result.best:
+  // at every turn of a side that must preserve the proven class (the winner's
+  // turns; both sides' in a draw) the move comes from a fresh narrow-window
+  // proof of the current position, re-searched over the warm table outside the
+  // node budget; the doomed side's turns take the greedy playout move, which
+  // cannot change the class. Succeeds for every proven class; the terminal
+  // class check is kept as a hard gate. Reconstruction cost lands in
+  // result.certificate_nodes.
+  void extract_continuation(EndgameResult& result);
+  // The proven class-preserving move for the side to move at the current walk
+  // position (`req_class` is the class from the mover's perspective), from an
+  // iterative narrow-window proof rooted at walk ply `ply`. Returns false only
+  // if no proof lands within kMaxPlayout depths (impossible for a true class,
+  // kept as the never-wrong gate).
+  bool reprove_walk_move(int ply, int req_class, Move* out);
   SearchResult run_root(int depth, int32_t alpha, int32_t beta, std::vector<RankedMove>& root_moves,
                         const std::vector<Move>& plays, Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
@@ -271,6 +344,21 @@ class EndgameSolver {
   SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply,
                             bool first);
   int32_t greedy_playout(uint64_t node_key, int ply);
+
+  // Return the legal move list for `rack` on the current board, counting one
+  // logical move generation (movegens_). With the memo off it generates fresh
+  // into a scratch buffer; with the memo on it keys by the current board_hash_
+  // mixed with rack.bits() and returns a cached list on a hit, else generates,
+  // stores, and returns. A 64-bit key collision with matching content would
+  // return a wrong move list -- the same accepted collision model as the
+  // transposition table -- but the map stores the full key, so its bucket
+  // (index) collisions are resolved by key equality and only a genuine hash
+  // collision can misfire. The returned reference stays valid while the caller
+  // uses it even across nested make/unmake and further memo insertions:
+  // std::unordered_map never invalidates references to mapped values on rehash
+  // (only iterators), and the scratch buffer is overwritten only by a later
+  // call, never during the current caller's use.
+  const std::vector<Move>& generate_moves(const Rack& rack);
 
   // Sound upper bound on the mover's value from playing `m` at the current node,
   // derived from the best out-play in `replier_outs` that `m` provably leaves
@@ -332,6 +420,22 @@ class EndgameSolver {
   uint64_t budget_ = 0;
   bool aborting_ = false;
 
+  // Logical move generations the current solve has performed (see
+  // EndgameResult::movegens). Reset at solve() entry, copied into the result at
+  // the end; a memo hit increments it just as a real generation does.
+  uint64_t movegens_ = 0;
+
+  // Move-generation memo, off by default (see set_movegen_memo). Keyed by the
+  // full 64-bit key mixing board_hash_ with the rack bits. It survives clear()
+  // -- its keys are board+rack content, independent of scores and table
+  // generations -- but is capped: once it exceeds kMovegenMemoCap entries the
+  // whole map is erased before the next insert (a crude bound; the memo is a
+  // measurement accelerator, not a production default).
+  static constexpr size_t kMovegenMemoCap = static_cast<size_t>(1) << 20;
+  bool movegen_memo_ = false;
+  std::unordered_map<uint64_t, std::vector<Move>> movegen_memo_map_;
+  std::vector<Move> movegen_scratch_;  // return buffer when the memo is off
+
   // Opponent-outplay futility pruning, on except when a test disables it to A/B
   // the two modes (see set_outplay_futility).
   bool outplay_futility_ = true;
@@ -349,6 +453,16 @@ class EndgameSolver {
   OutplaySet* cur_sets_[2] = {nullptr, nullptr};
 
   bool proof_early_exit_ = true;
+
+  // Root beta cutoff, on except when a test disables it to measure the nodes it
+  // saves (see set_root_cutoff).
+  bool root_cutoff_ = true;
+
+  // Trace sink and move renderer; tracing is active iff trace_ is non-null
+  // (set_trace installs a fallback renderer when none is given).
+  std::ostream* trace_ = nullptr;
+  std::function<std::string(const Board&, const Move&)> trace_fmt_;
+
   std::vector<TTEntry> tt_;
   uint64_t tt_mask_ = 0;
   uint16_t tt_gen_ = 1;  // current generation; entries with gen != this are empty

@@ -22,7 +22,7 @@ class HastyAgent : public Agent {
  public:
   HastyAgent(int tid, std::string name, uint64_t seed) : Agent(tid, std::move(name)), rng_(seed) {}
 
-  Move make_move(const MoveRequest& req) override {
+  MoveDecision make_move(const MoveRequest& req) override {
     const std::vector<Move> plays = generate_legal_plays(req);
     if (!plays.empty()) {
       int best = -1;

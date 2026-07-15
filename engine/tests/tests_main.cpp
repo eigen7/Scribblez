@@ -838,7 +838,7 @@ class TestAgent : public scribblez::Agent {
   TestAgent(int tid, std::string name, uint64_t seed)
       : scribblez::Agent(tid, std::move(name)), rng_(seed) {}
 
-  scribblez::Move make_move(const scribblez::MoveRequest& req) override {
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
     const std::vector<scribblez::Move> plays = scribblez::generate_legal_plays(req);
     if (!plays.empty()) {
       int best = -1;
@@ -1946,9 +1946,24 @@ namespace {
 class AlwaysPassAgent : public scribblez::Agent {
  public:
   AlwaysPassAgent(int tid, std::string name) : scribblez::Agent(tid, std::move(name)) {}
-  scribblez::Move make_move(const scribblez::MoveRequest&) override {
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest&) override {
+    ++prompts;
     return scribblez::Move::pass();
   }
+  int prompts = 0;
+};
+
+// Passes, and on its first prompt projects the rest of a pass-out game: five
+// more passes, which together with its own reach the six consecutive zero
+// turns that end the game.
+class ProjectingPassAgent : public scribblez::Agent {
+ public:
+  ProjectingPassAgent(int tid, std::string name) : scribblez::Agent(tid, std::move(name)) {}
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest&) override {
+    ++prompts;
+    return {scribblez::Move::pass(), std::vector<scribblez::Move>(5, scribblez::Move::pass())};
+  }
+  int prompts = 0;
 };
 
 }  // namespace
@@ -2002,6 +2017,36 @@ TEST(Game, EndStalematePenalty) {
   for (const auto& t : log.turns) ASSERT_EQ(t.move.type(), MoveType::PASS);
   for (int p = 0; p < 2; ++p) {
     ASSERT_EQ(log.final_scores[p], -log.final_racks[p].point_value());
+  }
+}
+
+// A respected projection replaces prompting: the projecting agent is asked
+// once, its five projected passes complete the stalemate, and the opponent is
+// never prompted at all. With projections ignored (the default), both agents
+// are prompted for every turn of the same game.
+TEST(Game, RespectedProjectionStopsPrompting) {
+  Dictionary dict = medium_dict();
+  {
+    ProjectingPassAgent a0(0, "P0");
+    AlwaysPassAgent a1(0, "P1");
+    scribblez::Game g(a0, a1, dict, /*seed=*/424242ULL);
+    g.set_respect_projections(true);
+    g.play();
+    const scribblez::GameLogStorage log = g.extract_log();
+    ASSERT_EQ(log.end_reason, "stalemate");
+    ASSERT_EQ(log.turns.size(), 6);
+    ASSERT_EQ(a0.prompts, 1);
+    ASSERT_EQ(a1.prompts, 0);
+    for (int p = 0; p < 2; ++p) ASSERT_EQ(log.final_scores[p], -log.final_racks[p].point_value());
+  }
+  {
+    ProjectingPassAgent a0(0, "P0");
+    AlwaysPassAgent a1(0, "P1");
+    scribblez::Game g(a0, a1, dict, /*seed=*/424242ULL);
+    g.play();
+    ASSERT_EQ(g.extract_log().turns.size(), 6);
+    ASSERT_EQ(a0.prompts, 3);
+    ASSERT_EQ(a1.prompts, 3);
   }
 }
 
@@ -3410,8 +3455,8 @@ class ShadowCheckAgent : public scribblez::Agent {
  public:
   ShadowCheckAgent(int tid, const std::string& name)
       : scribblez::Agent(tid, name), bot_({.thread_id = tid, .name = name}) {}
-  scribblez::Move make_move(const scribblez::MoveRequest& req) override {
-    const scribblez::Move shadow = bot_.make_move(req);
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
+    const scribblez::Move shadow = bot_.make_move(req).move;
     const scribblez::Move ref = scribblez::hasty_best_move_reference(req);
     EXPECT_EQ(move_key(req.board, shadow), move_key(req.board, ref));
     ++comparisons;
@@ -3519,11 +3564,11 @@ class CapturingAgent : public scribblez::Agent {
         bot_({.thread_id = tid, .name = name}),
         sink_(sink),
         blanked_sink_(blanked_sink) {}
-  scribblez::Move make_move(const scribblez::MoveRequest& req) override {
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
     auto& dst = req.my_rack.counts().blanks() == 0 ? sink_ : blanked_sink_;
     dst.push_back(
       {req.board, req.my_rack, req.opp_rack, req.my_score, req.opp_score, req.bag_size});
-    return bot_.make_move(req);
+    return bot_.make_move(req).move;
   }
 
  private:
@@ -3564,7 +3609,7 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
   HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
-    ASSERT_EQ(move_key(p.board, blank_bot.make_move(req)),
+    ASSERT_EQ(move_key(p.board, blank_bot.make_move(req).move),
               move_key(p.board, hasty_best_move_wmp(req)));
   }
 
@@ -3581,7 +3626,8 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
     total_moves += static_cast<long>(full.size());
 
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
-    ASSERT_EQ(move_key(p.board, bot.make_move(req)), move_key(p.board, hasty_best_move_wmp(req)));
+    ASSERT_EQ(move_key(p.board, bot.make_move(req).move),
+              move_key(p.board, hasty_best_move_wmp(req)));
   }
   ASSERT_FALSE(positions.empty());
   std::cout << "  WMP/GADDAG equivalence OK (" << positions.size() << " blank-free + "

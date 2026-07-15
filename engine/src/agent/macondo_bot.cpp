@@ -368,7 +368,7 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 
 }  // namespace
 
-Move HastyBotAgent::make_move(const MoveRequest& req) {
+MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   // Greedy: the fast pruned shadow-play search (WordMap extents, with a GADDAG
   // fallback for blank-bearing racks). Used when sampling is disabled
   // (temperature 0) or confined to the opening and the bag has dropped below

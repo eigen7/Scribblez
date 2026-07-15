@@ -3,6 +3,7 @@
 //   - EndgameSolver correctness against a brute-force reference plus oracle
 //     positions, determinism, node-budget behavior, and cross-turn TT reuse.
 
+#include "data/gcg_reader.h"
 #include "endgame/endgame_solver.h"
 #include "endgame/outplays.h"
 #include "game/board.h"
@@ -342,8 +343,9 @@ int32_t forced_move_value(const Dictionary& d, const EndgamePos& p, const Move& 
   bool over = false;
   const RefState ns = ref_apply(s, m, over);
   if (over) return ns.scores[0] - ns.scores[1];
-  const EndgameResult r = control.solve(ns.board, d, ns.racks[1], ns.racks[0], ns.scores[1],
-                                        ns.scores[0], ns.scoreless, kBigBudget, kRefDepth);
+  const EndgameResult r = control.solve(
+    {&d, ns.board, ns.racks[1], ns.racks[0], ns.scores[1], ns.scores[0], ns.scoreless},
+    {kBigBudget, kRefDepth, true});
   return -r.value;
 }
 
@@ -365,10 +367,12 @@ void check_pruning_ab(const Dictionary& d, unsigned seed, int count, uint64_t& p
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));  // 2..4 tiles
     EndgameSolver on, off;
     off.set_outplay_futility(false);
-    const EndgameResult a = on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
-                                     kBigBudget, kRefDepth);
-    const EndgameResult b = off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
-                                      kBigBudget, kRefDepth);
+    const EndgameResult a =
+      on.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+               {kBigBudget, kRefDepth, true});
+    const EndgameResult b =
+      off.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                {kBigBudget, kRefDepth, true});
     EXPECT_EQ(a.value, b.value) << "seed " << seed << " position " << i;
     if (!(a.best == b.best)) {
       EXPECT_EQ(forced_move_value(d, p, a.best, off), b.value)
@@ -408,16 +412,18 @@ TEST(EndgameSolver, DifferentialVsBruteForce) {
   for (int i = 0; i < 120; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
     solver.clear();
-    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                         /*scoreless_turns=*/0, kBigBudget, kRefDepth);
+    const EndgameResult r = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, true});
     const int32_t ref =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
     ASSERT_EQ(r.value, ref) << "position " << i << " (solving side to move)";
 
     // Other parity: opponent's rack/score becomes the side to move.
     solver.clear();
-    const EndgameResult r2 = solver.solve(p.board, d, p.opp_rack, p.my_rack, p.opp_score,
-                                          p.my_score, 0, kBigBudget, kRefDepth);
+    const EndgameResult r2 =
+      solver.solve({&d, p.board, p.opp_rack, p.my_rack, p.opp_score, p.my_score, 0},
+                   {kBigBudget, kRefDepth, true});
     const int32_t ref2 =
       ref_solve(p.board, d, p.opp_rack, p.my_rack, p.opp_score, p.my_score, 0, kRefDepth);
     ASSERT_EQ(r2.value, ref2) << "position " << i << " (opponent to move)";
@@ -443,7 +449,8 @@ TEST(EndgameSolver, OutInOneOptimal) {
   const int32_t expected = (my_score + out->score() + 2 * opp.point_value()) - opp_score;
 
   EndgameSolver solver;
-  const EndgameResult r = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 8);
+  const EndgameResult r =
+    solver.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, 8, true});
   EXPECT_EQ(r.value, expected);
   EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
   ASSERT_EQ(r.best.type(), MoveType::PLAY);
@@ -464,7 +471,8 @@ TEST(EndgameSolver, StalematePassPass) {
 
   const int32_t expected = (my_score - my.point_value()) - (opp_score - opp.point_value());
   EndgameSolver solver;
-  const EndgameResult r = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 6);
+  const EndgameResult r =
+    solver.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, 6, true});
   EXPECT_EQ(r.value, expected);
   EXPECT_EQ(r.best.type(), MoveType::PASS);
   EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
@@ -483,7 +491,8 @@ TEST(EndgameSolver, StuckOpponentMultiTurnOut) {
   ASSERT_TRUE(MoveGenerator(b, d).generate(opp).empty());
 
   EndgameSolver solver;
-  const EndgameResult deep = solver.solve(b, d, my, opp, my_score, opp_score, 0, kBigBudget, 12);
+  const EndgameResult deep =
+    solver.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, 12, true});
   const int32_t ref = ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth);
   EXPECT_EQ(deep.value, ref);
   // No single opening play empties this 4-tile rack (the longest tiny-dict word
@@ -505,15 +514,17 @@ TEST(EndgameSolver, GreedyHoldbackSuboptimal) {
   for (int i = 0; i < 400 && !found; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     solver.clear();
-    const EndgameResult deep = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                            p.opp_score, 0, kBigBudget, kRefDepth);
+    const EndgameResult deep =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, true});
     const int32_t ref =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
     ASSERT_EQ(deep.value, ref);
 
     solver.clear();
-    const EndgameResult greedy = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                              p.opp_score, 0, kBigBudget, /*max_plies=*/1);
+    const EndgameResult greedy =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, /*max_plies=*/1, true});
     ASSERT_EQ(greedy.depth_completed, 1);
     const int32_t greedy_true = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
                                                       p.opp_score, 0, greedy.best, kRefDepth);
@@ -534,14 +545,14 @@ TEST(EndgameSolver, Determinism) {
   for (int i = 0; i < 20; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     EndgameSolver s1;
-    const EndgameResult a =
-      s1.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    const EndgameResult a = s1.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 12, true});
     s1.clear();
-    const EndgameResult b =
-      s1.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    const EndgameResult b = s1.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 12, true});
     EndgameSolver s2;
-    const EndgameResult c =
-      s2.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 12);
+    const EndgameResult c = s2.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 12, true});
     ASSERT_EQ(a.value, b.value);
     ASSERT_EQ(a.value, c.value);
     ASSERT_EQ(a.depth_completed, b.depth_completed);
@@ -570,8 +581,8 @@ TEST(EndgameSolver, NodeBudget) {
     uint64_t prev_nodes = 0;
     for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull, 200000ull}) {
       solver.clear();
-      const EndgameResult r =
-        solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget, 12);
+      const EndgameResult r = solver.solve(
+        {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, 12, true});
       EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
       EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
       EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
@@ -601,8 +612,8 @@ TEST(EndgameSolver, DeclinesRichPositionsBeyondBudget) {
     solver.clear();
     // Root moves are the plays plus the pass, so a budget of plays.size() falls
     // one node short of the first iteration.
-    const EndgameResult r =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, plays.size(), 12);
+    const EndgameResult r = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {plays.size(), 12, true});
     EXPECT_EQ(r.depth_completed, 0) << "position " << i;
     EXPECT_EQ(r.nodes, 0u) << "position " << i;
     if (r.best.type() != MoveType::PASS) {
@@ -624,8 +635,9 @@ TEST(EndgameSolver, TTReuseAcrossTurns) {
   EndgameSolver solver;
   for (int i = 0; i < 20; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
-    const EndgameResult parent = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                              p.opp_score, 0, kBigBudget, kRefDepth);
+    const EndgameResult parent =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, true});
 
     // Apply the parent's best move; if it ends the game there is no child solve.
     RefState s = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
@@ -634,9 +646,9 @@ TEST(EndgameSolver, TTReuseAcrossTurns) {
     if (over) continue;
 
     // Reuse the warm TT: solve the child from the opponent's perspective.
-    const EndgameResult child =
-      solver.solve(after.board, d, after.racks[1], after.racks[0], after.scores[1], after.scores[0],
-                   after.scoreless, kBigBudget, kRefDepth);
+    const EndgameResult child = solver.solve({&d, after.board, after.racks[1], after.racks[0],
+                                              after.scores[1], after.scores[0], after.scoreless},
+                                             {kBigBudget, kRefDepth, true});
     // The child's optimal value (opponent to move) is the negation of the value
     // the parent assigned to reaching it, i.e. the parent's optimum.
     EXPECT_EQ(child.value, -parent.value);
@@ -661,9 +673,9 @@ TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
 
     solver.clear();
-    const EndgameResult r =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
+    const EndgameResult r = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, false});
     ++checked;
 
     if (v_star > 0) {
@@ -700,13 +712,13 @@ TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
 
     solver.clear();
-    const EndgameResult full =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kSpread);
+    const EndgameResult full = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, true});
     solver.clear();
-    const EndgameResult wld =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
+    const EndgameResult wld = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, false});
     full_nodes += full.nodes;
     wld_nodes += wld.nodes;
   }
@@ -725,8 +737,9 @@ TEST(EndgameSolver, ProvenMatchesBruteForce) {
   for (int i = 0; i < 40; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
     solver.clear();
-    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                         /*scoreless_turns=*/0, kBigBudget, kRefDepth);
+    const EndgameResult r = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, true});
     const int32_t ref =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
     if (r.proven) {
@@ -744,7 +757,9 @@ TEST(EndgameSolver, ProvenMatchesBruteForce) {
 // the identical iterations, so value, best move, and node count all match. And
 // because the proof depth is far below the kRefDepth horizon, the full-horizon
 // solve spends no more nodes than the shallow depth-capped one -- the proof
-// truncated the deepening.
+// truncated the deepening. Run without spread_matters: its single pass makes
+// "the same iterations up to the proof depth" well-defined, while the
+// spread_matters driver's two passes each deepen on their own schedule.
 TEST(EndgameSolver, EarlyExitPreservesResults) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -754,12 +769,14 @@ TEST(EndgameSolver, EarlyExitPreservesResults) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2);
 
     solver.clear();
-    const EndgameResult early = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                             p.opp_score, 0, kBigBudget, kRefDepth);
+    const EndgameResult early =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, false});
     ASSERT_GE(early.depth_completed, 1) << "position " << i;
     solver.clear();
-    const EndgameResult ctrl = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                            p.opp_score, 0, kBigBudget, early.depth_completed);
+    const EndgameResult ctrl =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, early.depth_completed, false});
     ASSERT_EQ(early.value, ctrl.value) << "position " << i;
     ASSERT_TRUE(early.best == ctrl.best) << "position " << i;
     ASSERT_EQ(early.nodes, ctrl.nodes) << "position " << i;
@@ -789,12 +806,23 @@ TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/(i % 2) ? 1 : 2);
     on.clear();
     off.clear();
-    const EndgameResult a =
-      on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 25);
-    const EndgameResult b =
-      off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget, 25);
+    const EndgameResult a = on.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 25, true});
+    const EndgameResult b = off.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 25, true});
     ASSERT_EQ(a.value, b.value) << "position " << i;
-    ASSERT_TRUE(a.best == b.best) << "position " << i;
+    if (!(a.best == b.best)) {
+      // The short-circuit changes how many narrow-window class-pass iterations
+      // run before the spread pass, and a root beta cutoff leaves the moves it
+      // skips stale-ranked, so a different iteration count can reorder the root
+      // and settle on a different equal-optimal move. A divergent best is
+      // accepted only if a fresh control solver credits it with the same exact
+      // value when forced (a true tie); a fresh solver keeps the measured
+      // solvers' warm tables untouched.
+      EndgameSolver control;
+      EXPECT_EQ(forced_move_value(d, p, a.best, control), b.value)
+        << "position " << i << ": divergent best move is not a tie";
+    }
     nodes_on += a.nodes;
     nodes_off += b.nodes;
     ++checked;
@@ -826,12 +854,13 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
 
     solver.clear();
-    const EndgameResult wld =
-      solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                   /*scoreless_turns=*/0, kBigBudget, kRefDepth, EndgameObjective::kFirstWin);
+    const EndgameResult wld = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      {kBigBudget, kRefDepth, false});
     solver.clear();
-    const EndgameResult full = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                            p.opp_score, 0, kBigBudget, kRefDepth);
+    const EndgameResult full =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, true});
     if (wld.proven) {
       const int wld_sign = (wld.value > 0) - (wld.value < 0);
       const int ref_sign = (ref > 0) - (ref < 0);
@@ -843,6 +872,59 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   }
   ASSERT_GT(proven, 0) << "no wld solve proved a class";
   std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
+}
+
+// Every class-proven solve carries a valid proof certificate: starting from
+// the returned best move, every entry is legal in its position (regenerated
+// and matched exactly), the line ends the game under the solver's rules, and
+// the final spread's class is the proven class. Checked across objectives and
+// budgets.
+TEST(EndgameSolver, ContinuationCertificateIsSound) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0xCE47B00Cu);
+  int with_certificate = 0, class_proven = 0;
+  for (int i = 0; i < 120; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    const bool spread_matters = (i % 4) < 2;
+    solver.clear();
+    const EndgameResult r =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {budget, kRefDepth, spread_matters});
+    if (r.proven_class == EndgameResult::kClassUnknown) {
+      ASSERT_TRUE(r.continuation.empty()) << "position " << i;
+      continue;
+    }
+    ++class_proven;
+
+    RefState st = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
+    bool over = false;
+    st = ref_apply(st, r.best, over);
+    // A best move that itself ends the game needs no continuation; otherwise
+    // the certificate must be present and finish the game.
+    if (!over) {
+      ASSERT_FALSE(r.continuation.empty())
+        << "position " << i << ": class proven but no certificate";
+      ++with_certificate;
+    }
+    for (const Move& m : r.continuation) {
+      ASSERT_FALSE(over) << "position " << i << ": continuation past the game end";
+      if (m.type() == MoveType::PLAY) {
+        const std::vector<Move> plays = MoveGenerator(st.board, d).generate(st.racks[st.stm]);
+        ASSERT_NE(std::find(plays.begin(), plays.end(), m), plays.end())
+          << "position " << i << ": illegal continuation move";
+      }
+      st = ref_apply(st, m, over);
+    }
+    ASSERT_TRUE(over) << "position " << i << ": certified line does not end the game";
+    const int32_t final_spread = st.scores[0] - st.scores[1];
+    ASSERT_EQ((final_spread > 0) - (final_spread < 0), r.proven_class) << "position " << i;
+  }
+  ASSERT_GT(class_proven, 0);
+  ASSERT_GT(with_certificate, 0);
+  std::cout << "  certificates " << with_certificate << "/" << class_proven
+            << " class-proven endgames (the rest end with the chosen move)\n";
 }
 
 // At a budget large enough to prove everything, the lexicographic objective is
@@ -857,11 +939,11 @@ TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
     EndgameSolver lex_solver, spread_solver;
     const EndgameResult lex =
-      lex_solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget,
-                       kRefDepth, EndgameObjective::kLexicographic);
+      lex_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                       {kBigBudget, kRefDepth, true});
     const EndgameResult spread =
-      spread_solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kBigBudget,
-                          kRefDepth, EndgameObjective::kSpread);
+      spread_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                          {kBigBudget, kRefDepth, true});
     ASSERT_EQ(lex.value, spread.value) << "position " << i;
     ASSERT_TRUE(lex.proven) << "position " << i;
     const int32_t ref =
@@ -888,8 +970,8 @@ TEST(EndgameSolver, LexicographicPreservesProvenClass) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
     const uint64_t budget = 60 + 140 * (i % 5);  // 60..620: from starved to roomy
     solver.clear();
-    const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score,
-                                         0, budget, kRefDepth, EndgameObjective::kLexicographic);
+    const EndgameResult r = solver.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, kRefDepth, true});
     ++checked;
     if (r.depth_completed == 0 || r.proven_class == EndgameResult::kClassUnknown) continue;
     ++class_proven;
@@ -919,8 +1001,8 @@ TEST(EndgameSolver, LexicographicRespectsBudget) {
     for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull}) {
       solver.clear();
       const EndgameResult r =
-        solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, budget,
-                     kRefDepth, EndgameObjective::kLexicographic);
+        solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                     {budget, kRefDepth, true});
       EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
     }
   }
@@ -938,13 +1020,14 @@ TEST(EndgameSolver, ProvenClassMatchesReference) {
     const int32_t ref =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
     const int ref_class = (ref > 0) - (ref < 0);
-    for (EndgameObjective objective : {EndgameObjective::kSpread, EndgameObjective::kFirstWin}) {
+    for (const bool spread_matters : {false, true}) {
       solver.clear();
-      const EndgameResult r = solver.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score,
-                                           p.opp_score, 0, kBigBudget, kRefDepth, objective);
+      const EndgameResult r =
+        solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                     {kBigBudget, kRefDepth, spread_matters});
       if (r.proven) {
         ASSERT_EQ(r.proven_class, ref_class)
-          << "position " << i << " objective " << static_cast<int>(objective);
+          << "position " << i << " spread_matters " << spread_matters;
       }
     }
   }
@@ -1091,10 +1174,12 @@ TEST(EndgameSolver, OutplayFutilityCutsNodes) {
     const EndgamePos p = random_endgame(rng, d, rack_tiles);
     EndgameSolver on, off;
     off.set_outplay_futility(false);
-    const EndgameResult a = on.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
-                                     kBigBudget, kRefDepth);
-    const EndgameResult b = off.solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
-                                      kBigBudget, kRefDepth);
+    const EndgameResult a =
+      on.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+               {kBigBudget, kRefDepth, true});
+    const EndgameResult b =
+      off.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                {kBigBudget, kRefDepth, true});
     EXPECT_EQ(a.value, b.value) << "position " << i;  // sound at full resolution
     pruned += a.nodes;
     unpruned += b.nodes;
@@ -1104,4 +1189,179 @@ TEST(EndgameSolver, OutplayFutilityCutsNodes) {
               static_cast<unsigned long long>(unpruned),
               100.0 * (1.0 - static_cast<double>(pruned) / static_cast<double>(unpruned)));
   EXPECT_LT(pruned, unpruned);
+}
+
+// THE soundness gate for the root beta cutoff: over a large random batch of
+// first-win (spread_matters=false) solves, whenever the solve proves a class it
+// must equal the brute-force reference's sign, and for a proven win or draw the
+// returned move must preserve that class under optimal play by both sides
+// afterward (a proven loss makes every move class-equal, so there is no per-move
+// claim to check). The cutoff stops a root scan the instant a fail-high settles
+// the class, so a cutoff that dropped a move that mattered would surface here as
+// a wrong class or a class-forfeiting best move.
+TEST(EndgameSolver, RootCutoffPreservesVerdicts) {
+  Dictionary d = tiny_dict();
+  EndgameSolver solver;
+  std::mt19937 rng(0x2000C0DEu);
+  int class_proven = 0, checked = 0;
+  for (int i = 0; i < 120; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    solver.clear();
+    const EndgameResult r =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {budget, kRefDepth, /*spread_matters=*/false});
+    ++checked;
+    if (r.proven_class == EndgameResult::kClassUnknown) continue;
+    ++class_proven;
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    ASSERT_EQ(r.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
+    if (r.proven_class == -1) continue;
+    const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                p.opp_score, 0, r.best, kRefDepth);
+    ASSERT_EQ((after > 0) - (after < 0), r.proven_class)
+      << "position " << i << " budget " << budget << ": played move forfeits the proven class";
+  }
+  ASSERT_GT(class_proven, checked / 4) << "class proofs fired too rarely to gate anything";
+  std::cout << "  root-cutoff class-proven " << class_proven << "/" << checked << " endgames\n";
+}
+
+// The root cutoff demonstrably pays on won blowouts: scan for random endgames
+// the reference scores as a decisive win, where a top-ordered winning root move
+// fails high early and the cutoff skips the rest of the root. A solver with the
+// cutoff disabled scans every root move at every depth instead. The cutoff is
+// never worse per position (it only ever skips work), it strictly wins on most
+// of the batch, and it cuts the aggregate node count. A blowout can tie when its
+// fail-high lands on the last-scanned root move at the proving depth (nothing
+// left to skip), which is why the strict claim is the batch total, not each
+// position. Both solvers must still prove the same (won) class.
+TEST(EndgameSolver, RootCutoffSavesNodes) {
+  Dictionary d = tiny_dict();
+  EndgameSolver on, off;
+  off.set_root_cutoff(false);
+  std::mt19937 rng(0x2C07A5EDu);
+  uint64_t nodes_on = 0, nodes_off = 0;
+  int blowouts = 0, improved = 0;
+  for (int i = 0; i < 400 && blowouts < 20; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    if (ref < 30) continue;  // want a decisive win whose fail-high lands early
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    on.clear();
+    off.clear();
+    const EndgameResult a = on.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
+    const EndgameResult b = off.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
+    ASSERT_EQ(a.proven_class, 1) << "position " << i;  // a blowout is a proven win
+    ASSERT_EQ(b.proven_class, a.proven_class) << "position " << i;
+    nodes_on += a.nodes;
+    nodes_off += b.nodes;
+    EXPECT_LE(a.nodes, b.nodes) << "position " << i;  // the cutoff never costs more
+    if (a.nodes < b.nodes) ++improved;
+    ++blowouts;
+  }
+  ASSERT_GT(blowouts, 0) << "no won-blowout positions found in the scan";
+  EXPECT_GT(improved, blowouts / 2) << "the cutoff should strictly win on most blowouts";
+  EXPECT_LT(nodes_on, nodes_off);
+  std::cout << "  root-cutoff on " << blowouts << " won blowouts (" << improved
+            << " strictly fewer): nodes " << nodes_on << " vs " << nodes_off << " without cutoff\n";
+}
+
+namespace {
+
+// One curated endgame position, committed as a GCG under tests/data/: the
+// solver must prove the expected win/draw/loss class for the side to move
+// while expending at most `max_nodes` of a generous budget, and its
+// certificate must exist. Add cases by dropping a GCG (with a #RackN pragma
+// for the mover) into tests/data/ and appending a row.
+struct GcgEndgameCase {
+  const char* file;
+  int expected_class;  // +1 win, 0 draw, -1 loss, for the side to move
+  uint64_t max_nodes;  // proof must land within this many nodes
+};
+
+constexpr GcgEndgameCase kGcgEndgameCases[] = {
+  // Alice, down 141 with AABCGNT, cannot block all of Bob's FOE out-plays nor
+  // outscore them: a cheap proven loss.
+  {"FOE.gcg", -1, 10000},
+};
+
+}  // namespace
+
+// Curated GCG endgames resolve to their known class, cheaply. These run the
+// real lexicon and skip when it is not installed.
+TEST(EndgameGcgCases, ProvenClassAndCost) {
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
+  Dictionary d = Dictionary::load_kwg(path);
+
+  for (const GcgEndgameCase& c : kGcgEndgameCases) {
+    const std::string file = std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/" + c.file;
+    std::ifstream in(file);
+    ASSERT_TRUE(in.good()) << "cannot read " << file;
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+
+    ParsedGcgEndgame endgame;
+    std::string error;
+    ASSERT_TRUE(read_gcg_endgame(buffer.str(), &endgame, &error)) << c.file << ": " << error;
+
+    EndgameSolver solver;
+    const EndgameResult r = solver.solve(
+      {&d, endgame.board, endgame.racks[endgame.mover], endgame.racks[1 - endgame.mover],
+       endgame.scores[endgame.mover], endgame.scores[1 - endgame.mover], 0},
+      {/*budget=*/1'000'000, /*plies=*/25, /*spread_matters=*/false});
+
+    EXPECT_EQ(r.proven_class, c.expected_class) << c.file;
+    EXPECT_LE(r.nodes, c.max_nodes) << c.file << ": the proof should be cheap";
+    EXPECT_FALSE(r.continuation.empty()) << c.file << ": no certificate";
+    std::cout << "  " << c.file << ": class " << r.proven_class << ", nodes " << r.nodes
+              << ", certificate length " << r.continuation.size() << "\n";
+  }
+}
+
+// The move-generation memo is fully transparent: a memo-on solver and a
+// memo-off solver return bit-identical results -- value, best move, proven
+// class, nodes, and the logical movegens count -- on the same positions. Each
+// solver runs a run of solves without clear() between them, so the memo-on
+// solver reuses cached move lists across positions (and revisits of the same
+// board+rack) while the memo-off solver regenerates every time; the counts
+// still match because a memo hit counts as one logical generation. Both solvers
+// carry their warm transposition table across the run in lockstep.
+TEST(EndgameSolver, MovegenMemoIsTransparent) {
+  Dictionary d = tiny_dict();
+  EndgameSolver memo, plain;
+  memo.set_movegen_memo(true);
+  std::mt19937 rng(0x3E3D0BADu);
+  for (int i = 0; i < 60; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    const bool spread_matters = (i % 4) < 2;
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    const EndgameResult a = memo.solve(state, {budget, kRefDepth, spread_matters});
+    const EndgameResult b = plain.solve(state, {budget, kRefDepth, spread_matters});
+    EXPECT_EQ(a.value, b.value) << "position " << i;
+    EXPECT_TRUE(a.best == b.best) << "position " << i;
+    EXPECT_EQ(a.proven_class, b.proven_class) << "position " << i;
+    EXPECT_EQ(a.nodes, b.nodes) << "position " << i;
+    EXPECT_EQ(a.movegens, b.movegens) << "position " << i;
+  }
+}
+
+// The logical movegens count is nonzero for any real solve and never shrinks
+// with a larger budget on a fixed position: a bigger budget searches a superset
+// of the smaller budget's deterministic work (each requests a move list at the
+// same points), so it performs at least as many generations.
+TEST(EndgameSolver, MovegensCounted) {
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xB16B00B5u);
+  const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/4);
+  const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+
+  EndgameSolver small_solver, big_solver;
+  const EndgameResult small = small_solver.solve(state, {/*budget=*/500, kRefDepth, true});
+  const EndgameResult big = big_solver.solve(state, {kBigBudget, kRefDepth, true});
+  EXPECT_GT(small.movegens, 0u);
+  EXPECT_GE(big.movegens, small.movegens);
 }

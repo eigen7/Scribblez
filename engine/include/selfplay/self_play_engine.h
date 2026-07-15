@@ -29,6 +29,12 @@ class SelfPlayEngine {
     // random-opening mode), K drawn per game as an exponential with this mean,
     // rounded to the nearest integer.
     double random_opening_mean = 0.0;
+    // Respect agents' projected_remaining_moves annotations (see
+    // MoveDecision): a proven endgame fast-tracks to its end instead of
+    // prompting agents turn by turn. Off by default; self-play generation is
+    // the special case that turns it on -- its compute belongs to undecided
+    // games, and its logs tolerate proof-line stand-ins for agent moves.
+    bool respect_projections = false;
   };
 
   // Builds `params.threads` agent pairs (downgrading to 1, with a warning, if
