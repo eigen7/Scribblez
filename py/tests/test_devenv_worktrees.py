@@ -88,10 +88,36 @@ def test_detached_head_worktree_has_no_branch(repo: Path):
 def test_teardown_branch_removes_worktree_and_branch(repo: Path):
     worktree = add_worktree(repo, "feature", "feature")
     assert pr_flow.local_branch_exists(repo, "feature")
-    pr_flow.teardown_branch(repo, "feature", force=True)
+    assert pr_flow.teardown_branch(repo, "feature", force=True) is True
     assert worktree_for_branch(repo, "feature") is None
     assert not pr_flow.local_branch_exists(repo, "feature")
     assert not worktree.exists()
+
+
+def test_teardown_branch_without_worktree_returns_false(repo: Path):
+    # A branch that was never checked out in a worktree: teardown deletes it but
+    # reports that no worktree was removed, so callers don't claim one was.
+    git(repo, "branch", "loose")
+    assert pr_flow.teardown_branch(repo, "loose", force=True) is False
+    assert not pr_flow.local_branch_exists(repo, "loose")
+
+
+def test_pr_head_branch():
+    # While the branch exists, head.ref is the branch name.
+    assert (
+        pr_flow.pr_head_branch({"head": {"ref": "my-branch", "label": "my-branch"}}) == "my-branch"
+    )
+    # Once the branch is deleted (e.g. a web-UI merge), Gitea degrades head.ref
+    # to refs/pull/N/head; head.label still carries the real name.
+    assert (
+        pr_flow.pr_head_branch({"head": {"ref": "refs/pull/9/head", "label": "my-branch"}})
+        == "my-branch"
+    )
+    # A fork PR's label is owner-qualified; the owner prefix is stripped.
+    assert (
+        pr_flow.pr_head_branch({"head": {"ref": "refs/pull/9/head", "label": "fork:my-branch"}})
+        == "my-branch"
+    )
 
 
 def test_teardown_branch_is_idempotent(repo: Path):
