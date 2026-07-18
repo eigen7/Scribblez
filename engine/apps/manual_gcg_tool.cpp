@@ -6,7 +6,6 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "selfplay/game_runner.h"
-#include "serve/instance_ports.h"
 #include "serve/position_json.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
@@ -1094,8 +1093,8 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
-    int ws_port = 8082 + scribblez::instance_port_offset();
-    int vite_port = 5174 + scribblez::instance_port_offset();
+    int ws_port = 8082;
+    int vite_port = 5174;
     std::string web_dir = "web";
 
     po::options_description desc("manual_gcg_tool options");
@@ -1110,7 +1109,7 @@ int main(int argc, char** argv) {
 
     const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
-    scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual");
+    scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual", "manual", 5174);
     if (!vite.wait_until_ready()) {
       throw std::runtime_error("the Vite dev server did not start; see web/.vite-dev.log");
     }

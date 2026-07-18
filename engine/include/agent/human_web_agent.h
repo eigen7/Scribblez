@@ -1,7 +1,6 @@
 #pragma once
 
 #include "agent/agent.h"
-#include "serve/instance_ports.h"
 
 #include <memory>
 #include <string>
@@ -20,14 +19,14 @@ class WebSession;
 // browser-driven UI is bound to the lifetime of the agent.
 class HumanWebAgent : public Agent {
  public:
-  // Per-instance configuration parsed from `--player "--type=human ..."`.
-  // The default ports include instance_port_offset() so parallel dev-container
-  // instances bind distinct, forwarded ports; an explicit --port/--vite-port
-  // overrides them verbatim.
+  // Configuration parsed from `--player "--type=human ..."`. An explicit
+  // --port/--vite-port overrides the defaults; the browser link is routed
+  // through the gateway only while --vite-port keeps its default (see
+  // service_url.h).
   struct Params {
-    int port = 8080 + instance_port_offset();       // engine WebSocket port
-    int vite_port = 5173 + instance_port_offset();  // browser UI (Vite) port
-    std::string web_dir = "web";                    // front-end package dir (cwd of `npm run dev`)
+    int port = 8080;              // engine WebSocket port
+    int vite_port = 5173;         // browser UI (Vite) port
+    std::string web_dir = "web";  // front-end package dir (cwd of `npm run dev`)
   };
 
   // Constructs the engine-side WebSocket server, spawns `npm run dev` from

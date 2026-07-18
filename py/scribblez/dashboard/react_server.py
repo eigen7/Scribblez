@@ -15,14 +15,16 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
-from scribblez.instance_ports import port_offset
+from scribblez.service_urls import service_url
 
 WEB_DIR = Path(__file__).resolve().parents[3] / "web"
 
-# Defaults shifted by the dev-container instance offset so parallel instances don't
-# collide; chosen distinct from the C++ tools (8080/5173-5) and Bokeh (5006).
-DEFAULT_API_PORT = 8090 + port_offset()
-DEFAULT_DEV_PORT = 5180 + port_offset()
+# Ports distinct from the C++ web tools' (8080 / 5173-5). The Vite dev server is
+# the page the browser opens; it is routed by the gateway as
+# scribblez-dash.localhost. The Tornado API is loopback-only, reached through
+# Vite's proxy, so it never faces the browser directly.
+DEFAULT_API_PORT = 8090
+DEFAULT_DEV_PORT = 5180
 
 
 def _listening_pids(port: int) -> list[int]:
@@ -107,7 +109,7 @@ def spawn(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    url = f"http://localhost:{dev_port}"
+    url = service_url("dash", dev_port, DEFAULT_DEV_PORT)
     query = [
         *(["workload=" + quote(workload)] if workload else []),
         *(["tag=" + quote(tag)] if tag else []),

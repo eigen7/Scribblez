@@ -35,9 +35,12 @@ class ViteDevServer {
   // `dev_port` is the port Vite listens on; `ws_port` is the WebSession port
   // Vite proxies `/ws` to (passed through as env vars VITE_DEV_PORT /
   // VITE_WS_PORT). `tool` selects which front-end UI to mount (passed through as
-  // env var VITE_TOOL; empty means play_game's default UI). Throws if the child
-  // process cannot be started.
-  ViteDevServer(const std::string& web_dir, int dev_port, int ws_port, const std::string& tool);
+  // env var VITE_TOOL; empty means play_game's default UI). `service` and
+  // `default_dev_port` name this UI's devenv.toml gateway service and its
+  // unshifted port, used only to shape url() -- the browser link (see
+  // service_url.h). Throws if the child process cannot be started.
+  ViteDevServer(const std::string& web_dir, int dev_port, int ws_port, const std::string& tool,
+                const std::string& service, int default_dev_port);
   ~ViteDevServer();
 
   ViteDevServer(const ViteDevServer&) = delete;
@@ -47,7 +50,9 @@ class ViteDevServer {
   // Returns false on timeout or if the child exited early.
   bool wait_until_ready(int timeout_ms = 60000);
 
-  // URL to open in the browser, e.g. "http://localhost:5173".
+  // The URL to open in the browser: the gateway route for `service` (e.g.
+  // "http://scribblez-web.localhost") when `dev_port` is the default, else the
+  // plain "http://localhost:<dev_port>" fallback (see service_url.h).
   std::string url() const;
   int dev_port() const { return dev_port_; }
 
@@ -55,6 +60,8 @@ class ViteDevServer {
   int dev_port_;
   int ws_port_;
   std::string tool_;
+  std::string service_;
+  int default_dev_port_;
   std::unique_ptr<boost::process::group> group_;
   std::unique_ptr<boost::process::child> child_;
 };

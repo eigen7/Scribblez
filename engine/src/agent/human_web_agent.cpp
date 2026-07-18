@@ -92,7 +92,8 @@ HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::str
   // block until Vite is accepting browser connections, and best-effort open
   // the URL in the user's browser.
   session_ = std::make_unique<WebSession>(params.port);
-  vite_ = std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port, "");
+  vite_ =
+    std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port, "", "web", 5173);
   std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
   if (!vite_->wait_until_ready()) {
     throw std::runtime_error("the Vite dev server did not start. See " + params.web_dir +
