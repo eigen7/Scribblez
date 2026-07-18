@@ -38,10 +38,10 @@ def init_repo(root: Path, content: str = "x"):
 def test_is_origin_push():
     assert prepush_guard.is_origin_push("origin", "https://github.com/x/y.git")
     assert prepush_guard.is_origin_push("whatever", "git@github.com:x/y.git")
-    assert not prepush_guard.is_origin_push("gitea", "http://localhost:3001/dshin/y.git")
+    assert not prepush_guard.is_origin_push("gitea", "http://localhost:3000/dshin/y.git")
 
 
-def test_gitea_read_url_strips_creds_and_derives_submodule(tmp_path: Path):
+def test_gitea_read_url_derives_submodule_from_parent_remote(tmp_path: Path):
     # A bare origin for the submodule, named so its basename is `devenv_utils`.
     sub_origin = tmp_path / "devenv_utils.git"
     git(tmp_path, "init", "-q", "--bare", str(sub_origin))
@@ -52,11 +52,12 @@ def test_gitea_read_url_strips_creds_and_derives_submodule(tmp_path: Path):
 
     sup = tmp_path / "sup"
     init_repo(sup)
-    git(sup, "remote", "add", "gitea", "http://claude:pw@localhost:3001/dshin/scribblez.git")
+    # The canonical credential-free web-port remote URL (gitea_client.py).
+    git(sup, "remote", "add", "gitea", "http://localhost:3000/dshin/scribblez.git")
     git(sup, "-c", "protocol.file.allow=always", "submodule", "add", str(sub_origin), "sub")
     git(sup, "commit", "-q", "-m", "add sub")
 
-    # Parent: credentials dropped, backend :3001 -> web :3000.
+    # Parent: the canonical remote URL fetches from the host as-is.
     assert publish.gitea_read_url(sup) == "http://localhost:3000/dshin/scribblez.git"
     # Submodule: same host/owner, repo name from the submodule's origin basename,
     # needing no `gitea` remote of its own.
