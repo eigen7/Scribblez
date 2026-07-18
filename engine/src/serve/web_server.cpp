@@ -3,6 +3,7 @@
 #include "game/game.h"
 #include "game/tile.h"
 #include "serve/position_json.h"
+#include "serve/service_url.h"
 #include "util/io.h"
 #include "util/string.h"
 
@@ -269,8 +270,13 @@ std::string game_state_json(const StateView& v) {
 // ------------------------------ ViteDevServer ----------------------------
 
 ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_port,
-                             const std::string& tool)
-    : dev_port_(dev_port), ws_port_(ws_port), tool_(tool) {
+                             const std::string& tool, const std::string& service,
+                             int default_dev_port)
+    : dev_port_(dev_port),
+      ws_port_(ws_port),
+      tool_(tool),
+      service_(service),
+      default_dev_port_(default_dev_port) {
   namespace bp = boost::process;
 
   // If a dev server is already listening on this port, reuse it only when it
@@ -339,7 +345,9 @@ bool ViteDevServer::wait_until_ready(int timeout_ms) {
   return false;
 }
 
-std::string ViteDevServer::url() const { return "http://localhost:" + std::to_string(dev_port_); }
+std::string ViteDevServer::url() const {
+  return service_url(service_, dev_port_, default_dev_port_);
+}
 
 // ------------------------------ WebSession -------------------------------
 

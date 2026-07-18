@@ -38,7 +38,7 @@ add_library(scribblez_core STATIC
   src/selfplay/game_runner.cpp
   src/lexicon/hasty_equity.cpp
   src/agent/human_web_agent.cpp
-  src/serve/instance_ports.cpp
+  src/serve/service_url.cpp
   src/lexicon/leave_values.cpp
   src/lexicon/lexicon.cpp
   src/agent/macondo_bot.cpp
