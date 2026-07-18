@@ -89,12 +89,15 @@ def test_container_access_requires_env_contract(monkeypatch):
 
 
 def test_ensure_remote_adds_then_updates(tmp_path: Path):
+    # Assertions read the raw configured URL: `git remote get-url` applies any
+    # insteadOf rewrites active in the environment (a dev container rewrites
+    # the canonical URL to the service-container form).
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
     ensure_remote(repo, "http://localhost:3000/dshin/x.git")
-    assert git_out(repo, "remote", "get-url", "gitea") == "http://localhost:3000/dshin/x.git"
+    assert git_out(repo, "config", "remote.gitea.url") == "http://localhost:3000/dshin/x.git"
     # An existing remote with a stale URL (e.g. the credential-embedded shape
     # of a pre-service checkout) is updated in place.
     ensure_remote(repo, "http://localhost:3100/dshin/x.git")
-    assert git_out(repo, "remote", "get-url", "gitea") == "http://localhost:3100/dshin/x.git"
+    assert git_out(repo, "config", "remote.gitea.url") == "http://localhost:3100/dshin/x.git"

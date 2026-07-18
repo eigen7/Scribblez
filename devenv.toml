@@ -10,7 +10,7 @@ docker_context = "docker-setup/local"
 # particular after a docker-setup/ change that needs an image rebuild (the
 # wizard rebuilds the image). Increasing the major (first) number additionally
 # wipes the target/ build trees.
-setup_version = "2.12.0"
+setup_version = "2.12.1"
 
 # Ports forwarded host -> container by run_docker.py. For instance N these are
 # each shifted up by the per-instance stride (see instances.py).

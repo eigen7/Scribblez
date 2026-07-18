@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 # submodules.* lives at the repo root, not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -62,6 +64,65 @@ def test_gitea_read_url_derives_submodule_from_parent_remote(tmp_path: Path):
     # Submodule: same host/owner, repo name from the submodule's origin basename,
     # needing no `gitea` remote of its own.
     assert publish.gitea_read_url(sup, "sub") == "http://localhost:3000/dshin/devenv_utils.git"
+
+
+def make_gitea_pair(tmp_path: Path) -> tuple[Path, Path]:
+    """A repo whose `gitea` remote is a bare repo holding the same main."""
+    repo = tmp_path / "repo"
+    init_repo(repo)
+    bare = tmp_path / "gitea.git"
+    git(tmp_path, "init", "-q", "--bare", str(bare))
+    git(repo, "remote", "add", "gitea", str(bare))
+    git(repo, "push", "-q", "gitea", "main")
+    return repo, bare
+
+
+def bare_main(anchor: Path, bare: Path) -> str:
+    """The bare repo's main tip, read via ls-remote: agent harnesses set
+    safe.bareRepository=explicit, which forbids running git *inside* a bare
+    repo but not addressing it as a remote."""
+    return git_out(anchor, "ls-remote", str(bare), "main").split()[0]
+
+
+def advance_gitea(tmp_path: Path, bare: Path):
+    """Land a commit on the bare repo's main that the test repo doesn't have."""
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", str(bare), str(other))
+    git(other, "config", "user.name", "T")
+    git(other, "config", "user.email", "t@t")
+    (other / "merged").write_text("merged")
+    git(other, "add", "merged")
+    git(other, "commit", "-q", "-m", "merged on gitea")
+    git(other, "push", "-q", "origin", "main")
+
+
+def test_fast_forward_main_fast_forwards_when_behind(tmp_path: Path):
+    repo, bare = make_gitea_pair(tmp_path)
+    advance_gitea(tmp_path, bare)
+    publish.fast_forward_main(repo)
+    assert git_out(repo, "rev-parse", "main") == bare_main(repo, bare)
+
+
+def test_fast_forward_main_syncs_gitea_when_ahead(tmp_path: Path):
+    # A local-only main commit (its commit_guard mirror push never landed) is
+    # a guaranteed fast-forward for Gitea: publish syncs it instead of
+    # bouncing the user.
+    repo, bare = make_gitea_pair(tmp_path)
+    (repo / "f").write_text("ahead")
+    git(repo, "add", "f")
+    git(repo, "commit", "-q", "-m", "ahead")
+    publish.fast_forward_main(repo)
+    assert bare_main(repo, bare) == git_out(repo, "rev-parse", "main")
+
+
+def test_fast_forward_main_refuses_diverged(tmp_path: Path):
+    repo, bare = make_gitea_pair(tmp_path)
+    advance_gitea(tmp_path, bare)
+    (repo / "f").write_text("local")
+    git(repo, "add", "f")
+    git(repo, "commit", "-q", "-m", "local")
+    with pytest.raises(SystemExit, match="diverged"):
+        publish.fast_forward_main(repo)
 
 
 def test_teardown_removes_only_merged_worktrees(tmp_path: Path):
