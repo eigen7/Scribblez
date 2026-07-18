@@ -6,7 +6,9 @@ Mounts:
                                      target/ persist on the host)
   <mount-dir>  -> /workspace/mount  (Macondo checkout, lexica, future data)
 
-Forwards the ports the engine's web UI uses (Vite + WebSocket).
+The engine's and dashboard's web UIs are reached via devenv-gateway hostnames
+(http://scribblez-<service>.localhost); the launcher prints the service -> URL
+table at every launch (see submodules/devenv_utils/GATEWAY.md).
 
 Drops you into a bash shell inside the container as `devuser`, whose UID/GID
 match your host user so that anything written into the bind-mounts is owned

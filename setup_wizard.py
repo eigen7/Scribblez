@@ -5,9 +5,11 @@ Run this *outside* the Docker container. It:
   1. Picks a persistent host directory ("mount dir") to be bind-mounted into
      the container at /workspace/mount. Build artifacts that need to outlive a
      single container, plus large data files (Macondo, lexica), live there.
-  2. Verifies you can run `docker` without sudo, then provisions the
-     machine-wide Gitea PR-review service and registers this repo on it
-     (see submodules/devenv_utils/GITEA.md).
+  2. Verifies you can run `docker` without sudo, provisions the machine-wide
+     Gitea PR-review service and registers this repo on it
+     (see submodules/devenv_utils/GITEA.md), then provisions the machine-wide
+     gateway service that routes the browser UIs' *.localhost dev URLs
+     (see submodules/devenv_utils/GATEWAY.md).
   3. Downloads .kwg lexicon files from the public Woogles/liwords repo into
      <mount>/lexica/, and symlinks them into Macondo's own data dir so the
      macondo subprocess can find them too. The KWG files are not redistributed
@@ -196,6 +198,8 @@ def main():
         tool.validate_docker_permissions()
         tool.rule()
         tool.setup_gitea_service()
+        tool.rule()
+        tool.setup_gateway_service()
         tool.rule()
         tool.setup_lexica()
         tool.rule()
