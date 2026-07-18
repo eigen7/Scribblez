@@ -10,7 +10,7 @@ docker_context = "docker-setup/local"
 # particular after a docker-setup/ change that needs an image rebuild (the
 # wizard rebuilds the image). Increasing the major (first) number additionally
 # wipes the target/ build trees.
-setup_version = "2.11.0"
+setup_version = "2.12.0"
 
 # Ports forwarded host -> container by run_docker.py. For instance N these are
 # each shifted up by the per-instance stride (see instances.py).
@@ -23,9 +23,3 @@ required_ports = [
     5180,  # React dashboard: Vite dev server (the page the browser opens)
     8090,  # React dashboard: Tornado data API (proxied by Vite; handy direct)
 ]
-
-# Publishes the Gitea front-end port bound to 127.0.0.1 on the host instead of
-# 0.0.0.0: its nginx front-end signs every request in as the admin user, so the
-# port must not be reachable from the LAN. The fixed host port assumes a single
-# container instance.
-extra_docker_args = ["-p", "127.0.0.1:3000:3000"]

@@ -82,7 +82,10 @@ Layout -- where data lives and what provisions it:
     bundles the leave values (data/strategy/\<lexicon\>/leaves.klv2) and
     pre-endgame table that `HastyEquity::default_leaves_path()` /
     `default_peg_path()` read.
-  - gitea/ -- Gitea state, admin_credentials.json, claude_credentials.json.
+  - gitea/ -- state of the machine-wide Gitea service container, which serves
+    it from the host side (see submodules/devenv_utils/GITEA.md); credentials
+    under gitea/credentials/. In-container tooling reads the credentials from
+    the read-only mount at /workspace/gitea-credentials/.
   - worktrees/<project>/ -- per-project working worktrees (see the PR
     workflow above).
 

@@ -16,7 +16,7 @@ import pytest
 # submodules.* lives at the repo root, which is not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submodules.devenv_utils import pr_flow  # noqa: E402
+from submodules.devenv_utils import gitea_client, pr_flow  # noqa: E402
 from submodules.devenv_utils.worktrees import (  # noqa: E402
     primary_worktree,
     secondary_worktrees,
@@ -127,7 +127,7 @@ def test_gitea_repo_name_from_origin_basename(repo: Path):
     # A submodule's Gitea repo is named after its origin basename (same project),
     # so create can open its PR without the submodule knowing its Gitea remote.
     git(repo, "remote", "add", "origin", "https://github.com/eigen7/devenv_utils.git")
-    assert pr_flow.gitea_repo_name(repo) == "devenv_utils"
+    assert gitea_client.gitea_repo_name(repo) == "devenv_utils"
 
 
 def test_submodule_pr_note_lists_links():
