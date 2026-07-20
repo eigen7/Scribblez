@@ -10,7 +10,7 @@ docker_context = "docker-setup/local"
 # particular after a docker-setup/ change that needs an image rebuild (the
 # wizard rebuilds the image). Increasing the major (first) number additionally
 # wipes the target/ build trees.
-setup_version = "2.13.0"
+setup_version = "2.14.0"
 
 # Browser-facing HTTP services, routed by the devenv-gateway as
 # http://scribblez-<name>.localhost (see submodules/devenv_utils/GATEWAY.md).
