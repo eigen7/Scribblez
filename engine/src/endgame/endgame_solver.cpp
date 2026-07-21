@@ -474,29 +474,49 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
 }
 
 EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, int32_t beta,
+                                                    bool first_win,
                                                     std::vector<RankedMove>& root_moves,
                                                     const std::vector<Move>& plays,
                                                     Move* best_out) {
   // The root is the solving side's node; it hands its children out-play sets
-  // just as an interior node does, but is itself never futility-pruned: under
-  // the full window every root move needs its exact value for the re-ordering
-  // between iterations. It does apply a beta cutoff (only reachable under the
-  // narrow first-win window; see the scan below).
+  // just as an interior node does. Under the narrow first-win window it also
+  // futility-prunes its own moves like an interior node; under the full window
+  // it never prunes, because every root move needs its exact value for the
+  // re-ordering between iterations. It applies a beta cutoff as well (only
+  // reachable under the narrow first-win window; see the scan below).
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
+  const OutplaySet* replier_outs = nullptr;
+  if (outplay_futility_ && root_futility_ && first_win && !cur_sets_[1 - stm_]->empty())
+    replier_outs = cur_sets_[1 - stm_];
 
   int32_t best = -kInf;
   Move best_move = root_moves[0].move;
+  bool searched = false;     // at least one root child was actually searched (for PVS)
   bool all_proven = true;    // AND over every root child's verdict
   bool best_proven = false;  // proven bit of the child that set `best`
   for (RankedMove& rm : root_moves) {
+    // Root futility: a move a surviving replier out-play caps below alpha
+    // cannot affect the class verdict. The bound comes from a terminal line,
+    // so folding it into the fail-low value keeps the verdict proven, and it
+    // becomes the move's rank so re-sorts sink it. Folded bounds never raise
+    // alpha (the prune fires only at or below it) and never set best_move, so
+    // a pruned move can be returned only when every root move is bounded below
+    // alpha -- a proven loss, where any legal move is class-correct.
+    const int32_t ubound = replier_outs ? outplay_futility_bound(rm.move, *replier_outs) : kInf;
+    if (ubound <= alpha) {
+      best = std::max(best, ubound);
+      rm.rank = ubound;
+      continue;
+    }
     OutplaySet* saved_sets[2];
     push_outplay_sets(rm.move, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
     make(rm.move, 0);
-    const SearchResult child = search_child(depth - 1, alpha, beta, 1, best == -kInf);
+    const SearchResult child = search_child(depth - 1, alpha, beta, 1, !searched);
     unmake(0);
     restore_outplay_sets(saved_sets);
     if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
+    searched = true;
     rm.rank = child.value;
     all_proven = all_proven && child.proven;
     if (child.value > best) {
@@ -523,7 +543,9 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
   // A root fail-high (best >= beta, reachable only under the narrow first-win
   // window) rests on the single best-achieving child -- the cutoff witness when
   // the scan broke early, or the last child to raise best otherwise -- so its
-  // proven bit alone settles the verdict. Otherwise every child must be proven.
+  // proven bit alone settles the verdict. Otherwise every child must be proven
+  // (pruned root moves contribute proven terminal bounds, so they leave
+  // all_proven untouched).
   const bool proven = best >= beta ? best_proven : all_proven;
   return {best, proven};
 }
@@ -535,7 +557,7 @@ EndgameResult EndgameSolver::run_iterative(int32_t alpha, int32_t beta, bool fir
   result.best = root_moves[0].move;
   for (int depth = 1; depth <= max_plies; ++depth) {
     Move best_move = root_moves[0].move;
-    const SearchResult sr = run_root(depth, alpha, beta, root_moves, plays, &best_move);
+    const SearchResult sr = run_root(depth, alpha, beta, first_win, root_moves, plays, &best_move);
     if (aborting_) {
       // Budget exhausted mid-iteration: the last completed iteration's result
       // stands. When not even the first iteration finished, fall back to the

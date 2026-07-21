@@ -113,7 +113,8 @@ struct EndgameResult {
 // What a solve does with proofs is Params::spread_matters' business.
 //
 // Opponent-outplay futility pruning cuts the mover's own moves at interior
-// nodes. Each node knows the current out-play set of the side that will reply
+// nodes and -- under the narrow first-win window -- at the root. Each node
+// knows the current out-play set of the side that will reply
 // (see outplays.h): every entry is a play that would empty the replier's rack,
 // still legal at its recorded score. A mover move m scoring g that leaves the
 // replier a turn and places no tile in the halo of such an out-play scoring p
@@ -129,8 +130,14 @@ struct EndgameResult {
 // terminal, so the skip never clears the node's proven bit), and U(m) also caps
 // the move-ordering estimate so provably weak moves sink. Moves that end the
 // game themselves -- an out-play, or a pass that trips the internal scoreless
-// cap -- give the replier no turn and are never pruned. A test can disable the
-// scheme (set_outplay_futility) to A/B that it changes no value or best move.
+// cap -- give the replier no turn and are never pruned. At the root the same
+// bound test runs only under the narrow first-win window, where a pruned
+// move's proven terminal bound settles its contribution to the class verdict;
+// a full-window root never prunes, because the re-ordering between deepening
+// iterations needs every root move's exact value (see run_root). A test can
+// disable the scheme (set_outplay_futility) to A/B that it changes no value or
+// best move, and the root leg separately (set_root_futility) to A/B that it
+// changes no class verdict.
 //
 // The out-play sets are maintained incrementally rather than recomputed per
 // node, since a per-node move generation for the replier's rack would cost as
@@ -219,6 +226,14 @@ class EndgameSolver {
   // so a test can A/B the two modes and assert the pruning never changes a
   // solve's value or best move; production always leaves it on.
   void set_outplay_futility(bool on) { outplay_futility_ = on; }
+
+  // Enable or disable root-level outplay futility pruning (on by default):
+  // under the narrow first-win window, a root move whose futility bound cannot
+  // beat alpha is skipped without search, exactly as at an interior node. Full
+  // windows are unaffected (they never prune the root), as is everything when
+  // outplay futility itself is off. Exists so a test can A/B the two modes and
+  // assert the pruning changes no proven class; production always leaves it on.
+  void set_root_futility(bool on) { root_futility_ = on; }
 
   // Enable or disable the proven-verdict deepening short-circuit (on by
   // default). Exists so tests and the benchmark can A/B how many nodes the
@@ -335,8 +350,9 @@ class EndgameSolver {
   // if no proof lands within kMaxPlayout depths (impossible for a true class,
   // kept as the never-wrong gate).
   bool reprove_walk_move(int ply, int req_class, Move* out);
-  SearchResult run_root(int depth, int32_t alpha, int32_t beta, std::vector<RankedMove>& root_moves,
-                        const std::vector<Move>& plays, Move* best_out);
+  SearchResult run_root(int depth, int32_t alpha, int32_t beta, bool first_win,
+                        std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
+                        Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
   // Search one child at (alpha, beta) and return its value from the parent's
   // perspective (negated) with the child's proven bit, using a full window for
@@ -440,11 +456,16 @@ class EndgameSolver {
   // the two modes (see set_outplay_futility).
   bool outplay_futility_ = true;
 
+  // Root-level leg of the futility scheme, on except when a test disables it to
+  // A/B the two modes (see set_root_futility).
+  bool root_futility_ = true;
+
   // The out-play sets each ply's children read their futility bounds from. A
   // node's mover writes its children's sets into ply_sets_[child ply] (one slot
   // per depth, so siblings reuse it) and points cur_sets_ there; cur_sets_[s]
   // is always seat s's current set, rooted at root_sets_ (the solving side's
-  // slot stays empty: the root node itself is never futility-pruned).
+  // slot stays empty: the root's own pruning reads only the opponent's set,
+  // and every deeper node reads the per-ply sets push_outplay_sets installs).
   struct PlyOutplaySets {
     OutplaySet mover, other;
   };
