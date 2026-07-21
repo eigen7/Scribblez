@@ -276,7 +276,7 @@ void EndgameSolver::tt_store_playout(uint64_t hash, int32_t score_rel) {
   // depth-0 playout value.
   if (e.gen == tt_gen_ && e.flag != kEmpty && e.depth > 0) return;
   e.hash = hash;
-  e.best = Move::pass();
+  e.best = Move::pass();  // placeholder: depth-0 entries never supply a TT move
   e.score_rel = score_rel;
   e.flag = kExact;
   e.depth = 0;
@@ -383,8 +383,13 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   Move tt_move = Move::pass();
   bool have_tt_move = false;
   if (TTEntry* e = tt_probe(hash)) {
-    have_tt_move = true;
-    tt_move = e->best;
+    // A depth-0 entry comes from a greedy playout and carries only a pass
+    // placeholder in its move slot, so it supplies no ordering hint; its value
+    // is still usable as an exact depth-0 result below.
+    if (e->depth > 0) {
+      have_tt_move = true;
+      tt_move = e->best;
+    }
     if (e->depth >= depth) {
       const int32_t score = e->score_rel + spread_stm();
       const bool proven = tt_is_proven(e->flag);
