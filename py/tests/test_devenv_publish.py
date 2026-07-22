@@ -145,6 +145,28 @@ def test_sync_main_syncs_gitea_when_ahead(tmp_path: Path, monkeypatch):
     assert bare_main(repo, gitea) == git_out(repo, "rev-parse", "main")
 
 
+def test_sync_main_ahead_push_ignores_unpublished_submodule(tmp_path: Path, monkeypatch):
+    # The local-ahead sync of main to Gitea must not be gated by
+    # push.recurseSubmodules=check: the submodule origin push happens later in
+    # publish, so main can record a submodule commit that is still only a local
+    # object in the submodule clone (the host failure mode).
+    repo, gitea, _ = make_synced_repo(tmp_path)
+    forbid_prompts(monkeypatch)
+    sub_upstream = tmp_path / "sub_upstream"
+    init_repo(sub_upstream, "A")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(sub_upstream), "sub")
+    (repo / "sub" / "f").write_text("B")
+    git(repo / "sub", "add", "f")
+    git(repo / "sub", "commit", "-q", "-m", "B")
+    git(repo, "add", "sub")
+    git(repo, "commit", "-q", "-m", "add sub at B")
+    git(repo, "config", "push.recurseSubmodules", "check")
+
+    publish.sync_main(repo)
+
+    assert bare_main(repo, gitea) == git_out(repo, "rev-parse", "main")
+
+
 def test_sync_main_rebases_private_diverged_commits(tmp_path: Path, monkeypatch):
     repo, gitea, _ = make_synced_repo(tmp_path)
     advance_bare(tmp_path, gitea, "merged")

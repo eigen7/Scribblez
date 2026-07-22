@@ -135,3 +135,23 @@ def test_sync_ignores_other_branches(pair):
     commit(repo, "feature work")
     commit_guard.sync(repo)
     assert bare_main(repo, bare) == gitea_tip
+
+
+def test_sync_mirrors_with_unpublished_submodule_commit(pair, tmp_path: Path):
+    # Reproduce the host failure: main records a submodule commit that exists in
+    # the submodule clone only as a local object (in no remote-tracking ref),
+    # with push.recurseSubmodules=check set as the wizard installs it. The
+    # same-machine mirror must still push, via --recurse-submodules=no.
+    repo, bare = pair
+    sub_upstream = init_repo(tmp_path / "sub_upstream", "A")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(sub_upstream), "sub")
+    git(repo, "commit", "-q", "-m", "add sub")
+    # A submodule commit B that never reached the submodule's remote.
+    commit(repo / "sub", "B")
+    git(repo, "add", "sub")
+    git(repo, "commit", "-q", "-m", "bump sub to B")
+    git(repo, "config", "push.recurseSubmodules", "check")
+
+    commit_guard.sync(repo)
+
+    assert bare_main(repo, bare) == git_out(repo, "rev-parse", "main")

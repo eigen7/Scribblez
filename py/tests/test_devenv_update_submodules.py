@@ -309,3 +309,85 @@ def test_loop_continues_across_submodules(tmp_path: Path, monkeypatch, capsys):
     # Both submodules were reached and offered.
     assert "asub: submodule Gitea main is ahead" in out
     assert "bsub: submodule Gitea main is ahead" in out
+
+
+# ---- content-free (identical-tree) tip suppression ----------------------
+
+
+def test_bump_status_suppresses_content_free_merge(tmp_path: Path):
+    # A --no-ff merge of an already-contained branch: strictly ahead of the
+    # pre-merge tip, but with an identical tree -- Gitea's merge-style plumbing,
+    # nothing to bump to.
+    sub = tmp_path / "sub"
+    init_repo(sub, "base")
+    git(sub, "checkout", "-q", "-b", "feature")
+    (sub / "g").write_text("g")
+    git(sub, "add", "g")
+    git(sub, "commit", "-q", "-m", "real work")
+    pre_merge = git_out(sub, "rev-parse", "HEAD")
+    git(sub, "checkout", "-q", "main")
+    git(sub, "merge", "--no-ff", "-m", "Merge feature", "feature")
+    merge = git_out(sub, "rev-parse", "HEAD")
+
+    assert submodule_bump.trees_equal(sub, pre_merge, merge)
+    assert submodule_bump.bump_status(sub, pre_merge, merge) == "none"
+
+
+def test_bump_status_ready_for_real_content(tmp_path: Path):
+    sub = tmp_path / "sub"
+    init_repo(sub, "A")
+    a_sha = git_out(sub, "rev-parse", "HEAD")
+    (sub / "g").write_text("g")
+    git(sub, "add", "g")
+    git(sub, "commit", "-q", "-m", "B")
+    b_sha = git_out(sub, "rev-parse", "HEAD")
+
+    assert submodule_bump.bump_status(sub, a_sha, b_sha) == "ahead"
+
+
+def build_super_content_free_merge(tmp_path: Path, monkeypatch) -> Path:
+    """A synced super whose submodule's Gitea main is a content-free --no-ff
+    merge over the recorded pointer (the pre-merge tip)."""
+    work = tmp_path / "sub_work"
+    init_repo(work, "base")
+    git(work, "checkout", "-q", "-b", "feature")
+    (work / "g").write_text("g")
+    git(work, "add", "g")
+    git(work, "commit", "-q", "-m", "real work")
+    pre_merge = git_out(work, "rev-parse", "HEAD")
+    git(work, "checkout", "-q", "main")
+    git(work, "merge", "--no-ff", "-m", "Merge feature", "feature")
+    merge = git_out(work, "rev-parse", "HEAD")
+    sub_origin = bare(tmp_path, "sub_origin.git")
+    sub_gitea = bare(tmp_path, "sub_gitea.git")
+    git(work, "push", "-q", str(sub_origin), f"{merge}:refs/heads/main")
+    git(work, "push", "-q", str(sub_gitea), f"{merge}:refs/heads/main")
+
+    super_ = tmp_path / "super"
+    init_repo(super_, "super")
+    git(super_, "-c", "protocol.file.allow=always", "submodule", "add", str(sub_origin), "sub")
+    git(super_ / "sub", "checkout", "-q", pre_merge)
+    git(super_, "add", "sub")
+    git(super_, "commit", "-q", "-m", "pin sub at pre-merge tip")
+    super_gitea = bare(tmp_path, "super_gitea.git")
+    super_origin = bare(tmp_path, "super_origin.git")
+    git(super_, "remote", "add", "gitea", str(super_gitea))
+    git(super_, "remote", "add", "origin", str(super_origin))
+    git(super_, "push", "-q", "gitea", "main")
+    git(super_, "push", "-q", "origin", "main")
+    monkeypatch.setattr(
+        submodule_bump,
+        "gitea_read_url",
+        lambda root, sub_path="": str(sub_gitea) if sub_path else str(super_gitea),
+    )
+    return super_
+
+
+def test_content_free_merge_reports_up_to_date(tmp_path: Path, monkeypatch, capsys):
+    super_ = build_super_content_free_merge(tmp_path, monkeypatch)
+    forbid_prompts(monkeypatch)
+
+    assert update_submodules.update_submodules(super_) == 0
+    out = capsys.readouterr().out
+    assert "sub: up to date" in out
+    assert "git publish" not in out
