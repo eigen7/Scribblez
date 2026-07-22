@@ -565,7 +565,13 @@ TEST(EndgameSolver, Determinism) {
 // The node budget is a hard cap: nodes spent never exceed it by more than one
 // greedy playout's plies (the overshoot before the next negamax entry detects
 // exhaustion), a legal move comes back even at absurdly small budgets (where
-// depth_completed may be 0), and depth/nodes are monotone in the budget.
+// depth_completed may be 0), and depth/nodes are monotone in the budget. The
+// monotonicity claims are specific to a single-pass (spread_matters=false)
+// solve, whose deepening is one deterministic sequence the budget merely
+// truncates. The lexicographic driver forks control flow at budget-dependent
+// thresholds (its class pass proves or aborts at the half-budget cap), so its
+// depth and node counts can legitimately shrink as the budget grows; its
+// budget cap is gated separately by LexicographicRespectsBudget.
 TEST(EndgameSolver, NodeBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xB0DA711Eu);
@@ -582,7 +588,7 @@ TEST(EndgameSolver, NodeBudget) {
     for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull, 200000ull}) {
       solver.clear();
       const EndgameResult r = solver.solve(
-        {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, 12, true});
+        {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, 12, false});
       EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
       EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
       EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
