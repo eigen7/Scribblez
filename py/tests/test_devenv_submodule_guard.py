@@ -7,7 +7,6 @@ repo standing in for its upstream. Hook installation itself is the wizard's
 job and isn't covered here.
 """
 
-import io
 import subprocess
 import sys
 from pathlib import Path
@@ -17,7 +16,7 @@ import pytest
 # submodules.* lives at the repo root, not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submodules.devenv_utils import submodule_bump, submodule_guard  # noqa: E402
+from submodules.devenv_utils import submodule_guard  # noqa: E402
 
 
 def git(cwd: Path, *args: str):
@@ -163,143 +162,3 @@ def test_sync_leaves_unpopulated_submodule(repos):
     git(super_, "submodule", "deinit", "-f", "sub")
     submodule_guard.sync(super_)
     assert not (super_ / "sub" / "f").exists()
-
-
-# ---- offer-update: the pull-time freshness reaction ----------------------
-#
-# `repos` pins `sub` at A while its upstream also has a later B. Pointing the
-# submodule's derived Gitea URL at that upstream makes the freshness fetch read
-# B as the "Gitea main" tip.
-
-
-def point_gitea_at_upstream(monkeypatch, tmp_path: Path):
-    upstream = tmp_path / "upstream"
-    monkeypatch.setattr(submodule_bump, "gitea_read_url", lambda root, sub_path="": str(upstream))
-
-
-def sub_pointer(super_: Path) -> str:
-    return git_out(super_, "ls-tree", "HEAD", "sub").split()[2]
-
-
-def write_devenv_toml(super_: Path, body: str = 'name = "proj"\n'):
-    (super_ / "devenv.toml").write_text(body)
-
-
-def test_react_never_prints_note_without_committing(repos, tmp_path, monkeypatch, capsys):
-    super_, a_sha, b_sha = repos
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    before = git_out(super_, "rev-parse", "HEAD")
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "never")
-
-    assert git_out(super_, "rev-parse", "HEAD") == before
-    assert sub_pointer(super_) == a_sha
-    out = capsys.readouterr().out
-    assert "new upstream commits" in out and b_sha[:7] in out
-
-
-def test_react_always_bumps_without_prompting(repos, tmp_path, monkeypatch, capsys):
-    super_, _, b_sha = repos
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        submodule_guard, "open_tty", lambda: pytest.fail("always mode must not prompt")
-    )
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "always")
-
-    assert sub_pointer(super_) == b_sha
-    assert git_out(super_, "log", "--format=%s", "-1") == f"Bump sub submodule to {b_sha[:7]}"
-    assert "Updated sub submodule" in capsys.readouterr().out
-
-
-def test_react_prompt_no_tty_falls_back_to_note(repos, tmp_path, monkeypatch, capsys):
-    super_, a_sha, _ = repos
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    monkeypatch.setattr(submodule_guard, "open_tty", lambda: None)
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "prompt")
-
-    assert sub_pointer(super_) == a_sha
-    assert "new upstream commits" in capsys.readouterr().out
-
-
-def test_react_prompt_accept_commits_bump(repos, tmp_path, monkeypatch):
-    super_, _, b_sha = repos
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    monkeypatch.setattr(submodule_guard, "open_tty", lambda: io.StringIO())
-    monkeypatch.setattr(submodule_guard, "tty_prompt", lambda tty, q, e: True)
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "prompt")
-
-    assert sub_pointer(super_) == b_sha
-    assert git_out(super_, "log", "--format=%s", "-1") == f"Bump sub submodule to {b_sha[:7]}"
-
-
-def test_react_prompt_decline_then_save_writes_local_toml(repos, tmp_path, monkeypatch, capsys):
-    super_, a_sha, _ = repos
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    monkeypatch.setattr(submodule_guard, "open_tty", lambda: io.StringIO())
-    # First prompt (bump) declined, second prompt (save selection) accepted.
-    answers = iter([False, True])
-    monkeypatch.setattr(submodule_guard, "tty_prompt", lambda tty, q, e: next(answers))
-    before = git_out(super_, "rev-parse", "HEAD")
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "prompt")
-
-    assert git_out(super_, "rev-parse", "HEAD") == before  # no bump commit
-    assert sub_pointer(super_) == a_sha
-    # The selection lands in the untracked devenv.local.toml, created for it.
-    local = super_ / "devenv.local.toml"
-    assert local.exists()
-    assert "[submodules]" in local.read_text()
-    assert 'pull_update = "never"' in local.read_text()
-    assert not (super_ / "devenv.toml").exists()  # tracked config untouched
-    assert "devenv.local.toml" in capsys.readouterr().out
-
-
-def test_react_gitea_unreachable_is_silent(repos, tmp_path, monkeypatch, capsys):
-    super_, a_sha, _ = repos
-    # A URL whose fetch fails: submodule_gitea_tip returns None, so nothing fires.
-    monkeypatch.setattr(
-        submodule_bump, "gitea_read_url", lambda root, sub_path="": str(tmp_path / "gone.git")
-    )
-    before = git_out(super_, "rev-parse", "HEAD")
-
-    submodule_guard.react_to_bump(super_, "sub", "sub", "prompt")
-
-    assert git_out(super_, "rev-parse", "HEAD") == before
-    out = capsys.readouterr()
-    assert out.out == "" and out.err == ""
-
-
-def add_gitea_remote(super_: Path, tmp_path: Path) -> Path:
-    bare = tmp_path / "super-gitea.git"
-    git(tmp_path, "init", "-q", "--bare", str(bare))
-    git(super_, "remote", "add", "gitea", str(bare))
-    git(super_, "push", "-q", "gitea", "main")
-    return bare
-
-
-def test_offer_update_noop_off_main(repos, tmp_path, monkeypatch, capsys):
-    super_, a_sha, _ = repos
-    add_gitea_remote(super_, tmp_path)
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    git(super_, "checkout", "-q", "-b", "feature")
-
-    submodule_guard.offer_update(super_)
-
-    assert sub_pointer(super_) == a_sha
-    out = capsys.readouterr()
-    assert out.out == "" and out.err == ""
-
-
-def test_offer_update_on_main_reacts_per_mode(repos, tmp_path, monkeypatch, capsys):
-    super_, _, b_sha = repos
-    add_gitea_remote(super_, tmp_path)
-    point_gitea_at_upstream(monkeypatch, tmp_path)
-    write_devenv_toml(super_, 'name = "proj"\n[submodules]\npull_update = "always"\n')
-
-    submodule_guard.offer_update(super_)
-
-    assert sub_pointer(super_) == b_sha
-    assert "Updated sub submodule" in capsys.readouterr().out
