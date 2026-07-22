@@ -565,7 +565,13 @@ TEST(EndgameSolver, Determinism) {
 // The node budget is a hard cap: nodes spent never exceed it by more than one
 // greedy playout's plies (the overshoot before the next negamax entry detects
 // exhaustion), a legal move comes back even at absurdly small budgets (where
-// depth_completed may be 0), and depth/nodes are monotone in the budget.
+// depth_completed may be 0), and depth/nodes are monotone in the budget. The
+// monotonicity claims are specific to a single-pass (spread_matters=false)
+// solve, whose deepening is one deterministic sequence the budget merely
+// truncates. The lexicographic driver forks control flow at budget-dependent
+// thresholds (its class pass proves or aborts at the half-budget cap), so its
+// depth and node counts can legitimately shrink as the budget grows; its
+// budget cap is gated separately by LexicographicRespectsBudget.
 TEST(EndgameSolver, NodeBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xB0DA711Eu);
@@ -582,7 +588,7 @@ TEST(EndgameSolver, NodeBudget) {
     for (uint64_t budget : {5ull, 50ull, 500ull, 5000ull, 200000ull}) {
       solver.clear();
       const EndgameResult r = solver.solve(
-        {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, 12, true});
+        {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, 12, false});
       EXPECT_LE(r.nodes, budget + kSlack) << "budget " << budget << " position " << i;
       EXPECT_GE(r.depth_completed, prev_depth);  // depth is monotone in budget
       EXPECT_GE(r.nodes, prev_nodes);            // nodes grow with budget
@@ -1266,6 +1272,102 @@ TEST(EndgameSolver, RootCutoffSavesNodes) {
   EXPECT_LT(nodes_on, nodes_off);
   std::cout << "  root-cutoff on " << blowouts << " won blowouts (" << improved
             << " strictly fewer): nodes " << nodes_on << " vs " << nodes_off << " without cutoff\n";
+}
+
+// THE soundness gate for root-level outplay futility pruning: over a large
+// random batch of first-win solves at budgets from starved to unlimited,
+// pruning on and off must prove the same classes, each matching the
+// brute-force reference's sign, and for a proven win or draw the pruned
+// solver's move must preserve that class under optimal play by both sides
+// afterward (a proven loss makes every move class-equal -- and a loss is the
+// one verdict root pruning can return without searching a single move, so the
+// scan requires losses to occur). A wrong root bound would either prune a
+// class-saving move (wrong class or class-forfeiting best) or fold an unsound
+// bound into a fail-low (wrong class versus the reference). At the unlimited
+// budget both solves must prove; there the pruning must also not cost nodes in
+// aggregate (per-position counts can shift either way: pruned moves re-rank by
+// their bounds, so later iterations search the root in a different order).
+TEST(EndgameSolver, RootFutilityPruningIsSound) {
+  Dictionary d = tiny_dict();
+  EndgameSolver on, off;
+  off.set_root_futility(false);
+  std::mt19937 rng(0x0007F007u);
+  uint64_t full_nodes_on = 0, full_nodes_off = 0;
+  int losses = 0, checked = 0;
+  for (int i = 0; i < 160; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 400;
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    on.clear();
+    off.clear();
+    const EndgameResult a = on.solve(state, {budget, kRefDepth, /*spread_matters=*/false});
+    const EndgameResult b = off.solve(state, {budget, kRefDepth, /*spread_matters=*/false});
+    ++checked;
+    const int32_t ref =
+      ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
+    const int ref_class = (ref > 0) - (ref < 0);
+    if (budget == kBigBudget) {
+      // Every line resolves within kRefDepth, so both solves must prove.
+      ASSERT_TRUE(a.proven && b.proven) << "position " << i;
+      full_nodes_on += a.nodes;
+      full_nodes_off += b.nodes;
+    }
+    if (a.proven_class != EndgameResult::kClassUnknown) {
+      ASSERT_EQ(a.proven_class, ref_class) << "position " << i;
+      if (ref_class == -1) {
+        ++losses;
+      } else {
+        const int32_t after = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
+                                                    p.opp_score, 0, a.best, kRefDepth);
+        ASSERT_EQ((after > 0) - (after < 0), ref_class)
+          << "position " << i << " budget " << budget << ": played move forfeits the proven class";
+      }
+    }
+    if (b.proven_class != EndgameResult::kClassUnknown) {
+      ASSERT_EQ(b.proven_class, ref_class) << "position " << i;
+    }
+  }
+  ASSERT_GT(losses, 0) << "no proven losses in the scan; root pruning was never stressed";
+  EXPECT_LE(full_nodes_on, full_nodes_off);
+  std::cout << "  root-futility A/B over " << checked << " endgames (" << losses
+            << " proven losses): full-budget nodes " << full_nodes_on << " pruned vs "
+            << full_nodes_off << " unpruned\n";
+}
+
+// The end of the block-or-outscore chain: when no root move blocks the
+// opponent's out-plays or outscores them, the loss is proven from the bounds
+// alone, with no search below the root. Here the mover is stuck (no plays, so
+// the only root move is a pass) while the opponent holds an out-play; the pass
+// leaves that out-play alive and its bound is a loss, so a first-win solve
+// proves the loss having spent zero search nodes -- and still produces a valid
+// certificate. The control solver with root pruning disabled must reach the
+// same proven loss by actually searching.
+TEST(EndgameSolver, RootFutilityProvesLossFromBoundsAlone) {
+  Dictionary d = tiny_dict();
+  Board b;
+  const Rack my = rack_from("VV");   // V appears in no tiny-dict word: pass only
+  const Rack opp = rack_from("GO");  // "GO" opens across the center and goes out
+  const int my_score = 20, opp_score = 20;
+  ASSERT_TRUE(MoveGenerator(b, d).generate(my).empty());
+  ASSERT_NE(find_out_move(MoveGenerator(b, d).generate(opp), opp), nullptr);
+
+  EndgameSolver on;
+  const EndgameResult a =
+    on.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, kRefDepth, false});
+  EXPECT_TRUE(a.proven);
+  EXPECT_EQ(a.proven_class, -1);
+  EXPECT_EQ(a.nodes, 0u);  // the bounds settled the root; nothing was searched
+  EXPECT_EQ(a.best.type(), MoveType::PASS);
+  EXPECT_FALSE(a.continuation.empty());
+  EXPECT_LT(ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth), 0);
+
+  EndgameSolver off;
+  off.set_root_futility(false);
+  const EndgameResult c =
+    off.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, kRefDepth, false});
+  EXPECT_TRUE(c.proven);
+  EXPECT_EQ(c.proven_class, -1);
+  EXPECT_GT(c.nodes, 0u);  // without root pruning the same proof takes search
 }
 
 namespace {
