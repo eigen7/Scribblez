@@ -150,6 +150,23 @@ def test_diverged_warns_no_closing(tmp_path: Path, monkeypatch, capsys):
     assert "git publish" not in captured.out
 
 
+def test_unreachable_gitea_warns_not_up_to_date(tmp_path: Path, monkeypatch, capsys):
+    # The freshness check never runs (fetch from a nonexistent path fails), so
+    # evaluate_bump returns None. An explicit invocation must report the outage,
+    # not falsely claim the pointer is current.
+    super_ = make_super(tmp_path)
+    add_submodule(super_, tmp_path, "sub")
+    point_gitea(monkeypatch, {"sub": tmp_path / "gone.git"})
+    forbid_prompts(monkeypatch)
+
+    update_submodules.update_submodules(super_)
+
+    captured = capsys.readouterr()
+    assert "could not reach the submodule's Gitea repo" in captured.err
+    assert "up to date" not in captured.out
+    assert "git publish" not in captured.out
+
+
 def test_decline_continues_to_next_submodule(tmp_path: Path, monkeypatch, capsys):
     super_ = make_super(tmp_path)
     up_a, a_pin, _ = add_submodule(super_, tmp_path, "asub")  # ahead, will be declined
