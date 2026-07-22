@@ -65,40 +65,71 @@ def test_pull_update_mode_falls_back_on_invalid_value(tmp_path: Path):
     assert submodule_bump.pull_update_mode(tmp_path) == "prompt"
 
 
-# ---- devenv.toml write-back ----------------------------------------------
+# ---- devenv.local.toml overlay -------------------------------------------
+
+
+def test_local_overlay_replaces_tracked_table(tmp_path: Path):
+    write_toml(tmp_path, 'name = "proj"\n[submodules]\npull_update = "prompt"\n')
+    (tmp_path / "devenv.local.toml").write_text('[submodules]\npull_update = "never"\n')
+    assert load_config(tmp_path).submodules.pull_update == "never"
+
+
+def test_local_overlay_adds_local_only_keys(tmp_path: Path):
+    write_toml(tmp_path, 'name = "proj"\n')
+    (tmp_path / "devenv.local.toml").write_text('[submodules]\npull_update = "always"\n')
+    assert load_config(tmp_path).submodules.pull_update == "always"
+
+
+def test_absent_local_file_leaves_tracked_config(tmp_path: Path):
+    write_toml(tmp_path, 'name = "proj"\n[submodules]\npull_update = "always"\n')
+    assert load_config(tmp_path).submodules.pull_update == "always"
+
+
+# ---- devenv.local.toml write-back ----------------------------------------
+#
+# save_pull_update_never targets the untracked devenv.local.toml, creating it
+# when absent and using the same table-aware rewrite within an existing file.
+
+
+def test_save_never_creates_local_file_from_scratch(tmp_path: Path):
+    local = tmp_path / "devenv.local.toml"
+    submodule_bump.save_pull_update_never(local)
+    assert local.exists()
+    assert tomllib.loads(local.read_text()) == {"submodules": {"pull_update": "never"}}
 
 
 def test_save_never_appends_new_table_not_inside_last_table(tmp_path: Path):
     # A trailing [services] table: a bare appended key would land inside it.
-    toml = write_toml(tmp_path, 'name = "proj"\n[services]\nweb = 5173\n') / "devenv.toml"
-    submodule_bump.save_pull_update_never(toml)
+    local = tmp_path / "devenv.local.toml"
+    local.write_text('name = "proj"\n[services]\nweb = 5173\n')
+    submodule_bump.save_pull_update_never(local)
 
-    parsed = tomllib.loads(toml.read_text())
+    parsed = tomllib.loads(local.read_text())
     assert parsed["submodules"] == {"pull_update": "never"}
     assert parsed["services"] == {"web": 5173}  # not swallowed into [services]
 
 
 def test_save_never_rewrites_existing_key_in_place(tmp_path: Path):
-    toml = (
-        write_toml(tmp_path, 'name = "proj"\n[submodules]\npull_update = "prompt"\n')
-        / "devenv.toml"
-    )
-    submodule_bump.save_pull_update_never(toml)
-    assert tomllib.loads(toml.read_text())["submodules"] == {"pull_update": "never"}
+    local = tmp_path / "devenv.local.toml"
+    local.write_text('[submodules]\npull_update = "prompt"\n')
+    submodule_bump.save_pull_update_never(local)
+    assert tomllib.loads(local.read_text())["submodules"] == {"pull_update": "never"}
 
 
 def test_save_never_inserts_key_under_bare_table(tmp_path: Path):
-    toml = write_toml(tmp_path, 'name = "proj"\n[submodules]\n') / "devenv.toml"
-    submodule_bump.save_pull_update_never(toml)
-    assert tomllib.loads(toml.read_text())["submodules"] == {"pull_update": "never"}
+    local = tmp_path / "devenv.local.toml"
+    local.write_text('name = "proj"\n[submodules]\n')
+    submodule_bump.save_pull_update_never(local)
+    assert tomllib.loads(local.read_text())["submodules"] == {"pull_update": "never"}
 
 
 def test_save_never_preserves_other_content(tmp_path: Path):
     body = 'name = "proj"\ndocker_context = "docker-setup"\n\n[services]\nweb = 5173\n'
-    toml = write_toml(tmp_path, body) / "devenv.toml"
-    submodule_bump.save_pull_update_never(toml)
+    local = tmp_path / "devenv.local.toml"
+    local.write_text(body)
+    submodule_bump.save_pull_update_never(local)
 
-    text = toml.read_text()
+    text = local.read_text()
     assert body in text  # every original byte is preserved verbatim
     parsed = tomllib.loads(text)
     assert parsed["name"] == "proj"

@@ -235,10 +235,9 @@ def test_react_prompt_accept_commits_bump(repos, tmp_path, monkeypatch):
     assert git_out(super_, "log", "--format=%s", "-1") == f"Bump sub submodule to {b_sha[:7]}"
 
 
-def test_react_prompt_decline_then_save_writes_toml(repos, tmp_path, monkeypatch, capsys):
+def test_react_prompt_decline_then_save_writes_local_toml(repos, tmp_path, monkeypatch, capsys):
     super_, a_sha, _ = repos
     point_gitea_at_upstream(monkeypatch, tmp_path)
-    write_devenv_toml(super_)
     monkeypatch.setattr(submodule_guard, "open_tty", lambda: io.StringIO())
     # First prompt (bump) declined, second prompt (save selection) accepted.
     answers = iter([False, True])
@@ -249,9 +248,13 @@ def test_react_prompt_decline_then_save_writes_toml(repos, tmp_path, monkeypatch
 
     assert git_out(super_, "rev-parse", "HEAD") == before  # no bump commit
     assert sub_pointer(super_) == a_sha
-    assert "[submodules]" in (super_ / "devenv.toml").read_text()
-    assert 'pull_update = "never"' in (super_ / "devenv.toml").read_text()
-    assert "Wrote pull_update" in capsys.readouterr().out
+    # The selection lands in the untracked devenv.local.toml, created for it.
+    local = super_ / "devenv.local.toml"
+    assert local.exists()
+    assert "[submodules]" in local.read_text()
+    assert 'pull_update = "never"' in local.read_text()
+    assert not (super_ / "devenv.toml").exists()  # tracked config untouched
+    assert "devenv.local.toml" in capsys.readouterr().out
 
 
 def test_react_gitea_unreachable_is_silent(repos, tmp_path, monkeypatch, capsys):
