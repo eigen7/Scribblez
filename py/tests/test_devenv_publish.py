@@ -14,7 +14,7 @@ import pytest
 # submodules.* lives at the repo root, not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submodules.devenv_utils import prepush_guard, publish  # noqa: E402
+from submodules.devenv_utils import prepush_guard, publish, submodule_bump  # noqa: E402
 
 
 def git(cwd: Path, *args: str):
@@ -261,3 +261,130 @@ def test_is_ancestor(tmp_path: Path):
     git(repo, "commit", "-q", "-m", "two")
     assert publish.is_ancestor(repo, first, "HEAD")
     assert not publish.is_ancestor(repo, "HEAD", first)
+
+
+# ---- Feature 1: the publish-time pointer-bump offer ----------------------
+
+
+def super_with_submodule(tmp_path: Path) -> tuple[Path, str, str, Path]:
+    """A superproject pinning submodule `sub` at commit A, whose upstream (the
+    stand-in for the submodule's Gitea main) also has a later commit B. Returns
+    (super, A, B, upstream)."""
+    upstream = tmp_path / "upstream"
+    init_repo(upstream, "A")
+    (upstream / "g").write_text("g")
+    git(upstream, "add", "g")
+    git(upstream, "commit", "-q", "-m", "add g (B)")
+    a_sha = git_out(upstream, "rev-parse", "HEAD~1")
+    b_sha = git_out(upstream, "rev-parse", "HEAD")
+
+    super_ = tmp_path / "super"
+    init_repo(super_, "super")
+    git(super_, "-c", "protocol.file.allow=always", "submodule", "add", str(upstream), "sub")
+    git(super_ / "sub", "checkout", "-q", a_sha)
+    git(super_, "add", "sub")
+    git(super_, "commit", "-q", "-m", "pin sub at A")
+    return super_, a_sha, b_sha, upstream
+
+
+def point_gitea_at(monkeypatch, upstream: Path):
+    """Make the submodule's derived Gitea URL resolve to `upstream`, so the
+    freshness fetch reads the stand-in upstream instead of a real Gitea."""
+    monkeypatch.setattr(submodule_bump, "gitea_read_url", lambda root, sub_path="": str(upstream))
+
+
+def sub_pointer(super_: Path) -> str:
+    return git_out(super_, "ls-tree", "HEAD", "sub").split()[2]
+
+
+def test_offer_bump_accepted_commits_gitlink_only(tmp_path: Path, monkeypatch):
+    super_, _, b_sha, upstream = super_with_submodule(tmp_path)
+    point_gitea_at(monkeypatch, upstream)
+    # Unrelated staged and untracked changes must survive the gitlink-only bump.
+    (super_ / "s").write_text("dirty")
+    git(super_, "add", "s")
+    (super_ / "untracked").write_text("u")
+    feed_answers(monkeypatch, "")  # default yes
+
+    publish.offer_pointer_bump(super_, "sub", "sub")
+
+    assert sub_pointer(super_) == b_sha
+    assert git_out(super_, "log", "--format=%s", "-1") == f"Bump sub submodule to {b_sha[:7]}"
+    # Only the gitlink is in the commit; the unrelated file stays staged.
+    assert git_out(super_, "show", "--stat", "--format=", "HEAD").strip().startswith("sub")
+    assert "s" in git_out(super_, "diff", "--cached", "--name-only")
+
+
+def test_offer_bump_declined_leaves_pointer(tmp_path: Path, monkeypatch):
+    super_, a_sha, _, upstream = super_with_submodule(tmp_path)
+    point_gitea_at(monkeypatch, upstream)
+    before = git_out(super_, "rev-parse", "HEAD")
+    feed_answers(monkeypatch, "n")
+
+    publish.offer_pointer_bump(super_, "sub", "sub")  # returns; does not raise
+
+    assert git_out(super_, "rev-parse", "HEAD") == before
+    assert sub_pointer(super_) == a_sha
+
+
+def test_offer_bump_up_to_date_does_not_prompt(tmp_path: Path, monkeypatch):
+    super_, _, b_sha, upstream = super_with_submodule(tmp_path)
+    # Pin the pointer at B, matching the upstream tip: nothing to offer.
+    git(super_ / "sub", "checkout", "-q", b_sha)
+    git(super_, "add", "sub")
+    git(super_, "commit", "-q", "-m", "pin sub at B")
+    point_gitea_at(monkeypatch, upstream)
+    before = git_out(super_, "rev-parse", "HEAD")
+    forbid_prompts(monkeypatch)
+
+    publish.offer_pointer_bump(super_, "sub", "sub")
+
+    assert git_out(super_, "rev-parse", "HEAD") == before
+
+
+def test_offer_bump_diverged_warns_without_prompt(tmp_path: Path, monkeypatch, capsys):
+    super_, a_sha, b_sha, upstream = super_with_submodule(tmp_path)
+    # Pin the pointer at a private commit C that forks from A, diverging from B.
+    git(super_ / "sub", "checkout", "-q", a_sha)
+    (super_ / "sub" / "c").write_text("c")
+    git(super_ / "sub", "add", "c")
+    git(super_ / "sub", "commit", "-q", "-m", "C (private)")
+    git(super_, "add", "sub")
+    git(super_, "commit", "-q", "-m", "pin sub at C")
+    point_gitea_at(monkeypatch, upstream)
+    before = git_out(super_, "rev-parse", "HEAD")
+    forbid_prompts(monkeypatch)
+
+    publish.offer_pointer_bump(super_, "sub", "sub")
+
+    assert git_out(super_, "rev-parse", "HEAD") == before
+    assert "diverged" in capsys.readouterr().err
+
+
+def test_offer_bump_dirty_submodule_skips(tmp_path: Path, monkeypatch, capsys):
+    super_, a_sha, _, upstream = super_with_submodule(tmp_path)
+    point_gitea_at(monkeypatch, upstream)
+    (super_ / "sub" / "f").write_text("edited")  # dirty checkout
+    before = git_out(super_, "rev-parse", "HEAD")
+    forbid_prompts(monkeypatch)
+
+    publish.offer_pointer_bump(super_, "sub", "sub")
+
+    assert git_out(super_, "rev-parse", "HEAD") == before
+    assert sub_pointer(super_) == a_sha
+    assert "uncommitted changes" in capsys.readouterr().err
+
+
+def test_offer_bump_no_gitea_remote_is_silent(tmp_path: Path, monkeypatch, capsys):
+    # No gitea_read_url override and no `gitea` remote on the superproject: the
+    # URL derivation fails, so the offer is skipped without a word.
+    super_, a_sha, _, _ = super_with_submodule(tmp_path)
+    before = git_out(super_, "rev-parse", "HEAD")
+    forbid_prompts(monkeypatch)
+
+    publish.offer_pointer_bump(super_, "sub", "sub")
+
+    assert git_out(super_, "rev-parse", "HEAD") == before
+    assert sub_pointer(super_) == a_sha
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
