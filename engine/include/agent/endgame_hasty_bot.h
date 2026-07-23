@@ -83,6 +83,11 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   // one pooled solver, this setting applies to both seat-mates.
   void set_movegen_memo(bool on) { solver_->set_movegen_memo(on); }
 
+  // Enable or disable the solver's incremental move-list maintenance (on by
+  // default), forwarding to the underlying solver. As with the memo, the
+  // seat-shared solver makes this apply to both seat-mates.
+  void set_incremental_movegen(bool on) { solver_->set_incremental_movegen(on); }
+
   // Build an EndgameHastyBotAgent from `--player "--type=hastybot-endgame
   // [options]"` tokens (after the factory has stripped --type and --name).
   // Accepts every HastyBot option plus the solver Params under an "endgame-"
