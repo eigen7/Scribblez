@@ -47,19 +47,19 @@ win% at the same margin -- e.g. "+10%" means the solver's win% is 10 points
 above hasty's from the identical seat (a win counts 1, a draw 0.5). The
 final column is the hasty baseline's own win% at that margin.
 
-| margin | budget 100 | 220 | 400 | 1600 | hasty win% |
-|---|---|---|---|---|---|
-| -100 | +0.0% | +0.0% | +0.0% | +0.0% | 2.5% |
-| -80 | +0.0% | +0.0% | +0.0% | +0.0% | 8.0% |
-| -60 | +0.0% | +1.0% | +1.0% | +2.5% | 10.0% |
-| -40 | +4.0% | +5.0% | +8.0% | +10.0% | 19.5% |
-| -20 | +8.0% | +11.5% | +15.0% | +18.0% | 40.5% |
-| 0 | +6.5% | +9.5% | +10.5% | +11.5% | 75.5% |
-| 20 | +1.0% | +2.0% | +3.0% | +2.0% | 91.0% |
-| 40 | +1.0% | +1.0% | +1.0% | +1.0% | 96.0% |
-| 60 | +0.0% | +0.0% | +1.0% | +2.0% | 97.0% |
-| 80 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
-| 100 | +0.0% | +0.0% | +0.0% | +1.0% | 99.0% |
+| margin | budget 100 | 200 | 400 | 800 | 1600 | hasty win% |
+|---|---|---|---|---|---|---|
+| -100 | +0.0% | +0.0% | +0.0% | +0.0% | +0.0% | 2.5% |
+| -80 | +0.0% | +0.0% | +0.0% | +0.0% | +0.0% | 8.0% |
+| -60 | +0.0% | +0.0% | +1.0% | +1.5% | +2.5% | 10.0% |
+| -40 | +4.0% | +5.0% | +8.0% | +14.0% | +10.0% | 19.5% |
+| -20 | +8.0% | +10.5% | +15.0% | +17.0% | +18.0% | 40.5% |
+| 0 | +6.5% | +9.5% | +10.5% | +10.5% | +11.5% | 75.5% |
+| 20 | +1.0% | +2.0% | +3.0% | +3.0% | +2.0% | 91.0% |
+| 40 | +1.0% | +1.0% | +1.0% | +1.0% | +1.0% | 96.0% |
+| 60 | +0.0% | +0.0% | +1.0% | +2.0% | +2.0% | 97.0% |
+| 80 | +0.0% | +0.0% | +0.0% | +1.0% | +1.0% | 99.0% |
+| 100 | +0.0% | +0.0% | +0.0% | +1.0% | +1.0% | 99.0% |
 
 Readings:
 
@@ -68,7 +68,8 @@ Readings:
 - The peak sits at slightly-losing margins (+18.0% at margin -20, budget
   1600): the solver rescues games hasty loses more than it protects games
   hasty already wins, since hasty's baseline is already 91%+ at winning
-  margins.
+  margins. (Budget 800 beating 1600 at margin -40 is 100-game sampling
+  noise, not a real non-monotonicity.)
 - Skill is meaningful even at the smallest budget (+8.0% at margin -20,
   budget 100).
 
@@ -82,19 +83,19 @@ relative error 83% -- the error reflects per-playout fixed overheads and the
 root-vs-derived generation cost split that the one-term model folds into a,
 so treat the table as relative structure more than absolute ms.
 
-| margin | 100 | 220 | 400 | 1600 |
-|---|---|---|---|---|
-| -100 | 0.40 | 1.49 | 4.07 | 27.99 |
-| -80 | 0.40 | 1.43 | 3.97 | 27.16 |
-| -60 | 0.40 | 1.37 | 3.85 | 26.52 |
-| -40 | 0.40 | 1.18 | 3.17 | 23.79 |
-| -20 | 0.46 | 1.00 | 2.62 | 13.43 |
-| 0 | 0.38 | 0.99 | 2.28 | 8.30 |
-| 20 | 0.33 | 0.95 | 2.49 | 12.79 |
-| 40 | 0.32 | 0.94 | 2.72 | 15.19 |
-| 60 | 0.32 | 0.94 | 2.88 | 16.30 |
-| 80 | 0.31 | 0.98 | 3.01 | 16.82 |
-| 100 | 0.32 | 0.98 | 2.92 | 16.43 |
+| margin | 100 | 200 | 400 | 800 | 1600 |
+|---|---|---|---|---|---|
+| -100 | 0.40 | 1.16 | 4.08 | 13.26 | 28.00 |
+| -80 | 0.40 | 1.11 | 3.97 | 12.85 | 27.17 |
+| -60 | 0.40 | 1.11 | 3.85 | 12.64 | 26.53 |
+| -40 | 0.40 | 0.95 | 3.17 | 11.03 | 23.81 |
+| -20 | 0.46 | 0.79 | 2.62 | 6.65 | 13.44 |
+| 0 | 0.38 | 0.87 | 2.28 | 4.76 | 8.31 |
+| 20 | 0.33 | 0.70 | 2.49 | 6.28 | 12.79 |
+| 40 | 0.32 | 0.69 | 2.72 | 7.28 | 15.20 |
+| 60 | 0.32 | 0.69 | 2.88 | 7.61 | 16.31 |
+| 80 | 0.31 | 0.73 | 3.01 | 7.91 | 16.83 |
+| 100 | 0.32 | 0.73 | 2.92 | 7.72 | 16.44 |
 
 Readings:
 
@@ -113,17 +114,18 @@ hasty-vs-hasty baseline (~4.6 ms/game):
 
 | budget | ratio (incremental on) | ratio (`--incremental=0`) |
 |---|---|---|
-| 100 | 1.07x | 1.09x |
-| 220 | 1.26x | 1.43x |
-| 400 | 1.89x | 2.57x |
-| 1600 | 7.05x | 11.54x |
+| 100 | 1.07x | 1.08x |
+| 200 | 1.18x | 1.29x |
+| 400 | 1.88x | 2.58x |
+| 800 | 4.01x | 6.33x |
+| 1600 | 7.02x | 11.65x |
 
 The incremental maintenance roughly halves the solver's per-game overhead
 above the hasty baseline (e.g. at budget 1600: 27.5 vs 48.9 ms/game of
 endgame overhead). The same mode's head-to-head table reports each budget's
 win% and W/D/L record against plain hasty, bucketed by baseline bag-empty
-spread; it is bit-identical under both settings (budget 1600: 52.0% overall,
-54.2% in the 0-19 bucket).
+spread; it is bit-identical under both settings (budgets 800 and 1600: 52.0%
+overall, 54.2% in the 0-19 bucket).
 
 ## Proof certificates
 
@@ -147,10 +149,10 @@ deepening iteration's verdict, the certificate walk, and the projected line.
 
 ```
 target/engine/endgame_bench --mode=endgames --games=100 --seed=1 \
-    --budgets=100,220,400,1600 --margin-max=100 --margin-step=20 \
+    --budgets=100,200,400,800,1600 --margin-max=100 --margin-step=20 \
     --threads=8
 target/engine/endgame_bench --mode=games --games=200 --seed=7 \
-    --threads=1 --budgets=100,220,400,1600
+    --threads=1 --budgets=100,200,400,800,1600
 target/engine/endgame_tool  --gcg engine/tests/data/FOE.gcg
 ```
 
