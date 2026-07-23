@@ -9,6 +9,7 @@ add_library(scribblez_core STATIC
   src/game/movegen.cpp
   src/endgame/endgame_solver.cpp
   src/endgame/outplays.cpp
+  src/endgame/path_move_lists.cpp
   src/training/lane_targets.cpp
   src/training/lane_analysis.cpp
   src/encoding/contingent_map.cpp
