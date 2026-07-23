@@ -1,6 +1,7 @@
 #pragma once
 
 #include "endgame/outplays.h"
+#include "endgame/path_move_lists.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -151,6 +152,16 @@ struct EndgameResult {
 // the board grows (see OutplayEntry). Greedy playouts neither consult nor
 // maintain the sets.
 //
+// Move generation itself is also incremental (PathMoveLists, on by default):
+// both sides' full legal-play lists are generated once on the root board, and
+// every deeper node's list is derived from the same side's list two plies up
+// -- lanes untouched by the two intervening moves carry over verbatim (subset-
+// filtered against the mover's shrunken rack), touched lanes are regenerated
+// via MoveGenerator::generate_lane. The derived list is byte-identical to a
+// scratch generation, so solves are bit-for-bit the same either way; only the
+// cost of a "move generation" changes. A test can disable the scheme
+// (set_incremental_movegen) to A/B exactly that.
+//
 // TODO(multithreading): when single-game (non-parallel-self-play) settings
 // arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
 // atomic uint64 words (the lockless Hyatt scheme MAGPIE uses, which also
@@ -246,6 +257,13 @@ class EndgameSolver {
   // window's +infinity beta is unreachable), where a root fail-high already
   // settles the class, so disabling it changes no solve's value or best move.
   void set_root_cutoff(bool on) { root_cutoff_ = on; }
+
+  // Enable or disable incremental move-list maintenance (on by default): node
+  // move lists are derived from the lists two plies up via PathMoveLists
+  // instead of generated from scratch, with byte-identical results. Exists so
+  // a test can A/B the two modes and assert bit-identical solves, and so the
+  // benchmark can measure the speedup; production always leaves it on.
+  void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
   // Enable or disable the move-generation memo (off by default). When on, every
   // move list the solver requests is cached by board+rack and reused on a
@@ -361,7 +379,17 @@ class EndgameSolver {
                             bool first);
   int32_t greedy_playout(uint64_t node_key, int ply);
 
-  // Return the legal move list for `rack` on the current board, counting one
+  // Return the legal move list for `rack` at the current position, `ply` deep
+  // down the search path, counting one logical move generation (movegens_).
+  // With incremental maintenance on this reads PathMoveLists (byte-identical
+  // to a scratch generation); otherwise it defers to generate_moves_scratch.
+  // The returned reference stays valid while the caller uses it even across
+  // nested make/unmake: deeper plies materialize into their own slots, and
+  // the scratch buffer is overwritten only by a later same-mode call, never
+  // during the current caller's use.
+  const std::vector<Move>& generate_moves(const Rack& rack, int ply);
+
+  // Scratch move generation for `rack` on the current board, counting one
   // logical move generation (movegens_). With the memo off it generates fresh
   // into a scratch buffer; with the memo on it keys by the current board_hash_
   // mixed with rack.bits() and returns a cached list on a hit, else generates,
@@ -369,12 +397,8 @@ class EndgameSolver {
   // return a wrong move list -- the same accepted collision model as the
   // transposition table -- but the map stores the full key, so its bucket
   // (index) collisions are resolved by key equality and only a genuine hash
-  // collision can misfire. The returned reference stays valid while the caller
-  // uses it even across nested make/unmake and further memo insertions:
-  // std::unordered_map never invalidates references to mapped values on rehash
-  // (only iterators), and the scratch buffer is overwritten only by a later
-  // call, never during the current caller's use.
-  const std::vector<Move>& generate_moves(const Rack& rack);
+  // collision can misfire.
+  const std::vector<Move>& generate_moves_scratch(const Rack& rack);
 
   // Sound upper bound on the mover's value from playing `m` at the current node,
   // derived from the best out-play in `replier_outs` that `m` provably leaves
@@ -451,6 +475,12 @@ class EndgameSolver {
   bool movegen_memo_ = false;
   std::unordered_map<uint64_t, std::vector<Move>> movegen_memo_map_;
   std::vector<Move> movegen_scratch_;  // return buffer when the memo is off
+
+  // Incremental move-list maintenance, on except when a test or benchmark
+  // disables it to A/B the two modes (see set_incremental_movegen), and the
+  // per-ply lists it maintains.
+  bool incremental_movegen_ = true;
+  PathMoveLists path_lists_;
 
   // Opponent-outplay futility pruning, on except when a test disables it to A/B
   // the two modes (see set_outplay_futility).
