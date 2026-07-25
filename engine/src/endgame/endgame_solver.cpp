@@ -681,8 +681,7 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   return result;
 }
 
-void EndgameSolver::set_trace(std::ostream* os,
-                              std::function<std::string(const Board&, const Move&)> fmt) {
+void EndgameSolver::set_trace(std::ostream* os, MoveFormatter fmt) {
   trace_ = os;
   trace_fmt_ = fmt ? std::move(fmt) : [](const Board&, const Move&) { return std::string("?"); };
 }
