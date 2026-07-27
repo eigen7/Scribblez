@@ -101,11 +101,36 @@ Layout -- where data lives and what provisions it:
 
 # Comments and documentation
 
-Write every comment and doc as a standalone description of the code as it currently is, for a reader
-with no prior context. Do not reference past versions of the code or the change that produced it
-("we replaced", "previously", "the old X", "now uses", "formerly"), and do not reference anything
-that only makes sense from the current conversation or task. State what the code does and why, not
-what it used to do or how it got here — that history belongs in commit messages, not the code.
+In general, you (Claude) have a tendency to put too much detail into code comments. Please follow
+the following guidelines when writing code comments:
+
+- You should think of the purpose of comments as serving HUMAN readers, to help them navigate the
+  codebase. Humans benefit from succinctness and organization.
+- Comments are NOT for the purpose of giving an AI agent a spec from which they could re-implement
+  the code. That would be way too much detail. What would be the point, when an AI can quickly read
+  the actual code anyway?
+- If the code is simple and straightforward enough to be "self-documenting", then a comment is
+  superfluous. Within a function implementation, a block of code warrants a comment only if there is
+  an important subtle detail pertaining to that logic that a human is likely to miss at a glance,
+  which could lead to future bugs. If such an in-function comment seems warranted, you should take a
+  step back and ask if the code could be refactored to make the code more self-documenting in
+  nature.
+- Generally, in headers/declarations, comments should answer the "what" and the "why". What does
+  this class represent, or what does this function do? Why does it exist? They should NOT answer the
+  "how". C++ private data members can be a bit of an exception: "how" that belongs to a data
+  structure can sit beside it, or at class level when it necessarily weaves several members
+  together.
+- Locality rule of thumb: changing an implementation detail should force a comment change in AT MOST
+  one spot, within a close radius of the code changed. If altering a detail inside a function body
+  demands edits to comments in three places, at least two of them were misplaced to begin with.
+  Imagine that in the future, a human can take over your implementation and decide to change some
+  aspect of it - is it likely he would miss a comment that goes stale as a result of his change? If
+  so, the comment should have been relocated or deleted from the beginning.
+- Do not word comments in a "reactionary" way based on conversation with the user. For example, if
+  the user requests, "A is bad because of X, can you change to B", then the implementation of B
+  does NOT need a comment saying, "This does B. It does not do A, since that would suffer from X."
+  That's a reactionary comment. Principle: imagine if the entire codebase was written one-shot from
+  scratch. Would this comment still be written like this? If not, it's probably not appropriate."
 
 # Macondo repo
 
