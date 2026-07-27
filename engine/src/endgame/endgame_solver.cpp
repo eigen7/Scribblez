@@ -351,9 +351,17 @@ int32_t EndgameSolver::outplay_futility_bound(const Move& m, const OutplaySet& r
   const int32_t p = best_surviving_score(replier_outs, m);
   if (p == kNoOutplaySurvivor) return kInf;
   // The replier can answer m with the surviving out-play: it scores p and banks
-  // twice the face value of the mover's post-m leftover as its end-of-game
-  // bonus, capping m's value at the resulting terminal spread. See the class
-  // comment for the derivation and why missed out-plays keep the bound sound.
+  // twice the face value L of the mover's post-m leftover as its end-of-game
+  // bonus, so the game ends at spread s + m.score() - p - 2L for the mover,
+  // where s is the mover's spread at this node. That line is available to the
+  // replier, so it caps m's value; anything better for the mover would require
+  // the replier to play worse.
+  //
+  // The bound stays sound when the out-play set is incomplete. Entries the set
+  // is missing -- dropped by the halo kill filter without really being blocked,
+  // or newly enabled by m -- are further replier options, which can only lower
+  // m's true value. A conservatively dropped entry therefore costs a tighter
+  // bound, never a valid one.
   const int32_t leftover = racks_[mover].point_value() - placed_face_value(m);
   return spread_stm() + m.score() - p - 2 * leftover;
 }
@@ -868,13 +876,12 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
     return result;
   }
 
-  // Seed the incremental out-play sets (see the class comment): the opponent's
-  // from one move generation against its rack, the solving side's empty -- the
-  // root node itself is never futility-pruned, and its children's mover-side
-  // sets come from bucketing the root play list. The same opponent generation
-  // seeds PathMoveLists' root lists, from which every deeper node's move list
-  // is derived. Seeded only once the solve is sure to run, so a declined
-  // position pays nothing.
+  // Seed the incremental out-play sets: the opponent's from one move generation
+  // against its rack, the solving side's empty -- the root node itself is never
+  // futility-pruned, and its children's mover-side sets come from bucketing the
+  // root play list. The same opponent generation seeds PathMoveLists' root
+  // lists, from which every deeper node's move list is derived. Seeded only
+  // once the solve is sure to run, so a declined position pays nothing.
   root_sets_[0].clear();
   root_sets_[1].clear();
   cur_sets_[0] = &root_sets_[0];
