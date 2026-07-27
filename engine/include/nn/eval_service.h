@@ -3,7 +3,6 @@
 namespace scribblez {
 namespace nn {
 
-// One model readout for a single encoded position.
 struct Eval {
   // P(win) + 0.5 * P(draw), the expected game points under the WLD head.
   float win_prob = 0.0f;

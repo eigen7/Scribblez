@@ -8,7 +8,6 @@
 
 namespace scribblez {
 
-// A Bag holds remaining tiles and supports uniform-random draws.
 class Bag {
  public:
   // Initialize from the standard English tile distribution.

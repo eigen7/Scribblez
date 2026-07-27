@@ -10,19 +10,19 @@ namespace scribblez {
 // (optionally a designated blank), or an unassigned blank (a blank with no
 // chosen letter -- only meaningful in a move/rack, never on the board).
 //
-// One byte, with Empty == 0 so a zero-filled board/array is all-empty:
+// One byte:
 //   0        empty
 //   1..26    played letter A..Z            (letter index = code - 1)
 //   27..52   designated blank, shows A..Z  (letter index = code - 27)
 //   53       unassigned blank
 class Glyph {
  public:
-  constexpr Glyph() = default;  // empty
+  constexpr Glyph() = default;  // empty, so a zero-filled array is all-empty
 
   static constexpr Glyph empty() { return Glyph(0); }
   static constexpr Glyph of(Tile letter) { return Glyph(static_cast<uint8_t>(letter.index() + 1)); }
   static constexpr Glyph of_blank(Tile letter);
-  static constexpr Glyph blank() { return Glyph(53); }  // unassigned
+  static constexpr Glyph blank() { return Glyph(53); }
 
   static constexpr Glyph played(Tile letter, bool is_blank);
 
@@ -30,12 +30,11 @@ class Glyph {
   constexpr bool is_blank() const { return code_ >= 27; }  // designated or not
   constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
   constexpr Tile letter() const;    // valid iff has_letter()
-  constexpr bool is_vowel() const;  // true iff has_letter() and letter is AEIOU
+  constexpr bool is_vowel() const;  // false unless has_letter()
   int value() const { return has_letter() && !is_blank() ? letter().value() : 0; }
   constexpr char to_char() const;
   constexpr uint8_t code() const { return code_; }
 
-  // The rack tile this glyph consumes when played or exchanged.
   constexpr Tile rack_tile() const { return is_blank() ? BLANK : letter(); }
 
   static constexpr Glyph exchanging(Tile t) { return t.is_blank() ? blank() : of(t); }

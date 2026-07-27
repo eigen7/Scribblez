@@ -18,11 +18,9 @@ struct TurnRecord {
   Rack rack_before;
   int bag_size_before;
   Move move;
-  int score_delta;  // points scored on this turn (may be 0 or negative)
+  int score_delta;  // may be 0 or negative
   std::array<int, 2> cumulative_scores;
-  // Tiles drawn from the bag after the move (in draw order). Trailing entries
-  // of `drawn` are empty Tiles. A turn draws at most RACK_SIZE tiles.
-  Rack drawn;
+  Rack drawn;  // drawn after the move resolved, in draw order
 };
 
 // Non-owning view of one completed game's log; its variable-length backing
@@ -122,17 +120,13 @@ class Game {
   std::mt19937_64 opening_rng_;
   bool respect_projections_ = false;
 
-  // Draw until the player's rack is at RACK_SIZE, adding the drawn tiles to
-  // `drawn_out` when it is non-null.
+  // `drawn_out`, when non-null, accumulates the tiles drawn.
   void refill_rack(int p, Rack* drawn_out);
 
-  // A uniformly-random move while the turn index is within the random opening
-  // (tallying it in the log), the seated agent's choice otherwise.
+  // Also tallies a random-opening move in the log.
   MoveDecision choose_move(int player, const MoveRequest& req);
 
-  // The turn loop shared by play() and play_from(): play from `start_player`
-  // until the standard end (out / stalemate / max-turns), scoring the endgame
-  // and writing the final state to the log.
+  // Shared by play() and play_from().
   void play_loop(int start_player);
 };
 

@@ -39,13 +39,13 @@ class SelfPlayEngine {
   // params.
   SelfPlayEngine(const Params& params, const PlayerFactory::Params& player_params);
 
-  // Agent pairs actually built, i.e. usable parallel threads.
+  // May be below params.threads; see the constructor.
   int num_threads() const { return static_cast<int>(agents_.size()); }
 
   // Game g is played with seed() + g.
   uint64_t seed() const { return params_.seed; }
 
-  // The two persistent players' seat-independent identities.
+  // Seat-independent: seats alternate between games.
   std::array<std::string, 2> player_names() const;
 
   // Play one game on `thread_idx`'s agent pair, `seats[s]` being the player

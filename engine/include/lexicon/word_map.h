@@ -61,8 +61,8 @@ class WordMap {
   // letters, so a real entry has count >= 1 and a nonzero key).
   struct Slot {
     BitRack key;
-    uint32_t word_start = 0;  // index of the first word for this key
-    uint32_t count = 0;       // number of words for this key
+    uint32_t word_start = 0;
+    uint32_t count = 0;
   };
   struct PerLength {
     std::vector<Tile> words;  // flat; word i occupies [i*len, (i+1)*len)

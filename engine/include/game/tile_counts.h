@@ -7,9 +7,8 @@
 
 namespace scribblez {
 
-// A multiset of tiles as a per-type histogram -- the fast representation for
-// counting, adding, and removing. (A Tile indexes it via its implicit
-// conversion.)
+// Rack's counterpart: the same tiles as a per-type histogram, which trades
+// Rack's compactness for O(1) counting.
 class TileCounts {
  public:
   void add(Tile t) { ++counts_[t]; }

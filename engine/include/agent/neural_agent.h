@@ -90,7 +90,7 @@ class NeuralAgent : public Agent {
 
   int greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const;
 
-  // Fill cand_idx_ with this turn's candidates and return the count.
+  // Returns the candidate count, not an index.
   int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
   float objective_value(const nn::Eval& e) const;

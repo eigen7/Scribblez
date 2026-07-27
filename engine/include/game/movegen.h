@@ -18,8 +18,6 @@ enum class GenAlgo {
   DAWG,    // Appel-Jacobson anchor + forward-trie traversal (reference impl).
 };
 
-// Generates all legal Scrabble moves for a (board, rack) pair, using
-// cross-checks for perpendicular-word validity.
 class MoveGenerator {
  public:
   MoveGenerator(const Board& board, const Dictionary& dict);

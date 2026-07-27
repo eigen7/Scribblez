@@ -22,8 +22,8 @@ namespace scribblez {
 class Dictionary;
 class LeaveOutplays;
 
-// One bag-empty position to solve, from the perspective of the side holding
-// `my_rack`.
+// A position to solve, from the perspective of the side holding `my_rack`.
+// The bag must be empty, which is what makes both racks known.
 struct EndgameState {
   const Dictionary* dict = nullptr;
   Board board;
@@ -34,7 +34,7 @@ struct EndgameState {
   int scoreless_turns = 0;  // consecutive zero-score turns already played
 };
 
-// Result of one solve, from the perspective of the side that was to move.
+// From the perspective of the side that was to move.
 struct EndgameResult {
   // proven_class value when no class proof landed.
   static constexpr int kClassUnknown = 2;
@@ -88,7 +88,7 @@ struct EndgameResult {
 // returns modest, so stop at lazy-SMP unless a profile says otherwise.
 class EndgameSolver {
  public:
-  // Renders a move against the board it is about to be played on.
+  // The board passed is the one the move is about to be played on.
   using MoveFormatter = std::function<std::string(const Board&, const Move&)>;
 
   // The transposition table takes 2^tt_log2_entries entries.
@@ -112,7 +112,6 @@ class EndgameSolver {
                      const std::string& prefix = "");
   };
 
-  // Solve for the side holding `state`'s my_rack.
   EndgameResult solve(const EndgameState& state, const Params& params);
 
   // The window a class-only solve searches: a final spread >= kFirstWinBeta is a
@@ -120,8 +119,7 @@ class EndgameSolver {
   static constexpr int32_t kFirstWinAlpha = -1;
   static constexpr int32_t kFirstWinBeta = 1;
 
-  // Discard everything remembered from previous solves. Must be called between
-  // games; within a game, every turn reuses the table.
+  // Must be called between games; within a game, every turn reuses the table.
   void clear();
 
   // Trace each solve to `os`, or nullptr to stop (the default).
@@ -171,7 +169,6 @@ class EndgameSolver {
     bool proven = false;
   };
 
-  // A candidate move and the value the search currently ranks it by.
   struct RankedMove {
     Move move;
     int32_t rank = 0;

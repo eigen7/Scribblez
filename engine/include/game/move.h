@@ -53,7 +53,6 @@ class Move {
   uint16_t square_mask() const { return square_mask_; }
   uint16_t score() const { return score_; }
 
-  // Played (PLAY) or surrendered (EXCHANGE) tiles; 0 for a PASS.
   int num_glyphs() const { return num_played_; }
 
   Glyph glyph(int i) const { return glyphs_[i]; }

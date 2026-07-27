@@ -10,8 +10,8 @@
 
 namespace scribblez {
 
-// Up to RACK_SIZE tiles, held as a sorted fixed-size array -- compact and
-// trivially serializable. For histogram-style bookkeeping, ask for counts().
+// Up to RACK_SIZE tiles, held sorted in a fixed-size array so the type stays
+// compact and trivially serializable. TileCounts is the histogram counterpart.
 class Rack {
  public:
   void add(Tile t);

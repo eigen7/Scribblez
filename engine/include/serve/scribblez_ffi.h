@@ -24,13 +24,8 @@ typedef struct ScribblezShape {
   int target_index;  // -1 for inputs; 0..N-1 for targets, in row layout order
 } ScribblezShape;
 
-// Description of the session's input tensor(s): a spatial-plane tensor
-// followed by a flat vector of scalar features. The shapes depend on the
-// session's input-encoding spec (a contingent-features session reports the
-// full layout; a baseline session the smaller base layout), so they hang off
-// the session. Declared below the session typedef; see there.
-
-// Static description of the target tensor(s) in row order:
+// The input shapes depend on the session's encoding spec, so they hang off the
+// session; see scribblez_input_shapes below. The targets do not:
 //   target_index=0  "wld"                (3,)
 //   target_index=1  "score_diff"         (1,)
 //   target_index=2  "opp_next_placement"  (15, 15)
@@ -39,8 +34,7 @@ typedef struct ScribblezShape {
 //   target_index=5  "self_win_placement"  (15, 15)
 const ScribblezShape* scribblez_target_shapes(void);
 
-// Shapes / sizes for the max-move-per-lane task (the "highest-scoring move per lane"
-// model), a sibling layout to the post-move shapes above. Input: a (31, 15, 15)
+// The max-move-per-lane task's sibling layout. Input: a (31, 15, 15)
 // board-plane tensor + a 27-float rack-count vector. Targets, in row order:
 //   target_index=0  "lane_occupancy" (30, 15, 27)
 //   target_index=1  "lane_score"     (30,)
@@ -81,58 +75,50 @@ const ScribblezShape* scribblez_input_shapes(ScribblezSession* s);
 int scribblez_input_floats(ScribblezSession* s);
 int scribblez_row_size_floats(ScribblezSession* s);
 
-// Score-differential sweep encoder -- a sister to the DataLoader that reads a
-// .slog and materializes input tensors with NO sampling or shuffling. It
-// replays a sampled position and re-encodes it once per integer score
+// A sister to the DataLoader that reads a .slog with NO sampling or shuffling:
+// it replays a sampled position and re-encodes it once per integer score
 // differential in [diff_lo, diff_hi], sweeping ONLY the active player's score
 // advantage while board, racks, and move history stay constant. Let
 // R = diff_hi - diff_lo + 1.
 //
-// `path`       : .slog file to read.
-// `game_idx`   : a single game (0 .. num_games-1) -> R tensors, OR < 0 for
-//                EVERY game in the file -> num_games * R tensors, position-
-//                major (game g occupies rows [g*R, (g+1)*R)).
-// `post_move`  : encode the post-move snapshot (1) or pre-move (0).
-// `out_inputs` : receives the input tensors, each scribblez_input_floats(s)
-//                floats long, contiguous.
+// `game_idx`   : one game -> R tensors, or < 0 for EVERY game in the file ->
+//                num_games * R tensors, game g occupying rows [g*R, (g+1)*R).
+// `post_move`  : the post-move snapshot (1) or the pre-move one (0).
+// `out_inputs` : contiguous, each tensor scribblez_input_floats(s) long.
 //
 // Returns 0 on success, -1 on I/O error / bad header / out-of-range index.
 int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
                                       int post_move, int diff_lo, int diff_hi, float* out_inputs);
 
 // Sim evidence for a penultimate-bingo analysis GCG's final decision point:
-// replays the GCG to the state BEFORE its final recorded move, ranks the
-// mover's legal moves by HastyBot static equity, and runs SimRunner over the
-// top-K (common random numbers, `rollouts` HastyBot rollouts each; with
-// open_leaves != 0 every rollout starts the opponent from the leave their
-// last recorded move retained, with their replenishments sampled; otherwise
-// their whole rack is sampled uniformly from the unseen pool). Writes the
-// evidence as
-// consecutive SimObsRecord blobs (the .sobs record layout,
-// sim_observation_log.h) into `out_records`, which must hold at least top_k
-// records. Sets *played_rank to the index of the GCG's final (actually
-// played) move within the returned candidates, or -1 if it fell outside the
-// top-K. Returns the record count, or -1 on a parse error / an endgame
-// position (the sim requires a non-empty bag at the decision point).
+// replay to the state BEFORE its final recorded move, rank the mover's legal
+// moves by HastyBot static equity, and run SimRunner over the top-K. With
+// open_leaves != 0 every rollout starts the opponent from the leave their last
+// recorded move retained; otherwise their whole rack is sampled.
+//
+// `out_records` must hold at least top_k consecutive SimObsRecord blobs (see
+// sim_observation_log.h). *played_rank receives the index of the GCG's actually
+// played move among the candidates, or -1 if it fell outside the top-K. Returns
+// the record count, or -1 on a parse error or an endgame position, the sim
+// requiring a non-empty bag.
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
                                int threads, uint64_t seed, int open_leaves, char* out_records,
                                int* played_rank);
 
-// Decode explicit training rows of one .slog file: row j is the position at
-// (game_idx[j], turn_idx[j]), encoded exactly like a DataLoader training row
-// (input floats followed by the label block) but with no symmetry flip.
-// `post_move` selects the snapshot for every row. Writes n rows of
-// scribblez_row_size_floats() floats to `out`. Returns 0 on success, -1 on an
-// I/O / header error. Serves consumers that pair rows with per-position
-// sidecar data (the .sobs sim observations) and so must address positions by
-// identity rather than stream them shuffled.
+// Row j is the position at (game_idx[j], turn_idx[j]), encoded exactly like a
+// DataLoader training row but with no symmetry flip; `out` takes n rows of
+// scribblez_row_size_floats(). Returns 0 on success, -1 on an I/O / header
+// error.
+//
+// It exists for consumers that pair rows with per-position sidecar data (the
+// .sobs sim observations) and so must address positions by identity rather than
+// stream them shuffled.
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
-// Encode `n` candidate Moves into the move set evaluation model's
-// move-encoder input arrays (the single source of truth for that layout;
-// training/move_set_encoder.h -- the training dataset reaches it here and
-// the move set evaluation agent shares it at inference). `moves` points to n
+// Encode `n` candidate Moves into the move set evaluation model's move-encoder
+// input arrays, whose layout training/move_set_encoder.h owns -- the training
+// dataset reaches it here and the agent shares it at inference. `moves` points to n
 // contiguous 16-byte serialized Moves (as stored in .slog/.mset);
 // `pre_move_score_diffs` is the mover's pre-move score advantage (points) per
 // move, used to form the resultant post-move differential feature. Writes
@@ -146,7 +132,7 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                                      uint8_t* out_blanks, int32_t* out_squares,
                                      uint8_t* out_tile_mask, float* out_scalars);
 
-// The move-encoder layout constants, so Python callers never hardcode them:
+// So Python callers never hardcode them:
 //   max_placed    letter/square array width (tiles per move slot)
 //   num_scalars   per-move scalar-feature count
 //   letter_vocab  letter-embedding vocabulary size (valid ids 0..letter_vocab-1;
@@ -155,23 +141,21 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
                                   int32_t* cells);
 
-// The board input's score-differential scalar, so the move set dataset can
-// read each position's pre-move differential straight out of the encoded row
-// (rather than recomputing it): `scalar_index` is its index within the scalar
-// input vector for this session's arm, and `scale` is the divisor the
-// encoder applied (so points = input_scalar[scalar_index] * scale).
+// Where the board input's score-differential scalar sits, so the move set
+// dataset can read a position's pre-move differential straight out of the
+// encoded row instead of recomputing it: points =
+// input_scalar[scalar_index] * scale.
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale);
 
-// Render an ASCII description of a sampled position (POV, scores, leave, last
-// moves, board) into `out` (NUL-terminated, truncated to out_cap). Returns
-// the full string length on success (which may exceed out_cap - 1, signaling
-// the caller to retry with a larger buffer), or -1 on I/O / header error.
+// An ASCII description of a sampled position (POV, scores, leave, last moves,
+// board) into `out`, NUL-terminated and truncated to out_cap. Returns the full
+// string length, which may exceed out_cap - 1 and so signal a retry with a
+// larger buffer, or -1 on I/O / header error.
 int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
                             char* out, int out_cap);
 
-// Like scribblez_dump_position, but emits the web UI's GameState JSON (board,
-// bonuses, rack, scores, tile_scores, ...) for the sampled position, suitable
-// for driving the web-style image renderer. Same return/truncation contract.
+// scribblez_dump_position's output as the web UI's GameState JSON instead,
+// for the web-style image renderer. Same return/truncation contract.
 int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
                                  int post_move, char* out, int out_cap);
 
@@ -224,13 +208,11 @@ int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* g
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
                           const int64_t* game_indices, int num_picks);
 
-// Peek at the FileHeader of a .slog file. Returns 0 on success and fills
-// *out_num_positions / *out_file_size. Returns -1 on I/O failure or magic
-// / version mismatch.
+// Returns 0 having filled *out_num_positions / *out_file_size, or -1 on I/O
+// failure or a magic / version mismatch.
 int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
                                int64_t* out_file_size);
 
-// Opaque DataLoader handle.
 typedef struct DataLoaderHandle DataLoaderHandle;
 
 // Create a loader over the session's lexicon. `task` selects the training row it
@@ -243,9 +225,8 @@ DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
 
 void scribblez_dl_delete(DataLoaderHandle* h);
 
-// Register one .slog file (chronological, oldest-first). `num_positions`
-// must match the value the FileHeader reports; `file_size` must match the
-// on-disk size in bytes.
+// Chronological, oldest-first. `num_positions` must match what the FileHeader
+// reports and `file_size` the on-disk size.
 void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_positions,
                            int64_t file_size);
 
@@ -262,12 +243,11 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
                              uint64_t seed, int turns_per_game, int epoch_index);
 
-// Fill `output` with the next batch of the current epoch. Returns the
-// number of rows written (0 = epoch exhausted). `output` must have capacity
-// for at least batch_size * scribblez_row_size_floats() floats.
+// Returns the rows written, 0 once the epoch is exhausted. `output` needs room
+// for batch_size * scribblez_row_size_floats() floats.
 int scribblez_dl_load_batch(DataLoaderHandle* h, float* output);
 
-// Query current resident memory in bytes (useful for testing eviction).
+// Resident bytes, for testing eviction.
 int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h);
 
 // ===========================================================================
@@ -320,26 +300,23 @@ StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float*
                                                      const char* const* player_specs,
                                                      int num_specs);
 
-// Spawn the producer threads. Idempotent.
+// Idempotent.
 void scribblez_stream_start(StreamHandle* h);
 
-// Block until a full slot is ready; returns its index [0, num_slots), or -1 if
-// the stream has stopped and no more slots will come. Releases the Python GIL
-// (it is a plain C call invoked via ctypes), so the training thread runs while
-// producers fill slots.
+// Blocks; -1 once the stream has stopped and no more slots will come. Being a
+// plain C call invoked via ctypes it releases the Python GIL, so the training
+// thread runs while producers fill slots.
 int scribblez_stream_wait_full_slot(StreamHandle* h);
 
-// Return a consumed slot to the producers.
 void scribblez_stream_release_slot(StreamHandle* h, int slot);
 
-// Snapshot the throughput / backpressure counters.
 void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out);
 
-// Signal shutdown: wakes the consumer and producers and joins the producer
-// threads. Idempotent.
+// Wakes the consumer and producers, then joins the producer threads.
+// Idempotent.
 void scribblez_stream_stop(StreamHandle* h);
 
-// Destroy the streamer (stops + joins first if needed).
+// Stops and joins first if needed.
 void scribblez_stream_delete(StreamHandle* h);
 
 #ifdef __cplusplus

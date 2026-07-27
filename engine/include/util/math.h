@@ -9,7 +9,7 @@
 
 namespace scribblez::util {
 
-// Smallest power of two that is >= n (and >= 1, since std::bit_ceil(0) == 1).
+// 1 for n == 0, std::bit_ceil's convention.
 inline uint64_t round_up_pow2(uint64_t n) { return std::bit_ceil(n); }
 
 // splitmix64 finalizer: decorrelates structured integers (file/game/turn
@@ -21,7 +21,7 @@ constexpr uint64_t splitmix64(uint64_t x) {
   return x ^ (x >> 31);
 }
 
-// Round n up to the next multiple of alignment. alignment must be a power of two.
+// `alignment` must be a power of two.
 constexpr uint64_t align_up(uint64_t n, uint64_t alignment) {
   return (n + alignment - 1) & ~(alignment - 1);
 }
@@ -39,9 +39,8 @@ class SoftmaxSampler {
   std::vector<double> weights_;
 };
 
-// Linear index of cell (r, c) in a side x side grid stored row-major. When
-// transpose is true the grid is reflected across the main diagonal, i.e. the
-// roles of row and column are swapped.
+// Into a row-major side x side grid, reflected across the main diagonal when
+// `transpose`.
 constexpr int plane_index(int r, int c, int side, bool transpose) {
   return transpose ? (c * side + r) : (r * side + c);
 }

@@ -56,9 +56,8 @@ struct MoveDecision {
   MoveDecision(const Move& m, std::vector<Move> projected);
 };
 
-// Uniformly at random among all legal PLAYs and EXCHANGEs; passes only when
-// neither exists. Game's random-opening mode reaches off-policy positions with
-// it.
+// Draws from the legal PLAYs and EXCHANGEs together, passing only when neither
+// exists. Game's random-opening mode reaches off-policy positions with it.
 Move pick_uniform_random_play(const MoveRequest& req, std::mt19937_64& rng);
 
 class Agent {
@@ -85,13 +84,12 @@ class Agent {
   // even though make_move() fires only on its own turns.
   virtual void observe_move(const Move& move) {}
 
-  // Called once after the game ends, on each seat's agent. The default result
-  // means "no opinion"; the human agent returns the user's Play Again / Quit
-  // choice.
+  // Called on each seat's agent once the game ends. The default "no opinion"
+  // leaves the next step to the caller; the human agent answers with the user's
+  // Play Again / Quit choice.
   virtual EndGameResult end_game(const Game& game, int my_seat) { return {}; }
 
-  // Whether instances of this agent can run concurrently in a threaded game
-  // loop. The human web agent cannot: it owns a browser session.
+  // False for the human web agent, which owns a browser session.
   virtual bool supports_parallelism() const { return true; }
 
  protected:

@@ -42,7 +42,7 @@ bool move_touches_halo(const OutplayHalo& halo, const Move& m);
 uint8_t canonical_used_mask(const Rack& rack, const TileCounts& used);
 
 // Halos for a fixed list of candidate out-plays on one board, each built on
-// first use, so a caller that queries only a few plays never pays for the rest.
+// first use so a caller that queries only a few never pays for the rest.
 class LazyHalos {
  public:
   LazyHalos(const Board& board, const std::vector<Move>& plays);
@@ -117,8 +117,7 @@ class LeaveOutplays {
 // its own.
 class OutplaySetStack {
  public:
-  // Start a search whose paths run at most `max_ply` plies deep, from a root
-  // with both sets empty.
+  // Sizes the per-ply slots for paths of at most `max_ply` plies.
   void reset(int max_ply);
 
   // Make the out-plays of `plays` (the replier's legal plays with a

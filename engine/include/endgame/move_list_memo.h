@@ -12,10 +12,10 @@ class Board;
 class Dictionary;
 class Rack;
 
-// Move generation with an optional cache of the lists it produces, keyed by
-// board and rack. Caching trades memory for generation work and changes no
-// list, so a benchmark can enable it to speed up a measurement run without
-// perturbing what is measured. Off by default.
+// Move generation, optionally cached by board and rack. Caching trades memory
+// for generation work and changes no list, so a benchmark can enable it to
+// speed up a measurement run without perturbing what is measured. Off by
+// default.
 //
 // A returned reference is invalidated by later generate() calls; a caller that
 // must hold a list across further generation keeps its own copy.

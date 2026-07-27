@@ -91,9 +91,8 @@ class SimObsWriter {
   bool closed_ = false;
 };
 
-// Loads a .sobs file into memory and serves per-position views. Throws
-// std::runtime_error on a missing file, bad magic, or version mismatch, so a
-// stale file fails loudly rather than misparses.
+// Throws std::runtime_error on a missing file, bad magic, or version mismatch,
+// so a stale file fails loudly rather than misparsing.
 class SimObsReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.

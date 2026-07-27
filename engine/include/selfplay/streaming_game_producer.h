@@ -22,7 +22,7 @@
 namespace scribblez {
 namespace binlog {
 
-// Game-production counters (combined with RingStats by the trainer).
+// Combined with RingStats by the trainer.
 struct ProducerStats {
   int64_t games_played = 0;   // games whose sampled row was committed
   int64_t games_dropped = 0;  // games with no bag-nonempty (eligible) turn

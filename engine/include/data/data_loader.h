@@ -77,7 +77,6 @@ class DataLoader {
   int64_t num_positions() const;
   int num_files() const;
 
-  // Bytes currently resident across loaded file buffers.
   int64_t resident_bytes() const;
 
   // =========================================================================
@@ -360,7 +359,6 @@ class DataLoader {
     void append_game_turns(int file_idx, int64_t game, int n, int64_t base, uint64_t file_key,
                            int turns_per_game, int epoch_index);
 
-    // Fill flips_ with per-row diagonal-flip bits.
     void build_flips(const EpochConfig& config);
 
     std::vector<EpochPosition> order_;

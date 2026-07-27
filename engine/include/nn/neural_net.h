@@ -57,7 +57,7 @@ class NeuralNet {
 
   int max_batch_size() const;
 
-  // Read off the engine's declared tensor shapes. Valid after load().
+  // Valid after load().
   int spatial_planes() const;
   int scalar_floats() const;
 
