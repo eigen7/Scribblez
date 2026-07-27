@@ -797,6 +797,16 @@ std::vector<Move> MoveGenerator::generate(const Rack& rack, GenAlgo algo) {
   return out;
 }
 
+void MoveGenerator::generate_lane(const Rack& rack, bool transposed, int row,
+                                  std::vector<Move>& out) {
+  board_.ensure_movegen_caches(dict_);
+  const View view{board_, transposed};
+  GaddagGen st{
+    view,          dict_, board_.cross_checks(transposed), board_.gaddag_anchors(transposed),
+    rack.counts(), out};
+  st.generate_for_row(row);
+}
+
 void wmp_rack_subracks(const Rack& rack, WmpSubracks& out, int& rack_tiles) {
   const TileCounts& counts = rack.counts();
   std::vector<std::pair<int, int>> letters;

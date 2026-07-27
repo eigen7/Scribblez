@@ -6,6 +6,7 @@
 #include "data/gcg_reader.h"
 #include "endgame/endgame_solver.h"
 #include "endgame/outplays.h"
+#include "endgame/path_move_lists.h"
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/move.h"
@@ -1466,4 +1467,184 @@ TEST(EndgameSolver, MovegensCounted) {
   const EndgameResult big = big_solver.solve(state, {kBigBudget, kRefDepth, true});
   EXPECT_GT(small.movegens, 0u);
   EXPECT_GE(big.movegens, small.movegens);
+}
+
+// --- Incremental move-list maintenance (PathMoveLists) ----------------------
+
+TEST(PackedCounts, SubsetRespectsMultiplicityAndBlanks) {
+  const PackedCounts eea = pack_rack(rack_from("EEA"));
+  EXPECT_TRUE(counts_subset(pack_rack(Rack{}), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(rack_from("E")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(rack_from("EE")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(rack_from("EEA")), eea));
+  EXPECT_FALSE(counts_subset(pack_rack(rack_from("EEE")), eea));
+  EXPECT_FALSE(counts_subset(pack_rack(rack_from("B")), eea));
+  // The blank is a tile type of its own, not a wildcard, and lives in the high
+  // half together with Q..Z.
+  EXPECT_FALSE(counts_subset(pack_rack(rack_from("?")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(rack_from("?")), pack_rack(rack_from("A?"))));
+  EXPECT_TRUE(counts_subset(pack_rack(rack_from("ZZ")), pack_rack(rack_from("QZZ"))));
+  EXPECT_FALSE(counts_subset(pack_rack(rack_from("ZZZ")), pack_rack(rack_from("QZZ"))));
+}
+
+namespace {
+
+uint16_t lane_mask(const std::vector<int>& lanes) {
+  uint16_t m = 0;
+  for (int lane : lanes) m |= static_cast<uint16_t>(1u << lane);
+  return m;
+}
+
+}  // namespace
+
+TEST(MoveLaneInfluence, MarksPlacedAndNeighborLanes) {
+  const Board b;  // empty
+  const LaneTouch t = move_lane_influence(b, horiz_play(7, {6, 7}));
+  EXPECT_EQ(t.rows, lane_mask({6, 7, 8}));
+  EXPECT_EQ(t.cols, lane_mask({5, 6, 7, 8}));
+  const LaneTouch pass = move_lane_influence(b, Move::pass());
+  EXPECT_EQ(pass.rows, 0);
+  EXPECT_EQ(pass.cols, 0);
+}
+
+TEST(MoveLaneInfluence, WalksThroughExistingRuns) {
+  // An existing vertical run at (5,7)-(6,7): placing at (7,7) reaches through
+  // it to the run's far end (4,7), and rows 5-6 themselves host no reachable
+  // placement, so they stay unmarked.
+  Board b;
+  b.apply(vert_play(7, {5, 6}));
+  const LaneTouch t = move_lane_influence(b, horiz_play(7, {7}));
+  EXPECT_EQ(t.rows, lane_mask({4, 7, 8}));
+  EXPECT_EQ(t.cols, lane_mask({6, 7, 8}));
+}
+
+TEST(MoveLaneInfluence, BoardEdgeDropsOffWalks) {
+  const Board b;
+  const LaneTouch t = move_lane_influence(b, horiz_play(0, {0}));
+  EXPECT_EQ(t.rows, lane_mask({0, 1}));
+  EXPECT_EQ(t.cols, lane_mask({0, 1}));
+}
+
+namespace {
+
+void expect_moves_identical(const std::vector<Move>& inc, const std::vector<Move>& ref,
+                            const char* ctx, int ply) {
+  ASSERT_EQ(inc.size(), ref.size()) << ctx << " ply " << ply;
+  for (size_t i = 0; i < inc.size(); ++i)
+    ASSERT_TRUE(inc[i] == ref[i]) << ctx << " ply " << ply << " index " << i;
+}
+
+void rack_remove_move(Rack& rack, const Move& m) {
+  for (int i = 0; i < m.num_glyphs(); ++i) rack.remove(m.glyph(i).rack_tile());
+}
+
+void rack_add_move(Rack& rack, const Move& m) {
+  for (int i = 0; i < m.num_glyphs(); ++i) rack.add(m.glyph(i).rack_tile());
+}
+
+// Walk random game paths and assert every PathMoveLists materialization is
+// byte-identical to a scratch generation -- including for a sibling probe
+// (make a move, materialize the child, unmake, proceed with another move),
+// the pattern a search's move scan produces.
+void check_path_lists_on_random_paths(const Dictionary& d, unsigned seed, int games,
+                                      int max_plies) {
+  std::mt19937 rng(seed);
+  for (int g = 0; g < games; ++g) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/5);
+    Board board = p.board;
+    Rack racks[2] = {p.my_rack, p.opp_rack};
+    if ((rng() % 2) != 0) racks[rng() % 2].add(BLANK);
+
+    PathMoveLists pl;
+    pl.reset(&board, &d, max_plies + 2);
+    pl.set_root_list(0, MoveGenerator(board, d).generate(racks[0]));
+    pl.set_root_list(1, MoveGenerator(board, d).generate(racks[1]));
+
+    for (int ply = 0; ply < max_plies; ++ply) {
+      const int side = ply % 2;
+      const std::vector<Move> ref = MoveGenerator(board, d).generate(racks[side]);
+      {
+        const std::vector<Move>& inc = pl.moves_at(ply, racks[side]);
+        expect_moves_identical(inc, ref, "path", ply);
+      }
+      if (!ref.empty()) {
+        // Sibling probe.
+        const Move probe = ref[rng() % ref.size()];
+        pl.on_make(ply, probe);
+        BoardUndo undo;
+        board.apply(probe, &undo);
+        rack_remove_move(racks[side], probe);
+        const std::vector<Move>& pinc = pl.moves_at(ply + 1, racks[1 - side]);
+        expect_moves_identical(pinc, MoveGenerator(board, d).generate(racks[1 - side]), "probe",
+                               ply + 1);
+        board.unapply(undo);
+        rack_add_move(racks[side], probe);
+      }
+      const Move chosen =
+        (!ref.empty() && (rng() % 8) != 0) ? ref[rng() % ref.size()] : Move::pass();
+      pl.on_make(ply, chosen);
+      board.apply(chosen);
+      rack_remove_move(racks[side], chosen);
+      if (racks[side].empty()) break;
+    }
+  }
+}
+
+}  // namespace
+
+TEST(PathMoveLists, MatchesScratchTinyDict) {
+  check_path_lists_on_random_paths(tiny_dict(), 0x9A7E11u, /*games=*/40, /*max_plies=*/6);
+}
+
+TEST(PathMoveLists, MatchesScratchRealLexicon) {
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) {
+    GTEST_SKIP() << "no lexicon at " << path;
+  }
+  Dictionary d = Dictionary::load_kwg(path);
+  check_path_lists_on_random_paths(d, 0x9A7E22u, /*games=*/6, /*max_plies=*/8);
+}
+
+// Incremental maintenance must be invisible in every solver observable: value,
+// best move, node/movegen counts, proof state, and continuation, across
+// windows and budget levels.
+namespace {
+
+void check_incremental_ab(const Dictionary& d, unsigned seed, int count) {
+  std::mt19937 rng(seed);
+  for (int i = 0; i < count; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
+    const uint64_t budget = (i % 2) ? kBigBudget : 60;
+    const bool spread_matters = (i % 4) < 2;
+    const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
+    EndgameSolver inc, scratch;
+    scratch.set_incremental_movegen(false);
+    const EndgameResult a = inc.solve(state, {budget, kRefDepth, spread_matters});
+    const EndgameResult b = scratch.solve(state, {budget, kRefDepth, spread_matters});
+    EXPECT_EQ(a.value, b.value) << "position " << i;
+    EXPECT_TRUE(a.best == b.best) << "position " << i;
+    EXPECT_EQ(a.depth_completed, b.depth_completed) << "position " << i;
+    EXPECT_EQ(a.nodes, b.nodes) << "position " << i;
+    EXPECT_EQ(a.movegens, b.movegens) << "position " << i;
+    EXPECT_EQ(a.proven, b.proven) << "position " << i;
+    EXPECT_EQ(a.proven_class, b.proven_class) << "position " << i;
+    ASSERT_EQ(a.continuation.size(), b.continuation.size()) << "position " << i;
+    for (size_t j = 0; j < a.continuation.size(); ++j)
+      EXPECT_TRUE(a.continuation[j] == b.continuation[j]) << "position " << i << " move " << j;
+  }
+}
+
+}  // namespace
+
+TEST(EndgameSolver, IncrementalMovegenBitIdenticalTinyDict) {
+  check_incremental_ab(tiny_dict(), 0x1AB2CD3u, /*count=*/60);
+}
+
+TEST(EndgameSolver, IncrementalMovegenBitIdenticalRealLexicon) {
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) {
+    GTEST_SKIP() << "no lexicon at " << path;
+  }
+  Dictionary d = Dictionary::load_kwg(path);
+  check_incremental_ab(d, 0x1AB2CD4u, /*count=*/16);
 }

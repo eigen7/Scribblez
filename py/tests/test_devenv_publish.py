@@ -195,6 +195,61 @@ def test_sync_main_merges_when_local_only_commits_are_published(tmp_path: Path, 
     assert bare_main(repo, gitea) == git_out(repo, "rev-parse", "main")
 
 
+def amend(repo: Path, filename: str, content: str):
+    (repo / filename).write_text(content)
+    git(repo, "add", filename)
+    git(repo, "commit", "-q", "--amend", "-m", content)
+
+
+def test_sync_main_replaces_a_superseded_gitea_tip(tmp_path: Path, monkeypatch):
+    # `git commit --amend` on a mirrored main leaves Gitea holding the pre-amend
+    # commit. Rebasing onto it would replay the amended commit over its own
+    # older self; Gitea's copy is discarded instead.
+    repo, gitea, _ = make_synced_repo(tmp_path)
+    local_commit(repo, "one", filename="shared")
+    git(repo, "push", "-q", "gitea", "main")
+    superseded = git_out(repo, "rev-parse", "main")
+    amend(repo, "shared", "two")
+
+    prompts = feed_answers(monkeypatch, "")
+    publish.sync_main(repo)
+
+    assert len(prompts) == 1 and "Replace Gitea" in prompts[0]
+    assert bare_main(repo, gitea) == git_out(repo, "rev-parse", "main")
+    assert not publish.is_ancestor(repo, superseded, "main")
+
+
+def test_sync_main_keeps_a_rewritten_tip_that_github_has(tmp_path: Path, monkeypatch, capsys):
+    # Same rewrite, but the superseded commit reached GitHub, where it can never
+    # be discarded. Reconciling has to replay over it, so publish says why and
+    # bounces the conflict to the user rather than resolving it.
+    repo, gitea, _ = make_synced_repo(tmp_path)
+    local_commit(repo, "one", filename="shared")
+    git(repo, "push", "-q", "gitea", "main")
+    git(repo, "push", "-q", "origin", "main")
+    published = git_out(repo, "rev-parse", "main")
+    amend(repo, "shared", "two")
+
+    prompts = feed_answers(monkeypatch, "")
+    with pytest.raises(SystemExit, match="rebase"):
+        publish.sync_main(repo)
+
+    assert "Rebase" in prompts[0]
+    assert "GitHub already has" in capsys.readouterr().out
+    assert bare_main(repo, gitea) == published
+
+
+def test_sync_main_reports_both_sides_of_a_divergence(tmp_path: Path, monkeypatch, capsys):
+    repo, gitea, _ = make_synced_repo(tmp_path)
+    advance_bare(tmp_path, gitea, "merged")
+    local_commit(repo)
+    feed_answers(monkeypatch, "")
+    publish.sync_main(repo)
+    out = capsys.readouterr().out
+    assert "Gitea's main has commits your main lacks:" in out
+    assert "Your main has commits Gitea lacks:" in out
+
+
 def test_sync_main_merges_github_only_commits(tmp_path: Path, monkeypatch):
     repo, gitea, origin = make_synced_repo(tmp_path)
     advance_bare(tmp_path, origin, "outside")

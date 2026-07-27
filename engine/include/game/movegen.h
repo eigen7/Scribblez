@@ -28,6 +28,14 @@ class MoveGenerator {
   // PASS or EXCHANGE actions; the agent layer is responsible for those.
   std::vector<Move> generate(const Rack& rack, GenAlgo algo = GenAlgo::GADDAG);
 
+  // Append every legal PLAY whose canonical anchor lies in view-lane
+  // (`transposed`, `row`) -- for the GADDAG algorithm, exactly the moves
+  // generate() emits while scanning that lane, in the same order and under the
+  // same single-tile dedup rule, so the union over all 2 * BOARD_SIZE lanes
+  // equals generate(). An incremental caller uses this to regenerate just the
+  // lanes a board change touched.
+  void generate_lane(const Rack& rack, bool transposed, int row, std::vector<Move>& out);
+
  private:
   const Board& board_;
   const Dictionary& dict_;

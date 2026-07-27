@@ -150,6 +150,7 @@ int EndgameSolver::placed_face_value(const Move& move) const {
 }
 
 void EndgameSolver::make(const Move& move, int ply) {
+  if (incremental_movegen_) path_lists_.on_make(ply, move);
   Frame& f = frames_[ply];
   f.scores[0] = scores_[0];
   f.scores[1] = scores_[1];
@@ -283,7 +284,13 @@ void EndgameSolver::tt_store_playout(uint64_t hash, int32_t score_rel) {
   e.gen = tt_gen_;
 }
 
-const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack) {
+const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack, int ply) {
+  if (!incremental_movegen_) return generate_moves_scratch(rack);
+  ++movegens_;
+  return path_lists_.moves_at(ply, rack);
+}
+
+const std::vector<Move>& EndgameSolver::generate_moves_scratch(const Rack& rack) {
   ++movegens_;
   if (!movegen_memo_) {
     movegen_scratch_ = MoveGenerator(board_, *dict_).generate(rack);
@@ -301,7 +308,7 @@ int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
   const int32_t node_spread = spread_stm();
   int made = 0;
   while (!game_over_ && made < kMaxPlayout) {
-    const std::vector<Move>& plays = generate_moves(racks_[stm_]);
+    const std::vector<Move>& plays = generate_moves(racks_[stm_], ply + made);
     const Move chosen = plays.empty() ? Move::pass() : greedy_pick(plays);
     ++nodes_;
     make(chosen, ply + made);
@@ -344,9 +351,17 @@ int32_t EndgameSolver::outplay_futility_bound(const Move& m, const OutplaySet& r
   const int32_t p = best_surviving_score(replier_outs, m);
   if (p == kNoOutplaySurvivor) return kInf;
   // The replier can answer m with the surviving out-play: it scores p and banks
-  // twice the face value of the mover's post-m leftover as its end-of-game
-  // bonus, capping m's value at the resulting terminal spread. See the class
-  // comment for the derivation and why missed out-plays keep the bound sound.
+  // twice the face value L of the mover's post-m leftover as its end-of-game
+  // bonus, so the game ends at spread s + m.score() - p - 2L for the mover,
+  // where s is the mover's spread at this node. That line is available to the
+  // replier, so it caps m's value; anything better for the mover would require
+  // the replier to play worse.
+  //
+  // The bound stays sound when the out-play set is incomplete. Entries the set
+  // is missing -- dropped by the halo kill filter without really being blocked,
+  // or newly enabled by m -- are further replier options, which can only lower
+  // m's true value. A conservatively dropped entry therefore costs a tighter
+  // bound, never a valid one.
   const int32_t leftover = racks_[mover].point_value() - placed_face_value(m);
   return spread_stm() + m.score() - p - 2 * leftover;
 }
@@ -406,7 +421,7 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   // Owned copy: LeaveOutplays below holds a reference to this list, and the
   // child searches in the scan run nested generate_moves calls that may insert
   // into the memo, so an owned vector keeps the list stable across the loop.
-  std::vector<Move> plays = generate_moves(racks_[stm_]);
+  std::vector<Move> plays = generate_moves(racks_[stm_], ply);
   std::vector<RankedMove> moves;
   moves.reserve(plays.size() + 1);
   for (const Move& m : plays) moves.push_back({m, 0});
@@ -674,8 +689,7 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
   return result;
 }
 
-void EndgameSolver::set_trace(std::ostream* os,
-                              std::function<std::string(const Board&, const Move&)> fmt) {
+void EndgameSolver::set_trace(std::ostream* os, MoveFormatter fmt) {
   trace_ = os;
   trace_fmt_ = fmt ? std::move(fmt) : [](const Board&, const Move&) { return std::string("?"); };
 }
@@ -739,13 +753,16 @@ bool EndgameSolver::reprove_walk_move(int ply, int req_class, Move* out) {
     if (!sr.proven || !settles_first_win_class(sr.value) || class_of(sr.value) != req_class)
       continue;
     // The proof's root entry (just stored, or the hit that answered it) holds
-    // the class-preserving move; revalidate it against a fresh generation.
+    // the class-preserving move; revalidate it against a fresh generation. The
+    // generation runs even for a PASS (which needs no validation): it stamps
+    // this walk ply's PathMoveLists slot, which deeper walk positions derive
+    // their lists from -- a TT-answered proof would otherwise leave it stale.
     TTEntry* e = tt_probe(node_hash());
     if (e == nullptr) return false;
     const Move m = e->best;
-    if (m.type() == MoveType::PLAY) {
-      const std::vector<Move>& plays = generate_moves(racks_[stm_]);
-      if (std::find(plays.begin(), plays.end(), m) == plays.end()) return false;
+    const std::vector<Move>& plays = generate_moves(racks_[stm_], ply);
+    if (m.type() == MoveType::PLAY && std::find(plays.begin(), plays.end(), m) == plays.end()) {
+      return false;
     }
     *out = m;
     return true;
@@ -786,7 +803,7 @@ void EndgameSolver::extract_continuation(EndgameResult& result) {
     } else {
       // This side is proven lost: no move of theirs changes the class, so the
       // greedy playout move stands in for their optimal play.
-      const std::vector<Move>& plays = generate_moves(racks_[stm_]);
+      const std::vector<Move>& plays = generate_moves(racks_[stm_], ply);
       if (!plays.empty()) next = greedy_pick(plays);
     }
     if (trace_) *trace_ << "  " << trace_move(next) << "\n";
@@ -840,7 +857,7 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   // Owned copy: `plays` is handed by const reference to run_iterative and on to
   // LeaveOutplays, so it must outlive every nested search (and any memo insert
   // those searches make) for the whole solve.
-  std::vector<Move> plays = generate_moves(racks_[0]);
+  std::vector<Move> plays = generate_moves_scratch(racks_[0]);
   std::vector<RankedMove> root_moves;
   root_moves.reserve(plays.size() + 1);
   for (const Move& m : plays) root_moves.push_back({m, 0});
@@ -859,18 +876,25 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
     return result;
   }
 
-  // Seed the incremental out-play sets (see the class comment): the opponent's
-  // from one move generation against its rack, the solving side's empty -- the
-  // root node itself is never futility-pruned, and its children's mover-side
-  // sets come from bucketing the root play list. Seeded only once the solve is
-  // sure to run, so a declined position pays nothing.
+  // Seed the incremental out-play sets: the opponent's from one move generation
+  // against its rack, the solving side's empty -- the root node itself is never
+  // futility-pruned, and its children's mover-side sets come from bucketing the
+  // root play list. The same opponent generation seeds PathMoveLists' root
+  // lists, from which every deeper node's move list is derived. Seeded only
+  // once the solve is sure to run, so a declined position pays nothing.
   root_sets_[0].clear();
   root_sets_[1].clear();
   cur_sets_[0] = &root_sets_[0];
   cur_sets_[1] = &root_sets_[1];
-  if (outplay_futility_) {
-    const std::vector<Move>& opp_plays = generate_moves(state.opp_rack);
-    collect_rack_outplays(board_, opp_plays, state.opp_rack.size(), root_sets_[1]);
+  if (outplay_futility_ || incremental_movegen_) {
+    const std::vector<Move>& opp_plays = generate_moves_scratch(state.opp_rack);
+    if (outplay_futility_)
+      collect_rack_outplays(board_, opp_plays, state.opp_rack.size(), root_sets_[1]);
+    if (incremental_movegen_) {
+      path_lists_.reset(&board_, dict_, static_cast<int>(needed));
+      path_lists_.set_root_list(0, plays);
+      path_lists_.set_root_list(1, opp_plays);
+    }
   }
   if (trace_) {
     *trace_ << "solve: spread-matters " << (params.spread_matters ? "true" : "false") << ", budget "
