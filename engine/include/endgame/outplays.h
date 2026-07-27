@@ -118,4 +118,46 @@ class LeaveOutplays {
   LazyHalos halos_;
 };
 
+// The out-play sets in effect at one node of a search, one per seat: the
+// candidates that node's futility bounds are read from. A mover pushes the pair
+// its children read and pops it on the way back up, so the stack follows the
+// descent. Only the replier's half of the root pair is ever populated -- the
+// root's own moves are bounded against the replier's out-plays, never against
+// its own.
+class OutplaySetStack {
+ public:
+  // Start a search whose paths run at most `max_ply` plies deep, from a root
+  // with both sets empty.
+  void reset(int max_ply);
+
+  // Make the out-plays of `plays` (the replier's legal plays with a
+  // `rack_size`-tile rack) on the root `board` the set the root's moves are
+  // bounded against.
+  void collect_root_replier(const Board& board, const std::vector<Move>& plays, int rack_size);
+  const OutplaySet& root_replier() const { return root_[1]; }
+
+  const OutplaySet& current(int seat) const { return *cur_[seat]; }
+
+  // Install the sets the child that `m` reaches at `child_ply` will read, where
+  // `stm` is the seat playing `m`. `leave_outs` buckets the node's own move
+  // list, the source of the mover's next set; passing nullptr leaves the
+  // current sets in place, for a search that reads none of them.
+  void push(const Move& m, LeaveOutplays* leave_outs, int stm, int child_ply);
+
+  // Restore the sets the matching push() displaced.
+  void pop(int child_ply);
+
+ private:
+  // One ply's sets, plus the pair push() displaced to install them. Siblings
+  // share a slot, since only one is ever being searched.
+  struct Slot {
+    OutplaySet mover, other;
+    OutplaySet* saved[2] = {nullptr, nullptr};
+  };
+
+  OutplaySet root_[2];
+  std::vector<Slot> slots_;  // indexed by the child's ply
+  OutplaySet* cur_[2] = {nullptr, nullptr};
+};
+
 }  // namespace scribblez

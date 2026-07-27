@@ -1,5 +1,6 @@
 #pragma once
 
+#include "endgame/move_list_memo.h"
 #include "endgame/outplays.h"
 #include "endgame/path_move_lists.h"
 #include "game/board.h"
@@ -10,7 +11,6 @@
 #include <functional>
 #include <ostream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 // Forward-declared so Params::add_options() can register options without
@@ -143,11 +143,10 @@ class EndgameSolver {
   void set_root_cutoff(bool on) { root_cutoff_ = on; }
   void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
-  // Cache generated move lists by board and rack, trading memory for move
-  // generation (off by default). For benchmarks: it leaves results, including
-  // the reported movegens, bit-identical, so it speeds up a measurement run
-  // without perturbing what is measured.
-  void set_movegen_memo(bool on) { movegen_memo_ = on; }
+  // Cache generated move lists (see MoveListMemo); off by default. It changes
+  // nothing the solve reports, movegens included, so a benchmark may enable it
+  // freely.
+  void set_movegen_memo(bool on) { movegen_memo_.set_enabled(on); }
 
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
@@ -244,13 +243,6 @@ class EndgameSolver {
   // no out-play bounds `m`.
   int32_t outplay_futility_bound(const Move& m, const OutplaySet& replier_outs) const;
 
-  // Install the out-play sets that the child reached by `m` will read, and
-  // restore the parent's. `leave_outs` buckets the node's own move list, the
-  // source of the mover's next set.
-  void push_outplay_sets(const Move& m, LeaveOutplays* leave_outs, int child_ply,
-                         OutplaySet* saved[2]);
-  void restore_outplay_sets(OutplaySet* const saved[2]);
-
   // --- Make / unmake ------------------------------------------------------
   void make(const Move& move, int ply);
   void unmake(int ply);
@@ -297,33 +289,14 @@ class EndgameSolver {
 
   uint64_t movegens_ = 0;  // see EndgameResult::movegens
 
-  // Move-generation memo (see set_movegen_memo), keyed by board and rack. It
-  // outlives clear(), depending on neither scores nor table generations, but is
-  // wiped whole once it exceeds kMovegenMemoCap entries.
-  static constexpr size_t kMovegenMemoCap = static_cast<size_t>(1) << 20;
-  bool movegen_memo_ = false;
-  std::unordered_map<uint64_t, std::vector<Move>> movegen_memo_map_;
-  std::vector<Move> movegen_scratch_;  // return buffer when the memo is off
+  MoveListMemo movegen_memo_;  // outlives clear(), which it does not depend on
 
   bool incremental_movegen_ = true;
   PathMoveLists path_lists_;
 
   bool outplay_futility_ = true;
   bool root_futility_ = true;
-
-  // The out-play sets, one pair per seat, that each node's futility bounds are
-  // read from. cur_sets_[s] is seat s's set at the current node; a mover writes
-  // its children's pair into ply_sets_[child ply] -- one slot per depth, since
-  // siblings can share -- and repoints cur_sets_ there for the descent.
-  // root_sets_ holds the pair the root starts from, of which only the
-  // opponent's half is populated: the root's own moves are bounded against the
-  // replier's out-plays, never its own.
-  struct PlyOutplaySets {
-    OutplaySet mover, other;
-  };
-  OutplaySet root_sets_[2];
-  std::vector<PlyOutplaySets> ply_sets_;  // indexed by the child's ply
-  OutplaySet* cur_sets_[2] = {nullptr, nullptr};
+  OutplaySetStack outplay_sets_;
 
   bool proof_early_exit_ = true;
   bool root_cutoff_ = true;

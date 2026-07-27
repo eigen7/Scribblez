@@ -3,7 +3,6 @@
 #include "agent/macondo_bot.h"
 #include "endgame/outplays.h"
 #include "game/glyph.h"
-#include "game/movegen.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "util/math.h"
@@ -292,15 +291,7 @@ const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack, int ply
 
 const std::vector<Move>& EndgameSolver::generate_moves_scratch(const Rack& rack) {
   ++movegens_;
-  if (!movegen_memo_) {
-    movegen_scratch_ = MoveGenerator(board_, *dict_).generate(rack);
-    return movegen_scratch_;
-  }
-  const uint64_t key = board_hash_ ^ util::splitmix64(rack.bits());
-  const auto it = movegen_memo_map_.find(key);
-  if (it != movegen_memo_map_.end()) return it->second;
-  if (movegen_memo_map_.size() >= kMovegenMemoCap) movegen_memo_map_.clear();
-  return movegen_memo_map_.emplace(key, MoveGenerator(board_, *dict_).generate(rack)).first->second;
+  return movegen_memo_.generate(board_, *dict_, rack, board_hash_);
 }
 
 int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
@@ -366,23 +357,6 @@ int32_t EndgameSolver::outplay_futility_bound(const Move& m, const OutplaySet& r
   return spread_stm() + m.score() - p - 2 * leftover;
 }
 
-void EndgameSolver::push_outplay_sets(const Move& m, LeaveOutplays* leave_outs, int child_ply,
-                                      OutplaySet* saved[2]) {
-  saved[0] = cur_sets_[0];
-  saved[1] = cur_sets_[1];
-  if (leave_outs == nullptr) return;  // futility disabled: the sets are never read
-  PlyOutplaySets& slot = ply_sets_[child_ply];
-  leave_outs->collect_after(m, slot.mover);
-  assign_surviving(*cur_sets_[1 - stm_], m, slot.other);
-  cur_sets_[stm_] = &slot.mover;
-  cur_sets_[1 - stm_] = &slot.other;
-}
-
-void EndgameSolver::restore_outplay_sets(OutplaySet* const saved[2]) {
-  cur_sets_[0] = saved[0];
-  cur_sets_[1] = saved[1];
-}
-
 EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int32_t beta,
                                                    int ply) {
   if (aborting_) return {0, false};
@@ -432,7 +406,8 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   // the ordering below and then as a pruning cutoff in the scan. LeaveOutplays
   // buckets this node's own play list to derive the children's mover-side sets.
   const OutplaySet* replier_outs = nullptr;
-  if (outplay_futility_ && !cur_sets_[1 - stm_]->empty()) replier_outs = cur_sets_[1 - stm_];
+  if (outplay_futility_ && !outplay_sets_.current(1 - stm_).empty())
+    replier_outs = &outplay_sets_.current(1 - stm_);
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
   order_moves(moves, tt_move, have_tt_move, replier_outs);
@@ -454,12 +429,11 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
       best = std::max(best, ubound);
       continue;
     }
-    OutplaySet* saved_sets[2];
-    push_outplay_sets(move, leave_outs ? &*leave_outs : nullptr, ply + 1, saved_sets);
+    outplay_sets_.push(move, leave_outs ? &*leave_outs : nullptr, stm_, ply + 1);
     make(move, ply);
     const SearchResult child = search_child(depth - 1, alpha, beta, ply + 1, !searched);
     unmake(ply);
-    restore_outplay_sets(saved_sets);
+    outplay_sets_.pop(ply + 1);
     if (aborting_) return {best, false};  // an aborted scan proves nothing
     searched = true;
     all_proven = all_proven && child.proven;
@@ -502,8 +476,8 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
   const OutplaySet* replier_outs = nullptr;
-  if (outplay_futility_ && root_futility_ && first_win && !cur_sets_[1 - stm_]->empty())
-    replier_outs = cur_sets_[1 - stm_];
+  if (outplay_futility_ && root_futility_ && first_win && !outplay_sets_.current(1 - stm_).empty())
+    replier_outs = &outplay_sets_.current(1 - stm_);
 
   int32_t best = -kInf;
   Move best_move = root_moves[0].move;
@@ -524,12 +498,11 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
       rm.rank = ubound;
       continue;
     }
-    OutplaySet* saved_sets[2];
-    push_outplay_sets(rm.move, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
+    outplay_sets_.push(rm.move, leave_outs ? &*leave_outs : nullptr, stm_, 1);
     make(rm.move, 0);
     const SearchResult child = search_child(depth - 1, alpha, beta, 1, !searched);
     unmake(0);
-    restore_outplay_sets(saved_sets);
+    outplay_sets_.pop(1);
     if (aborting_) return {best, false};  // the aborted subtree's value is meaningless
     searched = true;
     rm.rank = child.value;
@@ -609,8 +582,7 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
                                       int max_plies) {
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
-  OutplaySet* saved_sets[2];
-  push_outplay_sets(m, leave_outs ? &*leave_outs : nullptr, 1, saved_sets);
+  outplay_sets_.push(m, leave_outs ? &*leave_outs : nullptr, stm_, 1);
   make(m, 0);
   bool verified = false;
   if (game_over_) {
@@ -631,7 +603,7 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
     }
   }
   unmake(0);
-  restore_outplay_sets(saved_sets);
+  outplay_sets_.pop(1);
   return verified;
 }
 
@@ -696,7 +668,7 @@ void EndgameSolver::set_trace(std::ostream* os, MoveFormatter fmt) {
 
 void EndgameSolver::trace_root_view(const std::vector<RankedMove>& root_moves) {
   std::ostream& os = *trace_;
-  const OutplaySet& outs = root_sets_[1];
+  const OutplaySet& outs = outplay_sets_.root_replier();
   os << "replier out-plays on the current board (" << outs.size() << "):\n";
   for (const OutplayEntry& e : outs)
     os << "  " << trace_move(e.move) << " +" << e.move.score() << "\n";
@@ -851,8 +823,6 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   // re-searches (and their playouts) on top of the walked plies.
   const size_t needed = static_cast<size_t>(max_plies) + 3 * kMaxPlayout + 2;
   if (frames_.size() < needed) frames_.resize(needed);
-  const size_t sets_needed = static_cast<size_t>(max_plies) + 2;
-  if (ply_sets_.size() < sets_needed) ply_sets_.resize(sets_needed);
 
   // Owned copy: `plays` is handed by const reference to run_iterative and on to
   // LeaveOutplays, so it must outlive every nested search (and any memo insert
@@ -876,20 +846,15 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
     return result;
   }
 
-  // Seed the incremental out-play sets: the opponent's from one move generation
-  // against its rack, the solving side's empty -- the root node itself is never
-  // futility-pruned, and its children's mover-side sets come from bucketing the
-  // root play list. The same opponent generation seeds PathMoveLists' root
-  // lists, from which every deeper node's move list is derived. Seeded only
-  // once the solve is sure to run, so a declined position pays nothing.
-  root_sets_[0].clear();
-  root_sets_[1].clear();
-  cur_sets_[0] = &root_sets_[0];
-  cur_sets_[1] = &root_sets_[1];
+  // Seed the incremental out-play sets from one move generation against the
+  // opponent's rack. The same generation seeds PathMoveLists' root lists, from
+  // which every deeper node's move list is derived. Seeded only once the solve
+  // is sure to run, so a declined position pays nothing.
+  outplay_sets_.reset(static_cast<int>(needed));
   if (outplay_futility_ || incremental_movegen_) {
     const std::vector<Move>& opp_plays = generate_moves_scratch(state.opp_rack);
     if (outplay_futility_)
-      collect_rack_outplays(board_, opp_plays, state.opp_rack.size(), root_sets_[1]);
+      outplay_sets_.collect_root_replier(board_, opp_plays, state.opp_rack.size());
     if (incremental_movegen_) {
       path_lists_.reset(&board_, dict_, static_cast<int>(needed));
       path_lists_.set_root_list(0, plays);

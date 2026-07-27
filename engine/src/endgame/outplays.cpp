@@ -182,4 +182,34 @@ void LeaveOutplays::collect_after(const Move& m, OutplaySet& out) {
   std::sort(out.begin(), out.end(), by_entry_score_desc);
 }
 
+void OutplaySetStack::reset(int max_ply) {
+  if (static_cast<int>(slots_.size()) < max_ply) slots_.resize(max_ply);
+  root_[0].clear();
+  root_[1].clear();
+  cur_[0] = &root_[0];
+  cur_[1] = &root_[1];
+}
+
+void OutplaySetStack::collect_root_replier(const Board& board, const std::vector<Move>& plays,
+                                           int rack_size) {
+  collect_rack_outplays(board, plays, rack_size, root_[1]);
+}
+
+void OutplaySetStack::push(const Move& m, LeaveOutplays* leave_outs, int stm, int child_ply) {
+  Slot& slot = slots_[child_ply];
+  slot.saved[0] = cur_[0];
+  slot.saved[1] = cur_[1];
+  if (leave_outs == nullptr) return;
+  leave_outs->collect_after(m, slot.mover);
+  assign_surviving(*cur_[1 - stm], m, slot.other);
+  cur_[stm] = &slot.mover;
+  cur_[1 - stm] = &slot.other;
+}
+
+void OutplaySetStack::pop(int child_ply) {
+  const Slot& slot = slots_[child_ply];
+  cur_[0] = slot.saved[0];
+  cur_[1] = slot.saved[1];
+}
+
 }  // namespace scribblez
