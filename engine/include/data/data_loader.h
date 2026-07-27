@@ -73,7 +73,7 @@ class DataLoader {
   // newest. `num_positions` and `file_size` must match the on-disk header.
   void add_file(const std::string& path, int64_t num_positions, int64_t file_size);
 
-  // Across all registered files.
+  // Totals across all registered files.
   int64_t num_positions() const;
   int num_files() const;
 
@@ -142,10 +142,10 @@ class DataLoader {
     int64_t file_size() const { return file_size_; }
     bool is_loaded() const;
 
-    // Blocking I/O.
+    // Reads the file contents into memory; blocking I/O.
     void load();
 
-    // Returns the bytes freed, 0 if it was not loaded.
+    // Frees the buffer and returns the bytes freed, or 0 if it was not loaded.
     int64_t unload();
 
     // Blocks until the file is loaded.
@@ -198,7 +198,7 @@ class DataLoader {
 
     void mark_as_available(int id);
 
-    // Blocks; -1 if quitting.
+    // Blocks until a thread is available. Returns -1 if quitting.
     int allocate_thread();
 
     // Blocks until all threads are available, or quitting.

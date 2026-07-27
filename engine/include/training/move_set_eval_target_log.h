@@ -92,8 +92,9 @@ class TargetWriter {
   bool closed_ = false;
 };
 
-// Throws std::runtime_error on a missing file, bad magic, or version mismatch,
-// so a stale file fails loudly rather than misparsing.
+// Loads a .mset file into memory and serves per-position views. Throws
+// std::runtime_error on a missing file, bad magic, or version mismatch, so a
+// stale file fails loudly rather than misparsing.
 class TargetReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.

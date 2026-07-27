@@ -90,15 +90,15 @@ class NeuralAgent : public Agent {
 
   int greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const;
 
-  // Returns the candidate count, not an index.
+  // Fills cand_idx_ with this turn's candidates and returns their count.
   int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
   float objective_value(const nn::Eval& e) const;
 
-  // Fill eval_buf_[0..k), chunked to max_batch_ rows per evaluate() call.
+  // Fills eval_buf_[0..k), chunked to max_batch_ rows per evaluate() call.
   void evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays, int k);
 
-  // Index into the first `k` candidates to play.
+  // Index, into the first `k` candidates, of the one to play.
   int select_index(int k);
 
   int top_k_;

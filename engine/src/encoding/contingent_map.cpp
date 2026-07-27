@@ -12,7 +12,7 @@ namespace scribblez {
 
 namespace {
 
-// Row lanes 0..14, column lanes 15..29.
+// Flat lane id for an assignment: row lanes 0..14, column lanes 15..29.
 int lane_id(const LaneAssignment& a) { return (a.horizontal ? 0 : kLanesPerAxis) + a.lane_index; }
 
 // The play's newly placed tiles, as a mask over the assignment's lane cells.
@@ -31,7 +31,8 @@ void fold_entry(ContingentMap::Entry& e, int score, uint16_t mask) {
   e.placed_mask = mask;
 }
 
-// Designated blanks excluded.
+// How many `letter` tiles the play places as natural tiles, designated blanks
+// excluded.
 int natural_count(const Move& m, int letter_index) {
   int n = 0;
   for (int i = 0; i < m.num_glyphs(); ++i) {
@@ -58,7 +59,7 @@ int real_tile_delta(const Board& board, const Move& m, const PlacedTile& q, int 
   return letter.value() * prem.letter_mult() * word_factor;
 }
 
-// `x` clipped to `scale` and normalized by it.
+// `x` clipped to `scale` and normalized by it, giving a value in [0, 1].
 float scaled_unit(float x, int scale) { return std::min(1.0f, x / static_cast<float>(scale)); }
 
 // Per-cell max-paint of `value` onto the entry's placed cells within `lane`.

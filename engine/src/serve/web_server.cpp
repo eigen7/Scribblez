@@ -411,7 +411,7 @@ bool WebSession::wait_for_client() {
       if (errno == EINTR) continue;
       return false;
     }
-    // Headers are terminated by a blank line.
+    // Read the request headers, which a blank line terminates.
     std::string req;
     char buf[2048];
     while (req.find("\r\n\r\n") == std::string::npos) {

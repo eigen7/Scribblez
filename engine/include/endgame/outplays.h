@@ -117,7 +117,8 @@ class LeaveOutplays {
 // its own.
 class OutplaySetStack {
  public:
-  // Sizes the per-ply slots for paths of at most `max_ply` plies.
+  // Start a fresh search, sizing the per-ply slots for paths of at most
+  // `max_ply` plies.
   void reset(int max_ply);
 
   // Make the out-plays of `plays` (the replier's legal plays with a

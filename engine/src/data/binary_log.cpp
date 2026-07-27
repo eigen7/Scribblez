@@ -170,7 +170,8 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   return p;
 }
 
-// One entry per game, all start offsets being known up front.
+// Build the metadata index: one entry per game, every start offset being known
+// up front.
 std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   std::vector<GameMetadata> meta;
   meta.reserve(p.games.size());

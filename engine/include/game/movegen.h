@@ -18,6 +18,8 @@ enum class GenAlgo {
   DAWG,    // Appel-Jacobson anchor + forward-trie traversal (reference impl).
 };
 
+// Enumerates the legal plays for a (board, rack) pair, taking perpendicular-word
+// validity from the board's cross-checks.
 class MoveGenerator {
  public:
   MoveGenerator(const Board& board, const Dictionary& dict);

@@ -19,7 +19,7 @@ struct TrieNode {
   bool terminal = false;
 };
 
-// The final node is marked terminal.
+// Insert a sequence of tile values, marking the final node terminal.
 void insert(TrieNode* root, const std::vector<uint8_t>& tiles) {
   TrieNode* node = root;
   for (uint8_t t : tiles) {

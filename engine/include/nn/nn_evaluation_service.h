@@ -21,7 +21,7 @@ class NNEvaluationService : public EvalService {
  public:
   explicit NNEvaluationService(const NeuralNetParams& params);
 
-  // Once, before evaluate().
+  // Call once before evaluate().
   void load();
 
   // Valid after load().
@@ -35,7 +35,7 @@ class NNEvaluationService : public EvalService {
   std::vector<Eval> evaluate(const float* inputs, int count);
 
  private:
-  // At most max_batch_size rows.
+  // Run one chunk of at most max_batch_size rows.
   void evaluate_chunk(const float* inputs, int chunk, Eval* out);
 
   NeuralNet net_;

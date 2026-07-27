@@ -41,7 +41,8 @@ AdmitResult admit_score(bool& has_move, int& max_score, int score) {
 
 }  // namespace
 
-// The stored glyphs are in ascending lane-cell order, matching square_mask().
+// Decode a PLAY into its newly placed tiles. The stored glyphs are in
+// ascending lane-cell order, matching square_mask().
 int decode_placements(const Move& m, PlacedTile* out) {
   const bool horiz = m.horizontal();
   uint16_t mask = m.square_mask();
@@ -126,7 +127,7 @@ LaneBestMovesSet compute_lane_best_moves(const Board& board, const Rack& rack,
 
 namespace {
 
-// Zero where !has_move.
+// Write one lane's occupancy block, all zero where !has_move.
 void encode_lane_occupancy(const LaneBest& lane, float* out) {
   for (int cell = 0; cell < kLaneLen; ++cell) {
     const uint32_t bits = lane.has_move ? lane.placed[cell] : 0u;

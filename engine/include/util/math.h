@@ -9,7 +9,7 @@
 
 namespace scribblez::util {
 
-// 1 for n == 0, std::bit_ceil's convention.
+// Smallest power of two >= n, and 1 for n == 0 (std::bit_ceil's convention).
 inline uint64_t round_up_pow2(uint64_t n) { return std::bit_ceil(n); }
 
 // splitmix64 finalizer: decorrelates structured integers (file/game/turn
@@ -39,8 +39,8 @@ class SoftmaxSampler {
   std::vector<double> weights_;
 };
 
-// Into a row-major side x side grid, reflected across the main diagonal when
-// `transpose`.
+// Linear index of cell (r, c) in a row-major side x side grid, reflected
+// across the main diagonal when `transpose`.
 constexpr int plane_index(int r, int c, int side, bool transpose) {
   return transpose ? (c * side + r) : (r * side + c);
 }

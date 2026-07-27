@@ -8,8 +8,8 @@ namespace scribblez {
 
 namespace {
 
-// Uppercased with '-' mapped to '_', matching the contract run_docker.py
-// exports.
+// The DEVENV_SERVICE_URL_<NAME> variable name for a service: uppercased, with
+// '-' mapped to '_', matching the contract run_docker.py exports.
 std::string env_var_name(const std::string& service) {
   std::string name = "DEVENV_SERVICE_URL_";
   for (char c : service) {

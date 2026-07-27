@@ -53,7 +53,8 @@ std::vector<char> read_file_bytes(const std::string& path) {
   return bytes;
 }
 
-// Atomically (tmp file + rename), creating parents. The temp name carries the
+// Write `bytes` to `path` atomically (tmp file + rename), creating parents.
+// The temp name carries the
 // pid and a random suffix, so two processes building the same plan concurrently
 // -- self-play workers sharing one cache directory -- cannot corrupt each
 // other's rename.
@@ -152,7 +153,7 @@ struct NeuralNet::Impl {
 
   void deserialize_engine(const std::vector<char>& plan);
 
-  // Touches no disk.
+  // Builds the plan in memory; touches no disk.
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
 
   // For after deserializing a cached plan, which shares the architecture but

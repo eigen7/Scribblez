@@ -74,6 +74,7 @@ class GameRunner::Results {
     return games_played_;
   }
 
+  // A live progress line: games done out of `total`, throughput, and ETA.
   // Thread-safe.
   void print_progress(std::ostream& os, double elapsed_secs, uint64_t total) const {
     int done;

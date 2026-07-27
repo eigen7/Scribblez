@@ -20,8 +20,8 @@ class RowEncoder {
 
   virtual int row_floats() const = 0;
 
-  // -1 drops the game. Called before a ring slot is claimed, so a dropped game
-  // never holds one.
+  // The turn of `view` to sample, or -1 to drop the game. Called before a ring
+  // slot is claimed, so a dropped game never holds one.
   virtual int pick_turn(const GameLog& view, std::mt19937_64& rng) = 0;
 
   virtual void encode(const GameLog& view, int turn, bool flip, float* dest) = 0;

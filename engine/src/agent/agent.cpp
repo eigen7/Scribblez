@@ -39,7 +39,7 @@ struct ExchangeableType {
   int count;
 };
 
-// `chosen[k]` copies of type k.
+// The exchange an odometer state describes: `chosen[k]` copies of type k.
 Move exchange_move_of(const std::vector<ExchangeableType>& types, const std::vector<int>& chosen) {
   TileCounts pick;
   for (size_t k = 0; k < types.size(); ++k) {

@@ -46,7 +46,8 @@ static_assert(sizeof(Premium) == 1);
 class Move;
 class Dictionary;
 
-// The cross-check of a square with no perpendicular neighbor.
+// Bitmask with every letter A..Z allowed -- the cross-check of a square with no
+// perpendicular neighbor.
 inline constexpr uint32_t kAllLettersMask = (1u << 26) - 1u;
 
 // The perpendicular-word constraint on a single empty square, mirroring

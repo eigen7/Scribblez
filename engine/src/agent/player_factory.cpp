@@ -44,7 +44,8 @@ po::options_description universal_player_options(std::string& type_str, std::str
   return desc;
 }
 
-// Implementation detail of PlayerFactory::make_players().
+// Parse one --player spec string. An implementation detail of
+// PlayerFactory::make_players().
 PlayerSpec parse_player_spec(const std::string& spec) {
   std::string type_str;
   PlayerSpec out;

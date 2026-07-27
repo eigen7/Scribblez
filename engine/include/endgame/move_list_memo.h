@@ -23,8 +23,8 @@ class MoveListMemo {
  public:
   void set_enabled(bool on) { enabled_ = on; }
 
-  // The legal plays for `rack` on `board`. `board_hash` identifies `board` and
-  // is the caller's to maintain.
+  // The legal plays for `rack` on `board`, generated on a cache miss.
+  // `board_hash` identifies `board` and is the caller's to maintain.
   const std::vector<Move>& generate(const Board& board, const Dictionary& dict, const Rack& rack,
                                     uint64_t board_hash);
 

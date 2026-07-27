@@ -31,8 +31,8 @@ constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 // star; identical set for horizontal and vertical first plays.
 bool is_penalised_position(int pos) { return pos == 2 || pos == 6 || pos == 8 || pos == 12; }
 
-// Per vowel landing on a 2LS square adjacent to the star on an empty-board
-// opening play. Matches Maven / Macondo's heuristic.
+// A kVowelPenalty charge per vowel that lands on a 2LS square adjacent to the
+// star on an empty-board opening play. Matches Maven / Macondo's heuristic.
 double opening_adjustment(const Move& move, const Board& board) {
   if (!board.empty_board()) return 0.0;
   if (move.type() != MoveType::PLAY) return 0.0;

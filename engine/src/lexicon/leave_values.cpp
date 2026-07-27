@@ -16,7 +16,7 @@ constexpr uint32_t kIsEndBit = 0x00400000u;
 constexpr uint32_t kAcceptsBit = 0x00800000u;
 constexpr uint32_t kTileShift = 24u;
 
-// Little-endian.
+// Read a little-endian uint32 array of `count` elements from `in`.
 std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
   std::vector<uint32_t> data(count);
   in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);
@@ -24,7 +24,7 @@ std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
   return data;
 }
 
-// Little-endian.
+// Read a little-endian float32 array of `count` elements from `in`.
 std::vector<float> read_f32_array(std::ifstream& in, uint32_t count) {
   std::vector<float> data(count);
   in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);

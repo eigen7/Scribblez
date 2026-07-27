@@ -20,7 +20,7 @@ struct TurnRecord {
   Move move;
   int score_delta;  // may be 0 or negative
   std::array<int, 2> cumulative_scores;
-  Rack drawn;  // drawn after the move resolved, in draw order
+  Rack drawn;  // tiles drawn after the move resolved, in draw order
 };
 
 // Non-owning view of one completed game's log; its variable-length backing
@@ -101,7 +101,7 @@ class Game {
   // After this, log() must not be used.
   GameLogStorage extract_log() { return std::move(log_); }
 
-  // Reflect the final state once play() returns.
+  // These reflect the final state once play() returns.
   const Board& board() const { return board_; }
   int score(int player) const { return scores_[player]; }
   const Rack& rack(int player) const { return racks_[player]; }
@@ -123,10 +123,13 @@ class Game {
   // `drawn_out`, when non-null, accumulates the tiles drawn.
   void refill_rack(int p, Rack* drawn_out);
 
-  // Also tallies a random-opening move in the log.
+  // The decision for the current turn: a uniformly-random move while the turn
+  // index is within the random opening (which it also tallies in the log), the
+  // seated agent's choice otherwise.
   MoveDecision choose_move(int player, const MoveRequest& req);
 
-  // Shared by play() and play_from().
+  // The turn loop shared by play() and play_from(), running from `start_player`
+  // to the standard end (out / stalemate / max-turns).
   void play_loop(int start_player);
 };
 
