@@ -102,7 +102,8 @@ Layout -- where data lives and what provisions it:
 # Comments and documentation
 
 In general, you (Claude) have a tendency to put too much detail into code comments. Please follow
-the following guidelines when writing code comments:
+these guidelines when writing code comments, and apply them to prose documentation (docs/*.md) as
+well:
 
 - You should think of the purpose of comments as serving HUMAN readers, to help them navigate the
   codebase. Humans benefit from succinctness and organization.
@@ -113,24 +114,27 @@ the following guidelines when writing code comments:
   superfluous. Within a function implementation, a block of code warrants a comment only if there is
   an important subtle detail pertaining to that logic that a human is likely to miss at a glance,
   which could lead to future bugs. If such an in-function comment seems warranted, you should take a
-  step back and ask if the code could be refactored to make the code more self-documenting in
-  nature.
+  step back and ask whether the code could be refactored to become more self-documenting.
 - Generally, in headers/declarations, comments should answer the "what" and the "why". What does
   this class represent, or what does this function do? Why does it exist? They should NOT answer the
   "how". C++ private data members can be a bit of an exception: "how" that belongs to a data
   structure can sit beside it, or at class level when it necessarily weaves several members
-  together.
+  together. When trimming a header, "how" that genuinely earns its keep moves down to the
+  implementation site rather than being deleted -- and watch for cross-references ("see the class
+  comment") that go stale when it moves.
 - Locality rule of thumb: changing an implementation detail should force a comment change in AT MOST
   one spot, within a close radius of the code changed. If altering a detail inside a function body
   demands edits to comments in three places, at least two of them were misplaced to begin with.
-  Imagine that in the future, a human can take over your implementation and decide to change some
-  aspect of it - is it likely he would miss a comment that goes stale as a result of his change? If
-  so, the comment should have been relocated or deleted from the beginning.
+  Imagine that in the future, a human takes over your implementation and decides to change some
+  aspect of it - is it likely they would miss a comment that goes stale as a result of their change?
+  If so, the comment should have been relocated or deleted from the beginning.
 - Do not word comments in a "reactionary" way based on conversation with the user. For example, if
   the user requests, "A is bad because of X, can you change to B", then the implementation of B
   does NOT need a comment saying, "This does B. It does not do A, since that would suffer from X."
   That's a reactionary comment. Principle: imagine if the entire codebase was written one-shot from
-  scratch. Would this comment still be written like this? If not, it's probably not appropriate."
+  scratch. Would this comment still be written like this? If not, it's probably not appropriate.
+  The same test rules out references to the code's own history -- "we replaced", "previously", "the
+  old X", "now uses", "formerly". That belongs in commit messages, not in the code.
 
 # Macondo repo
 
