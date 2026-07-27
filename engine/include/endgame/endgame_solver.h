@@ -11,7 +11,6 @@
 #include <ostream>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 // Forward-declared so Params::add_options() can register options without
