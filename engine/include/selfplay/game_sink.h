@@ -6,16 +6,15 @@
 
 namespace scribblez {
 
-// Destination for finished self-play games. SelfPlayEngine hands ownership of
-// each game's log storage to on_game (a move, no copy); the sink derives a
-// GameLog view from it as needed -- taken *after* the move so the view's
-// pointers are valid -- and may retain (e.g. the disk writer) or discard it
-// (e.g. the streaming encoder).
+// Destination for finished self-play games. SelfPlayEngine moves each game's
+// log storage in, and the sink may retain it (the disk writer) or discard it
+// (the streaming encoder). A GameLog view must be taken *after* the move, or
+// its pointers dangle.
 class GameSink {
  public:
   virtual ~GameSink() = default;
 
-  // `seats[s]` is the persistent player index (0 or 1) seated at seat s.
+  // `seats[s]` is the persistent player index seated at seat s.
   virtual void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) = 0;
 };
 

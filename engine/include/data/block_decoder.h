@@ -1,13 +1,11 @@
 #pragma once
 
-// BlockDecoder turns a contiguous range of in-file game indices into populated
-// rows of the DataLoader's training-tensor output buffer. It adapts the on-disk
-// .slog format to the shared PositionEncoder: for each game it builds a GameLog
-// view over the file bytes (materializing the turn array into a reused scratch
-// buffer) and hands that view to the encoder.
+// Turns in-file game indices into populated rows of the DataLoader's output
+// buffer, adapting the on-disk .slog format to the shared PositionEncoder by
+// building a GameLog view over the file bytes per game.
 //
-// One instance is owned per decoder worker thread; it is stateful so the
-// encoder and the scratch turn buffer need not be reallocated between calls.
+// Stateful, to reallocate neither the encoder nor the scratch turn buffer
+// between calls, so each decoder worker thread owns one.
 
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
@@ -20,69 +18,52 @@
 namespace scribblez {
 namespace binlog {
 
-// Which training task a decoder emits. This fixes both the row width and, one
-// level up in the DataLoader, which of a game's turns expand into rows:
-//   kPositionEval     -- input + wld/score-diff/opp-placement labels; a game
-//                        expands over its bag-non-empty eligible-turn prefix,
-//                        encoded post-move.
-//   kMaxMovePerLane   -- the lean board/rack input + per-lane occupancy/score/
-//                        mask labels; a game expands over every turn, encoded
-//                        pre-move (the labels come from legal-move enumeration
-//                        at the position, so the outcome/score fields are unused).
+// Which training task a decoder emits. This fixes the row width and, one level
+// up in the DataLoader, which of a game's turns expand into rows:
+//   kPositionEval   -- input + wld/score-diff/placement labels; a game expands
+//                      over its bag-non-empty eligible-turn prefix, post-move.
+//   kMaxMovePerLane -- the lean board/rack input + per-lane labels; a game
+//                      expands over every turn, pre-move. The labels come from
+//                      enumerating legal moves at the position, so the outcome
+//                      and score fields go unused.
 enum class DecodeTask { kPositionEval, kMaxMovePerLane };
 
 class BlockDecoder {
  public:
-  // `spec` configures the input encoding (lexicon + feature blocks); `task`
-  // selects which training row is emitted and thus its width.
   explicit BlockDecoder(const InputEncodingSpec& spec, DecodeTask task = DecodeTask::kPositionEval)
       : task_(task), row_floats_(row_floats_for(task, spec)), pos_(spec) {}
 
-  // Decode games [local_start, local_start + n_rows) of the .slog file
-  // pointed to by `buf`, emitting each game's eval-only `sampled_turn` into
-  // output rows [output_row_start, output_row_start + n_rows). One row per
-  // game. `flips[i] != 0` selects diagonal-symmetry augmentation for output
-  // row (output_row_start + i). `post_move` picks pre-move vs post-move
-  // snapshot. `path` is used only for diagnostic messages. (Training uses
-  // decode_one, which addresses an explicit turn; this game-indexed form is
-  // for tests / one-position-per-game callers.)
+  // One row per game: each game's eval-only `sampled_turn`, for tests and
+  // one-position-per-game callers. `flips[i] != 0` selects diagonal-symmetry
+  // augmentation for output row (output_row_start + i), and `path` appears only
+  // in diagnostics. Training instead uses decode_one, which addresses an
+  // explicit turn.
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* flips, bool post_move, int64_t output_row_start, float* output);
 
-  // Decode a single (game, turn) position of the .slog file `buf` into output
-  // row `output_row`. This is the training entry point: the DataLoader expands
-  // each game into one position per eligible turn and calls this per row.
-  // `turn_idx` selects which turn to encode (replacing the file's sampled_turn);
-  // `flip` toggles diagonal symmetry; `post_move` picks the snapshot.
+  // The training entry point: the DataLoader expands each game into one
+  // position per eligible turn and calls this per row.
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
                   bool flip, bool post_move, int64_t output_row, float* output);
 
-  // Replay game `game_idx` to its sampled position, then encode that fixed
-  // position once per integer score differential in [diff_lo, diff_hi],
-  // sweeping only the active player's score advantage. Writes
-  // (diff_hi - diff_lo + 1) input tensors (kInputFloats each, no targets, no
-  // symmetry flip) contiguously to `out`.
+  // Replay to the game's sampled position, then encode it once per integer
+  // score differential in [diff_lo, diff_hi], writing that many input tensors
+  // (no targets, no flip) contiguously to `out`.
   void encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move, int diff_lo,
                                int diff_hi, float* out);
 
-  // Replay game `game_idx` to its sampled position and render a human-readable
-  // ASCII description of that position (POV, scores, leave, last moves, board).
+  // The game's sampled position as human-readable ASCII (POV, scores, leave,
+  // last moves, board).
   std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
 
-  // Replay game `game_idx` to its sampled position and serialize it as the web
-  // UI's GameState JSON (board, bonuses, rack, scores, ...) from the POV
-  // player's information set. Feeds the web-style image renderer.
+  // The game's sampled position as the web UI's GameState JSON, from the POV
+  // player's information set, for the web-style image renderer.
   std::string dump_position_json(const char* buf, uint32_t game_idx, bool post_move);
 
  private:
-  // Build a non-owning GameLog view over game `game_idx` of `buf`, filling
-  // scratch_ with that game's turns (only `move` and `drawn` -- the fields the
-  // encoder reads). Sets *sampled_turn to the game's sampled turn index. The
-  // returned view is valid until scratch_ is next reused.
+  // Valid until scratch_ is next reused.
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 
-  // Floats per emitted row for `task`: the lane task's fixed row, else the
-  // spec-dependent post-move input plus the post-move label block.
   static int row_floats_for(DecodeTask task, const InputEncodingSpec& spec);
 
   DecodeTask task_;

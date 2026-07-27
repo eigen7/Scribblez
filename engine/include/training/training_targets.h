@@ -1,11 +1,10 @@
 #pragma once
 
-// Training-target (label) registry. The set of targets the model is
-// trained against is declared in exactly ONE place: the `AllTargets`
-// alias near the bottom of this file. Adding, removing, or reordering a
-// target is a one-line edit; everything downstream -- on-disk row layout,
-// BlockDecoder emit code, FFI shape advertising, total label floats --
-// is derived from that single list.
+// Training-target (label) registry. The targets a model trains against are
+// declared in exactly ONE place, the `AllTargets` alias at the bottom of this
+// file, from which everything downstream is derived -- on-disk row layout,
+// BlockDecoder emit code, FFI shape advertising, total label floats -- so
+// adding, removing, or reordering one is a one-line edit.
 //
 // Each target struct must expose:
 //   * static constexpr const char* kName  -- display / FFI name
@@ -13,8 +12,7 @@
 //   * static void encode(const EncodeContext&, float* out)
 //                                         -- writes product(kDims) floats
 //
-// Targets are emitted into the row in declaration order; offsets are
-// computed by TargetList::encode_all().
+// Targets are emitted in declaration order.
 
 #include "encoding/encode_context.h"
 
@@ -32,23 +30,19 @@ struct WldTarget {
 };
 
 struct ScoreDiffTarget {
-  // Regression target for the score-differential head: the final differential,
-  // the active player's final score minus the opponent's. The head predicts the
-  // mean and standard deviation of this differential (a Gaussian, see
-  // kScoreDiffOutputFloats) and is trained by Gaussian negative log-likelihood,
-  // so the single stored target float is just the observed differential the NLL
-  // scores against.
+  // The observed final differential, the active player's final score minus the
+  // opponent's. The head predicts a Gaussian over it (see
+  // kScoreDiffOutputFloats) and trains by negative log-likelihood, which scores
+  // that pair against this one stored float.
   static constexpr const char* kName = "score_diff";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
 };
 
 struct OppNextPlacementTarget {
-  // 15x15 binary mask: cell (r,c) is 1.0 iff the opponent placed a tile
-  // on (r,c) on their next move. All zeros if the next move is missing,
-  // EXCHANGE, or PASS. Transposed across the main diagonal when the context's
-  // apply_flip is true (so it stays aligned with the InputEncoder's spatial
-  // planes).
+  // Cell (r,c) is 1.0 iff the opponent placed a tile there on their next move.
+  // All zeros if that move is missing, EXCHANGE, or PASS. Transposed when
+  // apply_flip is set, staying aligned with the input's spatial planes.
   static constexpr int kSide = 15;
   static constexpr const char* kName = "opp_next_placement";
   static constexpr int kDims[] = {kSide, kSide};
@@ -56,10 +50,8 @@ struct OppNextPlacementTarget {
 };
 
 struct SelfNextPlacementTarget {
-  // The mover-side sibling of OppNextPlacementTarget: cell (r,c) is 1.0 iff
-  // the mover placed a tile on (r,c) on their own next move from the sampled
-  // snapshot. All zeros if that move is missing, EXCHANGE, or PASS. Transposed
-  // when apply_flip is true. Serves as the marginal-occupancy partner of
+  // OppNextPlacementTarget's mover-side sibling, over the mover's own next move
+  // from the sampled snapshot. The marginal-occupancy partner of
   // SelfWinPlacementTarget, letting the network separate "plays there often"
   // from "wins when playing there" (see docs/sim_residual_feedback.md).
   static constexpr int kSide = 15;
@@ -69,14 +61,11 @@ struct SelfNextPlacementTarget {
 };
 
 struct OppWinPlacementTarget {
-  // 15x15 conjunction mask: cell (r,c) is 1.0 iff the opponent placed a tile
-  // on (r,c) on their next move AND the opponent went on to win the game
-  // (draws count as not winning). The head trained against it predicts, per
-  // square, Pr[opponent-next-move-occupies AND opponent-wins] -- an
-  // "opponent danger" map marking spots whose occupation by the opponent is
-  // associated with losing (see docs/sim_residual_feedback.md). All zeros when
-  // the next move is missing, EXCHANGE, or PASS, or when the opponent did not
-  // win. Transposed when apply_flip is true.
+  // OppNextPlacementTarget conjoined with the opponent going on to win, draws
+  // counting as not winning. The head trained against it predicts, per square,
+  // Pr[opponent-next-move-occupies AND opponent-wins] -- an "opponent danger"
+  // map of spots whose occupation is associated with losing (see
+  // docs/sim_residual_feedback.md).
   static constexpr int kSide = 15;
   static constexpr const char* kName = "opp_win_placement";
   static constexpr int kDims[] = {kSide, kSide};
@@ -84,12 +73,8 @@ struct OppWinPlacementTarget {
 };
 
 struct SelfWinPlacementTarget {
-  // The mover-side sibling of OppWinPlacementTarget: cell (r,c) is 1.0 iff the
-  // mover placed a tile on (r,c) on their own next move from the sampled
-  // snapshot AND went on to win the game -- a "self opportunity" map of hot
-  // spots for the mover's follow-up (see docs/sim_residual_feedback.md). All
-  // zeros when that move is missing, EXCHANGE, or PASS, or when the mover did
-  // not win. Transposed when apply_flip is true.
+  // OppWinPlacementTarget's mover-side sibling -- a "self opportunity" map of
+  // hot spots for the mover's follow-up (see docs/sim_residual_feedback.md).
   static constexpr int kSide = 15;
   static constexpr const char* kName = "self_win_placement";
   static constexpr int kDims[] = {kSide, kSide};
@@ -112,11 +97,10 @@ struct TargetList {
   static constexpr std::size_t size = sizeof...(Ts);
   static constexpr int total_floats = (0 + ... + detail::target_floats<Ts>());
 
-  // Per-target float counts in declaration order.
+  // In declaration order.
   static constexpr std::array<int, size> floats_per_target = {detail::target_floats<Ts>()...};
 
-  // Writes total_floats floats starting at `out`, one target after the
-  // next in declaration order.
+  // One target after the next, in declaration order.
   static void encode_all(const EncodeContext& v, float* out);
 };
 
@@ -126,19 +110,15 @@ using AllTargets =
   TargetList<WldTarget, ScoreDiffTarget, OppNextPlacementTarget, SelfNextPlacementTarget,
              OppWinPlacementTarget, SelfWinPlacementTarget>;
 
-// Convenience constants derived from AllTargets. These exist so code that
-// just wants "how many label floats in a row?" doesn't have to mention the
-// template.
+// Constants derived from AllTargets, so code that just wants a size need not
+// mention the template or the target struct.
 inline constexpr int kNumLabelHeads = static_cast<int>(AllTargets::size);
 inline constexpr int kLabelFloats = AllTargets::total_floats;
 
-// Per-target convenience aliases. Downstream code (tests, FFI, layout
-// docs) can refer to a specific target's size without naming the struct.
 inline constexpr int kWldFloats = detail::target_floats<WldTarget>();
-inline constexpr int kScoreDiffFloats = detail::target_floats<ScoreDiffTarget>();  // 1 (regression)
-// The score-diff head's OUTPUT width: the mean and standard deviation of the
-// final differential (a Gaussian). Distinct from kScoreDiffFloats, which is the
-// 1-float regression target the NLL loss scores those two against.
+inline constexpr int kScoreDiffFloats = detail::target_floats<ScoreDiffTarget>();
+// The score-diff head's OUTPUT width -- the Gaussian's mean and standard
+// deviation -- as against kScoreDiffFloats, the target the NLL scores them on.
 inline constexpr int kScoreDiffOutputFloats = 2;
 inline constexpr int kOppNextPlacementFloats = detail::target_floats<OppNextPlacementTarget>();
 inline constexpr int kOppNextPlacementSide = OppNextPlacementTarget::kSide;

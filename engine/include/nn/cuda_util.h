@@ -2,14 +2,12 @@
 
 #include <cstddef>
 
-// Thin, throwing wrappers around the handful of CUDA runtime calls the
-// TensorRT inference path needs. Every call checks the returned cudaError_t and
-// throws scribblez::Exception on failure, so callers never have to inspect
-// status codes. The CUDA headers are confined to cuda_util.cpp; consumers see
-// only opaque void* device pointers and the cudaStream_t typedef below.
+// Thin wrappers around the CUDA runtime calls the TensorRT inference path
+// needs, each throwing scribblez::Exception on failure so callers never inspect
+// status codes. The CUDA headers stay confined to cuda_util.cpp; consumers see
+// only opaque void* device pointers and the stream typedef below.
 
-// cudaStream_t is `struct CUstream_st*`; forward-declare it so this header does
-// not pull in <cuda_runtime_api.h>.
+// cudaStream_t is `struct CUstream_st*`.
 struct CUstream_st;
 
 namespace scribblez {
@@ -17,8 +15,8 @@ namespace nn {
 
 using stream_t = CUstream_st*;
 
-// "8.9" for an RTX 4090. Used to key the engine-plan cache, since a plan is
-// only valid for the compute capability it was built on.
+// "8.9" for an RTX 4090. Keys the engine-plan cache, a plan being valid only
+// for the compute capability it was built on.
 const char* sm_tag();
 
 void set_device(int device_id);
@@ -30,8 +28,7 @@ void synchronize_stream(stream_t stream);
 void* device_malloc(size_t n_bytes);
 void device_free(void* ptr);
 
-// Pinned host allocation, so host<->device copies can run asynchronously on the
-// stream. Freed with host_free().
+// Pinned, so host<->device copies can run asynchronously on the stream.
 void* host_malloc(size_t n_bytes);
 void host_free(void* ptr);
 

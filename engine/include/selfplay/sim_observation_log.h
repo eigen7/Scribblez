@@ -16,10 +16,8 @@
 //     [SimObsRecord   num_candidates(p)    1848 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
-// .slog file: game_index is the game's index in that file and turn_index the
-// pre-move turn the candidates were generated at. Records store the exact
-// Move alongside its observation because the evidence encoding pairs each
-// observation with the move that produced it.
+// .slog file. Records store the exact Move alongside its observation, the
+// evidence encoding pairing each observation with the move behind it.
 
 #include "game/move.h"
 #include "selfplay/sim_runner.h"
@@ -68,10 +66,8 @@ static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
 
 #pragma pack(pop)
 
-// Streams positions to a .sobs file as they are generated. The header's
-// num_positions is patched and the file written (temp + rename, so it appears
-// atomically) when the writer closes; nothing exists on disk before close()
-// (or destruction) completes.
+// Accumulates positions and writes the .sobs file atomically (temp + rename)
+// on close, so nothing exists on disk until then.
 class SimObsWriter {
  public:
   explicit SimObsWriter(const std::string& path, uint32_t flags = 0);
@@ -80,14 +76,12 @@ class SimObsWriter {
   SimObsWriter(const SimObsWriter&) = delete;
   SimObsWriter& operator=(const SimObsWriter&) = delete;
 
-  // Append one position's observations. `candidates` and `observations` are
-  // parallel arrays (equal length); `rollouts` is the per-candidate rollout
-  // count and `base_seed` the SimRunner::run seed used.
+  // `candidates` and `observations` are parallel arrays; `base_seed` is the
+  // SimRunner::run seed used.
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
                     const std::vector<SimObservation>& observations, uint32_t rollouts,
                     uint64_t base_seed);
 
-  // Patch the header with the final position count and close the file.
   void close();
 
  private:

@@ -1,12 +1,10 @@
 #pragma once
 
-// Build a new .slog file from a selection of games drawn out of existing
-// .slog files. The selected games are copied verbatim (initial racks + turn
-// blobs + their sampled-turn / score metadata) into the destination in the
-// given order; only the file header and per-game start offsets are recomputed.
-// This produces a standard .slog -- inspectable and loadable by all the same
-// tooling as training data -- holding a curated subset of positions (e.g. a
-// frozen evaluation set sampled from the held-out test split).
+// Build a new .slog from a selection of games drawn out of existing ones. The
+// games are copied verbatim, only the file header and per-game start offsets
+// being recomputed, so the result is a standard .slog -- loadable by all the
+// same tooling -- holding a curated subset (e.g. a frozen evaluation set
+// sampled from the held-out test split).
 
 #include <cstdint>
 #include <string>
@@ -21,8 +19,7 @@ struct SlogPick {
   int64_t game_idx;
 };
 
-// Write the picked games, in order, to a new .slog at `dst_path`. Returns
-// true on success; false on any I/O error, bad header, or out-of-range index.
+// False on any I/O error, bad header, or out-of-range index.
 bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>& picks);
 
 }  // namespace binlog

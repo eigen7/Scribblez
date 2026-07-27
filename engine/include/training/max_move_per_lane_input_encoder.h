@@ -16,15 +16,11 @@ namespace scribblez {
 //   * post-move-specific features (scores, unseen pool, move history) -- a
 //     single-move query does not depend on game context.
 //
-// All-static (it carries no state), so it composes as a policy type: its
-// constants and encode() plug into the training-task machinery alongside the
-// target structs in training_targets.h.
-//
-// Spatial -- kSpatialPlanes planes, channel-major, each 15x15: the shared
-// BoardPlanes block (letters, blank-marker, premiums) and nothing else.
-// Scalar -- kScalarFloats floats:
-//   [0..26]  the POV rack as raw per-tile counts (A..Z, blank). Raw (not unary)
-//            because rack counts are tiny, and exact ("can I play two R's").
+// All-static, so it composes as a policy type alongside the target structs in
+// training_targets.h. The spatial half is the shared BoardPlanes block and
+// nothing else; the scalar half is the POV rack as raw per-tile counts -- raw
+// rather than unary because rack counts are tiny, and exact ("can I play two
+// R's").
 struct MaxMovePerLaneInputEncoder {
   static constexpr int kSpatialPlanes = BoardPlanes::kPlanes;          // 31
   static constexpr int kBoardCells = BOARD_SIZE * BOARD_SIZE;          // 225

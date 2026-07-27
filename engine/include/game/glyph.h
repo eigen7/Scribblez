@@ -24,7 +24,6 @@ class Glyph {
   static constexpr Glyph of_blank(Tile letter);
   static constexpr Glyph blank() { return Glyph(53); }  // unassigned
 
-  // A tile played as a designated blank renders that letter but scores nothing.
   static constexpr Glyph played(Tile letter, bool is_blank);
 
   constexpr bool is_empty() const { return code_ == 0; }
@@ -36,11 +35,9 @@ class Glyph {
   constexpr char to_char() const;
   constexpr uint8_t code() const { return code_; }
 
-  // The rack tile this glyph consumes when played or exchanged (any blank
-  // consumes a blank tile).
+  // The rack tile this glyph consumes when played or exchanged.
   constexpr Tile rack_tile() const { return is_blank() ? BLANK : letter(); }
 
-  // The glyph for surrendering a rack tile in an exchange.
   static constexpr Glyph exchanging(Tile t) { return t.is_blank() ? blank() : of(t); }
 
   constexpr bool operator==(Glyph o) const { return code_ == o.code_; }

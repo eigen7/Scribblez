@@ -12,48 +12,38 @@ class ViteDevServer;
 class WebSession;
 
 // A human player driven through a WebSession: renders the position to the
-// browser and blocks until the user submits a move (or passes / exchanges).
-// Owns the WebSession (the engine-side WebSocket server) and the Vite dev
-// server that serves the front-end -- both are created in the constructor
-// and torn down when the agent is destroyed, so the lifetime of the whole
-// browser-driven UI is bound to the lifetime of the agent.
+// browser and blocks until the user submits a move. Owns both the engine-side
+// WebSocket server and the Vite dev server serving the front-end, so the whole
+// browser-driven UI lives and dies with the agent.
 class HumanWebAgent : public Agent {
  public:
-  // Configuration parsed from `--player "--type=human ..."`. An explicit
-  // --port/--vite-port overrides the defaults; the browser link is routed
-  // through the gateway only while --vite-port keeps its default (see
-  // service_url.h).
+  // The browser link is routed through the gateway only while vite_port keeps
+  // its default (see service_url.h).
   struct Params {
     int port = 8080;              // engine WebSocket port
     int vite_port = 5173;         // browser UI (Vite) port
     std::string web_dir = "web";  // front-end package dir (cwd of `npm run dev`)
   };
 
-  // Constructs the engine-side WebSocket server, spawns `npm run dev` from
-  // `params.web_dir`, blocks until Vite is ready, and best-effort opens the
-  // browser at the Vite URL. Throws if any of those steps fail.
+  // Starts the WebSocket server, spawns `npm run dev`, blocks until Vite is
+  // ready, and best-effort opens the browser. Throws if any step fails.
   HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                 const std::string& opp_name);
   ~HumanWebAgent() override;
 
   MoveDecision make_move(const MoveRequest& req) override;
 
-  // Surfaces the final board to the user and prompts them with Play Again /
-  // Quit buttons; blocks until the browser responds, then returns the
-  // corresponding EndGameAction.
+  // Surfaces the final board and blocks on the user's Play Again / Quit choice.
   EndGameResult end_game(const Game& game, int my_seat) override;
 
-  // Human players drive an interactive browser session and cannot safely run
-  // concurrently with other games in a thread pool.
   bool supports_parallelism() const override { return false; }
 
-  // Build a HumanWebAgent from `--player "--type=human [options]"` tokens
-  // (after the factory has stripped --type and --name). Throws on bad input.
+  // Build from `--player "--type=human [options]"` tokens, with --type and
+  // --name already stripped. Throws on bad input.
   static std::unique_ptr<HumanWebAgent> from_spec(const std::vector<std::string>& tokens,
                                                   int thread_id, const std::string& name,
                                                   const std::string& opp_name);
 
-  // Human-readable description + options, shown by `play_game --help`.
   static std::string options_help();
 
  private:

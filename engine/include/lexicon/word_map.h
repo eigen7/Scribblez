@@ -1,11 +1,11 @@
 #pragma once
 
-// Anagram index ("word map"): for each word length, a hash map from a letter
-// multiset to the contiguous list of dictionary words with exactly that
-// multiset. It is the MAGPIE-style alternative to walking a GADDAG during move
+// Anagram index ("word map"): per word length, a hash map from a letter
+// multiset to the contiguous list of dictionary words having exactly that
+// multiset. The MAGPIE-style alternative to walking a GADDAG during move
 // generation -- a rack subset's anagrams come back as one cache-resident block
-// instead of a tree traversal. Words contain no blanks; the move generator
-// resolves blanks to concrete letters before looking up.
+// instead of a tree traversal. Words hold no blanks; the move generator
+// resolves those to concrete letters before looking up.
 
 #include "game/tile.h"
 
@@ -17,12 +17,11 @@ namespace scribblez {
 
 class Dictionary;
 
-// A 128-bit letter multiset: 4 bits per letter, A..Z in slots 0..25. A multiset
-// is only ever built up to a full word (<= 15 tiles), so no per-letter count
-// reaches 16 and packed addition needs no inter-nibble carry handling -- two
-// 64-bit adds union two multisets. This is the key type for the word map: a
-// rack subset's count vector plus the playthrough tiles' count vector hash
-// straight to the anagram list.
+// A 128-bit letter multiset: 4 bits per letter, A..Z in slots 0..25. The word
+// map's key type -- a rack subset's count vector plus the playthrough tiles'
+// hashes straight to the anagram list. A multiset is only ever built up to a
+// full word (<= 15 tiles), so no per-letter count reaches 16 and two 64-bit
+// adds union two multisets with no inter-nibble carry handling.
 struct BitRack {
   uint64_t lo = 0;  // letters 0..15
   uint64_t hi = 0;  // letters 16..25
@@ -32,7 +31,6 @@ struct BitRack {
   bool empty() const { return lo == 0 && hi == 0; }
   int get(int letter) const { return static_cast<int>((half(letter) >> shift(letter)) & 0xF); }
 
-  // Add `n` copies of `letter` (unions the letter into the multiset).
   void add_letter(int letter, int n = 1);
   // Multiplicative (Fibonacci) hash mixing both halves.
   uint64_t hash() const;
@@ -45,12 +43,11 @@ struct BitRack {
 
 class WordMap {
  public:
-  // Build by enumerating every word in `dict` (DAWG depth-first walk).
   static WordMap build(const Dictionary& dict);
 
   // The words of `length` whose letter multiset equals `key`, as a contiguous
-  // block: `count` words, word i at begin[i*length .. i*length+length). begin is
-  // null when there are none.
+  // block: word i at begin[i*length .. i*length+length). `begin` is null when
+  // there are none.
   struct WordList {
     const Tile* begin = nullptr;
     int count = 0;

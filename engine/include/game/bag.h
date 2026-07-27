@@ -16,9 +16,8 @@ class Bag {
 
   std::optional<Tile> draw();
   void put_back(Tile t);
-  // Remove one tile `t` from the bag (it must be present). Used to build a bag of
-  // the tiles unseen from a player's POV: start full, then remove the tiles on the
-  // board and in the player's own rack.
+  // `t` must be present. Lets a caller carve an unseen-tile pool out of a full
+  // bag.
   void remove(Tile t);
   int size() const { return remaining_; }
   const std::array<int, 27>& counts() const { return counts_; }

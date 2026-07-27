@@ -31,8 +31,7 @@ struct ParsedGcgSnapshot {
 };
 
 // An end-of-game rack adjustment: the player who went out gains the value of
-// the opponent's leftover tiles (positive delta); a player left holding tiles
-// loses their value (negative delta). `tiles` is the rack scored or penalized.
+// the opponent's leftover tiles; a player left holding tiles loses theirs.
 struct ParsedGcgEndAdjustment {
   int player = 0;
   std::string tiles;
@@ -55,9 +54,9 @@ bool read_gcg_text(const std::string& gcg_text, ParsedGcgGame* out_game,
 
 // One endgame position lifted from a GCG's final recorded state: the bag is
 // empty, `mover` is to act, and both racks are concrete. racks[mover] comes
-// from the file's #RackN pragma (the rack-slot arrays the reader tracks
-// cannot distinguish an empty slot from a hidden tile); the other rack is
-// derived as the tiles absent from the board and the mover's rack.
+// from the file's #RackN pragma, the reader's rack-slot arrays being unable to
+// tell an empty slot from a hidden tile; the other rack is what the board and
+// the mover's rack leave unaccounted for.
 struct ParsedGcgEndgame {
   Board board;
   std::array<Rack, 2> racks;
@@ -68,22 +67,20 @@ struct ParsedGcgEndgame {
 };
 
 // The rack recorded by a "#RackN TILES" pragma line ('?' is a blank), or
-// nullopt when the file has none for that player. The pragma name matches
-// case-insensitively, as GCG writers vary.
+// nullopt when the file has none. The pragma name matches case-insensitively,
+// GCG writers varying.
 std::optional<Rack> pragma_rack(const std::string& gcg_text, int player);
 
-// Parse `gcg_text` and lift its final position as an endgame (see
-// ParsedGcgEndgame). Returns false with an explanation when the text does not
-// parse, the mover's rack pragma is missing, or the position is not a
-// bag-empty endgame.
+// False with an explanation when the text does not parse, the mover's rack
+// pragma is missing, or the position is not a bag-empty endgame.
 bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
                       std::string* error_message);
 
 // The leave `player` retained at their most recent recorded turn: their
-// rack_before minus the tiles that move played or exchanged (a PASS retains
-// everything). Empty when the player has no recorded turn. This is the
-// known part of their rack under the open-leaves information condition --
-// their replenishment draws after that move are not recorded and stay hidden.
+// rack_before minus what that move played or exchanged, a PASS retaining
+// everything. Empty when they have no recorded turn. This is the known part of
+// their rack under the open-leaves information condition, their replenishment
+// draws going unrecorded.
 Rack retained_leave(const ParsedGcgGame& game, int player);
 
 }  // namespace scribblez

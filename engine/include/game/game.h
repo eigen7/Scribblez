@@ -25,13 +25,10 @@ struct TurnRecord {
   Rack drawn;
 };
 
-// Non-owning view of one completed game's log. The variable-length backing
-// store (the turn array and the name/end-reason strings) lives elsewhere -- a
-// GameLogStorage produced by self-play, or a decoder's scratch buffer -- and
-// must outlive the view. The fixed-size fields (racks, scores) are held by
-// value. This is the single currency the tensorization path consumes, so both
-// the self-play and on-disk replay paths build a GameLog and funnel through the
-// same encoder.
+// Non-owning view of one completed game's log; its variable-length backing
+// store (a GameLogStorage, or a decoder's scratch buffer) must outlive it. The
+// single currency the tensorization path consumes, so self-play and on-disk
+// replay funnel through one encoder.
 struct GameLog {
   uint64_t seed = 0;
   std::array<const char*, 2> player_names = {nullptr, nullptr};
@@ -49,11 +46,8 @@ struct GameLog {
   int num_random_opening_plies = 0;
 };
 
-// Owning backing store for a game's log. Produced by self-play (Game), the
-// manual GCG tool, and tests -- anything that must keep a game's data alive
-// beyond the producing scope. `view()` yields a non-owning GameLog pointing
-// into this storage (valid for as long as the storage object lives and its
-// `turns` vector is not reallocated).
+// Owning backing store for a game's log. `view()` points into it, and stays
+// valid while the storage lives and its `turns` vector is not reallocated.
 struct GameLogStorage {
   uint64_t seed = 0;
   std::array<std::string, 2> player_names;
@@ -70,57 +64,46 @@ struct GameLogStorage {
 
 class Game {
  public:
-  // The Game does not own the agents; the caller (typically play_game) keeps
-  // them alive across multiple Game instances. This lets the same human or
-  // bot persist (including any per-process state like a WebSession or a
-  // background Macondo subprocess) over a series of games.
+  // The Game does not own the agents; the caller keeps them alive across
+  // Game instances, so a human or bot persists (with any per-process state
+  // like a WebSession or a Macondo subprocess) over a series of games.
   Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed);
 
-  // Give the players a head-start handicap before play begins. Must be called
-  // before play(); asserts that no move has been made yet.
+  // Must be called before play(); asserts that no move has been made yet.
   void set_initial_scores(std::array<int, 2> initial_scores);
 
   // Respect agents' projected_remaining_moves annotations (see MoveDecision):
-  // when the acting agent proves the rest of the game, the loop plays the
-  // projected moves directly instead of prompting the agents further. Enabled
-  // by self-play generation, where a decided game is not worth more agent
-  // compute; off by default so interactive play and head-to-head strength
+  // a proven remainder is played out directly instead of prompting the agents
+  // further. Self-play generation turns this on, since a decided game is not
+  // worth more agent compute; off by default, so interactive play and strength
   // benchmarks always exercise the agents. Must be called before play().
   void set_respect_projections(bool on);
 
-  // Play the first `plies` turns of the game uniformly at random (via
-  // pick_uniform_random_play, seeded from the game seed) instead of asking the
-  // seated agents, to reach off-policy positions -- especially unusual rack
-  // leaves -- that agent self-play would never visit. Agents still observe the
-  // random moves through observe_move(). Must be called before play(); asserts
-  // that no move has been made yet.
+  // Play the first `plies` turns uniformly at random instead of asking the
+  // seated agents, reaching off-policy positions -- especially unusual rack
+  // leaves -- that agent self-play would never visit. Agents still see the
+  // random moves through observe_move(). Must be called before play().
   void set_random_opening(int plies);
 
   void play();
 
-  // Play out from a mid-game position (e.g. a Monte-Carlo rollout of an endgame).
-  // `board`/`scores` are the post-move state; `known_racks[p]` holds each player's
-  // already-known tiles (a leave, or an empty rack to deal fresh); both racks are
-  // then refilled to RACK_SIZE from `pool` (the unseen tiles, drawn in the Game's
-  // seeded order), and `to_move` plays first. `returned_to_bag` holds tiles that
-  // re-enter the bag only after both refills -- the tiles a just-made exchange
-  // surrendered, which are available to future draws but not to either player's
-  // initial refill. The turn loop, draws, and endgame scoring are identical to
-  // play().
+  // Play out from a mid-game position, e.g. a Monte-Carlo rollout. `board` and
+  // `scores` are the post-move state and `known_racks[p]` each player's already
+  // known tiles (empty to deal fresh); both racks are then refilled from `pool`
+  // and `to_move` plays first. `returned_to_bag` holds tiles that rejoin the bag
+  // only after those refills -- what a just-made exchange surrendered, which
+  // future draws may see but neither initial refill may.
   void play_from(const Board& board, std::array<int, 2> scores,
                  const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move,
                  const Rack& returned_to_bag = Rack{});
 
-  // A non-owning view of this game's log. Valid for as long as the Game (and
-  // its internal storage) lives and extract_log() has not been called.
+  // Valid while the Game lives and extract_log() has not been called.
   GameLog log() const { return log_.view(); }
 
-  // Move the owning log storage out of the Game (e.g. to hand to a sink that
-  // retains it). After this call, log() must not be used.
+  // After this, log() must not be used.
   GameLogStorage extract_log() { return std::move(log_); }
 
-  // Live game accessors (valid after construction; reflect final state after
-  // play() returns). Used by the web front-end to render the end-of-game board.
+  // Reflect the final state once play() returns.
   const Board& board() const { return board_; }
   int score(int player) const { return scores_[player]; }
   const Rack& rack(int player) const { return racks_[player]; }
@@ -136,21 +119,20 @@ class Game {
   std::array<int, 2> scores_{0, 0};
   GameLogStorage log_;
   int random_opening_plies_ = 0;
-  std::mt19937_64 opening_rng_;  // drives the random-opening move choices
+  std::mt19937_64 opening_rng_;
   bool respect_projections_ = false;
 
-  // Draw from the bag until the player's rack is at RACK_SIZE. If
-  // `drawn_out` is non-null, the drawn tiles are added to it.
+  // Draw until the player's rack is at RACK_SIZE, adding the drawn tiles to
+  // `drawn_out` when it is non-null.
   void refill_rack(int p, Rack* drawn_out);
 
-  // The decision for the current turn: a uniformly-random move while the turn
-  // index is within the random opening (tallying it in the log), the seated
-  // agent's choice otherwise.
+  // A uniformly-random move while the turn index is within the random opening
+  // (tallying it in the log), the seated agent's choice otherwise.
   MoveDecision choose_move(int player, const MoveRequest& req);
 
-  // The turn loop shared by play() and play_from(): `start_player` moves first,
-  // play continues until the standard end (out / stalemate / max-turns) with the
-  // usual endgame scoring, and the final state is written to the log.
+  // The turn loop shared by play() and play_from(): play from `start_player`
+  // until the standard end (out / stalemate / max-turns), scoring the endgame
+  // and writing the final state to the log.
   void play_loop(int start_player);
 };
 
