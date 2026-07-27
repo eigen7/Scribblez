@@ -1246,9 +1246,9 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
     auto live_snaps = live_replay_all_snapshots(log);
 
     scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict, true}};
-    // The encoder no longer tracks racks (an outside observer cannot see
-    // opponent draws). The test, however, has full information, so we
-    // maintain a parallel rack pair alongside the encoder.
+    // The encoder tracks no racks (an outside observer cannot see opponent
+    // draws), but the test has full information, so it maintains a parallel
+    // rack pair alongside the encoder.
     std::array<scribblez::Rack, 2> racks = {log.initial_racks[0], log.initial_racks[1]};
 
     size_t snap_idx = 0;

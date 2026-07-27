@@ -8,14 +8,12 @@ namespace scribblez {
 
 // A TrainingTask bundles an input encoding and a set of labels into one training
 // row. PositionEncoder replays a game to a sampled position, fills an
-// EncodeContext, and hands it to the task's encode_row, which writes the input
-// floats followed by the label floats. Parameterizing the encoder on the task
-// lets one replay/streaming pipeline serve several training problems.
+// EncodeContext, and hands it to the task's encode_row. Parameterizing the
+// encoder on the task lets one replay/streaming pipeline serve several training
+// problems.
 
-// The win-probability task: the post-move board/leave/score input (via the
-// stateful GameStateEncoder the context points at) plus the WLD, score-diff, and
-// opponent-next-placement labels. The input width is the spec's
-// input_floats(); the row is that plus kLabelFloats.
+// The win-probability task: the post-move board/leave/score input plus the WLD,
+// score-diff, and placement labels.
 struct PositionEvalTask {
   static int row_floats(const InputEncodingSpec& spec);
 

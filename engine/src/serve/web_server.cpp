@@ -42,7 +42,7 @@ using util::write_all;
 
 // --------------------------- HTTP / WS helpers ---------------------------
 
-// Extract a header value (case-insensitive name) from a raw HTTP request.
+// Case-insensitive.
 std::string header_value(const std::string& req, const std::string& name) {
   std::string lower = req;
   to_lower(lower);
@@ -411,7 +411,7 @@ bool WebSession::wait_for_client() {
       if (errno == EINTR) continue;
       return false;
     }
-    // Read the request headers (terminated by a blank line).
+    // Read the request headers, which a blank line terminates.
     std::string req;
     char buf[2048];
     while (req.find("\r\n\r\n") == std::string::npos) {

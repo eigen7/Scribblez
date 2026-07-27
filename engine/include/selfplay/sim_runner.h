@@ -2,19 +2,16 @@
 
 // Monte-Carlo evaluation of candidate moves at one decision point, producing
 // the per-candidate observations the sim-evidence loop consumes
-// (docs/sim_residual_feedback.md): rollout counts, W/D/L tallies, final-score-
-// delta moments, and per-square reply/outcome count maps mirroring the
-// placement-mask training targets (training_targets.h).
+// (docs/sim_residual_feedback.md).
 //
-// Common random numbers (CRN): rollout index i uses the same seed for every
+// Common random numbers: rollout index i uses the same seed for every
 // candidate. The unseen pool is a function of the pre-move board and the
-// mover's full rack -- identical across candidates, since a candidate only
-// moves tiles between that rack and the board -- so the opponent's sampled
-// rack (drawn from the pool before the mover's replacement tiles) is
-// identical across candidates for a given i. Shared rack luck cancels in
-// candidate differences, making comparisons far sharper than independent
-// sampling and making the observations a valid source of pairwise covariance
-// estimates. Results are deterministic and independent of the thread count.
+// mover's full rack, identical across candidates since a candidate only moves
+// tiles between the two, so for a given i the opponent's sampled rack is
+// identical across candidates. Shared rack luck then cancels in candidate
+// differences, sharpening comparisons far beyond independent sampling and
+// making the observations a valid source of pairwise covariance estimates.
+// Results are deterministic and independent of the thread count.
 
 #include "game/bag.h"
 #include "game/board.h"
@@ -30,15 +27,13 @@ namespace scribblez {
 class Dictionary;
 struct MoveRequest;  // agent.h
 
-// The pre-move decision point candidates are simmed from: the board, both
-// cumulative scores, and the mover's own rack. `opp_leave` carries the KNOWN
-// part of the opponent's rack -- under the open-leaves information condition,
-// the tiles they retained from their last move -- and every rollout starts
-// the opponent from those tiles plus hidden replenishments drawn from the
-// unseen pool (a full bag minus the board tiles, `rack`, and `opp_leave`).
-// Empty means the whole rack is hidden and sampled. A full 7-tile `opp_leave`
-// degenerates to a completely known rack, making the opponent's first reply
-// to each candidate deterministic under the greedy rollout policy.
+// The pre-move decision point candidates are simmed from. `opp_leave` carries
+// the KNOWN part of the opponent's rack -- under the open-leaves condition, the
+// tiles they retained from their last move -- and every rollout starts them
+// from those plus hidden replenishments drawn from the unseen pool. Empty means
+// the whole rack is hidden and sampled; a full 7-tile leave degenerates to a
+// completely known rack, making the opponent's first reply to each candidate
+// deterministic under the greedy rollout policy.
 struct SimPosition {
   Board board;
   std::array<int, 2> scores{0, 0};
@@ -48,13 +43,11 @@ struct SimPosition {
 };
 
 // Aggregate observations from `n` rollouts of one candidate, all from the
-// mover's POV. The spatial planes are row-major 15x15 COUNTS (not
-// frequencies, so the consumer can weigh them by sample size) with no
-// symmetry flip, and mirror the placement-mask training targets: how often
-// the opponent's reply / the mover's own next move placed a tile on the
-// square, and how often it did so in a rollout that player went on to win.
-// The layout is trivially copyable and packed; SimObsWriter/SimObsReader
-// (sim_observation_log.h) serialize it verbatim.
+// mover's POV. The spatial planes mirror the placement-mask training targets --
+// how often the opponent's reply or the mover's own next move placed a tile on
+// the square, and how often it did so in a rollout that player went on to win
+// -- as row-major COUNTS rather than frequencies, so a consumer can weigh them
+// by sample size. SimObsWriter/SimObsReader serialize the layout verbatim.
 struct SimObservation {
   static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
 
@@ -82,12 +75,10 @@ class SimRunner {
 
   SimRunner(const Dictionary& dict, const Params& params);
 
-  // Sim every candidate (PLAY, EXCHANGE, or PASS) from `pos`. Rollout i of
-  // every candidate is seeded by `base_seed + i` (the CRN scheme above; a
-  // known opp_leave shrinks the shared randomness to the hidden draws), and
-  // rollouts are HastyBot-vs-HastyBot played to a natural game end. Requires
-  // a non-empty bag at the decision point -- the training-eligibility rule
-  // (binary_log.h) -- so no candidate can end the game outright.
+  // Rollout i of every candidate is seeded by `base_seed + i` (the scheme
+  // above), and rollouts are HastyBot-vs-HastyBot to a natural game end.
+  // Requires a non-empty bag at the decision point -- the
+  // training-eligibility rule -- so no candidate can end the game outright.
   std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
                                   uint64_t base_seed) const;
 
@@ -96,15 +87,14 @@ class SimRunner {
   Params params_;
 };
 
-// The unseen-tile pool from a player's POV: a full bag (with draw RNG seeded
-// by `seed`) minus the tiles on the board and in the player's own rack.
+// A full bag, its draw RNG seeded by `seed`, minus the tiles on the board and
+// in the player's own rack.
 Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 
-// The mover-POV candidate set at a decision point, ranked by HastyBot static
-// equity (best first): every legal play and exchange, capped at `k`, or a
-// lone PASS when nothing is legal. HastyEquity must be initialized. The
-// opponent rack inside `req` should be empty mid-game (their tiles are hidden
-// from the mover); it only influences equity near the endgame.
+// Every legal play and exchange ranked by HastyBot static equity, best first
+// and capped at `k`, or a lone PASS when nothing is legal. HastyEquity must be
+// initialized. The opponent rack in `req` should be empty mid-game, their tiles
+// being hidden; it only influences equity near the endgame.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
 }  // namespace scribblez

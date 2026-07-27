@@ -21,10 +21,9 @@ std::string square_name(int r, int c) {
   return s;
 }
 
-// Board-independent one-line description of a move, built from the move's own
-// stored data. The PLAY string lists only the tiles this move PLACED (blanks
-// lowercased), with the anchor square and orientation; connecting tiles already
-// on the board are not part of it -- the board diagram shows the full word.
+// One line, from the move's own stored data alone. A PLAY lists only the tiles
+// it PLACED (blanks lowercased) with the anchor square and orientation; the
+// board diagram beside it shows the full word.
 std::string describe_move(const Move& m) {
   if (m.type() == MoveType::PASS) return "PASS";
 

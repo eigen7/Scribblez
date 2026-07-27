@@ -30,24 +30,20 @@ struct GcgWriteOptions {
   // Extra '#note ...' lines to include near the top of the file.
   std::vector<std::string> notes;
 
-  // If non-empty, controls whether each turn line includes rack_before.
-  // When omitted, every turn includes rack_before (legacy behavior).
+  // Per turn, whether its line includes rack_before. Empty includes them all.
   std::vector<bool> include_rack_before;
 
-  // Exact rack field to use on each event line. When present, this overrides
-  // include_rack_before and the rack string derived from TurnRecord.
+  // Overrides include_rack_before and the rack string derived from TurnRecord.
   std::vector<std::optional<std::string>> rack_before_fields;
 
-  // Exact exchanged-tile field to use on exchange event lines. The stored
-  // string does not include the leading '-'. Useful for incomplete-rack GCG
-  // logs that encode unknown exchanged tiles as '_' or by count.
+  // The exchanged-tile field, without its leading '-'. For incomplete-rack GCG
+  // logs, which encode unknown exchanged tiles as '_' or by count.
   std::vector<std::optional<std::string>> exchange_fields;
 
-  // Optional '#rack1' / '#rack2' pragmata to emit immediately after each
-  // event line.
+  // '#rack1' / '#rack2' pragmata to emit after each event line.
   std::vector<PostEventRacks> post_event_racks;
 
-  // Optional initial '#Rack1' / '#Rack2' pragmata to emit after the header.
+  // '#Rack1' / '#Rack2' pragmata to emit after the header.
   std::optional<std::string> initial_rack1;
   std::optional<std::string> initial_rack2;
 };

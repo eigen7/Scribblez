@@ -47,8 +47,7 @@ class GameRunner::Results {
  public:
   explicit Results(std::array<std::string, 2> names) : names_(std::move(names)) {}
 
-  // Append the game tally. `seats[s]` is the persistent player index (0 or 1)
-  // that sat at seat `s` in this game. Thread-safe.
+  // `seats[s]` is the persistent player index that sat at seat s. Thread-safe.
   void record(const GameLog& log, const std::array<int, 2>& seats, bool verbose) {
     int winning_seat = -1;
     if (log.final_scores[0] != log.final_scores[1])
@@ -69,14 +68,14 @@ class GameRunner::Results {
     }
   }
 
-  // Returns the number of games recorded so far. Thread-safe.
+  // Thread-safe.
   int games_played() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return games_played_;
   }
 
-  // Live progress line: games done out of `total`, throughput, and ETA.
-  // Thread-safe; called periodically by the monitor thread during the batch.
+  // A live progress line: games done out of `total`, throughput, and ETA.
+  // Thread-safe.
   void print_progress(std::ostream& os, double elapsed_secs, uint64_t total) const {
     int done;
     {

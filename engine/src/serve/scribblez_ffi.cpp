@@ -91,9 +91,8 @@ struct ScribblezSession {
 
 namespace {
 
-// Points the process-wide Lexicon at `lexicon_name` and loads it. Throws (via
-// load_dictionary_or_throw, which also prints an install hint to stderr) when
-// the .kwg is missing; uncaught across the C ABI, that terminates the process.
+// Throws when the .kwg is missing, having printed an install hint; uncaught
+// across the C ABI, that terminates the process.
 const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
   scribblez::Lexicon& lex = scribblez::Lexicon::instance();
   lex.set_params({.name = lexicon_name, .dir = lex.dir()});
@@ -199,8 +198,8 @@ int scribblez_max_move_per_lane_input_floats(void) {
 
 namespace {
 
-// Read an entire .slog file into `buf`, validate its header, and report the
-// game count. When `game_idx >= 0`, also bounds-check it. Returns 0 on
+// Read a .slog file into `buf`, validate its header, and report the game
+// count, bounds-checking `game_idx` when it is >= 0. Returns 0 on
 // success, -1 on any failure.
 int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32_t* num_games) {
   if (!path) return -1;

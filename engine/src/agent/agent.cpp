@@ -15,9 +15,8 @@ namespace {
 
 namespace po = boost::program_options;
 
-// The command-line options for `--type=greedy`, binding `--seed` to `seed`. Both
-// from_spec() (to parse) and options_help() (to document) build this, so the two
-// share one source of truth for the option list.
+// Built by both from_spec() and options_help(), so the parsed options and the
+// documented ones share one source of truth.
 po::options_description greedy_options(uint64_t& seed) {
   po::options_description desc;
   desc.add_options()                      //
@@ -40,7 +39,7 @@ struct ExchangeableType {
   int count;
 };
 
-// The exchange described by an odometer state: `chosen[k]` copies of type k.
+// The exchange an odometer state describes: `chosen[k]` copies of type k.
 Move exchange_move_of(const std::vector<ExchangeableType>& types, const std::vector<int>& chosen) {
   TileCounts pick;
   for (size_t k = 0; k < types.size(); ++k) {

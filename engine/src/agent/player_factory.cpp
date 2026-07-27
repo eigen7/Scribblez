@@ -31,10 +31,9 @@ namespace {
 
 namespace po = boost::program_options;
 
-// The universal --player options common to every agent type, binding `--type`
-// and `--name` to the given storage. parse_player_spec() builds this to parse a
-// spec; all_player_types_help() builds it to document the same flags, so the two
-// share one source of truth.
+// The --player options common to every agent type. Built by both
+// parse_player_spec() and all_player_types_help(), so the parsed options and
+// the documented ones share one source of truth.
 po::options_description universal_player_options(std::string& type_str, std::string& name) {
   po::options_description desc;
   desc.add_options()                                               //
@@ -45,8 +44,8 @@ po::options_description universal_player_options(std::string& type_str, std::str
   return desc;
 }
 
-// Parse one --player spec string into a PlayerSpec. Implementation detail of
-// PlayerFactory::make_players(); not part of the public API.
+// Parse one --player spec string. An implementation detail of
+// PlayerFactory::make_players().
 PlayerSpec parse_player_spec(const std::string& spec) {
   std::string type_str;
   PlayerSpec out;
@@ -80,7 +79,7 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   return out;
 }
 
-// Dispatch one parsed spec to the chosen Agent subclass's from_spec().
+// Dispatch to the chosen Agent subclass's from_spec().
 std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
                                 const std::string& opp_name) {
   std::string name = spec.display_name();

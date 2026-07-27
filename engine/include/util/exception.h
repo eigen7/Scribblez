@@ -5,15 +5,10 @@
 
 namespace scribblez {
 
-// Base class for user-facing errors that have already printed a complete,
-// human-readable message to stderr at the source. The top-level main()
-// catches this, returns a non-zero exit code, and prints *nothing*. Use
-// this whenever the place that detects the error is in a better position
-// to write a helpful message than main() is.
-//
-// Distinct from std::exception so a catch-all for std::exception at the top
-// level can still flag genuinely unexpected failures with a "Unexpected
-// error: ..." prefix.
+// A user-facing error whose complete message has already been printed to
+// stderr at the source, which is usually better placed to write a helpful one
+// than main() is. main() catches this, exits non-zero, and prints nothing --
+// while a plain std::exception still gets its "Unexpected error: " prefix.
 class Exception : public std::runtime_error {
  public:
   explicit Exception(const std::string& what_arg = "") : std::runtime_error(what_arg) {}

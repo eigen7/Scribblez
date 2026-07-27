@@ -11,8 +11,7 @@ namespace binlog {
 
 namespace {
 
-// Replace all glyphs the move places with empty tiles in `rack` (PLAY: the
-// tiles being placed; EXCHANGE: the tiles being swapped out).
+// Clear from `rack` the tiles a PLAY places or an EXCHANGE swaps out.
 void remove_played_or_exchanged(Rack& rack, const Move& m) {
   const int n = m.num_glyphs();
   for (int i = 0; i < n; ++i) {

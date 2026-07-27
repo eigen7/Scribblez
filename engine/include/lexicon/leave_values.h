@@ -10,47 +10,38 @@
 
 namespace scribblez {
 
-// Stores leave values loaded from a Kurnia Leave Value (.klv2) file.
+// Leave values loaded from a Kurnia Leave Value (.klv2) file. Read-only after
+// construction and safe to query concurrently.
 //
-// At load time the embedded KWG is walked once to enumerate every leave (in
-// word-index order) into a hash map keyed on the canonical Rack representation
-// of the leave. Thereafter lookup() is a single O(1) hash probe.
-//
-// The KWG itself (arc nodes plus a per-node value array) is retained so callers
-// can also walk leaves incrementally with the cursor API below -- following one
-// tile per arc instead of hashing a whole leave. This is what lets a subrack
-// enumeration price every leave in a single DFS rather than one hash per subrack.
-//
-// After construction the object is read-only and safe to query from multiple
-// threads concurrently.
+// Loading walks the embedded KWG once to enumerate every leave into a hash map
+// keyed on the canonical Rack, making lookup() a single probe. The KWG itself
+// is retained for the cursor API below, which follows one tile per arc instead
+// of hashing a whole leave -- what lets a subrack enumeration price every leave
+// in a single DFS rather than one hash per subrack.
 class LeaveValues {
  public:
-  // Load from a .klv2 file. Throws std::runtime_error on I/O failure.
+  // Throws std::runtime_error on I/O failure.
   static LeaveValues load(const std::string& path);
 
-  // Leave equity for a given rack leave (the tiles remaining after a play).
-  // Returns 0.0 for an empty leave or a leave not in the table.
+  // 0.0 for an empty leave or one absent from the table.
   float lookup(const Rack& leave) const;
 
   // ---- Incremental cursor over the leave KWG ----------------------------
   // The KWG is a minimized DAWG, so a leave's value is keyed by its word index
-  // (its pre-order position over the tree expansion), not by the node it ends on
-  // (suffix nodes are shared). The cursor follows a leave's tiles in ascending
-  // KLV code order (blank = code 0, A..Z = codes 1..26), accumulating that index:
-  // klv_step matches one tile and adds the word counts of the earlier siblings it
-  // skipped; after matching, advance past the arc's own word (if accepting) and
-  // descend with klv_next. The leave's value is klv_value_at(index) iff the arc it
-  // ends on is klv_accepts.
+  // (its pre-order position over the tree expansion) rather than by the node it
+  // ends on, suffix nodes being shared. The cursor follows a leave's tiles in
+  // ascending KLV code order, accumulating that index: klv_step matches one tile
+  // and adds the word counts of the earlier siblings it skipped; after matching,
+  // advance past the arc's own word (if accepting) and descend with klv_next.
+  // The leave's value is klv_value_at(index) iff the arc it ends on accepts.
 
-  // The arc-list index of the root's children (where the first tile is matched).
   uint32_t klv_root() const { return root_arc_list_; }
 
-  // KLV code for a board letter (A..Z -> 1..26); the blank is code 0.
+  // A..Z -> 1..26; the blank is code 0.
   static uint8_t klv_code(Tile letter) { return static_cast<uint8_t>(letter.index() + 1); }
 
-  // Match one tile `code` in sibling list `arc_list`, adding the skipped earlier
-  // siblings' subtree word counts to *index. Returns the matched arc, or 0 if the
-  // tile is absent (siblings are sorted, so a larger tile means absent).
+  // Returns the matched arc, or 0 if the tile is absent -- siblings are sorted,
+  // so a larger tile means absent.
   uint32_t klv_step(uint32_t arc_list, uint8_t code, uint32_t* index) const;
 
   bool klv_accepts(uint32_t arc) const { return (nodes_[arc] & kAcceptsBit) != 0; }

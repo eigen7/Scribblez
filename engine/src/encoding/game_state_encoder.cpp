@@ -56,10 +56,8 @@ struct PovCtx {
   const Rack* opp_leave;            // null iff the spec excludes the open-leaves block
 };
 
-// Placement plane (1 plane at `out`): mark squares `m` placed tiles on. Uses
-// Move::square_mask -- an absolute bitmask over the play's lane (bit k set iff
-// lane cell k was a newly placed tile). No-op for EXCHANGE / PASS / game-start
-// (leaving the plane all-zero).
+// One plane at `out`, marking the squares `m` placed tiles on. EXCHANGE, PASS,
+// and game-start place nothing and leave it all-zero.
 int encode_placement_plane(const Move& m, bool flip, float* out) {
   if (m.type() != MoveType::PLAY) return 1;
   const bool horizontal = m.horizontal();
@@ -75,13 +73,9 @@ int encode_placement_plane(const Move& m, bool flip, float* out) {
   return 1;
 }
 
-// Per-letter directional cross-check planes (kCrossCheckPlanes planes at
-// `out`: horizontal A..Z, then vertical A..Z).
-//
-// Horizontal cross-check plane L marks empty squares where placing letter L
-// would fuse with an existing left/right neighbor and pass horizontal-play
-// cross-check constraints. Vertical cross-check planes are defined analogously
-// using above/below neighbors and the transposed cross-check table.
+// The kCrossCheckPlanes cross-check planes at `out`: horizontal A..Z, then
+// vertical A..Z. A vertical plane reads the transposed cross-check table and
+// the above/below neighbors.
 int encode_cross_check_planes(const Board& board, bool flip, float* out) {
   float* h_planes = out;
   float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
@@ -128,7 +122,7 @@ int encode_cross_check_planes(const Board& board, bool flip, float* out) {
   return kCrossCheckPlanes;
 }
 
-// Active player's rack as raw per-tile counts (27 floats).
+// The active player's rack as raw per-tile counts.
 int encode_rack_counts(const Rack& my_rack, float* out) {
   for (Tile t : my_rack.tiles()) {
     if (!t.is_empty()) out[t.index()] += 1.0f;
@@ -136,9 +130,9 @@ int encode_rack_counts(const Rack& my_rack, float* out) {
   return kRackCountFloats;
 }
 
-// Unseen pool as a per-letter thermometer (100 floats): letter i owns a
-// region of width TILE_COUNTS[i]; its first unseen[i] slots are 1.0, holes
-// at the tail. Regions are concatenated in tile order (A..Z, blank).
+// A per-letter thermometer: letter i owns a region of width TILE_COUNTS[i]
+// whose first unseen[i] slots are 1.0, the holes falling at the tail. Regions
+// are concatenated in tile order.
 int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   int offset = 0;
   for (int i = 0; i < 27; ++i) {

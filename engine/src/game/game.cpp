@@ -118,10 +118,6 @@ void Game::play_loop(int start_player) {
   size_t projected_next = 0;
 
   while ((int)log_.turns.size() < kMaxTurns) {
-    // The game loop no longer generates moves; each agent generates the moves
-    // it needs from the board + dictionary on its own turn. The board's
-    // cross-check/anchor caches still live on board_ and are maintained
-    // incrementally as moves are applied.
     Move m;
     if (projected_next < projected.size()) {
       m = projected[projected_next++];

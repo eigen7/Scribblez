@@ -11,27 +11,13 @@ class options_description;
 }
 
 // A thin, synchronous wrapper around a TensorRT engine specialized to the
-// Scribblez position evaluation model: two inputs ("input_spatial"
-// (N,spatial_planes,15,15), "input_scalar" (N,scalar_floats) -- widths declared
-// by the model itself) and six outputs ("wld" (N,3), "score_diff"
-// (N,2 = [mean, std]), plus the auxiliary masks "opp_next_placement",
-// "self_next_placement", "opp_win_placement", and "self_win_placement", each
-// (N,15,15)). The input shapes mirror the constants in input_encoder.h, which
-// is the single source of truth for the encoding layout.
+// Scribblez position evaluation model: two inputs ("input_spatial",
+// "input_scalar", at widths the model itself declares) and six outputs ("wld",
+// "score_diff" = [mean, std], and four (N,15,15) auxiliary placement masks).
+// input_encoder.h is the single source of truth for the encoding layout.
 //
-// load() builds a TensorRT engine from the ONNX file at params.onnx_path (or
-// deserializes a cached plan keyed by the model's architecture signature +
-// precision + batch size + GPU compute capability + TRT version, then refits
-// it with this model's weights -- all checkpoints of one architecture share a
-// single cached plan), then allocates one execution context, one CUDA stream,
-// and pinned host + device buffers sized to max_batch_size.
-//
-// predict() is blocking: it copies the host input rows to the GPU, runs the
-// engine, copies the wld and score_diff outputs back, and synchronizes the
-// stream before returning. The auxiliary mask outputs are produced on the GPU
-// (their device buffers must stay bound) but have no inference consumer, so
-// they are not copied back. There is no batching across threads and no async
-// pipeline -- one NeuralNet drives one engine from one thread.
+// One NeuralNet drives one engine from one thread: predict() blocks until the
+// outputs are back, with no cross-thread batching and no async pipeline.
 
 namespace scribblez {
 namespace nn {
@@ -44,17 +30,14 @@ struct NeuralNetParams {
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
 
-  // Build the engine at TensorRT builder optimization level 0: skip the tactic-
-  // timing search and take the first working kernel for each layer. This cuts a
-  // cold engine build by several-fold (tens of seconds down to a few seconds for
-  // this model) at the cost of much slower inference, so it is meant for tests
-  // and quick checks, not for production agents. Fast-built plans are cached
-  // separately from full-optimization plans (see engine_plan_cache_path).
+  // Build at TensorRT optimization level 0: take the first working kernel per
+  // layer instead of timing tactics. Cuts a cold build from tens of seconds to
+  // a few, at the cost of much slower inference -- for tests and quick checks,
+  // not production agents. Cached separately from full-optimization plans.
   bool fast_build = false;
 
-  // Register the command-line-facing subset on the given options_description
-  // (--model, --batch-size, --fast-build), binding directly to this struct's
-  // fields. Call before parsing argv.
+  // Register the command-line-facing subset, bound to this struct's fields.
+  // Call before parsing argv.
   void add_options(boost::program_options::options_description& desc);
 };
 
@@ -66,39 +49,35 @@ class NeuralNet {
   NeuralNet(const NeuralNet&) = delete;
   NeuralNet& operator=(const NeuralNet&) = delete;
 
-  // Build (or load a cached) engine from the ONNX file at params.onnx_path and
-  // ready the GPU resources. Must be called exactly once before predict().
+  // Build the engine from params.onnx_path, or deserialize a cached plan and
+  // refit it with this model's weights -- every checkpoint of one architecture
+  // shares a plan, keyed by architecture signature, precision, batch size, GPU
+  // compute capability, and TRT version. Exactly once, before predict().
   void load();
 
   int max_batch_size() const;
 
-  // The loaded model's declared input widths (read off the engine's tensor
-  // shapes): the spatial plane count and the scalar float count of one row.
   // Valid after load().
   int spatial_planes() const;
   int scalar_floats() const;
 
-  // The model's input-encoding arm, from the "contingent_features" entry the
-  // exporter stamps into the ONNX metadata_props (see onnx_export.py). Valid
-  // after load(); consumers cross-check it against the input widths through
-  // input_encoder.h's layout registry.
+  // The model's input-encoding arm, from the entry the exporter stamps into the
+  // ONNX metadata_props (see onnx_export.py). Valid after load(); consumers
+  // cross-check it against the input widths through input_encoder.h's registry.
   bool contingent_features() const;
 
-  // Host input staging buffers, row-major and sized for max_batch_size rows.
-  // The caller writes the first num_rows rows before calling predict(num_rows).
+  // Row-major staging buffers sized for max_batch_size rows. The caller writes
+  // the first num_rows rows before calling predict(num_rows).
   float* input_spatial_host();  // num_rows x (spatial_planes() * 225)
   float* input_scalar_host();   // num_rows x scalar_floats()
 
-  // Run inference on the first num_rows rows of the host input buffers. Blocks
-  // until the outputs have been copied back. Requires 1 <= num_rows <= max.
+  // Blocks until the outputs are back. Requires 1 <= num_rows <= max.
   void predict(int num_rows);
 
-  // Host output buffers, valid after predict() returns. Row-major; only the
-  // first num_rows rows are meaningful. wld is raw logits; score_diff is the
-  // [mean, std] of the final-differential Gaussian (std already positive). The
-  // auxiliary mask outputs are not exposed here -- they are not copied back.
+  // Valid after predict(), for its first num_rows rows. wld is raw logits. The
+  // auxiliary mask outputs are not exposed: they are never copied back.
   const float* wld_host() const;         // num_rows x kWldFloats
-  const float* score_diff_host() const;  // num_rows x kScoreDiffOutputFloats ([mean, std])
+  const float* score_diff_host() const;  // num_rows x [mean, std], std positive
 
  private:
   struct Impl;

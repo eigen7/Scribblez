@@ -9,7 +9,7 @@
 
 namespace scribblez::util {
 
-// Smallest power of two that is >= n (and >= 1, since std::bit_ceil(0) == 1).
+// Smallest power of two >= n, and 1 for n == 0 (std::bit_ceil's convention).
 inline uint64_t round_up_pow2(uint64_t n) { return std::bit_ceil(n); }
 
 // splitmix64 finalizer: decorrelates structured integers (file/game/turn
@@ -21,32 +21,26 @@ constexpr uint64_t splitmix64(uint64_t x) {
   return x ^ (x >> 31);
 }
 
-// Round n up to the next multiple of alignment. alignment must be a power of two.
+// `alignment` must be a power of two.
 constexpr uint64_t align_up(uint64_t n, uint64_t alignment) {
   return (n + alignment - 1) & ~(alignment - 1);
 }
 
 // Draws an index from a numerically-stable softmax over a vector of scores.
-// Shared by every agent that turns a vector of candidate scores (static equity,
-// or a value head's output) into an exploratory move choice.
-//
-// The sampler owns a weight buffer that sample() reuses across calls, so persist
-// one instance over the lifetime of the caller (e.g. as a member) to avoid a
-// per-call allocation.
+// It owns a weight buffer that sample() reuses, so hold one instance for the
+// caller's lifetime rather than paying a per-call allocation.
 class SoftmaxSampler {
  public:
-  // Returns an index in [0, k) drawn with probability proportional to
-  // exp((values[i] - max) / temperature), shifting by the max for stability.
-  // Preconditions: k >= 1 and temperature > 0.
+  // An index in [0, k) drawn with probability proportional to
+  // exp((values[i] - max) / temperature). Requires k >= 1 and temperature > 0.
   int sample(const std::vector<double>& values, int k, double temperature, std::mt19937_64& rng);
 
  private:
   std::vector<double> weights_;
 };
 
-// Linear index of cell (r, c) in a side x side grid stored row-major. When
-// transpose is true the grid is reflected across the main diagonal, i.e. the
-// roles of row and column are swapped.
+// Linear index of cell (r, c) in a row-major side x side grid, reflected
+// across the main diagonal when `transpose`.
 constexpr int plane_index(int r, int c, int side, bool transpose) {
   return transpose ? (c * side + r) : (r * side + c);
 }

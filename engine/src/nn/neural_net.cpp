@@ -35,8 +35,7 @@ constexpr const char* kOutputSelfNext = "self_next_placement";
 constexpr const char* kOutputOppWin = "opp_win_placement";
 constexpr const char* kOutputSelfWin = "self_win_placement";
 
-// Routes TensorRT's internal diagnostics to stderr, dropping anything below a
-// warning so the build logs stay readable.
+// Drops anything below a warning, so the build logs stay readable.
 class Logger : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -54,10 +53,11 @@ std::vector<char> read_file_bytes(const std::string& path) {
   return bytes;
 }
 
-// Write `bytes` to `path` atomically (tmp file + rename), creating parents. The
-// temp name carries the pid and a random suffix so two processes building the
-// same plan concurrently (multiple self-play workers share one cache directory)
-// never write to the same temp file and corrupt each other's rename.
+// Write `bytes` to `path` atomically (tmp file + rename), creating parents.
+// The temp name carries the
+// pid and a random suffix, so two processes building the same plan concurrently
+// -- self-play workers sharing one cache directory -- cannot corrupt each
+// other's rename.
 void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::path p(path);
   std::filesystem::create_directories(p.parent_path());
@@ -79,9 +79,8 @@ struct OnnxMetadata {
   std::string architecture_signature;
 };
 
-// Read the serving-side contract out of the model's ONNX metadata_props (see
-// onnx_export.py). Every served model must declare both entries; a missing
-// entry (or unparseable model) throws.
+// Every served model must declare both entries; a missing one, or an
+// unparseable model, throws.
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
   if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
@@ -145,27 +144,23 @@ struct NeuralNet::Impl {
   int spatial_floats(int rows) const { return rows * spatial_planes * kBoardCells; }
   int scalar_size(int rows) const { return rows * scalar_floats; }
 
-  // Input widths read off the deserialized engine's declared tensor shapes --
-  // the model file states which input layout (full or base) it consumes -- and
-  // the arm the model declares in its ONNX metadata_props.
+  // Read off the deserialized engine's declared tensor shapes and the model's
+  // own ONNX metadata_props.
   int spatial_planes = 0;
   int scalar_floats = 0;
   bool contingent_features = false;
   ~Impl();
 
-  // Set engine from a serialized plan blob.
   void deserialize_engine(const std::vector<char>& plan);
 
-  // Build a serialized engine plan from the ONNX bytes (does not touch disk).
+  // Builds the plan in memory; touches no disk.
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
 
-  // Replace the loaded engine's weights with the ones in the ONNX bytes. Used
-  // after deserializing a cached plan, which shares the model's architecture
-  // but was built from whatever same-architecture checkpoint first populated
-  // the cache.
+  // For after deserializing a cached plan, which shares the architecture but
+  // holds whatever same-architecture checkpoint first populated the cache.
   void refit_engine(const std::vector<char>& onnx_bytes);
 
-  // Allocate context, stream, and host/device buffers once the engine exists.
+  // Context, stream, and host/device buffers, once the engine exists.
   void allocate_buffers();
 
   NeuralNetParams params;
@@ -175,22 +170,11 @@ struct NeuralNet::Impl {
   std::unique_ptr<nvinfer1::IExecutionContext> context;
   stream_t stream = nullptr;
 
-  // TODO(Refactor): Decouple C++ inference buffers from the strict neural net architecture.
-  // Currently, adding a new head (e.g., 'ownership') requires manually hardcoding new
-  // device/host pointers, cudaMallocs, and cudaMemcpys across 5+ different places.
-  //
-  // Implementation Plan:
-  // 1. Define a `TensorBuffer` struct (name, size_bytes, is_input, d_ptr, h_ptr).
-  // 2. Query the engine dynamically during `allocate_buffers`:
-  //    - num_tensors = engine->getNbIOTensors()
-  //    - name = engine->getIOTensorName(i)
-  //    - mode = engine->getTensorIOMode(name)  // Check for kINPUT vs kOUTPUT
-  //    - shape = engine->getTensorShape(name)  // Calculate size_bytes
-  // 3. Store buffers dynamically in `std::vector<TensorBuffer> tensors`.
-  // 4. Bind memory to the context before execution:
-  //    - context->setTensorAddress(tensor.name, tensor.d_ptr)
-  // 5. Replace manual cudaMemcpy/execution calls with loops over the `tensors` vector
-  //    and execute using `context->enqueueV3(stream)`.
+  // TODO(Refactor): hold the engine's tensors in one list instead of a named
+  // pointer pair per tensor. Adding a head (say 'ownership') currently means
+  // hand-writing device/host pointers, allocations, and copies in five places;
+  // the engine can enumerate its own I/O tensors (names, modes, and shapes), so
+  // allocation, binding, and the copies could all be loops over that list.
   void* d_input_spatial = nullptr;
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;
@@ -206,9 +190,8 @@ struct NeuralNet::Impl {
   float* h_score_diff = nullptr;
   // No host buffers for the auxiliary mask outputs (opp_next_placement,
   // self_next_placement, opp_win_placement, self_win_placement): the engine
-  // still produces them
-  // (their device buffers must stay bound for enqueueV3), but no inference
-  // consumer reads them, so they are never copied back to the host.
+  // produces them into device buffers, which must stay bound for enqueueV3, but
+  // no inference consumer reads them, so they are never copied back.
 
   int last_rows = -1;
 };
@@ -393,9 +376,6 @@ void NeuralNet::predict(int num_rows) {
 
   if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
 
-  // Only the wld and score_diff outputs are copied back; the auxiliary mask
-  // outputs are produced into their device buffers but have no inference
-  // consumer, so they stay on the GPU.
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
                        sizeof(float) * num_rows * kScoreDiffOutputFloats);

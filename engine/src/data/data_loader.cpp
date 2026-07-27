@@ -37,6 +37,17 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
+// One row of a batch, tagged with the file it comes from so the batch can be
+// grouped into per-file WorkUnits.
+struct TaggedRow {
+  int file_idx;
+  int64_t local_pos;
+  uint8_t flip;
+  int output_idx;
+};
+
+bool by_file_idx(const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; }
+
 // Per-game turn index of one .slog file: for each game, the number of included
 // turns (as prefix sums: cum[g] = first flat row index of game g, cum.back() =
 // total expanded rows) and the turn index its first flat row stands for.
@@ -45,12 +56,10 @@ struct TurnIndex {
   std::vector<uint8_t> first_turn;
 };
 
-// Read a file's per-game turn index from its header and metadata table without
-// resident body. `all_turns` includes every turn of each game starting at turn
-// 0 (the lane task); otherwise the game's training-eligible region
-// [eligible_begin, eligible_end) (the value task). Sets `num_games`. On any
-// read failure, returns a one-turn-per-game fallback (cum = 0,1,2,...;
-// first_turn all 0) of num_games games.
+// From the file's header and metadata table, needing no resident body.
+// `all_turns` counts every turn of each game, otherwise only its
+// training-eligible region. On any read failure it falls back to one turn per
+// game.
 TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t num_games_fallback,
                           bool all_turns) {
   std::ifstream f(path, std::ios::binary);
@@ -586,19 +595,12 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
   cursor_ = batch_end;
 
   // Group rows by file for locality.
-  struct TaggedRow {
-    int file_idx;
-    int64_t local_pos;
-    uint8_t flip;
-    int output_idx;
-  };
   std::vector<TaggedRow> rows(static_cast<size_t>(n_rows));
   for (int i = 0; i < n_rows; ++i) {
     const auto& ep = order_[batch_start + i];
     rows[i] = {ep.file_idx, ep.local_pos, flips_[batch_start + i], i};
   }
-  std::sort(rows.begin(), rows.end(),
-            [](const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; });
+  std::sort(rows.begin(), rows.end(), by_file_idx);
 
   // Build one WorkUnit per contiguous file group.
   int i = 0;

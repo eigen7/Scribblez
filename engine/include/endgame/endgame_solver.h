@@ -1,5 +1,6 @@
 #pragma once
 
+#include "endgame/move_list_memo.h"
 #include "endgame/outplays.h"
 #include "endgame/path_move_lists.h"
 #include "game/board.h"
@@ -10,11 +11,8 @@
 #include <functional>
 #include <ostream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-// Forward-declared so Params::add_options() can register options without
-// pulling boost::program_options into every consumer of this header.
 namespace boost::program_options {
 class options_description;
 }
@@ -24,8 +22,8 @@ namespace scribblez {
 class Dictionary;
 class LeaveOutplays;
 
-// One bag-empty position to solve, from the perspective of the side holding
-// `my_rack`.
+// A position to solve, from the perspective of the side holding `my_rack`.
+// The bag must be empty, which is what makes both racks known.
 struct EndgameState {
   const Dictionary* dict = nullptr;
   Board board;
@@ -36,7 +34,7 @@ struct EndgameState {
   int scoreless_turns = 0;  // consecutive zero-score turns already played
 };
 
-// Result of one solve, from the perspective of the side that was to move.
+// From the perspective of the side that was to move.
 struct EndgameResult {
   // proven_class value when no class proof landed.
   static constexpr int kClassUnknown = 2;
@@ -60,19 +58,17 @@ struct EndgameResult {
 };
 
 // The Scrabble endgame -- the phase after the bag empties -- is a game of
-// perfect information: both racks are known, so the position has an exact
-// game-theoretic value. EndgameSolver searches for it with alpha-beta,
-// consulting nothing but the board, the lexicon, the racks, and the scores --
-// no equity model, no leave tables, no belief over unseen tiles.
+// perfect information, so the position has an exact game-theoretic value.
+// EndgameSolver searches for it with alpha-beta, consulting nothing but the
+// board, the lexicon, the racks, and the scores: no equity model, no leave
+// tables, no belief over unseen tiles.
 //
 // A solve is bounded by a node budget rather than run to exhaustion, so its
 // answer is either exact ("proven": every line it rests on reached a real game
-// end) or an estimate from a search that ran out of room. Params::spread_matters
-// chooses what is optimized. A legal move always comes back, even from a budget
-// too small to search at all.
-//
-// Where a proof lands, the solver also returns a certificate: the line of play
-// that carries the position from `best` to a game end at the proven class.
+// end) or an estimate from a search that ran out of room. A legal move always
+// comes back, even from a budget too small to search at all, and where a proof
+// lands the solver also returns a certificate: the line of play carrying the
+// position from `best` to a game end at the proven class.
 //
 // The solver ends a game after two consecutive scoreless turns rather than the
 // official six. A pass leaves the position unchanged, so a longer chain of them
@@ -92,33 +88,30 @@ struct EndgameResult {
 // returns modest, so stop at lazy-SMP unless a profile says otherwise.
 class EndgameSolver {
  public:
-  // Renders a move against the board it is about to be played on.
+  // The board passed is the one the move is about to be played on.
   using MoveFormatter = std::function<std::string(const Board&, const Move&)>;
 
-  // tt_log2_entries sizes the transposition table to 2^tt_log2_entries entries.
+  // The transposition table takes 2^tt_log2_entries entries.
   explicit EndgameSolver(int tt_log2_entries = 16);
 
-  // Solve-time configuration.
   struct Params {
     // Hard cap on the nodes one solve may spend. The default is tuned with
     // `endgame_bench`; see docs/endgame_bench_results.md.
     uint64_t budget = 220;
     int plies = 25;  // iterative-deepening depth cap
 
-    // When disabled, all provably winning moves are considered equally good, as
-    // are all provably losing ones. When enabled, winning by A is a better
-    // result than winning by B for A > B -- though never at the cost of the
-    // win: the class comes first, and spread only breaks ties within it.
+    // When disabled, all provably winning moves are equally good, as are all
+    // provably losing ones. When enabled, winning by more is better -- though
+    // never at the cost of the win: the class comes first, and spread only
+    // breaks ties within it.
     bool spread_matters = false;
 
-    // Register --<prefix>budget, --<prefix>plies, and
-    // --<prefix>spread-matters, bound to this object's fields; the current
-    // field values become the option defaults.
+    // Register the options under `prefix`, bound to this object's fields, whose
+    // current values become the defaults.
     void add_options(boost::program_options::options_description& desc,
                      const std::string& prefix = "");
   };
 
-  // Solve `state` for the side holding its my_rack.
   EndgameResult solve(const EndgameState& state, const Params& params);
 
   // The window a class-only solve searches: a final spread >= kFirstWinBeta is a
@@ -126,12 +119,10 @@ class EndgameSolver {
   static constexpr int32_t kFirstWinAlpha = -1;
   static constexpr int32_t kFirstWinBeta = 1;
 
-  // Discard everything remembered from previous solves. Must be called between
-  // games; within a game, every turn reuses the table.
+  // Must be called between games; within a game, every turn reuses the table.
   void clear();
 
-  // Enable a detailed trace of each solve to `os`, for debugging. Pass nullptr
-  // to disable (the default).
+  // Trace each solve to `os`, or nullptr to stop (the default).
   void set_trace(std::ostream* os, MoveFormatter fmt);
 
   // Switches for individual search features, all on. Production never touches
@@ -143,11 +134,10 @@ class EndgameSolver {
   void set_root_cutoff(bool on) { root_cutoff_ = on; }
   void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
-  // Cache generated move lists by board and rack, trading memory for move
-  // generation (off by default). For benchmarks: it leaves results, including
-  // the reported movegens, bit-identical, so it speeds up a measurement run
-  // without perturbing what is measured.
-  void set_movegen_memo(bool on) { movegen_memo_ = on; }
+  // Cache generated move lists (see MoveListMemo); off by default. It changes
+  // nothing the solve reports, movegens included, so a benchmark may enable it
+  // freely.
+  void set_movegen_memo(bool on) { movegen_memo_.set_enabled(on); }
 
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
@@ -174,13 +164,11 @@ class EndgameSolver {
     uint16_t gen = 0;  // generation that wrote it; older ones read as empty
   };
 
-  // A negamax return: the search value and whether it is proven.
   struct SearchResult {
     int32_t value = 0;
     bool proven = false;
   };
 
-  // A candidate move and the value the search currently ranks it by.
   struct RankedMove {
     Move move;
     int32_t rank = 0;
@@ -207,10 +195,9 @@ class EndgameSolver {
   // Solve for the class first and the spread second, per Params::spread_matters.
   EndgameResult solve_lexicographic(std::vector<RankedMove>& root_moves,
                                     const std::vector<Move>& plays, int max_plies);
-  // True iff playing `m` at the root provably preserves game class `cls` for the
-  // solving side. False when no proof lands in the remaining budget.
+  // Whether playing `m` at the root provably preserves game class `cls`. False
+  // when no proof lands in the remaining budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
-  // Render `m` with the trace formatter against the solver's current board.
   std::string trace_move(const Move& m) const { return trace_fmt_(board_, m); }
   // Trace the opponent's out-plays and what each root move does about them.
   void trace_root_view(const std::vector<RankedMove>& root_moves);
@@ -226,16 +213,16 @@ class EndgameSolver {
                         std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
                         Move* best_out);
   SearchResult negamax(int depth, int32_t alpha, int32_t beta, int ply);
-  // Search one child and return its value from the parent's perspective.
+  // One child's value, from the parent's perspective.
   SearchResult search_child(int child_depth, int32_t alpha, int32_t beta, int child_ply,
                             bool first);
-  // Play the position out greedily and return the resulting spread, the
-  // estimate a search that has run out of depth falls back on.
+  // The spread from playing the position out greedily -- what a search that has
+  // run out of depth falls back on.
   int32_t greedy_playout(uint64_t node_key, int ply);
 
   // The legal moves for `rack` at the current position, `ply` deep down the
-  // search path. The returned reference stays valid for the caller's use even
-  // across nested make/unmake and nested generate_moves calls.
+  // search path. The reference stays valid across nested make/unmake and nested
+  // generate_moves calls.
   const std::vector<Move>& generate_moves(const Rack& rack, int ply);
   const std::vector<Move>& generate_moves_scratch(const Rack& rack);
 
@@ -243,13 +230,6 @@ class EndgameSolver {
   // from the best out-play in `replier_outs` that `m` leaves intact. kInf when
   // no out-play bounds `m`.
   int32_t outplay_futility_bound(const Move& m, const OutplaySet& replier_outs) const;
-
-  // Install the out-play sets that the child reached by `m` will read, and
-  // restore the parent's. `leave_outs` buckets the node's own move list, the
-  // source of the mover's next set.
-  void push_outplay_sets(const Move& m, LeaveOutplays* leave_outs, int child_ply,
-                         OutplaySet* saved[2]);
-  void restore_outplay_sets(OutplaySet* const saved[2]);
 
   // --- Make / unmake ------------------------------------------------------
   void make(const Move& move, int ply);
@@ -277,8 +257,8 @@ class EndgameSolver {
                 int depth);
   void tt_store_playout(uint64_t hash, int32_t score_rel);
 
-  // Search position (one scratch board reused across the whole solve) and the
-  // side-to-move state that make/unmake maintain alongside it.
+  // The search position -- one scratch board reused across the whole solve --
+  // and the side-to-move state make/unmake maintain alongside it.
   Board board_;
   const Dictionary* dict_ = nullptr;
   Rack racks_[2];
@@ -297,39 +277,20 @@ class EndgameSolver {
 
   uint64_t movegens_ = 0;  // see EndgameResult::movegens
 
-  // Move-generation memo (see set_movegen_memo), keyed by board and rack. It
-  // outlives clear(), depending on neither scores nor table generations, but is
-  // wiped whole once it exceeds kMovegenMemoCap entries.
-  static constexpr size_t kMovegenMemoCap = static_cast<size_t>(1) << 20;
-  bool movegen_memo_ = false;
-  std::unordered_map<uint64_t, std::vector<Move>> movegen_memo_map_;
-  std::vector<Move> movegen_scratch_;  // return buffer when the memo is off
+  MoveListMemo movegen_memo_;  // outlives clear(), which it does not depend on
 
   bool incremental_movegen_ = true;
   PathMoveLists path_lists_;
 
   bool outplay_futility_ = true;
   bool root_futility_ = true;
-
-  // The out-play sets, one pair per seat, that each node's futility bounds are
-  // read from. cur_sets_[s] is seat s's set at the current node; a mover writes
-  // its children's pair into ply_sets_[child ply] -- one slot per depth, since
-  // siblings can share -- and repoints cur_sets_ there for the descent.
-  // root_sets_ holds the pair the root starts from, of which only the
-  // opponent's half is populated: the root's own moves are bounded against the
-  // replier's out-plays, never its own.
-  struct PlyOutplaySets {
-    OutplaySet mover, other;
-  };
-  OutplaySet root_sets_[2];
-  std::vector<PlyOutplaySets> ply_sets_;  // indexed by the child's ply
-  OutplaySet* cur_sets_[2] = {nullptr, nullptr};
+  OutplaySetStack outplay_sets_;
 
   bool proof_early_exit_ = true;
   bool root_cutoff_ = true;
 
-  // Trace sink and move renderer; tracing is active iff trace_ is non-null
-  // (set_trace installs a fallback renderer when none is given).
+  // Tracing is active iff trace_ is non-null; set_trace installs a fallback
+  // renderer when given none.
   std::ostream* trace_ = nullptr;
   MoveFormatter trace_fmt_;
 

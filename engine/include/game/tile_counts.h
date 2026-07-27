@@ -7,10 +7,8 @@
 
 namespace scribblez {
 
-// A multiset of tiles as a per-type histogram: how many of each letter A..Z and
-// how many blanks. This is the fast representation for counting / adding /
-// removing tiles -- e.g. movegen's available-tile scratch, or a Rack's contents
-// viewed as counts. (A Tile indexes the histogram via its implicit conversion.)
+// Rack's counterpart: the same tiles as a per-type histogram, which trades
+// Rack's compactness for O(1) counting.
 class TileCounts {
  public:
   void add(Tile t) { ++counts_[t]; }
@@ -21,7 +19,7 @@ class TileCounts {
   int size() const;
   bool empty() const { return size() == 0; }
 
-  // Sum of tile values (blanks count as 0).
+  // Blanks count as 0.
   int point_value() const;
 
   // Letters in alphabetical order followed by '?' for each blank.

@@ -31,8 +31,8 @@ constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 // star; identical set for horizontal and vertical first plays.
 bool is_penalised_position(int pos) { return pos == 2 || pos == 6 || pos == 8 || pos == 12; }
 
-// -0.7 penalty per vowel that lands on a 2LS square adjacent to the star on
-// an empty-board opening play.  Matches Maven / Macondo's heuristic.
+// A kVowelPenalty charge per vowel that lands on a 2LS square adjacent to the
+// star on an empty-board opening play. Matches Maven / Macondo's heuristic.
 double opening_adjustment(const Move& move, const Board& board) {
   if (!board.empty_board()) return 0.0;
   if (move.type() != MoveType::PLAY) return 0.0;
@@ -145,8 +145,8 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
 
 namespace {
 
-// Recurse over the rack's distinct tile types, choosing how many of each to KEEP
-// (the leave), tracking the max leave value by leave size in `best[size]`.
+// Recurse over the rack's distinct tile types, choosing how many of each to
+// KEEP, and track the max leave value by leave size in `best[size]`.
 void enum_sub_leaves(const std::vector<std::pair<Tile, int>>& types, size_t i, Rack& leave,
                      int kept, const LeaveValues& lv, std::array<double, RACK_SIZE + 1>& best) {
   if (i == types.size()) {
