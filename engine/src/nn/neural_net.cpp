@@ -35,8 +35,7 @@ constexpr const char* kOutputSelfNext = "self_next_placement";
 constexpr const char* kOutputOppWin = "opp_win_placement";
 constexpr const char* kOutputSelfWin = "self_win_placement";
 
-// Routes TensorRT's internal diagnostics to stderr, dropping anything below a
-// warning so the build logs stay readable.
+// Drops anything below a warning, so the build logs stay readable.
 class Logger : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -54,10 +53,10 @@ std::vector<char> read_file_bytes(const std::string& path) {
   return bytes;
 }
 
-// Write `bytes` to `path` atomically (tmp file + rename), creating parents. The
-// temp name carries the pid and a random suffix so two processes building the
-// same plan concurrently (multiple self-play workers share one cache directory)
-// never write to the same temp file and corrupt each other's rename.
+// Atomically (tmp file + rename), creating parents. The temp name carries the
+// pid and a random suffix, so two processes building the same plan concurrently
+// -- self-play workers sharing one cache directory -- cannot corrupt each
+// other's rename.
 void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::path p(path);
   std::filesystem::create_directories(p.parent_path());
@@ -79,9 +78,8 @@ struct OnnxMetadata {
   std::string architecture_signature;
 };
 
-// Read the serving-side contract out of the model's ONNX metadata_props (see
-// onnx_export.py). Every served model must declare both entries; a missing
-// entry (or unparseable model) throws.
+// Every served model must declare both entries; a missing one, or an
+// unparseable model, throws.
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
   if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
@@ -145,27 +143,23 @@ struct NeuralNet::Impl {
   int spatial_floats(int rows) const { return rows * spatial_planes * kBoardCells; }
   int scalar_size(int rows) const { return rows * scalar_floats; }
 
-  // Input widths read off the deserialized engine's declared tensor shapes --
-  // the model file states which input layout (full or base) it consumes -- and
-  // the arm the model declares in its ONNX metadata_props.
+  // Read off the deserialized engine's declared tensor shapes and the model's
+  // own ONNX metadata_props.
   int spatial_planes = 0;
   int scalar_floats = 0;
   bool contingent_features = false;
   ~Impl();
 
-  // Set engine from a serialized plan blob.
   void deserialize_engine(const std::vector<char>& plan);
 
-  // Build a serialized engine plan from the ONNX bytes (does not touch disk).
+  // Touches no disk.
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
 
-  // Replace the loaded engine's weights with the ones in the ONNX bytes. Used
-  // after deserializing a cached plan, which shares the model's architecture
-  // but was built from whatever same-architecture checkpoint first populated
-  // the cache.
+  // For after deserializing a cached plan, which shares the architecture but
+  // holds whatever same-architecture checkpoint first populated the cache.
   void refit_engine(const std::vector<char>& onnx_bytes);
 
-  // Allocate context, stream, and host/device buffers once the engine exists.
+  // Context, stream, and host/device buffers, once the engine exists.
   void allocate_buffers();
 
   NeuralNetParams params;

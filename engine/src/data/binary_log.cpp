@@ -16,7 +16,6 @@ namespace binlog {
 
 namespace {
 
-// Pack a TurnRecord into a TurnBlob: copy the move and the post-turn draws.
 TurnBlob to_blob(const TurnRecord& t) {
   TurnBlob b{};
   b.move = t.move;
@@ -24,7 +23,6 @@ TurnBlob to_blob(const TurnRecord& t) {
   return b;
 }
 
-// Pack a GameLog's initial racks into an InitialRacks blob.
 InitialRacks initial_racks_of(const GameLog& log) {
   InitialRacks ir{};
   ir.p0 = log.initial_racks[0];
@@ -141,10 +139,9 @@ struct PreparedBatch {
   std::vector<GameLog> games;
 };
 
-// Pre-build per-game blobs. Each kept game records its eligible-turn region
-// (the [begin, end) training expands over) and one eval-only sampled turn
-// drawn uniformly from that region. Games with an empty region (bag empty for
-// every turn, or a game that ended during its random opening) are dropped.
+// Each kept game records its eligible-turn region and one eval-only sampled
+// turn drawn uniformly from it. A game with an empty region -- its bag empty
+// every turn, or an end during its random opening -- is dropped.
 PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   PreparedBatch p;
   p.initial.reserve(games.size());
@@ -173,8 +170,7 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   return p;
 }
 
-// Build the metadata index: one entry per game with its absolute start offset
-// (all offsets are known up front) plus scores and turn counts.
+// One entry per game, all start offsets being known up front.
 std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   std::vector<GameMetadata> meta;
   meta.reserve(p.games.size());
@@ -196,7 +192,6 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   return meta;
 }
 
-// Write header, metadata table, and per-game data to path.
 void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
                      const std::vector<GameMetadata>& meta) {
   std::ofstream f(path, std::ios::binary | std::ios::trunc);

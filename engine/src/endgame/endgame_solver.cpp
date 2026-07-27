@@ -20,8 +20,8 @@ namespace scribblez {
 
 namespace {
 
-// A large finite bound for the alpha-beta window; real endgame spreads are far
-// smaller, so it stands in for +/- infinity without overflow on negation.
+// Stands in for +/- infinity in the alpha-beta window: far above any real
+// endgame spread, yet small enough not to overflow on negation.
 constexpr int32_t kInf = 1'000'000;
 
 // Upper bound on plies a single greedy leaf playout can add past the search
@@ -30,9 +30,8 @@ constexpr int32_t kInf = 1'000'000;
 // far shorter than this.
 constexpr int kMaxPlayout = 40;
 
-// Zobrist keys for every (square, letter, is-blank) placement, plus the keys
-// mixed in at node level, one per internal scoreless count (0..2).
-// Deterministically derived from a fixed seed.
+// One key per (square, letter, is-blank) placement, plus one per internal
+// scoreless count, all derived from a fixed seed.
 struct ZobristTable {
   std::array<std::array<std::array<uint64_t, 2>, 26>, BOARD_SIZE * BOARD_SIZE> square;
   std::array<uint64_t, 3> scoreless;
@@ -57,7 +56,7 @@ bool settles_first_win_class(int32_t value) {
          value == 0;
 }
 
-// The win/draw/loss class of a settled value: +1 win, 0 draw, -1 loss.
+// +1 win, 0 draw, -1 loss.
 int class_of(int32_t value) { return (value > 0) - (value < 0); }
 
 const ZobristTable& zobrist() {

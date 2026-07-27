@@ -26,15 +26,15 @@ constexpr std::array<uint32_t, 5> kSha1Init = {0x67452301u, 0xEFCDAB89u, 0x98BAD
 
 uint32_t rotl(uint32_t v, int b) { return (v << b) | (v >> (32 - b)); }
 
-// Append the SHA-1 padding: a 0x80 byte, zero bytes up to a 56-mod-64 boundary,
-// then the original message length in bits as a big-endian 64-bit integer.
+// A 0x80 byte, zeroes up to a 56-mod-64 boundary, then the message length in
+// bits as a big-endian 64-bit integer.
 void sha1_pad(std::string& data, uint64_t bit_len) {
   data.push_back(static_cast<char>(0x80));
   while (data.size() % 64 != 56) data.push_back(0);
   for (int i = 7; i >= 0; --i) data.push_back(static_cast<char>((bit_len >> (i * 8)) & 0xff));
 }
 
-// Mix one 64-byte block into the running hash state h.
+// One 64-byte block.
 void sha1_process_chunk(std::array<uint32_t, 5>& h, const char* chunk) {
   uint32_t w[80];
   for (int i = 0; i < 16; ++i) {
@@ -74,7 +74,7 @@ void sha1_process_chunk(std::array<uint32_t, 5>& h, const char* chunk) {
   h[4] += e;
 }
 
-// Serialize the hash state to 20 big-endian bytes.
+// 20 big-endian bytes.
 void sha1_finalize(const std::array<uint32_t, 5>& h, uint8_t out[20]) {
   for (int i = 0; i < 5; ++i) {
     out[i * 4] = (h[i] >> 24) & 0xff;

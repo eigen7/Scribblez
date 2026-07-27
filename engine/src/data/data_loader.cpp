@@ -56,12 +56,10 @@ struct TurnIndex {
   std::vector<uint8_t> first_turn;
 };
 
-// Read a file's per-game turn index from its header and metadata table without
-// resident body. `all_turns` includes every turn of each game starting at turn
-// 0 (the lane task); otherwise the game's training-eligible region
-// [eligible_begin, eligible_end) (the value task). Sets `num_games`. On any
-// read failure, returns a one-turn-per-game fallback (cum = 0,1,2,...;
-// first_turn all 0) of num_games games.
+// From the file's header and metadata table, needing no resident body.
+// `all_turns` counts every turn of each game, otherwise only its
+// training-eligible region. On any read failure it falls back to one turn per
+// game.
 TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t num_games_fallback,
                           bool all_turns) {
   std::ifstream f(path, std::ios::binary);

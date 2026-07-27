@@ -29,9 +29,8 @@ struct AdmitResult {
   bool reset;
 };
 
-// Fold `score` into a lane's has_move/max_score and report how to record the play.
-// Shared by the union (compute_lane_targets) and move-list (compute_lane_best_moves)
-// accumulators, which differ only in what data `reset` tells them to drop.
+// Shared by the union and move-list accumulators, which differ only in what
+// data `reset` tells them to drop.
 AdmitResult admit_score(bool& has_move, int& max_score, int score) {
   if (has_move && score < max_score) return {false, false};
   const bool reset = !has_move || score > max_score;
@@ -42,9 +41,7 @@ AdmitResult admit_score(bool& has_move, int& max_score, int score) {
 
 }  // namespace
 
-// Decode a PLAY into its newly placed tiles. `start()` is the lane's cross-axis
-// coordinate and `square_mask()` marks the placed cells along the lane; the
-// stored glyphs are in ascending lane-cell order.
+// The stored glyphs are in ascending lane-cell order, matching square_mask().
 int decode_placements(const Move& m, PlacedTile* out) {
   const bool horiz = m.horizontal();
   uint16_t mask = m.square_mask();
@@ -129,7 +126,7 @@ LaneBestMovesSet compute_lane_best_moves(const Board& board, const Rack& rack,
 
 namespace {
 
-// Write one lane's 15x27 occupancy block (zero where !has_move).
+// Zero where !has_move.
 void encode_lane_occupancy(const LaneBest& lane, float* out) {
   for (int cell = 0; cell < kLaneLen; ++cell) {
     const uint32_t bits = lane.has_move ? lane.placed[cell] : 0u;

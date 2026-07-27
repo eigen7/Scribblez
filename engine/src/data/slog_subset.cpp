@@ -12,7 +12,7 @@ namespace binlog {
 
 namespace {
 
-// Read an entire file into a byte buffer. Returns false on I/O failure.
+// False on I/O failure.
 bool read_file(const std::string& path, std::vector<char>& buf) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return false;
@@ -20,7 +20,7 @@ bool read_file(const std::string& path, std::vector<char>& buf) {
   return true;
 }
 
-// Bytes occupied by one game's blob (initial racks + its turn array).
+// Initial racks plus turn array.
 int64_t blob_size(const GameMetadata& gm) {
   return static_cast<int64_t>(sizeof(InitialRacks)) +
          static_cast<int64_t>(gm.num_turns) * static_cast<int64_t>(sizeof(TurnBlob));

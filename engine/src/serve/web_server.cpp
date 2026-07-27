@@ -42,7 +42,7 @@ using util::write_all;
 
 // --------------------------- HTTP / WS helpers ---------------------------
 
-// Extract a header value (case-insensitive name) from a raw HTTP request.
+// Case-insensitive.
 std::string header_value(const std::string& req, const std::string& name) {
   std::string lower = req;
   to_lower(lower);
