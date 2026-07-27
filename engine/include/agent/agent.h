@@ -25,11 +25,10 @@ struct EndGameResult {
 };
 
 // Everything an agent needs in order to choose a move on its turn. Constructed
-// by the game loop and passed to Agent::make_move(). The game loop no longer
-// pre-computes legal moves: each agent generates the moves it needs from
-// `board` + `dict` (most via generate_legal_plays(); HastyBot via its own
-// shadow-play search), so an agent only pays for the generation it actually
-// uses.
+// by the game loop and passed to Agent::make_move(). It carries no legal-move
+// list: each agent generates the moves it needs from `board` + `dict` (most via
+// generate_legal_plays(); HastyBot via its own shadow-play search), so an agent
+// only pays for the generation it actually uses.
 struct MoveRequest {
   const Board& board;
   const Dictionary& dict;

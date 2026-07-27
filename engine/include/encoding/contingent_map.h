@@ -14,10 +14,10 @@
 // the extra blank needs a drawn blank. Independently, ANY placed blank
 // designated as letter L can be read as the real drawn L (rescored with L's
 // face value at that cell) -- a contingent "drew L" play, provided the
-// placement needs more copies of L than the rack holds. Tile kinds absent from the unseen pool are
-// undrawable and stay empty. A full rack draws no replenishment tile, so no
-// phantom is added there: its contingent columns are all empty and only the
-// rack-alone lanes are populated.
+// placement needs more copies of L than the rack holds. Tile kinds absent from
+// the unseen pool are undrawable and stay empty. A full rack draws no
+// replenishment tile, so no phantom is added there: its contingent columns are
+// all empty and only the rack-alone lanes are populated.
 
 #include "game/board.h"
 #include "game/rack.h"

@@ -37,6 +37,17 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
+// One row of a batch, tagged with the file it comes from so the batch can be
+// grouped into per-file WorkUnits.
+struct TaggedRow {
+  int file_idx;
+  int64_t local_pos;
+  uint8_t flip;
+  int output_idx;
+};
+
+bool by_file_idx(const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; }
+
 // Per-game turn index of one .slog file: for each game, the number of included
 // turns (as prefix sums: cum[g] = first flat row index of game g, cum.back() =
 // total expanded rows) and the turn index its first flat row stands for.
@@ -586,19 +597,12 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
   cursor_ = batch_end;
 
   // Group rows by file for locality.
-  struct TaggedRow {
-    int file_idx;
-    int64_t local_pos;
-    uint8_t flip;
-    int output_idx;
-  };
   std::vector<TaggedRow> rows(static_cast<size_t>(n_rows));
   for (int i = 0; i < n_rows; ++i) {
     const auto& ep = order_[batch_start + i];
     rows[i] = {ep.file_idx, ep.local_pos, flips_[batch_start + i], i};
   }
-  std::sort(rows.begin(), rows.end(),
-            [](const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; });
+  std::sort(rows.begin(), rows.end(), by_file_idx);
 
   // Build one WorkUnit per contiguous file group.
   int i = 0;

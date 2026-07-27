@@ -31,7 +31,7 @@ struct GcgWriteOptions {
   std::vector<std::string> notes;
 
   // If non-empty, controls whether each turn line includes rack_before.
-  // When omitted, every turn includes rack_before (legacy behavior).
+  // When omitted, every turn includes rack_before.
   std::vector<bool> include_rack_before;
 
   // Exact rack field to use on each event line. When present, this overrides

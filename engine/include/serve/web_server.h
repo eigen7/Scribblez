@@ -113,17 +113,12 @@ class WebSession {
 // "pass".
 std::string move_to_notation(const Board& board, const Move& move);
 
-// Build the GameState JSON the front-end expects, from the perspective of
-// one seat ("my" side). Two constructors cover the only two places we ever
-// build one of these:
-//
-//   * mid-game, from a MoveRequest (the human's own turn) -- the agent
-//     already has every field of `req` parallel-named; we just relay them
-//     and tag on the agent-supplied display names and optional Macondo
-//     equities.
-//   * end-of-game (or any other view derived from a live Game) -- pulled
-//     directly from the Game itself, so callers no longer have to splat 11
-//     positional fields into a brace-init list.
+// Build the GameState JSON the front-end expects, from the perspective of one
+// seat ("my" side). Its two constructors cover the two sources a view is ever
+// built from: mid-game, a MoveRequest (the human's own turn), whose fields it
+// relays with the agent-supplied display names and optional Macondo equities
+// tagged on; and end-of-game (or any other view anchored on a live Game), the
+// Game itself.
 //
 // `legal_play_equities`, when non-null, must be parallel to `legal_plays`
 // and is emitted per-move as the JSON `equity` field (null for entries

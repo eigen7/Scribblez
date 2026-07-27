@@ -38,16 +38,7 @@ EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
 }
 
 MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
-  // Endgame: the bag is empty and both racks are fully known, so hand the
-  // position to the exact solver (unless the solver is disabled). The solver's
-  // move is used only when it completed at least its first iteration -- every
-  // root move backed by a full greedy playout. Below that (the solve was
-  // declined as too rich for the budget, or the budget ran out mid-iteration)
-  // its answer reflects an arbitrary fraction of the root, and HastyBot's
-  // static-equity argmax is the stronger policy.
-  //
-  // A solve that proved the game's class carries the proof-certificate line as
-  // its continuation; it rides along as the decision's projection, so a
+  // A proof certificate rides along as the decision's projection, so a
   // projection-respecting loop (self-play generation) fast-tracks the game to
   // its proven end instead of prompting for the remaining turns.
   if (req.bag_size == 0 && solver_params_.budget > 0) {
@@ -76,9 +67,6 @@ MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
 }
 
 void EndgameHastyBotAgent::observe_move(const Move& move) {
-  // Track consecutive scoreless turns for the solver's scoreless-turn input,
-  // mirroring the game loop: any play resets the run, a pass or exchange
-  // extends it.
   if (move.type() == MoveType::PLAY)
     scoreless_turns_ = 0;
   else

@@ -175,22 +175,11 @@ struct NeuralNet::Impl {
   std::unique_ptr<nvinfer1::IExecutionContext> context;
   stream_t stream = nullptr;
 
-  // TODO(Refactor): Decouple C++ inference buffers from the strict neural net architecture.
-  // Currently, adding a new head (e.g., 'ownership') requires manually hardcoding new
-  // device/host pointers, cudaMallocs, and cudaMemcpys across 5+ different places.
-  //
-  // Implementation Plan:
-  // 1. Define a `TensorBuffer` struct (name, size_bytes, is_input, d_ptr, h_ptr).
-  // 2. Query the engine dynamically during `allocate_buffers`:
-  //    - num_tensors = engine->getNbIOTensors()
-  //    - name = engine->getIOTensorName(i)
-  //    - mode = engine->getTensorIOMode(name)  // Check for kINPUT vs kOUTPUT
-  //    - shape = engine->getTensorShape(name)  // Calculate size_bytes
-  // 3. Store buffers dynamically in `std::vector<TensorBuffer> tensors`.
-  // 4. Bind memory to the context before execution:
-  //    - context->setTensorAddress(tensor.name, tensor.d_ptr)
-  // 5. Replace manual cudaMemcpy/execution calls with loops over the `tensors` vector
-  //    and execute using `context->enqueueV3(stream)`.
+  // TODO(Refactor): hold the engine's tensors in one list instead of a named
+  // pointer pair per tensor. Adding a head (say 'ownership') currently means
+  // hand-writing device/host pointers, allocations, and copies in five places;
+  // the engine can enumerate its own I/O tensors (names, modes, and shapes), so
+  // allocation, binding, and the copies could all be loops over that list.
   void* d_input_spatial = nullptr;
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;
@@ -206,9 +195,8 @@ struct NeuralNet::Impl {
   float* h_score_diff = nullptr;
   // No host buffers for the auxiliary mask outputs (opp_next_placement,
   // self_next_placement, opp_win_placement, self_win_placement): the engine
-  // still produces them
-  // (their device buffers must stay bound for enqueueV3), but no inference
-  // consumer reads them, so they are never copied back to the host.
+  // produces them into device buffers, which must stay bound for enqueueV3, but
+  // no inference consumer reads them, so they are never copied back.
 
   int last_rows = -1;
 };
@@ -393,9 +381,6 @@ void NeuralNet::predict(int num_rows) {
 
   if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
 
-  // Only the wld and score_diff outputs are copied back; the auxiliary mask
-  // outputs are produced into their device buffers but have no inference
-  // consumer, so they stay on the GPU.
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
                        sizeof(float) * num_rows * kScoreDiffOutputFloats);

@@ -40,12 +40,8 @@ Move hasty_best_move_wmp(const MoveRequest& req);
 //
 // Move selection has two modes, set at construction:
 //   temperature == 0 : pure argmax -- play the highest-equity move, found via
-//                      hasty_best_move_wmp: a shadow-play search that bounds
-//                      each word extent's best possible equity, generates
-//                      extents best-first with WordMap anagram lookups, and
-//                      stops once no remaining extent can beat the move found
-//                      (instead of generating every legal play). Ties broken
-//                      by hasty_move_better.
+//                      hasty_best_move_wmp (which never has to generate every
+//                      legal play).
 //   temperature  > 0 : generate every legal play and sample
 //                      softmax(equity / temperature) over the top-K moves by
 //                      equity. This injects exploration into self-play data

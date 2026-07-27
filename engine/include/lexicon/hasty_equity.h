@@ -86,12 +86,9 @@ class HastyEquity {
   double equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
                 TurnLeaves& leaves) const;
 
-  // Batched static-equity evaluation for a full legal-play list.
-  //
-  // Builds a per-turn leave table for `my_rack` once, then reads each move's
-  // leave value in O(1) via Move::leave_mask() -- no sorting, hashing, or
-  // per-move leave reconstruction.  Intended for both HastyBot and human UI
-  // annotations to share one optimized implementation.
+  // Batched static-equity evaluation for a full legal-play list, sharing one
+  // TurnLeaves across the moves so no leave is priced twice. The path both
+  // HastyBot and the human UI's move annotations take.
   std::vector<double> equities(const std::vector<Move>& moves, const Board& board, int bag_size,
                                const Rack& opp_rack, const Rack& my_rack) const;
 

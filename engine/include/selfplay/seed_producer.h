@@ -20,7 +20,7 @@ namespace scribblez {
 //
 // Caveat: results depend on the *order* of next() calls -- changing the
 // construction order of RNG-using objects will change the seed each one
-// receives. This is the same caveat as the prior master-mt19937 scheme.
+// receives.
 class SeedProducer {
  public:
   // Configuration collected from the command line.
