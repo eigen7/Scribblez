@@ -128,6 +128,66 @@ def test_sync_reports_nonff_without_failing(pair, tmp_path: Path, capsys):
     assert "git publish" in capsys.readouterr().err
 
 
+def amend(repo: Path, content: str):
+    (repo / "f").write_text(content)
+    git(repo, "add", "f")
+    git(repo, "commit", "-q", "--amend", "-m", content)
+
+
+def add_origin(tmp_path: Path, repo: Path) -> Path:
+    """Give the repo a bare `origin`, standing in for GitHub."""
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", str(origin))
+    git(repo, "remote", "add", "origin", str(origin))
+    return origin
+
+
+def mirrored_commit(repo: Path, content: str = "v1") -> str:
+    """Commit and mirror it, as the hooks do on a direct commit to main."""
+    commit(repo, content)
+    commit_guard.sync(repo)
+    return git_out(repo, "rev-parse", "main")
+
+
+def test_sync_mirrors_an_amended_commit(pair, capsys):
+    # An amend rewrites a tip Gitea already mirrored, so the plain push is
+    # non-fast-forward. Gitea's copy is this checkout's own superseded commit,
+    # so the mirror replaces it rather than reporting a divergence.
+    repo, bare = pair
+    superseded = mirrored_commit(repo)
+    amend(repo, "v2")
+    commit_guard.sync(repo)
+    assert bare_main(repo, bare) == git_out(repo, "rev-parse", "main")
+    assert f"replaced {superseded[:9]}" in capsys.readouterr().out
+
+
+def test_sync_refuses_to_replace_a_tip_github_has(pair, tmp_path: Path, capsys):
+    # Rewriting a commit GitHub already holds is the user's problem to resolve;
+    # the mirror must not quietly drop it from Gitea too.
+    repo, bare = pair
+    add_origin(tmp_path, repo)
+    mirrored_commit(repo)
+    git(repo, "push", "-q", "origin", "main")
+    gitea_tip = bare_main(repo, bare)
+    amend(repo, "v2")
+    commit_guard.sync(repo)
+    assert bare_main(repo, bare) == gitea_tip
+    assert "git publish" in capsys.readouterr().err
+
+
+def test_sync_refuses_to_replace_an_unrecognized_tip(pair, capsys):
+    # Without reflog evidence that Gitea's tip came from here, the mirror cannot
+    # prove replacing it discards nothing, so it reports instead.
+    repo, bare = pair
+    mirrored_commit(repo)
+    gitea_tip = bare_main(repo, bare)
+    amend(repo, "v2")
+    git(repo, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+    commit_guard.sync(repo)
+    assert bare_main(repo, bare) == gitea_tip
+    assert "git publish" in capsys.readouterr().err
+
+
 def test_sync_ignores_other_branches(pair):
     repo, bare = pair
     gitea_tip = bare_main(repo, bare)
