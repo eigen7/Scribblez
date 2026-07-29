@@ -3,6 +3,7 @@
 #include "agent/macondo_bot.h"
 #include "endgame/outplays.h"
 #include "game/glyph.h"
+#include "game/movegen.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "util/math.h"
@@ -290,7 +291,8 @@ const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack, int ply
 
 const std::vector<Move>& EndgameSolver::generate_moves_scratch(const Rack& rack) {
   ++movegens_;
-  return movegen_memo_.generate(board_, *dict_, rack, board_hash_);
+  scratch_moves_ = MoveGenerator(board_, *dict_).generate(rack);
+  return scratch_moves_;
 }
 
 int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {

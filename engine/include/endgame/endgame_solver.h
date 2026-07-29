@@ -1,6 +1,5 @@
 #pragma once
 
-#include "endgame/move_list_memo.h"
 #include "endgame/outplays.h"
 #include "endgame/path_move_lists.h"
 #include "game/board.h"
@@ -134,11 +133,6 @@ class EndgameSolver {
   void set_root_cutoff(bool on) { root_cutoff_ = on; }
   void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
-  // Cache generated move lists (see MoveListMemo); off by default. It changes
-  // nothing the solve reports, movegens included, so a benchmark may enable it
-  // freely.
-  void set_movegen_memo(bool on) { movegen_memo_.set_enabled(on); }
-
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
   // never-written slot. Every stored entry carries a real bound (>= kExact), so a
@@ -224,6 +218,10 @@ class EndgameSolver {
   // search path. The reference stays valid across nested make/unmake and nested
   // generate_moves calls.
   const std::vector<Move>& generate_moves(const Rack& rack, int ply);
+  // Generated straight from the board, bypassing the path lists: for the root,
+  // whose lists are what this seeds, and for the incremental A/B. The reference
+  // is invalidated by the next call, so a caller holding a list across further
+  // generation keeps its own copy.
   const std::vector<Move>& generate_moves_scratch(const Rack& rack);
 
   // A sound upper bound on what the mover can get out of playing `m`, derived
@@ -277,7 +275,7 @@ class EndgameSolver {
 
   uint64_t movegens_ = 0;  // see EndgameResult::movegens
 
-  MoveListMemo movegen_memo_;  // outlives clear(), which it does not depend on
+  std::vector<Move> scratch_moves_;  // generate_moves_scratch's return buffer
 
   bool incremental_movegen_ = true;
   PathMoveLists path_lists_;
