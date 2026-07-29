@@ -29,7 +29,7 @@
 //                 [--budget N | --budgets 100,220,...] [--plies P]
 //                 [--spread-matters 0|1] [--threads N]
 //                 [--margin-min M] [--margin-max M] [--margin-step S]
-//                 [--time-games N]                           (endgames mode)
+//                 [--time-games N] [--projections 0|1]       (endgames mode)
 //                 [--spread-buckets 20,60]                   (games mode)
 //                 [--lexicon NAME] [--leaves-file PATH] [--peg-file PATH]
 //
@@ -248,10 +248,12 @@ struct SolverPlayout {
 // greedy HastyBot's deterministic tie-breaks make the spread a pure function of
 // the position, margin, and budget (threading cannot perturb it).
 // `incremental` toggles the solver's incremental move-list maintenance, which
-// changes speed but no result.
+// changes speed but no result. `projections` toggles whether a proven class
+// ends the game at its certificate, as self-play generation has it, or the
+// endgame is played out move by move.
 SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                                  const EndgameSolver::Params& params, int thread_id,
-                                 bool incremental) {
+                                 bool incremental, bool projections) {
   EndgameHastyBotAgent::Params ep;
   ep.hasty = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
   ep.solver = params;
@@ -261,7 +263,7 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
 
   const Bag pool = empty_pool(cap);
   Game g(eg, opp, dict, /*seed=*/1);
-  g.set_respect_projections(true);
+  g.set_respect_projections(projections);
   g.play_from(cap.board, {margin, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
 
   SolverPlayout out;
@@ -308,8 +310,9 @@ std::vector<int> margin_axis(int margin_min, int margin_max, int margin_step) {
 // every worker waiting on the slowest game.
 void sweep_column(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                   const std::vector<std::pair<uint64_t, int>>& desc_budgets,
-                  EndgameSolver::Params params, bool incremental, int thread_id, size_t cell_base,
-                  std::vector<SolverOutcome>& grid, std::atomic<uint64_t>& skipped) {
+                  EndgameSolver::Params params, bool incremental, bool projections, int thread_id,
+                  size_t cell_base, std::vector<SolverOutcome>& grid,
+                  std::atomic<uint64_t>& skipped) {
   const bool skip_enabled = !params.spread_matters;
   SolverOutcome last;
   uint64_t last_max_nodes = 0;
@@ -322,7 +325,8 @@ void sweep_column(const Dictionary& dict, const CapturedEndgame& cap, int margin
       continue;
     }
     params.budget = bd.first;
-    const SolverPlayout p = run_solver_playout(dict, cap, margin, params, thread_id, incremental);
+    const SolverPlayout p =
+      run_solver_playout(dict, cap, margin, params, thread_id, incremental, projections);
     last = {p.spread, p.totals.solve_ns};
     last_max_nodes = p.totals.max_solve_nodes;
     have_last = true;
@@ -398,8 +402,8 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
 // table, which is where sample size buys accuracy.
 void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
                        const std::vector<uint64_t>& budgets, EndgameSolver::Params params,
-                       bool incremental, int margin_min, int margin_max, int margin_step,
-                       int time_games) {
+                       bool incremental, bool projections, int margin_min, int margin_max,
+                       int margin_step, int time_games) {
   const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games, threads);
   const int g_count = static_cast<int>(caps.size());
   const std::vector<int> margins = margin_axis(margin_min, margin_max, margin_step);
@@ -409,9 +413,9 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
 
   std::printf(
     "endgames mode (margin sweep): %d games, %d captured, margins %d..%d step %d, budgets=%s, "
-    "spread-matters=%d, incremental=%d, threads=%d, timed games=%d\n",
+    "spread-matters=%d, incremental=%d, projections=%d, threads=%d, timed games=%d\n",
     games, g_count, margin_min, margin_max, margin_step, join_budgets(budgets).c_str(),
-    params.spread_matters ? 1 : 0, incremental ? 1 : 0, threads, timed);
+    params.spread_matters ? 1 : 0, incremental ? 1 : 0, projections ? 1 : 0, threads, timed);
   if (g_count == 0) {
     std::printf("no game reached an endgame; nothing to sweep\n");
     return;
@@ -431,7 +435,7 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
   std::vector<SolverOutcome> grid(static_cast<size_t>(g_count) * ms * bs);
   std::atomic<uint64_t> skipped{0};
   const auto sweep = [&](int worker, int g, int mi) {
-    sweep_column(dict, caps[g], margins[mi], desc_budgets, params, incremental, worker,
+    sweep_column(dict, caps[g], margins[mi], desc_budgets, params, incremental, projections, worker,
                  (static_cast<size_t>(g) * ms + mi) * bs, grid, skipped);
   };
 
@@ -650,6 +654,7 @@ int main(int argc, char** argv) {
     int margin_step = 1;
     int time_games = 25;
     int incremental = 1;
+    int projections = 1;
     scribblez::EndgameSolver::Params params;
     std::string budgets_csv;
     std::string buckets_csv = "20,60";
@@ -682,6 +687,9 @@ int main(int argc, char** argv) {
     desc.add_options()("incremental", po::value<int>(&incremental)->default_value(incremental),
                        "solver incremental move-list maintenance (1 on, 0 off); changes only "
                        "speed, never results");
+    desc.add_options()("projections", po::value<int>(&projections)->default_value(projections),
+                       "endgames mode: 1 ends a solved endgame at its certificate, as self-play "
+                       "generation does; 0 plays it out move by move");
     desc.add_options()("spread-buckets",
                        po::value<std::string>(&buckets_csv)->default_value(buckets_csv),
                        "games mode: ascending |spread| thresholds bucketing head-to-head games by "
@@ -706,7 +714,8 @@ int main(int argc, char** argv) {
 
     if (mode == "endgames") {
       scribblez::run_endgames_mode(dict, seed, games, threads, budgets, params, incremental != 0,
-                                   margin_min, margin_max, margin_step, time_games);
+                                   projections != 0, margin_min, margin_max, margin_step,
+                                   time_games);
     } else if (mode == "games") {
       scribblez::run_games_mode(dict, seed, games, threads, budgets, params, incremental != 0,
                                 thresholds);
