@@ -4,15 +4,15 @@
 //   --mode=endgames : play N HastyBot-vs-HastyBot games and capture each one's
 //                     first bag-empty position. Then, for every captured
 //                     position, synthetically sweep the score margin at the
-//                     start of the endgame from -M to +M (from the point of
-//                     view of the first player to act once the bag is empty),
-//                     and for every (margin, budget) report two tables:
+//                     start of the endgame over [--margin-min, --margin-max]
+//                     (from the point of view of the first player to act once
+//                     the bag is empty), and for every (margin, budget) report
+//                     two tables:
 //                       skill -- mean over games of the solver seat's game-value
 //                                minus a plain-HastyBot baseline's, in win%
 //                                points (a win is 1, a draw 0.5, a loss 0);
-//                       perf  -- mean over games of the solver seat's modeled
-//                                endgame runtime in ms, from an operation-count
-//                                model (see calibrate()).
+//                       cost  -- mean over the timed games of the solver seat's
+//                                measured endgame ms (see run_endgames_mode).
 //                     Absolute score level is irrelevant -- both agent types
 //                     decide off the spread alone -- so each margin sets the
 //                     first actor's scores to (margin, 0).
@@ -28,7 +28,8 @@
 //   endgame_bench [--mode=endgames|games] [--games N] [--seed N]
 //                 [--budget N | --budgets 100,220,...] [--plies P]
 //                 [--spread-matters 0|1] [--threads N]
-//                 [--margin-max M] [--margin-step S]         (endgames mode)
+//                 [--margin-min M] [--margin-max M] [--margin-step S]
+//                 [--time-games N]                           (endgames mode)
 //                 [--spread-buckets 20,60]                   (games mode)
 //                 [--lexicon NAME] [--leaves-file PATH] [--peg-file PATH]
 //
@@ -55,8 +56,8 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -76,6 +77,22 @@ using Clock = std::chrono::steady_clock;
 
 double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
+}
+
+// Run items [0, items) across `threads` workers, each pulling the next index off
+// a shared counter, and pass each worker its own index so it can key per-thread
+// resources (the pooled EndgameSolver) off it. Work is handed out dynamically
+// because a game's sweep cost varies by orders of magnitude with its position:
+// static chunks leave most workers waiting on the slowest chunk.
+void parallel_for(int items, int threads, const std::function<void(int worker, int item)>& body) {
+  std::atomic<int> next{0};
+  std::vector<std::thread> pool;
+  for (int t = 0; t < threads; ++t) {
+    pool.emplace_back([&, t] {
+      for (int i = next.fetch_add(1); i < items; i = next.fetch_add(1)) body(t, i);
+    });
+  }
+  for (std::thread& th : pool) th.join();
 }
 
 // The first bag-empty decision point of one HastyBot self-play game --
@@ -161,18 +178,24 @@ std::string bucket_label(int k, const std::vector<int>& thresholds) {
 }
 
 // Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return the
-// first bag-empty position of each game that reached one.
-std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t base_seed,
-                                              int games) {
-  std::vector<CapturedEndgame> out;
-  for (int i = 0; i < games; ++i) {
-    CapturedEndgame cap;
-    bool captured = false;
-    FirstEndgameCapturer a0(0, "A", cap, captured);
-    FirstEndgameCapturer a1(0, "B", cap, captured);
+// first bag-empty position of each game that reached one, in seed order. Each
+// game is seeded independently, so which worker plays it does not show up in
+// the captured position.
+std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t base_seed, int games,
+                                              int threads) {
+  std::vector<CapturedEndgame> caps(games);
+  std::vector<char> captured(games, 0);
+  parallel_for(games, threads, [&](int worker, int i) {
+    bool got = false;
+    FirstEndgameCapturer a0(worker, "A", caps[i], got);
+    FirstEndgameCapturer a1(worker, "B", caps[i], got);
     Game g(a0, a1, dict, base_seed + static_cast<uint64_t>(i));
     g.play();
-    if (captured) out.push_back(cap);
+    captured[i] = got ? 1 : 0;
+  });
+  std::vector<CapturedEndgame> out;
+  for (int i = 0; i < games; ++i) {
+    if (captured[i]) out.push_back(caps[i]);
   }
   return out;
 }
@@ -203,11 +226,12 @@ double win_fraction(int spread) {
 
 // --- Margin sweep -----------------------------------------------------------
 
-// One solver-seat endgame playout's deterministic result: the first actor's
-// final spread plus the operation count that feeds the timing model.
+// One solver-seat endgame playout's result: the first actor's final spread,
+// which is deterministic, and the wall time the solver spent on it, which is
+// meaningful only for a playout from the single-threaded timed phase.
 struct SolverOutcome {
   int spread = 0;
-  uint64_t movegens = 0;
+  uint64_t solve_ns = 0;
 };
 
 // A solver-seat playout's outcome together with the solver's full totals (the
@@ -220,20 +244,18 @@ struct SolverPlayout {
 // Play one captured endgame with an EndgameHastyBot on the first-actor seat
 // (scores set to {margin, 0}) and a plain HastyBot on the reply seat,
 // projections respected, and return the first actor's final spread and the
-// solver's operation totals. Agents are rebuilt per call with a fixed
-// thread_id/name so greedy HastyBot's deterministic tie-breaks make the result
-// a pure function of the position, margin, and budget (threading cannot perturb
-// it). `memo` toggles the solver's move-generation memo and `incremental` its
-// incremental move-list maintenance; both change only speed, never the logical
-// operation counts.
+// solver's totals. Agents are rebuilt per call with a fixed thread_id/name so
+// greedy HastyBot's deterministic tie-breaks make the spread a pure function of
+// the position, margin, and budget (threading cannot perturb it).
+// `incremental` toggles the solver's incremental move-list maintenance, which
+// changes speed but no result.
 SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
-                                 const EndgameSolver::Params& params, int thread_id, bool memo,
+                                 const EndgameSolver::Params& params, int thread_id,
                                  bool incremental) {
   EndgameHastyBotAgent::Params ep;
   ep.hasty = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
   ep.solver = params;
   EndgameHastyBotAgent eg(ep);
-  eg.set_movegen_memo(memo);
   eg.set_incremental_movegen(incremental);
   HastyBotAgent opp(HastyBotAgent::Params{.thread_id = thread_id, .name = "HastyBot"});
 
@@ -262,123 +284,51 @@ int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int threa
   return g.score(0) - g.score(1);
 }
 
-// The playout-time model: time_us ~= a * movegens, with a the aggregate rate
-//   a = (total wall time over the calibration playouts) / (total movegens).
-// Move generations are the single cost carrier: they span search, greedy
-// playouts, and certificate reconstruction, and the counter is memo-invariant.
-// The other counters (nodes, certificate nodes) track movegens almost
-// one-for-one by construction -- roughly one generation per node -- so they
-// carry no independent timing signal.
-struct TimingModel {
-  double a = 0.0;             // us per logical move generation
-  double mean_rel_error = 0;  // mean |predicted - measured| / measured over the fit runs
-};
-
-// One timed calibration playout: its wall time and the move generations it ran.
-struct CalibSample {
-  double us = 0;
-  double movegens = 0;
-};
-
-double modeled_ms(const TimingModel& m, uint64_t movegens) {
-  return m.a * static_cast<double>(movegens) / 1000.0;
-}
-
-// Fit the aggregate movegen rate over the calibration playouts and record the
-// single-term model's mean per-run relative error, which contextualizes its
-// fidelity in the calibration line.
-TimingModel fit_timing_model(const std::vector<CalibSample>& samples) {
-  double sum_us = 0, sum_movegens = 0;
-  for (const CalibSample& c : samples) {
-    sum_us += c.us;
-    sum_movegens += c.movegens;
-  }
-  TimingModel m;
-  m.a = sum_movegens > 0.0 ? sum_us / sum_movegens : 0.0;
-  double rel = 0;
-  int n = 0;
-  for (const CalibSample& c : samples) {
-    if (c.us <= 0.0) continue;
-    rel += std::fabs(m.a * c.movegens - c.us) / c.us;
-    ++n;
-  }
-  m.mean_rel_error = n > 0 ? rel / n : 0.0;
-  return m;
-}
-
-// Calibrate the timing model on the first ~30 captured games, single-threaded
-// at the largest requested budget and each game's natural margin. Calibration
-// runs the solver with the move-generation memo OFF, so it does real work and
-// its wall times reflect real cost; sweep playouts run with the memo ON, and
-// because the logical operation counts are memo-invariant the modeled cost is
-// identical either way -- the point of modeling off counts rather than timing
-// the fast runs directly.
-TimingModel calibrate(const Dictionary& dict, const std::vector<CapturedEndgame>& caps,
-                      EndgameSolver::Params params, uint64_t max_budget, bool incremental,
-                      int& runs_out) {
-  params.budget = max_budget;
-  const int n = std::min<int>(30, static_cast<int>(caps.size()));
-  runs_out = n;
-  std::vector<CalibSample> samples;
-  samples.reserve(n);
-  for (int g = 0; g < n; ++g) {
-    const int natural = caps[g].my_score - caps[g].opp_score;
-    const auto t0 = Clock::now();
-    const SolverPlayout p = run_solver_playout(dict, caps[g], natural, params, /*thread_id=*/0,
-                                               /*memo=*/false, incremental);
-    samples.push_back({1e6 * seconds_since(t0), static_cast<double>(p.totals.movegens)});
-  }
-  return fit_timing_model(samples);
-}
-
-// The ascending margins the sweep covers: -max, -max+step, ..., up to +max.
-std::vector<int> margin_axis(int margin_max, int margin_step) {
+// The ascending margins the sweep covers: min, min+step, ..., up to max.
+std::vector<int> margin_axis(int margin_min, int margin_max, int margin_step) {
   std::vector<int> margins;
-  for (int m = -margin_max; m <= margin_max; m += margin_step) margins.push_back(m);
+  for (int m = margin_min; m <= margin_max; m += margin_step) margins.push_back(m);
   return margins;
 }
 
-// Solve every (game, margin, budget) cell for games [lo, hi), writing outcomes
-// into `grid` (indexed (g*Ms + mi)*Bs + bi) and per-game baseline deltas into
-// `d0`. Budgets are processed in DESCENDING order per (game, margin) so the
-// budget-nesting skip can reuse a larger budget's bit-identical result: once a
-// run's max_solve_nodes is <= a smaller budget b', re-running at b' changes
-// nothing (no solve hit the larger cap, and any solve declined for having more
-// root moves than the larger budget stays declined at b'). The skip is unsound
-// when spread_matters (its half-budget class pass makes behavior depend on the
-// budget value itself), so it is disabled there. `skipped` counts the cells the
-// skip filled without a playout.
-void sweep_game_range(const Dictionary& dict, const std::vector<CapturedEndgame>& caps,
-                      const std::vector<int>& margins,
-                      const std::vector<std::pair<uint64_t, int>>& desc_budgets,
-                      EndgameSolver::Params params, bool incremental, int n_budgets, int thread_id,
-                      int lo, int hi, std::vector<int>& d0, std::vector<SolverOutcome>& grid,
-                      uint64_t& skipped) {
-  const int ms = static_cast<int>(margins.size());
+// Solve one (game, margin) column of the grid -- every budget at that margin --
+// into `grid[cell_base + budget index]`.
+//
+// Budgets are processed in DESCENDING order so the budget-nesting skip can
+// reuse a larger budget's bit-identical result: once a run's max_solve_nodes is
+// <= a smaller budget b', re-running at b' changes nothing (no solve hit the
+// larger cap, and any solve declined for having more root moves than the larger
+// budget stays declined at b'), so its measured time stands for the smaller
+// budget's too. The skip is unsound when spread_matters (its half-budget class
+// pass makes behavior depend on the budget value itself), so it is disabled
+// there. `skipped` counts the cells the skip filled without a playout.
+//
+// A column, rather than a whole game, is the sweep's unit of parallel work:
+// per-position solve cost spans orders of magnitude, so whole-game items leave
+// every worker waiting on the slowest game.
+void sweep_column(const Dictionary& dict, const CapturedEndgame& cap, int margin,
+                  const std::vector<std::pair<uint64_t, int>>& desc_budgets,
+                  EndgameSolver::Params params, bool incremental, int thread_id, size_t cell_base,
+                  std::vector<SolverOutcome>& grid, std::atomic<uint64_t>& skipped) {
   const bool skip_enabled = !params.spread_matters;
-  for (int g = lo; g < hi; ++g) {
-    d0[g] = baseline_delta(dict, caps[g], thread_id);
-    for (int mi = 0; mi < ms; ++mi) {
-      SolverOutcome last;
-      uint64_t last_max_nodes = 0;
-      bool have_last = false;
-      for (const std::pair<uint64_t, int>& bd : desc_budgets) {
-        const size_t cell = (static_cast<size_t>(g) * ms + mi) * n_budgets + bd.second;
-        if (skip_enabled && have_last && last_max_nodes <= bd.first) {
-          grid[cell] = last;
-          ++skipped;
-          continue;
-        }
-        params.budget = bd.first;
-        const SolverPlayout p = run_solver_playout(dict, caps[g], margins[mi], params, thread_id,
-                                                   /*memo=*/true, incremental);
-        last = {p.spread, p.totals.movegens};
-        last_max_nodes = p.totals.max_solve_nodes;
-        have_last = true;
-        grid[cell] = last;
-      }
+  SolverOutcome last;
+  uint64_t last_max_nodes = 0;
+  bool have_last = false;
+  uint64_t skips = 0;
+  for (const std::pair<uint64_t, int>& bd : desc_budgets) {
+    if (skip_enabled && have_last && last_max_nodes <= bd.first) {
+      grid[cell_base + bd.second] = last;
+      ++skips;
+      continue;
     }
+    params.budget = bd.first;
+    const SolverPlayout p = run_solver_playout(dict, cap, margin, params, thread_id, incremental);
+    last = {p.spread, p.totals.solve_ns};
+    last_max_nodes = p.totals.max_solve_nodes;
+    have_last = true;
+    grid[cell_base + bd.second] = last;
   }
+  skipped.fetch_add(skips, std::memory_order_relaxed);
 }
 
 std::string join_budgets(const std::vector<uint64_t>& budgets) {
@@ -391,11 +341,12 @@ std::string join_budgets(const std::vector<uint64_t>& budgets) {
 }
 
 // Print the two margin-sweep tables from the filled grid: skill (solver win%
-// minus baseline win%, plus a trailing baseline win% column) and perf (modeled
-// ms), margins as ascending rows and budgets as columns.
+// minus baseline win%, plus a trailing baseline win% column) over every game,
+// and cost (measured ms) over the first `timed_games`, margins as ascending
+// rows and budgets as columns.
 void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
                         const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
-                        const TimingModel& model) {
+                        int timed_games) {
   const int ms = static_cast<int>(margins.size());
   const int bs = static_cast<int>(budgets.size());
   const int games = static_cast<int>(d0.size());
@@ -421,48 +372,50 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
     std::printf(" %11.1f\n", 100.0 * base_win);
   }
 
-  std::printf("\nperf: solver-seat modeled endgame ms, by margin x budget:\n");
+  if (timed_games == 0) return;
+  std::printf("\ncost: solver-seat measured endgame ms, by margin x budget:\n");
   std::printf("%8s", "margin");
   for (uint64_t b : budgets) std::printf(" %10llu", static_cast<unsigned long long>(b));
   std::printf("\n");
   for (int mi = 0; mi < ms; ++mi) {
     std::printf("%8d", margins[mi]);
     for (int bi = 0; bi < bs; ++bi) {
-      double perf = 0;
-      for (int g = 0; g < games; ++g) {
-        const SolverOutcome& o = grid[(static_cast<size_t>(g) * ms + mi) * bs + bi];
-        perf += modeled_ms(model, o.movegens);
+      double ns = 0;
+      for (int g = 0; g < timed_games; ++g) {
+        ns += static_cast<double>(grid[(static_cast<size_t>(g) * ms + mi) * bs + bi].solve_ns);
       }
-      std::printf(" %10.3f", perf / games);
+      std::printf(" %10.3f", ns / timed_games / 1e6);
     }
     std::printf("\n");
   }
 }
 
+// Sweep every captured endgame over the margin x budget grid. The first
+// `time_games` games run alone on one thread and are the only ones the cost
+// table reads: a solve's wall time is only worth reporting when nothing else on
+// the machine is competing for cores, caches, and clock. The rest run across
+// `threads` workers and contribute their (deterministic) spreads to the skill
+// table, which is where sample size buys accuracy.
 void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
                        const std::vector<uint64_t>& budgets, EndgameSolver::Params params,
-                       bool incremental, int margin_max, int margin_step) {
-  const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games);
+                       bool incremental, int margin_min, int margin_max, int margin_step,
+                       int time_games) {
+  const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games, threads);
   const int g_count = static_cast<int>(caps.size());
-  const std::vector<int> margins = margin_axis(margin_max, margin_step);
+  const std::vector<int> margins = margin_axis(margin_min, margin_max, margin_step);
   const int ms = static_cast<int>(margins.size());
   const int bs = static_cast<int>(budgets.size());
+  const int timed = std::min(time_games, g_count);
 
   std::printf(
     "endgames mode (margin sweep): %d games, %d captured, margins %d..%d step %d, budgets=%s, "
-    "spread-matters=%d, incremental=%d, threads=%d\n",
-    games, g_count, -margin_max, margin_max, margin_step, join_budgets(budgets).c_str(),
-    params.spread_matters ? 1 : 0, incremental ? 1 : 0, threads);
+    "spread-matters=%d, incremental=%d, threads=%d, timed games=%d\n",
+    games, g_count, margin_min, margin_max, margin_step, join_budgets(budgets).c_str(),
+    params.spread_matters ? 1 : 0, incremental ? 1 : 0, threads, timed);
   if (g_count == 0) {
     std::printf("no game reached an endgame; nothing to sweep\n");
     return;
   }
-
-  int calib_runs = 0;
-  const uint64_t max_budget = *std::max_element(budgets.begin(), budgets.end());
-  const TimingModel model = calibrate(dict, caps, params, max_budget, incremental, calib_runs);
-  std::printf("calibration: a=%.4f us/movegen, mean rel err %.1f%% over %d runs\n", model.a,
-              100.0 * model.mean_rel_error, calib_runs);
 
   std::vector<std::pair<uint64_t, int>> desc_budgets;
   for (int bi = 0; bi < bs; ++bi) desc_budgets.emplace_back(budgets[bi], bi);
@@ -472,29 +425,33 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
             });
 
   std::vector<int> d0(g_count, 0);
-  std::vector<SolverOutcome> grid(static_cast<size_t>(g_count) * ms * bs);
-  std::vector<uint64_t> skip_per(threads, 0);
-  std::vector<std::thread> pool;
-  const int per = (g_count + threads - 1) / threads;
-  for (int t = 0; t < threads; ++t) {
-    const int lo = t * per;
-    const int hi = std::min(g_count, lo + per);
-    if (lo >= hi) break;
-    pool.emplace_back([&, t, lo, hi] {
-      sweep_game_range(dict, caps, margins, desc_budgets, params, incremental, bs, t, lo, hi, d0,
-                       grid, skip_per[t]);
-    });
-  }
-  for (std::thread& th : pool) th.join();
+  parallel_for(g_count, threads,
+               [&](int worker, int g) { d0[g] = baseline_delta(dict, caps[g], worker); });
 
-  uint64_t skipped = 0;
-  for (uint64_t s : skip_per) skipped += s;
+  std::vector<SolverOutcome> grid(static_cast<size_t>(g_count) * ms * bs);
+  std::atomic<uint64_t> skipped{0};
+  const auto sweep = [&](int worker, int g, int mi) {
+    sweep_column(dict, caps[g], margins[mi], desc_budgets, params, incremental, worker,
+                 (static_cast<size_t>(g) * ms + mi) * bs, grid, skipped);
+  };
+
+  const auto t_timed = Clock::now();
+  for (int g = 0; g < timed; ++g) {
+    for (int mi = 0; mi < ms; ++mi) sweep(/*worker=*/0, g, mi);
+  }
+  const double timed_s = seconds_since(t_timed);
+  const auto t_rest = Clock::now();
+  parallel_for((g_count - timed) * ms, threads,
+               [&](int worker, int i) { sweep(worker, timed + i / ms, i % ms); });
+  std::printf("swept %d games in %.1f s single-threaded, %d in %.1f s on %d threads\n", timed,
+              timed_s, g_count - timed, seconds_since(t_rest), threads);
+
   const uint64_t total_cells = static_cast<uint64_t>(g_count) * ms * bs;
   std::printf("budget-nesting skip: %llu of %llu solver playouts avoided\n",
-              static_cast<unsigned long long>(skipped),
+              static_cast<unsigned long long>(skipped.load()),
               static_cast<unsigned long long>(total_cells));
 
-  print_sweep_tables(margins, budgets, d0, grid, model);
+  print_sweep_tables(margins, budgets, d0, grid, timed);
 }
 
 // --- Games mode -------------------------------------------------------------
@@ -688,8 +645,10 @@ int main(int argc, char** argv) {
     int games = 100;
     uint64_t seed = 1;
     int threads = 1;
-    int margin_max = 100;
-    int margin_step = 10;
+    int margin_min = -80;
+    int margin_max = 40;
+    int margin_step = 1;
+    int time_games = 25;
     int incremental = 1;
     scribblez::EndgameSolver::Params params;
     std::string budgets_csv;
@@ -711,10 +670,15 @@ int main(int argc, char** argv) {
                        "comma-separated budget sweep; overrides --budget when given");
     desc.add_options()("threads,t", po::value<int>(&threads)->default_value(threads),
                        "parallelism (games-mode configs; endgames-mode games)");
+    desc.add_options()("margin-min", po::value<int>(&margin_min)->default_value(margin_min),
+                       "endgames mode: lowest start-of-endgame margin to sweep");
     desc.add_options()("margin-max", po::value<int>(&margin_max)->default_value(margin_max),
-                       "endgames mode: sweep the start-of-endgame margin over [-M, +M]");
+                       "endgames mode: highest start-of-endgame margin to sweep");
     desc.add_options()("margin-step", po::value<int>(&margin_step)->default_value(margin_step),
                        "endgames mode: step between swept margins");
+    desc.add_options()("time-games", po::value<int>(&time_games)->default_value(time_games),
+                       "endgames mode: how many games to sweep single-threaded; only these are "
+                       "timed, and only they feed the cost table");
     desc.add_options()("incremental", po::value<int>(&incremental)->default_value(incremental),
                        "solver incremental move-list maintenance (1 on, 0 off); changes only "
                        "speed, never results");
@@ -738,10 +702,11 @@ int main(int argc, char** argv) {
     const std::vector<int> thresholds = scribblez::parse_thresholds(buckets_csv);
     if (threads < 1) threads = 1;
     if (margin_step < 1) margin_step = 1;
+    if (time_games < 0) time_games = 0;
 
     if (mode == "endgames") {
       scribblez::run_endgames_mode(dict, seed, games, threads, budgets, params, incremental != 0,
-                                   margin_max, margin_step);
+                                   margin_min, margin_max, margin_step, time_games);
     } else if (mode == "games") {
       scribblez::run_games_mode(dict, seed, games, threads, budgets, params, incremental != 0,
                                 thresholds);
