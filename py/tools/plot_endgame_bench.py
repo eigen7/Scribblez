@@ -304,8 +304,8 @@ def plot_skill(sweep, path):
     plt.close(fig)
 
 
-def format_ms(value, _pos):
-    return f"{value:g}" if value >= 1 else f"{value:.1f}"
+def format_multiple(value, _pos):
+    return f"{value:g}x"
 
 
 def plot_cost(sweep, path):
@@ -329,18 +329,25 @@ def plot_cost(sweep, path):
     style_axes(ax)
     style_margin_axis(ax, sweep)
     ax.set_yscale("log")
-    # Decade-only ticks leave two or three labels over this range; 1-2-5 subdivisions with
-    # plain (non-exponent) labels keep the axis readable at millisecond magnitudes. The
-    # remaining decade subdivisions stay unlabelled tick marks -- gridding them all would
-    # bury the series and bloat the SVG.
+    # Log, not linear: the cheap budgets sit within a few percent of 1.00x and a linear axis
+    # spanning the expensive ones would collapse them onto the baseline. Decade-only ticks
+    # leave two or three labels over this range, so 1-2-5 subdivisions carry the labels and
+    # the rest of the decade stays unlabelled tick marks -- gridding them all would bury the
+    # series and bloat the SVG.
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=20))
     ax.yaxis.set_minor_locator(
         LogLocator(base=10.0, subs=tuple(float(x) for x in range(2, 10)), numticks=20)
     )
-    ax.yaxis.set_major_formatter(FuncFormatter(format_ms))
+    ax.yaxis.set_major_formatter(FuncFormatter(format_multiple))
     ax.yaxis.set_minor_formatter(plt.NullFormatter())
     ax.tick_params(which="minor", length=2, color=INK_MUTED, width=0.6)
-    ax.set_ylabel("solver time per endgame (ms, log scale)", fontsize=9, color=INK_SECONDARY)
+    # 1.00x is a free endgame, so it anchors the axis rather than floating in it.
+    ax.axhline(1.0, color=AXIS_RULE, linewidth=1.0, zorder=2)
+    ax.set_ylabel(
+        "self-play game time\n(multiple of hasty-vs-hasty, log scale)",
+        fontsize=9,
+        color=INK_SECONDARY,
+    )
     ax.set_xlabel(
         "start-of-endgame margin (points, first actor's seat)", fontsize=9, color=INK_SECONDARY
     )
@@ -348,7 +355,8 @@ def plot_cost(sweep, path):
     draw_titles(
         fig,
         "Endgame solver cost vs. start-of-endgame margin",
-        f"mean over {sweep.timed_games} games timed single-threaded  ·  " + subtitle_tail(sweep),
+        f"what solving the endgame costs a self-play game  ·  {sweep.timed_games} games timed "
+        f"single-threaded  ·  " + subtitle_tail(sweep),
     )
     draw_budget_legend(fig, handles, len(sweep.budgets))
     fig.savefig(path, format="svg", metadata={"Date": None})

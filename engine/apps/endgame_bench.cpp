@@ -11,8 +11,10 @@
 //                       skill -- mean over games of the solver seat's game-value
 //                                minus a plain-HastyBot baseline's, in win%
 //                                points (a win is 1, a draw 0.5, a loss 0);
-//                       cost  -- mean over the timed games of the solver seat's
-//                                measured endgame ms (see run_endgames_mode).
+//                       cost  -- what solving the endgame does to self-play
+//                                throughput: the solver seat's measured endgame
+//                                time over the timed games, as a multiple of a
+//                                hasty-vs-hasty game (see run_endgames_mode).
 //                     Absolute score level is irrelevant -- both agent types
 //                     decide off the spread alone -- so each margin sets the
 //                     first actor's scores to (margin, 0).
@@ -216,6 +218,21 @@ Bag empty_pool(const CapturedEndgame& cap) {
   return pool;
 }
 
+// Mean wall time of a plain HastyBot-vs-HastyBot game, over the same seeds the
+// timed sweep games use. This is the denominator the cost table is quoted in:
+// what one self-play game costs when nothing solves its endgame.
+double hasty_game_ms(const Dictionary& dict, uint64_t base_seed, int games) {
+  HastyBotAgent a0(HastyBotAgent::Params{.thread_id = 0, .name = "A"});
+  HastyBotAgent a1(HastyBotAgent::Params{.thread_id = 0, .name = "B"});
+  const auto t0 = Clock::now();
+  for (int i = 0; i < games; ++i) {
+    Game g(a0, a1, dict, base_seed + static_cast<uint64_t>(i));
+    g.set_respect_projections(true);
+    g.play();
+  }
+  return 1000.0 * seconds_since(t0) / games;
+}
+
 // Game value of a finished endgame from the first actor's seat: a win is 1, a
 // draw 0.5, a loss 0.
 double win_fraction(int spread) {
@@ -346,11 +363,14 @@ std::string join_budgets(const std::vector<uint64_t>& budgets) {
 
 // Print the two margin-sweep tables from the filled grid: skill (solver win%
 // minus baseline win%, plus a trailing baseline win% column) over every game,
-// and cost (measured ms) over the first `timed_games`, margins as ascending
-// rows and budgets as columns.
+// and cost over the first `timed_games`, margins as ascending rows and budgets
+// as columns. Cost is quoted as what a self-play game costs with the endgame
+// solved, relative to `baseline_ms` -- the same currency as the games-mode
+// throughput ratios, and the one that says what the solver does to generation
+// throughput. 1.00x is free.
 void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
                         const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
-                        int timed_games) {
+                        int timed_games, double baseline_ms) {
   const int ms = static_cast<int>(margins.size());
   const int bs = static_cast<int>(budgets.size());
   const int games = static_cast<int>(d0.size());
@@ -377,7 +397,7 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
   }
 
   if (timed_games == 0) return;
-  std::printf("\ncost: solver-seat measured endgame ms, by margin x budget:\n");
+  std::printf("\ncost: self-play game time as a multiple of hasty-vs-hasty, by margin x budget:\n");
   std::printf("%8s", "margin");
   for (uint64_t b : budgets) std::printf(" %10llu", static_cast<unsigned long long>(b));
   std::printf("\n");
@@ -388,7 +408,7 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
       for (int g = 0; g < timed_games; ++g) {
         ns += static_cast<double>(grid[(static_cast<size_t>(g) * ms + mi) * bs + bi].solve_ns);
       }
-      std::printf(" %10.3f", ns / timed_games / 1e6);
+      std::printf(" %10.3f", 1.0 + ns / timed_games / 1e6 / baseline_ms);
     }
     std::printf("\n");
   }
@@ -439,6 +459,9 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
                  (static_cast<size_t>(g) * ms + mi) * bs, grid, skipped);
   };
 
+  // The baseline shares the timed phase's conditions: one thread, nothing else
+  // running, so its milliseconds are comparable with the sweep's.
+  const double baseline_ms = timed > 0 ? hasty_game_ms(dict, base_seed, timed) : 0.0;
   const auto t_timed = Clock::now();
   for (int g = 0; g < timed; ++g) {
     for (int mi = 0; mi < ms; ++mi) sweep(/*worker=*/0, g, mi);
@@ -449,13 +472,16 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
                [&](int worker, int i) { sweep(worker, timed + i / ms, i % ms); });
   std::printf("swept %d games in %.1f s single-threaded, %d in %.1f s on %d threads\n", timed,
               timed_s, g_count - timed, seconds_since(t_rest), threads);
+  if (timed > 0)
+    std::printf("hasty-vs-hasty baseline: %.3f ms/game over %d games, single-threaded\n",
+                baseline_ms, timed);
 
   const uint64_t total_cells = static_cast<uint64_t>(g_count) * ms * bs;
   std::printf("budget-nesting skip: %llu of %llu solver playouts avoided\n",
               static_cast<unsigned long long>(skipped.load()),
               static_cast<unsigned long long>(total_cells));
 
-  print_sweep_tables(margins, budgets, d0, grid, timed);
+  print_sweep_tables(margins, budgets, d0, grid, timed, baseline_ms);
 }
 
 // --- Games mode -------------------------------------------------------------
