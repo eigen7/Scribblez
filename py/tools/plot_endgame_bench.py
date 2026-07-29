@@ -355,8 +355,8 @@ def plot_cost(sweep, path):
     draw_titles(
         fig,
         "Endgame solver cost vs. start-of-endgame margin",
-        f"what solving the endgame costs a self-play game  ·  {sweep.timed_games} games timed "
-        f"single-threaded  ·  " + subtitle_tail(sweep),
+        f"what solving the endgame costs a self-play game  ·  {sweep.timed_games} of the "
+        f"{sweep.captured} endgames, timed single-threaded",
     )
     draw_budget_legend(fig, handles, len(sweep.budgets))
     fig.savefig(path, format="svg", metadata={"Date": None})
