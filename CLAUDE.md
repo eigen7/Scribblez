@@ -123,6 +123,11 @@ bit-field encodings — is worth spelling out itemized even though it restates t
 wants one specific detail, and an organized table makes it findable without reading the code that
 produces it.
 
+Note that the courtroom test is about whether a comment earns its place, not about how short it is.
+Once a comment has earned its place, write it as a readable sentence; compressing it into a terse
+fragment costs the reader and saves nothing. Short example usage is welcome on the same terms — a
+couple of lines that spare someone reverse-engineering a calling convention have earned their place.
+
 Another good litmus test: whenever you finish implementing something the user requested, go back and
 audit what research you had to do. Then ask yourself: are there any changes that could be made to
 the documentation that would have helped you get to the end goal more efficiently? Not "teaching to
@@ -136,14 +141,25 @@ things are not well documented, then you might expend more effort than you other
 Identify such things, and be proactive about making the necessary documentation changes (keeping
 in mind the courtroom battle litmus test). I want you to constantly be leaving documentation in a
 better place than you found it, whether that means removing details, adding details, moving from
-one file to another, etc.
+one file to another, etc. Folding such changes into the PR that prompted them is fine, within
+reason; if they would take the PR too far from its main purpose, do them separately and say so.
 
-Ideally, code is simple and straightforward enough to be self-documenting. If comments are needed
-based on the above guidelines, you should take a step back and ask whether the code could be
-refactored to become more self-documenting. For example, maybe a class has a collection of private
-data members that require nontrivial invariants to be held between them, warranting comments. Can
-those data members be abstracted out into a class with a clear nameable responsibility? Then those
-comments can be removed from the parent class.
+Ideally, code is simple and straightforward enough to be self-documenting. When a comment exists to
+explain STRUCTURE -- invariants tying several data members together, a non-obvious relationship
+between functions -- take a step back and ask whether the code could be refactored to become more
+self-documenting. For example, maybe a class has a collection of private data members that require
+nontrivial invariants to be held between them, warranting comments. Can those data members be
+abstracted out into a class with a clear nameable responsibility? Then those comments can be removed
+from the parent class.
+
+This does not apply to comments that explain WHY -- a rationale for choosing one approach over
+another, an argument that some bound is sound, a constraint imposed from outside the code. No
+amount of refactoring makes those unnecessary, so do not contort the code trying.
+
+Placement matters as much as content. A header should say what a thing is and why it exists; the
+"how" belongs at the implementation site, beside the code it describes. So when trimming a header,
+"how" that genuinely earns its keep moves down rather than being deleted. Watch for cross-references
+as it moves -- a "see the class comment" left behind in a .cpp goes stale silently.
 
 Locality rule of thumb: changing an implementation detail should usually force a comment change in
 AT MOST one spot, within a close radius of the code changed. If altering a detail inside a function
