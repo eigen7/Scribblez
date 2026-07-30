@@ -230,77 +230,79 @@ target_link_libraries(harvest_bingo_positions_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# gtest_discover_tests registers each TEST() in a binary as its own ctest
-# entry, so ctest reports and filters at single-test granularity.
-include(GoogleTest)
+if(SCRIBBLEZ_BUILD_TESTS)
+  # gtest_discover_tests registers each TEST() in a binary as its own ctest
+  # entry, so ctest reports and filters at single-test granularity.
+  include(GoogleTest)
 
-add_executable(scribblez_tests
-  tests/tests_main.cpp
-  src/lexicon/hasty_equity.cpp
-  src/lexicon/leave_values.cpp)
-target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
-# Point the tests at the container's lexicon mount (populated by
-# setup_wizard.py) so they cross-validate against the real GADDAG when it is
-# installed (the .kwg is not committed; the tests skip gracefully if absent).
-target_compile_definitions(scribblez_tests PRIVATE
-  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
-gtest_discover_tests(scribblez_tests)
+  add_executable(scribblez_tests
+    tests/tests_main.cpp
+    src/lexicon/hasty_equity.cpp
+    src/lexicon/leave_values.cpp)
+  target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
+  # Point the tests at the container's lexicon mount (populated by
+  # setup_wizard.py) so they cross-validate against the real GADDAG when it is
+  # installed (the .kwg is not committed; the tests skip gracefully if absent).
+  target_compile_definitions(scribblez_tests PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+  gtest_discover_tests(scribblez_tests)
 
-# GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction
-# that reopens a recorded game.
-add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
-target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
-gtest_discover_tests(test_gcg_reader)
+  # GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction
+  # that reopens a recorded game.
+  add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
+  target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
+  gtest_discover_tests(test_gcg_reader)
 
-# Endgame solver tests: Board make/unmake round-trips and EndgameSolver
-# correctness (brute-force differential, oracle positions, determinism, node
-# budget, cross-turn transposition-table reuse). Gated lexicon cases read the
-# same container mount as scribblez_tests and skip gracefully when it is absent.
-add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
-target_link_libraries(test_endgame PRIVATE
-  scribblez_core Boost::program_options GTest::gtest_main)
-target_compile_definitions(test_endgame PRIVATE
-  SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-  SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-gtest_discover_tests(test_endgame)
+  # Endgame solver tests: Board make/unmake round-trips and EndgameSolver
+  # correctness (brute-force differential, oracle positions, determinism, node
+  # budget, cross-turn transposition-table reuse). Gated lexicon cases read the
+  # same container mount as scribblez_tests and skip gracefully when it is absent.
+  add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
+  target_link_libraries(test_endgame PRIVATE
+    scribblez_core Boost::program_options GTest::gtest_main)
+  target_compile_definitions(test_endgame PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+  gtest_discover_tests(test_endgame)
 
-# Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
-# (with a scripted EvalService stub), chunked evaluation, and encode_candidate
-# parity. Compiles the agent's selection TU (not the factory) directly. The
-# factory TU holds the production constructor and make_service(), the only
-# references to NNEvaluationService, so this binary links neither scribblez_nn
-# nor CUDA/TensorRT: the tests use the injecting constructor and never touch the
-# GPU.
-add_executable(test_neural_agent
-  tests/test_neural_agent.cpp
-  src/agent/neural_agent.cpp
-  src/lexicon/hasty_equity.cpp
-  src/lexicon/leave_values.cpp)
-target_link_libraries(test_neural_agent PRIVATE
-  scribblez_core Boost::json Threads::Threads GTest::gtest_main)
-gtest_discover_tests(test_neural_agent)
+  # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
+  # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
+  # parity. Compiles the agent's selection TU (not the factory) directly. The
+  # factory TU holds the production constructor and make_service(), the only
+  # references to NNEvaluationService, so this binary links neither scribblez_nn
+  # nor CUDA/TensorRT: the tests use the injecting constructor and never touch the
+  # GPU.
+  add_executable(test_neural_agent
+    tests/test_neural_agent.cpp
+    src/agent/neural_agent.cpp
+    src/lexicon/hasty_equity.cpp
+    src/lexicon/leave_values.cpp)
+  target_link_libraries(test_neural_agent PRIVATE
+    scribblez_core Boost::json Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_neural_agent)
 
-# TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
-# it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
-# (skips cleanly if torch/onnx is absent) and needs a GPU at run time. A fixture
-# directory may be passed as the first non-gtest argument to reuse one instead,
-# so this binary carries its own main() and links GTest::gtest, not gtest_main.
-add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
-target_link_libraries(test_nn_inference_parity PRIVATE
-  scribblez_nn scribblez_core Threads::Threads GTest::gtest)
-target_compile_definitions(test_nn_inference_parity PRIVATE
-  SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-gtest_discover_tests(test_nn_inference_parity)
+  # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
+  # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
+  # (skips cleanly if torch/onnx is absent) and needs a GPU at run time. A fixture
+  # directory may be passed as the first non-gtest argument to reuse one instead,
+  # so this binary carries its own main() and links GTest::gtest, not gtest_main.
+  add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
+  target_link_libraries(test_nn_inference_parity PRIVATE
+    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
+  target_compile_definitions(test_nn_inference_parity PRIVATE
+    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
+  gtest_discover_tests(test_nn_inference_parity)
+
+  # Test helper: writes .slog files using an in-memory dictionary for integration
+  # testing (Python FFI tests, etc.).
+  add_executable(test_slog_writer apps/test_slog_writer.cpp)
+  target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
+endif()
 
 # Standalone ad-hoc driver for the binary-log DataLoader. Lets us point it at
 # a directory of .slog files and verify load() produces well-formed rows.
 add_executable(dataloader_smoke apps/dataloader_smoke.cpp)
 target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
-
-# Test helper: writes .slog files using an in-memory dictionary for integration
-# testing (Python FFI tests, etc.).
-add_executable(test_slog_writer apps/test_slog_writer.cpp)
-target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 
 # Standalone TensorRT inference sanity check: load an ONNX model, run a batch of
 # zero inputs, print WLD + ScoreDiff outputs. Exercises the engine path without

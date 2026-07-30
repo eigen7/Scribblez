@@ -100,15 +100,21 @@ def arch_build_log(arch: str) -> str:
 _STRIP_TTY_SED = r"sed -u 's/\x1b\[[0-9;]*[a-zA-Z]//g'"
 
 
-def configure_engine(arch: str, build_type: str, *, live: bool) -> int:
+def configure_engine(arch: str, build_type: str, *, live: bool, tests: bool) -> int:
     """Run just the CMake configure step for one CPU microarchitecture.
+
+    `tests` builds the C++ test binaries, which only an arch this machine can
+    execute may do (see SCRIBBLEZ_BUILD_TESTS in the top-level CMakeLists.txt).
 
     When `live` is False, output is redirected to the arch's build.log
     instead of the terminal, for the non-primary archs of a multi-arch build
     (see build_all_archs).
     """
     build_dir = arch_build_dir(arch)
-    cmd = f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} -DSCRIBBLEZ_MARCH={arch}"
+    cmd = (
+        f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} "
+        f"-DSCRIBBLEZ_MARCH={arch} -DSCRIBBLEZ_BUILD_TESTS={'ON' if tests else 'OFF'}"
+    )
     if live:
         print(f"\nConfiguring arch '{arch}' ({build_type}) in {build_dir} ...")
         return run_rc(cmd)
@@ -122,12 +128,14 @@ def configure_engine(arch: str, build_type: str, *, live: bool) -> int:
 
 
 def build_engine(arch: str, build_type: str, jobs: int) -> int:
-    """Configure + compile the C++ engine for one CPU microarchitecture.
+    """Configure + compile the C++ engine for this host's own arch, tests
+    included (the default single-arch build; build_all_archs handles the
+    multi-arch case).
 
     Returns the exit code of the first failing step, or 0.
     """
     build_dir = arch_build_dir(arch)
-    rc = configure_engine(arch, build_type, live=True)
+    rc = configure_engine(arch, build_type, live=True, tests=True)
     if rc:
         return rc
     print(f"\nCompiling arch '{arch}' (-j{jobs}) in {build_dir} ...")
@@ -182,7 +190,9 @@ def build_all_archs(
             zip(
                 archs,
                 pool.map(
-                    lambda arch: configure_engine(arch, build_type, live=(arch == primary)),
+                    lambda arch: configure_engine(
+                        arch, build_type, live=(arch == primary), tests=(arch == host_arch)
+                    ),
                     archs,
                 ),
                 strict=True,
