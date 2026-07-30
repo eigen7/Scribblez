@@ -70,6 +70,27 @@ class GpuResources:
     gpu_count: int
 
 
+def bundle_worker_env(
+    creds: CloudCredentials,
+    spec: workloads.WorkloadSpec,
+    tag: str,
+    params,
+    *,
+    role: str,
+    bundle_id: str,
+    worker_id: str,
+) -> dict[str, str]:
+    """The full environment for a worker that boots the image + bundle flow
+    (a cloud pod or an ssh machine's container): bucket credentials, the
+    workload's SCZ_* definition, the bundle to run, and the slot identity."""
+    return {
+        **r2_env(creds),
+        **spec.worker_env(tag, params, role),
+        "SCZ_BUNDLE": bundle_id,
+        "SCZ_WORKER_ID": worker_id,
+    }
+
+
 def _compute_fields(resources: CpuResources | GpuResources) -> dict:
     """The compute-selection part of a POST /pods body: a CPU flavor + vCPU
     count, or a GPU type + count."""
@@ -96,12 +117,9 @@ def pod_create_spec(
     """(pod name, POST /pods body) for one cloud worker. Shared by this CLI and
     the dashboard's WorkerManager so pods are identical however launched."""
     name = f"{POD_NAME_PREFIX}{tag}-{secrets.token_hex(3)}"
-    env = {
-        **r2_env(creds),
-        **spec.worker_env(tag, params, role),
-        "SCZ_BUNDLE": bundle_id,
-        "SCZ_WORKER_ID": name,
-    }
+    env = bundle_worker_env(
+        creds, spec, tag, params, role=role, bundle_id=bundle_id, worker_id=name
+    )
     return name, {
         "name": name,
         "imageName": creds.registry.worker_image,
