@@ -49,7 +49,9 @@ class RoleSpec:
     runner: str  # dotted path to run(ctx: WorkerContext) -> int
     deps: str = ""  # dotted path to a fetch-runtime-deps callable, or ""
     singleton: bool = False  # at most one slot per task (the trainer)
-    kinds: tuple[str, ...] = ("local", "cloud")
+    # Worker kinds this role's slots may run as: a "local" subprocess, a
+    # "cloud" pod, an "ssh" container on an operator-owned machine.
+    kinds: tuple[str, ...] = ("local", "cloud", "ssh")
     # Whether this role runs on GPU hardware. Cloud pods for a GPU role rent a
     # GPU instance (a gpuTypeId + gpu count) rather than a CPU flavor, and the
     # dashboard's add-worker form offers GPU instances instead of CPU flavors.

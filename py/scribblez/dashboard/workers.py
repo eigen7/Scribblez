@@ -1,16 +1,20 @@
-"""The WorkerManager: reconciles worker slots with real processes and pods.
+"""The WorkerManager: reconciles worker slots with real processes, pods, and
+ssh machines.
 
 Owned by the dashboard API process. Local worker slots are backed by
 subprocesses of this process running the worker entrypoint with the local
 results sink; cloud slots are backed by Runpod pods (one pod per slot),
-created through the same pod spec as the fleet CLI. While a task has any cloud
-slots, a cloud_sync --watch subprocess streams that tag's bucket results into
-the local mount.
+created through the same pod spec as the fleet CLI; ssh slots are backed by
+worker-image containers on operator-owned machines (cloud/ssh_machine.py),
+booting the same image + bundle flow as a pod. Cloud and ssh slots both
+deliver through the results bucket, so while a task has any, a cloud_sync
+--watch subprocess streams that tag's bucket results into the local mount.
 
 Desired state lives in task.json (dashboard/tasks.py); actual state is observed
 live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
 worker is observable and stoppable no matter which dashboard instance spawned
-it, even across a restart), cloud slots by pod runtime. reconcile() drives
+it, even across a restart), cloud slots by pod runtime, ssh slots by a docker
+probe over ssh. reconcile() drives
 observed toward desired in both directions: it relaunches local workers that
 should be running (e.g. after a dashboard restart), restarts interruptible pods
 Runpod reclaimed, and stops workers that are running but should not be. It also
@@ -34,7 +38,8 @@ from cloud.bundles import resolve_bundle_id
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from scripts.cloud_fleet import CpuResources, GpuResources, pod_create_spec
+from cloud.ssh_machine import SshMachine, SshMachineError
+from scripts.cloud_fleet import CpuResources, GpuResources, bundle_worker_env, pod_create_spec
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -46,9 +51,30 @@ REPO_ROOT = Path("/workspace/repo")
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 
+# Worker kinds that deliver through the results bucket, and so need the
+# per-task sync watcher and the scheduler's bucket mirror.
+BUCKET_KINDS = ("cloud", "ssh")
+
+# After an ssh machine fails a probe, how long it is assumed still unreachable
+# before probing again -- so a powered-off machine costs one connect timeout
+# per interval, not one per 3-second status poll.
+SSH_REPROBE_SECONDS = 30.0
+
 
 def _key(spec: workloads.WorkloadSpec, tag: str, worker_id: str = "") -> str:
     return f"{spec.name}/{tag}/{worker_id}"
+
+
+def _next_worker_id(task: tasks.TaskRecord, prefix: str) -> str:
+    """The first free "<prefix>-<n>" worker id in the task."""
+    taken = {w.worker_id for w in task.workers}
+    return next(f"{prefix}-{i}" for i in range(len(taken) + 1) if f"{prefix}-{i}" not in taken)
+
+
+def _container_name(spec: workloads.WorkloadSpec, tag: str, worker_id: str) -> str:
+    """An ssh slot's container name on its machine: qualified by workload and
+    tag so one machine can serve several tasks without collisions."""
+    return f"scz-{spec.name}-{tag}-{worker_id}"
 
 
 # The entrypoint module name every local worker runs, matched in its /proc
@@ -99,6 +125,22 @@ def _local_state(desired: str, alive: bool, gated: bool) -> str:
     return "running" if alive else "exited"
 
 
+def _ssh_state(desired: str, probe: str, gated: bool) -> str:
+    """The honest display state of an ssh slot from its container probe
+    (cloud/ssh_machine.py's four probe states). `unreachable` is its own
+    display state rather than a guess either way: the machine may be powered
+    off with the worker gone, or merely off the network with the worker still
+    running."""
+    if gated:
+        return "waiting"
+    if probe == "unreachable":
+        return "unreachable"
+    alive = probe == "running"
+    if desired == "paused":
+        return "stopping" if alive else "paused"
+    return "running" if alive else "exited"
+
+
 def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str) -> str:
     """The honest display state of a cloud slot. `alive` is real pod liveness
     (a running runtime), independent of the pod's own desiredStatus. `stopping`
@@ -141,6 +183,7 @@ class WorkerManager:
         self._sync: dict[str, subprocess.Popen] = {}  # task key -> sync watcher
         self._creds: CloudCredentials | None = None
         self._client: RunpodClient | None = None
+        self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
 
     # ---- cloud plumbing --------------------------------------------------
 
@@ -151,11 +194,12 @@ class WorkerManager:
         return self._creds, self._client
 
     def _ensure_sync(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
-        """Keep exactly one sync watcher alive per task with cloud slots."""
+        """Keep exactly one sync watcher alive per task with bucket-delivering
+        slots."""
         key = _key(spec, task.tag)
-        has_cloud = any(w.kind == "cloud" for w in task.workers)
+        has_bucket = any(w.kind in BUCKET_KINDS for w in task.workers)
         proc = self._sync.get(key)
-        if has_cloud and (proc is None or proc.poll() is not None):
+        if has_bucket and (proc is None or proc.poll() is not None):
             log = self._log_file(spec, task.tag, "cloud_sync")
             self._sync[key] = subprocess.Popen(
                 [
@@ -165,7 +209,7 @@ class WorkerManager:
                 ],
                 stdout=log, stderr=subprocess.STDOUT,
             )  # fmt: skip
-        elif not has_cloud and proc is not None:
+        elif not has_bucket and proc is not None:
             proc.terminate()
             del self._sync[key]
 
@@ -213,6 +257,37 @@ class WorkerManager:
             except ProcessLookupError:
                 pass
 
+    # ---- ssh plumbing ----------------------------------------------------
+
+    def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord) -> str:
+        """Slot `w`'s container probe state, with negative caching: after a
+        failed probe the host is assumed unreachable for SSH_REPROBE_SECONDS
+        rather than paying a connect timeout on every status poll."""
+        down_since = self._ssh_down.get(w.host)
+        if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
+            return "unreachable"
+        probe = SshMachine(w.host).container_state(_container_name(spec, tag, w.worker_id))
+        if probe == "unreachable":
+            self._ssh_down[w.host] = time.time()
+        else:
+            self._ssh_down.pop(w.host, None)
+        return probe
+
+    def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Create + start slot `w`'s container on its machine, on the latest
+        bundle (matching what a fresh pod would run)."""
+        creds, _ = self._cloud()
+        params = params_mod.validate(spec.params_cls, task.params)
+        env = bundle_worker_env(
+            creds, spec, task.tag, params,
+            role=w.role, bundle_id=resolve_bundle_id(creds.r2, "latest"), worker_id=w.worker_id,
+        )  # fmt: skip
+        if w.threads:
+            env["SCZ_THREADS"] = str(w.threads)
+        SshMachine(w.host).run_container(
+            _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
+        )
+
     # ---- slot operations -------------------------------------------------
 
     def _check_role(self, spec, task: tasks.TaskRecord, role: str, kind: str, gpu: bool = False):
@@ -230,10 +305,8 @@ class WorkerManager:
         self, spec, task: tasks.TaskRecord, role: str, threads: int | None
     ) -> tasks.WorkerRecord:
         self._check_role(spec, task, role, "local")
-        taken = {w.worker_id for w in task.workers}
-        n = next(i for i in range(len(taken) + 1) if f"local-{i}" not in taken)
         w = tasks.WorkerRecord(
-            worker_id=f"local-{n}",
+            worker_id=_next_worker_id(task, "local"),
             role=role,
             kind="local",
             desired_state="running",
@@ -243,6 +316,26 @@ class WorkerManager:
         tasks.save_task(spec, task)
         if role not in task.gates:
             self._spawn_local(spec, task, w)
+        return w
+
+    def add_ssh(
+        self, spec, task: tasks.TaskRecord, role: str, host: str, threads: int | None
+    ) -> tasks.WorkerRecord:
+        role_spec = self._check_role(spec, task, role, "ssh")
+        assert not role_spec.gpu, f"role '{role}' needs GPU hardware; the worker image is CPU-only"
+        w = tasks.WorkerRecord(
+            worker_id=_next_worker_id(task, "ssh"),
+            role=role,
+            kind="ssh",
+            desired_state="running",
+            host=host,
+            threads=threads,
+        )
+        if role not in task.gates:
+            self._run_ssh_container(spec, task, w)
+        task.workers.append(w)
+        tasks.save_task(spec, task)
+        self._ensure_sync(spec, task)
         return w
 
     def add_cloud(
@@ -291,6 +384,17 @@ class WorkerManager:
                 self._spawn_local(spec, task, w)
             elif not run:
                 self._stop_local(spec, task, w)
+        elif w.kind == "ssh":
+            # An unreachable machine gets no action either way: the desired
+            # state is saved, and reconcile enforces it once probes succeed.
+            probe = self._probe_container(spec, task.tag, w)
+            name = _container_name(spec, task.tag, w.worker_id)
+            if start and probe == "stopped":
+                SshMachine(w.host).start_container(name)
+            elif start and probe == "missing":
+                self._run_ssh_container(spec, task, w)
+            elif not run and probe == "running":
+                SshMachine(w.host).stop_container(name)
         else:
             _, client = self._cloud()
             if start:
@@ -305,6 +409,17 @@ class WorkerManager:
         if w.kind == "local":
             assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
             self._local.pop(_key(spec, task.tag, worker_id), None)
+        elif w.kind == "ssh":
+            probe = self._probe_container(spec, task.tag, w)
+            assert probe != "running", f"{worker_id} is running; pause it first"
+            # Removing while unreachable would orphan a possibly-live container
+            # that keeps generating into the tag with nothing tracking it.
+            assert probe != "unreachable", (
+                f"{w.host} is unreachable; bring it online (or clean up its container "
+                f"by hand) before removing {worker_id}"
+            )
+            if probe == "stopped":
+                SshMachine(w.host).remove_container(_container_name(spec, task.tag, w.worker_id))
         else:
             _, client = self._cloud()
             pod = next((p for p in client.list_pods() if p["id"] == w.pod_id), None)
@@ -339,12 +454,20 @@ class WorkerManager:
                 "gpu_type_id": w.gpu_type_id,
                 "gpu_count": w.gpu_count,
                 "pod_id": w.pod_id,
+                "host": w.host,
             }
             if gated:
                 info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
                 alive = self._local_alive(spec, task, w)
                 info["state"] = _local_state(w.desired_state, alive, gated)
+                _accrue(w, alive, None)
+            elif w.kind == "ssh":
+                probe = self._probe_container(spec, task.tag, w)
+                alive = probe == "running"
+                info["state"] = _ssh_state(w.desired_state, probe, gated)
+                info["ssh_probe"] = probe  # reconcile keys its enforcement off this
+                info["ssh"] = f"ssh {w.host}"
                 _accrue(w, alive, None)
             else:
                 if pods is None:
@@ -393,8 +516,9 @@ class WorkerManager:
         chunk locally, its bucket object (if any -- the chunk may be
         local-origin) moves to the matching generation prefix, so the bucket
         keeps mirroring the local corpus and the sync watcher never
-        re-downloads an ingested chunk. None for tasks without cloud slots."""
-        if not any(w.kind == "cloud" for w in task.workers):
+        re-downloads an ingested chunk. None for tasks without
+        bucket-delivering slots."""
+        if not any(w.kind in BUCKET_KINDS for w in task.workers):
             return None
         try:
             creds, _ = self._cloud()
@@ -457,13 +581,28 @@ class WorkerManager:
 
     def _reconcile_worker(self, spec, task: tasks.TaskRecord, w, should_run: bool, info: dict):
         """Close one slot's desired-vs-observed gap. A cloud pod that is booting
-        (`starting`) is left alone -- it is already on its way up."""
+        (`starting`) is left alone -- it is already on its way up. An
+        unreachable ssh machine is left alone too, and an ssh failure only
+        skips this tick (the machine may vanish mid-action): enforcement
+        resumes once probes succeed."""
         alive = info["observed_running"]
         if w.kind == "local":
             if should_run and not alive:
                 self._spawn_local(spec, task, w)
             elif not should_run and alive:
                 self._stop_local(spec, task, w)
+        elif w.kind == "ssh":
+            probe = info["ssh_probe"]
+            name = _container_name(spec, task.tag, w.worker_id)
+            try:
+                if should_run and probe == "stopped":
+                    SshMachine(w.host).start_container(name)
+                elif should_run and probe == "missing":
+                    self._run_ssh_container(spec, task, w)
+                elif not should_run and alive:
+                    SshMachine(w.host).stop_container(name)
+            except SshMachineError as e:
+                print(f"ssh worker {w.worker_id}: {e}")
         else:
             if should_run and info["state"] == "interrupted":
                 _, client = self._cloud()
@@ -474,7 +613,8 @@ class WorkerManager:
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);
-        pods are unaffected -- cloud work continues across dashboard restarts."""
+        pods and ssh containers are unaffected -- their work continues across
+        dashboard restarts."""
         for proc in [*self._local.values(), *self._sync.values()]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)

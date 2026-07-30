@@ -27,12 +27,16 @@ and workload-specific analysis — all from the browser.
   allocation, and a **desired state** (running/paused). A local slot is a
   subprocess of the dashboard server running the same worker loop as the
   cloud, with a local results sink; a cloud slot is exactly one Runpod pod
-  running the image + bundle flow of [cloud_compute.md](cloud_compute.md).
-  While a task has cloud workers, the server keeps a sync watcher running so
-  cloud results stream into the local mount. A slot's *actual* state can
-  diverge from desired (an operator-stopped pod, a dead subprocess, a
-  reclaimed interruptible pod); the UI shows both, and the server reconciles
-  desired vs. actual on startup and periodically.
+  running the image + bundle flow of [cloud_compute.md](cloud_compute.md); an
+  ssh slot is that same image + bundle flow as a Docker container on a machine
+  the operator owns (a spare laptop on the LAN, a home server), driven over
+  SSH. Cloud and ssh slots deliver through the results bucket, and while a
+  task has any, the server keeps a sync watcher running so their results
+  stream into the local mount. A slot's *actual* state can diverge from
+  desired (an operator-stopped pod, a dead subprocess, a reclaimed
+  interruptible pod, an ssh machine that is off the network); the UI shows
+  both, and the server reconciles desired vs. actual on startup and
+  periodically.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as
@@ -67,6 +71,29 @@ Selecting a tag opens its task view, with tabs:
 Output files carry a per-worker stem suffix: names are per-machine nanosecond
 timestamps, so the suffix makes them globally unique across workers while
 preserving the stem-based pair matching downstream tools rely on.
+
+## SSH worker machines
+
+An ssh slot's machine is prepared once, by hand:
+
+- **SSH**: reachable non-interactively from the dev container — key-based
+  auth, no prompts. The form's host string is passed to `ssh` verbatim, so
+  `user@host` and `~/.ssh/config` aliases both work.
+- **Docker**: installed, with the SSH user able to run it (in the `docker`
+  group).
+- **Worker image**: pulled once — `docker login` (the image repo is private;
+  see `registry.worker_image` in the credentials file) then
+  `docker pull <worker image>`. Containers start with `--pull=never`, so a
+  missing image is an instant, actionable error rather than a long pull
+  blocking the dashboard.
+
+Slots then behave like pods: the machine's CPU arch picks its bundle (generic
+`x86-64` fallback), results and stats ride the bucket and the sync watcher,
+and the reconcile loop restarts a container that died (e.g. the machine
+rebooted). A machine that is off the network shows `unreachable`; the server
+leaves it alone — its worker may well still be running — and resumes control
+when SSH works again. Keep the machine from sleeping on lid-close if it is a
+laptop.
 
 ## Server architecture
 

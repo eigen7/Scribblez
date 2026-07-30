@@ -52,7 +52,9 @@ Principles:
 - **Worker image** (`docker-setup/worker/`,
   `./build_and_push_worker_image.py`): dependency-only runtime image with the
   baked-in `bootstrap.py` entrypoint — no repo code, binaries, or lexica.
-  Rebuild only when `docker-setup/worker/` changes.
+  Rebuild only when `docker-setup/worker/` changes. The dashboard's ssh
+  worker slots ([master_dashboard.md](master_dashboard.md)) run this same
+  image on operator-owned machines.
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
   the engine builds once per supported CPU microarchitecture
   (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch

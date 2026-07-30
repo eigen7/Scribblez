@@ -11,16 +11,17 @@ import StatsTab from './StatsTab';
 // -- e.g. the training workloads' Loss/Positions/Controls views.
 
 type WorkerInfo = {
-  worker_id: string; role: string; kind: 'local' | 'cloud'; desired_state: string; state: string;
+  worker_id: string; role: string; kind: 'local' | 'cloud' | 'ssh'; desired_state: string; state: string;
   observed_running: boolean;
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
-  pod_id: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
+  pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
   gate_reason?: string;
 };
 
 function workerResources(w: WorkerInfo): string {
   if (w.kind === 'local') return `${w.threads} threads`;
+  if (w.kind === 'ssh') return `${w.host}${w.threads ? ` (${w.threads} threads)` : ''}`;
   if (w.gpu_type_id) return `${w.gpu_count}× ${w.gpu_type_id}`;
   return `${w.vcpus} vcpu ${w.flavor}`;
 }
@@ -37,6 +38,7 @@ type TaskInfo = {
 const stateColors: Record<string, string> = {
   running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b',
   interrupted: '#a05a00', terminated: '#b23b3b', waiting: '#a05a00',
+  unreachable: '#a05a00',
   starting: '#1f77b4', stopping: '#1f77b4',
 };
 
@@ -91,8 +93,8 @@ function useCloudOffers(): { offers: CloudOffers | null; failed: boolean } {
   return { offers, failed };
 }
 
-type Busy = 'local' | 'cloud' | null;
-type AddWorker = (kind: 'local' | 'cloud', body: Record<string, unknown>) => void;
+type Busy = 'local' | 'cloud' | 'ssh' | null;
+type AddWorker = (kind: 'local' | 'cloud' | 'ssh', body: Record<string, unknown>) => void;
 
 const STOCK_COLORS: Record<string, string> = { High: '#2a7a2a', Medium: '#a05a00', Low: '#b23b3b' };
 function StockBadge({ stock }: { stock: string | null }) {
@@ -186,6 +188,39 @@ function LocalForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabl
         label={busy === 'local' ? 'Adding…' : 'Add local'}
         disabled={disabled}
         onClick={() => add('local', { threads: threads ? parseInt(threads, 10) : null })}
+      />
+    </div>
+  );
+}
+
+// The ssh (operator-owned machine) add-worker form: an SSH destination
+// ("user@host" or an ~/.ssh/config alias, passed to ssh verbatim) plus an
+// optional thread count. Machine prerequisites: docs/master_dashboard.md.
+function SshForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabled: boolean }) {
+  const [host, setHost] = useState('');
+  const [threads, setThreads] = useState('');
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+      <label style={{ fontSize: 13 }}>
+        SSH — host<br />
+        <input
+          style={{ ...numInput, width: 160 }} value={host} placeholder="user@host"
+          onChange={(e) => setHost(e.target.value)}
+        />
+      </label>
+      <label style={{ fontSize: 13 }}>
+        threads<br />
+        <input
+          style={numInput} value={threads} placeholder="all"
+          onChange={(e) => setThreads(e.target.value)}
+        />
+      </label>
+      <Button
+        label={busy === 'ssh' ? 'Adding…' : 'Add ssh'}
+        disabled={disabled || !host.trim()}
+        onClick={() => add('ssh', {
+          host: host.trim(), threads: threads ? parseInt(threads, 10) : null,
+        })}
       />
     </div>
   );
@@ -432,9 +467,10 @@ function CloudForm({ role, add, busy, disabled }: {
     : <CpuCloudForm role={role} offers={offers.cpu} add={add} busy={busy} disabled={disabled} />;
 }
 
-// The add-worker forms for one role: a local form (threads) and/or a cloud
-// form (a live instance selector), per the role's declared kinds. A singleton
-// role's forms disable once it has a slot.
+// The add-worker forms for one role: a local form (threads), an ssh form (an
+// operator-owned machine), and/or a cloud form (a live instance selector),
+// per the role's declared kinds. A singleton role's forms disable once it has
+// a slot.
 function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
   workload: Workload; role: Role; tag: string; taken: boolean;
   onError: (e: string) => void; onChanged: () => void;
@@ -465,6 +501,7 @@ function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
         {role.title}{role.singleton ? ' (singleton)' : ''}
       </span>
       {role.kinds.includes('local') && <LocalForm add={add} busy={busy} disabled={disabled} />}
+      {role.kinds.includes('ssh') && <SshForm add={add} busy={busy} disabled={disabled} />}
       {role.kinds.includes('cloud') && <CloudForm role={role} add={add} busy={busy} disabled={disabled} />}
     </div>
   );
