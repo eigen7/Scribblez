@@ -1,7 +1,9 @@
 #pragma once
 
 #include "agent/agent.h"
+#include "agent/agent_endgame_solver.h"
 #include "encoding/game_state_encoder.h"
+#include "endgame/endgame_solver.h"
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
 #include "util/math.h"
@@ -26,9 +28,10 @@ namespace scribblez {
 // best plays by HastyBot static equity instead -- cheaper, and a safety valve
 // against the blank explosion of positions with thousands of plays.
 //
-// In the endgame the agent bypasses the model and plays the greedy HastyBot
-// move: the value model never trains on bag-empty positions and evaluates them
-// poorly, whereas static equity is the strong heuristic there.
+// In the endgame the agent bypasses the model entirely -- the value model never
+// trains on bag-empty positions and evaluates them poorly -- and hands the turn
+// to an exact AgentEndgameSolver, falling back to the greedy HastyBot move on
+// the turns the solver declines (or when a zero budget disables it).
 //
 // The agent's GameStateEncoder mirrors the real game through begin_game() /
 // observe_move(), since its placement-plane features depend on both players'
@@ -40,7 +43,8 @@ class NeuralAgent : public Agent {
   enum class Objective { kScoreDiff, kWinProb };
 
   // `dict` is required and must outlive the agent; `seed` is read only when
-  // temperature is positive.
+  // temperature is positive. An `endgame` budget of 0 turns endgame solving off,
+  // leaving the greedy HastyBot move to play the endgame out.
   struct Params {
     int thread_id = 0;
     std::string name;
@@ -49,6 +53,7 @@ class NeuralAgent : public Agent {
     Objective objective = Objective::kWinProb;
     double temperature = 0.0;
     uint64_t seed = 0;
+    EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
   NeuralAgent(const Params& params, const nn::NeuralNetParams& net_params);
@@ -108,6 +113,7 @@ class NeuralAgent : public Agent {
   std::unique_ptr<nn::EvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
+  AgentEndgameSolver endgame_;
   std::mt19937_64 rng_;
 
   // Scratch reused across turns to avoid per-move allocation.

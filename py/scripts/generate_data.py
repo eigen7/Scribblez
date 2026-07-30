@@ -36,7 +36,8 @@ def build_player_spec(args) -> str:
     """The `--player` value for both seats. With no --model: HastyBot, optionally
     temperature-sampled over equity (--hasty-temperature > 0) for exploration.
     With a --model: the neural value agent -- --top-k=0 evaluates every legal
-    play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster)."""
+    play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster); its
+    endgames go to the exact solver at the engine's default node budget."""
     if not args.model:
         return hasty_player_spec(args.hasty_temperature, args.hasty_top_k, args.hasty_temp_min_bag)
     return (

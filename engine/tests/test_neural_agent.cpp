@@ -14,6 +14,8 @@
 //    trained on.
 //  * temperature controls selection: temperature 0 is the greedy argmax, while a
 //    high temperature samples across the candidates.
+//  * the endgame goes to the exact solver, with the greedy static-equity move as
+//    the fallback when solving is disabled -- either way without the model.
 
 #include "agent/agent.h"
 #include "agent/neural_agent.h"
@@ -22,6 +24,8 @@
 #include "data/data_loader.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
+#include "endgame/endgame_solver.h"
+#include "endgame_positions.h"
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/move.h"
@@ -42,6 +46,7 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -549,7 +554,8 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                        std::move(stub));
     greedy.begin_game();
     gp->scripted = {sd(2.0f), sd(0.0f)};
-    for (int i = 0; i < 50; ++i) ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
+    for (int i = 0; i < 50; ++i)
+      ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
   }
 
   // High temperature -> both candidates are sampled, but the higher-rated one
@@ -579,4 +585,91 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
     ASSERT_GT(low, 0);
     ASSERT_GT(high, low);  // higher-valued arm dominates
   }
+}
+
+// --- Endgame ----------------------------------------------------------------
+
+static constexpr uint64_t kSolveBudget = 1ull << 20;
+static constexpr int kSolvePlies = 24;
+
+static EndgameSolver::Params solver_params(uint64_t budget) {
+  EndgameSolver::Params p;
+  p.budget = budget;
+  p.plies = kSolvePlies;
+  return p;
+}
+
+// The move the agent falls back on when the solver declines a bag-empty turn:
+// the static-equity argmax over the generated plays, tie-broken the way the
+// agent's own std::max_element is.
+static Move greedy_equity_move(const MoveRequest& req, const std::vector<Move>& plays) {
+  const std::vector<double> eq =
+    HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+  return plays[static_cast<size_t>(std::max_element(eq.begin(), eq.end()) - eq.begin())];
+}
+
+TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
+  // Scan random bag-empty positions for one where the exact solver's move
+  // differs from the static-equity move -- the only kind that tells the two
+  // policies apart -- and check both configurations on it.
+  Dictionary d = tiny_dict();
+  std::mt19937 rng(0xE9DA3E01u);
+  EndgameSolver ref;
+
+  bool found = false;
+  for (int i = 0; i < 1200 && !found; ++i) {
+    const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
+    const MoveRequest req = endgame_request(p, d);
+    const std::vector<Move> plays = generate_legal_plays(req);
+    if (plays.empty()) continue;
+    const Move greedy = greedy_equity_move(req, plays);
+
+    ref.clear();
+    const EndgameResult r = ref.solve(
+      {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
+      solver_params(kSolveBudget));
+    // Skip the outcomes the agent is specified to play itself: no completed
+    // iteration, or a proven loss whose move is arbitrary.
+    if (r.depth_completed < 1) continue;
+    if (r.proven_class == -1 && r.continuation.empty()) continue;
+    if (r.best == greedy) continue;
+
+    // Solving enabled: the solver's move (with its certificate as the
+    // decision's projection), and no model call at all.
+    auto solving_stub = std::make_unique<CountingStubEvalService>();
+    CountingStubEvalService* solving_sp = solving_stub.get();
+    NeuralAgent solving({.thread_id = 0,
+                         .name = "solving",
+                         .dict = &d,
+                         .top_k = 0,
+                         .objective = NeuralAgent::Objective::kScoreDiff,
+                         .endgame = solver_params(kSolveBudget)},
+                        std::move(solving_stub));
+    // begin_game() clears the shared transposition table, matching the
+    // freshly-cleared reference solve above.
+    solving.begin_game();
+    const MoveDecision decision = solving.make_move(req);
+    EXPECT_EQ(decision.move, r.best);
+    EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size());
+    EXPECT_EQ(solving_sp->calls, 0);
+
+    // Solving disabled: the greedy static-equity move, again without the model.
+    auto disabled_stub = std::make_unique<CountingStubEvalService>();
+    CountingStubEvalService* disabled_sp = disabled_stub.get();
+    NeuralAgent disabled({.thread_id = 0,
+                          .name = "disabled",
+                          .dict = &d,
+                          .top_k = 0,
+                          .objective = NeuralAgent::Objective::kScoreDiff,
+                          .endgame = solver_params(/*budget=*/0)},
+                         std::move(disabled_stub));
+    disabled.begin_game();
+    const MoveDecision fallback = disabled.make_move(req);
+    EXPECT_EQ(fallback.move, greedy);
+    EXPECT_TRUE(fallback.projected_remaining_moves.empty());
+    EXPECT_EQ(disabled_sp->calls, 0);
+
+    found = true;
+  }
+  ASSERT_TRUE(found) << "no solver-beats-greedy endgame found in the scan";
 }
