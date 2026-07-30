@@ -354,6 +354,11 @@ def link_lexica_into_macondo():
     print(f"\nLinked {LEXICA_DIR} -> {MACONDO_GADDAG_DIR}")
 
 
+def build_macondo_shell():
+    os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
+    run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
+
+
 def clone_and_build_macondo():
     """Clone the pinned Macondo tag and build its shell binary, atomically.
 
@@ -367,31 +372,53 @@ def clone_and_build_macondo():
             f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
             f"{MACONDO_REPO_URL} {MACONDO_DIR}"
         )
-        os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
-        run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
+        build_macondo_shell()
     except BaseException:
         shutil.rmtree(MACONDO_DIR, ignore_errors=True)
         raise
 
 
-def check_macondo_tag():
-    """Error out if the existing Macondo checkout is not at the expected tag."""
-    result = subprocess.run(
-        ["git", "describe", "--tags", "--exact-match", "HEAD"],
-        capture_output=True,
-        text=True,
-        cwd=MACONDO_DIR,
-    )
-    current_tag = result.stdout.strip()
-    if result.returncode != 0 or current_tag != MACONDO_TAG:
-        display = current_tag or "(not on an exact tag)"
+def macondo_git_output(*args) -> tuple[int, str]:
+    result = subprocess.run(["git", *args], capture_output=True, text=True, cwd=MACONDO_DIR)
+    return result.returncode, result.stdout.strip()
+
+
+def current_macondo_tag() -> str:
+    """The tag the Macondo checkout sits on, or "" if HEAD is not on an exact tag."""
+    returncode, tag = macondo_git_output("describe", "--tags", "--exact-match", "HEAD")
+    return tag if returncode == 0 else ""
+
+
+def sync_macondo_tag():
+    """Move an existing Macondo checkout onto MACONDO_TAG and rebuild its shell.
+
+    The checkout is shallow, and `clone --branch <tag>` leaves behind a fetch
+    refspec naming only that one tag, so a plain `git fetch` would not see any
+    newer tag -- the wanted one has to be fetched by name.
+
+    Local edits to the Macondo source are left alone: they are a supported way
+    to work (see --skip-macondo-tag-sync), and silently stashing or discarding
+    them to move tags would be worse than stopping.
+    """
+    current = current_macondo_tag()
+    if current == MACONDO_TAG:
+        return
+    _, dirty = macondo_git_output("status", "--porcelain", "--untracked-files=no")
+    if dirty:
         print(
-            f"\nError: macondo at {MACONDO_DIR} is at '{display}', "
-            f"but this project expects '{MACONDO_TAG}'.\n"
-            "Update MACONDO_TAG in py/build.py, re-clone the directory, "
-            "or pass --skip-macondo-tag-check to build anyway."
+            f"\nError: macondo at {MACONDO_DIR} has uncommitted changes, so it "
+            f"cannot be moved from '{current or '(no exact tag)'}' to '{MACONDO_TAG}'.\n"
+            "Commit or stash them, or pass --skip-macondo-tag-sync to build "
+            "against the checkout as it stands."
         )
         sys.exit(1)
+    print(f"\nUpdating Macondo {current or '(no exact tag)'} -> {MACONDO_TAG} ...")
+    run(
+        f"git fetch --depth 1 --quiet origin refs/tags/{MACONDO_TAG}:refs/tags/{MACONDO_TAG}",
+        cwd=MACONDO_DIR,
+    )
+    run(f"git -c advice.detachedHead=false checkout --quiet {MACONDO_TAG}", cwd=MACONDO_DIR)
+    build_macondo_shell()
 
 
 def parse_args() -> argparse.Namespace:
@@ -420,10 +447,10 @@ def parse_args() -> argparse.Namespace:
         "--skip-macondo", action="store_true", help="skip rebuilding the Macondo shell binary"
     )
     parser.add_argument(
-        "--skip-macondo-tag-check",
+        "--skip-macondo-tag-sync",
         action="store_true",
-        help="skip verifying that the macondo checkout is at "
-        f"the expected tag ({MACONDO_TAG}); useful when "
+        help="leave the macondo checkout on whatever tag it is on instead of "
+        f"moving it to the expected one ({MACONDO_TAG}); useful when "
         "fiddling with the macondo source",
     )
     args = parser.parse_args()
@@ -493,7 +520,8 @@ def main():
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
-    # 3. Clone + build the Macondo shell binary (only when first cloned).
+    # 3. Clone + build the Macondo shell binary (only when first cloned, or
+    #    when MACONDO_TAG has moved since).
     if not args.skip_macondo:
         if shutil.which("git") is None:
             print("\nWARNING: `git` not found on PATH -- skipping Macondo build.")
@@ -502,8 +530,8 @@ def main():
         else:
             if not os.path.isdir(MACONDO_DIR):
                 clone_and_build_macondo()
-            elif not args.skip_macondo_tag_check:
-                check_macondo_tag()
+            elif not args.skip_macondo_tag_sync:
+                sync_macondo_tag()
 
             # Make the installed lexica resolvable by the macondo subprocess.
             link_lexica_into_macondo()
