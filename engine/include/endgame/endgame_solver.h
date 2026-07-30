@@ -94,9 +94,11 @@ class EndgameSolver {
   explicit EndgameSolver(int tt_log2_entries = 16);
 
   struct Params {
-    // Hard cap on the nodes one solve may spend. The default is tuned with
-    // `endgame_bench`; see docs/endgame_bench_results.md.
-    uint64_t budget = 200;
+    // Hard cap on the nodes one solve may spend. This is the endgame's
+    // strength-for-throughput dial, and picking a value is a judgement rather
+    // than an optimum: docs/endgame_bench_results.md plots both curves against
+    // the start-of-endgame margin and is the place to look before changing it.
+    uint64_t budget = 400;
     int plies = 25;  // iterative-deepening depth cap
 
     // When disabled, the solve stops at the class proof: all provably winning

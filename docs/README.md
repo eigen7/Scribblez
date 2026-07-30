@@ -25,7 +25,7 @@
   distributed-worker design it grows into.
 - **[endgame_bench_results.md](endgame_bench_results.md)** — the endgame
   solver's measured cost/strength curve vs its node budget (methodology, the
-  seat-mirrored head-to-head protocol, the shipped default of 200).
+  seat-mirrored head-to-head protocol, the shipped default of 400).
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
