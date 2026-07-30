@@ -77,8 +77,12 @@ preserving the stem-based pair matching downstream tools rely on.
 An ssh slot's machine is prepared once, by hand:
 
 - **SSH**: reachable non-interactively from the dev container — key-based
-  auth, no prompts. The form's host string is passed to `ssh` verbatim, so
-  `user@host` and `~/.ssh/config` aliases both work.
+  auth, no prompts. The key to authorize is the container's own
+  `~/.ssh/id_ed25519.pub`; devenv_utils persists that identity host-side, so
+  authorizing it once holds across container relaunches. The form's host
+  string is passed to `ssh` verbatim, so `user@host` and `~/.ssh/config`
+  aliases both work — and the config file persists alongside the key, so an
+  alias defined once keeps working too.
 - **Docker**: installed, with the SSH user able to run it (in the `docker`
   group).
 - **Worker image**: pulled once — `docker login` (the image repo is private;
