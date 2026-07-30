@@ -118,11 +118,6 @@ comment would diminish an expert developer's ability to understand the code, to 
 features to the code, or to improve the code. If a convincing argument cannot be put forth, the
 defendant loses, and so the comment should be removed.
 
-An exception: reference material a reader looks things up in — on-disk formats, tensor layouts,
-bit-field encodings — is worth spelling out itemized even though it restates the code. The reader
-wants one specific detail, and an organized table makes it findable without reading the code that
-produces it.
-
 Note that the courtroom test is about whether a comment earns its place, not about how short it is.
 Once a comment has earned its place, write it as a readable sentence; compressing it into a terse
 fragment costs the reader and saves nothing. Short example usage is welcome on the same terms — a
@@ -155,6 +150,11 @@ from the parent class.
 This does not apply to comments that explain WHY -- a rationale for choosing one approach over
 another, an argument that some bound is sound, a constraint imposed from outside the code. No
 amount of refactoring makes those unnecessary, so do not contort the code trying.
+
+Note: reference material a reader looks things up in — on-disk formats, tensor layouts,
+bit-field encodings — is worth spelling out itemized even though it restates the code. The reader
+wants one specific detail, and an organized table makes it findable without reading the code that
+produces it.
 
 Placement matters as much as content. A header should say what a thing is and why it exists; the
 "how" belongs at the implementation site, beside the code it describes. So when trimming a header,
