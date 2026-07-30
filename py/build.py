@@ -36,9 +36,9 @@ ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
 SUPPORTED_ARCHS = ["alderlake", "tigerlake", "x86-64", "znver2", "znver4"]
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
-# and will error if the existing checkout is at a different tag (unless
-# --skip-macondo-tag-check is passed).
-MACONDO_TAG = "v0.13.1"
+# and will move an existing checkout onto it if it is at a different tag
+# (unless --skip-macondo-tag-sync is passed).
+MACONDO_TAG = "v0.13.2"
 MOUNT_DIR = "/workspace/mount"
 MACONDO_DIR = os.path.join(MOUNT_DIR, "macondo")
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
