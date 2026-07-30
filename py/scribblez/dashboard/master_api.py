@@ -18,6 +18,7 @@ import tornado.web
 from bokeh.embed import json_item
 from cloud.credentials import CredentialsError
 from cloud.runpod_api import RunpodError, fetch_cloud_offers
+from cloud.ssh_machine import SshMachineError
 from scripts.cloud_fleet import CpuResources, GpuResources
 
 from scribblez import params as params_mod
@@ -32,6 +33,7 @@ _CLIENT_ERRORS = (
     params_mod.ParamsError,
     CredentialsError,
     RunpodError,
+    SshMachineError,
 )
 
 
@@ -180,6 +182,10 @@ class WorkerAddHandler(_MasterBase):
             role = body.get("role", spec.roles[0].name)
             if body.get("kind") == "local":
                 added = [self.manager.add_local(spec, task, role, body.get("threads"))]
+            elif body.get("kind") == "ssh":
+                host = (body.get("host") or "").strip()
+                assert host, "ssh worker needs a host"
+                added = [self.manager.add_ssh(spec, task, role, host, body.get("threads"))]
             else:
                 added = self.manager.add_cloud(
                     spec,

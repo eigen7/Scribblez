@@ -25,9 +25,10 @@ class WorkerRecord:
 
     worker_id: str
     role: str  # which of the workload's roles this slot runs
-    kind: str  # "local" | "cloud"
+    kind: str  # "local" | "cloud" | "ssh"
     desired_state: str  # "running" | "paused"
-    threads: int | None = None  # local: engine thread count
+    threads: int | None = None  # local/ssh: engine thread count (None: all cores)
+    host: str | None = None  # ssh: SSH destination ("user@host" or an ssh-config alias)
     pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
     vcpus: int | None = None  # cloud CPU pod: vCPU count
     flavor: str | None = None  # cloud CPU pod: Runpod CPU flavor
