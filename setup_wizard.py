@@ -197,6 +197,8 @@ def main():
         tool.rule()
         tool.validate_docker_permissions()
         tool.rule()
+        tool.validate_docker_version()
+        tool.rule()
         tool.setup_gitea_service()
         tool.rule()
         tool.setup_gateway_service()
