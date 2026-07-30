@@ -3,7 +3,7 @@
 Measurements from `endgame_bench` (see `engine/apps/endgame_bench.cpp`) on the
 development machine (Docker container, NWL23 lexicon, Release build). They
 characterize the `hastybot-endgame` agent as a function of the solver's node
-budget (default 200).
+budget (default 400).
 
 **Hardware**: Intel Core i7-13850HX (28 hardware threads), 64 GB RAM, inside
 the project's Docker container, Release build.
@@ -131,8 +131,15 @@ Readings:
   time.
 - Cost scales far faster than skill above budget 400. At margin -20, budget 800
   buys 4.0 points of skill over 400 and costs 1.8x more game time; 1600 gives
-  0.1 of that back and costs 3.3x more. The default of 200 sits where the
-  endgame is nearly free (1.27x at the peak margin) and still worth +8.9.
+  0.1 of that back and costs 3.3x more.
+- Skill per unit of generation time picks out 200 and 400 together: +8.9 at
+  1.20x and +14.6 at 2.00x are the same 7.4 and 7.3 points per multiple of a
+  hasty-vs-hasty game, against 4.7 at budget 800 and 2.5 at 1600. **400 is the
+  shipped default** -- the last rung before the returns collapse, and the side
+  of that pair that buys strength rather than games, since a generator that
+  optimizes win% rather than score margin should reach the bag-empty point
+  contested more often than HastyBot does and put more weight on the band where
+  the solver earns its keep.
 
 ## Whole-game throughput
 
