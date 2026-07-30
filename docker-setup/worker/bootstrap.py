@@ -45,6 +45,9 @@ def rclone_env() -> dict[str, str]:
         "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
         "RCLONE_CONFIG_R2_ENDPOINT": endpoint,
         "RCLONE_CONFIG_R2_NO_CHECK_BUCKET": "true",
+        # Silences a per-invocation NOTICE about the config file rclone did
+        # not find; the remote is defined entirely by the variables above.
+        "RCLONE_CONFIG": "/dev/null",
     }
 
 
