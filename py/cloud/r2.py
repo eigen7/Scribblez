@@ -29,6 +29,11 @@ def rclone_env(r2: R2Credentials) -> dict[str, str]:
         # bucket-scoped R2 tokens are not permitted to make (AccessDenied).
         # The bucket always exists; skip the check.
         f"{prefix}_NO_CHECK_BUCKET": "true",
+        # The remote is defined entirely by the variables above, but rclone
+        # still prints a NOTICE about the config file it did not find -- on
+        # every invocation, which for a multi-file upload reads like something
+        # going wrong. Point it at an empty config it can find instead.
+        "RCLONE_CONFIG": "/dev/null",
     }
 
 
