@@ -7,6 +7,7 @@
 #include "endgame/endgame_solver.h"
 #include "endgame/outplays.h"
 #include "endgame/path_move_lists.h"
+#include "endgame_positions.h"
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/move.h"
@@ -31,13 +32,6 @@ using namespace scribblez;
 
 namespace {
 
-Dictionary tiny_dict() {
-  return Dictionary::build_from_words({"CAT", "CATS", "AT",     "AS",     "BAT", "BATS", "HE",
-                                       "TO",  "ON",   "NO",     "IT",     "IS",  "OAT",  "OATS",
-                                       "HAT", "HATS", "RAT",    "RATS",   "DOG", "GOD",  "GO",
-                                       "OD",  "DO",   "AERIES", "PARTIED"});
-}
-
 Rack rack_from(const std::string& s) {
   Rack r;
   for (char c : s) {
@@ -45,16 +39,6 @@ Rack rack_from(const std::string& s) {
       r.add(BLANK);
     else
       r.add(Tile::from_char(c));
-  }
-  return r;
-}
-
-Rack random_rack(std::mt19937& rng) {
-  Rack r;
-  std::uniform_int_distribution<int> pick(0, 26);  // 26 -> blank
-  for (int i = 0; i < RACK_SIZE; ++i) {
-    int v = pick(rng);
-    r.add(v == 26 ? BLANK : Tile::of(v));
   }
   return r;
 }
@@ -272,37 +256,6 @@ int32_t ref_value_after_first(const Board& b, const Dictionary& d, const Rack& m
   const RefState ns = ref_apply(s, first, over);
   if (over) return ns.scores[0] - ns.scores[1];
   return -ref_negamax(ns, d, depth);
-}
-
-// A small endgame position: a board seeded with a few random plays, two short
-// racks drawn from a curated tiny-dict letter set (so plays exist but branching
-// stays low), and small random scores.
-struct EndgamePos {
-  Board board;
-  Rack my_rack;
-  Rack opp_rack;
-  int my_score;
-  int opp_score;
-};
-
-EndgamePos random_endgame(std::mt19937& rng, const Dictionary& d, int rack_tiles) {
-  static const char kLetters[] = "ATSOCHEBDGRINO";
-  EndgamePos p;
-  const int setup = std::uniform_int_distribution<int>(1, 3)(rng);
-  for (int k = 0; k < setup; ++k) {
-    const Rack seed = random_rack(rng);
-    const std::vector<Move> plays = MoveGenerator(p.board, d).generate(seed);
-    if (plays.empty()) break;
-    p.board.apply(plays[std::uniform_int_distribution<size_t>(0, plays.size() - 1)(rng)]);
-  }
-  std::uniform_int_distribution<int> letter(0, static_cast<int>(sizeof(kLetters) - 2));
-  for (int i = 0; i < rack_tiles; ++i) {
-    p.my_rack.add(Tile::from_char(kLetters[letter(rng)]));
-    p.opp_rack.add(Tile::from_char(kLetters[letter(rng)]));
-  }
-  p.my_score = std::uniform_int_distribution<int>(0, 40)(rng);
-  p.opp_score = std::uniform_int_distribution<int>(0, 40)(rng);
-  return p;
 }
 
 // The generated move that empties `rack` (goes out) in one, or nullptr.

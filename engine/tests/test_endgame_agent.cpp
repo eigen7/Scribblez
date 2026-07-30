@@ -6,6 +6,7 @@
 #include "agent/endgame_hasty_bot.h"
 #include "agent/macondo_bot.h"
 #include "endgame/endgame_solver.h"
+#include "endgame_positions.h"
 #include "game/board.h"
 #include "game/game.h"
 #include "game/move.h"
@@ -30,13 +31,6 @@
 using namespace scribblez;
 
 namespace {
-
-Dictionary tiny_dict() {
-  return Dictionary::build_from_words({"CAT", "CATS", "AT",     "AS",     "BAT", "BATS", "HE",
-                                       "TO",  "ON",   "NO",     "IT",     "IS",  "OAT",  "OATS",
-                                       "HAT", "HATS", "RAT",    "RATS",   "DOG", "GOD",  "GO",
-                                       "OD",  "DO",   "AERIES", "PARTIED"});
-}
 
 // Load HastyBot's default equity tables for NWL23 (leaves + pre-endgame), which
 // the agent's greedy path needs. Returns false (so the caller skips) when the
@@ -84,51 +78,6 @@ std::set<std::string> key_set(const std::vector<Move>& ms) {
   std::set<std::string> s;
   for (const auto& m : ms) s.insert(move_key(m));
   return s;
-}
-
-Rack random_rack(std::mt19937& rng) {
-  Rack r;
-  std::uniform_int_distribution<int> pick(0, 26);  // 26 -> blank
-  for (int i = 0; i < RACK_SIZE; ++i) {
-    const int v = pick(rng);
-    r.add(v == 26 ? BLANK : Tile::of(v));
-  }
-  return r;
-}
-
-// A small bag-empty endgame: a board seeded with a few random plays, two short
-// racks drawn from a curated tiny-dict letter set (so plays exist but branching
-// stays low), and small random scores.
-struct EndgamePos {
-  Board board;
-  Rack my_rack;
-  Rack opp_rack;
-  int my_score;
-  int opp_score;
-};
-
-EndgamePos random_endgame(std::mt19937& rng, const Dictionary& d, int rack_tiles) {
-  static const char kLetters[] = "ATSOCHEBDGRINO";
-  EndgamePos p;
-  const int setup = std::uniform_int_distribution<int>(1, 3)(rng);
-  for (int k = 0; k < setup; ++k) {
-    const Rack seed = random_rack(rng);
-    const std::vector<Move> plays = MoveGenerator(p.board, d).generate(seed);
-    if (plays.empty()) break;
-    p.board.apply(plays[std::uniform_int_distribution<size_t>(0, plays.size() - 1)(rng)]);
-  }
-  std::uniform_int_distribution<int> letter(0, static_cast<int>(sizeof(kLetters) - 2));
-  for (int i = 0; i < rack_tiles; ++i) {
-    p.my_rack.add(Tile::from_char(kLetters[letter(rng)]));
-    p.opp_rack.add(Tile::from_char(kLetters[letter(rng)]));
-  }
-  p.my_score = std::uniform_int_distribution<int>(0, 40)(rng);
-  p.opp_score = std::uniform_int_distribution<int>(0, 40)(rng);
-  return p;
-}
-
-MoveRequest endgame_request(const EndgamePos& p, const Dictionary& d) {
-  return MoveRequest{p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*bag_size=*/0};
 }
 
 // Reconstruct a completed game's end-of-game bookkeeping from its turn records

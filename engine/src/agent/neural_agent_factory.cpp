@@ -8,6 +8,7 @@
 // the TensorRT precision parser, all confined to this file.
 
 #include "agent/neural_agent.h"
+#include "endgame/endgame_solver.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/neural_net.h"
@@ -43,6 +44,7 @@ struct NeuralOptions {
   std::string objective = "winprob";
   double temperature = 0.0;
   uint64_t seed = 0;
+  EndgameSolver::Params endgame;
 };
 
 // Boost.program_options renders defaults set via default_value() as "(=...)" in
@@ -66,6 +68,7 @@ po::options_description make_options_description(NeuralOptions& opts) {
     "temperature,t", po::value<double>(&opts.temperature)->default_value(opts.temperature),
     "softmax move-sampling temperature (0 = greedy argmax)")(
     "seed,s", po::value<uint64_t>(&opts.seed), "sampling PRNG seed (default: SeedProducer)");
+  opts.endgame.add_options(desc, "endgame-");
   return desc;
 }
 
@@ -87,6 +90,7 @@ NeuralAgent::NeuralAgent(const Params& params, const nn::NeuralNetParams& net_pa
       service_(make_service(net_params)),
       spec_(derive_spec(*params.dict, *service_)),
       encoder_(spec_),
+      endgame_(params.thread_id, params.endgame),
       rng_(params.seed) {
   init();
 }
@@ -135,7 +139,8 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
                                                            .top_k = opts.top_k,
                                                            .objective = obj,
                                                            .temperature = opts.temperature,
-                                                           .seed = resolved_seed},
+                                                           .seed = resolved_seed,
+                                                           .endgame = opts.endgame},
                                        net_params);
 }
 
@@ -144,7 +149,8 @@ std::string NeuralAgent::options_help() {
   std::ostringstream os;
   os << "  HastyBot move-gen + position evaluation model: applies candidate plays\n"
         "  and plays the one whose post-move state the model's objective head\n"
-        "  rates highest.\n"
+        "  rates highest. Once the bag empties the model steps aside and an\n"
+        "  iterative-deepening negamax solver plays the endgame exactly.\n"
      << make_options_description(opts);
   return os.str();
 }

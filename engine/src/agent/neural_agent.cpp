@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 
 // The production constructor and make_service() -- the only members that
@@ -26,6 +27,7 @@ NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> 
       service_(std::move(service)),
       spec_(derive_spec(*params.dict, *service_)),
       encoder_(spec_),
+      endgame_(params.thread_id, params.endgame),
       rng_(params.seed) {
   init();
 }
@@ -49,9 +51,15 @@ void NeuralAgent::init() {
   input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
 }
 
-void NeuralAgent::begin_game() { encoder_ = GameStateEncoder(spec_); }
+void NeuralAgent::begin_game() {
+  encoder_ = GameStateEncoder(spec_);
+  endgame_.begin_game();
+}
 
-void NeuralAgent::observe_move(const Move& move) { encoder_.apply_move(move); }
+void NeuralAgent::observe_move(const Move& move) {
+  encoder_.apply_move(move);
+  endgame_.observe_move(move);
+}
 
 // --- make_move()'s per-turn pipeline ---------------------------------------
 // make_move() (at the bottom of this file) drives three stages, each a method
@@ -146,12 +154,15 @@ int NeuralAgent::select_index(int k) {
 // TODO: use the WMP/shadow-play based play-generation that the streaming data generation code
 // uses in order to generate just the top-K plays efficiently
 MoveDecision NeuralAgent::make_move(const MoveRequest& req) {
+  // The endgame belongs to the exact solver, which needs no move list of ours.
+  if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
+
   const std::vector<Move> plays = generate_legal_plays(req);
   if (plays.empty()) return Move::pass();
 
-  // Endgame (empty bag): the value model is out of its training regime and
-  // ranks these positions worse than static equity, so play the greedy HastyBot
-  // equity move instead of consulting the model.
+  // A bag-empty position the solver declined: the value model is out of its
+  // training regime and ranks these worse than static equity, so play the
+  // greedy HastyBot equity move instead of consulting the model.
   if (req.bag_size == 0) {
     return plays[static_cast<size_t>(greedy_equity_index(req, plays))];
   }
