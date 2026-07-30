@@ -8,7 +8,6 @@ add_library(scribblez_core STATIC
   src/lexicon/dictionary.cpp
   src/game/movegen.cpp
   src/endgame/endgame_solver.cpp
-  src/endgame/move_list_memo.cpp
   src/endgame/outplays.cpp
   src/endgame/path_move_lists.cpp
   src/training/lane_targets.cpp

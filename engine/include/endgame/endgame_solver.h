@@ -1,6 +1,5 @@
 #pragma once
 
-#include "endgame/move_list_memo.h"
 #include "endgame/outplays.h"
 #include "endgame/path_move_lists.h"
 #include "game/board.h"
@@ -97,13 +96,18 @@ class EndgameSolver {
   struct Params {
     // Hard cap on the nodes one solve may spend. The default is tuned with
     // `endgame_bench`; see docs/endgame_bench_results.md.
-    uint64_t budget = 220;
+    uint64_t budget = 200;
     int plies = 25;  // iterative-deepening depth cap
 
-    // When disabled, all provably winning moves are equally good, as are all
-    // provably losing ones. When enabled, winning by more is better -- though
-    // never at the cost of the win: the class comes first, and spread only
-    // breaks ties within it.
+    // When disabled, the solve stops at the class proof: all provably winning
+    // moves are equally good, as are all provably losing ones. When enabled,
+    // winning by more is better -- though never at the cost of the win: the
+    // class comes first, and spread only breaks ties within it.
+    //
+    // Either way, a solve that fails to prove the class falls back to a
+    // spread-maximizing pass. A narrow-window search that proves nothing ranks
+    // its moves by a bound rather than by points, and deepening only reshuffles
+    // them, so its move is no basis for play against an imperfect opponent.
     bool spread_matters = false;
 
     // Register the options under `prefix`, bound to this object's fields, whose
@@ -133,11 +137,6 @@ class EndgameSolver {
   void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
   void set_root_cutoff(bool on) { root_cutoff_ = on; }
   void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
-
-  // Cache generated move lists (see MoveListMemo); off by default. It changes
-  // nothing the solve reports, movegens included, so a benchmark may enable it
-  // freely.
-  void set_movegen_memo(bool on) { movegen_memo_.set_enabled(on); }
 
  private:
   // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
@@ -192,9 +191,12 @@ class EndgameSolver {
   EndgameResult run_iterative(int32_t alpha, int32_t beta, bool first_win,
                               std::vector<RankedMove>& root_moves, const std::vector<Move>& plays,
                               int max_plies);
-  // Solve for the class first and the spread second, per Params::spread_matters.
-  EndgameResult solve_lexicographic(std::vector<RankedMove>& root_moves,
-                                    const std::vector<Move>& plays, int max_plies);
+  // Prove the class on half the budget, then spend the rest: on the spread when
+  // `refine_spread` (Params::spread_matters), or, when the class proof failed,
+  // on a spread pass whose move is at least chosen for points.
+  EndgameResult solve_class_first(std::vector<RankedMove>& root_moves,
+                                  const std::vector<Move>& plays, int max_plies,
+                                  bool refine_spread);
   // Whether playing `m` at the root provably preserves game class `cls`. False
   // when no proof lands in the remaining budget.
   bool verify_move_class(const Move& m, int cls, const std::vector<Move>& plays, int max_plies);
@@ -224,6 +226,10 @@ class EndgameSolver {
   // search path. The reference stays valid across nested make/unmake and nested
   // generate_moves calls.
   const std::vector<Move>& generate_moves(const Rack& rack, int ply);
+  // Generated straight from the board, bypassing the path lists: for the root,
+  // whose lists are what this seeds, and for the incremental A/B. The reference
+  // is invalidated by the next call, so a caller holding a list across further
+  // generation keeps its own copy.
   const std::vector<Move>& generate_moves_scratch(const Rack& rack);
 
   // A sound upper bound on what the mover can get out of playing `m`, derived
@@ -277,7 +283,7 @@ class EndgameSolver {
 
   uint64_t movegens_ = 0;  // see EndgameResult::movegens
 
-  MoveListMemo movegen_memo_;  // outlives clear(), which it does not depend on
+  std::vector<Move> scratch_moves_;  // generate_moves_scratch's return buffer
 
   bool incremental_movegen_ = true;
   PathMoveLists path_lists_;

@@ -47,8 +47,8 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   void observe_move(const Move& move) override;
   void begin_game() override;
 
-  // Deterministic operation totals over a game, one contribution per solve, for
-  // a benchmark to convert into modeled time. Reset by begin_game().
+  // Totals over a game, one contribution per solve, for a benchmark to report.
+  // Reset by begin_game(). Everything but solve_ns is deterministic.
   //
   // max_solve_nodes lets a budget sweep tell when a smaller-budget run would be
   // bit-identical: if no solve of a game spent more than a smaller budget b',
@@ -61,11 +61,11 @@ class EndgameHastyBotAgent : public HastyBotAgent {
     uint64_t movegens = 0;
     uint64_t certificate_nodes = 0;
     uint64_t max_solve_nodes = 0;
+    uint64_t solve_ns = 0;  // wall time inside solve(), the agent's whole endgame cost
   };
   const SolveTotals& solve_totals() const { return solve_totals_; }
 
-  // The seat-shared solver makes both settings apply to the seat-mate too.
-  void set_movegen_memo(bool on) { solver_->set_movegen_memo(on); }
+  // The seat-shared solver makes this apply to the seat-mate too.
   void set_incremental_movegen(bool on) { solver_->set_incremental_movegen(on); }
 
   // Build from `--player "--type=hastybot-endgame [options]"` tokens, with

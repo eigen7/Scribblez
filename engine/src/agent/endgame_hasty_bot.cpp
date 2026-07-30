@@ -6,6 +6,7 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -42,11 +43,15 @@ MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
   // projection-respecting loop (self-play generation) fast-tracks the game to
   // its proven end instead of prompting for the remaining turns.
   if (req.bag_size == 0 && solver_params_.budget > 0) {
+    const auto t0 = std::chrono::steady_clock::now();
     const EndgameResult r = solver_->solve({&req.dict, req.board, req.my_rack, req.opp_rack,
                                             req.my_score, req.opp_score, scoreless_turns_},
                                            solver_params_);
-    // Every solve the agent runs contributes to the operation totals, whether or
-    // not its move ends up used.
+    // Every solve the agent runs contributes to the totals, whether or not its
+    // move ends up used.
+    solve_totals_.solve_ns += static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
+        .count());
     ++solve_totals_.solves;
     solve_totals_.nodes += r.nodes;
     solve_totals_.movegens += r.movegens;

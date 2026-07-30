@@ -3,6 +3,7 @@
 #include "agent/macondo_bot.h"
 #include "endgame/outplays.h"
 #include "game/glyph.h"
+#include "game/movegen.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "util/math.h"
@@ -78,7 +79,8 @@ void EndgameSolver::Params::add_options(boost::program_options::options_descript
      po::value<bool>(&spread_matters)->default_value(spread_matters),
      "false: resolve only the win/draw/loss class and stop at its proof (the self-play "
      "break-out setting); true: prove the class first, then maximize spread without ever "
-     "trading the class for points");
+     "trading the class for points. Both fall back to a spread pass when the class proof "
+     "fails");
 }
 
 EndgameSolver::EndgameSolver(int tt_log2_entries)
@@ -290,7 +292,8 @@ const std::vector<Move>& EndgameSolver::generate_moves(const Rack& rack, int ply
 
 const std::vector<Move>& EndgameSolver::generate_moves_scratch(const Rack& rack) {
   ++movegens_;
-  return movegen_memo_.generate(board_, *dict_, rack, board_hash_);
+  scratch_moves_ = MoveGenerator(board_, *dict_).generate(rack);
+  return scratch_moves_;
 }
 
 int32_t EndgameSolver::greedy_playout(uint64_t node_key, int ply) {
@@ -606,15 +609,17 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
   return verified;
 }
 
-EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_moves,
-                                                 const std::vector<Move>& plays, int max_plies) {
+EndgameResult EndgameSolver::solve_class_first(std::vector<RankedMove>& root_moves,
+                                               const std::vector<Move>& plays, int max_plies,
+                                               bool refine_spread) {
   // First pass: prove the win/draw/loss class as cheaply as possible. The pass
   // is capped at half the budget: on a position whose class is not provable
-  // within it, an uncapped pass would burn the entire cap and leave the margin
+  // within it, an uncapped pass would burn the entire cap and leave the spread
   // fallback below no budget at all -- the narrow-window move it would return
-  // is margin-blind, the worst of both objectives. Class proofs are cheap when
-  // they land, so the cap loses few of them; the reserved half is the
-  // insurance premium this objective pays for class protection.
+  // is chosen for a bound rather than for points, the worst of both objectives.
+  // Class proofs are cheap when they land, so the cap loses few of them; the
+  // reserved half is the insurance premium both objectives pay for a move that
+  // means something when the proof does not arrive.
   const uint64_t full_budget = budget_;
   budget_ = full_budget / 2;
   if (trace_) *trace_ << "class pass (narrow window, budget " << budget_ << "):\n";
@@ -630,6 +635,14 @@ EndgameResult EndgameSolver::solve_lexicographic(std::vector<RankedMove>& root_m
     const EndgameResult spread =
       run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
     return spread.depth_completed >= 1 ? spread : first;
+  }
+
+  // The class is proven. Under the break-out objective that is the whole
+  // answer -- the point of it is to stop spending on a decided endgame.
+  if (!refine_spread) {
+    EndgameResult result = first;
+    result.proven_class = class_of(first.value);
+    return result;
   }
 
   // The class is settled; the rest of the budget maximizes spread. Every move
@@ -869,15 +882,10 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
             << state.opp_rack.point_value() << "\n";
     trace_root_view(root_moves);
   }
-  if (params.spread_matters) {
-    result = solve_lexicographic(root_moves, plays, max_plies);
-  } else {
-    result = run_iterative(kFirstWinAlpha, kFirstWinBeta, /*first_win=*/true, root_moves, plays,
-                           max_plies);
-  }
-  // A proven value's sign is the position's class; kLexicographic may already
-  // carry a class proven by its first pass even when its final value is an
-  // unproven spread refinement.
+  result = solve_class_first(root_moves, plays, max_plies, params.spread_matters);
+  // A proven value's sign is the position's class; a result may already carry a
+  // class proven by the first pass even when its final value is an unproven
+  // spread refinement.
   if (result.proven && result.proven_class == EndgameResult::kClassUnknown)
     result.proven_class = class_of(result.value);
   if (result.proven_class != EndgameResult::kClassUnknown && result.depth_completed >= 1)
