@@ -39,6 +39,7 @@
 // summarized in docs/endgame_bench_results.md.
 
 #include "agent/agent.h"
+#include "agent/agent_endgame_solver.h"
 #include "agent/endgame_hasty_bot.h"
 #include "agent/macondo_bot.h"
 #include "endgame/endgame_solver.h"
@@ -255,7 +256,7 @@ struct SolverOutcome {
 // caller needs max_solve_nodes for the budget-nesting skip).
 struct SolverPlayout {
   int spread = 0;
-  EndgameHastyBotAgent::SolveTotals totals;
+  AgentEndgameSolver::SolveTotals totals;
 };
 
 // Play one captured endgame with an EndgameHastyBot on the first-actor seat
@@ -275,7 +276,7 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
   ep.hasty = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
   ep.solver = params;
   EndgameHastyBotAgent eg(ep);
-  eg.set_incremental_movegen(incremental);
+  eg.endgame().set_incremental_movegen(incremental);
   HastyBotAgent opp(HastyBotAgent::Params{.thread_id = thread_id, .name = "HastyBot"});
 
   const Bag pool = empty_pool(cap);
@@ -285,7 +286,7 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
 
   SolverPlayout out;
   out.spread = g.score(0) - g.score(1);
-  out.totals = eg.solve_totals();
+  out.totals = eg.endgame().solve_totals();
   return out;
 }
 
@@ -528,7 +529,7 @@ AgentFactory endgame_factory(const EndgameSolver::Params& params, bool increment
     p.hasty = HastyBotAgent::Params{.thread_id = tid, .name = "EndgameHastyBot"};
     p.solver = params;
     auto agent = std::make_unique<EndgameHastyBotAgent>(p);
-    agent->set_incremental_movegen(incremental);
+    agent->endgame().set_incremental_movegen(incremental);
     return agent;
   };
 }

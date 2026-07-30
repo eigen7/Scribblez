@@ -43,6 +43,7 @@ add_library(scribblez_core STATIC
   src/lexicon/leave_values.cpp
   src/lexicon/lexicon.cpp
   src/agent/macondo_bot.cpp
+  src/agent/agent_endgame_solver.cpp
   src/agent/endgame_hasty_bot.cpp
   src/selfplay/monte_carlo_sim.cpp
   src/selfplay/sim_runner.cpp

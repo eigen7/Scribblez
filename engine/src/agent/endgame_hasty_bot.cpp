@@ -5,84 +5,27 @@
 
 #include <boost/program_options.hpp>
 
-#include <algorithm>
-#include <chrono>
-#include <map>
 #include <memory>
-#include <mutex>
-#include <stdexcept>
+#include <optional>
 #include <string>
-#include <utility>
 
 namespace scribblez {
 
-namespace {
-
-// The per-thread EndgameSolver pool (see the class comment in the header):
-// both seats of a thread's game loop draw the same instance.
-std::shared_ptr<EndgameSolver> pooled_solver(int thread_id) {
-  static std::mutex mutex;
-  static std::map<int, std::shared_ptr<EndgameSolver>> pool;
-  const std::lock_guard<std::mutex> lock(mutex);
-  std::shared_ptr<EndgameSolver>& solver = pool[thread_id];
-  if (!solver) solver = std::make_shared<EndgameSolver>();
-  return solver;
-}
-
-}  // namespace
-
 EndgameHastyBotAgent::EndgameHastyBotAgent(const Params& params)
-    : HastyBotAgent(params.hasty),
-      solver_params_(params.solver),
-      solver_(pooled_solver(params.hasty.thread_id)) {
-  solver_->clear();
-}
+    : HastyBotAgent(params.hasty), endgame_(params.hasty.thread_id, params.solver) {}
 
 MoveDecision EndgameHastyBotAgent::make_move(const MoveRequest& req) {
-  // A proof certificate rides along as the decision's projection, so a
-  // projection-respecting loop (self-play generation) fast-tracks the game to
-  // its proven end instead of prompting for the remaining turns.
-  if (req.bag_size == 0 && solver_params_.budget > 0) {
-    const auto t0 = std::chrono::steady_clock::now();
-    const EndgameResult r = solver_->solve({&req.dict, req.board, req.my_rack, req.opp_rack,
-                                            req.my_score, req.opp_score, scoreless_turns_},
-                                           solver_params_);
-    // Every solve the agent runs contributes to the totals, whether or not its
-    // move ends up used.
-    solve_totals_.solve_ns += static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
-        .count());
-    ++solve_totals_.solves;
-    solve_totals_.nodes += r.nodes;
-    solve_totals_.movegens += r.movegens;
-    solve_totals_.certificate_nodes += r.certificate_nodes;
-    solve_totals_.max_solve_nodes = std::max(solve_totals_.max_solve_nodes, r.nodes);
-    // A proven-lost class-only result carries an arbitrary move (every move
-    // loses, and that setting refines no further). With a certificate the
-    // break-out takes priority -- the class-only setting exists to stop
-    // spending compute on decided games, and it presumes a
-    // projection-respecting loop. Without one, HastyBot's static-equity move
-    // shapes the final spread better than an arbitrary losing move. With
-    // spread_matters the solver spread-defends lost positions itself.
-    const bool arbitrary_loss =
-      !solver_params_.spread_matters && r.proven_class == -1 && r.continuation.empty();
-    if (r.depth_completed >= 1 && !arbitrary_loss) return {r.best, r.continuation};
-  }
+  if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
   return HastyBotAgent::make_move(req);
 }
 
 void EndgameHastyBotAgent::observe_move(const Move& move) {
-  if (move.type() == MoveType::PLAY)
-    scoreless_turns_ = 0;
-  else
-    ++scoreless_turns_;
+  endgame_.observe_move(move);
   HastyBotAgent::observe_move(move);
 }
 
 void EndgameHastyBotAgent::begin_game() {
-  scoreless_turns_ = 0;
-  solve_totals_ = {};
-  solver_->clear();
+  endgame_.begin_game();
   HastyBotAgent::begin_game();
 }
 
