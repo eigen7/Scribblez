@@ -4,7 +4,7 @@ The model encodes the pre-move board once with the shared SpatialTrunk (the same
 front end as the position evaluation model), then scores every candidate move
 against that one encoding via cross-attention -- so the expensive board encode
 is amortized across all candidates, not repeated per move (docs/roadmap.md,
-Phase 4).
+track A).
 
 Shapes follow the dataset's flattened, no-padding batch: P positions supply the
 board inputs, and M candidate moves (concatenated across those positions) each

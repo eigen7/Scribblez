@@ -1,5 +1,5 @@
 """Evaluation for the move set evaluation model: how well it reproduces the
-teacher's ranking of a position's candidate set (docs/roadmap2.md, A3 gate).
+teacher's ranking of a position's candidate set (docs/roadmap.md, A3 gate).
 
 The filter's one job is recall: this model's top-K must contain the moves the
 position evaluation model would pick. For each labeled position we rank its

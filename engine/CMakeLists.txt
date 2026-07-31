@@ -313,7 +313,7 @@ target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
 
 # Move set evaluation model distillation-target generator: stratified
 # candidate sampling + batched teacher (position evaluation model) inference
-# over .slog positions (docs/roadmap2.md track A).
+# over .slog positions (docs/roadmap.md track A).
 add_executable(move_set_eval_target_generator apps/move_set_eval_target_generator.cpp)
 target_link_libraries(move_set_eval_target_generator PRIVATE
   scribblez_nn

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Move selection (roadmap Phase 4) runs the move set evaluation model over all
+Move selection (roadmap track A) runs the move set evaluation model over all
 legal moves, sends the top-`K` to Monte Carlo simulation, and picks the best
 simmed move. This document makes that a **loop**: the sim results for each
 simmed candidate are fed back into the model as *evidence*, and the move set
@@ -20,7 +20,7 @@ own first-pass predictions.
 
 ## Where this sits
 
-- **Roadmap Phase 4** ([roadmap.md](roadmap.md)): wraps the one-round
+- **Roadmap track A** ([roadmap.md](roadmap.md)): wraps the one-round
   pipeline in an iteration.
 - **[design.md](design.md) §8.1 (search-derived knowledge buffers)**: the
   evidence set is a concrete instantiation, with a natural training story.
@@ -388,9 +388,9 @@ the condition, so mixing modes within a tag fails loudly.
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/selfplay/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/selfplay/sim_observation_log.h) (the versioned `.sobs` sidecar). |
-| 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, Phase 3 eval machinery | **Done — passed** (see above). |
+| 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
 | 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
-| 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap Phase 4 | — |
+| 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | — |
 | 6 | Multi-round agent (the decision procedure above); the proves-best acquisition head (footprint novelty penalty covers the batch-mode fallback); budget tuning; match-play eval vs. the one-round agent. | 5 | — |
 
 ## Open questions

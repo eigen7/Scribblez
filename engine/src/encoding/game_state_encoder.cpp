@@ -160,7 +160,7 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
 // full thermometer, and apply the same basis to the move set evaluation
 // model's resultant-diff move feature (move_set_encoder) so the two stay on
 // one representation. The principled answer for the decisive endgame is the
-// negamax solver (docs/roadmap2.md, D3), not finer value-net input resolution.
+// negamax solver (docs/roadmap.md, D3), not finer value-net input resolution.
 int encode_score_diff_scalar(int score_diff, float* out) {
   out[0] = static_cast<float>(score_diff) / kScoreDiffInputScale;
   return kScoreDiffInputFloats;

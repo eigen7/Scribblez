@@ -14,7 +14,7 @@ Read docs when the task touches their subject, not up front:
   the component chain, the `.slog` format, and the replay-reconstruction
   invariant (inputs are recomputed by replaying moves; targets come from
   stored final scores).
-- docs/roadmap.md and docs/roadmap2.md -- the model roadmap and rationale.
+- docs/roadmap.md -- the model roadmap and rationale.
 - docs/README.md -- the index of all documentation.
 
 Routine build/refactor/tooling tasks rarely need any of them.

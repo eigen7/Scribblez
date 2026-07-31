@@ -4,7 +4,7 @@
 // One .mset accompanies one .slog and holds, for a subset of its positions, the
 // candidate moves sampled there and the teacher position evaluation model's
 // readouts for each candidate's post-move state. The move set trainer pairs
-// these with inputs it reconstructs by replay (docs/roadmap2.md, track A).
+// these with inputs it reconstructs by replay (docs/roadmap.md, track A).
 //
 // The header pins the teacher by content hash, so a corpus can be verified to
 // come from one blessed checkpoint. It also carries the per-record target

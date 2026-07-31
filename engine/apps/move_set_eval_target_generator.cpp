@@ -1,5 +1,5 @@
 // Offline generator of move set evaluation model distillation targets (.mset
-// sidecars) for .slog self-play data (docs/roadmap2.md, track A).
+// sidecars) for .slog self-play data (docs/roadmap.md, track A).
 //
 // For every training-eligible position of each game (or a per-game sample),
 // the tool replays to the pre-move decision point, draws a STRATIFIED sample

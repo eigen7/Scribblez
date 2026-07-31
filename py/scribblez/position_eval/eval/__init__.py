@@ -1,1 +1,1 @@
-"""Model validation and evaluation machinery (roadmap Phase 3)."""
+"""Model validation and evaluation machinery (docs/roadmap.md)."""

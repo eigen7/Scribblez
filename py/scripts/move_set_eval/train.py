@@ -6,7 +6,7 @@ sets stored in a directory of .mset/.slog pairs (produced by the
 move_set_eval_target_generator), reporting the top-K recall / rank-correlation
 metric against the teacher on a held-out split. This is a lean, single-window
 loop for iterating on the model and the metric; the generational
-generate->train pipeline and dashboard integration (docs/roadmap2.md track A)
+generate->train pipeline and dashboard integration (docs/roadmap.md track A)
 are separate, later work.
 
 Usage:
