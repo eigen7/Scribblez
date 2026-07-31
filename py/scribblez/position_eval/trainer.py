@@ -47,7 +47,6 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PositionEvalModel
@@ -216,14 +215,12 @@ def run_generational_training(model, optimizer, conn, paths, device, params, sta
 # ---------------------------------------------------------------------------
 
 
-def load_position_eval(params, spatial_planes: int) -> dict | None:
-    """Build the frozen position-evaluation input batch once (or None if disabled / the
+def load_position_eval(spatial_planes: int) -> dict | None:
+    """Build the frozen position-evaluation input batch once (or None if the
     dataset is empty / the lexicon is unavailable). At each checkpoint the model is
     run over it and the predictions are written to the dashboard DB, where the
     Positions tab pairs them with the Monte-Carlo ground truth."""
-    if params.no_eval:
-        return None
-    dataset = params.eval_dataset or str(position_eval_analysis.DEFAULT_DATASET)
+    dataset = str(position_eval_analysis.DEFAULT_DATASET)
     try:
         names, inputs = position_eval_analysis.load_inputs(dataset)
     except Exception as e:  # missing lexicon / unreadable dataset
@@ -246,14 +243,12 @@ def eval_position_eval(model, position_eval: dict, device, conn, generation: int
     db.write_position_eval_preds(conn, generation, positions, preds)
 
 
-def load_position_eval_quality(params, spatial_planes: int) -> dict | None:
+def load_position_eval_quality(spatial_planes: int) -> dict | None:
     """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth once
-    (or None if disabled / the dataset or its ground truth is unavailable). At each
-    checkpoint the model is run over it and aggregate quality scalars are recorded for
-    the Loss tab."""
-    if params.no_quality:
-        return None
-    dataset = params.quality_dataset or str(position_eval_analysis.LARGE_DATASET)
+    (or None if the dataset or its ground truth is unavailable). At each checkpoint
+    the model is run over it and aggregate quality scalars are recorded for the
+    Loss tab."""
+    dataset = str(position_eval_analysis.LARGE_DATASET)
     try:
         names, inputs = position_eval_analysis.load_inputs(dataset)
         gt = position_eval_analysis.load_ground_truth(dataset, names)
@@ -299,16 +294,11 @@ def run(ctx: WorkerContext) -> int:
     in_shapes = {s.name: s.dims for s in get_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
-    lex = LexiconArgs(module=params.lexicon_module)
-    lexicon_module = lex.build(channels=params.trunk_channels)
-    if lexicon_module is not None:
-        print(f"Lexicon module: {lex.module}")
     model = PositionEvalModel(
         spatial_planes=spatial_planes,
         scalar_size=scalar_size,
         num_blocks=params.num_blocks,
         trunk_channels=params.trunk_channels,
-        lexicon_module=lexicon_module,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
@@ -335,8 +325,8 @@ def run(ctx: WorkerContext) -> int:
         "config": asdict(params),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
-        "position_eval": load_position_eval(params, spatial_planes),
-        "position_eval_quality": load_position_eval_quality(params, spatial_planes),
+        "position_eval": load_position_eval(spatial_planes),
+        "position_eval_quality": load_position_eval_quality(spatial_planes),
         "stats": WorkerStats(ctx),
     }
 
