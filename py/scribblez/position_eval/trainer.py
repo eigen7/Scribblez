@@ -15,12 +15,12 @@ One epoch per generation keeps data reuse low by construction -- a game is
 trained on `window` times over its residency, once per generation it is part
 of the window -- and makes epoch and generation the same clock. Everything
 else is keyed on cumulative rows trained (the rows-clock): the dashboard
-x-axis, the warmup learning rate, and the restart cursor. A single rolling
-model.pt holds resume state, so pausing and restarting the worker continues
-exactly where it left off; SIGTERM stops at the next batch boundary, losing at
-most the current (uncheckpointed) generation. The base learning rate and the
-CPU thread pools (DataLoader workers, torch intra-op threads) are live
-controls in the per-tag dashboard.db, adopted at the next generation.
+x-axis and the restart cursor. A single rolling model.pt holds resume state,
+so pausing and restarting the worker continues exactly where it left off;
+SIGTERM stops at the next batch boundary, losing at most the current
+(uncheckpointed) generation. The base learning rate and the CPU thread pools
+(DataLoader workers, torch intra-op threads) are live controls in the per-tag
+dashboard.db, adopted at the next generation.
 
 Runs as the singleton `train` worker of the position_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train), or directly via the
@@ -47,7 +47,6 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.generational.lr import effective_lr
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
@@ -100,8 +99,7 @@ def _checkpoint_and_eval(
     sys.stdout.write("\n")
     avg = result.losses
     ci = gen
-    base_lr = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
-    lr_now = effective_lr(base_lr, state.rows_trained, params.warmup_rows)
+    lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
         f"wld_acc={result.wld_acc:.4f} lr={lr_now:.2e} {elapsed:.1f}s"
@@ -199,7 +197,7 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    lr_controller = LrController(conn, params.lr, params.warmup_rows)
+    lr_controller = LrController(conn, params.lr)
     cpu = CpuController(conn)
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)

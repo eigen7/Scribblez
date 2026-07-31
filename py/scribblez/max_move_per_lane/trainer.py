@@ -40,7 +40,6 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.generational.lr import effective_lr
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel
 from scribblez.max_move_per_lane.train_loop import LossConfig, run_epoch
@@ -63,8 +62,7 @@ def _checkpoint_and_eval(
     sys.stdout.write("\n")
     avg = result.losses
     ci = gen
-    base_lr = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
-    lr_now = effective_lr(base_lr, state.rows_trained, params.warmup_rows)
+    lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
         f"move_acc={result.accs['move_acc']:.4f} "
@@ -143,7 +141,7 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    lr_controller = LrController(conn, params.lr, params.warmup_rows)
+    lr_controller = LrController(conn, params.lr)
     cpu = CpuController(conn)
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)

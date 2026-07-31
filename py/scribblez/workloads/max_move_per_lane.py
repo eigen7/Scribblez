@@ -30,7 +30,6 @@ class MaxMovePerLaneParams:
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
-    warmup_rows: int = param(0, "linear LR warmup over the first this-many rows")
     weight_decay: float = param(1e-4, "AdamW weight decay")
     # Model.
     trunk_channels: int = param(128, "CNN trunk width")

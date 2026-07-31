@@ -19,7 +19,7 @@ class GenerationalState:
     """The generational cursor persisted across restarts.
 
     rows_trained: cumulative rows (positions) trained -- the rows-clock that
-        keys the dashboard x-axis and drives the warmup learning rate.
+        keys the dashboard x-axis.
     generation_index: the next generation to train. Each generation is trained
         exactly once, so this is also the metrics / ONNX index its checkpoint
         will be written under.

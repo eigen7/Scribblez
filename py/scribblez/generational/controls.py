@@ -21,7 +21,6 @@ import torch
 
 from ..dashboard import db
 from ..train_common import timed_print
-from .lr import make_lr_fn
 
 # Names of the live controls (dashboard Controls tab / DB).
 CONTROL_BASE_LR = "base_lr"
@@ -33,16 +32,18 @@ DEFAULT_DATALOADER_WORKERS = 4
 
 
 class LrController:
-    """Serves the per-step learning rate from the live base rate in the control
-    table, so the operator can step it down mid-run from the dashboard. The base
-    is read once per epoch (cheap; the rate only needs to change at epoch
-    granularity) and scaled by the rows-clock warmup. When the operator has moved
-    the base since the last epoch, a rows-clock control event is recorded so the
-    metric plots can annotate where it changed."""
+    """Serves the learning rate from the live base rate in the control table.
 
-    def __init__(self, conn, base_lr: float, warmup_rows: int):
+    There is no schedule: an open-ended, moving-target self-play run has no
+    known annealing horizon, so the rate is a manual operator control, stepped
+    down by hand off the loss plots (see docs/generational_training.md,
+    "Learning rate: a persisted manual control"). The base is read once per
+    generation (the rate only needs to change at that granularity); when the
+    operator has moved it, a rows-clock control event is recorded so the metric
+    plots can annotate where it changed."""
+
+    def __init__(self, conn, base_lr: float):
         self._conn = conn
-        self._warmup_rows = warmup_rows
         self._default = base_lr
         self.base = db.read_control(conn, CONTROL_BASE_LR, default=base_lr)
 
@@ -53,7 +54,11 @@ class LrController:
             db.write_control_event(self._conn, rows_trained, CONTROL_BASE_LR, base)
             timed_print(f"base LR {self.base:.2e} -> {base:.2e} at {rows_trained} rows")
             self.base = base
-        return make_lr_fn(base, self._warmup_rows)
+
+        def lr_fn(rows_trained: int) -> float:
+            return base
+
+        return lr_fn
 
 
 class CpuController:
