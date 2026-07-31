@@ -1,9 +1,7 @@
 """Rolling checkpoint for the generational trainer -- the restart authority.
 
 A single rolling `model.pt` under the tag holds everything needed to resume: the
-model and optimizer state plus the generational cursor (cumulative rows trained,
-which generation is being trained, how far into that generation's epochs, and a
-monotonic checkpoint index for the dashboard metrics key). Restarting the script
+model and optimizer state plus the generational cursor. Restarting the script
 loads this and continues exactly where it left off.
 """
 
@@ -20,20 +18,15 @@ from ..paths import TagPaths
 class GenerationalState:
     """The generational cursor persisted across restarts.
 
-    rows_trained: cumulative rows (positions) trained -- the rows-clock that keys
-        the dashboard x-axis and drives the warmup learning rate.
-    generation_index: the generation currently being trained (newest in the
-        training window).
-    epoch_in_generation: number of epochs already completed over that generation,
-        so a resume continues at this epoch rather than repeating them.
-    checkpoint_index: monotonic count of checkpoints written, used as the integer
-        key of the dashboard `metrics` table.
+    rows_trained: cumulative rows (positions) trained -- the rows-clock that
+        keys the dashboard x-axis and drives the warmup learning rate.
+    generation_index: the next generation to train. Each generation is trained
+        exactly once, so this is also the metrics / ONNX index its checkpoint
+        will be written under.
     """
 
     rows_trained: int = 0
     generation_index: int = 0
-    epoch_in_generation: int = 0
-    checkpoint_index: int = 0
 
 
 def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: dict):
@@ -45,8 +38,6 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
         {
             "rows_trained": state.rows_trained,
             "generation_index": state.generation_index,
-            "epoch_in_generation": state.epoch_in_generation,
-            "checkpoint_index": state.checkpoint_index,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "config": config,
@@ -67,11 +58,9 @@ def resume(paths: TagPaths, model, optimizer, device) -> GenerationalState:
     state = GenerationalState(
         rows_trained=int(ckpt["rows_trained"]),
         generation_index=int(ckpt["generation_index"]),
-        epoch_in_generation=int(ckpt["epoch_in_generation"]),
-        checkpoint_index=int(ckpt["checkpoint_index"]),
     )
     print(
         f"Resuming from {path.name}: generation {state.generation_index}, "
-        f"epoch {state.epoch_in_generation}, {state.rows_trained} rows trained"
+        f"{state.rows_trained} rows trained"
     )
     return state

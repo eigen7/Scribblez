@@ -40,15 +40,9 @@ class PositionEvalParams:
         "open each game with K uniformly-random plies (K ~ round(Exp(mean))) before the "
         "HastyBots take over, reaching off-policy states; 0 disables",
     )
-    # Training window / reuse.
+    # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
-    turns_per_game: int = param(1, "turns sampled per game per epoch; 0 = every eligible turn")
-    reuse_per_position: float = param(
-        2.0, "target gradient passes per unique position; derives epochs-per-generation"
-    )
-    epochs_per_generation: int = param(
-        1, "explicit epochs-per-generation, overriding reuse_per_position; 0 derives it"
-    )
+    turns_per_game: int = param(1, "turns sampled per game per generation; 0 = every eligible turn")
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")

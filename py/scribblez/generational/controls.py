@@ -106,11 +106,11 @@ def init_controls(conn, base_lr: float):
     )
 
 
-def progress_line(generation_index, epoch, done_batches, samples, elapsed, rows):
-    """run_epoch on_batch callback: an in-place per-epoch throughput line."""
+def progress_line(generation_index, done_batches, samples, elapsed, rows):
+    """run_epoch on_batch callback: an in-place per-generation throughput line."""
     rate = samples / elapsed if elapsed > 0 else 0.0
     sys.stdout.write(
-        f"\r  gen {generation_index} epoch {epoch}: {done_batches} batches | "
+        f"\r  gen {generation_index}: {done_batches} batches | "
         f"{rate / 1000:.1f}k rows/s | {rows} rows total   "
     )
     sys.stdout.flush()

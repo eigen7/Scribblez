@@ -27,15 +27,9 @@ class MaxMovePerLaneParams:
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
     hasty_temp_min_bag: int = param(0, "sample only on turns with at least this many bag tiles")
     random_opening_mean: float = param(0.0, "random-opening plies per game (0 disables)")
-    # Training window / reuse.
+    # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
-    turns_per_game: int = param(1, "turns sampled per game per epoch; 0 = every turn")
-    reuse_per_position: float = param(
-        2.0, "target gradient passes per unique position; derives epochs-per-generation"
-    )
-    epochs_per_generation: int = param(
-        0, "explicit epochs-per-generation, overriding reuse_per_position; 0 derives it"
-    )
+    turns_per_game: int = param(1, "turns sampled per game per generation; 0 = every turn")
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")

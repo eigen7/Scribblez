@@ -186,8 +186,8 @@ def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list
 
 
 def read_train_state(paths: TagPaths) -> dict:
-    """The trainer's cursor ({rows_trained, generation_index, epoch_in_generation,
-    checkpoint_index}), or {} before a trainer has ever checkpointed."""
+    """The trainer's cursor ({rows_trained, generation_index}), or {} before a
+    trainer has ever checkpointed."""
     try:
         return json.loads(paths.train_state_path.read_text())
     except (FileNotFoundError, json.JSONDecodeError, OSError):

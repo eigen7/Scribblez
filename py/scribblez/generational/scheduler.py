@@ -231,12 +231,6 @@ def progress(spec, tag: str) -> list[tuple[str, object]]:
         out.append(("generations", f"{len(complete)} complete (latest gen {max(complete)})"))
     state = lifecycle.read_train_state(paths)
     if state:
-        out.append(
-            (
-                "trainer",
-                f"gen {state.get('generation_index', 0)} "
-                f"epoch {state.get('epoch_in_generation', 0)}",
-            )
-        )
+        out.append(("trainer", f"gen {state.get('generation_index', 0)}"))
         out.append(("rows", state.get("rows_trained", 0)))
     return out

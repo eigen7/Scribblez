@@ -5,19 +5,22 @@ scheduler (scribblez/generational/scheduler.py) fills generation directories
 from generator workers' staged chunks, and the trainer
 
   1. waits until its cursor generation is complete on disk,
-  2. trains a few epochs over a sliding window of the most recent complete
-     generations -- reusing each position across epochs and, with
-     turns_per_game, sampling several turns per game,
+  2. trains one epoch over a sliding window of the most recent complete
+     generations (turns_per_game turns sampled per game), checkpointing under
+     the generation's index,
   3. advances, evicting generations older than the window, and publishes its
      cursor (train_state.json) so the scheduler can pace the generator fleet.
 
-Everything is keyed on cumulative rows trained (the rows-clock): the dashboard
+One epoch per generation keeps data reuse low by construction -- a game is
+trained on `window` times over its residency, once per generation it is part
+of the window -- and makes epoch and generation the same clock. Everything
+else is keyed on cumulative rows trained (the rows-clock): the dashboard
 x-axis, the warmup learning rate, and the restart cursor. A single rolling
 model.pt holds resume state, so pausing and restarting the worker continues
 exactly where it left off; SIGTERM stops at the next batch boundary, losing at
-most the current (uncheckpointed) epoch. The base learning rate and the CPU
-thread pools (DataLoader workers, torch intra-op threads) are live controls in
-the per-tag dashboard.db, adopted at the next epoch / generation.
+most the current (uncheckpointed) generation. The base learning rate and the
+CPU thread pools (DataLoader workers, torch intra-op threads) are live
+controls in the per-tag dashboard.db, adopted at the next generation.
 
 Runs as the singleton `train` worker of the position_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train), or directly via the
@@ -45,7 +48,6 @@ from scribblez.generational.controls import (
     progress_line,
 )
 from scribblez.generational.lr import effective_lr
-from scribblez.generational.reuse import effective_reuse, epochs_for_reuse
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
@@ -83,11 +85,11 @@ def _rows_left(params, state: GenerationalState) -> bool:
 
 
 def _checkpoint_and_eval(
-    model, optimizer, conn, paths, device, params, state, result, elapsed, ctx
+    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, ctx
 ):
-    """Export ONNX, record this epoch's metrics + eval (keyed on the checkpoint
-    index, with the rows-clock stored as `positions`), save the rolling
-    checkpoint, and publish the cursor.
+    """Export ONNX, record the trained generation's metrics + eval (keyed on
+    the generation index `gen`, with the rows-clock stored as `positions`),
+    save the rolling checkpoint, and publish the cursor.
 
     ONNX export runs first because the eval step below is what makes this
     generation visible to the dashboard's Positions tab (it writes the row
@@ -97,18 +99,16 @@ def _checkpoint_and_eval(
     null."""
     sys.stdout.write("\n")
     avg = result.losses
-    ci = state.checkpoint_index
+    ci = gen
     base_lr = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
     lr_now = effective_lr(base_lr, state.rows_trained, params.warmup_rows)
     timed_print(
-        f"[gen {state.generation_index} epoch {state.epoch_in_generation}] ckpt {ci} "
-        f"rows={state.rows_trained} loss={avg['total']:.4f} wld_acc={result.wld_acc:.4f} "
-        f"lr={lr_now:.2e} {elapsed:.1f}s"
+        f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
+        f"wld_acc={result.wld_acc:.4f} lr={lr_now:.2e} {elapsed:.1f}s"
     )
     record = {
         "epoch": ci,
         "positions": state.rows_trained,
-        "generation": state.generation_index,
         "loss": avg["total"],
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
@@ -147,76 +147,53 @@ def _checkpoint_and_eval(
     return time.time() - t_eval
 
 
-def epochs_this_generation(params, ds) -> int:
-    """The epoch count to run over the current window: epochs_per_generation when
-    set explicitly, otherwise derived from reuse_per_position and the window's
-    measured average eligible turns per game."""
-    if params.epochs_per_generation > 0:
-        return params.epochs_per_generation
-    avg_eligible = ds.num_samples / max(ds.num_games, 1)
-    return epochs_for_reuse(
-        params.reuse_per_position, params.window, params.turns_per_game, avg_eligible
-    )
-
-
 def train_one_generation(
     model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
-) -> int:
-    """Train `epochs` passes over the current window, resuming at
-    state.epoch_in_generation and checkpointing after each epoch. Returns the
-    target epoch count (so the caller can tell a max_rows early stop from a
-    completed generation)."""
-    window = lifecycle.window_dirs(paths, state.generation_index, params.window)
+):
+    """Train one epoch over the window ending at the cursor generation, then
+    checkpoint under that generation's index and advance the cursor."""
+    gen = state.generation_index
+    window = lifecycle.window_dirs(paths, gen, params.window)
     ds = SlogDataset(
         window, post_move=True, apply_symmetry=True, num_workers=cpu.dataloader_workers
     )
-    epochs = epochs_this_generation(params, ds)
-    avg_eligible = ds.num_samples / max(ds.num_games, 1)
-    reuse = effective_reuse(epochs, params.window, params.turns_per_game, avg_eligible)
     timed_print(
-        f"generation {state.generation_index}: window {[d.name for d in window]} "
-        f"({ds.num_games} games, {ds.num_samples} rows, {avg_eligible:.1f} eligible turns/game); "
-        f"{epochs} epochs/gen -> ~{reuse:.2f} passes/position (turns/game {params.turns_per_game})"
+        f"generation {gen}: window {[d.name for d in window]} "
+        f"({ds.num_games} games, {ds.num_samples} eligible rows)"
     )
-    while state.epoch_in_generation < epochs and _rows_left(params, state):
-        e = state.epoch_in_generation
-        # The global epoch index (monotonic across the whole run) seeds the epoch
-        # shuffle and the per-game turn rotation, so every pass shuffles differently
-        # and draws distinct turns. checkpoint_index counts completed epochs, so it
-        # is exactly that index and survives restarts.
-        global_epoch = state.checkpoint_index
-        batches = ds.iter_batches(
-            params.batch_size,
-            seed=global_epoch * 1000003,
-            turns_per_game=params.turns_per_game,
-            epoch_index=global_epoch,
+    # The generation index seeds the shuffle and the per-game turn rotation, so
+    # each of the `window` passes a game gets over its residency shuffles
+    # differently and draws distinct turns.
+    batches = ds.iter_batches(
+        params.batch_size,
+        seed=gen * 1000003,
+        turns_per_game=params.turns_per_game,
+        epoch_index=gen,
+    )
+    t0 = time.time()
+    rows_before = state.rows_trained
+    result = run_epoch(
+        model,
+        optimizer,
+        batches,
+        device,
+        loss_cfg,
+        lr_fn=lr_controller.epoch_lr_fn(state.rows_trained),
+        rows_trained=state.rows_trained,
+        on_batch=functools.partial(progress_line, gen),
+    )
+    state.rows_trained = result.rows_trained
+    state.generation_index = gen + 1
+    elapsed = time.time() - t0
+    eval_seconds = _checkpoint_and_eval(
+        model, optimizer, conn, paths, device, params, state, gen, result, elapsed, ctx
+    )
+    if ctx["stats"] is not None:
+        ctx["stats"].cycle_done(
+            {"train_s": elapsed, "eval_s": eval_seconds},
+            units=state.rows_trained - rows_before,
+            nbytes=0,
         )
-        t0 = time.time()
-        rows_before = state.rows_trained
-        result = run_epoch(
-            model,
-            optimizer,
-            batches,
-            device,
-            loss_cfg,
-            lr_fn=lr_controller.epoch_lr_fn(state.rows_trained),
-            rows_trained=state.rows_trained,
-            on_batch=functools.partial(progress_line, state.generation_index, e),
-        )
-        state.rows_trained = result.rows_trained
-        state.epoch_in_generation = e + 1
-        state.checkpoint_index += 1
-        elapsed = time.time() - t0
-        eval_seconds = _checkpoint_and_eval(
-            model, optimizer, conn, paths, device, params, state, result, elapsed, ctx
-        )
-        if ctx["stats"] is not None:
-            ctx["stats"].cycle_done(
-                {"train_s": elapsed, "eval_s": eval_seconds},
-                units=state.rows_trained - rows_before,
-                nbytes=0,
-            )
-    return epochs
 
 
 def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
@@ -227,18 +204,12 @@ def run_generational_training(model, optimizer, conn, paths, device, params, sta
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index)
-        epochs = train_one_generation(
+        train_one_generation(
             model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
         )
-        if state.epoch_in_generation < epochs:
-            break  # stopped mid-generation by max_rows; resume here next run
-        evicted = lifecycle.evict_beyond_window(paths, state.generation_index, params.window)
+        evicted = lifecycle.evict_beyond_window(paths, state.generation_index - 1, params.window)
         if evicted:
             timed_print(f"evicted generations {evicted} (window={params.window})")
-        state.generation_index += 1
-        state.epoch_in_generation = 0
-        checkpoint.save(paths, model, optimizer, state, ctx["config"])
-        _publish_train_state(paths, state)
     timed_print(f"Stopped at {state.rows_trained} rows (generation {state.generation_index}).")
 
 
