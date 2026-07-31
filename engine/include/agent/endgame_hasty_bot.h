@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agent/agent_endgame_solver.h"
+#include "agent/endgame_turn_policy.h"
 #include "agent/macondo_bot.h"
 #include "endgame/endgame_solver.h"
 
@@ -10,7 +10,7 @@
 
 namespace scribblez {
 
-// A HastyBot that hands the endgame off to an AgentEndgameSolver, so it
+// A HastyBot that hands the endgame off to an EndgameTurnPolicy, so it
 // converts won endgames and defends lost ones optimally rather than greedily.
 // Until the bag empties it plays exactly like HastyBotAgent, as it does on any
 // turn the solver declines.
@@ -29,7 +29,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
 
   // Exposed for the endgame benchmark, which reads the solve totals and toggles
   // individual solver features.
-  AgentEndgameSolver& endgame() { return endgame_; }
+  EndgameTurnPolicy& endgame() { return endgame_; }
 
   // Build from `--player "--type=hastybot-endgame [options]"` tokens, with
   // --type and --name already stripped. Accepts every HastyBot option plus the
@@ -40,7 +40,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   static std::string options_help();
 
  private:
-  AgentEndgameSolver endgame_;
+  EndgameTurnPolicy endgame_;
 };
 
 }  // namespace scribblez

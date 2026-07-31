@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agent/agent.h"
-#include "agent/agent_endgame_solver.h"
+#include "agent/endgame_turn_policy.h"
 #include "encoding/game_state_encoder.h"
 #include "endgame/endgame_solver.h"
 #include "nn/eval_service.h"
@@ -30,8 +30,8 @@ namespace scribblez {
 //
 // In the endgame the agent bypasses the model entirely -- the value model never
 // trains on bag-empty positions and evaluates them poorly -- and hands the turn
-// to an exact AgentEndgameSolver, falling back to the greedy HastyBot move on
-// the turns the solver declines (or when a zero budget disables it).
+// to an EndgameTurnPolicy's exact solve, falling back to the greedy HastyBot
+// move on the turns the solver declines (or when a zero budget disables it).
 //
 // The agent's GameStateEncoder mirrors the real game through begin_game() /
 // observe_move(), since its placement-plane features depend on both players'
@@ -113,7 +113,7 @@ class NeuralAgent : public Agent {
   std::unique_ptr<nn::EvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
-  AgentEndgameSolver endgame_;
+  EndgameTurnPolicy endgame_;
   std::mt19937_64 rng_;
 
   // Scratch reused across turns to avoid per-move allocation.
