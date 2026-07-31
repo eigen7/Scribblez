@@ -27,7 +27,14 @@ struct MoveRequest {
   const Board& board;
   const Dictionary& dict;
   const Rack& my_rack;
-  const Rack& opp_rack;  // visible during the endgame, hidden otherwise
+  // What the mover legitimately knows of the opponent's rack, which is not
+  // always the whole of it: in face-up-leaves games it is the tiles they
+  // publicly retained from their last move, with their replenishment draws
+  // still hidden, and once the bag is empty it is their entire rack, provably
+  // so. In a standard game before that point it is empty. An agent may
+  // therefore read it freely, but must not assume the opponent holds nothing
+  // else.
+  const Rack& opp_rack;
   int my_score;
   int opp_score;
   int bag_size;

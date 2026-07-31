@@ -384,11 +384,11 @@ def _position_eval_onnx_feed(sess, flat_input: np.ndarray) -> dict:
     session's full flat input row.
 
     The model declares its own arm in its ONNX metadata_props
-    ("contingent_features", stamped at export). A baseline model consumes the base
-    layout, whose spatial planes and scalars are prefixes of the full blocks, so its
-    declared input widths select the right slices."""
+    ("contingent_features", stamped at export; absent means off). A baseline model
+    consumes the base layout, whose spatial planes and scalars are prefixes of the
+    full blocks, so its declared input widths select the right slices."""
     meta = sess.get_modelmeta().custom_metadata_map
-    contingent = meta["contingent_features"] == "true"
+    contingent = meta.get("contingent_features") == "true"
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
     planes = int(model_inputs["input_spatial"][1])
     scalars = int(model_inputs["input_scalar"][1])

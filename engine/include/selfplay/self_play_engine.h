@@ -32,6 +32,9 @@ class SelfPlayEngine {
     // compute belonging to undecided games and its logs tolerating proof-line
     // stand-ins for agent moves.
     bool respect_projections = false;
+    // Play face-up-leaves Scrabble, in which each player's retained tiles are
+    // public until they move again (docs/roadmap.md).
+    bool face_up_leaves = false;
   };
 
   // Builds `params.threads` agent pairs, downgrading to 1 (with a warning) if

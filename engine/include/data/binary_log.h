@@ -45,12 +45,16 @@ namespace binlog {
 inline constexpr uint32_t kMagic = 0x474F4C53u;
 inline constexpr uint16_t kVersion = 10;
 
+// FileHeader::flags bits: the rules the games were played under, so a consumer
+// can refuse a corpus that does not suit it.
+inline constexpr uint16_t kFlagFaceUpLeaves = 1u;  // players saw each other's leaves
+
 #pragma pack(push, 1)
 
 struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
-  uint16_t reserved;
+  uint16_t flags;
   uint32_t num_games;
   uint32_t num_sample_positions;  // total training rows
 };
@@ -127,7 +131,7 @@ int pick_any_turn(const GameLog& log, std::mt19937_64& rng);
 // writing, keeping the I/O off the critical path.
 class BinaryLogWriter {
  public:
-  BinaryLogWriter(const std::string& dir, int games_per_file);
+  BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags = 0);
   ~BinaryLogWriter();  // flushes any pending games
 
   BinaryLogWriter(const BinaryLogWriter&) = delete;
@@ -144,6 +148,7 @@ class BinaryLogWriter {
 
   std::string dir_;
   int games_per_file_;
+  uint16_t flags_;
   std::mutex mutex_;
   std::vector<GameLogStorage> pending_;
 };

@@ -170,6 +170,7 @@ class StubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
   bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   void evaluate(const float* /*inputs*/, int count, nn::Eval* out) override {
@@ -187,6 +188,7 @@ class CountingStubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
   bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   int total_rows = 0;
@@ -403,7 +405,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   Rack my_rack = rack_from("DONERST");
 
   std::vector<float> agent_row(kInputFloats);
-  agent.encode_candidate(candidate, my_rack, my_seat, agent_row.data());
+  agent.encode_candidate(candidate, my_rack, my_seat, Rack{}, agent_row.data());
 
   std::vector<float> ref_row(kInputFloats);
   ref.board().ensure_movegen_caches(dict);
@@ -499,7 +501,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
   agent.observe_move(move1);
 
   std::vector<float> agent_row(kInputFloats, 0.0f);
-  agent.encode_candidate(move2, rack_from("DONERST"), mover, agent_row.data());
+  agent.encode_candidate(move2, rack_from("DONERST"), mover, Rack{}, agent_row.data());
 
   bool any_nonzero = false;
   for (int i = 0; i < kInputFloats; ++i) {

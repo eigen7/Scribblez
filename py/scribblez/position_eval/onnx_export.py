@@ -111,7 +111,9 @@ def _architecture_signature(model: torch.nn.Module, opset: int) -> str:
     return hashlib.md5("\n".join(components).encode()).hexdigest()
 
 
-def _write_model_metadata(path: Path, contingent_features: bool, architecture_signature: str):
+def _write_model_metadata(
+    path: Path, contingent_features: bool, opp_leave_input: bool, architecture_signature: str
+):
     """Record the model's input-encoding arm, lexicon, and architecture
     signature in the ONNX metadata_props -- the explicit contract serving
     consumers recover model properties from (the dashboard's what-if runner
@@ -120,6 +122,7 @@ def _write_model_metadata(path: Path, contingent_features: bool, architecture_si
     m = onnx.load(str(path), load_external_data=False)
     for key, value in (
         ("contingent_features", "true" if contingent_features else "false"),
+        ("opp_leave_input", "true" if opp_leave_input else "false"),
         ("lexicon", DEFAULT_LEXICON),
         ("model-architecture-signature", architecture_signature),
     ):
@@ -135,6 +138,7 @@ def export_onnx(
     scalar_size: int,
     *,
     contingent_features: bool,
+    opp_leave_input: bool = False,
     board_size: int = 15,
     opset: int = 17,
 ):
@@ -187,7 +191,9 @@ def export_onnx(
     # (resolved relative to the directory the model file is loaded from, not to the
     # model file's own name), so it stays correct once tmp_path is renamed to path.
     _externalize_frozen_lexicon(tmp_path, _frozen_lexicon_names(model))
-    _write_model_metadata(tmp_path, contingent_features, _architecture_signature(model, opset))
+    _write_model_metadata(
+        tmp_path, contingent_features, opp_leave_input, _architecture_signature(model, opset)
+    )
     os.replace(tmp_path, path)
     if was_training:
         model.train()
