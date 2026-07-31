@@ -39,8 +39,8 @@
 // summarized in docs/endgame_bench_results.md.
 
 #include "agent/agent.h"
-#include "agent/agent_endgame_solver.h"
 #include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_turn_policy.h"
 #include "agent/macondo_bot.h"
 #include "endgame/endgame_solver.h"
 #include "game/bag.h"
@@ -256,7 +256,7 @@ struct SolverOutcome {
 // caller needs max_solve_nodes for the budget-nesting skip).
 struct SolverPlayout {
   int spread = 0;
-  AgentEndgameSolver::SolveTotals totals;
+  EndgameTurnPolicy::SolveTotals totals;
 };
 
 // Play one captured endgame with an EndgameHastyBot on the first-actor seat

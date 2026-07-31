@@ -29,7 +29,7 @@ namespace scribblez {
 // transposition entries the first seat just wrote; a thread runs its two agents
 // sequentially, so the shared solver never sees concurrent use. Construction
 // and begin_game() both clear the table.
-class AgentEndgameSolver {
+class EndgameTurnPolicy {
  public:
   // A budget of 0 in `params` disables endgame solving entirely: try_solve()
   // then always declines, leaving the owning agent's own policy to play the
@@ -38,7 +38,7 @@ class AgentEndgameSolver {
   // params.spread_matters defaults to false -- the self-play break-out setting,
   // which stops at the class proof and presumes a projection-respecting game
   // loop; pass true for games played to their end, where points still matter.
-  AgentEndgameSolver(int thread_id, const EndgameSolver::Params& params);
+  EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params);
 
   // The decision for a turn the solver owns: its move, annotated with the proof
   // certificate as the decision's projection, so a projection-respecting loop

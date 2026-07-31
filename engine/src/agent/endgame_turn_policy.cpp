@@ -1,4 +1,4 @@
-#include "agent/agent_endgame_solver.h"
+#include "agent/endgame_turn_policy.h"
 
 #include "game/move.h"
 
@@ -26,12 +26,12 @@ std::shared_ptr<EndgameSolver> pooled_solver(int thread_id) {
 
 }  // namespace
 
-AgentEndgameSolver::AgentEndgameSolver(int thread_id, const EndgameSolver::Params& params)
+EndgameTurnPolicy::EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params)
     : params_(params), solver_(pooled_solver(thread_id)) {
   solver_->clear();
 }
 
-std::optional<MoveDecision> AgentEndgameSolver::try_solve(const MoveRequest& req) {
+std::optional<MoveDecision> EndgameTurnPolicy::try_solve(const MoveRequest& req) {
   if (req.bag_size != 0 || params_.budget == 0) return std::nullopt;
 
   const auto t0 = std::chrono::steady_clock::now();
@@ -62,14 +62,14 @@ std::optional<MoveDecision> AgentEndgameSolver::try_solve(const MoveRequest& req
   return MoveDecision{r.best, r.continuation};
 }
 
-void AgentEndgameSolver::observe_move(const Move& move) {
+void EndgameTurnPolicy::observe_move(const Move& move) {
   if (move.type() == MoveType::PLAY)
     scoreless_turns_ = 0;
   else
     ++scoreless_turns_;
 }
 
-void AgentEndgameSolver::begin_game() {
+void EndgameTurnPolicy::begin_game() {
   scoreless_turns_ = 0;
   solve_totals_ = {};
   solver_->clear();
