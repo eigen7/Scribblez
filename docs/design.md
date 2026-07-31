@@ -13,6 +13,12 @@ over both players' hidden racks from the perspective of an outside observer —
 and use a learned encoder/decoder framework with posterior refinement to
 produce accurate, context-aware rack samples for Monte Carlo simulation.
 
+**Scope note.** This document describes the full design, in standard Scrabble.
+Development currently runs in the face-up-leaves variant, which parks the
+belief system (§3) and everything downstream of it; see
+[roadmap.md](roadmap.md) for what that defers and why. Nothing else here is
+specific to an information condition.
+
 ## 1. Introduction and motivation
 
 Current state-of-the-art Scrabble engines, such as Macondo, operate by

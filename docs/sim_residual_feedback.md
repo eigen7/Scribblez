@@ -361,16 +361,15 @@ decision metric is best held-out `wld_ce`):
   gains are the transfer gains that matter. The optional `ownsim` arm
   (`--arms ownsim`) prices that shortcut.
 
-### The open-leaves information condition
+### The face-up-leaves mode
 
 `--open-leaves` on both commands (under a dedicated tag) runs the same
-experiment in **open-leaves Scrabble**: the tiles a player retained from
-their last move are public, replenishment draws stay hidden. The leave is
-the Bayesian-inferable part of a rack, so this hands the model and the sims
-an exact rack posterior — the exact endpoint of the belief-quality axis. The
-open-leaves gain minus the hidden gain prices the entire belief line of work
-interventionally. A research instrument, not the product path; compare arm
-deltas within a mode only.
+experiment in **face-up-leaves Scrabble**: the tiles a player retained from
+their last move are public, replenishment draws stay hidden. This is the
+variant the project now develops in ([roadmap.md](roadmap.md)), so it is the
+mainline mode rather than an instrument; the hidden arm remains runnable and
+the gap between the two is what belief would have to close. Compare arm deltas
+within a mode only.
 
 Mechanics: the model input gains the opponent-leave counts block
 (`kOppLeaveCounts`, input_encoder.h); the leave is derived at replay time
