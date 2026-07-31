@@ -39,7 +39,7 @@ def build_player_spec(args) -> str:
     play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster); its
     endgames go to the exact solver at the engine's default node budget."""
     if not args.model:
-        return hasty_player_spec(args.hasty_temperature, args.hasty_top_k, args.hasty_temp_min_bag)
+        return hasty_player_spec(args.hasty_temperature, args.hasty_top_k)
     return (
         f"--type=neural --model={args.model} --top-k={args.top_k} "
         f"--temperature={args.temperature} --precision={args.precision}"
@@ -108,14 +108,6 @@ def main() -> int:
         type=int,
         default=10,
         help="HastyBot candidate count when --hasty-temperature > 0.",
-    )
-    parser.add_argument(
-        "--hasty-temp-min-bag",
-        type=int,
-        default=0,
-        help="Confine HastyBot softmax sampling to turns where the bag has >= this "
-        "many tiles (greedy below it). 0 = sample the whole game; ~60 reproduces "
-        "an opening-only exploratory bot.",
     )
     parser.add_argument(
         "--random-opening-mean",

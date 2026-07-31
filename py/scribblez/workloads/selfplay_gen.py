@@ -34,9 +34,7 @@ GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_
 
 
 def player_spec(params) -> str:
-    return hasty_player_spec(
-        params.hasty_temperature, params.hasty_top_k, params.hasty_temp_min_bag, endgame=True
-    )
+    return hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True)
 
 
 def _deliver_chunks(ctx: WorkerContext, work_dir) -> tuple[int, int]:

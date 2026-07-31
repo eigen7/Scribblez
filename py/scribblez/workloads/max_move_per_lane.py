@@ -22,7 +22,6 @@ class MaxMovePerLaneParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
-    hasty_temp_min_bag: int = param(0, "sample only on turns with at least this many bag tiles")
     random_opening_mean: float = param(0.0, "random-opening plies per game (0 disables)")
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")

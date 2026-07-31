@@ -25,12 +25,9 @@ HastyBotAgent::HastyBotAgent(const Params& params)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),
       temperature_(params.temperature),
-      temperature_min_bag_(params.temperature_min_bag),
       rng_(params.seed) {
   if (top_k_ < 1) throw std::runtime_error("hastybot: --top-k must be >= 1");
   if (temperature_ < 0.0) throw std::runtime_error("hastybot: --temperature must be >= 0");
-  if (temperature_min_bag_ < 0)
-    throw std::runtime_error("hastybot: --temperature-min-bag must be >= 0");
 }
 
 namespace {
@@ -350,7 +347,6 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
 // it against scratch defaults to document the same flags, so the parsed options
 // and the documented options share one source of truth.
 boost::program_options::options_description hastybot_options(int& top_k, double& temperature,
-                                                             int& temperature_min_bag,
                                                              uint64_t& seed) {
   namespace po = boost::program_options;
   po::options_description desc("hastybot options");
@@ -359,9 +355,6 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
      "candidate moves to sample among when temperature > 0")                      //
     ("temperature", po::value<double>(&temperature)->default_value(temperature),  //
      "softmax sampling temperature over equity (0 = greedy argmax)")              //
-    ("temperature-min-bag",
-     po::value<int>(&temperature_min_bag)->default_value(temperature_min_bag),
-     "sample only while bag >= this many tiles (0 = sample all game)")  //
     ("seed", po::value<uint64_t>(&seed), "sampling PRNG seed (default: SeedProducer)");
   return desc;
 }
@@ -370,11 +363,8 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 
 MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   // Greedy: the fast pruned shadow-play search (WordMap extents, with a GADDAG
-  // fallback for blank-bearing racks). Used when sampling is disabled
-  // (temperature 0) or confined to the opening and the bag has dropped below
-  // temperature_min_bag_ (so the rest of the game keeps HastyBot's exact
-  // strength).
-  if (temperature_ <= 0.0 || req.bag_size < temperature_min_bag_) {
+  // fallback for blank-bearing racks).
+  if (temperature_ <= 0.0) {
     return hasty_best_move_wmp_impl(req);
   }
 
@@ -412,11 +402,10 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
   // optional softmax-over-equity sampler used for exploratory self-play.
   int top_k = 10;
   double temperature = 0.0;
-  int temperature_min_bag = 0;
   uint64_t seed = 0;
   bool have_seed = false;
 
-  po::options_description desc = hastybot_options(top_k, temperature, temperature_min_bag, seed);
+  po::options_description desc = hastybot_options(top_k, temperature, seed);
   desc.add(extra);
 
   try {
@@ -434,8 +423,7 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
                                .name = name,
                                .top_k = top_k,
                                .temperature = temperature,
-                               .seed = resolved_seed,
-                               .temperature_min_bag = temperature_min_bag};
+                               .seed = resolved_seed};
 }
 
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
@@ -448,12 +436,11 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 std::string HastyBotAgent::options_help() {
   int top_k = 10;
   double temperature = 0.0;
-  int temperature_min_bag = 0;
   uint64_t seed = 0;  // scratch binding targets; never read here
   return agent_options_help(
     "  In-process HastyBot: enumerates all legal plays and ranks them by\n"
     "  static equity (score + leave value + adjustments).\n",
-    hastybot_options(top_k, temperature, temperature_min_bag, seed));
+    hastybot_options(top_k, temperature, seed));
 }
 
 }  // namespace scribblez

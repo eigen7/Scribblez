@@ -32,7 +32,6 @@ class PositionEvalParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
-    hasty_temp_min_bag: int = param(0, "sample only on turns with at least this many bag tiles")
     random_opening_mean: float = param(
         2.0,
         "open each game with K uniformly-random plies (K ~ round(Exp(mean))) before the "
