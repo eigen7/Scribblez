@@ -5,8 +5,9 @@ and max_move_per_lane workloads
 ([scribblez/position_eval/trainer.py](../py/scribblez/position_eval/trainer.py),
 [scribblez/max_move_per_lane/trainer.py](../py/scribblez/max_move_per_lane/trainer.py))
 — plus the machinery it grows into. The core lifecycle (rows-clock,
-generations, sliding window, reuse-driven epochs, restart reconciliation, live
-controls, distributed generation via the master dashboard — see
+generations, sliding window, one epoch per generation, restart
+reconciliation, live controls, distributed generation via the master
+dashboard — see
 [position_eval_workload.md](position_eval_workload.md)) is built; the
 game-pool producer and the resource-contention manager are forward-looking.
 For the data pipeline it builds on, see [architecture.md](architecture.md).
@@ -27,34 +28,35 @@ ergonomics and extends to neural self-play and remote generation workers.
 ## Core concepts
 
 - **The rows-clock.** Every quantity that must survive a restart or index the
-  dashboard is keyed on cumulative rows trained — the dashboard x-axis, the
-  LR warmup clock, and the restart cursor (in the rolling checkpoint) — never
-  on epoch or wall-clock.
+  dashboard is keyed on cumulative rows trained — the dashboard x-axis and
+  the restart cursor (in the rolling checkpoint) — never on wall-clock.
 - **Generations and the sliding window.** A generation is a batch of
   self-play games in its own directory
   (`data/generations/gen_NNNNNN/{manifest.json, *.slog}`); the trainer trains
   over a sliding window of the most recent `W` generations
-  (`SlogDataset` takes a list of directories). The held-out test set
-  (`data/test/`) is generated exactly once and never wiped, keeping metrics
-  comparable across the run.
+  (`SlogDataset` takes a list of directories).
 - **Decorrelation and multi-sampling come from the data pipeline.**
-  `SlogDataset.iter_batches` shuffles the whole loaded set each epoch, and
-  `turns_per_game K` with a per-epoch `epoch_index` draws a *fresh* window of
-  K turns each epoch — E epochs over a generation yield up to `E·K` distinct
-  positions per game, not the same K rows hammered E times.
-- **The overfitting knob is reuse, not epochs.** The bounded quantity is
-  gradient passes per unique position: expose a target reuse factor and
-  derive epochs-per-generation from the generation's size, so small
-  generations don't overfit at the same epoch count where large ones are
-  fine.
+  `SlogDataset.iter_batches` shuffles the whole loaded set each pass, and
+  `turns_per_game K` with the generation index as `epoch_index` draws a
+  *fresh* window of K turns each pass — a game's `W` passes over its window
+  residency yield up to `W·K` distinct positions, not the same K rows
+  hammered `W` times.
+- **Epoch and generation are the same clock.** Each generation is trained
+  exactly once (one epoch over the window it completes), so a game's lifetime
+  reuse is fixed at `window · turns_per_game` passes by construction. This
+  bound is load-bearing: at ~40 passes per game (the old reuse-derived
+  epochs), every position of a game sharing one WLD target let the model
+  memorize game outcomes — train accuracy kept climbing while held-out
+  quality and play strength decayed from ~1M rows on. At 4 passes the same
+  budget of rows keeps improving.
 
 ## The lifecycle
 
 The trainer is a pure consumer: generator workers stage whole-file chunks,
 the generation scheduler assigns them to generation directories, and the
-trainer waits for the cursor's generation to complete, trains reuse-derived
-epochs over the window, checkpoints/exports/publishes per epoch, evicts
-beyond the window, and advances
+trainer waits for the cursor's generation to complete, trains one epoch over
+the window, checkpoints/exports/publishes under the generation's index,
+evicts beyond the window, and advances
 (protocol details in [position_eval_workload.md](position_eval_workload.md)).
 Generation overlaps training via the scheduler's ahead-limit: the fleet runs
 continuously up to `open_ahead` generations in front of the trainer's
@@ -62,16 +64,15 @@ published cursor, then gates.
 
 **Restart is "run the script again."** Authority for what has been done is
 the per-generation manifests plus the rolling checkpoint (`rows_trained`,
-`generation_index`, `epoch_in_generation`); on startup the trainer reconciles
-disk against that state — wait for a filling generation, resume a partial
-window, or advance. Chunks are whole files assigned by a single writer, so
+`generation_index`); on startup the trainer reconciles disk against that
+state — wait for a filling generation, or advance. Chunks are whole files
+assigned by a single writer, so
 counting committed games against targets is reliable.
 
 **Learning rate is a persisted manual control, not a schedule.** An annealing
 schedule assumes a known horizon, which an open-ended stop-and-resume run
 lacks; instead the base LR is a live dashboard control (following
-KataGo/LC0's operator-stepped fixed rate), with warmup on the rows-clock
-(`base_lr · min(1, rows_trained / warmup_rows)`) and every change logged as a
+KataGo/LC0's operator-stepped fixed rate), every change logged as a
 rows-clock event that annotates the loss plots. Caveat: the manual step-down
 wisdom comes from SGD-with-momentum systems; AdamW absorbs much of what a
 drop provides, so expect smaller effects.
@@ -169,5 +170,6 @@ commit tracking, and the game-pool.
 - **Where the bottleneck lands** — if reuse makes the GPU the constraint, the
   CPU controller is moot; the blocked-time instrumentation is worth adding
   early because it says which world we are in.
-- **Reuse factor** — the right passes-per-position is unknown and likely
-  differs for neural data.
+- **Reuse** — per-game passes are `window · turns_per_game`; whether the
+  right setting differs for expensive neural data (where each game costs far
+  more to generate) is unknown.

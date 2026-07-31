@@ -86,16 +86,6 @@ def open_generation(paths: TagPaths, index: int, *, target_games: int) -> Path:
     return gen_dir
 
 
-def open_split(split_dir: Path, *, target_games: int) -> Path:
-    """Create a non-generation fill target (the frozen test split) with a
-    `generating` manifest; return the directory."""
-    write_manifest(
-        split_dir,
-        {"target_games": target_games, "status": GENERATING, "committed_games": 0},
-    )
-    return split_dir
-
-
 def update_committed(gen_dir: Path, committed_games: int):
     """Record the directory's committed game count (display/bookkeeping; the
     scheduler recomputes it from file headers, so a stale value self-heals)."""
@@ -186,8 +176,8 @@ def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list
 
 
 def read_train_state(paths: TagPaths) -> dict:
-    """The trainer's cursor ({rows_trained, generation_index, epoch_in_generation,
-    checkpoint_index}), or {} before a trainer has ever checkpointed."""
+    """The trainer's cursor ({rows_trained, generation_index}), or {} before a
+    trainer has ever checkpointed."""
     try:
         return json.loads(paths.train_state_path.read_text())
     except (FileNotFoundError, json.JSONDecodeError, OSError):

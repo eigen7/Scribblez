@@ -38,9 +38,7 @@ Move hasty_best_move_wmp(const MoveRequest& req);
 // softmax(equity / temperature) over the top-K plays, injecting the exploration
 // that self-play data generation wants and pure argmax play lacks. Equity units
 // are points, so a temperature of a few points spreads probability across
-// near-best plays. `temperature_min_bag` confines sampling to the opening,
-// where near-equal plays differ most in long-term value; below it the bot
-// recovers HastyBot's exact strength.
+// near-best plays.
 class HastyBotAgent : public Agent {
  public:
   // The defaults describe greedy HastyBot.
@@ -50,7 +48,6 @@ class HastyBotAgent : public Agent {
     int top_k = 1;
     double temperature = 0.0;
     uint64_t seed = 0;
-    int temperature_min_bag = 0;  // sample only while bag_size >= this; 0 = all game
   };
 
   explicit HastyBotAgent(const Params& params);
@@ -77,7 +74,6 @@ class HastyBotAgent : public Agent {
  private:
   int top_k_;
   double temperature_;
-  int temperature_min_bag_;
   std::mt19937_64 rng_;
   util::SoftmaxSampler sampler_;
 };

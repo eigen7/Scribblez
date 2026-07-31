@@ -71,7 +71,9 @@ enough to serve as the oracle for the move set evaluation model's targets.
   and smooth. [py/scribblez/position_eval/eval/](../py/scribblez/position_eval/eval/),
   rendered by the dashboard.
 - **3.2 Calibration on held-out games — built.** Brier, log-loss, decile
-  calibration, score-diff MAE/sharpness over the frozen test split.
+  calibration, score-diff MAE/sharpness over a held-out split
+  (`generate_data.py --test-ratio`; evaluated offline by
+  `scripts/position_eval/evaluate.py`).
   Calibration matters beyond ordering: comparing 72% vs 68% between moves is
   only sound if the numbers are accurate.
 - **3.3 Monte-Carlo ground-truth comparison — built.** A committed GCG

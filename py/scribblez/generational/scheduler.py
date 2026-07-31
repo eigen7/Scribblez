@@ -5,10 +5,9 @@ tag's staging area (directly for local workers, via cloud sync for pods). The
 scheduler, ticked per task by the dashboard server's reconcile loop, is the
 single writer of generation structure:
 
-  1. It fills the frozen test split first (when the task wants one), then keeps
-     exactly one generation open at a time, assigning staged chunks by atomic
-     rename and recording completion in the directory manifest when the target
-     game count is reached.
+  1. It keeps exactly one generation open at a time, assigning staged chunks
+     by atomic rename and recording completion in the directory manifest when
+     the target game count is reached.
   2. It paces the fleet: a generation is opened only while its index is within
      `open_ahead` of the trainer's published cursor (train_state.json); when
      nothing may be opened, the generate role is gated (parked) until the
@@ -58,7 +57,6 @@ def _header_games(chunk: Path) -> int:
 @dataclass(frozen=True)
 class SchedulerConfig:
     games_per_generation: int
-    test_games: int  # 0 = no frozen test split
     open_ahead: int
 
 
@@ -67,7 +65,6 @@ def tick_for_task(spec, task, hooks):
     params = params_mod.validate(spec.params_cls, task.params)
     cfg = SchedulerConfig(
         games_per_generation=params.games_per_generation,
-        test_games=params.test_games,
         open_ahead=params.open_ahead,
     )
     tick(spec.paths(task.tag), cfg, hooks)
@@ -78,15 +75,6 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
     allows, updating manifests and the generate-role gate."""
     paths.staging_dir.mkdir(parents=True, exist_ok=True)
     staged = _staged_chunks(paths)
-
-    if cfg.test_games > 0:
-        if lifecycle.read_manifest(paths.test_dir) is None:
-            lifecycle.open_split(paths.test_dir, target_games=cfg.test_games)
-        if not lifecycle.is_complete(paths.test_dir):
-            _fill(paths, paths.test_dir, "test", cfg.test_games, staged, hooks, chunk_games)
-            if not lifecycle.is_complete(paths.test_dir):
-                hooks.gate(GENERATE_ROLE, None)
-                return
 
     cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
     while True:
@@ -211,11 +199,6 @@ def _next_index(paths: TagPaths, cursor: int) -> int:
 def progress(spec, tag: str) -> list[tuple[str, object]]:
     paths = spec.paths(tag)
     out: list[tuple[str, object]] = []
-    test_manifest = lifecycle.read_manifest(paths.test_dir)
-    if test_manifest is not None and test_manifest.get("status") == lifecycle.GENERATING:
-        out.append(
-            ("test fill", f"{test_manifest['committed_games']}/{test_manifest['target_games']}")
-        )
     open_index = _open_index(paths)
     if open_index is not None:
         m = lifecycle.read_manifest(paths.generation_dir(open_index))
@@ -231,12 +214,6 @@ def progress(spec, tag: str) -> list[tuple[str, object]]:
         out.append(("generations", f"{len(complete)} complete (latest gen {max(complete)})"))
     state = lifecycle.read_train_state(paths)
     if state:
-        out.append(
-            (
-                "trainer",
-                f"gen {state.get('generation_index', 0)} "
-                f"epoch {state.get('epoch_in_generation', 0)}",
-            )
-        )
+        out.append(("trainer", f"gen {state.get('generation_index', 0)}"))
         out.append(("rows", state.get("rows_trained", 0)))
     return out

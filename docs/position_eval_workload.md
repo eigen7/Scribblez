@@ -100,26 +100,21 @@ run the cursor reads 0, so generation runs ahead of a trainer being attached
 at all. Overshoot from in-flight chunks is bounded and harmless — they join
 an open generation like any other games.
 
-**The frozen test split** rides the same protocol: the scheduler fills
-`data/test/` first, marks it complete, and only then opens generation 0. It
-is never evicted and never regenerated, so probe/calibration metrics stay
-comparable across the run and the train/test boundary is file-level by
-construction. `test_games = 0` skips it.
-
 ## The trainer role
 
 `scribblez/position_eval/trainer.py` (and its max_move_per_lane sibling) owns
 orchestration: resume from the rolling checkpoint; wait for the cursor's
 generation to complete (sleep-poll on manifests — GPU idle here *is* the
-"generation is the bottleneck" signal, visible in Stats); train reuse-derived
-epochs over the window; per epoch, checkpoint + ONNX export + metrics +
-`train_state.json`; evict generations beyond the window; advance the cursor.
+"generation is the bottleneck" signal, visible in Stats); train one epoch
+over the window; checkpoint + ONNX export + metrics + `train_state.json`
+under the generation's index; evict generations beyond the window; advance
+the cursor.
 
 Launched as a local worker slot like any other; the runner lives with the
 training code (referenced by dotted path) so generator bundles never import
 torch. `scripts/position_eval/train.py` remains a thin CLI over the same
 runner for headless debugging. SIGTERM pauses; resume repeats at most one
-epoch from the last checkpoint. Live controls (LR, loader threads) come from
+generation from the last checkpoint. Live controls (LR, loader threads) come from
 dashboard.db. A fresh start is a fresh tag; there is no in-place run reset.
 
 ## Seeds
@@ -152,8 +147,8 @@ entrypoint and always renders the master app.
 
 ## Open questions
 
-- **Chunk size** (`games_per_chunk`) — the pacing/latency quantum; default
-  1000, measure under real parameters.
+- **Chunk size** — the pacing/latency quantum; fixed at 1000 games
+  (play_game's kGamesPerFile), measure under real parameters.
 - **Trainer wait behavior** — sleep-poll on manifests is fine until the idle
   tail between generations is measured to matter.
 - **GPU trainer in the cloud** — the role abstraction admits it later;

@@ -15,7 +15,7 @@ def test_resume_without_checkpoint_is_fresh(tmp_path):
     model = torch.nn.Linear(4, 2)
     opt = torch.optim.SGD(model.parameters(), lr=0.1)
     state = resume(_paths(tmp_path), model, opt, _CPU)
-    assert state == GenerationalState(0, 0, 0, 0)
+    assert state == GenerationalState(0, 0)
 
 
 def test_save_resume_roundtrip(tmp_path):
@@ -27,9 +27,7 @@ def test_save_resume_roundtrip(tmp_path):
     model(torch.randn(3, 4)).sum().backward()
     opt.step()
 
-    state = GenerationalState(
-        rows_trained=512, generation_index=3, epoch_in_generation=2, checkpoint_index=7
-    )
+    state = GenerationalState(rows_trained=512, generation_index=3)
     save(paths, model, opt, state, {"lr": 0.1, "tag": "t"})
 
     model2 = torch.nn.Linear(4, 2)

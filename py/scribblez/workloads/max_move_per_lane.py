@@ -1,9 +1,8 @@
 """The max-move-per-lane training workload (the representation probe).
 
 Same two-role shape as position_eval -- interchangeable generate workers plus
-a singleton local trainer -- with the probe's own model/loss parameters and no
-held-out test split (its eval is train accuracy plus the frozen lane-analysis
-GCG dataset).
+a singleton local trainer -- with the probe's own model/loss parameters (its
+eval is train accuracy plus the frozen lane-analysis GCG dataset).
 """
 
 from dataclasses import dataclass
@@ -18,29 +17,19 @@ from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
 class MaxMovePerLaneParams:
     # Generation.
     games_per_generation: int = param(20000, "self-play games per generation")
-    test_games: int = param(0, "held-out test games; the probe uses none by default")
-    games_per_chunk: int = param(1000, "games per generator cycle (= per .slog chunk)")
     open_ahead: int = param(
-        1, "generations kept open ahead of the trainer's cursor before generators are parked"
+        4, "generations kept open ahead of the trainer's cursor before generators are parked"
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
-    hasty_temp_min_bag: int = param(0, "sample only on turns with at least this many bag tiles")
     random_opening_mean: float = param(0.0, "random-opening plies per game (0 disables)")
-    # Training window / reuse.
+    # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
-    turns_per_game: int = param(1, "turns sampled per game per epoch; 0 = every turn")
-    reuse_per_position: float = param(
-        2.0, "target gradient passes per unique position; derives epochs-per-generation"
-    )
-    epochs_per_generation: int = param(
-        0, "explicit epochs-per-generation, overriding reuse_per_position; 0 derives it"
-    )
+    turns_per_game: int = param(1, "turns sampled per game per generation; 0 = every turn")
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
-    warmup_rows: int = param(0, "linear LR warmup over the first this-many rows")
     weight_decay: float = param(1e-4, "AdamW weight decay")
     # Model.
     trunk_channels: int = param(128, "CNN trunk width")

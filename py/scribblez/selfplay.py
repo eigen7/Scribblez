@@ -11,9 +11,7 @@ from pathlib import Path
 PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
 
-def hasty_player_spec(
-    temperature: float = 0.0, top_k: int = 10, temp_min_bag: int = 0, endgame: bool = False
-) -> str:
+def hasty_player_spec(temperature: float = 0.0, top_k: int = 10, endgame: bool = False) -> str:
     """The `--player` value for a HastyBot seat, optionally temperature-sampled
     over equity (temperature > 0) for exploration. `endgame` selects the
     hastybot-endgame agent, which plays identically until the bag empties and
@@ -21,17 +19,13 @@ def hasty_player_spec(
     node budget."""
     bot_type = "hastybot-endgame" if endgame else "hastybot"
     if temperature > 0:
-        return (
-            f"--type={bot_type} --temperature={temperature} "
-            f"--top-k={top_k} --temperature-min-bag={temp_min_bag}"
-        )
+        return f"--type={bot_type} --temperature={temperature} --top-k={top_k}"
     return f"--type={bot_type}"
 
 
 def run_games(
     out_dir: Path,
     num_games: int,
-    games_per_file: int,
     threads: int,
     player_spec: str,
     seed: int = 0,
@@ -54,7 +48,6 @@ def run_games(
         "--player", player_spec,
         "--player", player_spec,
         "--binary-log-dir", str(out_dir),
-        "--games-per-file", str(games_per_file),
         "--games", str(num_games),
         "--threads", str(threads),
         "--seed", str(seed),

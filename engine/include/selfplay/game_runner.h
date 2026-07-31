@@ -35,7 +35,6 @@ class GameRunner : public GameSink {
     int games = 1;               // minimum number of games to play
     std::string log_dir;         // if non-empty, one <id>.gcg per game
     std::string binary_log_dir;  // if non-empty, batched .slog files
-    int games_per_file = 100;    // only used with binary_log_dir
     // SelfPlayEngine downgrades to 1 thread, with a warning, when a player does
     // not support parallelism.
     int threads = util::default_thread_count();
