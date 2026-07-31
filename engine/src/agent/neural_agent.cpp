@@ -33,15 +33,15 @@ NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> 
 }
 
 InputEncodingSpec NeuralAgent::derive_spec(const Dictionary& dict, const nn::EvalService& service) {
-  const InputEncodingSpec candidates[] = {{&dict, true}, {&dict, false}};
+  const InputEncodingSpec candidates[] = {
+    {&dict, true, false}, {&dict, false, false}, {&dict, true, true}, {&dict, false, true}};
   for (const InputEncodingSpec& spec : candidates) {
     if (service.spatial_planes() == spatial_planes(spec) &&
         service.scalar_floats() == scalar_floats(spec)) {
       return spec;
     }
   }
-  throw std::runtime_error(
-    "neural agent: the model's input widths match neither the full nor the base input layout");
+  throw std::runtime_error("neural agent: the model's input widths match no known input layout");
 }
 
 void NeuralAgent::init() {
@@ -104,7 +104,7 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
 }
 
 void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
-                                   float* dst) const {
+                                   const Rack& opp_leave, float* dst) const {
   Rack leave = my_rack;
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
 
@@ -114,7 +114,10 @@ void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_s
   encoder_.board().ensure_movegen_caches(*spec_.dict);
   GameStateEncoder post = encoder_;
   post.apply_move(mv);
-  post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
+  if (spec_.opp_leave_input)
+    post.encode_input(my_seat, leave, opp_leave, /*apply_flip=*/false, dst);
+  else
+    post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
 }
 
 void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays,
@@ -130,7 +133,7 @@ void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<
     const int chunk = std::min(max_batch_, k - done);
     for (int j = 0; j < chunk; ++j) {
       const Move& mv = plays[static_cast<size_t>(cand_idx_[done + j])];
-      encode_candidate(mv, req.my_rack, my_seat,
+      encode_candidate(mv, req.my_rack, my_seat, req.opp_rack,
                        input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
     }
     service_->evaluate(input_buf_.data(), chunk, eval_buf_.data() + done);

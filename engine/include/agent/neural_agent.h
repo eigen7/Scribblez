@@ -77,8 +77,10 @@ class NeuralAgent : public Agent {
 
   // The post-move input for candidate `mv`, encoded exactly as make_move()
   // does. Public so the encoding the model actually sees can be checked
-  // against an independent replay.
-  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, float* dst) const;
+  // against an independent replay. `opp_leave` is ignored unless the model's
+  // input layout carries the opponent-leave block.
+  void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, const Rack& opp_leave,
+                        float* dst) const;
 
  private:
   static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params);

@@ -44,6 +44,8 @@ class GameRunner : public GameSink {
                                        // random plies, K ~ round(Exp(this mean))
     bool respect_projections = false;  // fast-track games whose end an agent proved;
                                        // self-play generation turns this on
+    bool face_up_leaves = false;       // play the face-up-leaves variant, in which each
+                                       // player's retained tiles are public
     int progress_secs = 10;            // games-done/rate/ETA line interval; 0 disables,
                                        // and only the parallel batch loop prints one
     bool verbose = false;              // per-game + batch summaries to stderr

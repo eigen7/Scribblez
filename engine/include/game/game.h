@@ -83,6 +83,12 @@ class Game {
   // random moves through observe_move(). Must be called before play().
   void set_random_opening(int plies);
 
+  // Play face-up-leaves Scrabble (docs/roadmap.md): the tiles each player
+  // retains from their move are public from then until they move again, and
+  // only their replenishment draws stay hidden. Both seats see the other's,
+  // and each reads it off MoveRequest::opp_rack. Must be called before play().
+  void set_face_up_leaves(bool on);
+
   void play();
 
   // Play out from a mid-game position, e.g. a Monte-Carlo rollout. `board` and
@@ -116,12 +122,21 @@ class Game {
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};
   GameLogStorage log_;
+  // What each player has publicly retained, empty until they first move. A
+  // move sets its mover's entry to the tiles left after it, before any draw.
+  std::array<Rack, 2> leaves_{};
+  bool face_up_leaves_ = false;
   int random_opening_plies_ = 0;
   std::mt19937_64 opening_rng_;
   bool respect_projections_ = false;
 
   // `drawn_out`, when non-null, accumulates the tiles drawn.
   void refill_rack(int p, Rack* drawn_out);
+
+  // What the player to move legitimately knows of their opponent's rack: the
+  // whole thing once the bag is empty, else the public leave under face-up
+  // leaves, else nothing.
+  const Rack& visible_opp_rack(int mover) const;
 
   // The decision for the current turn: a uniformly-random move while the turn
   // index is within the random opening (which it also tallies in the log), the

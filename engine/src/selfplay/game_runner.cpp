@@ -143,6 +143,10 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      po::value<bool>(&respect_projections)->default_value(respect_projections),
      "play out an agent's proven remaining-game projection directly instead of "
      "prompting agents turn by turn (the endgame solver's break-out)")  //
+    ("face-up-leaves", po::bool_switch(&face_up_leaves),
+     "play face-up-leaves Scrabble: the tiles each player retains from their "
+     "move are public until they move again, with only their replenishment "
+     "draws hidden (docs/roadmap.md)")  //
     ("progress-secs", po::value<int>(&progress_secs)->default_value(progress_secs),
      "print a games-done/rate/ETA progress line to stderr every this many "
      "seconds during the parallel batch loop (0 disables)")  //
@@ -172,7 +176,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
     : params_(params),
       seed_(SeedProducer::instance().next()),
       engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max,
-                                     params.random_opening_mean, params.respect_projections},
+                                     params.random_opening_mean, params.respect_projections,
+                                     params.face_up_leaves},
               player_params) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";

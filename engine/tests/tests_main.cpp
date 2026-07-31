@@ -1968,6 +1968,127 @@ class ProjectingPassAgent : public scribblez::Agent {
 
 }  // namespace
 
+// --- face-up-leaves visibility ----------------------------------------------
+//
+// What Game puts in MoveRequest::opp_rack: nothing in a standard game until
+// the bag empties, the opponent's publicly retained tiles under face-up
+// leaves, and their whole rack once an empty bag makes it deducible.
+
+namespace {
+
+// One prompt, as the seated agent saw it.
+struct SeenRequest {
+  int mover;
+  int bag_size;
+  Rack opp_rack;
+};
+
+// Plays the first legal play it is offered (else passes) and records what it
+// was told about its opponent. Both seats share one log, so the k-th entry
+// belongs to the k-th turn of the game.
+class LeaveWatchingAgent : public scribblez::Agent {
+ public:
+  LeaveWatchingAgent(int seat, std::vector<SeenRequest>* seen)
+      : scribblez::Agent(0, "W"), seat_(seat), seen_(seen) {}
+
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
+    seen_->push_back({seat_, req.bag_size, req.opp_rack});
+    const std::vector<Move> plays = scribblez::generate_legal_plays(req);
+    return plays.empty() ? scribblez::Move::pass() : plays.front();
+  }
+
+ private:
+  int seat_;
+  std::vector<SeenRequest>* seen_;
+};
+
+// The tiles `player` held back at their most recent turn before `turn`, which
+// is what face-up leaves makes public. Empty before they have acted.
+Rack leave_before_turn(const scribblez::GameLogStorage& log, int player, size_t turn) {
+  Rack leave;
+  for (size_t t = turn; t-- > 0;) {
+    if (log.turns[t].player != player) continue;
+    leave = log.turns[t].rack_before;
+    for (int i = 0; i < log.turns[t].move.num_glyphs(); ++i)
+      leave.remove(log.turns[t].move.glyph(i).rack_tile());
+    break;
+  }
+  return leave;
+}
+
+std::vector<SeenRequest> play_watched_game(const Dictionary& dict, bool face_up, uint64_t seed,
+                                           scribblez::GameLogStorage* log_out) {
+  std::vector<SeenRequest> seen;
+  LeaveWatchingAgent a0(0, &seen), a1(1, &seen);
+  scribblez::Game g(a0, a1, dict, seed);
+  g.set_face_up_leaves(face_up);
+  g.play();
+  *log_out = g.extract_log();
+  return seen;
+}
+
+}  // namespace
+
+TEST(FaceUpLeaves, AStandardGameShowsNothingWhileTilesRemain) {
+  Dictionary dict = medium_dict();
+  scribblez::GameLogStorage log;
+  const std::vector<SeenRequest> seen = play_watched_game(dict, /*face_up=*/false, 99ULL, &log);
+
+  ASSERT_FALSE(seen.empty());
+  int mid_game_prompts = 0;
+  for (const SeenRequest& r : seen) {
+    if (r.bag_size == 0) continue;
+    ++mid_game_prompts;
+    EXPECT_TRUE(r.opp_rack.empty()) << "leaked " << r.opp_rack.to_string();
+  }
+  ASSERT_GT(mid_game_prompts, 0);
+}
+
+TEST(FaceUpLeaves, ShowsExactlyWhatTheOpponentKept) {
+  Dictionary dict = medium_dict();
+  scribblez::GameLogStorage log;
+  const std::vector<SeenRequest> seen = play_watched_game(dict, /*face_up=*/true, 99ULL, &log);
+
+  // One prompt per turn, in turn order: no random opening, no projections.
+  ASSERT_EQ(seen.size(), log.turns.size());
+  EXPECT_TRUE(seen.front().opp_rack.empty()) << "nothing is public before the opponent acts";
+
+  int revealed = 0;
+  for (size_t t = 0; t < seen.size(); ++t) {
+    if (seen[t].bag_size == 0) continue;  // the endgame reveals more; see below
+    const Rack expected = leave_before_turn(log, 1 - seen[t].mover, t);
+    EXPECT_TRUE(seen[t].opp_rack == expected)
+      << "turn " << t << ": saw " << seen[t].opp_rack.to_string() << ", kept "
+      << expected.to_string();
+    if (!expected.empty()) ++revealed;
+  }
+  ASSERT_GT(revealed, 0) << "the variant never actually revealed anything";
+}
+
+TEST(FaceUpLeaves, AnEmptyBagShowsTheWholeRackInEitherVariant) {
+  Dictionary dict = medium_dict();
+  for (bool face_up : {false, true}) {
+    std::vector<SeenRequest> seen;
+    LeaveWatchingAgent a0(0, &seen), a1(1, &seen);
+    scribblez::Game g(a0, a1, dict, /*seed=*/7ULL);
+    g.set_face_up_leaves(face_up);
+
+    // A pool holding exactly both racks: the refills drain it, so every prompt
+    // faces an empty bag and a fully deducible opponent.
+    scribblez::Bag pool(/*seed=*/7ULL);
+    while (pool.size() > 2 * RACK_SIZE) pool.draw();
+    g.play_from(Board{}, {0, 0}, {Rack{}, Rack{}}, pool, /*to_move=*/0);
+    const scribblez::GameLogStorage log = g.extract_log();
+
+    ASSERT_FALSE(seen.empty());
+    ASSERT_EQ(seen.front().bag_size, 0) << "face_up=" << face_up;
+    // The opponent's whole rack, not merely what they kept: at the first
+    // prompt they have not moved, so a leave would be empty.
+    EXPECT_EQ(seen.front().opp_rack.size(), RACK_SIZE) << "face_up=" << face_up;
+    EXPECT_TRUE(seen.front().opp_rack == log.initial_racks[1]) << "face_up=" << face_up;
+  }
+}
+
 TEST(Game, EndRackOutBonus) {
   // Greedy agents on a small in-memory dict almost always stalemate (they
   // can't form enough words to drain the bag). With the real lexicon, "out"

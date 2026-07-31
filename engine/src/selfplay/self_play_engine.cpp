@@ -72,6 +72,7 @@ std::pair<EndGameAction, EndGameAction> SelfPlayEngine::play(int thread_idx,
   game.set_initial_scores(pick_handicap(game_seed, params_.handicap_max));
   game.set_random_opening(pick_random_opening_plies(game_seed, params_.random_opening_mean));
   game.set_respect_projections(params_.respect_projections);
+  game.set_face_up_leaves(params_.face_up_leaves);
   game.play();
 
   // Hand the finished game's owning log storage to the sink (a move). The Game

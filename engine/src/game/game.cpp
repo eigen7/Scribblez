@@ -49,6 +49,21 @@ void Game::set_random_opening(int plies) {
   random_opening_plies_ = plies;
 }
 
+void Game::set_face_up_leaves(bool on) {
+  assert(log_.turns.empty());  // must be set before play() begins
+  face_up_leaves_ = on;
+}
+
+const Rack& Game::visible_opp_rack(int mover) const {
+  static const Rack kHidden;
+  const int opp = 1 - mover;
+  // An empty bag puts the opponent's whole rack on show whatever the variant:
+  // every tile not on the board or in our own hand is provably theirs.
+  if (bag_.size() == 0) return racks_[opp];
+  if (face_up_leaves_) return leaves_[opp];
+  return kHidden;
+}
+
 void Game::refill_rack(int p, Rack* drawn_out) {
   while (racks_[p].size() < RACK_SIZE) {
     auto t = bag_.draw();
@@ -81,6 +96,11 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   scores_ = scores;
   racks_[0] = known_racks[0];
   racks_[1] = known_racks[1];
+  // Whatever a seat is seeded with is exactly what it has publicly retained --
+  // a rollout's known racks ARE the leaves the simulating player can see -- so
+  // the face-up-leaves view is already correct before the first refill hides
+  // the replenishments.
+  leaves_ = known_racks;
   bag_ = pool;
   // Refill both racks from the seeded pool in turn order, then return any
   // just-exchanged tiles to the bag (they were not drawable by either refill).
@@ -122,8 +142,9 @@ void Game::play_loop(int start_player) {
     if (projected_next < projected.size()) {
       m = projected[projected_next++];
     } else {
-      MoveRequest ctx{board_,           dict_,      racks_[cur], racks_[1 - cur], scores_[cur],
-                      scores_[1 - cur], bag_.size()};
+      MoveRequest ctx{
+        board_,           dict_,      racks_[cur], visible_opp_rack(cur), scores_[cur],
+        scores_[1 - cur], bag_.size()};
       MoveDecision decision = choose_move(cur, ctx);
       m = decision.move;
       if (respect_projections_ && !decision.projected_remaining_moves.empty()) {
@@ -140,26 +161,28 @@ void Game::play_loop(int start_player) {
 
     bool rack_emptied = false;
     const int n_glyphs = m.num_glyphs();
+    // Every move kind surrenders its glyphs off the rack first (a PASS has
+    // none), and what remains is the leave -- which face-up leaves makes
+    // public, captured here before the refill hides the replenishments.
+    for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
+    leaves_[cur] = racks_[cur];
+
     if (m.type() == MoveType::PLAY) {
-      // Remove placed tiles from rack, apply to board.
-      for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
       board_.apply(m);
       scores_[cur] += m.score();
       rec.score_delta = m.score();
       consecutive_zero_turns = 0;
-      // Draw replacement tiles.
       refill_rack(cur, &rec.drawn);
       if (racks_[cur].empty() && bag_.size() == 0) {
         rack_emptied = true;
       }
     } else if (m.type() == MoveType::EXCHANGE) {
-      // Remove tiles from rack, draw new ones, then put exchanged tiles back.
-      for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
+      // Draw the replacements before the surrendered tiles rejoin the bag, so
+      // this exchange cannot draw back what it just gave up.
       refill_rack(cur, &rec.drawn);
       for (int i = 0; i < n_glyphs; ++i) bag_.put_back(m.glyph(i).rack_tile());
       ++consecutive_zero_turns;
     } else {
-      // PASS
       ++consecutive_zero_turns;
     }
 
