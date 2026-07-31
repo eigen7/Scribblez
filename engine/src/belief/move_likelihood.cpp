@@ -48,7 +48,7 @@ bool EquityLikelihood::matches_observation(const Move& candidate) const {
   return candidate == observed_;
 }
 
-void EquityLikelihood::explain(const Rack& rack, std::vector<Explanation>* out) const {
+void EquityLikelihood::explain(const Rack& rack, std::vector<ScoredLeave>* out) const {
   const Rack opp_rack;  // their opponent is us, and our rack was hidden from them
   // Neither move generation nor static equity reads the scores.
   const MoveRequest req{board_, dict_, rack, opp_rack, 0, 0, bag_size_};
@@ -61,15 +61,19 @@ void EquityLikelihood::explain(const Rack& rack, std::vector<Explanation>* out) 
     HastyEquity::instance().equities(moves, board_, bag_size_, opp_rack, rack);
   const double best = *std::max_element(equities.begin(), equities.end());
 
-  // Softmax with the maximum subtracted out, so the exponentials stay in
-  // range however far apart the equities spread.
+  // Softmax with the maximum subtracted out, so the exponentials stay in range
+  // however far apart the equities spread. Only the denominator is summed in
+  // linear space; the answer stays logarithmic, because at a low temperature a
+  // move the opponent was never going to make is exp(-1000) away from the best
+  // one, and rounding that to zero here would strike the hypothesis out
+  // entirely rather than merely rank it last.
   double total = 0.0;
   for (double e : equities) total += std::exp((e - best) / temperature_);
+  const double log_total = std::log(total);
 
   for (size_t i = 0; i < moves.size(); ++i) {
     if (!matches_observation(moves[i])) continue;
-    const double p = std::exp((equities[i] - best) / temperature_) / total;
-    if (p > 0.0) out->push_back({kept_after(rack, moves[i]), p});
+    out->push_back({kept_after(rack, moves[i]), (equities[i] - best) / temperature_ - log_total});
   }
 }
 

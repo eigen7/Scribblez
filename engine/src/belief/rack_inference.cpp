@@ -14,13 +14,6 @@ namespace scribblez::belief {
 
 namespace {
 
-// One explanation of the observation, priced in logs so the prior and the
-// likelihood can be multiplied without underflowing.
-struct ScoredLeave {
-  Rack kept;
-  double log_weight;
-};
-
 Rack combine(const Rack& revealed, const Rack& hidden) {
   Rack rack = revealed;
   for (int i = 0; i < hidden.size(); ++i) rack.add(hidden.tiles()[i]);
@@ -37,7 +30,7 @@ RackPosterior build_posterior(const std::vector<ScoredLeave>& scored, bool exhau
   if (!std::isfinite(max_log)) return {};
 
   std::unordered_map<Rack, double> merged;
-  for (const ScoredLeave& s : scored) merged[s.kept] += std::exp(s.log_weight - max_log);
+  for (const ScoredLeave& s : scored) merged[s.leave] += std::exp(s.log_weight - max_log);
   double total = 0.0;
   for (const auto& [leave, weight] : merged) total += weight;
 
@@ -50,34 +43,33 @@ RackPosterior build_posterior(const std::vector<ScoredLeave>& scored, bool exhau
   return RackPosterior(std::move(entries), exhaustive);
 }
 
+// Appends the readings of one hypothesis, each weighted by the prior it was
+// proposed with on top of its own likelihood.
 void score_hypothesis(const EquityLikelihood& likelihood, const Rack& hidden, double log_prior,
-                      std::vector<Explanation>* scratch, std::vector<ScoredLeave>* out) {
-  scratch->clear();
-  likelihood.explain(combine(likelihood.revealed(), hidden), scratch);
-  for (const Explanation& e : *scratch)
-    out->push_back({e.kept, log_prior + std::log(e.probability)});
+                      std::vector<ScoredLeave>* out) {
+  const size_t begin = out->size();
+  likelihood.explain(combine(likelihood.revealed(), hidden), out);
+  for (size_t i = begin; i < out->size(); ++i) (*out)[i].log_weight += log_prior;
 }
 
 std::vector<ScoredLeave> score_enumerated(const EquityLikelihood& likelihood,
                                           const TileCounts& pool, int hidden) {
   std::vector<ScoredLeave> scored;
-  std::vector<Explanation> scratch;
-  for (const LeaveHypothesis& h : enumerate_leaves(pool, hidden))
-    score_hypothesis(likelihood, h.leave, h.log_prior, &scratch, &scored);
+  for (const ScoredLeave& h : enumerate_leaves(pool, hidden))
+    score_hypothesis(likelihood, h.leave, h.log_weight, &scored);
   return scored;
 }
 
 std::vector<ScoredLeave> score_sampled(const EquityLikelihood& likelihood, const TileCounts& pool,
                                        int hidden, int samples, uint64_t seed) {
   std::vector<ScoredLeave> scored;
-  std::vector<Explanation> scratch;
   std::mt19937_64 rng(util::splitmix64(seed));
   // Draws come from the prior, so each carries likelihood alone as its
   // importance weight. The prior then enters through multiplicity -- a likely
   // leave is simply drawn more often -- which is why repeat draws are scored
   // again rather than folded into the first.
   for (int i = 0; i < samples; ++i)
-    score_hypothesis(likelihood, draw_leave(pool, hidden, rng), 0.0, &scratch, &scored);
+    score_hypothesis(likelihood, draw_leave(pool, hidden, rng), 0.0, &scored);
   return scored;
 }
 

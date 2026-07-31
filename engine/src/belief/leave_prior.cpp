@@ -47,8 +47,8 @@ int64_t count_multisets(const TileCounts& pool, int k, int64_t cap) {
   return count;
 }
 
-std::vector<LeaveHypothesis> enumerate_leaves(const TileCounts& pool, int k) {
-  std::vector<LeaveHypothesis> out;
+std::vector<ScoredLeave> enumerate_leaves(const TileCounts& pool, int k) {
+  std::vector<ScoredLeave> out;
   if (k < 0 || k > RACK_SIZE || pool.size() < k) return out;
   Rack buf;
   walk_multisets(pool, 0, k, buf, [&](const Rack& leave) {

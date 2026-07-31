@@ -131,18 +131,18 @@ TEST(LeavePrior, PriorsNormalize) {
   const TileCounts pool = pool_from("AABBCDE");
   for (int k = 1; k <= 4; ++k) {
     double total = 0.0;
-    for (const LeaveHypothesis& h : enumerate_leaves(pool, k)) total += std::exp(h.log_prior);
+    for (const ScoredLeave& h : enumerate_leaves(pool, k)) total += std::exp(h.log_weight);
     EXPECT_NEAR(total, 1.0, 1e-9) << "k=" << k;
   }
 }
 
 TEST(LeavePrior, SingleTilePriorIsTheTileFraction) {
   const TileCounts pool = pool_from("AABBCDE");
-  const std::vector<LeaveHypothesis> hyps = enumerate_leaves(pool, 1);
+  const std::vector<ScoredLeave> hyps = enumerate_leaves(pool, 1);
   ASSERT_EQ(hyps.size(), 5u);  // A, B, C, D, E
-  for (const LeaveHypothesis& h : hyps) {
+  for (const ScoredLeave& h : hyps) {
     const Tile t = h.leave.tiles()[0];
-    EXPECT_NEAR(std::exp(h.log_prior), static_cast<double>(pool.count(t)) / pool.size(), 1e-12);
+    EXPECT_NEAR(std::exp(h.log_weight), static_cast<double>(pool.count(t)) / pool.size(), 1e-12);
   }
 }
 
@@ -160,7 +160,7 @@ TEST(LeavePrior, CountingStopsOnceTheCapIsExceeded) {
 
 TEST(LeavePrior, DrawingReproducesThePrior) {
   const TileCounts pool = pool_from("AABBC");
-  const std::vector<LeaveHypothesis> hyps = enumerate_leaves(pool, 2);
+  const std::vector<ScoredLeave> hyps = enumerate_leaves(pool, 2);
   std::mt19937_64 rng(7);
   std::vector<int> hits(hyps.size(), 0);
   constexpr int kDraws = 200000;
@@ -170,7 +170,7 @@ TEST(LeavePrior, DrawingReproducesThePrior) {
       if (hyps[j].leave == drawn) ++hits[j];
   }
   for (size_t j = 0; j < hyps.size(); ++j)
-    EXPECT_NEAR(static_cast<double>(hits[j]) / kDraws, std::exp(hyps[j].log_prior), 0.01)
+    EXPECT_NEAR(static_cast<double>(hits[j]) / kDraws, std::exp(hyps[j].log_weight), 0.01)
       << "leave=" << hyps[j].leave.to_string();
 }
 
@@ -309,4 +309,23 @@ TEST_F(RackInferenceTest, TheTrueLeaveGainsWeightOverItsPrior) {
   ASSERT_GT(scored, 4);
   EXPECT_GT(gained * 2, scored) << "inference should raise the true leave more often than not";
   EXPECT_GT(total_log_ratio / scored, 0.4) << "mean information gain, in bits, over the prior";
+}
+
+TEST_F(RackInferenceTest, ALowTemperatureKeepsEveryHypothesis) {
+  // A sharp temperature divides equity gaps into the hundreds, which is where
+  // a likelihood held as a plain probability rounds to zero and takes its
+  // hypothesis out of the posterior altogether. Support must not depend on the
+  // temperature: a hypothesis the evidence merely disfavors should rank last,
+  // not disappear.
+  const OppMoveObservation obs = observation_of(best_move(partial_play_rack()));
+  RackInferrer::Params warm;
+  warm.temperature = 3.0;
+  const int support = RackInferrer(dict_, warm).infer(obs, 1).size();
+  ASSERT_GT(support, 1);
+
+  for (double sharp : {0.5, 0.1, 0.01, 0.001}) {
+    RackInferrer::Params params;
+    params.temperature = sharp;
+    EXPECT_EQ(RackInferrer(dict_, params).infer(obs, 1).size(), support) << "temperature=" << sharp;
+  }
 }

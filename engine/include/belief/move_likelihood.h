@@ -22,6 +22,7 @@
 // hypothesis by mini-simulating it instead, and pricing that against this is
 // the reason to keep the seam visible.
 
+#include "belief/scored_leave.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -33,16 +34,6 @@ class Dictionary;
 }
 
 namespace scribblez::belief {
-
-// One way an observed action could have arisen from a hypothesis rack: the
-// tiles it would have left the opponent holding, and P(action | rack) for that
-// explanation. A tile play has exactly one explanation, its own leave. An
-// exchange has one per distinct choice of tiles to surrender, because only the
-// number exchanged is public.
-struct Explanation {
-  Rack kept;
-  double probability;
-};
 
 class EquityLikelihood {
  public:
@@ -62,9 +53,13 @@ class EquityLikelihood {
   // the action left nothing to infer -- a bingo empties the rack.
   int hidden_tiles() const { return hidden_tiles_; }
 
-  // Appends every explanation of the observed action under `rack`, leaving
-  // `out` untouched when the rack cannot explain the action at all.
-  void explain(const Rack& rack, std::vector<Explanation>* out) const;
+  // Appends one entry per way the action could have arisen from `rack` -- the
+  // tiles it would have left behind, weighted by log P(action | rack) for that
+  // reading. A tile play has exactly one reading, its own leave; an exchange
+  // has one per distinct choice of tiles to surrender, because only the number
+  // exchanged is public. `out` is left untouched when the rack cannot explain
+  // the action at all.
+  void explain(const Rack& rack, std::vector<ScoredLeave>* out) const;
 
  private:
   // Whether `candidate` would have looked, to us, exactly like what we saw.

@@ -4,11 +4,8 @@
 // the opponent's kept tiles look like before their move tells us anything.
 // Whatever they kept is a draw from the pool of tiles unseen to us, so the
 // prior over leaves is multivariate hypergeometric.
-//
-// Priors are returned as logs throughout. A posterior multiplies them by
-// likelihoods that routinely underflow double precision, so the whole
-// inference runs in log space and normalizes once at the end.
 
+#include "belief/scored_leave.h"
 #include "game/rack.h"
 #include "game/tile_counts.h"
 
@@ -18,21 +15,15 @@
 
 namespace scribblez::belief {
 
-// One possible set of kept tiles and its prior probability, in logs.
-struct LeaveHypothesis {
-  Rack leave;
-  double log_prior;
-};
-
 // The number of distinct size-k multisets drawable from `pool`, counted
 // without materializing them and abandoned as soon as the count exceeds `cap`
 // (which then returns cap + 1). The count grows exponentially in k, and the
 // only question a caller asks of it is which side of a threshold it falls on.
 int64_t count_multisets(const TileCounts& pool, int k, int64_t cap);
 
-// Every distinct size-k multiset drawable from `pool`, with exact priors:
-// exponentiated, the log_priors sum to 1.
-std::vector<LeaveHypothesis> enumerate_leaves(const TileCounts& pool, int k);
+// Every distinct size-k multiset drawable from `pool`, weighted by its exact
+// prior: exponentiated, the weights sum to 1.
+std::vector<ScoredLeave> enumerate_leaves(const TileCounts& pool, int k);
 
 // log P(a size-k draw from `pool` comes out exactly `leave`), and -infinity
 // when `leave` cannot be drawn from `pool` at all.
