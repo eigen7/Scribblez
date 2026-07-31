@@ -67,7 +67,7 @@ class PositionEvalParams:
         "none", "compiled-lexicon tool to attach to the trunk (see lexical_tool/modules.py)"
     )
     # Loss.
-    lambda_sd: float = param(0.004, "score-diff loss weight")
+    lambda_sd: float = param(0.0002, "score-diff loss weight")
     lambda_next_placement: float = param(0.5, "marginal placement loss weight (opp and self)")
     lambda_win_placement: float = param(0.5, "win-placement conjunction loss weight (opp and self)")
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
