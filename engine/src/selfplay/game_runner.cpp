@@ -121,11 +121,11 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "humans may extend the loop via the Play Again button")                         //
     ("log-dir", po::value<std::string>(&log_dir),                                    //
      "directory to write one <timestamp>.gcg log per game (omit to suppress logs)")  //
-    ("binary-log-dir", po::value<std::string>(&binary_log_dir),  //
+    ("binary-log-dir", po::value<std::string>(&binary_log_dir),                      //
      "directory to write batched binary .slog files (one file per "
      "kGamesPerFile games; every eligible position is written -- "
-     "train-time sampling is done by the DataLoader)")  //
-    ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
+     "train-time sampling is done by the DataLoader)")               //
+    ("threads,t", po::value<int>(&threads)->default_value(threads),  //
      "number of parallel game threads (default: all logical processors; "
      "downgraded to 1 when a player does not support parallelism, e.g. a "
      "human seat)")  //
