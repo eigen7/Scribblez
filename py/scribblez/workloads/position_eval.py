@@ -3,10 +3,10 @@
 Two roles on one tag: any number of interchangeable generate workers
 (local/cloud) producing self-play chunks into the tag's staging area, and a
 singleton local train worker consuming complete generations (sliding window,
-reuse-derived epochs, per-checkpoint ONNX + dashboard metrics). The generation
-scheduler (scribblez/generational/scheduler.py) assigns staged chunks to the
-frozen test split and to generation directories, and paces the generator fleet
-against the trainer's published cursor.
+one epoch per generation, per-checkpoint ONNX + dashboard metrics). The
+generation scheduler (scribblez/generational/scheduler.py) assigns staged
+chunks to generation directories and paces the generator fleet against the
+trainer's published cursor.
 
 Parameters here are the frozen task params: they define the corpus and the
 model, so every worker on a tag must share them. Live operator knobs (base
@@ -27,7 +27,6 @@ TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "ev
 class PositionEvalParams:
     # Generation.
     games_per_generation: int = param(20000, "self-play games per generation")
-    test_games: int = param(2000, "held-out test games, generated once before gen 0; 0 disables")
     games_per_chunk: int = param(1000, "games per generator cycle (= per .slog chunk)")
     open_ahead: int = param(
         1, "generations kept open ahead of the trainer's cursor before generators are parked"

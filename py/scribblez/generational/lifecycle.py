@@ -86,16 +86,6 @@ def open_generation(paths: TagPaths, index: int, *, target_games: int) -> Path:
     return gen_dir
 
 
-def open_split(split_dir: Path, *, target_games: int) -> Path:
-    """Create a non-generation fill target (the frozen test split) with a
-    `generating` manifest; return the directory."""
-    write_manifest(
-        split_dir,
-        {"target_games": target_games, "status": GENERATING, "committed_games": 0},
-    )
-    return split_dir
-
-
 def update_committed(gen_dir: Path, committed_games: int):
     """Record the directory's committed game count (display/bookkeeping; the
     scheduler recomputes it from file headers, so a stale value self-heals)."""

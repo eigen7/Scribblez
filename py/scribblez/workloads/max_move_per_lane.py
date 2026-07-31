@@ -1,9 +1,8 @@
 """The max-move-per-lane training workload (the representation probe).
 
 Same two-role shape as position_eval -- interchangeable generate workers plus
-a singleton local trainer -- with the probe's own model/loss parameters and no
-held-out test split (its eval is train accuracy plus the frozen lane-analysis
-GCG dataset).
+a singleton local trainer -- with the probe's own model/loss parameters (its
+eval is train accuracy plus the frozen lane-analysis GCG dataset).
 """
 
 from dataclasses import dataclass
@@ -18,7 +17,6 @@ from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
 class MaxMovePerLaneParams:
     # Generation.
     games_per_generation: int = param(20000, "self-play games per generation")
-    test_games: int = param(0, "held-out test games; the probe uses none by default")
     games_per_chunk: int = param(1000, "games per generator cycle (= per .slog chunk)")
     open_ahead: int = param(
         1, "generations kept open ahead of the trainer's cursor before generators are parked"

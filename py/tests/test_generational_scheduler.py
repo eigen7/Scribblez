@@ -39,8 +39,8 @@ class Hooks(SchedulerHooks):
         )
 
 
-def _tick(paths, hooks, *, games=100, test=0, ahead=1):
-    cfg = scheduler.SchedulerConfig(games_per_generation=games, test_games=test, open_ahead=ahead)
+def _tick(paths, hooks, *, games=100, ahead=1):
+    cfg = scheduler.SchedulerConfig(games_per_generation=games, open_ahead=ahead)
     scheduler.tick(paths, cfg, hooks, chunk_games=_chunk_games)
 
 
@@ -80,23 +80,6 @@ def test_gates_when_ahead_of_trainer(paths):
     assert lifecycle.read_manifest(paths.generation_dir(2))["status"] == lifecycle.GENERATING
     assert lifecycle.read_manifest(paths.generation_dir(2))["committed_games"] == 40
     assert hooks.gates["generate"] is None
-
-
-def test_test_split_fills_first(paths):
-    hooks = Hooks()
-    _stage(paths, "a", 30)
-    _tick(paths, hooks, test=50)
-    test_manifest = lifecycle.read_manifest(paths.test_dir)
-    assert test_manifest["status"] == lifecycle.GENERATING
-    assert test_manifest["committed_games"] == 30
-    assert lifecycle.list_generation_indices(paths) == []  # no generation until test done
-    assert hooks.gates["generate"] is None
-
-    _stage(paths, "b", 30)
-    _tick(paths, hooks, test=50)
-    assert lifecycle.is_complete(paths.test_dir)
-    # Generations start only after the test split froze.
-    assert lifecycle.read_manifest(paths.generation_dir(0))["status"] == lifecycle.GENERATING
 
 
 def test_ledger_deletes_resynced_duplicates(paths):
