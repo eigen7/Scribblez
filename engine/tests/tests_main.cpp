@@ -2029,6 +2029,45 @@ std::vector<SeenRequest> play_watched_game(const Dictionary& dict, bool face_up,
 
 }  // namespace
 
+TEST(FaceUpLeaves, TheLogRecordsWhichVariantWasPlayed) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+
+  for (bool face_up : {false, true}) {
+    fs::path dir =
+      fs::temp_directory_path() / ("scribblez_faceup_flag_" + std::to_string(::getpid()) + "_" +
+                                   std::to_string(static_cast<int>(face_up)));
+    fs::create_directories(dir);
+    struct DirCleanup {
+      fs::path p;
+      ~DirCleanup() {
+        std::error_code ec;
+        fs::remove_all(p, ec);
+      }
+    } cleanup{dir};
+
+    const uint16_t flags = face_up ? scribblez::binlog::kFlagFaceUpLeaves : 0;
+    {
+      scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/1, flags);
+      writer.append(play_test_game(dict, /*seed=*/321ULL));
+    }
+
+    fs::path slog;
+    for (const auto& ent : fs::directory_iterator(dir))
+      if (ent.path().extension() == ".slog") slog = ent.path();
+    ASSERT_FALSE(slog.empty()) << "face_up=" << face_up;
+
+    scribblez::binlog::FileHeader hdr{};
+    std::ifstream f(slog, std::ios::binary);
+    ASSERT_TRUE(f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr))) << "face_up=" << face_up;
+    EXPECT_EQ(hdr.magic, scribblez::binlog::kMagic);
+    // The version does not move with the flags: a file written before the bits
+    // existed carries none, which correctly reads as standard Scrabble.
+    EXPECT_EQ(hdr.version, scribblez::binlog::kVersion);
+    EXPECT_EQ(hdr.flags & scribblez::binlog::kFlagFaceUpLeaves, flags) << "face_up=" << face_up;
+  }
+}
+
 TEST(FaceUpLeaves, AStandardGameShowsNothingWhileTilesRemain) {
   Dictionary dict = medium_dict();
   scribblez::GameLogStorage log;

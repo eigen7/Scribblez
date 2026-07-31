@@ -92,8 +92,8 @@ int pick_any_turn(const GameLog& log, std::mt19937_64& rng) {
 // BinaryLogWriter
 // ---------------------------------------------------------------------------
 
-BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file)
-    : dir_(dir), games_per_file_(games_per_file) {
+BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags)
+    : dir_(dir), games_per_file_(games_per_file), flags_(flags) {
   if (games_per_file_ < 1) games_per_file_ = 1;
 }
 
@@ -194,7 +194,7 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
 }
 
 void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
-                     const std::vector<GameMetadata>& meta) {
+                     const std::vector<GameMetadata>& meta, uint16_t flags) {
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) {
     std::cerr << "Warning: failed to open binary log file: " << path << "\n";
@@ -204,7 +204,7 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
   FileHeader hdr{};
   hdr.magic = kMagic;
   hdr.version = kVersion;
-  hdr.reserved = 0;
+  hdr.flags = flags;
   hdr.num_games = static_cast<uint32_t>(p.games.size());
   uint32_t num_sample_positions = 0;
   for (const EligibleSpan& s : p.eligible)
@@ -236,7 +236,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   // unique_id keeps slog filenames globally unique, as with gcg log filenames.
   const std::filesystem::path path =
     std::filesystem::path(dir_) / (std::to_string(util::get_unique_id()) + ".slog");
-  write_slog_file(path, prepared, meta);
+  write_slog_file(path, prepared, meta, flags_);
 }
 
 }  // namespace binlog

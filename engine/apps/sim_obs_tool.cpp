@@ -284,6 +284,16 @@ int main(int argc, char** argv) {
         std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
         continue;
       }
+      // Games played face up must be simmed face up. The reverse is fine and
+      // deliberate: open-leaves sims over a standard corpus are the
+      // information-condition instrument (docs/sim_residual_feedback.md), which
+      // hands the sims more than the players had. Sims that know LESS than the
+      // players did are the incoherent direction -- the evidence would describe
+      // a game nobody played.
+      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !opt.open_leaves) {
+        throw std::runtime_error(slog.filename().string() +
+                                 " was played with face-up leaves; pass --open-leaves to sim it");
+      }
       total_positions += count_positions(buf, opt);
       pending.emplace_back(slog, std::move(buf));
     }

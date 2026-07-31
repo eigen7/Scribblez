@@ -201,8 +201,9 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
                 << "' is not a directory\n";
       throw Exception("--binary-log-dir is not a directory: " + params_.binary_log_dir);
     }
-    binary_writer_ =
-      std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, kGamesPerFile);
+    binary_writer_ = std::make_unique<binlog::BinaryLogWriter>(
+      params_.binary_log_dir, kGamesPerFile,
+      params_.face_up_leaves ? binlog::kFlagFaceUpLeaves : 0);
   }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from "
