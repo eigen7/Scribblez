@@ -47,6 +47,9 @@ add_library(scribblez_core STATIC
   src/agent/endgame_hasty_bot.cpp
   src/selfplay/monte_carlo_sim.cpp
   src/selfplay/sim_runner.cpp
+  src/belief/leave_prior.cpp
+  src/belief/move_likelihood.cpp
+  src/belief/rack_inference.cpp
   src/selfplay/sim_observation_log.cpp
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_encoder.cpp
@@ -281,6 +284,15 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_neural_agent PRIVATE
     scribblez_core Boost::json Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_agent)
+
+  # Rack inference: the hypergeometric prior and its sampler, the observations
+  # that carry no information, posterior shape and reproducibility, and that
+  # the leave the opponent actually held gains weight over its prior. Runs off
+  # a synthetic leave table, so it needs no lexicon or Macondo data mount.
+  add_executable(test_rack_inference tests/test_rack_inference.cpp)
+  target_link_libraries(test_rack_inference PRIVATE
+    scribblez_core Boost::json GTest::gtest_main)
+  gtest_discover_tests(test_rack_inference)
 
   # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
   # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR

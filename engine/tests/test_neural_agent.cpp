@@ -34,6 +34,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/eval_service.h"
+#include "synthetic_equity.h"
 
 #include <gtest/gtest.h>
 
@@ -147,44 +148,20 @@ struct OpeningPosition {
   }
 };
 
-// Fixture for the selection tests, which rank candidates by HastyBot equity:
-// writes a synthetic Macondo .klv2 leave file (blank=12.0, A=1.5, B=-2.5;
-// every other leave looks up as 0) into a temp dir and initializes the
-// HastyEquity singleton from it. The temp dir is removed on teardown, pass or
-// fail.
+// Fixture for the selection tests, which rank candidates by HastyBot equity.
+// The temp dir holding the synthetic leave table is removed on teardown, pass
+// or fail.
 class NeuralAgentEquityTest : public ::testing::Test {
  protected:
-  void SetUp() override;
+  void SetUp() override {
+    tmp_ = std::filesystem::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
+    std::filesystem::create_directories(tmp_);
+    scribblez::testing::install_synthetic_hasty_equity(tmp_);
+  }
   void TearDown() override { std::filesystem::remove_all(tmp_); }
 
   std::filesystem::path tmp_;
 };
-
-void NeuralAgentEquityTest::SetUp() {
-  namespace fs = std::filesystem;
-  tmp_ = fs::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
-  fs::create_directories(tmp_);
-
-  fs::path klv = tmp_ / "synthetic.klv2";
-  std::ofstream f(klv, std::ios::binary | std::ios::trunc);
-  auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-  auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-  write_u32(4);                                          // kwg_node_count
-  write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);  // root
-  write_u32((0u << 24) | (0u << 22) | (1u << 23) | 0u);  // ? (blank)
-  write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);  // A
-  write_u32((2u << 24) | (1u << 22) | (1u << 23) | 0u);  // B
-  write_u32(3);                                          // num_leaves
-  write_f32(12.0f);
-  write_f32(1.5f);
-  write_f32(-2.5f);
-  ASSERT_TRUE(f.good());
-  f.close();  // flush to disk before HastyEquity::init reopens the file to read
-
-  fs::path peg = tmp_ / "peg.json";
-  std::ofstream(peg) << "[]";
-  HastyEquity::init(klv.string(), peg.string());
-}
 
 // An EvalService that returns pre-set evals, one per candidate in *per-call*
 // order, ignoring the input rows. Suits tests that re-script and call make_move
