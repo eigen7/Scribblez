@@ -47,7 +47,7 @@ class PositionEvalParams:
         2.0, "target gradient passes per unique position; derives epochs-per-generation"
     )
     epochs_per_generation: int = param(
-        0, "explicit epochs-per-generation, overriding reuse_per_position; 0 derives it"
+        1, "explicit epochs-per-generation, overriding reuse_per_position; 0 derives it"
     )
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
