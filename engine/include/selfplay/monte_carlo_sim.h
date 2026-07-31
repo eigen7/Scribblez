@@ -57,9 +57,11 @@ struct MonteCarloResult {
   boost::json::object to_json() const;
 };
 
-// Play `n` HastyBot-vs-HastyBot rollouts from `pos` to a natural game end. Game
-// g is seeded by g, so the aggregate is deterministic and independent of how
-// the games spread across the workers.
+// Play `n` rollouts from `pos` to a natural game end, EndgameHastyBot vs
+// EndgameHastyBot at the self-play defaults (greedy static equity until the
+// bag empties, then class-only endgame solves). Game g is seeded by g, so the
+// aggregate is deterministic and independent of how the games spread across
+// the workers.
 MonteCarloResult run_monte_carlo(const MonteCarloPosition& pos, const Dictionary& dict, int n,
                                  int threads);
 
