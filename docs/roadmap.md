@@ -3,9 +3,38 @@
 Scribblez aims to beat existing Scrabble engines by replacing their
 context-blind static evaluation and naive rack inference with learned,
 belief-aware evaluation ([design.md](design.md)). This document is the plan for
-getting there: what is built, the agent everything converges on, and the tracks
-that remain — each with its own experiment and its own fallback, priced before
-it earns permanence.
+getting there: the variant we develop in, what is built, the agent everything
+converges on, and the tracks that remain — each with its own experiment and its
+own fallback, priced before it earns permanence.
+
+## The variant: face-up leaves
+
+Development happens in **face-up-leaves Scrabble**, where each player reveals
+their leave after every turn and only the replenishment draws stay hidden.
+Symmetrically: both seats see, and both may use, the other's retained tiles.
+
+The reason is that rack uncertainty is the dominant confound in every
+measurement this roadmap depends on. The kill-test's open-leaves pilot showed a
+**~5× larger transfer gain** than the hidden-information arm, which says the
+evidence loop's signal is being swamped by noise about what the opponent holds.
+Removing that uncertainty by rule makes every downstream readout — the
+re-ranking experiment above all — sharper and faster, and it lets the effort go
+where the novelty is: the move set evaluation model, evidence conditioning, and
+sim scheduling. None of those components are specific to an information
+condition, so returning to standard Scrabble later is a data regeneration
+rather than a redesign.
+
+What this parks is the *belief* half of the thesis in
+[design.md](design.md) — its second named weakness of existing engines. That is
+a sequencing decision, not a retraction; see the rack inference track below.
+
+Benchmark comparability survives the change. Macondo's published OracleBot
+result (~53.3% against BestBot, which is its SimmingBot) pits a leave-knowing
+bot against one that plays without leave knowledge. An opponent that declines
+to read a public leave produces exactly the games an opponent that never knew
+about it would, since its policy does not model what its opponent knows — so
+our agent against a leave-ignoring BestBot measures the same thing. Only
+self-play differs, both seats there reading the leave.
 
 ## What is built
 
@@ -68,10 +97,9 @@ shape everything below:
   are roughly equal, highly correlated estimators of root WLD; fusing them buys
   thousandths. The remaining prizes are *decision quality* (which move gets
   played) and *sim quality* (what the rollouts know), not root cross-entropy.
-- **Sim quality has two independent limiters, now separately measurable.**
-  Rollout variance (attacked by value-truncated rollouts) and opponent-rack
-  uncertainty (attacked by belief, and bounded above by the open-leaves
-  information condition, which hands the sims an exact rack posterior).
+- **Sim quality had two independent limiters, and the variant removes one.**
+  Opponent-rack uncertainty is settled by rule now that leaves are face up;
+  what remains is rollout variance, which value-truncated rollouts attack (D1).
 
 ## The destination
 
@@ -88,9 +116,10 @@ the move set evaluation model scores all N in one pass    [A]
 proves-best scheduler picks what to sim               [C]
       │
       ▼                     rollout policy ladder      [D]
-sims: racks from belief    ── ply 1..2: our own stack (move set eval + belief)
-      inference        [B]  ── middle plies: HastyBot (WMP greedy)
-      │                     ── bag empty: depth-limited endgame solver
+sims: opponent racks are    ── ply 1..2: our own stack (move set eval)
+      the public leave       ── middle plies: HastyBot (WMP greedy)
+      plus hidden draws      ── bag empty: depth-limited endgame solver
+      │
       ▼
 evidence-conditioned re-rank of all N                 [A/e]
       │
@@ -98,10 +127,10 @@ evidence-conditioned re-rank of all N                 [A/e]
 sim the promoted moves, pick by sim
 ```
 
-The tracks are separable, but they compound: better belief makes sims sharper,
-sharper sims make evidence and the proves-best labels more trustworthy, and a
-self-model rollout policy makes the ply-1 reply distribution (which is what the
-evidence maps actually read) match reality.
+The tracks are separable, but they compound: sharper sims make evidence and the
+proves-best labels more trustworthy, and a self-model rollout policy makes the
+ply-1 reply distribution (which is what the evidence maps actually read) match
+reality.
 
 ---
 
@@ -152,11 +181,23 @@ candidate comparisons — whereas at the root it would be fatal.
 
 ### Steps
 
-- **A0 — the sim agent baseline.** `SimRunner` is offline-only today, and the
-  engine has no simming agent at all; wrapping it as one (candidates → sim →
-  pick by sim) is small and unblocks everything else, since it is both the
-  baseline the move-set-evaluation agent must beat and the harness in which B,
-  C, and D get their match readouts.
+Two prerequisites come first, neither of them model work:
+
+- **Face-up leaves in the game loop.** The variant is an offline condition
+  today: `opp_known_leave` is filled from a `.slog` replay and nowhere else,
+  `MoveRequest.opp_rack` is documented visible only in the endgame, and `Game`
+  never tells an agent what the opponent kept. Threading the public leave
+  through the game loop to agents and to the encoder is what makes the variant
+  playable at all, and everything below waits on it.
+- **The sim agent baseline.** `SimRunner` is offline-only, and the engine has
+  no simming agent; wrapping it as one (candidates → sim → pick by sim) is
+  small and unblocks the rest. It is the baseline the move-set-evaluation agent
+  must beat, the harness in which C and D get their match readouts, and —
+  being simming plus the endgame solver we already have — our equivalent of
+  Macondo's BestBot, so it doubles as the opponent that makes published results
+  comparable.
+
+Then the spine proper:
 - **A1 — automated match eval.** Periodic `play_game` matches during training
   with win-rate curves and a sequential significance test on the dashboard.
 - **A2 — target generation at scale.** The `.mset` sidecar and its generator
@@ -174,69 +215,33 @@ candidate comparisons — whereas at the root it would be fatal.
   sets — recall is the filter's one job.
 - **A4 — the move-set-evaluation agent.** Needs an ONNX export path and an
   engine-side runtime, which the model does not yet have. Then top-K by the move
-  set evaluation model → sim → pick by sim, matched against A0 and against the
-  position-evaluation-top-K agent.
+  set evaluation model → sim → pick by sim, matched against the sim agent
+  baseline and against the position-evaluation-top-K agent.
 - **A5 — evidence-conditioned move set evaluation** (steps 5–6 of
   [sim_residual_feedback.md](sim_residual_feedback.md)): the fusion stage
   migrates from the kill-test's position-evaluation harness onto the move set
   evaluation model, enabling the two-round re-rank. Gated on E3.
 
-## Track B: rack inference — belief, cheapest first
+## Track B: rack inference — parked
 
-The sim interface is already built and stable: `SimPosition.opp_leave` seeds any
-known part of the opponent's rack, and per-rollout-index sampling preserves
-common random numbers. Belief work is therefore *sampling policy*, not sim
-plumbing.
+Face-up leaves removes the need to infer anything, so this track is dormant
+until the project returns to standard Scrabble.
 
-Today's hidden-information sims draw the opponent's rack uniformly from the
-unseen pool, which is only correct when they just bingoed. Everywhere else that
-discards the information in their last move — a misspecification the
-evidence-conditioned models would otherwise learn from. So inference is a
-data-correctness fix for track A as much as a strength lever for the agent.
+What exists already: a port of the algorithm behind Macondo's
+`SIMMING_INFER_BOT` — the hypergeometric prior over draws from the unseen pool,
+a temperature-softened static-equity likelihood, exhaustive enumeration of
+small leave spaces with importance sampling above them, and the posterior a
+simulation would sample racks from
+([belief/rack_inference.h](../engine/include/belief/rack_inference.h)). It is
+tested but has **no consumer**, which is expected rather than an oversight.
 
-The plan is to port Macondo's Bayesian rack inference (its `rangefinder`
-package, the machinery behind `SIMMING_INFER_BOT`) rather than build the
-design.md belief system. Its scheme is posterior ∝ prior × likelihood, with a
-multivariate hypergeometric prior over leaves drawn from the unseen pool, a
-softmax likelihood P(observed play | leave) over how good every play would have
-been under that hypothesis, exhaustive enumeration when the leave space is small
-and importance sampling from the prior otherwise (where the proposal *is* the
-prior, so the weight is likelihood only), and posterior sampling inside the sim
-hedged by a fallback to a uniform rack when coverage is thin.
-
-- **B1 — the inference core, with a static-equity likelihood.** Macondo scores
-  each hypothesis with a 200-iteration two-ply mini-sim — roughly 100 ms per
-  hypothesis, which is why it caps enumeration at 750 leaves and gives inference
-  a 20-second budget. We use HastyBot static equity instead: one move generation
-  plus an equity pass, some three orders of magnitude cheaper, which moves the
-  enumerate-vs-sample knee out to thousands of leaves and makes the whole thing
-  affordable inline. On our own data this is not a compromise but an
-  improvement: the opponent in a `.slog` *is* the equity argmax, so the equity
-  softmax is the exactly-correct generative model, where Macondo's mini-sim is
-  an approximation of its own simming bot. The temperature does not carry over —
-  Macondo's is on a win-probability log-odds scale, ours is in equity points —
-  so it needs its own sweep.
-- **B2 — price it offline against ground truth.** Replay recovers the
-  opponent's true leave, so the posterior can be scored directly: its log-loss
-  on the true leave against the prior's (the information gain in nats), the true
-  leave's posterior mass, and per-tile marginal calibration, sliced by tiles
-  kept and bag size. This sets the temperature, settles how to hedge thin
-  coverage, and prices the entire track before a single sim or match runs.
-  Caveat: on HastyBot self-play the likelihood model is exactly right, so these
-  numbers are an upper bound; repeat on a neural-agent corpus for the
-  misspecified case.
-- **B3 — the three-arm information-condition study.** Regenerate the kill-test
-  corpus with hidden, inferred, and open-leaves sims at matched scale.
-  Open-leaves is the ceiling any belief system can reach and hidden is the
-  status quo, but *inferred* is the arm that ships: two arms give the ceiling,
-  three give the fraction cheap inference actually collects. **Gate:** if
-  inference collects most of the open-leaves gain, the track is done and B4
-  stays parked; if the gap is wide, B4 is funded; if open-leaves itself buys
-  little, the budget moves to C and D. Macondo measures perfect-leave knowledge
-  at about 3.3 points of win rate over its simming bot and its inference at
-  about 1.9 of those, so a modest result is the expected one.
-- **B4 — learned belief** (design.md §3: encoder/decoder + compressor +
-  rejection traces). The full system, gated on B3.
+What was never done, and is where this resumes: pricing the posterior against
+ground truth (a `.slog` replay recovers the leave the opponent actually held,
+so posterior log-loss against the prior's measures the information gain
+directly), which is also what sets the likelihood temperature. Then wiring the
+posterior into `SimRunner`, whose per-rollout-index sampling already preserves
+common random numbers. Beyond that lies the learned belief system of
+design.md §3, which only earns attention if cheap inference leaves a wide gap.
 
 ## Track C: sim scheduling — spend rollouts where they buy information
 
@@ -276,7 +281,8 @@ machinery, and then by match play.
   GPU (the contention-manager regime
   [generational_training.md](generational_training.md) plans for).
 - **D2 — self-model plies.** Plies 1–2 of each rollout played by our full stack
-  (move set evaluation top-1 or a temperature sample, belief-sampled racks),
+  (move set evaluation top-1 or a temperature sample, over racks built from
+  the public leave),
   then HastyBot to the horizon. This beats a generic policy upgrade because the
   evidence maps *read exactly plies 1–2*. Cost: batched leaf evaluation on the
   game-pool substrate, at shallow plies only.
@@ -294,7 +300,7 @@ localized payoff.
 ## Track E: scale and readouts — the enablers
 
 - **E1 — cloud fleet** ([cloud_compute.md](cloud_compute.md), in flight). First
-  consumers: B3's matched-scale runs, then A2's target generation.
+  consumer: A2's target generation.
 - **E2 — match harness statistics** (with A1). Match play needs its own
   discipline — paired seeds and racks across agents (the CRN idea at the match
   level) and sequential stopping — which the harness should own so experiments
@@ -313,44 +319,37 @@ localized payoff.
 Effort splits into three lanes that can run concurrently (one person + fleet:
 lead with the spine, interleave the others as experiments block on data).
 
-| Stage | Spine (A) | Sims (B/C/D) | Enablers (E) |
+| Stage | Spine (A) | Sims (C/D) | Enablers (E) |
 |---|---|---|---|
-| 1 | A0 sim agent; A1 match eval | B1 inference core; **B2 offline pricing** | E1 fleet lands; E2 match statistics |
-| 2 | A2 fleet target generation; A3 move-set-evaluation v1 + recall bar | **B3 three-arm study**; D1 truncated rollouts; C1 novelty dedup | **E3 re-ranking experiment** |
+| 1 | Face-up leaves in the game loop; the sim agent baseline; A1 match eval | — | E1 fleet lands; E2 match statistics |
+| 2 | A2 fleet target generation; A3 move-set-evaluation v1 + recall bar | D1 truncated rollouts; C1 novelty dedup | **E3 re-ranking experiment** |
 | 3 | A4 move-set-evaluation agent | C2 proves-best head | — |
 | 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 proves-best scheduling | — |
-| 5 | — | D3 endgame-solver port; B4 learned belief *if B3 warrants* | volunteer-compute hardening |
+| 5 | — | D3 endgame-solver port | volunteer-compute hardening |
 
 Decision gates, stated so the results can veto the plan:
 
-1. **B2** (stage 1): the posterior's information gain over the prior, measured
-   against known ground truth, decides whether inference is worth simming with
-   at all — for a fraction of the cost of finding out by match play.
-2. **B3** (stage 2): inference recovers most of the open-leaves gain → the track
-   is done; a wide gap → B4 is funded; a small open-leaves gain → belief is
-   deprioritized and C and D take its budget.
-3. **E3** (stage 2): the two-round agent beats pick-by-sim at equal rollout
+1. **E3** (stage 2): the two-round agent beats pick-by-sim at equal rollout
    budget → A5 and the full loop proceed; it doesn't → the evidence loop's
    deployment form is reconsidered. The fallback is still valuable: better sims,
    better scheduling, and the move set evaluation model alone are an engine
    improvement without any second round.
-4. **A3** (stage 2): the move set evaluation model's top-K recall against the
+2. **A3** (stage 2): the move set evaluation model's top-K recall against the
    position evaluation model must clear a bar — set from A4's sensitivity, how
    much win rate a recall miss costs — before it replaces
    position-evaluation-top-K anywhere.
 
 ## What is deliberately not here
 
-- **Exporting or serving any information-condition model** (open-leaves is an
-  instrument, not a product path).
 - **Backtracking self-play**: rewind to a decision point and play out a
   *different* top-K move, for direct comparative signal from one position with
   the prefix cost amortized. Needs a `.slog` extension for branch points and a
   branching mode in `GameRunner`; parked until a training signal is demonstrably
   data-diversity-limited.
-- **Sequential belief** — carrying the rack posterior forward across turns
-  rather than recomputing it from the last move alone. Macondo has not built it
-  either; it belongs with B4 if B3 says the gap is worth closing.
-- **The full design.md belief system (B4) and search-derived knowledge buffers
-  beyond the evidence loop** — both remain the long-range shape, but every
-  nearer rung must fail to justify skipping to them.
+- **Standard (hidden-leave) Scrabble**, and with it everything belief: the
+  posterior wired into the sims, sequential belief carried across turns, and
+  the full design.md §3 system. The variant defers all of it. Returning means
+  regenerating data and retraining, not redesigning, because nothing in this
+  roadmap is specific to an information condition.
+- **Search-derived knowledge buffers beyond the evidence loop** — still the
+  long-range shape, but every nearer rung must fail to justify skipping to it.
