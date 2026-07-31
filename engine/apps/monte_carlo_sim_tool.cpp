@@ -3,8 +3,8 @@
 // Each input is a penultimate-bingo GCG: the player to move bingoed on the
 // penultimate turn (so its rack is a clean full draw), and the other player made
 // one final move. From that final player's POV, this plays the position out many
-// times -- HastyBot vs HastyBot, sampling the unknown racks and bag -- and records
-// the exact win/loss/draw and final-score-delta distribution. The aggregate
+// times -- EndgameHastyBot vs EndgameHastyBot, sampling the unknown racks and bag
+// -- and records the exact win/loss/draw and final-score-delta distribution. The aggregate
 // converges to the true value the position evaluation model should predict.
 //
 // Output: <dataset>/monte-carlo-sim-results.json, keyed by GCG stem (e.g. "pos-7").

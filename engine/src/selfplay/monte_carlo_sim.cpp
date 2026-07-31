@@ -1,6 +1,7 @@
 #include "selfplay/monte_carlo_sim.h"
 
-#include "agent/macondo_bot.h"
+#include "agent/agent.h"
+#include "agent/endgame_hasty_bot.h"
 #include "data/gcg_reader.h"
 #include "game/bag.h"
 #include "game/game.h"
@@ -32,8 +33,8 @@ struct RolloutResult {
 // (shared helper in sim_runner.h) is built from the board and start_player's
 // leave; the opponent's actual rack is unknown, so it stays in the pool (the
 // rollout re-samples it -- a clean full draw, since the opponent bingoed).
-RolloutResult rollout(const MonteCarloPosition& pos, const Dictionary& dict, HastyBotAgent& a0,
-                      HastyBotAgent& a1, uint64_t seed) {
+RolloutResult rollout(const MonteCarloPosition& pos, const Dictionary& dict, Agent& a0, Agent& a1,
+                      uint64_t seed) {
   const int opponent = 1 - pos.start_player;  // bingoed last turn, so plays first
   std::array<Rack, 2> known;
   known[pos.start_player] = pos.leave;  // start_player keeps its leave
@@ -83,13 +84,15 @@ void accumulate_rollout(const RolloutResult& r, MonteCarloResult* out) {
 // thread split doesn't affect any game's outcome) and accumulates into *out.
 void monte_carlo_worker(const MonteCarloPosition& pos, const Dictionary& dict, int n, int threads,
                         int t, MonteCarloResult* out) {
-  HastyBotAgent::Params p0;
-  p0.thread_id = t;
-  p0.name = "H0";
-  HastyBotAgent::Params p1;
-  p1.thread_id = t;
-  p1.name = "H1";
-  HastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
+  // Default solver params, matching the self-play generation that produces the
+  // training data (py/scribblez/selfplay.py): the ground truth must reflect the
+  // same rollout policy the model's targets are drawn from.
+  EndgameHastyBotAgent::Params p0;
+  p0.hasty.thread_id = t;
+  p0.hasty.name = "H0";
+  EndgameHastyBotAgent::Params p1 = p0;
+  p1.hasty.name = "H1";
+  EndgameHastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int g = t + 1; g <= n; g += threads)
     accumulate_rollout(rollout(pos, dict, a0, a1, static_cast<uint64_t>(g)), out);
 }
