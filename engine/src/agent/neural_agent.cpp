@@ -33,15 +33,15 @@ NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> 
 }
 
 InputEncodingSpec NeuralAgent::derive_spec(const Dictionary& dict, const nn::EvalService& service) {
-  const InputEncodingSpec candidates[] = {
-    {&dict, true, false}, {&dict, false, false}, {&dict, true, true}, {&dict, false, true}};
-  for (const InputEncodingSpec& spec : candidates) {
-    if (service.spatial_planes() == spatial_planes(spec) &&
-        service.scalar_floats() == scalar_floats(spec)) {
-      return spec;
-    }
+  const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
+  if (service.spatial_planes() != spatial_planes(spec) ||
+      service.scalar_floats() != scalar_floats(spec)) {
+    throw std::runtime_error("neural agent: the model declares an input arm (contingent=" +
+                             std::to_string(service.contingent_features()) +
+                             ", opp_leave=" + std::to_string(service.opp_leave_input()) +
+                             ") whose layout does not match the input widths it accepts");
   }
-  throw std::runtime_error("neural agent: the model's input widths match no known input layout");
+  return spec;
 }
 
 void NeuralAgent::init() {

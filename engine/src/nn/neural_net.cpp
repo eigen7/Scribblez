@@ -73,9 +73,12 @@ void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
 
 // The metadata_props entries the exporter stamps into every ONNX model that
 // the serving side consumes: the input-encoding arm and the architecture
-// signature keying the engine-plan cache.
+// signature keying the engine-plan cache. An arm entry the exporter did not
+// write reads as off, so a model states which blocks it takes rather than
+// leaving a consumer to infer them from its input widths.
 struct OnnxMetadata {
   bool contingent_features = false;
+  bool opp_leave_input = false;
   std::string architecture_signature;
 };
 
@@ -93,6 +96,8 @@ OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
     if (kv.key() == "contingent_features") {
       meta.contingent_features = kv.value() == "true";
       have_contingent = true;
+    } else if (kv.key() == "opp_leave_input") {
+      meta.opp_leave_input = kv.value() == "true";
     } else if (kv.key() == "model-architecture-signature") {
       meta.architecture_signature = kv.value();
     }
@@ -149,6 +154,7 @@ struct NeuralNet::Impl {
   int spatial_planes = 0;
   int scalar_floats = 0;
   bool contingent_features = false;
+  bool opp_leave_input = false;
   ~Impl();
 
   void deserialize_engine(const std::vector<char>& plan);
@@ -328,6 +334,7 @@ void NeuralNet::load() {
   std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
   OnnxMetadata meta = parse_onnx_metadata(onnx_bytes);
   impl_->contingent_features = meta.contingent_features;
+  impl_->opp_leave_input = meta.opp_leave_input;
   std::string cache_path = engine_plan_cache_path(
     meta.architecture_signature, impl_->params.precision, impl_->params.max_batch_size,
     impl_->params.fast_build, impl_->params.mount_root);
@@ -351,6 +358,7 @@ int NeuralNet::max_batch_size() const { return impl_->params.max_batch_size; }
 int NeuralNet::spatial_planes() const { return impl_->spatial_planes; }
 int NeuralNet::scalar_floats() const { return impl_->scalar_floats; }
 bool NeuralNet::contingent_features() const { return impl_->contingent_features; }
+bool NeuralNet::opp_leave_input() const { return impl_->opp_leave_input; }
 
 float* NeuralNet::input_spatial_host() { return impl_->h_input_spatial; }
 float* NeuralNet::input_scalar_host() { return impl_->h_input_scalar; }

@@ -170,6 +170,7 @@ class StubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
   bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   void evaluate(const float* /*inputs*/, int count, nn::Eval* out) override {
@@ -187,6 +188,7 @@ class CountingStubEvalService : public nn::EvalService {
  public:
   std::vector<nn::Eval> scripted;
   bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   int total_rows = 0;

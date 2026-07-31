@@ -45,19 +45,16 @@ namespace binlog {
 inline constexpr uint32_t kMagic = 0x474F4C53u;
 inline constexpr uint16_t kVersion = 10;
 
-// FileHeader::flags bits, recording the rules the games were played under so a
-// consumer can refuse a corpus that does not suit it. The field occupies what
-// was padding, and no flag set -- which is what every file written before the
-// bits existed carries -- says standard Scrabble, which those games truthfully
-// were. So the version does not move and old corpora stay readable.
-inline constexpr uint16_t kFlagFaceUpLeaves = 1u;  // players saw each other'"'"'s leaves
+// FileHeader::flags bits: the rules the games were played under, so a consumer
+// can refuse a corpus that does not suit it.
+inline constexpr uint16_t kFlagFaceUpLeaves = 1u;  // players saw each other's leaves
 
 #pragma pack(push, 1)
 
 struct FileHeader {
   uint32_t magic;    // kMagic
   uint16_t version;  // kVersion
-  uint16_t flags;    // kFlag* bits; see kFlagFaceUpLeaves
+  uint16_t flags;
   uint32_t num_games;
   uint32_t num_sample_positions;  // total training rows
 };
@@ -134,7 +131,6 @@ int pick_any_turn(const GameLog& log, std::mt19937_64& rng);
 // writing, keeping the I/O off the critical path.
 class BinaryLogWriter {
  public:
-  // `flags` are the kFlag* bits recorded in every file this writer produces.
   BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags = 0);
   ~BinaryLogWriter();  // flushes any pending games
 

@@ -29,6 +29,7 @@ class EvalService {
   // Agents build their InputEncodingSpec from the arm and validate the widths
   // against it through the layout registry.
   virtual bool contingent_features() const = 0;
+  virtual bool opp_leave_input() const = 0;
   virtual int spatial_planes() const = 0;
   virtual int scalar_floats() const = 0;
 
