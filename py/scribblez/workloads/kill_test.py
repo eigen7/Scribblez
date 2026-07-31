@@ -36,7 +36,7 @@ class KillTestParams:
     as one corpus. Worker-level knobs (thread count) deliberately live outside.
     """
 
-    games_per_batch: int = param(200, "self-play games per .slog file / generation cycle")
+    games_per_batch: int = param(200, "self-play games per generation cycle")
     rollouts: int = param(200, "sim rollouts per candidate")
     top_k: int = param(10, "candidates simmed per position")
     positions_per_game: int = param(1, "positions sampled per game for sim observation")
@@ -75,7 +75,6 @@ def run_one_cycle(out_dir: Path, params: KillTestParams, threads: int) -> CycleR
     rc = run_games(
         out_dir,
         num_games=params.games_per_batch,
-        games_per_file=params.games_per_batch,
         threads=threads,
         player_spec=hasty_player_spec(),
     )

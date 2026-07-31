@@ -29,6 +29,10 @@
 
 namespace scribblez {
 
+// Games per .slog file. One file is also the unit a self-play generator stages
+// as a chunk, so this fixes the chunk size fleet-wide.
+constexpr int kGamesPerFile = 1000;
+
 const Dictionary& GameRunner::load_dictionary_or_throw() {
   try {
     return Lexicon::instance().dict();
@@ -117,12 +121,10 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "humans may extend the loop via the Play Again button")                         //
     ("log-dir", po::value<std::string>(&log_dir),                                    //
      "directory to write one <timestamp>.gcg log per game (omit to suppress logs)")  //
-    ("binary-log-dir", po::value<std::string>(&binary_log_dir),                      //
+    ("binary-log-dir", po::value<std::string>(&binary_log_dir),  //
      "directory to write batched binary .slog files (one file per "
-     "--games-per-file games; every eligible position is written -- "
-     "train-time sampling is done by the DataLoader)")                                  //
-    ("games-per-file", po::value<int>(&games_per_file)->default_value(games_per_file),  //
-     "games per .slog file (only used with --binary-log-dir)")                          //
+     "kGamesPerFile games; every eligible position is written -- "
+     "train-time sampling is done by the DataLoader)")  //
     ("threads,t", po::value<int>(&threads)->default_value(threads),                     //
      "number of parallel game threads (default: all logical processors; "
      "downgraded to 1 when a player does not support parallelism, e.g. a "
@@ -194,12 +196,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
                 << "' is not a directory\n";
       throw Exception("--binary-log-dir is not a directory: " + params_.binary_log_dir);
     }
-    if (params_.games_per_file < 1) {
-      std::cerr << "Error: --games-per-file must be >= 1\n";
-      throw Exception("--games-per-file must be >= 1");
-    }
     binary_writer_ =
-      std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, params_.games_per_file);
+      std::make_unique<binlog::BinaryLogWriter>(params_.binary_log_dir, kGamesPerFile);
   }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from "
@@ -263,7 +261,7 @@ void GameRunner::run() {
     // Optional monitor thread: prints a games-done/rate/ETA line every
     // progress_secs seconds. Useful for long self-play batches (e.g. the
     // all-moves neural agent), where no .slog file flushes until a full
-    // --games-per-file chunk completes, so this is the only sign of life.
+    // .slog chunk completes, so this is the only sign of life.
     std::atomic<bool> done{false};
     std::thread monitor;
     if (params_.progress_secs > 0) {

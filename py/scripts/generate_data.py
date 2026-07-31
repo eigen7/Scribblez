@@ -74,9 +74,6 @@ def main() -> int:
         help="Parallel game threads (default: all logical processors).",
     )
     parser.add_argument(
-        "-p", "--games-per-file", type=int, default=10000, help="Games per .slog file."
-    )
-    parser.add_argument(
         "--test-ratio",
         type=float,
         default=0.1,
@@ -149,7 +146,6 @@ def main() -> int:
         rc = run_games(
             out_dir,
             n,
-            args.games_per_file,
             args.threads,
             player_spec,
             random_opening_mean=args.random_opening_mean,

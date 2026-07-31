@@ -27,9 +27,8 @@ TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "ev
 class PositionEvalParams:
     # Generation.
     games_per_generation: int = param(20000, "self-play games per generation")
-    games_per_chunk: int = param(1000, "games per generator cycle (= per .slog chunk)")
     open_ahead: int = param(
-        1, "generations kept open ahead of the trainer's cursor before generators are parked"
+        4, "generations kept open ahead of the trainer's cursor before generators are parked"
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")

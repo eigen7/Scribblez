@@ -26,6 +26,10 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 # The staging area under the tag's data/ dir (locally and in the bucket).
 STAGING_DIR = "staging"
 
+# Games per generator cycle. play_game writes one .slog per 1000 games (its
+# kGamesPerFile), so one cycle delivers exactly one chunk.
+GAMES_PER_CHUNK = 1000
+
 GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_s": "deliver"})
 
 
@@ -62,8 +66,7 @@ def run_generate(ctx: WorkerContext) -> int:
             t0 = time.monotonic()
             rc = run_games(
                 work_dir,
-                num_games=p.games_per_chunk,
-                games_per_file=p.games_per_chunk,
+                num_games=GAMES_PER_CHUNK,
                 threads=ctx.threads,
                 player_spec=spec_str,
                 random_opening_mean=p.random_opening_mean,
@@ -75,10 +78,10 @@ def run_generate(ctx: WorkerContext) -> int:
             chunks, nbytes = _deliver_chunks(ctx, work_dir)
             stats.cycle_done(
                 {"gen_s": gen_seconds, "upload_s": time.monotonic() - t1},
-                units=chunks * p.games_per_chunk,
+                units=chunks * GAMES_PER_CHUNK,
                 nbytes=nbytes,
             )
-            print(f"cycle {cycle}: {chunks} chunk(s) of {p.games_per_chunk} games staged")
+            print(f"cycle {cycle}: {chunks} chunk(s) of {GAMES_PER_CHUNK} games staged")
     except WorkerStopped:
         print("SIGTERM: exiting (any in-flight chunk is discarded on next start)")
     return 0

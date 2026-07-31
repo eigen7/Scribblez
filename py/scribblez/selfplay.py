@@ -31,7 +31,6 @@ def hasty_player_spec(
 def run_games(
     out_dir: Path,
     num_games: int,
-    games_per_file: int,
     threads: int,
     player_spec: str,
     seed: int = 0,
@@ -54,7 +53,6 @@ def run_games(
         "--player", player_spec,
         "--player", player_spec,
         "--binary-log-dir", str(out_dir),
-        "--games-per-file", str(games_per_file),
         "--games", str(num_games),
         "--threads", str(threads),
         "--seed", str(seed),
