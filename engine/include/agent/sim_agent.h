@@ -42,8 +42,13 @@ class SimAgent : public Agent {
     int thread_id = 0;
     std::string name;
     const Dictionary* dict = nullptr;
-    int top_k = 10;              // candidates simmed per turn, by static equity
-    SimRunner::Params sim = {};  // rollouts per candidate, and their threading
+    int top_k = 10;  // candidates simmed per turn, by static equity
+    // Rollouts per candidate, and their threading. 400 is where the measured
+    // strength curve flattens: a rollout run to a natural game end carries the
+    // noise of every ply in it, so below a few hundred the ranking is swamped
+    // and the agent plays WORSE than the static equity it started from -- 35%
+    // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
+    SimRunner::Params sim = {400, 1};
     Objective objective = Objective::kWinRate;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults

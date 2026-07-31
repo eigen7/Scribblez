@@ -22,7 +22,7 @@ namespace po = boost::program_options;
 // set and the documented set cannot drift.
 struct SimOptions {
   int top_k = 10;
-  int rollouts = 200;
+  int rollouts = 400;
   int sim_threads = 1;
   std::string objective = "winrate";
   uint64_t seed = 0;
