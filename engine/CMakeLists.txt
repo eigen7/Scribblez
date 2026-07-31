@@ -53,6 +53,7 @@ add_library(scribblez_core STATIC
   src/selfplay/sim_observation_log.cpp
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_encoder.cpp
+  src/agent/sim_agent.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
   src/selfplay/seed_producer.cpp
@@ -293,6 +294,15 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_rack_inference PRIVATE
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
+
+  # SimAgent: that it plays the candidate its own rollouts rank best (checked by
+  # replaying the decision through SimRunner), that a seed reproduces a game,
+  # and that a bag-empty turn falls back to static equity. Runs off a synthetic
+  # leave table, so it needs no lexicon or Macondo data mount.
+  add_executable(test_sim_agent tests/test_sim_agent.cpp)
+  target_link_libraries(test_sim_agent PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_sim_agent)
 
   # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
   # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
