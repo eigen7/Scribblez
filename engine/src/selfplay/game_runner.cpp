@@ -10,6 +10,7 @@
 #include "util/misc.h"
 #include "util/string.h"
 
+#include <boost/json.hpp>
 #include <boost/program_options.hpp>
 
 #include <array>
@@ -49,7 +50,9 @@ const Dictionary& GameRunner::load_dictionary_or_throw() {
 
 class GameRunner::Results {
  public:
-  explicit Results(std::array<std::string, 2> names) : names_(std::move(names)) {}
+  // `out`, if open, receives one JSON line per finished game.
+  Results(std::array<std::string, 2> names, std::ofstream out)
+      : names_(std::move(names)), out_(std::move(out)) {}
 
   // `seats[s]` is the persistent player index that sat at seat s. Thread-safe.
   void record(const GameLog& log, const std::array<int, 2>& seats, bool verbose) {
@@ -65,6 +68,7 @@ class GameRunner::Results {
     } else {
       ++wins_[seats[winning_seat]];
     }
+    if (out_.is_open()) write_result_line(log, seats);
     if (verbose) {
       std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
                 << log.end_reason << ")\n"
@@ -103,8 +107,21 @@ class GameRunner::Results {
   }
 
  private:
+  // One self-contained line per game, flushed so a supervising process can
+  // read results as they stream. Caller holds `mutex_`.
+  void write_result_line(const GameLog& log, const std::array<int, 2>& seats) {
+    boost::json::object o;
+    o["seed"] = log.seed;
+    o["seat_players"] = boost::json::array{seats[0], seats[1]};
+    o["seat_scores"] = boost::json::array{log.final_scores[0], log.final_scores[1]};
+    o["turns"] = log.num_records;
+    o["end_reason"] = log.end_reason;
+    out_ << boost::json::serialize(o) << "\n" << std::flush;
+  }
+
   mutable std::mutex mutex_;
   std::array<std::string, 2> names_;
+  std::ofstream out_;
   std::array<int, 2> wins_ = {0, 0};
   int draws_ = 0;
   int games_played_ = 0;
@@ -147,6 +164,13 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "play face-up-leaves Scrabble: the tiles each player retains from their "
      "move are public until they move again, with only their replenishment "
      "draws hidden (docs/roadmap.md)")  //
+    ("paired", po::bool_switch(&paired),
+     "play games in mirrored pairs: games 2k and 2k+1 share one game seed "
+     "with the seats swapped, so per-seed tile luck cancels out of paired "
+     "comparisons (requires an even --games)")  //
+    ("results-file", po::value<std::string>(&results_file),
+     "write one JSON line per finished game ({seed, seat_players, "
+     "seat_scores, turns, end_reason}), flushed as games complete")  //
     ("progress-secs", po::value<int>(&progress_secs)->default_value(progress_secs),
      "print a games-done/rate/ETA progress line to stderr every this many "
      "seconds during the parallel batch loop (0 disables)")  //
@@ -183,6 +207,10 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
     std::cerr << "Error: --games must be >= 1\n";
     throw Exception("--games must be >= 1");
   }
+  if (params_.paired && params_.games % 2 != 0) {
+    std::cerr << "Error: --paired requires an even --games\n";
+    throw Exception("--paired requires an even --games");
+  }
   // Force the lexicon load now so any I/O error surfaces at construction
   // time (rather than mid-game), and so the verbose summary below has the
   // node count to report.
@@ -205,12 +233,20 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
       params_.binary_log_dir, kGamesPerFile,
       params_.face_up_leaves ? binlog::kFlagFaceUpLeaves : 0);
   }
+  std::ofstream results_out;
+  if (!params_.results_file.empty()) {
+    results_out.open(params_.results_file, std::ios::trunc);
+    if (!results_out) {
+      std::cerr << "Error: cannot open --results-file '" << params_.results_file << "'\n";
+      throw Exception("cannot open --results-file: " + params_.results_file);
+    }
+  }
   if (params_.verbose) {
     std::cerr << "Loaded KWG (" << dict.num_nodes() << " nodes) from "
               << Lexicon::instance().kwg_path() << "\n"
               << "Seed: " << seed_ << "\n";
   }
-  results_ = std::make_unique<Results>(engine_.player_names());
+  results_ = std::make_unique<Results>(engine_.player_names(), std::move(results_out));
 }
 
 GameRunner::~GameRunner() = default;
@@ -249,7 +285,7 @@ void GameRunner::run() {
                                          static_cast<int>(1 - (seed_ & 1ULL))};
     uint64_t game_idx = 0;
     while (true) {
-      auto [a0, a1] = engine_.play(0, player_at_seat, game_idx, *this);
+      auto [a0, a1] = engine_.play(0, player_at_seat, seed_index(game_idx), *this);
       bool quit = a0 == EndGameAction::QUIT || a1 == EndGameAction::QUIT;
       bool play_again = a0 == EndGameAction::PLAY_AGAIN || a1 == EndGameAction::PLAY_AGAIN;
       if (quit) break;
@@ -283,7 +319,7 @@ void GameRunner::run() {
           if (idx >= total) break;
           int seat0_player = static_cast<int>((seed_ + idx) & 1ULL);
           std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
-          engine_.play(t, seats, idx, *this);
+          engine_.play(t, seats, seed_index(idx), *this);
         }
       });
     }
