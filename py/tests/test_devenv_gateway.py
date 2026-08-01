@@ -1,4 +1,4 @@
-"""Tests for the gateway service (submodules/devenv_utils/gateway_service.py) and
+"""Tests for the gateway service (subtrees/devenv_utils/gateway_service.py) and
 the [services] config parsing that feeds it.
 
 Pure config parsing, URL/label construction, and the env-var contract -- no
@@ -10,14 +10,14 @@ from pathlib import Path
 
 import pytest
 
-# submodules.* lives at the repo root, not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scribblez.service_urls import service_url  # noqa: E402
 
-from submodules.devenv_utils import gateway_service  # noqa: E402
-from submodules.devenv_utils.config import DevenvConfig, Service, load_config  # noqa: E402
-from submodules.devenv_utils.console import SetupException  # noqa: E402
+from subtrees.devenv_utils import gateway_service  # noqa: E402
+from subtrees.devenv_utils.config import DevenvConfig, Service, load_config  # noqa: E402
+from subtrees.devenv_utils.console import SetupException  # noqa: E402
 
 # ---- [services] parsing --------------------------------------------------
 

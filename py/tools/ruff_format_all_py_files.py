@@ -7,7 +7,7 @@ would change and exits non-zero if anything does, without modifying files.
 
 Ruff reads its configuration from the repo-root pyproject.toml ([tool.ruff]).
 The target paths below are the project's first-party Python; the checkouts
-under submodules/ and the build directory are excluded by that config.
+under subtrees/ and the build directory are excluded by that config.
 """
 
 import argparse

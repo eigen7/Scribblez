@@ -19,24 +19,24 @@ Read docs when the task touches their subject, not up front:
 
 Routine build/refactor/tooling tasks rarely need any of them.
 
-# Git submodules
+# Vendored subtrees
 
-`submodules/<dir>/` holds git submodules: full checkouts of repos within our
-complete control — notably `devenv_utils`, which provides the dev-container
-setup and the worktree/PR/publish tooling. We regularly modify submodule code to
-meet this project's needs; do not treat it as unmodifiable. The rules for
-changing one (commit-in-place, pointer-bump rules, publishing order, worktree
-interactions) live in submodules/devenv_utils/SUBMODULES.md — read it before
-touching anything under submodules/.
+`subtrees/<dir>/` holds vendored git subtrees: read-only copies of repos within
+our complete control — notably `devenv_utils`, which provides the dev-container
+setup and the worktree/PR tooling. They are never edited in place (a pre-commit
+hook enforces this): a change is authored in the source repo's working clone at
+/workspace/mount/devenv_utils and lands through that repo's own PR, after which
+this repo pulls the update. The rules — updating the copy, the authoring
+workflow, coordinated changes — live in subtrees/devenv_utils/SUBTREES.md; read
+it before touching anything under subtrees/.
 
 # Worktrees and PR review
 
 Unless told otherwise, never make changes directly in /workspace/repo: work in a
-git worktree and land it through a Gitea pull request. The full workflow —
-worktree → PR (`submodules/devenv_utils/pr_flow.py`) → browser review/merge →
-`git publish` on the host — is documented in
-**submodules/devenv_utils/WORKFLOW.md**; follow it, and relay the review/merge
-handoff `pr_flow.py create` prints.
+git worktree and land it through a GitHub pull request. The full workflow —
+worktree → PR (`subtrees/devenv_utils/pr_flow.py`) → review/merge on GitHub —
+is documented in **subtrees/devenv_utils/WORKFLOW.md**; follow it, and relay
+the review/merge handoff `pr_flow.py create` prints.
 
 Scribblez specifics for that workflow:
 - For C++ work, run py/build.py in the worktree before trusting IDE diagnostics:
@@ -82,10 +82,9 @@ Layout -- where data lives and what provisions it:
     bundles the leave values (data/strategy/\<lexicon\>/leaves.klv2) and
     pre-endgame table that `HastyEquity::default_leaves_path()` /
     `default_peg_path()` read.
-  - gitea/ -- state of the machine-wide Gitea service container, which serves
-    it from the host side (see submodules/devenv_utils/GITEA.md); credentials
-    under gitea/credentials/. In-container tooling reads the credentials from
-    the read-only mount at /workspace/gitea-credentials/.
+  - devenv_utils/ -- working clone of the devenv_utils repo, where changes to
+    the vendored subtrees/devenv_utils copy are authored (see
+    subtrees/devenv_utils/SUBTREES.md).
   - worktrees/<project>/ -- per-project working worktrees (see the PR
     workflow above).
 

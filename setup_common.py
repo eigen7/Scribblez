@@ -1,35 +1,27 @@
 """Project-specific devenv configuration and data-fetch constants for Scribblez.
 
 The generic host-side machinery (Docker build/run, .env.json, VS Code attach
-config, NVIDIA validation, the setup-wizard scaffold) lives in the
-`submodules/devenv_utils` git submodule. The static DevenvConfig fields live as
-data in the repo-root `devenv.toml`; this module loads them and adds the
+config, NVIDIA validation, the setup-wizard scaffold) lives in the vendored
+`subtrees/devenv_utils` copy. The static DevenvConfig fields live as data in
+the repo-root `devenv.toml`; this module loads them and adds the
 Scribblez-specific lexica/Macondo constants used by the custom wizard steps.
 
 It lives at the repo root (not under py/) so the host-side scripts can
 import it without depending on PYTHONPATH or any in-container Python paths.
 """
 
-import subprocess
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
-
-# submodules/devenv_utils is a git submodule, so a clone made without
-# --recurse-submodules leaves its directory empty. Every host-side entry point
-# imports this module before anything else, so populating the submodule here --
-# before the imports below -- makes a plain `git clone` just work.
-if not (REPO_ROOT / "submodules" / "devenv_utils" / "__init__.py").exists():
-    subprocess.run(["git", "submodule", "update", "--init"], cwd=REPO_ROOT, check=True)
-
-from submodules.devenv_utils import (  # noqa: E402
+from subtrees.devenv_utils import (
     DevenvConfig,
     DevTool,
     load_config,
 )
-from submodules.devenv_utils import (  # noqa: E402
+from subtrees.devenv_utils import (
     check_setup_version as _check_setup_version,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent
 
 # Lexica we know how to fetch. The KWG files are not in this repo; they are
 # downloaded at setup time from the public liwords URL into the user's mount

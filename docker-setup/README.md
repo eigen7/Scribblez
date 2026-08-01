@@ -25,5 +25,5 @@ Built and pushed by `./build_and_push_worker_image.py`. Rebuild only when the wo
 dependencies change. See docs/cloud_compute.md for the full architecture.
 
 Shared shell scripts (`entrypoint.sh`, `devuser-setup.sh`) referenced by the local
-Dockerfile are overlaid into the build context from `submodules/devenv_utils/docker/` at
+Dockerfile are overlaid into the build context from `subtrees/devenv_utils/docker/` at
 build time; they do not live in this directory.
