@@ -288,9 +288,7 @@ def _match_figure(title: str, y_label: str) -> figure:
 
 
 def _dashed_hline(fig, location: float, color: str = "#888888"):
-    fig.add_layout(
-        Span(location=location, dimension="width", line_color=color, line_dash="dashed")
-    )
+    fig.add_layout(Span(location=location, dimension="width", line_color=color, line_dash="dashed"))
 
 
 def match_eval_grid(conn):

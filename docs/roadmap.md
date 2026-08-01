@@ -71,10 +71,12 @@ and the failure mode each catches:
 | Monte-Carlo comparison | Absolute value accuracy | Divergence from deep-search ground truth |
 | Match play | Downstream utility | Calibrated but not *useful* for move selection |
 
-The first three are built and render on the dashboard. Match play is run by hand
-today; automating it is A1 below, and it is a prerequisite rather than a
-nicety — every remaining track's final readout is match play, because root
-cross-entropy demonstrably cannot see re-ranking value.
+All four are built and render on the dashboard: match play is A1's
+`match_eval` worker, which plays sequential-test-checked paired matches for
+each exported checkpoint against a fixed baseline. Automating it first was a
+prerequisite rather than a nicety — every remaining track's final readout is
+match play, because root cross-entropy demonstrably cannot see re-ranking
+value.
 
 **Sim machinery.** [sim_runner.h](../engine/include/selfplay/sim_runner.h) runs
 common-random-number rollouts over a position's candidates and
@@ -198,8 +200,11 @@ Two prerequisites come first, neither of them model work:
   comparable.
 
 Then the spine proper:
-- **A1 — automated match eval.** Periodic `play_game` matches during training
-  with win-rate curves and a sequential significance test on the dashboard.
+- **A1 — automated match eval.** Built: the `match_eval` worker
+  ([runner.py](../py/scribblez/match_eval/runner.py)) plays paired matches for
+  each exported checkpoint against a fixed opponent, with win-rate curves and
+  a sequential significance test (`scribblez/stats.py`, the E2 discipline) on
+  the dashboard's Match tab.
 - **A2 — target generation at scale.** The `.mset` sidecar and its generator
   ([move_set_eval_target_log.h](../engine/include/training/move_set_eval_target_log.h),
   [move_set_eval_target_generator.cpp](../engine/apps/move_set_eval_target_generator.cpp))
@@ -307,8 +312,12 @@ localized payoff.
   consumer: A2's target generation.
 - **E2 — match harness statistics** (with A1). Match play needs its own
   discipline — paired seeds and racks across agents (the CRN idea at the match
-  level) and sequential stopping — which the harness should own so experiments
-  do not reinvent it.
+  level) and sequential stopping — owned by the harness
+  ([harness.py](../py/scribblez/match_eval/harness.py) over the engine's
+  `--paired` mode, `scribblez/stats.py`) so experiments do not reinvent it.
+  Still open: full tile-order CRN, which needs the `Bag` reshaped into a
+  seeded permutation (today the shared-seed draw streams diverge once the two
+  arms' replenishment counts differ).
 - **E3 — the re-ranking experiment.** The pivotal readout root-CE experiments
   structurally cannot provide: match play between (a) pick-by-sim over top-K and
   (b) a two-round agent that sims top-K, re-ranks the *unsimmed* candidates with

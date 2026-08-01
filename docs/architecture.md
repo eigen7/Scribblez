@@ -117,7 +117,9 @@ dropped by the writer.
 
 - [SeedProducer](../engine/src/selfplay/seed_producer.cpp) is the global RNG
   source; `GameRunner` pulls one base seed and gives game *g* the seed
-  `base + g`, which seeds that game's [Bag](../engine/src/game/bag.cpp).
+  `base + g` (`base + g/2` under `--paired`, where games 2k and 2k+1
+  deliberately share a seed with the seats swapped), which seeds that game's
+  [Bag](../engine/src/game/bag.cpp).
 - Seeds are **not** required to map to fixed bags — nothing in the system relies
   on reproducing a specific bag from a seed, so auxiliary per-game randomness
   (e.g. handicap selection) may draw from the game seed freely.
