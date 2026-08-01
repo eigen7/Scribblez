@@ -22,7 +22,6 @@ from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
-from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 SIM_OBS_TOOL = "/workspace/repo/target/engine/sim_obs_tool"
 
@@ -95,40 +94,15 @@ def run_one_cycle(out_dir: Path, params: KillTestParams, threads: int) -> CycleR
     return CycleResult(rc, gen_seconds, sim_seconds)
 
 
-def deliver_pairs(sink, out_dir: Path, worker_id: str) -> tuple[int, int, float]:
-    """Deliver every complete .slog/.sobs pair in `out_dir` to the tag's
-    slogs/ store (the shared pair-store discipline; see workloads/pair_store.py)."""
-    return pair_store.deliver_pairs(sink, out_dir, worker_id, ".sobs", SLOGS_DIR)
+def _cycle(work_dir: Path, params: KillTestParams, threads: int) -> tuple[int, dict]:
+    """One cycle in the shared generate loop's (returncode, phases) shape."""
+    r = run_one_cycle(work_dir, params, threads)
+    return r.returncode, {"gen_s": r.gen_seconds, "sim_s": r.sim_seconds}
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: cycle in a private work dir, deliver pairs."""
-    work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    stats = WorkerStats(ctx)
-    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {ctx.params}")
-
-    cycle = 0
-    try:
-        # A restarted worker may find completed pairs a previous run generated
-        # but never delivered; flush them first.
-        deliver_pairs(ctx.sink, work_dir, ctx.worker_id)
-        while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
-            cycle += 1
-            result = run_one_cycle(work_dir, ctx.params, ctx.threads)
-            if result.returncode != 0:
-                return result.returncode
-            moved, nbytes, secs = deliver_pairs(ctx.sink, work_dir, ctx.worker_id)
-            stats.cycle_done(
-                {"gen_s": result.gen_seconds, "sim_s": result.sim_seconds, "upload_s": secs},
-                units=moved,
-                nbytes=nbytes,
-            )
-            print(f"cycle {cycle}: {moved} pair(s) delivered")
-    except WorkerStopped:
-        moved, _, _ = deliver_pairs(ctx.sink, work_dir, ctx.worker_id)
-        print(f"SIGTERM: flushed {moved} completed pair(s); exiting")
-    return 0
+    """The generate-role runner (the shared pair-store loop over run_one_cycle)."""
+    return pair_store.run_pair_generate(ctx, _cycle, ".sobs", SLOGS_DIR)
 
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:

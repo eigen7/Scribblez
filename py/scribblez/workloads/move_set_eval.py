@@ -31,7 +31,6 @@ from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
-from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 TARGET_GENERATOR = "/workspace/repo/target/engine/move_set_eval_target_generator"
 
@@ -41,9 +40,12 @@ SLOGS_DIR = "slogs"
 
 @dataclass(frozen=True)
 class MoveSetEvalParams:
-    """A tag's generation parameters, frozen at task creation: the corpus is
-    only loadable as one dataset if every worker generates with one teacher and
-    one sampling scheme. Worker-level knobs (thread count) live on the slots.
+    """A tag's generation parameters, frozen at task creation. The freeze is
+    what keeps the corpus coherent: MsetDataset itself enforces only a single
+    teacher hash and information condition per corpus, so a consistent sampling
+    scheme (the quotas below) is a generation-policy convention the frozen
+    params provide, not something a mixed corpus would fail on. Worker-level
+    knobs (thread count) live on the slots.
     """
 
     teacher_model: str = param(
@@ -52,9 +54,7 @@ class MoveSetEvalParams:
         "models/model_epoch_NNNN.onnx); required, and must never be overwritten in place",
     )
     games_per_batch: int = param(200, "self-play games per generation cycle")
-    positions_per_game: int = param(
-        0, "eligible turns targeted per game (0 = every eligible turn)"
-    )
+    positions_per_game: int = param(0, "eligible turns targeted per game (0 = every eligible turn)")
     # The stratified candidate sample per position (the generator's quotas):
     # dense head of the equity ranking, a slice of the contention zone, a
     # uniform tail, and exchanges.
@@ -122,42 +122,20 @@ def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> Cyc
     return CycleResult(rc, gen_seconds, mset_seconds)
 
 
+def _cycle(work_dir: Path, params: MoveSetEvalParams, threads: int) -> tuple[int, dict]:
+    """One cycle in the shared generate loop's (returncode, phases) shape."""
+    r = run_one_cycle(work_dir, params, threads)
+    return r.returncode, {"gen_s": r.gen_seconds, "mset_s": r.mset_seconds}
+
+
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: cycle in a private work dir, deliver pairs."""
+    """The generate-role runner (the shared pair-store loop over run_one_cycle),
+    after failing fast on a teacher the whole run would trip over."""
     p = ctx.params
     if not p.teacher_model or not Path(p.teacher_model).is_file():
         print(f"error: teacher_model {p.teacher_model!r} is not a readable file", file=sys.stderr)
         return 1
-    work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    stats = WorkerStats(ctx)
-    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
-
-    cycle = 0
-    try:
-        # A restarted worker may find completed pairs a previous run generated
-        # but never delivered; flush them first.
-        pair_store.deliver_pairs(ctx.sink, work_dir, ctx.worker_id, ".mset", SLOGS_DIR)
-        while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
-            cycle += 1
-            result = run_one_cycle(work_dir, p, ctx.threads)
-            if result.returncode != 0:
-                return result.returncode
-            moved, nbytes, secs = pair_store.deliver_pairs(
-                ctx.sink, work_dir, ctx.worker_id, ".mset", SLOGS_DIR
-            )
-            stats.cycle_done(
-                {"gen_s": result.gen_seconds, "mset_s": result.mset_seconds, "upload_s": secs},
-                units=moved,
-                nbytes=nbytes,
-            )
-            print(f"cycle {cycle}: {moved} pair(s) delivered")
-    except WorkerStopped:
-        moved, _, _ = pair_store.deliver_pairs(
-            ctx.sink, work_dir, ctx.worker_id, ".mset", SLOGS_DIR
-        )
-        print(f"SIGTERM: flushed {moved} completed pair(s); exiting")
-    return 0
+    return pair_store.run_pair_generate(ctx, _cycle, ".mset", SLOGS_DIR)
 
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
