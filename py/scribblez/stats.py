@@ -37,8 +37,8 @@ def mean_and_variance(counts: list[int]) -> tuple[float, float]:
     n = sum(counts)
     if n == 0:
         return 0.5, 0.0
-    mean = sum(c * s for c, s in zip(counts, PAIR_SCORES)) / n
-    var = sum(c * (s - mean) ** 2 for c, s in zip(counts, PAIR_SCORES)) / n
+    mean = sum(c * s for c, s in zip(counts, PAIR_SCORES, strict=True)) / n
+    var = sum(c * (s - mean) ** 2 for c, s in zip(counts, PAIR_SCORES, strict=True)) / n
     return mean, var
 
 

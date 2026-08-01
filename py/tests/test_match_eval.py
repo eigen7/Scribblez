@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from scribblez.dashboard import db
+from scribblez.dashboard import api, db
 from scribblez.match_eval import harness, runner
 from scribblez.paths import POSITION_EVAL, TagPaths
 
@@ -91,6 +91,16 @@ def test_match_eval_db_roundtrip(tmp_path):
     assert rows[0]["score"] == 0.5
     assert rows[0]["pair_counts"] == [5, 10, 15, 12, 8]
     assert rows[1]["decision"] == "H1"
+
+
+def test_match_eval_figure_is_serializable(tmp_path):
+    conn = db.connect(tmp_path / "dashboard.db")
+    assert api.build_figure_item(conn, "match_eval", {}, tmp_path, str(tmp_path)) is None
+    db.write_match_eval(conn, 5, _match_record())
+    db.write_match_eval(conn, 10, _match_record(decision="H1", llr=3.2))
+    item = api.build_figure_item(conn, "match_eval", {}, tmp_path, str(tmp_path))
+    assert item is not None
+    assert {"doc", "root_id", "target_id"} <= set(item)
 
 
 def test_pending_generation_prefers_the_frontier(tmp_path):

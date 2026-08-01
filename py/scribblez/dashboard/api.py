@@ -59,6 +59,7 @@ VERSION_TABLES = (
     "calibration",
     "score_belief",
     "control_event",
+    "match_eval",
 )
 
 
@@ -90,6 +91,10 @@ def _training_metrics(conn, params, image_dir, mount_root):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
+def _match_eval(conn, params, image_dir, mount_root):
+    return plots.match_eval_grid(conn)
+
+
 def _gen_idx(params) -> int | None:
     """The requested generation index (`?gen_idx=`), or None for the newest."""
     v = params.get("gen_idx")
@@ -119,6 +124,7 @@ FIGURES = {
     "training_metrics": _training_metrics,
     "positions": _positions,
     "calibration": _calibration,
+    "match_eval": _match_eval,
 }
 
 
