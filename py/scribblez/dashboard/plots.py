@@ -241,6 +241,90 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
 
 
 # ---------------------------------------------------------------------------
+# Match eval (per-generation match play vs a fixed opponent)
+# ---------------------------------------------------------------------------
+
+
+# Sequential-test outcomes, colored by verdict: the model cleared H1 (better
+# than the opponent by at least the tested margin), fell to H0, or exhausted
+# its pair budget undecided.
+_DECISION_COLORS = {"H1": "#2ca02c", "H0": "#d62728", "continue": "#7f7f7f"}
+
+
+def _match_source(rows) -> ColumnDataSource:
+    return ColumnDataSource(
+        {
+            "x": [r["epoch"] for r in rows],
+            "score": [r["score"] for r in rows],
+            "lower": [r["score"] - r["ci_half_width"] for r in rows],
+            "upper": [r["score"] + r["ci_half_width"] for r in rows],
+            "llr": [r["llr"] for r in rows],
+            "games": [r["games"] for r in rows],
+            "wdl": [f"{r['wins']}/{r['draws']}/{r['losses']}" for r in rows],
+            "decision": [r["decision"] for r in rows],
+            "color": [_DECISION_COLORS[r["decision"]] for r in rows],
+        }
+    )
+
+
+_MATCH_TOOLTIPS = [
+    ("generation", "@x"),
+    ("score", "@score{0.000}"),
+    ("games", "@games"),
+    ("W/D/L", "@wdl"),
+    ("decision", "@decision"),
+]
+
+
+def _match_figure(title: str, y_label: str) -> figure:
+    return figure(
+        width=SERIES_SIZE,
+        height=SERIES_SIZE,
+        title=title,
+        x_axis_label="generation",
+        y_axis_label=y_label,
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+
+
+def _dashed_hline(fig, location: float, color: str = "#888888"):
+    fig.add_layout(Span(location=location, dimension="width", line_color=color, line_dash="dashed"))
+
+
+def match_eval_grid(conn):
+    """The Match tab: the win-rate curve (mean pair score with its CI band, the
+    0.5 line dashed) and the sequential test's LLR (decision bounds dashed),
+    each generation's marker colored by its verdict. None when no match has
+    been recorded."""
+    rows = db.read_all_match_eval(conn)
+    if not rows:
+        return None
+    src = _match_source(rows)
+    opponents = " / ".join(sorted({r["opponent"] for r in rows}))
+
+    score_fig = _match_figure(f"Match win rate vs {opponents}", "pair score")
+    score_fig.varea(x="x", y1="lower", y2="upper", source=src, fill_alpha=0.15)
+    score_fig.line(x="x", y="score", source=src, line_width=2)
+    dots = score_fig.scatter(x="x", y="score", source=src, color="color", size=8)
+    score_fig.add_tools(HoverTool(tooltips=_MATCH_TOOLTIPS, renderers=[dots]))
+    _dashed_hline(score_fig, 0.5)
+
+    llr_fig = _match_figure("Sequential test LLR", "log-likelihood ratio")
+    llr_fig.line(x="x", y="llr", source=src, line_width=2)
+    llr_dots = llr_fig.scatter(x="x", y="llr", source=src, color="color", size=8)
+    llr_fig.add_tools(HoverTool(tooltips=_MATCH_TOOLTIPS, renderers=[llr_dots]))
+    _dashed_hline(llr_fig, rows[0]["llr_lower"], _DECISION_COLORS["H0"])
+    _dashed_hline(llr_fig, rows[0]["llr_upper"], _DECISION_COLORS["H1"])
+
+    games_fig = _match_figure("Games to decision", "games")
+    games_fig.line(x="x", y="games", source=src, line_width=2)
+    games_dots = games_fig.scatter(x="x", y="games", source=src, color="color", size=8)
+    games_fig.add_tools(HoverTool(tooltips=_MATCH_TOOLTIPS, renderers=[games_dots]))
+
+    return column(row(score_fig, llr_fig, games_fig))
+
+
+# ---------------------------------------------------------------------------
 # Loss / accuracy (per-checkpoint metrics over positions trained)
 # ---------------------------------------------------------------------------
 

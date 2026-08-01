@@ -46,6 +46,10 @@ class GameRunner : public GameSink {
                                        // self-play generation turns this on
     bool face_up_leaves = false;       // play the face-up-leaves variant, in which each
                                        // player's retained tiles are public
+    bool paired = false;               // games 2k and 2k+1 share one game seed with the
+                                       // seats swapped, so per-seed tile luck cancels
+                                       // out of paired comparisons; needs an even --games
+    std::string results_file;          // if non-empty, one JSON line per finished game
     int progress_secs = 10;            // games-done/rate/ETA line interval; 0 disables,
                                        // and only the parallel batch loop prints one
     bool verbose = false;              // per-game + batch summaries to stderr
@@ -74,8 +78,12 @@ class GameRunner : public GameSink {
 
  private:
   // Tally indexed by *player identity* rather than seat, seats alternating
-  // every game. Thread-safe.
+  // every game, plus the optional per-game JSON results stream. Thread-safe.
   class Results;
+
+  // The seed index game `game_idx` is played with: the games of a pair share
+  // one seed in paired mode.
+  uint64_t seed_index(uint64_t game_idx) const { return params_.paired ? game_idx / 2 : game_idx; }
 
   // Prints a progress line every progress_secs until `done` is set, polling it
   // at 10 Hz so it exits promptly once the workers finish.

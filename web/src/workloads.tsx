@@ -16,17 +16,23 @@ export type WorkloadTab = {
   render: (workload: string, tag: string) => ReactNode;
 };
 
-const trainingTab = (figure: string, versionKey: string, emptyText: string): WorkloadTab => ({
-  name: 'Training',
+const figureTab = (
+  name: string, figure: string, versionKey: string, emptyText: string,
+): WorkloadTab => ({
+  name,
   render: (w, t) => (
     <FigureTab task={w} tag={t} figure={figure} versionKey={versionKey} emptyText={emptyText} />
   ),
 });
 
+const trainingTab = (figure: string, versionKey: string, emptyText: string): WorkloadTab =>
+  figureTab('Training', figure, versionKey, emptyText);
+
 export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
   position_eval: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     { name: 'Positions', render: (w, t) => <PositionEvalAnalysis task={w} tag={t} /> },
+    figureTab('Match', 'match_eval', 'match_eval', 'No match results yet.'),
     trainingTab('training_metrics', 'metrics', 'No per-epoch training metrics yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },

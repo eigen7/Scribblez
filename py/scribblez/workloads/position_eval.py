@@ -1,9 +1,11 @@
 """The position-evaluation training workload.
 
-Two roles on one tag: any number of interchangeable generate workers
-(local/cloud) producing self-play chunks into the tag's staging area, and a
+Three roles on one tag: any number of interchangeable generate workers
+(local/cloud) producing self-play chunks into the tag's staging area, a
 singleton local train worker consuming complete generations (sliding window,
-one epoch per generation, per-checkpoint ONNX + dashboard metrics). The
+one epoch per generation, per-checkpoint ONNX + dashboard metrics), and a
+singleton local match_eval worker turning exported checkpoints into match-play
+readouts against a fixed opponent (scribblez/match_eval/runner.py). The
 generation scheduler (scribblez/generational/scheduler.py) assigns staged
 chunks to generation directories and paces the generator fleet against the
 trainer's published cursor.
@@ -36,6 +38,31 @@ class PositionEvalParams:
         2.0,
         "open each game with K uniformly-random plies (K ~ round(Exp(mean))) before the "
         "HastyBots take over, reaching off-policy states; 0 disables",
+    )
+    face_up_leaves: bool = param(
+        False,
+        "play the face-up-leaves variant (docs/roadmap.md) in self-play generation AND "
+        "match eval, so the model trains and is measured under one information condition",
+    )
+    # Match eval (the match_eval role; docs/roadmap.md A1).
+    match_every_generations: int = param(
+        5, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
+    )
+    match_opponent: str = param(
+        "--type=hastybot-endgame", "the fixed opponent's --player spec, e.g. --type=sim"
+    )
+    match_round_pairs: int = param(
+        25, "mirrored game pairs per play_game invocation, between sequential-test checks"
+    )
+    match_max_pairs: int = param(
+        200, "pair budget per generation's match when the sequential test does not decide"
+    )
+    match_p0: float = param(0.50, "sequential test H0: expected pair score (win rate) vs opponent")
+    match_p1: float = param(0.55, "sequential test H1: expected pair score (win rate) vs opponent")
+    match_seed: int = param(
+        1,
+        "base game seed for matches; fixed per tag so every generation faces identical deals "
+        "(must be nonzero)",
     )
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
@@ -82,6 +109,15 @@ SPEC = WorkloadSpec(
             kinds=("local",),
             gpu=True,
             stats=TRAINER_STATS,
+        ),
+        RoleSpec(
+            name="match_eval",
+            title="Match eval (GPU)",
+            runner="scribblez.match_eval.runner:run",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
         ),
     ),
     scheduler="scribblez.generational.scheduler:tick_for_task",

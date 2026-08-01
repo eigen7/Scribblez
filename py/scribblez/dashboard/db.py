@@ -10,6 +10,7 @@ Tables:
   monotonicity    per-epoch win-rate curves: score_diffs, win_rate, per-curve scores
   score_belief    per-epoch score-diff percentile bands
   calibration     per-epoch reliability binning (WLD + score-diff)
+  match_eval      per-generation match-play result vs a fixed opponent
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved). The
 frozen test-subset board images are NOT in the DB -- they are static PNGs
@@ -89,6 +90,18 @@ CREATE TABLE IF NOT EXISTS position_eval_pred (
   sd_mean    REAL,              -- predicted final-score-delta mean (points)
   sd_std     REAL,              -- predicted final-score-delta std (points, Gaussian)
   PRIMARY KEY (generation, position)
+);
+CREATE TABLE IF NOT EXISTS match_eval (
+  epoch INTEGER PRIMARY KEY,    -- generation index of the model under test
+  positions INTEGER,            -- rows trained at that checkpoint (display label)
+  opponent TEXT,                -- the opponent's --player spec
+  games INTEGER, wins INTEGER, draws INTEGER, losses INTEGER,
+  pair_counts TEXT,             -- JSON [5]: pentanomial pair-score counts
+  score REAL,                   -- mean pair score (win rate, draws at 0.5)
+  ci_half_width REAL,           -- pointwise CI half-width around score
+  llr REAL, llr_lower REAL, llr_upper REAL,
+  decision TEXT,                -- 'H0' | 'H1' | 'continue' (= budget-capped)
+  elapsed_s REAL
 );
 CREATE TABLE IF NOT EXISTS control (
   name       TEXT PRIMARY KEY,  -- live operator knob (e.g. 'base_lr')
@@ -325,6 +338,49 @@ def read_position_eval_pred(
         "sd_mean": r["sd_mean"],
         "sd_std": r["sd_std"],
     }
+
+
+def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
+    """Store one generation's match-eval result (the match_eval runner's write
+    path). Idempotent: replaying a generation's match replaces its row."""
+    conn.execute(
+        "INSERT INTO match_eval "
+        "(epoch, positions, opponent, games, wins, draws, losses, pair_counts, "
+        "score, ci_half_width, llr, llr_lower, llr_upper, decision, elapsed_s) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(epoch) DO UPDATE SET positions=excluded.positions, "
+        "opponent=excluded.opponent, games=excluded.games, wins=excluded.wins, "
+        "draws=excluded.draws, losses=excluded.losses, pair_counts=excluded.pair_counts, "
+        "score=excluded.score, ci_half_width=excluded.ci_half_width, llr=excluded.llr, "
+        "llr_lower=excluded.llr_lower, llr_upper=excluded.llr_upper, "
+        "decision=excluded.decision, elapsed_s=excluded.elapsed_s",
+        (
+            epoch,
+            int(record["positions"]),
+            record["opponent"],
+            int(record["games"]),
+            int(record["wins"]),
+            int(record["draws"]),
+            int(record["losses"]),
+            json.dumps(record["pair_counts"]),
+            float(record["score"]),
+            float(record["ci_half_width"]),
+            float(record["llr"]),
+            float(record["llr_lower"]),
+            float(record["llr_upper"]),
+            record["decision"],
+            float(record["elapsed_s"]),
+        ),
+    )
+    conn.commit()
+
+
+def read_all_match_eval(conn: sqlite3.Connection) -> list[dict]:
+    """Every match-eval row, oldest generation first, pair_counts decoded."""
+    rows = [dict(r) for r in conn.execute("SELECT * FROM match_eval ORDER BY epoch")]
+    for r in rows:
+        r["pair_counts"] = json.loads(r["pair_counts"])
+    return rows
 
 
 def write_monotonicity(conn: sqlite3.Connection, epoch: int, score_diffs, win_rate, curve_scores):

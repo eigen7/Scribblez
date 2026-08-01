@@ -6,8 +6,8 @@ farmed out to any number of interchangeable local/cloud workers, the GPU
 trainer running as a distinguished singleton worker consuming the shared data,
 and the whole run driven from the one web shell. Both training workloads
 (position_eval and max_move_per_lane) share this shape; position_eval is
-described throughout, with the probe differing only in its parameters and
-tabs.
+described throughout, with the probe differing in its parameters and tabs and
+lacking position_eval's third role (the match_eval singleton below).
 
 ## The workload-spec contract
 
@@ -42,10 +42,13 @@ pairs to the tag's data store.
 |---|---|---|---|---|
 | `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
 | `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, write dashboard.db |
+| `match_eval` | singleton | local (the GPU box) | — | play sequential-test-checked paired matches for each exported checkpoint against a fixed opponent, write dashboard.db (position_eval only; docs/roadmap.md A1) |
 
-The trainer never generates and the generators never train. A single-machine
-run attaches one local generator and the trainer to the same task; the CPU
-split between them is the two slots' thread counts.
+The trainer never generates and the generators never train; match_eval only
+consumes exported ONNX checkpoints, pacing itself off `models/` so the
+training loop is never blocked. A single-machine run attaches one local
+generator and the trainer (plus, optionally, the match_eval worker) to the
+same task; the CPU split between them is the slots' thread counts.
 
 ## Data flow: staging + controller-side ingest
 
@@ -140,7 +143,7 @@ needed, `generate_data.py` still exists.
 Overview gains a `role` column, `waiting (<reason>)` states, one add-worker
 form per role, and the workload's progress counters (fill state, completed
 generations, trainer cursor, rows). Stats is the generic schema-driven tab.
-The training tabs (Loss / Positions / Training / Controls / Info;
+The training tabs (Loss / Positions / Match / Training / Controls / Info;
 max_move_per_lane registers Loss / Lane analysis / Controls / Info) are
 registered in `web/src/workloads.tsx`; `scripts/dashboard.py` is the single
 entrypoint and always renders the master app.

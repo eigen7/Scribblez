@@ -304,6 +304,25 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_sim_agent)
 
+  # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
+  # --results-file per-game JSON stream. Builds real agents through
+  # PlayerFactory, whose dispatch references every agent type, so it compiles
+  # the NeuralAgent TUs and links scribblez_nn the same way play_game does.
+  add_executable(test_game_runner
+    tests/test_game_runner.cpp
+    src/agent/neural_agent.cpp
+    src/agent/neural_agent_factory.cpp)
+  target_link_libraries(test_game_runner PRIVATE
+    scribblez_core
+    scribblez_nn
+    Boost::program_options
+    Boost::json
+    Boost::filesystem
+    Boost::system
+    Threads::Threads
+    GTest::gtest_main)
+  gtest_discover_tests(test_game_runner)
+
   # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
   # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
   # (skips cleanly if torch/onnx is absent) and needs a GPU at run time. A fixture
