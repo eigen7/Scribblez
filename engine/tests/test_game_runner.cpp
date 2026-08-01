@@ -9,6 +9,7 @@
 #include "selfplay/game_runner.h"
 #include "selfplay/seed_producer.h"
 #include "synthetic_equity.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 #include <gtest/gtest.h>
@@ -52,41 +53,62 @@ std::vector<ResultLine> read_result_lines(const std::filesystem::path& path) {
   return out;
 }
 
+// The real lexicon plus a synthetic equity table, torn down with the temp
+// dir. Skips (not fails) without the lexicon mount, like the other gated
+// suites.
+class GameRunnerTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!std::ifstream(Lexicon::instance().kwg_path()).good()) {
+      GTEST_SKIP() << "no lexicon at " << Lexicon::instance().kwg_path();
+    }
+    tmp_ =
+      std::filesystem::temp_directory_path() / ("scribblez_paired_" + std::to_string(::getpid()));
+    std::filesystem::create_directories(tmp_);
+    scribblez::testing::install_synthetic_hasty_equity(tmp_);
+  }
+  void TearDown() override {
+    std::error_code ec;
+    std::filesystem::remove_all(tmp_, ec);
+  }
+
+  static GameRunner::Params paired_params(int games) {
+    GameRunner::Params rp;
+    rp.games = games;
+    rp.threads = 2;
+    rp.paired = true;
+    rp.progress_secs = 0;
+    return rp;
+  }
+
+  static PlayerFactory::Params hasty_players() {
+    PlayerFactory::Params pp;
+    pp.specs = {"--type=hastybot --name=A", "--type=hastybot --name=B"};
+    return pp;
+  }
+
+  std::filesystem::path tmp_;
+};
+
 }  // namespace
 
 // With deterministic agents the two games of a pair are the same game with the
 // player labels exchanged: same per-seat scores and length, opposite seat
 // assignment. Distinct pairs get distinct seeds.
-TEST(GameRunner, PairedGamesShareSeedsAndMirrorSeats) {
-  if (!std::ifstream(Lexicon::instance().kwg_path()).good()) {
-    GTEST_SKIP() << "no lexicon at " << Lexicon::instance().kwg_path();
-  }
-  namespace fs = std::filesystem;
-  const fs::path tmp =
-    fs::temp_directory_path() / ("scribblez_paired_" + std::to_string(::getpid()));
-  fs::create_directories(tmp);
-  scribblez::testing::install_synthetic_hasty_equity(tmp);
-  const fs::path results = tmp / "results.jsonl";
+TEST_F(GameRunnerTest, PairedGamesShareSeedsAndMirrorSeats) {
+  const std::filesystem::path results = tmp_ / "results.jsonl";
 
   SeedProducer::Params seed_params;
   seed_params.seed = 20260801;
   SeedProducer::instance().seed(seed_params);
 
-  GameRunner::Params rp;
-  rp.games = 4;
-  rp.threads = 2;
-  rp.paired = true;
-  rp.progress_secs = 0;
+  GameRunner::Params rp = paired_params(/*games=*/4);
   rp.results_file = results.string();
-  PlayerFactory::Params pp;
-  pp.specs = {"--type=hastybot --name=A", "--type=hastybot --name=B"};
 
-  GameRunner runner(rp, pp);
+  GameRunner runner(rp, hasty_players());
   runner.run();
 
   const std::vector<ResultLine> lines = read_result_lines(results);
-  std::error_code ec;
-  fs::remove_all(tmp, ec);
   ASSERT_EQ(lines.size(), 4u);
 
   std::map<uint64_t, std::vector<ResultLine>> by_seed;
@@ -99,4 +121,10 @@ TEST(GameRunner, PairedGamesShareSeedsAndMirrorSeats) {
     EXPECT_EQ(pair[0].seat_scores, pair[1].seat_scores);
     EXPECT_EQ(pair[0].turns, pair[1].turns);
   }
+}
+
+// An odd --games cannot form pairs; construction must reject it rather than
+// leave the last seed half-mirrored.
+TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
+  EXPECT_THROW(GameRunner(paired_params(/*games=*/3), hasty_players()), Exception);
 }
