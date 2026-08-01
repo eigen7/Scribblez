@@ -37,7 +37,12 @@ REPO_ROOT = Path("/workspace/repo")
 # placed at target/engine/<name> inside the tarball -- the fixed path all
 # python and C++ tooling references. The py/ tree rides along in full (minus
 # caches).
-BUNDLE_BINARY_NAMES = ["play_game", "sim_obs_tool", "libscribblez_ffi.so"]
+BUNDLE_BINARY_NAMES = [
+    "play_game",
+    "sim_obs_tool",
+    "move_set_eval_target_generator",
+    "libscribblez_ffi.so",
+]
 
 # Arch whose tarball any worker can run (baseline x86-64 codegen); workers
 # whose exact arch has no tarball fall back to this one.

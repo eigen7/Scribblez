@@ -20,6 +20,7 @@ from pathlib import Path
 
 from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
+from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
@@ -95,23 +96,9 @@ def run_one_cycle(out_dir: Path, params: KillTestParams, threads: int) -> CycleR
 
 
 def deliver_pairs(sink, out_dir: Path, worker_id: str) -> tuple[int, int, float]:
-    """Deliver every complete .slog/.sobs pair in `out_dir` (not just this
-    cycle's -- a restarted worker flushes leftovers too) to the tag's slogs/
-    store, appending a -<worker_id> stem suffix so names stay globally unique
-    across workers while preserving the stem-based pair matching downstream
-    tools rely on. Returns (pairs, bytes, seconds).
-
-    The .sobs is delivered before its .slog: a .slog missing its sidecar reads
-    as pending work downstream, while an orphaned .sobs is inert -- so the
-    store only ever presents complete pairs plus inert leftovers.
-    """
-    moved, nbytes, t0 = 0, 0, time.monotonic()
-    for sobs in sorted(out_dir.glob("*.sobs")):
-        slog = sobs.with_suffix(".slog")
-        for f in (sobs, slog):
-            nbytes += sink.deliver(f, f"{SLOGS_DIR}/{f.stem}-{worker_id}{f.suffix}")
-        moved += 1
-    return moved, nbytes, time.monotonic() - t0
+    """Deliver every complete .slog/.sobs pair in `out_dir` to the tag's
+    slogs/ store (the shared pair-store discipline; see workloads/pair_store.py)."""
+    return pair_store.deliver_pairs(sink, out_dir, worker_id, ".sobs", SLOGS_DIR)
 
 
 def run_generate(ctx: WorkerContext) -> int:
@@ -145,9 +132,7 @@ def run_generate(ctx: WorkerContext) -> int:
 
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
-    slogs = spec.paths(tag).data_dir / SLOGS_DIR
-    pairs = sum(1 for _ in slogs.glob("*.sobs")) if slogs.is_dir() else 0
-    return [("pairs", pairs)]
+    return [("pairs", pair_store.count_pairs(spec.paths(tag).data_dir / SLOGS_DIR, ".sobs"))]
 
 
 def slog_dir(tag: str) -> Path:

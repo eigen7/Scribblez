@@ -6,7 +6,7 @@ the engine: heavy code is referenced by dotted path and imported only when it
 runs.
 """
 
-from scribblez.workloads import kill_test, max_move_per_lane, position_eval
+from scribblez.workloads import kill_test, max_move_per_lane, move_set_eval, position_eval
 from scribblez.workloads.base import (
     RoleSpec,
     SchedulerHooks,
@@ -17,7 +17,8 @@ from scribblez.workloads.base import (
 )
 
 WORKLOADS = {
-    spec.name: spec for spec in (kill_test.SPEC, position_eval.SPEC, max_move_per_lane.SPEC)
+    spec.name: spec
+    for spec in (kill_test.SPEC, position_eval.SPEC, max_move_per_lane.SPEC, move_set_eval.SPEC)
 }
 
 
