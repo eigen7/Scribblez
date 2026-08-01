@@ -41,7 +41,8 @@ wizard checks the rest):
 ./build_docker_image.py  # builds the local `scribblez` docker image
 ```
 
-A plain `git clone` suffices; there are no submodules to initialize.
+A plain `git clone` gives you everything: the dev-environment machinery is
+vendored into the repo at `subtrees/devenv_utils`.
 
 **Every dev session**, launch the container and build inside it:
 
