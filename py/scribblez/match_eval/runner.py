@@ -14,6 +14,7 @@ row-less, so the next start replays it from the same fixed seeds.
 """
 
 import time
+from dataclasses import dataclass
 
 from scribblez import stats
 from scribblez.dashboard import db
@@ -64,9 +65,24 @@ def _rows_trained_label(conn, gen: int) -> int:
     return int(row["value"]) if row is not None else 0
 
 
-def _play_match(ctx: WorkerContext, gen: int):
-    """Play one generation's match in SPRT-checked rounds. Returns
-    (pair_counts, wins, draws, losses, SprtResult)."""
+@dataclass(frozen=True)
+class MatchOutcome:
+    """One generation's finished match: the accumulated pentanomial pair
+    counts, the per-game W/D/L behind them, and the sequential test's state."""
+
+    pair_counts: list[int]
+    wins: int
+    draws: int
+    losses: int
+    sprt: SprtResult
+
+    @property
+    def games(self) -> int:
+        return self.wins + self.draws + self.losses
+
+
+def _play_match(ctx: WorkerContext, gen: int) -> MatchOutcome:
+    """Play one generation's match in SPRT-checked rounds."""
     p = ctx.params
     paths = ctx.tag_paths()
     results_file = paths.work_dir(ctx.worker_id) / "match_results.jsonl"
@@ -99,7 +115,7 @@ def _play_match(ctx: WorkerContext, gen: int):
         )
         if result.decision != "continue":
             break
-    return counts, wins, draws, losses, result
+    return MatchOutcome(counts, wins, draws, losses, result)
 
 
 def run(ctx: WorkerContext) -> int:
@@ -122,39 +138,37 @@ def run(ctx: WorkerContext) -> int:
                 continue
             cycles += 1
             t0 = time.monotonic()
-            counts, wins, draws, losses, result = _play_match(ctx, gen)
+            outcome = _play_match(ctx, gen)
             elapsed = time.monotonic() - t0
-            mean, ci = stats.score_confidence_interval(counts)
-            games = wins + draws + losses
+            mean, ci = stats.score_confidence_interval(outcome.pair_counts)
+            llr = _storable_llr(outcome.sprt)
             db.write_match_eval(
                 conn,
                 gen,
                 {
                     "positions": _rows_trained_label(conn, gen),
                     "opponent": p.match_opponent,
-                    "games": games,
-                    "wins": wins,
-                    "draws": draws,
-                    "losses": losses,
-                    "pair_counts": counts,
+                    "games": outcome.games,
+                    "wins": outcome.wins,
+                    "draws": outcome.draws,
+                    "losses": outcome.losses,
+                    "pair_counts": outcome.pair_counts,
                     "score": mean,
                     "ci_half_width": ci,
-                    "llr": _storable_llr(result),
-                    "llr_lower": result.lower,
-                    "llr_upper": result.upper,
-                    "decision": result.decision,
+                    "llr": llr,
+                    "llr_lower": outcome.sprt.lower,
+                    "llr_upper": outcome.sprt.upper,
+                    "decision": outcome.sprt.decision,
                     "elapsed_s": elapsed,
                 },
             )
             db.write_metrics(
-                conn,
-                gen,
-                {"match_score": mean, "match_llr": _storable_llr(result), "match_games": games},
+                conn, gen, {"match_score": mean, "match_llr": llr, "match_games": outcome.games}
             )
-            stats_rec.cycle_done({"match_s": elapsed}, units=games, nbytes=0)
+            stats_rec.cycle_done({"match_s": elapsed}, units=outcome.games, nbytes=0)
             print(
-                f"[gen {gen}] done: {wins}/{draws}/{losses} W/D/L, score={mean:.3f}+-{ci:.3f}, "
-                f"decision={result.decision} in {elapsed:.0f}s"
+                f"[gen {gen}] done: {outcome.wins}/{outcome.draws}/{outcome.losses} W/D/L, "
+                f"score={mean:.3f}+-{ci:.3f}, decision={outcome.sprt.decision} in {elapsed:.0f}s"
             )
     except WorkerStopped:
         print("SIGTERM: exiting (an in-flight match is discarded and replayed on next start)")

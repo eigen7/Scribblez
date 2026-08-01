@@ -11,6 +11,15 @@ from pathlib import Path
 PLAY_GAME = "/workspace/repo/target/engine/play_game"
 
 
+def run_play_game(args: list[str]) -> int:
+    """Run the play_game binary with `args`, echoing the command line (quoted
+    the way a shell would want it) first. Returns the exit code."""
+    cmd = [PLAY_GAME, *args]
+    cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
+    print(f"Running: {cmd_str}")
+    return subprocess.run(cmd, capture_output=False).returncode
+
+
 def hasty_player_spec(temperature: float = 0.0, top_k: int = 10, endgame: bool = False) -> str:
     """The `--player` value for a HastyBot seat, optionally temperature-sampled
     over equity (temperature > 0) for exploration. `endgame` selects the
@@ -46,8 +55,7 @@ def run_games(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off
-    cmd = [
-        PLAY_GAME,
+    args = [
         "--player", player_spec,
         "--player", player_spec,
         "--binary-log-dir", str(out_dir),
@@ -58,7 +66,5 @@ def run_games(
     ]
     # fmt: on
     if face_up_leaves:
-        cmd.append("--face-up-leaves")
-    cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
-    print(f"Running: {cmd_str}")
-    return subprocess.run(cmd, capture_output=False).returncode
+        args.append("--face-up-leaves")
+    return run_play_game(args)

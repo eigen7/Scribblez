@@ -9,11 +9,10 @@ scores scribblez.stats' sequential test consumes.
 """
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from scribblez.selfplay import PLAY_GAME
+from scribblez.selfplay import run_play_game
 
 # Game scores for the player under test, and the per-pair average of two of
 # them; see scribblez.stats.PAIR_SCORES.
@@ -68,8 +67,7 @@ def play_round(
         raise ValueError("seed 0 means 'random' to play_game; matches need fixed seeds")
     results_file.parent.mkdir(parents=True, exist_ok=True)
     # fmt: off
-    cmd = [
-        PLAY_GAME,
+    args = [
         "--player", player0_spec,
         "--player", player1_spec,
         "--games", str(2 * num_pairs),
@@ -80,10 +78,8 @@ def play_round(
     ]
     # fmt: on
     if face_up_leaves:
-        cmd.append("--face-up-leaves")
-    cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
-    print(f"Running: {cmd_str}")
-    rc = subprocess.run(cmd, capture_output=False).returncode
+        args.append("--face-up-leaves")
+    rc = run_play_game(args)
     if rc != 0:
         raise RuntimeError(f"play_game failed with exit code {rc}")
 
