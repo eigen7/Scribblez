@@ -41,16 +41,33 @@ def test_target_generator_command(tmp_path, monkeypatch):
         return type("R", (), {"returncode": 0})()
 
     monkeypatch.setattr(move_set_eval.subprocess, "run", fake_run)
-    p = MoveSetEvalParams(teacher_model="/models/teacher.onnx", quota_top=5, mid_rank_limit=24)
+    # Distinct values per field, so a flag wired to the wrong param fails.
+    p = MoveSetEvalParams(
+        teacher_model="/models/teacher.onnx",
+        quota_top=5,
+        quota_mid=6,
+        quota_tail=7,
+        quota_exchange=3,
+        mid_rank_limit=24,
+        positions_per_game=9,
+    )
     slogs = [tmp_path / "a.slog", tmp_path / "b.slog"]
     assert move_set_eval.run_target_generator(slogs, p, threads=8) == 0
     cmd = captured["cmd"]
     assert cmd[0] == move_set_eval.TARGET_GENERATOR
     assert f"--slog-file={slogs[0]}" in cmd and f"--slog-file={slogs[1]}" in cmd
-    assert "--model=/models/teacher.onnx" in cmd
-    assert "--quota-top=5" in cmd
-    assert "--mid-rank-limit=24" in cmd
-    assert "--threads=8" in cmd
+    expected = {
+        "--model": "/models/teacher.onnx",
+        "--quota-top": 5,
+        "--quota-mid": 6,
+        "--quota-tail": 7,
+        "--quota-exchange": 3,
+        "--mid-rank-limit": 24,
+        "--positions-per-game": 9,
+        "--threads": 8,
+    }
+    for flag, value in expected.items():
+        assert f"{flag}={value}" in cmd
 
 
 def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
@@ -88,6 +105,17 @@ def test_cycle_stops_on_selfplay_failure(tmp_path, monkeypatch):
     assert result.mset_seconds == 0.0
 
 
+def test_cycle_propagates_generator_failure(tmp_path, monkeypatch):
+    def fake_run_games(out_dir, **kwargs):
+        (out_dir / "fresh.slog").touch()
+        return 0
+
+    monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a: 9)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    assert result.returncode == 9
+
+
 def test_run_generate_requires_a_readable_teacher(tmp_path):
     ctx = WorkerContext(
         spec=SPEC,
@@ -100,6 +128,50 @@ def test_run_generate_requires_a_readable_teacher(tmp_path):
         sink=RecordingSink(),
     )
     assert move_set_eval.run_generate(ctx) == 1
+
+
+class StubCtx:
+    """A WorkerContext stand-in whose tag paths live under a tmp mount."""
+
+    def __init__(self, tmp_path, sink, max_cycles):
+        self.spec = SPEC
+        self.role = SPEC.role("generate")
+        self.tag = "t"
+        self.params = MoveSetEvalParams()
+        self.worker_id = "w0"
+        self.threads = 1
+        self.max_cycles = max_cycles
+        self.sink = sink
+        self.provenance = {}
+        self._paths = SPEC.paths("t", mount_root=tmp_path)
+
+    def tag_paths(self):
+        return self._paths
+
+
+def test_pair_generate_loop_delivers_each_cycle(tmp_path):
+    cycles = []
+
+    def fake_cycle(work_dir, params, threads):
+        cycles.append(threads)
+        stem = f"c{len(cycles)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {"gen_s": 0.1, "mset_s": 0.2}
+
+    sink = RecordingSink()
+    ctx = StubCtx(tmp_path, sink, max_cycles=2)
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs") == 0
+    assert len(cycles) == 2
+    assert [name for name, _rel in sink.delivered] == ["c1.mset", "c1.slog", "c2.mset", "c2.slog"]
+
+
+def test_pair_generate_loop_stops_on_a_failed_cycle(tmp_path):
+    def failing_cycle(work_dir, params, threads):
+        return 5, {}
+
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=0)
+    assert pair_store.run_pair_generate(ctx, failing_cycle, ".mset", "slogs") == 5
 
 
 def test_deliver_pairs_suffixes_both_members_and_leads_with_the_sidecar(tmp_path):
