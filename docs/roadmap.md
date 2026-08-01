@@ -181,17 +181,18 @@ candidate comparisons — whereas at the root it would be fatal.
 
 ### Steps
 
-Two prerequisites come first, neither of them model work:
+Two prerequisites came first, neither of them model work, and both are done:
 
-- **Face-up leaves in the game loop.** The variant is an offline condition
-  today: `opp_known_leave` is filled from a `.slog` replay and nowhere else,
-  `MoveRequest.opp_rack` is documented visible only in the endgame, and `Game`
-  never tells an agent what the opponent kept. Threading the public leave
-  through the game loop to agents and to the encoder is what makes the variant
-  playable at all, and everything below waits on it.
-- **The sim agent baseline.** `SimRunner` is offline-only, and the engine has
-  no simming agent; wrapping it as one (candidates → sim → pick by sim) is
-  small and unblocks the rest. It is the baseline the move-set-evaluation agent
+- **Face-up leaves in the game loop.** The variant is playable, not just
+  replayable: `Game::set_face_up_leaves` makes each player's retained tiles
+  public until they move again, `MoveRequest.opp_rack` carries what the mover
+  legitimately knows (the public leave, or the whole rack once the bag is
+  empty), agents and the encoder read it at play time, and the `.slog` header
+  records the variant.
+- **The sim agent baseline**
+  ([sim_agent.h](../engine/include/agent/sim_agent.h)): top-K candidates by
+  static equity → CRN rollouts → pick by sim, handing the turn to the endgame
+  solver once the bag empties. It is the baseline the move-set-evaluation agent
   must beat, the harness in which C and D get their match readouts, and —
   being simming plus the endgame solver we already have — our equivalent of
   Macondo's BestBot, so it doubles as the opponent that makes published results
