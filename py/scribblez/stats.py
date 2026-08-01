@@ -23,16 +23,11 @@ from dataclasses import dataclass
 PAIR_SCORES = (0.0, 0.25, 0.5, 0.75, 1.0)
 
 
-def pair_score_counts(game_scores: list[float]) -> list[int]:
-    """Pentanomial counts over mirrored pairs from per-game scores (1, 0.5, or
-    0 for the player under test, in play order: games 2k and 2k+1 form pair k).
-    A trailing unpaired game is rejected rather than dropped -- the caller
-    controls the schedule and an odd count means it lost a game somewhere."""
-    if len(game_scores) % 2 != 0:
-        raise ValueError(f"odd number of games ({len(game_scores)}) cannot be paired")
+def pair_score_counts(pair_scores: list[float]) -> list[int]:
+    """Pentanomial counts from per-pair scores (each the mean of a pair's two
+    game scores, so one of PAIR_SCORES; anything else raises)."""
     counts = [0] * 5
-    for k in range(0, len(game_scores), 2):
-        score = (game_scores[k] + game_scores[k + 1]) / 2.0
+    for score in pair_scores:
         counts[PAIR_SCORES.index(score)] += 1
     return counts
 

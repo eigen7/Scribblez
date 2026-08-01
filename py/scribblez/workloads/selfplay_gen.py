@@ -68,6 +68,7 @@ def run_generate(ctx: WorkerContext) -> int:
                 threads=ctx.threads,
                 player_spec=spec_str,
                 random_opening_mean=p.random_opening_mean,
+                face_up_leaves=p.face_up_leaves,
             )
             gen_seconds = time.monotonic() - t0
             if rc != 0:

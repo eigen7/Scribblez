@@ -30,6 +30,7 @@ def run_games(
     player_spec: str,
     seed: int = 0,
     random_opening_mean: float = 0.0,
+    face_up_leaves: bool = False,
 ) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
@@ -40,6 +41,8 @@ def run_games(
     `random_opening_mean` > 0 opens each game with K uniformly-random plies
     (K ~ round(Exp(mean)) per game) before the agents take over; positions
     before the last random ply are excluded from the training-eligible region.
+    `face_up_leaves` plays the variant in which retained tiles are public; the
+    .slog header records it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off
@@ -54,6 +57,8 @@ def run_games(
         "--random-opening-mean", str(random_opening_mean),
     ]
     # fmt: on
+    if face_up_leaves:
+        cmd.append("--face-up-leaves")
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
     return subprocess.run(cmd, capture_output=False).returncode

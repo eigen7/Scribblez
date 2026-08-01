@@ -7,14 +7,13 @@ from scribblez import stats
 
 
 def test_pair_score_counts_bins_pairs():
-    # (1, 1) -> 1.0, (1, 0) -> 0.5, (0.5, 0) -> 0.25, (0, 0) -> 0.0
-    counts = stats.pair_score_counts([1, 1, 1, 0, 0.5, 0, 0, 0])
-    assert counts == [1, 1, 1, 0, 1]
+    counts = stats.pair_score_counts([1.0, 0.5, 0.25, 0.0, 1.0])
+    assert counts == [1, 1, 1, 0, 2]
 
 
-def test_pair_score_counts_rejects_odd_game_count():
+def test_pair_score_counts_rejects_non_pair_scores():
     with pytest.raises(ValueError):
-        stats.pair_score_counts([1, 0, 1])
+        stats.pair_score_counts([0.3])
 
 
 def test_mean_and_variance_balanced_sample():
