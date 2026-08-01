@@ -1,19 +1,19 @@
 """Tests for pr_flow.py's pure decision helpers.
 
 Only the ancestry / zero-commit logic that gates whether a PR is opened is
-covered here, against throwaway git repos. The Gitea-facing subcommands
-(worktree/create/abandon) need the live service and are validated by running
-them.
+covered here, against throwaway git repos. The GitHub-facing subcommands
+(worktree/create/cleanup/abandon) need a live remote and are validated by
+running them.
 """
 
 import subprocess
 import sys
 from pathlib import Path
 
-# submodules.* lives at the repo root, not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submodules.devenv_utils import pr_flow  # noqa: E402
+from subtrees.devenv_utils import pr_flow  # noqa: E402
 
 
 def git(cwd: Path, *args: str):
@@ -63,9 +63,9 @@ def test_branch_adds_commits_true_when_branch_ahead(tmp_path: Path):
     assert pr_flow.branch_adds_commits(repo, "feature")
 
 
-def test_branch_adds_commits_false_for_submodule_only_branch(tmp_path: Path):
-    # A branch cut from main with no superproject commits -- the shape a
-    # submodule-only change leaves -- adds nothing over main.
+def test_branch_adds_commits_false_for_empty_branch(tmp_path: Path):
+    # A branch cut from main with no commits of its own adds nothing over main,
+    # so create refuses to open an empty PR for it.
     repo = init_repo(tmp_path / "repo")
     git(repo, "checkout", "-q", "-b", "feature")
     assert not pr_flow.branch_adds_commits(repo, "feature")

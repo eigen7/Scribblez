@@ -1,8 +1,8 @@
 """Tests for the shared devenv_utils worktree logic and PR-flow teardown.
 
-These exercise submodules/devenv_utils/worktrees.py (primary-checkout
+These exercise subtrees/devenv_utils/worktrees.py (primary-checkout
 resolution + enumeration) and pr_flow.py's local teardown helpers against a
-throwaway git repo -- no Gitea, no Docker. The central case is the one the
+throwaway git repo -- no GitHub, no Docker. The central case is the one the
 merge incident got wrong: resolving the primary checkout from inside a feature
 worktree must return the primary checkout, not the worktree.
 """
@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-# submodules.* lives at the repo root, which is not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, which is not on the py/-rooted PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from submodules.devenv_utils import gitea_client, pr_flow  # noqa: E402
-from submodules.devenv_utils.worktrees import (  # noqa: E402
+from subtrees.devenv_utils import pr_flow  # noqa: E402
+from subtrees.devenv_utils.worktrees import (  # noqa: E402
     primary_worktree,
     secondary_worktrees,
     worktree_for_branch,
@@ -121,16 +121,3 @@ def test_delete_local_branch_reraises_real_errors(repo: Path):
     # rather than be swallowed as idempotency.
     with pytest.raises(subprocess.CalledProcessError):
         pr_flow.delete_local_branch(repo, "feature", force=False)
-
-
-def test_gitea_repo_name_from_origin_basename(repo: Path):
-    # A submodule's Gitea repo is named after its origin basename (same project),
-    # so create can open its PR without the submodule knowing its Gitea remote.
-    git(repo, "remote", "add", "origin", "https://github.com/eigen7/devenv_utils.git")
-    assert gitea_client.gitea_repo_name(repo) == "devenv_utils"
-
-
-def test_submodule_pr_note_lists_links():
-    note = pr_flow.submodule_pr_note([("devenv_utils", 7, "http://x/pulls/7")])
-    assert "merge first" in note
-    assert "devenv_utils #7: http://x/pulls/7" in note

@@ -2,7 +2,7 @@
 """Build the local Scribblez Docker image from docker-setup/local/."""
 
 from setup_common import make_config
-from submodules.devenv_utils import docker_build
+from subtrees.devenv_utils import docker_build
 
 
 def main():

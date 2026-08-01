@@ -24,7 +24,7 @@ py/tools/           small utilities (lexicon tools, formatters)
 docs/               documentation (see docs/README.md)
 positions/          committed GCG evaluation datasets + Monte-Carlo ground truth
 phonies/            the generated phony lexicon (word-validity experiments)
-submodules/         git submodules (dev-environment machinery; see submodules/README.md)
+subtrees/           vendored subtrees (dev-environment machinery; see subtrees/README.md)
 ```
 
 ## Build
@@ -41,8 +41,7 @@ wizard checks the rest):
 ./build_docker_image.py  # builds the local `scribblez` docker image
 ```
 
-A plain `git clone` suffices: the `submodules/devenv_utils` submodule is
-populated automatically the first time any of these scripts runs.
+A plain `git clone` suffices; there are no submodules to initialize.
 
 **Every dev session**, launch the container and build inside it:
 

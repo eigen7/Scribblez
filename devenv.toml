@@ -1,5 +1,5 @@
 # Declarative devenv configuration for Scribblez, read by
-# submodules/devenv_utils load_config() into a DevenvConfig. Every key is a
+# subtrees/devenv_utils load_config() into a DevenvConfig. Every key is a
 # DevenvConfig field; path-valued keys are resolved relative to this file's
 # directory (the repo root).
 
@@ -10,10 +10,10 @@ docker_context = "docker-setup/local"
 # particular after a docker-setup/ change that needs an image rebuild (the
 # wizard rebuilds the image). Increasing the major (first) number additionally
 # wipes the target/ build trees.
-setup_version = "2.14.0"
+setup_version = "2.15.0"
 
 # Browser-facing HTTP services, routed by the devenv-gateway as
-# http://scribblez-<name>.localhost (see submodules/devenv_utils/GATEWAY.md).
+# http://scribblez-<name>.localhost (see subtrees/devenv_utils/GATEWAY.md).
 # The loopback-bound backends -- the engine WebSocket servers and the Tornado
 # data API -- are reached through the Vite dev servers' proxies, so they stay
 # off this table.

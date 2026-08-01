@@ -4,7 +4,7 @@ run_docker.py exports one DEVENV_SERVICE_URL_<NAME> variable per entry in
 devenv.toml's [services] table -- the URL at which the host browser reaches
 that service through the gateway, e.g.
 DEVENV_SERVICE_URL_DASH=http://scribblez-dash.localhost (see
-submodules/devenv_utils/GATEWAY.md). Tools that print a URL for the user to
+subtrees/devenv_utils/GATEWAY.md). Tools that print a URL for the user to
 open read it through service_url(); when the variable is absent (running
 outside the dev container) the plain localhost form is the right fallback.
 """

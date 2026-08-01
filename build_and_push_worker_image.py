@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from setup_common import make_config
-from submodules.devenv_utils import get_env_json, in_docker_container
+from subtrees.devenv_utils import get_env_json, in_docker_container
 
 REPO_ROOT = Path(__file__).resolve().parent
 WORKER_CONTEXT = REPO_ROOT / "docker-setup" / "worker"
