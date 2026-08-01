@@ -274,7 +274,11 @@ machinery, and then by match play.
 
 - **D1 — value-truncated rollouts** (design.md §5.2): sim a few plies, then read
   the position evaluation model's value at the horizon. The kill-test's 8×
-  late-vs-early phase gradient says this is the biggest sim-quality lever. Keep
+  late-vs-early phase gradient says this is the biggest sim-quality lever, and
+  the sim agent's own strength curve says the same from the other end: rolling
+  out to a natural game end, it needs some 400 rollouts per candidate just to
+  pass the static evaluator it filters with, and fewer than 200 leave it worse
+  than playing no rollouts at all. Keep
   an **anchor fraction** of terminal rollouts per candidate — a ground-truth
   tether and a free measurement of the value model's bias. Costs to accept:
   `.sobs` artifacts become model-versioned, and sims start contending for the
