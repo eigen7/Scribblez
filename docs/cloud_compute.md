@@ -120,10 +120,17 @@ fees).
 
 ## Futures
 
-- **GPU workloads.** Remaining pieces: a cloud-capable GPU role in the
-  workload registry, and a worker-image variant on a CUDA runtime base with
-  the same bootstrap contract. Bundles, bucket layout, fleet CLI, and
-  dashboard pod specs are already GPU-ready.
+- **GPU workloads.** The first consumer is waiting: move_set_eval's generate
+  role (roadmap A2) runs the TensorRT teacher and is pinned to local workers
+  until pods can host it. Remaining pieces: a worker-image variant on a CUDA
+  runtime base with the same bootstrap contract (the current image ships the
+  TensorRT runtime libs so binaries load, but not
+  `libnvinfer_builder_resource`, which the builder dlopens — a cold plan build
+  on a fresh pod would fail), and a way to ship a per-tag input artifact like
+  the teacher ONNX to workers (all data flow is push-only today; a
+  `worker_deps`-style fetcher over the existing R2 credentials is the natural
+  shape). Bundles, bucket layout, fleet CLI, and dashboard pod specs are
+  already GPU-ready, and the generator binary already rides in the bundle.
 - **Volunteer compute.** A volunteer is, to first order, someone running the
   worker image (publicly pullable; it contains no redistribution-restricted
   data) with a participation token. The one necessary change is credentials —
