@@ -230,10 +230,13 @@ Then the spine proper:
 - **A3 — move-set-evaluation v1.** The model, dataset, trainer, and gate
   metric exist as a lean local loop
   ([py/scribblez/move_set_eval/](../py/scribblez/move_set_eval/)). This lands
-  in two slices. First, an **offline shakeout**: train once on the corpus
-  local generation has already produced and measure — answering whether the
-  distillation works at all before any infrastructure is built. That corpus
-  predates A2's variant wiring, so shakeout numbers are provisional and get
+  in two slices. First, an **offline shakeout**: run the A2 workload on the
+  local GPU long enough to accumulate a modest `.slog`/`.mset` corpus (none
+  exists yet — A2 has only been smoke-verified), train on it once, and
+  measure — answering whether the distillation works at all before any
+  infrastructure is built. That corpus is still out-of-variant (hidden-leave
+  games under a leave-blind teacher, the pairing the generator permits until
+  an opp-leave teacher exists), so shakeout numbers are provisional and get
   re-derived after regeneration. Second, only if the shakeout justifies it,
   the **generational fold-in**, whose real work is named here rather than
   discovered later: a data loader that is not the current synchronous
