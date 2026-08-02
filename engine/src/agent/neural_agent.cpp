@@ -105,19 +105,11 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
 
 void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
                                    const Rack& opp_leave, float* dst) const {
-  Rack leave = my_rack;
-  for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
-
   // The cross-check input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate on the
   // copy, which then updates them incrementally when the candidate is applied.
   encoder_.board().ensure_movegen_caches(*spec_.dict);
-  GameStateEncoder post = encoder_;
-  post.apply_move(mv);
-  if (spec_.opp_leave_input)
-    post.encode_input(my_seat, leave, opp_leave, /*apply_flip=*/false, dst);
-  else
-    post.encode_input(my_seat, leave, /*apply_flip=*/false, dst);
+  encode_post_move_row(encoder_, my_seat, my_rack, mv, opp_leave, dst);
 }
 
 void NeuralAgent::evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays,

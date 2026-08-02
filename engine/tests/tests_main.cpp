@@ -4178,6 +4178,97 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   fs::remove_all(tmp);
 }
 
+// A .mset carries the information condition of the games it labels, read off
+// its source .slog's header, which is what holds a training corpus to a single
+// condition.
+TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+
+  for (bool face_up : {false, true}) {
+    fs::path dir =
+      fs::temp_directory_path() / ("scribblez_mset_flag_" + std::to_string(::getpid()) + "_" +
+                                   std::to_string(static_cast<int>(face_up)));
+    fs::create_directories(dir);
+    struct DirCleanup {
+      fs::path p;
+      ~DirCleanup() {
+        std::error_code ec;
+        fs::remove_all(p, ec);
+      }
+    } cleanup{dir};
+
+    const uint16_t slog_flags = face_up ? scribblez::binlog::kFlagFaceUpLeaves : 0;
+    {
+      scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/1, slog_flags);
+      writer.append(play_test_game(dict, /*seed=*/4242ULL));
+    }
+    fs::path slog;
+    for (const auto& ent : fs::directory_iterator(dir))
+      if (ent.path().extension() == ".slog") slog = ent.path();
+    ASSERT_FALSE(slog.empty()) << "face_up=" << face_up;
+
+    scribblez::binlog::FileHeader hdr{};
+    std::ifstream f(slog, std::ios::binary);
+    ASSERT_TRUE(f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr))) << "face_up=" << face_up;
+
+    const std::string mset = (dir / "targets.mset").string();
+    {
+      move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, "abc123",
+                                    move_set_eval::target_flags_from_slog(hdr.flags));
+      w.add_position(0, 0, {Move::pass()},
+                     std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f));
+      w.close();
+    }
+    const uint32_t expected = face_up ? move_set_eval::kTargetFlagOpenLeaves : 0u;
+    EXPECT_EQ(move_set_eval::TargetReader(mset).flags(), expected) << "face_up=" << face_up;
+  }
+}
+
+// The distillation generator's encode path under the open-leaves arm: every
+// candidate row is the standard row plus the opponent's replayed retained
+// leave, so an open-leaves teacher is fed the input it was trained on rather
+// than a zeroed block.
+TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
+  Dictionary dict = medium_dict();
+  const GameLogStorage storage = play_test_game(dict, /*seed=*/4242ULL);
+  const GameLog g = storage.view();
+  const int turn = 4;
+  ASSERT_LT(turn, g.num_records);
+
+  const InputEncodingSpec base{&dict, false};
+  const InputEncodingSpec open{&dict, false, /*opp_leave_input=*/true};
+  binlog::PositionEncoder base_enc(base);
+  binlog::PositionEncoder open_enc(open);
+  const int mover = base_enc.replay_to_sampled(g, turn, /*post_move=*/false);
+  ASSERT_EQ(open_enc.replay_to_sampled(g, turn, /*post_move=*/false), mover);
+
+  const std::vector<Move> candidates = {g.records[turn].move, Move::pass()};
+  std::vector<float> base_rows(candidates.size() * input_floats(base), -1.0f);
+  std::vector<float> open_rows(candidates.size() * input_floats(open), -1.0f);
+  binlog::encode_candidate_rows(base_enc, g, turn, mover, candidates, base_rows.data());
+  binlog::encode_candidate_rows(open_enc, g, turn, mover, candidates, open_rows.data());
+
+  const Rack leave = binlog::opp_leave_from_replay(g, turn, open_enc.rack(1 - mover));
+  ASSERT_GT(leave.size(), 0) << "the leave must be non-empty or the tail check is vacuous";
+  float expected_counts[kOppLeaveCountFloats] = {};
+  for (Tile t : leave.tiles()) {
+    if (!t.is_empty()) expected_counts[t.index()] += 1.0f;
+  }
+
+  for (size_t c = 0; c < candidates.size(); ++c) {
+    const float* base_row = base_rows.data() + c * input_floats(base);
+    const float* open_row = open_rows.data() + c * input_floats(open);
+    ASSERT_EQ(
+      std::memcmp(base_row, open_row, sizeof(float) * static_cast<size_t>(input_floats(base))), 0)
+      << "candidate " << c;
+    const float* tail = open_row + input_floats(base);
+    for (int i = 0; i < kOppLeaveCountFloats; ++i) {
+      ASSERT_EQ(tail[i], expected_counts[i]) << "candidate " << c << ", tile " << i;
+    }
+  }
+}
+
 TEST(MoveSetEncoder, Basic) {
   namespace mset = move_set;
   // A horizontal PLAY at (row 4, cols 2..4): A, a blank shown as B, C; scoring

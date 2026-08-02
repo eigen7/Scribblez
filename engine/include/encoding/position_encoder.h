@@ -15,6 +15,7 @@
 #include "game/rack.h"
 
 #include <array>
+#include <vector>
 
 namespace scribblez {
 
@@ -67,6 +68,15 @@ class PositionEncoder {
   GameStateEncoder enc_;
   std::array<Rack, 2> racks_{};
 };
+
+// One post-move input row per candidate (input_floats(spec) floats each,
+// candidate-major) for the position `encoder` was replayed to: `turn`'s
+// pre-move decision point in `g`, with `mover` to play -- replay_to_sampled's
+// return for that turn. `g` is needed beyond the replayed state because an
+// open-leaves spec conditions each row on the opponent's retained leave, which
+// only the log's draw records reveal.
+void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int turn, int mover,
+                           const std::vector<Move>& candidates, float* out);
 
 }  // namespace binlog
 }  // namespace scribblez
