@@ -206,12 +206,18 @@ Then the spine proper:
   each exported checkpoint against a fixed opponent, with win-rate curves and
   a sequential significance test (`scribblez/stats.py`, the E2 discipline) on
   the dashboard's Match tab.
-- **A2 — target generation at scale.** The `.mset` sidecar and its generator
+- **A2 — target generation at scale.** Built: the `.mset` sidecar and its
+  generator
   ([move_set_eval_target_log.h](../engine/include/training/move_set_eval_target_log.h),
-  [move_set_eval_target_generator.cpp](../engine/apps/move_set_eval_target_generator.cpp))
-  are built and run locally. Remaining: a dashboard workload so the cloud fleet
-  generates them, following the position-evaluation workload's shape
-  ([position_eval_workload.md](position_eval_workload.md)).
+  [move_set_eval_target_generator.cpp](../engine/apps/move_set_eval_target_generator.cpp)),
+  and the `move_set_eval` dashboard workload
+  ([workloads/move_set_eval.py](../py/scribblez/workloads/move_set_eval.py)):
+  each cycle plays a self-play batch, runs the generator with the tag's frozen
+  teacher ONNX (hash-stamped into every sidecar), and delivers `.slog`/`.mset`
+  pairs to the tag's store. Remaining: the generate role is GPU and local-only
+  until the cloud fleet can host TensorRT — the GPU-workloads item in
+  [cloud_compute.md](cloud_compute.md), which now also needs a way to ship the
+  teacher model to pods.
 - **A3 — move-set-evaluation v1 + the recall bar.** The model, dataset, trainer,
   and gate metric exist as a lean local loop
   ([py/scribblez/move_set_eval/](../py/scribblez/move_set_eval/)). Remaining:

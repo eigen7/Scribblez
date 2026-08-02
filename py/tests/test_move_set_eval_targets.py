@@ -16,25 +16,28 @@ from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
 
-TARGET_GENERATOR = Path("/workspace/repo/target/engine/move_set_eval_target_generator")
-SLOG_WRITER = Path("/workspace/repo/target/engine/test_slog_writer")
+# This checkout's own binaries (not the primary checkout's), so a worktree's
+# tests exercise the code built beside them -- the external-data test below
+# exists precisely to catch a neural_net.cpp regression, which a fixed path to
+# /workspace/repo would mask until after merge.
+_ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+TARGET_GENERATOR = _ENGINE_DIR / "move_set_eval_target_generator"
+SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 QUOTAS = {"top": 3, "mid": 2, "tail": 2, "exchange": 1}
 
 
-@pytest.fixture(scope="module")
-def mset_dir(tmp_path_factory) -> Path:
-    """A directory of .slog files labeled by the tool with a tiny teacher."""
+def _skip_unless_runnable():
     if not TARGET_GENERATOR.exists() or not SLOG_WRITER.exists():
         pytest.skip("engine binaries not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
     if not torch.cuda.is_available():
         pytest.skip("no GPU")
-    d = tmp_path_factory.mktemp("move_set_eval_targets")
-    subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
 
+
+def _export_tiny_teacher(onnx_path: Path):
     from scribblez.ffi import get_input_shapes
 
     shapes = {s.name: s.dims for s in get_input_shapes()}
@@ -45,7 +48,6 @@ def mset_dir(tmp_path_factory) -> Path:
         trunk_channels=8,
         num_blocks=3,
     ).eval()
-    onnx_path = d / "teacher.onnx"
     export_onnx(
         model,
         onnx_path,
@@ -53,6 +55,16 @@ def mset_dir(tmp_path_factory) -> Path:
         scalar_size=shapes["input_scalar"][0],
         contingent_features=True,
     )
+
+
+@pytest.fixture(scope="module")
+def mset_dir(tmp_path_factory) -> Path:
+    """A directory of .slog files labeled by the tool with a tiny teacher."""
+    _skip_unless_runnable()
+    d = tmp_path_factory.mktemp("move_set_eval_targets")
+    subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
+    onnx_path = d / "teacher.onnx"
+    _export_tiny_teacher(onnx_path)
 
     result = subprocess.run(
         [
@@ -110,3 +122,47 @@ def test_mset_includes_the_played_move(mset_dir):
 def test_mset_model_hash_consistent_across_files(mset_dir):
     hashes = {read_mset(p).model_hash for p in mset_dir.glob("*.mset")}
     assert len(hashes) == 1
+
+
+def test_generator_loads_a_teacher_with_external_data(tmp_path):
+    """A teacher whose initializers live in an external-data blob beside the
+    .onnx must load regardless of the process CWD: TensorRT resolves external
+    references against the model path the engine passes (neural_net.cpp), not
+    the CWD. A regression re-breaks exactly this run, because the CWD here is
+    deliberately far from the model's directory."""
+    import onnx
+
+    _skip_unless_runnable()
+    subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "2"], check=True, capture_output=True)
+    plain = tmp_path / "teacher.onnx"
+    _export_tiny_teacher(plain)
+
+    ext_dir = tmp_path / "ext"
+    ext_dir.mkdir()
+    model = onnx.load(str(plain))
+    onnx.save_model(
+        model,
+        str(ext_dir / "teacher.onnx"),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location="teacher_data.bin",
+        size_threshold=0,
+    )
+    plain.unlink()  # only the external-data variant remains loadable
+
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={ext_dir / 'teacher.onnx'}",
+            "--fast-build",
+            "--positions-per-game=1",
+            "--limit-games=2",
+            "--threads=2",
+        ],
+        capture_output=True,
+        text=True,
+        cwd="/",
+    )
+    assert result.returncode == 0, f"generator failed from a foreign CWD: {result.stderr}"
+    assert sorted(tmp_path.glob("*.mset")), "no .mset produced"

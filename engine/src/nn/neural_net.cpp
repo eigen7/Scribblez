@@ -228,7 +228,10 @@ std::vector<char> NeuralNet::Impl::build_plan(const std::vector<char>& onnx_byte
   std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
   std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(0));
   std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network, logger));
-  if (!parser->parse(onnx_bytes.data(), onnx_bytes.size())) {
+  // The model path makes external-data references (e.g. an externalized frozen
+  // lexicon blob beside the .onnx) resolve against the model's own directory;
+  // without it TensorRT resolves them against the process CWD.
+  if (!parser->parse(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str())) {
     std::string msg = "Failed to parse ONNX model";
     if (parser->getNbErrors() > 0) msg += std::string(": ") + parser->getError(0)->desc();
     throw std::runtime_error(msg);
@@ -272,7 +275,9 @@ void NeuralNet::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   std::unique_ptr<nvinfer1::IRefitter> refitter(nvinfer1::createInferRefitter(*engine, logger));
   std::unique_ptr<nvonnxparser::IParserRefitter> parser_refitter(
     nvonnxparser::createParserRefitter(*refitter, logger));
-  if (!parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size())) {
+  // Model path for external-data resolution, as in build_plan().
+  if (!parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(),
+                                       params.onnx_path.c_str())) {
     std::string msg = "Failed to read refit weights from ONNX model";
     if (parser_refitter->getNbErrors() > 0)
       msg += std::string(": ") + parser_refitter->getError(0)->desc();

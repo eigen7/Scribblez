@@ -38,6 +38,7 @@ DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 POSITION_EVAL = "position_eval"
 MAX_MOVE_PER_LANE = "max_move_per_lane"
 KILL_TEST = "kill_test"
+MOVE_SET_EVAL = "move_set_eval"
 
 
 class TagPaths:
