@@ -78,11 +78,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
 
-# 6b) Install Node.js and Claude Code globally
+# 6b) Install Node.js and the CLI coding agents (Claude Code, Codex) globally
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code
+    && npm install -g @anthropic-ai/claude-code @openai/codex
 
 # 6c) Eigen
 RUN apt-get update && \
