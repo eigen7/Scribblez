@@ -1,9 +1,11 @@
 // Standalone helper that writes test .slog files for integration testing.
-// Usage: test_slog_writer <output_dir> <num_games> <games_per_file>
+// Usage: test_slog_writer <output_dir> <num_games> <games_per_file> [--face-up-leaves]
 //
 // Plays `num_games` games using a medium-sized in-memory dictionary and a
 // hasty-move agent, writing them through BinaryLogWriter into the given
-// output directory. Files are split by `games_per_file`.
+// output directory. Files are split by `games_per_file`. With
+// --face-up-leaves the games are played under the variant and the file
+// headers are stamped accordingly, mirroring GameRunner.
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -53,8 +55,10 @@ static Dictionary medium_dict() {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 4) {
-    std::cerr << "Usage: test_slog_writer <output_dir> <num_games> <games_per_file>\n";
+  const bool face_up = argc == 5 && std::string(argv[4]) == "--face-up-leaves";
+  if (argc != 4 && !face_up) {
+    std::cerr
+      << "Usage: test_slog_writer <output_dir> <num_games> <games_per_file> [--face-up-leaves]\n";
     return 1;
   }
   const std::string out_dir = argv[1];
@@ -67,13 +71,15 @@ int main(int argc, char* argv[]) {
   }
 
   Dictionary dict = medium_dict();
-  binlog::BinaryLogWriter writer(out_dir, games_per_file);
+  binlog::BinaryLogWriter writer(out_dir, games_per_file,
+                                 face_up ? binlog::kFlagFaceUpLeaves : uint16_t{0});
 
   for (int i = 0; i < num_games; ++i) {
     uint64_t seed = static_cast<uint64_t>(3000 + i);
     HastyAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
     HastyAgent a1(1, "A1", seed ^ 0x2222222222222222ULL);
     Game g(a0, a1, dict, seed);
+    g.set_face_up_leaves(face_up);
     g.play();
     writer.append(g.extract_log());
   }

@@ -21,9 +21,7 @@
 //
 // Information condition: the teacher's input arm comes from its ONNX metadata,
 // and each .mset records the variant of the games it labeled (the source
-// .slog's face-up-leaves flag). An open-leaves teacher is fed the opponent's
-// retained leave from the replay; a face-up corpus paired with a blind teacher
-// is refused outright.
+// .slog's face-up-leaves flag).
 //
 // Threading: encoding a post-move row costs roughly a move generation (the
 // contingent-map block), so CPU encoding -- not GPU inference -- is the

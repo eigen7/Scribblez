@@ -124,6 +124,40 @@ def test_mset_model_hash_consistent_across_files(mset_dir):
     assert len(hashes) == 1
 
 
+def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
+    """The pre-scan guard: a face-up-leaves .slog paired with a teacher whose
+    ONNX does not declare opp_leave_input must fail before any .mset is
+    written -- a blind teacher's labels would describe games nobody played."""
+    _skip_unless_runnable()
+    subprocess.run(
+        [str(SLOG_WRITER), str(tmp_path), "2", "2", "--face-up-leaves"],
+        check=True,
+        capture_output=True,
+    )
+    onnx_path = tmp_path / "teacher.onnx"
+    _export_tiny_teacher(onnx_path)  # opp_leave_input defaults to false
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            f"--quota-top={QUOTAS['top']}",
+            f"--quota-mid={QUOTAS['mid']}",
+            f"--quota-tail={QUOTAS['tail']}",
+            f"--quota-exchange={QUOTAS['exchange']}",
+            "--positions-per-game=2",
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "opp_leave_input" in result.stderr
+    assert not list(tmp_path.glob("*.mset"))
+
+
 def test_generator_loads_a_teacher_with_external_data(tmp_path):
     """A teacher whose initializers live in an external-data blob beside the
     .onnx must load regardless of the process CWD: TensorRT resolves external
