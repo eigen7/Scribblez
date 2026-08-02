@@ -37,6 +37,24 @@ Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_r
   return leave;
 }
 
+void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int turn, int mover,
+                           const std::vector<Move>& candidates, float* out) {
+  const GameStateEncoder& pre = encoder.enc();
+  const InputEncodingSpec& spec = pre.spec();
+  const Rack opp_leave =
+    spec.opp_leave_input ? opp_leave_from_replay(g, turn, encoder.rack(1 - mover)) : Rack{};
+
+  // The cross-check planes read the board's move-generation caches; building
+  // them on the replayed board (a no-op once valid) lets each candidate's copy
+  // update them incrementally instead of rebuilding them.
+  pre.board().ensure_movegen_caches(*spec.dict);
+  const size_t row_floats = static_cast<size_t>(input_floats(spec));
+  for (size_t c = 0; c < candidates.size(); ++c) {
+    encode_post_move_row(pre, mover, encoder.rack(mover), candidates[c], opp_leave,
+                         out + c * row_floats);
+  }
+}
+
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {
   enc_ = GameStateEncoder{spec_, g.initial_scores};
   racks_[0] = g.initial_racks[0];

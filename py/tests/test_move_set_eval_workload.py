@@ -78,7 +78,9 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
     (tmp_path / "old_done.mset").touch()
     (tmp_path / "old_pending.slog").touch()
 
-    def fake_run_games(out_dir, num_games, threads, player_spec, random_opening_mean):
+    def fake_run_games(
+        out_dir, num_games, threads, player_spec, random_opening_mean, face_up_leaves
+    ):
         assert num_games == 200
         (out_dir / "fresh.slog").touch()
         return 0
@@ -96,6 +98,23 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 0
     assert sorted(generated) == ["fresh.slog", "old_pending.slog"]
+
+
+def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
+    # The self-play condition is recorded in the .slog header and copied into
+    # every .mset, so the frozen param has to reach play_game.
+    seen = {}
+
+    def fake_run_games(out_dir, **kwargs):
+        seen.update(kwargs)
+        (out_dir / "fresh.slog").touch()
+        return 0
+
+    monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a: 0)
+    for face_up in (False, True):
+        move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(face_up_leaves=face_up), threads=2)
+        assert seen["face_up_leaves"] is face_up
 
 
 def test_cycle_stops_on_selfplay_failure(tmp_path, monkeypatch):

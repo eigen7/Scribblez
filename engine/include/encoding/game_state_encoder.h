@@ -102,4 +102,14 @@ class GameStateEncoder {
   int turn_index_ = 0;
 };
 
+// The row for the state `mv` leads to, from `mover`'s POV: `mv` applied to a
+// copy of `pre` and encoded with `my_rack` (their rack before the move) reduced
+// to the leave, no symmetry flip. `opp_leave` is read only under an open-leaves
+// spec, which the mover's own move leaves unchanged.
+//
+// The one place a candidate move's row is formed, so the serving agent and the
+// offline target generator cannot drift on which input arm they encode.
+void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my_rack,
+                          const Move& mv, const Rack& opp_leave, float* out);
+
 }  // namespace scribblez

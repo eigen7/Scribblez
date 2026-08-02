@@ -71,6 +71,12 @@ class MoveSetEvalParams:
         "open each game with K uniformly-random plies (K ~ round(Exp(mean))); positions "
         "before the last random ply are ineligible, so targets stay agent-play only",
     )
+    face_up_leaves: bool = param(
+        False,
+        "play the face-up-leaves variant (docs/roadmap.md) in self-play generation; the "
+        "teacher must then be an open-leaves model (the generator refuses the mismatch), "
+        "and each .mset records the condition so the student trains under it too",
+    )
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,7 @@ def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> Cyc
         threads=threads,
         player_spec=hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True),
         random_opening_mean=params.random_opening_mean,
+        face_up_leaves=params.face_up_leaves,
     )
     gen_seconds = time.monotonic() - t0
     if rc != 0:

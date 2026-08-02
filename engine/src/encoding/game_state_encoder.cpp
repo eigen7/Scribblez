@@ -319,4 +319,17 @@ void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) co
   encode_score_diff_scalar(score_diff, block);
 }
 
+void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my_rack,
+                          const Move& mv, const Rack& opp_leave, float* out) {
+  Rack leave = my_rack;
+  for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
+  GameStateEncoder post = pre;
+  post.apply_move(mv);
+  if (pre.spec().opp_leave_input) {
+    post.encode_input(mover, leave, opp_leave, /*apply_flip=*/false, out);
+  } else {
+    post.encode_input(mover, leave, /*apply_flip=*/false, out);
+  }
+}
+
 }  // namespace scribblez

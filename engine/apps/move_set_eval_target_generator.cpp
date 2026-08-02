@@ -19,6 +19,10 @@
 // unbiasedness: the sampler only has to visit a move for the teacher to
 // value it honestly.
 //
+// Information condition: the teacher's input arm comes from its ONNX metadata,
+// and each .mset records the variant of the games it labeled (the source
+// .slog's face-up-leaves flag).
+//
 // Threading: encoding a post-move row costs roughly a move generation (the
 // contingent-map block), so CPU encoding -- not GPU inference -- is the
 // bottleneck. Encoder workers produce whole-position row blocks into a
@@ -202,8 +206,7 @@ std::vector<Move> sample_candidates(const std::vector<Move>& ranked, const Move&
 
 // Encoder worker: claims positions, replays to the pre-move state, samples
 // candidates, and encodes each candidate's post-move row exactly as a
-// post-move-model training row (apply the move to a copy of the replayed
-// encoder, rack = the leave, no symmetry flip).
+// post-move-model training row.
 void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
                    const Options& opt, const std::vector<GamePositionIndex>& work,
                    std::atomic<size_t>* next, MoveSetQueue* queue) {
@@ -239,20 +242,9 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     item.pos = w;
     item.candidates = sample_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
 
-    // The cross-check planes read the board's movegen caches; building them on
-    // the replayed board (a no-op once valid) lets every candidate copy update
-    // them incrementally.
-    board.ensure_movegen_caches(dict);
     item.rows.resize(item.candidates.size() * static_cast<size_t>(row_floats));
-    for (size_t c = 0; c < item.candidates.size(); ++c) {
-      const Move& mv = item.candidates[c];
-      Rack leave = rack;
-      for (int t = 0; t < mv.num_glyphs(); ++t) leave.remove(mv.glyph(t).rack_tile());
-      GameStateEncoder post = encoder.enc();
-      post.apply_move(mv);
-      post.encode_input(mover, leave, /*apply_flip=*/false,
-                        item.rows.data() + c * static_cast<size_t>(row_floats));
-    }
+    binlog::encode_candidate_rows(encoder, g, static_cast<int>(w.turn_idx), mover, item.candidates,
+                                  item.rows.data());
     queue->push(std::move(item));
   }
   queue->producer_done();
@@ -359,8 +351,8 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
 
   // Canonical order, independent of thread scheduling.
   std::sort(done.begin(), done.end(), move_set_order);
-  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1,
-                                     model_hash);
+  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1, model_hash,
+                                     move_set_eval::target_flags_from_slog(hdr->flags));
   for (const MoveSet& p : done) {
     writer.add_position(p.pos.game_idx, p.pos.turn_idx, p.candidates, p.targets);
   }
@@ -417,7 +409,7 @@ int main(int argc, char** argv) {
 
     nn::NNEvaluationService service(params);
     service.load();
-    const InputEncodingSpec spec{&dict, service.contingent_features()};
+    const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
 
     std::vector<fs::path> slogs;
@@ -444,6 +436,17 @@ int main(int argc, char** argv) {
           hdr->version != binlog::kVersion) {
         std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
         continue;
+      }
+      // Games played face up must be labeled by a teacher that sees the leaves.
+      // A blind teacher's readouts would describe a game nobody played, and the
+      // .mset -- stamped open-leaves after its source log -- would hand the
+      // student targets its own input arm cannot account for. The reverse
+      // pairing is deliberate and allowed: an open-leaves teacher over a
+      // standard corpus is the privileged-teacher instrument.
+      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !spec.opp_leave_input) {
+        throw std::runtime_error(slog.filename().string() +
+                                 " was played with face-up leaves; labeling it needs a teacher "
+                                 "whose ONNX declares opp_leave_input");
       }
       const GameMetadata* metas =
         reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));

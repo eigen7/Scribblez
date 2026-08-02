@@ -6,12 +6,13 @@ unavailable (the tool builds a TensorRT engine, so this is a GPU test).
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
-from scribblez.move_set_eval.targets import TARGET_NAMES_V1, read_mset
+from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES, TARGET_NAMES_V1, read_mset
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
@@ -122,6 +123,95 @@ def test_mset_includes_the_played_move(mset_dir):
 def test_mset_model_hash_consistent_across_files(mset_dir):
     hashes = {read_mset(p).model_hash for p in mset_dir.glob("*.mset")}
     assert len(hashes) == 1
+
+
+def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
+    """The pre-scan guard: a face-up-leaves .slog paired with a teacher whose
+    ONNX does not declare opp_leave_input must fail before any .mset is
+    written -- a blind teacher's labels would describe games nobody played."""
+    _skip_unless_runnable()
+    subprocess.run(
+        [str(SLOG_WRITER), str(tmp_path), "2", "2", "--face-up-leaves"],
+        check=True,
+        capture_output=True,
+    )
+    onnx_path = tmp_path / "teacher.onnx"
+    _export_tiny_teacher(onnx_path)  # opp_leave_input defaults to false
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            f"--quota-top={QUOTAS['top']}",
+            f"--quota-mid={QUOTAS['mid']}",
+            f"--quota-tail={QUOTAS['tail']}",
+            f"--quota-exchange={QUOTAS['exchange']}",
+            "--positions-per-game=2",
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "opp_leave_input" in result.stderr
+    assert not list(tmp_path.glob("*.mset"))
+
+
+def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
+    """The guard's allowed branch: a face-up corpus under a teacher that
+    declares opp_leave_input labels successfully, and each .mset is stamped
+    open-leaves after its source log."""
+    _skip_unless_runnable()
+    subprocess.run(
+        [str(SLOG_WRITER), str(tmp_path), "2", "2", "--face-up-leaves"],
+        check=True,
+        capture_output=True,
+    )
+    onnx_path = tmp_path / "teacher.onnx"
+    # The open-leaves input arm changes the FFI session's row layout, which is
+    # process-wide and fixed at creation -- export this teacher in a subprocess
+    # (the test_sim_evidence.py pattern).
+    code = (
+        "import torch\n"
+        "from scribblez.ffi import set_opp_leave_input, get_input_shapes\n"
+        "from scribblez.position_eval.model import PositionEvalModel\n"
+        "from scribblez.position_eval.onnx_export import export_onnx\n"
+        "set_opp_leave_input(True)\n"
+        "shapes = {s.name: s.dims for s in get_input_shapes()}\n"
+        "torch.manual_seed(0)\n"
+        "model = PositionEvalModel(spatial_planes=shapes['input_spatial'][0],\n"
+        "                          scalar_size=shapes['input_scalar'][0],\n"
+        "                          trunk_channels=8, num_blocks=3).eval()\n"
+        f"export_onnx(model, {str(onnx_path)!r},\n"
+        "            spatial_planes=shapes['input_spatial'][0],\n"
+        "            scalar_size=shapes['input_scalar'][0],\n"
+        "            contingent_features=True, opp_leave_input=True)\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            f"--quota-top={QUOTAS['top']}",
+            f"--quota-mid={QUOTAS['mid']}",
+            f"--quota-tail={QUOTAS['tail']}",
+            f"--quota-exchange={QUOTAS['exchange']}",
+            "--positions-per-game=2",
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"generator refused the allowed pairing: {result.stderr}"
+    msets = sorted(tmp_path.glob("*.mset"))
+    assert msets, "no .mset produced"
+    assert all(read_mset(p).flags == MSET_FLAG_OPEN_LEAVES for p in msets)
 
 
 def test_generator_loads_a_teacher_with_external_data(tmp_path):

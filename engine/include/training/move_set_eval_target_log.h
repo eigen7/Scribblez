@@ -43,6 +43,11 @@ inline constexpr uint32_t kTargetFlagOpenLeaves = 2u;
 
 inline constexpr int kTargetModelHashChars = 64;
 
+// The target flags for a .mset generated from a .slog whose FileHeader carries
+// `slog_flags`: the information condition the labeled games were played under,
+// which the trainer must match with the student's input arm.
+uint32_t target_flags_from_slog(uint16_t slog_flags);
+
 #pragma pack(push, 1)
 
 struct TargetFileHeader {

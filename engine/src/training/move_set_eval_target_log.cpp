@@ -1,5 +1,7 @@
 #include "training/move_set_eval_target_log.h"
 
+#include "data/binary_log.h"
+
 #include <cassert>
 #include <cstring>
 #include <filesystem>
@@ -18,6 +20,10 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
 }
 
 }  // namespace
+
+uint32_t target_flags_from_slog(uint16_t slog_flags) {
+  return (slog_flags & binlog::kFlagFaceUpLeaves) != 0 ? kTargetFlagOpenLeaves : 0u;
+}
 
 TargetWriter::TargetWriter(const std::string& path, uint32_t record_floats,
                            const std::string& model_hash, uint32_t flags)
