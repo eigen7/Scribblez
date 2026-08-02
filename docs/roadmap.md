@@ -214,65 +214,72 @@ Then the spine proper:
   ([workloads/move_set_eval.py](../py/scribblez/workloads/move_set_eval.py)):
   each cycle plays a self-play batch, runs the generator with the tag's frozen
   teacher ONNX (hash-stamped into every sidecar), and delivers `.slog`/`.mset`
-  pairs to the tag's store. Remaining, found by plan review: the variant is
-  not actually wired through this pipeline — the workload never passes
-  `face_up_leaves` to self-play (so every corpus generated so far is standard
-  hidden-leave Scrabble), and the target generator neither honors the
-  teacher's `opp_leave_input` metadata nor stamps the `.mset` open-leaves
-  flag from the source `.slog` header. Beyond the wiring: an opp-leave-input
-  teacher must be trained and exported (none exists — it needs face-up-leaves
-  position-eval training first), and the corpus accumulated so far is
-  regeneration debt once the wired pipeline and that teacher exist.
-  Separately, the generate role is GPU and local-only until the cloud fleet
-  can host TensorRT — the GPU-workloads item in
-  [cloud_compute.md](cloud_compute.md), which now also needs a way to ship the
-  teacher model to pods.
+  pairs to the tag's store. Remaining:
+  - *Variant wiring.* The workload never passes `face_up_leaves` to
+    self-play, and the generator neither honors the teacher's
+    `opp_leave_input` metadata nor stamps the `.mset` open-leaves flag from
+    the source `.slog` header — as built, the pipeline can only produce
+    standard hidden-leave data.
+  - *An opp-leave teacher.* No position-eval checkpoint that reads the
+    opponent leave exists. Training one — on face-up-leaves position-eval
+    data, which must itself be generated first — is a prerequisite for any
+    in-variant target generation.
+  - *Cloud generation.* The generate role is GPU and local-only until the
+    cloud fleet can host TensorRT — the GPU-workloads item in
+    [cloud_compute.md](cloud_compute.md), which now also needs a way to
+    ship the teacher model to pods.
 - **A3 — move-set-evaluation v1.** The model, dataset, trainer, and gate
   metric exist as a lean local loop
-  ([py/scribblez/move_set_eval/](../py/scribblez/move_set_eval/)). This lands
-  in two slices. First, an **offline shakeout**: run the A2 workload on the
-  local GPU long enough to accumulate a modest `.slog`/`.mset` corpus (none
-  exists yet — A2 has only been smoke-verified), train on it once, and
-  measure — answering whether the distillation works at all before any
-  infrastructure is built. That corpus is still out-of-variant (hidden-leave
-  games under a leave-blind teacher, the pairing the generator permits until
-  an opp-leave teacher exists), so shakeout numbers are provisional and get
-  re-derived after regeneration. Second, only if the shakeout justifies it,
-  the **generational fold-in**, whose real work is named here rather than
-  discovered later: a data loader that is not the current synchronous
-  per-batch replay-decode (extend the native loader or add a prefetcher), a
-  file-level held-out reservation (position-level splits leak through shared
-  game prefixes), and a reuse regime re-derived for frozen sidecar targets
-  (the `turns_per_game` fresh-sampling lever does not exist here). The
-  teacher is pinned for the whole A3–A4 arc; refreshing it is a deliberate
-  new tag priced as a full corpus regeneration. "At scale" means the largest
-  corpus local generation sustains — not gated on the cloud item above. The
-  headline metrics are not target MSE but **top-K recall against the
-  position evaluation model's ranking** and **teacher-value regret** — the
+  ([py/scribblez/move_set_eval/](../py/scribblez/move_set_eval/)). It lands
+  in two slices:
+  - *Slice 1 — offline shakeout.* Run the A2 workload on the local GPU long
+    enough to accumulate a modest corpus (none exists yet; A2 has only been
+    smoke-verified), train on it once, and measure. This answers whether
+    the distillation works at all before any infrastructure is built. The
+    numbers are provisional: until the opp-leave teacher exists, generation
+    stays out-of-variant, and the measurements are re-derived after
+    regeneration.
+  - *Slice 2 — generational fold-in*, only if the shakeout justifies it.
+    Its non-obvious work, named up front: a data loader (the current one
+    replay-decodes synchronously per batch — extend the native loader or
+    add a prefetcher); a file-level held-out reservation (position-level
+    splits leak through shared game prefixes); and a reuse regime, since
+    the `turns_per_game` fresh-sampling lever does not exist for frozen
+    sidecar targets. "At scale" means the largest corpus local generation
+    sustains, not gated on the cloud item above. The teacher stays pinned
+    for the whole A3–A4 arc; refreshing it means a new tag and a full
+    corpus regeneration.
+
+  The metrics, shared by both slices: **top-K recall against the position
+  evaluation model's ranking**, and **teacher-value regret** — the
   teacher-value gap between its best candidate and the best candidate the
-  filter retains; recall alone scores dropping a near-tie like dropping a
-  uniquely winning move. Both are measured on a **full-sweep held-out slice**
-  (a generator mode that scores every legal candidate for a few positions
-  per game): the stratified ~15-candidate training samples are structurally
-  blind to exactly the tail moves the filter exists to catch. A3 ships
-  curves, not a bar — the bar is set by A4, which owns the measurement that
-  defines it.
-- **A4 — the move-set-evaluation agent.** First, the
-  **position-evaluation-top-K agent** — exact per-candidate evaluation by the
-  position evaluation model over a generous static-equity shortlist, then sim
-  — which needs no new runtime and owns two measurements: the **sensitivity
-  sweep** that sets A3's bar (vary K, or inject controlled recall degradation
-  into the shortlist, and measure the match-play cost of a recall miss), and
-  the equal-budget baseline the learned filter must beat. Then the
-  move-set-evaluation agent itself: top-K by the move set evaluation model →
-  sim → pick by sim, matched against the sim agent baseline and against that
-  exact-evaluation agent. Its missing ONNX export path and engine-side
-  runtime are a design task, not plumbing: the current model materializes a
-  per-move copy of the board tokens (gigabytes at two-blank `N`) and the
-  evaluation service API speaks flat fixed-width rows, so the export needs a
-  chunked candidate axis or shared board keys, and a two-input service API —
-  decided before the ONNX graph is frozen. Until the learned filter beats
-  exact evaluation at equal budget, exact evaluation stays the selector.
+  filter retains, since recall alone scores dropping a near-tie like
+  dropping a uniquely winning move. Both are measured on a full-sweep
+  held-out slice (a generator mode that scores every legal candidate for a
+  few positions per game), because the stratified ~15-candidate training
+  samples cannot see the tail moves the filter exists to catch. A3 ships
+  curves, not a bar; setting the bar belongs to A4, which owns the
+  measurement that defines it.
+- **A4 — the move-set-evaluation agent.** Two agents, in order:
+  - *The position-evaluation-top-K agent*: exact per-candidate evaluation
+    by the position evaluation model over a generous static-equity
+    shortlist, then sim. It needs no new runtime, and it owns two
+    measurements: the sensitivity sweep that sets A3's bar (vary K, or
+    inject controlled recall degradation into the shortlist, and measure
+    the match-play cost of a recall miss), and the equal-budget baseline
+    the learned filter must beat.
+  - *The move-set-evaluation agent itself*: top-K by the move set
+    evaluation model → sim → pick by sim, matched against the sim agent
+    baseline and against the exact-evaluation agent. Its missing ONNX
+    export and engine runtime are a design task, not plumbing: the current
+    model materializes a per-move copy of the board tokens (gigabytes at
+    two-blank `N`), and the evaluation service API speaks flat fixed-width
+    rows — so the export needs a chunked candidate axis or shared board
+    keys, plus a two-input service API, decided before the ONNX graph is
+    frozen.
+
+  Until the learned filter beats exact evaluation at equal budget, exact
+  evaluation stays the selector.
 - **A5 — evidence-conditioned move set evaluation** (steps 5–6 of
   [sim_residual_feedback.md](sim_residual_feedback.md)): the fusion stage
   migrates from the kill-test's position-evaluation harness onto the move set
@@ -398,14 +405,11 @@ Decision gates, stated so the results can veto the plan:
    deployment form is reconsidered. The fallback is still valuable: better sims,
    better scheduling, and the move set evaluation model alone are an engine
    improvement without any second round.
-2. **A4** (stage 3): the recall/regret bar fires here, not at A3 — the
-   sensitivity sweep on the position-evaluation-top-K agent prices what a
-   recall miss costs in win rate and sets the bar, and the move set
-   evaluation model must clear it *and* beat that agent at equal budget
-   before it replaces exact evaluation anywhere. A3's stage-2 deliverable is
-   the curves the bar is later read against; sequencing the gate at stage 2
-   was circular, since the sensitivity measurement needs an agent A3 cannot
-   provide.
+2. **A4** (stage 3): the sensitivity sweep on the position-evaluation-top-K
+   agent prices what a recall miss costs in win rate and sets the
+   recall/regret bar. The move set evaluation model must clear that bar
+   *and* beat the exact-evaluation agent at equal budget before it replaces
+   exact evaluation anywhere; A3's curves are what the bar is read against.
 
 ## What is deliberately not here
 
