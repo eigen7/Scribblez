@@ -216,6 +216,8 @@ def main():
         tool.rule()
         tool.setup_claude_trust()
         tool.rule()
+        tool.setup_codex_auth_store()
+        tool.rule()
         tool.build_docker_image()
         tool.rule()
         tool.setup_cdi()
