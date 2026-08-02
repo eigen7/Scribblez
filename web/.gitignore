@@ -1,5 +1,0 @@
-node_modules/
-dist/
-
-# Engine-launched Vite dev server log
-.vite-dev.log

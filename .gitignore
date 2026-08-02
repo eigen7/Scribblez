@@ -1,22 +1,2 @@
-target/
-*.o
-*.a
 __pycache__/
 *.pyc
-.venv/
-.vscode/
-
-# Lexicon binaries are not committed (encode a copyrighted wordlist).
-# setup_wizard.py downloads them into the host mount dir; if you keep a local
-# copy here for any reason, it stays out of git.
-data/lexica/
-
-# Local state written by setup_wizard.py / run_docker.py.
-.env.json
-
-# Editor / tooling caches and generated files
-.cache/
-compile_commands.json
-# Personal Claude Code settings (permissions etc.) -- keep out of version control.
-.claude/settings.local.json
-.claude/settings.json

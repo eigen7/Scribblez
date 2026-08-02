@@ -1,6 +1,0 @@
-CompileFlags:
-  # Resolved relative to this file, so every checkout -- the main repo and each
-  # worktree -- uses its own build tree's database once py/build.py has run.
-  CompilationDatabase: target
-Diagnostics:
-  Suppress: "pp_including_mainfile_in_preamble"

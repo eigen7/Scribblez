@@ -1,24 +1,7 @@
-# Declarative devenv configuration for Scribblez, read by
-# subtrees/devenv_utils load_config() into a DevenvConfig. Every key is a
-# DevenvConfig field; path-valued keys are resolved relative to this file's
-# directory (the repo root).
+# Minimal devenv configuration for devenv_utils' own working clone (the one
+# the wizard provisions under a project mount; see SUBTREES.md). It exists so
+# the worktree/PR tooling (pr_flow.py) works here the same way it does in a
+# consumer repo. devenv_utils has no dev container of its own, so nothing else
+# is configured.
 
-name = "scribblez"
-docker_context = "docker-setup/local"
-
-# Bump manually to force all users back through the setup wizard -- in
-# particular after a docker-setup/ change that needs an image rebuild (the
-# wizard rebuilds the image). Increasing the major (first) number additionally
-# wipes the target/ build trees.
-setup_version = "2.15.0"
-
-# Browser-facing HTTP services, routed by the devenv-gateway as
-# http://scribblez-<name>.localhost (see subtrees/devenv_utils/GATEWAY.md).
-# The loopback-bound backends -- the engine WebSocket servers and the Tornado
-# data API -- are reached through the Vite dev servers' proxies, so they stay
-# off this table.
-[services]
-web = 5173     # human_web_agent browser UI (Vite)
-manual = 5174  # manual_gcg_tool browser UI (Vite)
-board = 5175   # board_tool browser UI (Vite)
-dash = 5180    # React dashboard: Vite dev server (proxies the Tornado API)
+name = "devenv_utils"

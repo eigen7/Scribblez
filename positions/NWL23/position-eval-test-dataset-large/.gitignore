@@ -1,4 +1,0 @@
-# Transient loose positions exploded from the part-*.gcgs bundles for the C++
-# tools to consume; regenerated on every build/score run. The committed
-# artifacts are the bundles and monte-carlo-sim-results.json.
-pos-*.gcg
