@@ -138,7 +138,7 @@ def export_onnx(
     scalar_size: int,
     *,
     contingent_features: bool,
-    opp_leave_input: bool = False,
+    opp_leave_input: bool,
     board_size: int = 15,
     opset: int = 17,
 ):

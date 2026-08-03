@@ -37,7 +37,7 @@ import torch
 
 from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
-from scribblez.ffi import get_input_shapes, set_contingent_features
+from scribblez.ffi import get_input_shapes, set_contingent_features, set_opp_leave_input
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
@@ -135,6 +135,7 @@ def _checkpoint_and_eval(
         ctx["spatial_planes"],
         ctx["scalar_size"],
         contingent_features=params.contingent_features,
+        opp_leave_input=params.face_up_leaves,
     )
     db.write_metrics(conn, ci, record)
     if ctx["position_eval"] is not None:
@@ -281,10 +282,13 @@ def run(ctx: WorkerContext) -> int:
     """The train-role runner (invoked by the worker entrypoint; also the
     substance of the scripts/position_eval/train.py CLI)."""
     params = ctx.params
-    # Pick the experiment arm before any engine call: it is baked into the
+    # Pick the experiment arms before any engine call: they are baked into the
     # process-wide FFI session, whose reported input shapes -- and therefore the
-    # model, the ONNX export, and the eval batches -- all follow it.
+    # model, the ONNX export, and the eval batches -- all follow them. A
+    # face-up-leaves run trains on the opponent-leave input block, matching the
+    # information condition its self-play games are generated under.
     set_contingent_features(params.contingent_features)
+    set_opp_leave_input(params.face_up_leaves)
 
     paths = ctx.tag_paths()
     paths.root.mkdir(parents=True, exist_ok=True)
