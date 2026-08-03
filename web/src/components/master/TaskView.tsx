@@ -283,7 +283,7 @@ function CpuCloudForm({ role, offers, add, busy, disabled }: {
             : 'price unavailable'}
         </span>
         <Button
-          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          label={busy === 'cloud' ? 'Adding…' : 'Add cloud'}
           disabled={disabled}
           onClick={() => add('cloud', { count: n, vcpus: vcpuN, flavor: flavorId })}
         />
@@ -351,7 +351,7 @@ function GpuCloudForm({ role, offers, add, busy, disabled }: {
             : 'price unavailable'}
         </span>
         <Button
-          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          label={busy === 'cloud' ? 'Adding…' : 'Add cloud'}
           disabled={disabled}
           onClick={() => add('cloud', { count: n, gpu_type_id: gpuId, gpu_count: gc })}
         />
@@ -389,7 +389,7 @@ function CpuFallbackForm({ role, add, busy, disabled }: {
           </select>
         </label>
         <Button
-          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          label={busy === 'cloud' ? 'Adding…' : 'Add cloud'}
           disabled={disabled}
           onClick={() => add('cloud', {
             count: parseInt(count, 10) || 1, vcpus: parseInt(vcpus, 10) || 16, flavor,
@@ -431,7 +431,7 @@ function GpuFallbackForm({ role, add, busy, disabled }: {
           <input style={numInput} value={gpuCount} onChange={(e) => setGpuCount(e.target.value)} />
         </label>
         <Button
-          label={busy === 'cloud' ? 'Creating pods…' : 'Add cloud'}
+          label={busy === 'cloud' ? 'Adding…' : 'Add cloud'}
           disabled={disabled || !gpuId.trim()}
           onClick={() => add('cloud', {
             count: parseInt(count, 10) || 1,
@@ -470,13 +470,14 @@ function CloudForm({ role, add, busy, disabled }: {
 // The add-worker forms for one role: a local form (threads), an ssh form (an
 // operator-owned machine), and/or a cloud form (a live instance selector),
 // per the role's declared kinds. A singleton role's forms disable once it has
-// a slot.
+// a slot. Adding only records a paused slot; nothing launches (and no pod is
+// created) until the operator starts it from the workers table.
 function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
   workload: Workload; role: Role; tag: string; taken: boolean;
   onError: (e: string) => void; onChanged: () => void;
 }) {
-  // Which form is mid-request ('local' | 'cloud' | null): its button shows a
-  // progress label -- pod creation takes a few seconds.
+  // Which form is mid-request ('local' | 'cloud' | 'ssh' | null): its button
+  // shows a progress label.
   const [busy, setBusy] = useState<Busy>(null);
   const disabled = busy !== null || (role.singleton && taken);
 

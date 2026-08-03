@@ -10,6 +10,11 @@ booting the same image + bundle flow as a pod. Cloud and ssh slots both
 deliver through the results bucket, so while a task has any, a cloud_sync
 --watch subprocess streams that tag's bucket results into the local mount.
 
+Adding a slot only records it, paused: nothing launches until the operator
+starts it. For local and ssh slots the first start spawns the process /
+container; for cloud slots it creates the backing pod itself (a Runpod pod
+boots on creation), so an added-but-never-started slot has cost nothing.
+
 Desired state lives in task.json (dashboard/tasks.py); actual state is observed
 live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
 worker is observable and stoppable no matter which dashboard instance spawned
@@ -39,7 +44,13 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
 from cloud.ssh_machine import SshMachine, SshMachineError
-from scripts.cloud_fleet import CpuResources, GpuResources, bundle_worker_env, pod_create_spec
+from scripts.cloud_fleet import (
+    CpuResources,
+    GpuResources,
+    bundle_worker_env,
+    new_pod_name,
+    pod_create_spec,
+)
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -141,18 +152,21 @@ def _ssh_state(desired: str, probe: str, gated: bool) -> str:
     return "running" if alive else "exited"
 
 
-def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str) -> str:
+def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str | None) -> str:
     """The honest display state of a cloud slot. `alive` is real pod liveness
     (a running runtime), independent of the pod's own desiredStatus. `stopping`
     / `starting` are the in-flight states where intent and reality disagree;
-    `interrupted` is a pod Runpod reclaimed out from under a should-run slot."""
+    `interrupted` is a pod Runpod reclaimed out from under a should-run slot.
+    `desired_status` is None for a slot whose pod has not been created yet
+    (pods are created on first start): such a slot is `paused` until started,
+    then `starting` while reconcile creates its pod."""
     if gated:
         return "waiting"
     if desired == "paused":
         return "stopping" if alive else "paused"
     if alive:
         return "running"
-    return "starting" if desired_status == "RUNNING" else "interrupted"
+    return "starting" if desired_status is None or desired_status == "RUNNING" else "interrupted"
 
 
 def _resource_record_fields(resources: CpuResources | GpuResources) -> dict:
@@ -160,6 +174,14 @@ def _resource_record_fields(resources: CpuResources | GpuResources) -> dict:
     if isinstance(resources, GpuResources):
         return {"gpu_type_id": resources.gpu_type_id, "gpu_count": resources.gpu_count}
     return {"vcpus": resources.vcpus, "flavor": resources.flavor}
+
+
+def _worker_resources(w: tasks.WorkerRecord) -> CpuResources | GpuResources:
+    """The inverse of _resource_record_fields: the slot's recorded hardware
+    selection, for creating its pod at start time."""
+    if w.gpu_type_id:
+        return GpuResources(gpu_type_id=w.gpu_type_id, gpu_count=w.gpu_count)
+    return CpuResources(vcpus=w.vcpus, flavor=w.flavor)
 
 
 def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
@@ -192,6 +214,21 @@ class WorkerManager:
             self._creds = load_credentials()
             self._client = RunpodClient(self._creds.runpod.api_key)
         return self._creds, self._client
+
+    def _create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Create slot `w`'s backing pod (first start), on the latest bundle,
+        under the slot's recorded name and hardware. The pod boots and runs on
+        creation."""
+        creds, client = self._cloud()
+        params = params_mod.validate(spec.params_cls, task.params)
+        body = pod_create_spec(
+            creds, spec, task.tag, params,
+            name=w.worker_id, role=w.role,
+            bundle_id=resolve_bundle_id(creds.r2, "latest"),
+            resources=_worker_resources(w),
+        )  # fmt: skip
+        w.pod_id = client.create_pod(body)["id"]
+        tasks.save_task(spec, task)
 
     def _ensure_sync(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Keep exactly one sync watcher alive per task with bucket-delivering
@@ -309,13 +346,11 @@ class WorkerManager:
             worker_id=_next_worker_id(task, "local"),
             role=role,
             kind="local",
-            desired_state="running",
+            desired_state="paused",
             threads=threads or default_thread_count(),
         )
         task.workers.append(w)
         tasks.save_task(spec, task)
-        if role not in task.gates:
-            self._spawn_local(spec, task, w)
         return w
 
     def add_ssh(
@@ -327,12 +362,10 @@ class WorkerManager:
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
             kind="ssh",
-            desired_state="running",
+            desired_state="paused",
             host=host,
             threads=threads,
         )
-        if role not in task.gates:
-            self._run_ssh_container(spec, task, w)
         task.workers.append(w)
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
@@ -349,22 +382,13 @@ class WorkerManager:
         gpu = isinstance(resources, GpuResources)
         role_spec = self._check_role(spec, task, role, "cloud", gpu=gpu)
         assert not (role_spec.singleton and count > 1), f"role '{role}' allows one worker"
-        creds, client = self._cloud()
-        params = params_mod.validate(spec.params_cls, task.params)
-        bundle_id = resolve_bundle_id(creds.r2, "latest")
         added = []
         for _ in range(count):
-            name, body = pod_create_spec(
-                creds, spec, task.tag, params, role=role,
-                bundle_id=bundle_id, resources=resources,
-            )  # fmt: skip
-            pod = client.create_pod(body)
             w = tasks.WorkerRecord(
-                worker_id=name,
+                worker_id=new_pod_name(task.tag),
                 role=role,
                 kind="cloud",
-                desired_state="running",
-                pod_id=pod["id"],
+                desired_state="paused",
                 **_resource_record_fields(resources),
             )
             task.workers.append(w)
@@ -396,10 +420,13 @@ class WorkerManager:
             elif not run and probe == "running":
                 SshMachine(w.host).stop_container(name)
         else:
-            _, client = self._cloud()
-            if start:
+            if start and w.pod_id is None:
+                self._create_pod(spec, task, w)
+            elif start:
+                _, client = self._cloud()
                 client.start_pod(w.pod_id)
-            elif not run:
+            elif not run and w.pod_id is not None:
+                _, client = self._cloud()
                 client.stop_pod(w.pod_id)
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
@@ -420,7 +447,7 @@ class WorkerManager:
             )
             if probe == "stopped":
                 SshMachine(w.host).remove_container(_container_name(spec, task.tag, w.worker_id))
-        else:
+        elif w.pod_id is not None:  # a never-started cloud slot has no pod to delete
             _, client = self._cloud()
             pod = next((p for p in client.list_pods() if p["id"] == w.pod_id), None)
             assert pod is None or pod.get("runtime") is None, (
@@ -469,6 +496,10 @@ class WorkerManager:
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {w.host}"
                 _accrue(w, alive, None)
+            elif w.pod_id is None:  # not yet started, so no pod to observe
+                alive = False
+                info["state"] = _cloud_state(w.desired_state, False, gated, None)
+                _accrue(w, False, None)
             else:
                 if pods is None:
                     _, client = self._cloud()
@@ -604,7 +635,11 @@ class WorkerManager:
             except SshMachineError as e:
                 print(f"ssh worker {w.worker_id}: {e}")
         else:
-            if should_run and info["state"] == "interrupted":
+            if should_run and w.pod_id is None:
+                # A should-run slot with no pod: its creation failed on start,
+                # or a gate released it before its first start. Create it now.
+                self._create_pod(spec, task, w)
+            elif should_run and info["state"] == "interrupted":
                 _, client = self._cloud()
                 client.start_pod(w.pod_id)
             elif not should_run and alive:
