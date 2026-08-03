@@ -279,7 +279,7 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
         t[1] = e.p_draw;
         t[2] = e.p_loss;
         t[3] = e.score_diff_mean;
-        t[4] = e.score_diff_std;
+        t[4] = move_set_eval::clamped_sd_std(e.score_diff_std);
       }
       // Free the encoded rows now that they are consumed; `done` accumulates
       // a whole file's positions and must not hold every encoding.

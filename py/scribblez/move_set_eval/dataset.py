@@ -104,8 +104,10 @@ class MsetDataset:
                 moves, targets = pos.moves, pos.targets
                 # The generator stores the teacher's readouts verbatim, and the
                 # FP16 score-diff std head can overflow to inf on near-terminal
-                # post-move states -- such rows carry no usable target (a
-                # generator-side clamp is the eventual fix).
+                # post-move states. The generator now clamps the stored std
+                # (kSdStdCap in engine/include/training/move_set_eval_target_log.h),
+                # so this drop only fires on corpora generated before the clamp;
+                # it goes when those corpora are retired.
                 keep = np.isfinite(targets).all(axis=1)
                 if not keep.all():
                     dropped += int((~keep).sum())
