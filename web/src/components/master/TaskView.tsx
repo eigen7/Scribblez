@@ -527,8 +527,11 @@ function WorkersTable({ workers, onAction }: {
         {workers.map((w) => {
           const inFlight = IN_FLIGHT.has(w.state);
           // The toggle reflects operator intent, not the momentary state: a
-          // still-winding-down worker keeps showing Pause (disabled) until it
-          // has actually stopped, never a misleading Start.
+          // still-winding-down worker keeps showing Pause until it has
+          // actually stopped, never a misleading Start. Pause is never
+          // disabled — it is always a safe intent write, and for a cloud slot
+          // whose pod creation keeps failing (stuck `starting`) it is the only
+          // way back to a removable state.
           const desiredRunning = w.desired_state === 'running';
           return (
             <tr key={w.worker_id} style={{ borderTop: '1px solid #e2e8ee' }}>
@@ -550,7 +553,7 @@ function WorkersTable({ workers, onAction }: {
               </td>
               <td style={{ padding: '6px 0', whiteSpace: 'nowrap', display: 'flex', gap: 6, alignItems: 'center' }}>
                 {desiredRunning
-                  ? <Button label="Pause" disabled={inFlight} onClick={() => onAction(w.worker_id, 'pause')} />
+                  ? <Button label="Pause" onClick={() => onAction(w.worker_id, 'pause')} />
                   : <Button label="Start" disabled={inFlight} onClick={() => onAction(w.worker_id, 'start')} />}
                 {inFlight && <span className="scz-spinner" title={w.state} aria-label={w.state} />}
                 <span title={w.observed_running ? 'pause the worker before removing it' : undefined}>

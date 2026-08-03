@@ -13,7 +13,7 @@ deliver through the results bucket, so while a task has any, a cloud_sync
 Adding a slot only records it, paused: nothing launches until the operator
 starts it. For local and ssh slots the first start spawns the process /
 container; for cloud slots it creates the backing pod itself (a Runpod pod
-boots on creation), so an added-but-never-started slot has cost nothing.
+boots on creation), so an added-but-never-started slot costs nothing.
 
 Desired state lives in task.json (dashboard/tasks.py); actual state is observed
 live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
@@ -43,7 +43,7 @@ from cloud.bundles import resolve_bundle_id
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from cloud.ssh_machine import SshMachine, SshMachineError
+from cloud.ssh_machine import SshMachine
 from scripts.cloud_fleet import (
     CpuResources,
     GpuResources,
@@ -299,7 +299,11 @@ class WorkerManager:
     def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord) -> str:
         """Slot `w`'s container probe state, with negative caching: after a
         failed probe the host is assumed unreachable for SSH_REPROBE_SECONDS
-        rather than paying a connect timeout on every status poll."""
+        rather than paying a connect timeout on every status poll. A slot that
+        never launched is `missing` by definition — no ssh contact, so a slot
+        added with a bad host stays manageable (in particular, removable)."""
+        if not w.launched:
+            return "missing"
         down_since = self._ssh_down.get(w.host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
             return "unreachable"
@@ -324,6 +328,8 @@ class WorkerManager:
         SshMachine(w.host).run_container(
             _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
         )
+        w.launched = True
+        tasks.save_task(spec, task)
 
     # ---- slot operations -------------------------------------------------
 
@@ -364,6 +370,7 @@ class WorkerManager:
             kind="ssh",
             desired_state="paused",
             host=host,
+            launched=False,
             threads=threads,
         )
         task.workers.append(w)
@@ -607,15 +614,23 @@ class WorkerManager:
             status = self.worker_status(spec, task)
             for w, info in zip(task.workers, status, strict=True):
                 should_run = w.desired_state == "running" and w.role not in task.gates
-                self._reconcile_worker(spec, task, w, should_run, info)
+                # Contained per slot: one slot's failing enforcement (an ssh
+                # machine vanishing mid-action, a pod creation that keeps
+                # failing on an out-of-stock flavor) must not starve the rest
+                # of the pass -- reconcile is the only enforcement some slots
+                # get (e.g. stopping gated pods that are still billing).
+                try:
+                    self._reconcile_worker(spec, task, w, should_run, info)
+                except Exception as e:  # noqa: BLE001 -- enforcement must keep ticking
+                    print(f"reconcile {spec.name}/{task.tag}/{w.worker_id}: {e}")
             self._ensure_sync(spec, task)
 
     def _reconcile_worker(self, spec, task: tasks.TaskRecord, w, should_run: bool, info: dict):
         """Close one slot's desired-vs-observed gap. A cloud pod that is booting
         (`starting`) is left alone -- it is already on its way up. An
-        unreachable ssh machine is left alone too, and an ssh failure only
-        skips this tick (the machine may vanish mid-action): enforcement
-        resumes once probes succeed."""
+        unreachable ssh machine is left alone too. A failure here only skips
+        this slot's tick (the caller contains it): enforcement resumes on the
+        next pass."""
         alive = info["observed_running"]
         if w.kind == "local":
             if should_run and not alive:
@@ -625,15 +640,12 @@ class WorkerManager:
         elif w.kind == "ssh":
             probe = info["ssh_probe"]
             name = _container_name(spec, task.tag, w.worker_id)
-            try:
-                if should_run and probe == "stopped":
-                    SshMachine(w.host).start_container(name)
-                elif should_run and probe == "missing":
-                    self._run_ssh_container(spec, task, w)
-                elif not should_run and alive:
-                    SshMachine(w.host).stop_container(name)
-            except SshMachineError as e:
-                print(f"ssh worker {w.worker_id}: {e}")
+            if should_run and probe == "stopped":
+                SshMachine(w.host).start_container(name)
+            elif should_run and probe == "missing":
+                self._run_ssh_container(spec, task, w)
+            elif not should_run and alive:
+                SshMachine(w.host).stop_container(name)
         else:
             if should_run and w.pod_id is None:
                 # A should-run slot with no pod: its creation failed on start,

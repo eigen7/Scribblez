@@ -9,8 +9,14 @@ fail, so a regression back toward launch-on-add breaks loudly.
 import pytest
 from scribblez import workloads
 from scribblez.dashboard import tasks
-from scribblez.dashboard.workers import WorkerManager, _cloud_state
-from scripts.cloud_fleet import CpuResources
+from scribblez.dashboard import workers as workers_mod
+from scribblez.dashboard.workers import (
+    WorkerManager,
+    _cloud_state,
+    _resource_record_fields,
+    _worker_resources,
+)
+from scripts.cloud_fleet import CpuResources, GpuResources
 
 
 def _fail(*args, **kwargs):
@@ -52,6 +58,19 @@ def test_add_local_is_paused_and_not_spawned(manager, spec, task):
 def test_add_ssh_is_paused_and_runs_no_container(manager, spec, task):
     w = manager.add_ssh(spec, task, "generate", host="user@h", threads=None)
     assert w.desired_state == "paused"
+    assert not w.launched
+
+
+def test_never_launched_ssh_slot_needs_no_ssh(manager, spec, task, monkeypatch):
+    """A slot added with a bad or unreachable host (the host string is
+    unvalidated until first start) must stay manageable: status shows it
+    paused and remove works, with no ssh contact at all."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _fail)
+    w = manager.add_ssh(spec, task, "generate", host="user@no-such-host", threads=None)
+    (info,) = manager.worker_status(spec, task)
+    assert info["state"] == "paused"
+    manager.remove_worker(spec, task, w.worker_id)
+    assert task.workers == []
 
 
 def test_add_cloud_is_paused_with_no_pod(manager, spec, task):
@@ -80,6 +99,39 @@ def test_pause_and_remove_before_first_start_need_no_cloud(manager, spec, task):
     assert task.workers == []
 
 
+def test_reconcile_creates_the_missing_pod(manager, spec, task, monkeypatch):
+    """A should-run slot with no pod (its creation failed on start, or a gate
+    released it before its first start) gets its pod created by reconcile."""
+    (w,) = _add_cloud(manager, spec, task)
+    w.desired_state = "running"
+    created = []
+    monkeypatch.setattr(
+        WorkerManager, "_create_pod", lambda self, spec, task, w: created.append(w.worker_id)
+    )
+    (info,) = manager.worker_status(spec, task)
+    manager._reconcile_worker(spec, task, w, True, info)
+    assert created == [w.worker_id]
+
+
+def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
+    """One slot's persistently failing enforcement (e.g. pod creation on an
+    out-of-stock flavor) must not abort the pass: later slots still get
+    their tick."""
+    added = _add_cloud(manager, spec, task, count=2)
+    for w in added:
+        w.desired_state = "running"
+    attempted = []
+
+    def boom(self, spec, task, w):
+        attempted.append(w.worker_id)
+        raise RuntimeError("no capacity for flavor cpu3c")
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", boom)
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    manager.reconcile()
+    assert attempted == [w.worker_id for w in added]
+
+
 def test_status_of_slot_without_a_pod(manager, spec, task):
     (w,) = _add_cloud(manager, spec, task)
     (info,) = manager.worker_status(spec, task)
@@ -87,6 +139,18 @@ def test_status_of_slot_without_a_pod(manager, spec, task):
     w.desired_state = "running"  # e.g. pod creation failed after Start
     (info,) = manager.worker_status(spec, task)
     assert info["state"] == "starting"
+
+
+def test_worker_resources_roundtrip():
+    for res in (
+        CpuResources(vcpus=8, flavor="cpu3c"),
+        GpuResources(gpu_type_id="A100", gpu_count=2),
+    ):
+        w = tasks.WorkerRecord(
+            worker_id="x", role="generate", kind="cloud", desired_state="paused",
+            **_resource_record_fields(res),
+        )  # fmt: skip
+        assert _worker_resources(w) == res
 
 
 def test_cloud_state_mapping():
