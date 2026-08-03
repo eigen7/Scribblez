@@ -25,6 +25,7 @@
 
 #include "game/move.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -40,6 +41,18 @@ inline constexpr uint32_t kTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_me
 
 // TargetFileHeader::flags bits, mirroring the .sobs convention.
 inline constexpr uint32_t kTargetFlagOpenLeaves = 2u;
+
+// FP16 teacher inference can overflow the score-diff std readout to +inf on
+// near-terminal states: the exported graph's Softplus is evaluated naively in
+// half precision, overflowing for logits above ~11 even though the true
+// softplus value there is about the logit itself. The generator stores the
+// clamped std so every record carries finite targets -- the WLD label, the
+// target that matters, is intact, and the std head is extrapolating on such
+// states anyway. The cap sits comfortably above genuine teacher readouts
+// (< ~90 across the shakeout corpus).
+inline constexpr float kSdStdCap = 128.0f;
+
+inline float clamped_sd_std(float sd_std) { return std::min(sd_std, kSdStdCap); }
 
 inline constexpr int kTargetModelHashChars = 64;
 

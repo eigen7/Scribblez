@@ -47,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <set>
 #include <string>
@@ -4176,6 +4177,15 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   ASSERT_THROW(move_set_eval::TargetReader r2(path), std::runtime_error);
 
   fs::remove_all(tmp);
+}
+
+// The stored std must be finite even when FP16 teacher inference overflows the
+// readout to +inf (see kSdStdCap in the header); genuine readouts pass through.
+TEST(MoveSetEvalTargetLog, SdStdClamp) {
+  ASSERT_EQ(move_set_eval::clamped_sd_std(std::numeric_limits<float>::infinity()),
+            move_set_eval::kSdStdCap);
+  ASSERT_EQ(move_set_eval::clamped_sd_std(41.0f), 41.0f);
+  ASSERT_EQ(move_set_eval::clamped_sd_std(move_set_eval::kSdStdCap), move_set_eval::kSdStdCap);
 }
 
 // A .mset carries the information condition of the games it labels, read off
