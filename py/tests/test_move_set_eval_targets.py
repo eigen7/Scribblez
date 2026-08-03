@@ -55,6 +55,7 @@ def _export_tiny_teacher(onnx_path: Path):
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
         contingent_features=True,
+        opp_leave_input=False,
     )
 
 
@@ -136,7 +137,7 @@ def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
         capture_output=True,
     )
     onnx_path = tmp_path / "teacher.onnx"
-    _export_tiny_teacher(onnx_path)  # opp_leave_input defaults to false
+    _export_tiny_teacher(onnx_path)  # a blind teacher: opp_leave_input=False
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
