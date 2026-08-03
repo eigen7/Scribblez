@@ -17,7 +17,6 @@ to a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
         generations/gen_NNNNNN/   *.slog  -- one generation (+ manifest.json)
       checkpoints/                model.pt (rolling resume checkpoint)
       models/                     model_epoch_XXXX.onnx
-      test-subset/                positions.slog + pos-XX.txt  (frozen eval set)
       dashboard.db                metrics + eval data (rendered by the dashboard)
 
 Workloads use the subset of this tree they need (kill_test keeps its pairs under
@@ -113,15 +112,6 @@ class TagPaths:
         return self.root / "models"
 
     @property
-    def test_subset_dir(self) -> Path:
-        """Frozen evaluation positions sampled from the test split (standard .slog)."""
-        return self.root / "test-subset"
-
-    @property
-    def test_subset_slog(self) -> Path:
-        return self.test_subset_dir / "positions.slog"
-
-    @property
     def dashboard_db(self) -> Path:
         """SQLite store of all metrics + eval data, read by the dashboard."""
         return self.root / "dashboard.db"
@@ -136,6 +126,3 @@ class TagPaths:
 
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"model_epoch_{epoch:04d}.onnx"
-
-    def position_dump_path(self, index: int) -> Path:
-        return self.test_subset_dir / f"pos-{index:02d}.txt"

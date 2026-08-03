@@ -25,7 +25,7 @@ def _seed(path):
 
 def test_build_figure_item_loss_is_serializable(tmp_path):
     conn = _seed(tmp_path / "dashboard.db")
-    item = api.build_figure_item(conn, "loss", {}, tmp_path, str(tmp_path))
+    item = api.build_figure_item(conn, "loss", {}, str(tmp_path))
     assert item is not None
     assert {"doc", "root_id", "target_id"} <= set(item)
     json.dumps(item)  # must round-trip to the client as JSON
@@ -33,12 +33,12 @@ def test_build_figure_item_loss_is_serializable(tmp_path):
 
 def test_build_figure_item_empty_db_is_none(tmp_path):
     conn = db.connect(tmp_path / "empty.db")
-    assert api.build_figure_item(conn, "loss", {}, tmp_path, str(tmp_path)) is None
+    assert api.build_figure_item(conn, "loss", {}, str(tmp_path)) is None
 
 
 def test_build_figure_item_unknown_name_is_none(tmp_path):
     conn = _seed(tmp_path / "dashboard.db")
-    assert api.build_figure_item(conn, "no_such_figure", {}, tmp_path, str(tmp_path)) is None
+    assert api.build_figure_item(conn, "no_such_figure", {}, str(tmp_path)) is None
 
 
 def test_version_token_counts_rows(tmp_path):
