@@ -246,9 +246,11 @@ Then the spine proper:
     splits leak through shared game prefixes); and a reuse regime, since
     the `turns_per_game` fresh-sampling lever does not exist for frozen
     sidecar targets. "At scale" means the largest corpus local generation
-    sustains, not gated on the cloud item above. The teacher stays pinned
-    for the whole A3–A4 arc; refreshing it means a new tag and a full
-    corpus regeneration.
+    sustains, not gated on the cloud item above. The teacher advances by
+    explicit promotion under the generational-teacher design
+    ([generational_teacher.md](generational_teacher.md), not yet built);
+    until that lands, refreshing it means a new tag and a full corpus
+    regeneration.
 
   The metrics, shared by both slices: **top-K recall against the position
   evaluation model's ranking**, and **teacher-value regret** — the
