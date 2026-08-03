@@ -29,11 +29,14 @@ class WorkerRecord:
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local/ssh: engine thread count (None: all cores)
     host: str | None = None  # ssh: SSH destination ("user@host" or an ssh-config alias)
-    # ssh: whether the slot's container was ever created. A never-launched slot
-    # has nothing on the machine, so it needs no probe and may be removed even
-    # while the host is unreachable (or does not exist at all — the host string
-    # is unvalidated until first start). Defaults True so records saved before
-    # this field existed (adds used to launch immediately) keep normal probing.
+    # ssh: whether the slot's container is known to have been created. False
+    # from add until a start confirms it -- or until a probe finds a container
+    # an in-doubt start (ssh link lost mid-command) did create. While False, an
+    # unreachable probe reads as "missing", so the slot stays manageable --
+    # removable even when the host is bogus or offline (the host string is
+    # unvalidated until first start). Defaults True so records saved before
+    # this field existed (adds used to launch immediately) keep the stricter
+    # unreachable handling.
     launched: bool = True
     pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
     vcpus: int | None = None  # cloud CPU pod: vCPU count

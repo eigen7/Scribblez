@@ -299,19 +299,28 @@ class WorkerManager:
     def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord) -> str:
         """Slot `w`'s container probe state, with negative caching: after a
         failed probe the host is assumed unreachable for SSH_REPROBE_SECONDS
-        rather than paying a connect timeout on every status poll. A slot that
-        never launched is `missing` by definition — no ssh contact, so a slot
-        added with a bad host stays manageable (in particular, removable)."""
-        if not w.launched:
-            return "missing"
+        rather than paying a connect timeout on every status poll.
+
+        A not-yet-launched slot is probed like any other -- an in-doubt first
+        start (the ssh link dying after `docker run` was dispatched) may have
+        left a live container, and a probe that finds one flips the slot to
+        launched. But its `unreachable` maps to `missing`: with no container
+        confirmed to exist, the slot must stay manageable (in particular,
+        removable) even when the host is bogus or offline."""
         down_since = self._ssh_down.get(w.host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
-            return "unreachable"
-        probe = SshMachine(w.host).container_state(_container_name(spec, tag, w.worker_id))
-        if probe == "unreachable":
-            self._ssh_down[w.host] = time.time()
+            probe = "unreachable"
         else:
-            self._ssh_down.pop(w.host, None)
+            probe = SshMachine(w.host).container_state(_container_name(spec, tag, w.worker_id))
+            if probe == "unreachable":
+                self._ssh_down[w.host] = time.time()
+            else:
+                self._ssh_down.pop(w.host, None)
+        if not w.launched:
+            if probe == "unreachable":
+                return "missing"
+            if probe != "missing":
+                w.launched = True  # the in-doubt start did create the container
         return probe
 
     def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):

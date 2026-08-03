@@ -61,16 +61,42 @@ def test_add_ssh_is_paused_and_runs_no_container(manager, spec, task):
     assert not w.launched
 
 
-def test_never_launched_ssh_slot_needs_no_ssh(manager, spec, task, monkeypatch):
-    """A slot added with a bad or unreachable host (the host string is
-    unvalidated until first start) must stay manageable: status shows it
-    paused and remove works, with no ssh contact at all."""
-    monkeypatch.setattr(workers_mod, "SshMachine", _fail)
+class _FakeSshMachine:
+    """SshMachine stand-in whose container probe always returns `state`."""
+
+    state = "unreachable"
+
+    def __init__(self, host):
+        self.host = host
+
+    def container_state(self, name: str) -> str:
+        return self.state
+
+
+def test_unlaunched_ssh_slot_stays_manageable_when_unreachable(manager, spec, task, monkeypatch):
+    """A slot whose container was never confirmed created reads `missing` on
+    an unreachable probe (the host may be bogus -- it is unvalidated until
+    first start): status shows it paused, and remove works instead of
+    refusing until the host comes online."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     w = manager.add_ssh(spec, task, "generate", host="user@no-such-host", threads=None)
     (info,) = manager.worker_status(spec, task)
     assert info["state"] == "paused"
     manager.remove_worker(spec, task, w.worker_id)
     assert task.workers == []
+
+
+def test_probe_heals_launched_after_in_doubt_start(manager, spec, task, monkeypatch):
+    """If the first start's ssh link died after `docker run` was dispatched,
+    the container exists while `launched` is still False; the next successful
+    probe re-observes it and flips the marker."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "running")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state = "running"
+    (info,) = manager.worker_status(spec, task)
+    assert info["state"] == "running"
+    assert w.launched
 
 
 def test_add_cloud_is_paused_with_no_pod(manager, spec, task):
