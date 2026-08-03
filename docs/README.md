@@ -42,6 +42,11 @@
   ingest, and the trainer as a singleton consumer worker.
 
 ## Design proposals
+- **[generational_teacher.md](generational_teacher.md)** — AlphaZero-style
+  teacher broadcast for the distillation pipeline: the teacher as versioned
+  per-tag state advanced by one-click (later automatic) promotion,
+  teacher-bound corpus generations on a pair-aware ingest protocol, and the
+  student training over a sliding window.
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
   rollout evidence back into the value models for evidence-conditioned
   re-evaluation, and picking the next candidate to sim via a learned
