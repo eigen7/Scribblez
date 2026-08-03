@@ -104,6 +104,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
             "loss",
             "eval_quality",
             "training_metrics",
+            "mset_metrics",
             "positions",
             "calibration",
         ):

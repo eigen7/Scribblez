@@ -1,18 +1,24 @@
 """Evaluation for the move set evaluation model: how well it reproduces the
 teacher's ranking of a position's candidate set (docs/roadmap.md, A3 gate).
 
-The filter's one job is recall: this model's top-K must contain the moves the
-position evaluation model would pick. For each labeled position we rank its
-candidates two ways -- by the teacher's stored win-equity and by this model's
-predicted win-equity -- and report:
+The filter's job is measured two ways: recall (this model's top-K must
+contain the moves the position evaluation model would pick) and teacher-value
+regret (what a miss costs, the roadmap's other named A3 gate metric). For
+each labeled position we rank its candidates two ways -- by the teacher's
+stored win-equity and by this model's predicted win-equity -- and report:
 
   * top-K recall: the fraction of the teacher's top-K candidates that fall in
     this model's top-K (averaged over positions), for each K;
+  * teacher-value regret@K: the teacher win-equity forfeited by keeping only
+    the top-K -- recall scores dropping a near-tie like dropping a uniquely
+    winning move; regret prices the miss;
   * rank correlation: the Spearman correlation between the two rankings over the
     whole candidate set (averaged over positions with >= 2 candidates).
 
-Ranking is by win-equity P(win)+0.5*P(draw), the same scalar both models are
-scored on, so the comparison is apples-to-apples.
+Every metric is paired with an incumbent-baseline value computed on the same
+positions from the stored candidate order (_baseline_ranking). Ranking is by
+win-equity P(win)+0.5*P(draw), the same scalar both models are scored on, so
+the comparison is apples-to-apples.
 """
 
 from __future__ import annotations
@@ -49,13 +55,37 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     return float((ra * rb).sum() / denom)
 
 
+def _topk_indices(scores: np.ndarray, k: int) -> np.ndarray:
+    """Indices of the k best-scored candidates (k capped at the count)."""
+    return np.argsort(-scores)[: min(k, len(scores))]
+
+
 def _topk_recall(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
     """Fraction of the teacher's top-k candidates that appear in the model's
-    top-k (k capped at the candidate count)."""
-    k = min(k, len(teacher))
-    teacher_top = set(np.argsort(-teacher)[:k].tolist())
-    pred_top = set(np.argsort(-pred)[:k].tolist())
-    return len(teacher_top & pred_top) / k
+    top-k."""
+    teacher_top = set(_topk_indices(teacher, k).tolist())
+    pred_top = set(_topk_indices(pred, k).tolist())
+    return len(teacher_top & pred_top) / len(teacher_top)
+
+
+def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
+    """Teacher win-equity forfeited by keeping only the ranking's top-k: the
+    gap between the teacher's best candidate and the best it retains (the
+    module docstring carries the rationale)."""
+    return float(teacher.max() - teacher[_topk_indices(pred, k)].max())
+
+
+def _baseline_ranking(n: int) -> np.ndarray:
+    """The incumbent's ranking, encoded descending-by-stored-index: the
+    generator stores the played move first (HastyBot's own choice -- the
+    equity argmax outside the endgame, the solver's move inside it), then the
+    equity ranking's head. Beyond the top stratum the stored order is a
+    shuffled sample, so baseline rank metrics over the full set (Spearman)
+    are a floor, while top-k metrics for k <= 1 + quota_top are exact. One
+    known smudge: on the rare positions where the dataset's non-finite-target
+    filter dropped the stored-first candidate, index 0 is the next surviving
+    candidate rather than the move the incumbent played."""
+    return -np.arange(n, dtype=np.float64)
 
 
 @torch.no_grad()
@@ -67,15 +97,22 @@ def evaluate(
     ks=DEFAULT_KS,
     seed: int = 0,
 ) -> dict[str, float]:
-    """Run the model over `dataset` and return the ranking-recall metrics.
+    """Run the model over `dataset` and return the ranking metrics, each
+    paired with the incumbent baseline computed on the same positions (see
+    _baseline_ranking).
 
-    Returns {"recall@K": ..., "spearman": ..., "positions": n} where the
-    recall keys are one per K in `ks`.
+    Returns, per K in `ks`: "recall@K" / "recall@K_baseline" (top-k set
+    overlap with the teacher's) and "regret@K" / "regret@K_baseline" (mean
+    teacher win-equity forfeited by the top-k, lower is better); plus
+    "spearman" / "spearman_baseline" and "positions".
     """
     model.eval()
-    recall_sums = {k: 0.0 for k in ks}
+    sums = {}
+    for k in ks:
+        sums[f"recall@{k}"] = sums[f"recall@{k}_baseline"] = 0.0
+        sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
     n_positions = 0
-    spearman_sum = 0.0
+    spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
 
     for batch in dataset.iter_batches(positions_per_batch, seed=seed):
@@ -89,15 +126,19 @@ def evaluate(
         for p in np.unique(pos_id):
             sel = pos_id == p
             t = teacher_eq[sel]
-            q = pred_eq[sel]
+            rankings = {"": pred_eq[sel], "_baseline": _baseline_ranking(len(t))}
             n_positions += 1
-            for k in ks:
-                recall_sums[k] += _topk_recall(t, q, k)
+            for suffix, q in rankings.items():
+                for k in ks:
+                    sums[f"recall@{k}{suffix}"] += _topk_recall(t, q, k)
+                    sums[f"regret@{k}{suffix}"] += _regret(t, q, k)
             if len(t) >= 2:
-                spearman_sum += _spearman(t, q)
+                for suffix, q in rankings.items():
+                    spearman_sums[f"spearman{suffix}"] += _spearman(t, q)
                 n_ranked += 1
 
-    metrics = {f"recall@{k}": recall_sums[k] / max(n_positions, 1) for k in ks}
-    metrics["spearman"] = spearman_sum / max(n_ranked, 1)
+    metrics = {name: total / max(n_positions, 1) for name, total in sums.items()}
+    for name, total in spearman_sums.items():
+        metrics[name] = total / max(n_ranked, 1)
     metrics["positions"] = n_positions
     return metrics

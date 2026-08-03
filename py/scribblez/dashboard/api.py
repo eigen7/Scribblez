@@ -91,6 +91,13 @@ def _training_metrics(conn, params, image_dir, mount_root):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
+def _mset_metrics(conn, params, image_dir, mount_root):
+    """move_set_eval's Training tab: the generic training curves plus the
+    teacher-value-regret quality figure."""
+    groups = plots.TRAINING + plots.MSET_QUALITY
+    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
+
+
 def _match_eval(conn, params, image_dir, mount_root):
     return plots.match_eval_grid(conn)
 
@@ -122,6 +129,7 @@ FIGURES = {
     "loss": _loss,
     "eval_quality": _eval_quality,
     "training_metrics": _training_metrics,
+    "mset_metrics": _mset_metrics,
     "positions": _positions,
     "calibration": _calibration,
     "match_eval": _match_eval,

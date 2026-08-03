@@ -100,27 +100,31 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
     timed_print(
         f"[epoch {epoch}] rows={state.rows_trained} loss={avg['total']:.4f} "
-        f"{recall} spearman={metrics['spearman']:.3f} lr={lr_now:.2e} {train_s:.1f}s"
+        f"{recall} spearman={metrics['spearman']:.3f} "
+        f"regret@1={metrics['regret@1']:.4f} (incumbent r@1="
+        f"{metrics['recall@1_baseline']:.3f} regret@1={metrics['regret@1_baseline']:.4f}) "
+        f"lr={lr_now:.2e} {train_s:.1f}s"
     )
-    db.write_metrics(
-        conn,
-        epoch,
-        {
-            "epoch": epoch,
-            "positions": state.rows_trained,
-            "loss": avg["total"],
-            "loss_wld": avg["wld"],
-            "loss_score_diff": avg["score_diff"],
-            # recall@K / Spearman land on the Loss tab's Accuracy panel, which
-            # plots every *_acc series.
-            "recall1_acc": metrics["recall@1"],
-            "recall3_acc": metrics["recall@3"],
-            "recall5_acc": metrics["recall@5"],
-            "spearman_acc": metrics["spearman"],
-            "lr": lr_now,
-            "elapsed_s": train_s,
-        },
-    )
+    # recall@K / Spearman (and their incumbent baselines, flat reference
+    # lines) land on the Loss tab's Accuracy panel, which plots every *_acc
+    # series; the regrets have their own Training-tab figure (plots.py).
+    record = {
+        "epoch": epoch,
+        "positions": state.rows_trained,
+        "loss": avg["total"],
+        "loss_wld": avg["wld"],
+        "loss_score_diff": avg["score_diff"],
+        "spearman_acc": metrics["spearman"],
+        "spearman_baseline_acc": metrics["spearman_baseline"],
+        "lr": lr_now,
+        "elapsed_s": train_s,
+    }
+    for k in (1, 3, 5):
+        record[f"recall{k}_acc"] = metrics[f"recall@{k}"]
+        record[f"recall{k}_baseline_acc"] = metrics[f"recall@{k}_baseline"]
+        record[f"regret{k}"] = metrics[f"regret@{k}"]
+        record[f"regret{k}_baseline"] = metrics[f"regret@{k}_baseline"]
+    db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
