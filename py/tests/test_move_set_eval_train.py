@@ -168,3 +168,40 @@ def test_train_step_and_eval(corpus_dir):
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
     assert -1.0 <= metrics["spearman"] <= 1.0
+
+
+def _write_mset(path, positions):
+    """Hand-pack a minimal v1 .mset (layout mirrored by targets.py's dtypes)."""
+    from scribblez.move_set_eval import targets as T
+
+    parts = []
+    hdr = np.zeros(1, dtype=T._FILE_HEADER)
+    hdr["magic"], hdr["version"] = T.MSET_MAGIC, T.MSET_VERSION
+    hdr["num_positions"], hdr["record_floats"] = len(positions), 5
+    hdr["model_hash"] = b"cafe"
+    parts.append(hdr.tobytes())
+    for game_index, turn_index, targets in positions:
+        ph = np.zeros(1, dtype=T._POSITION_HEADER)
+        ph["game_index"], ph["turn_index"] = game_index, turn_index
+        ph["num_candidates"] = len(targets)
+        parts.append(ph.tobytes())
+        rec = np.zeros(len(targets), dtype=T._record_dtype(5))
+        rec["targets"] = targets
+        parts.append(rec.tobytes())
+    path.write_bytes(b"".join(parts))
+
+
+def test_dataset_drops_non_finite_teacher_targets(tmp_path):
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    finite = np.tile(np.array([0.2, 0.1, 0.7, 3.0, 5.0], dtype=np.float32), (3, 1))
+    partly_bad = finite.copy()
+    partly_bad[1, 4] = np.inf
+    all_bad = np.full((2, 5), np.inf, dtype=np.float32)
+    _write_mset(tmp_path / "a.mset", [(0, 0, finite), (0, 1, partly_bad), (0, 2, all_bad)])
+    (tmp_path / "a.slog").touch()
+
+    ds = MsetDataset(tmp_path)
+    assert ds.num_positions == 2  # the all-bad position is gone entirely
+    assert ds.num_candidates == 5  # 3 finite + 2 surviving from the partly-bad
+    assert ds.dropped_candidates == 3

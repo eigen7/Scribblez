@@ -19,6 +19,12 @@ TensorRT, which the cloud worker image cannot host yet (the GPU-workloads item
 in docs/cloud_compute.md -- a CUDA worker image plus a way to ship the teacher
 to pods). The generator binary already rides in the worker bundle so that
 enablement is config, not code, on this side.
+
+The singleton train role (scribblez/move_set_eval/trainer.py) distills the
+student over the tag's pair store: repeated epochs over a deterministic
+file-level split, per-epoch recall/rank metrics against the held-out pairs on
+the dashboard's Loss tab. It is the lean fixed-corpus loop (roadmap A3 slice
+1); the generational consume->train lifecycle is docs/generational_teacher.md.
 """
 
 import subprocess
@@ -77,6 +83,29 @@ class MoveSetEvalParams:
         "teacher must then be an open-leaves model (the generator refuses the mismatch), "
         "and each .mset records the condition so the student trains under it too",
     )
+    # Student training (the train role; scribblez/move_set_eval/trainer.py).
+    train_epochs: int = param(
+        20, "stop the trainer after this many epochs over the pair store (0 = run until paused)"
+    )
+    holdout_every: int = param(
+        20,
+        "hold out every Nth pair (file-level, by sorted stem) for the recall/rank metrics; "
+        "0 evaluates on the training pairs (a smoke check, not a real held-out score)",
+    )
+    batch_positions: int = param(64, "positions per training batch")
+    lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
+    weight_decay: float = param(1e-4, "AdamW weight decay")
+    num_blocks: int = param(10, "board-trunk residual blocks")
+    trunk_channels: int = param(192, "board-trunk width")
+    num_heads: int = param(4, "cross-attention heads")
+    contingent_features: bool = param(
+        False,
+        "encode the student's board input with the contingent-draw potential features; "
+        "independent of the teacher's input arm",
+    )
+    lambda_sd: float = param(0.004, "score-diff loss weight")
+    huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
+    huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 
 
 @dataclass(frozen=True)
@@ -155,6 +184,19 @@ def slog_dir(tag: str) -> Path:
     return SPEC.paths(tag).data_dir / SLOGS_DIR
 
 
+def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], list[str]]:
+    """(train, holdout) stems: every `holdout_every`-th of the sorted stems is
+    held out. File-level (whole pairs) because position-level splits leak
+    through shared game prefixes; deterministic so a resumed trainer holds out
+    the same pairs, and pairs generated later join the same interleaving."""
+    ordered = sorted(stems)
+    if holdout_every <= 0:
+        return ordered, []
+    train = [s for i, s in enumerate(ordered) if i % holdout_every != 0]
+    holdout = [s for i, s in enumerate(ordered) if i % holdout_every == 0]
+    return train, holdout
+
+
 SPEC = WorkloadSpec(
     name="move_set_eval",
     title="Generate move-set-eval targets",
@@ -172,6 +214,15 @@ SPEC = WorkloadSpec(
                 unit="pairs",
                 phases={"gen_s": "self-play", "mset_s": "targets", "upload_s": "deliver"},
             ),
+        ),
+        RoleSpec(
+            name="train",
+            title="Student trainer (GPU)",
+            runner="scribblez.move_set_eval.trainer:run",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),
     ),
     progress="scribblez.workloads.move_set_eval:progress",
