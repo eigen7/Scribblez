@@ -24,7 +24,10 @@ and workload-specific analysis — all from the browser.
   kinds (local/cloud), whether its pods rent interruptible, whether it needs
   GPU hardware, and its stats schema.
 - **Worker** — a durable *slot* attached to a task: role, kind, resource
-  allocation, and a **desired state** (running/paused). A local slot is a
+  allocation, and a **desired state** (running/paused). A slot is added
+  paused: nothing launches until its first start, which for a cloud slot is
+  the moment the backing pod is created (a pod boots on creation), so an
+  added-but-never-started slot costs nothing. A local slot is a
   subprocess of the dashboard server running the same worker loop as the
   cloud, with a local results sink; a cloud slot is exactly one Runpod pod
   running the image + bundle flow of [cloud_compute.md](cloud_compute.md); an
@@ -54,7 +57,8 @@ Selecting a tag opens its task view, with tabs:
 - **Overview** — the frozen params, progress, live cloud $/hr, the workers
   table, one add-worker form per role (cloud forms offer a live instance
   selector fed by the cached Runpod catalog), and per-worker plus task-level
-  start/pause/remove. Pausing a cloud worker stops the pod (billing drops to
+  start/pause/remove. Adding a worker records it paused — review the slot,
+  then start it. Pausing a cloud worker stops the pod (billing drops to
   disk-only); only a non-running worker can be removed, so removal never
   silently discards an in-flight cycle. Tag deletion (local data dir only —
   the bucket archive is kept) is refused while the tag has workers.

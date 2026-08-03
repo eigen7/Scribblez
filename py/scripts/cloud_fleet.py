@@ -103,24 +103,31 @@ def _compute_fields(resources: CpuResources | GpuResources) -> dict:
     return {"computeType": "CPU", "cpuFlavorIds": [resources.flavor], "vcpuCount": resources.vcpus}
 
 
+def new_pod_name(tag: str) -> str:
+    """A fresh pod name (also the slot's worker id). Minted separately from
+    pod_create_spec so the dashboard can name a slot when it is added and
+    create the pod later, on first start."""
+    return f"{POD_NAME_PREFIX}{tag}-{secrets.token_hex(3)}"
+
+
 def pod_create_spec(
     creds: CloudCredentials,
     spec: workloads.WorkloadSpec,
     tag: str,
     params,
     *,
+    name: str,
     role: str,
     bundle_id: str,
     resources: CpuResources | GpuResources,
     container_disk_gb: int = 20,
-) -> tuple[str, dict]:
-    """(pod name, POST /pods body) for one cloud worker. Shared by this CLI and
-    the dashboard's WorkerManager so pods are identical however launched."""
-    name = f"{POD_NAME_PREFIX}{tag}-{secrets.token_hex(3)}"
+) -> dict:
+    """The POST /pods body for one cloud worker. Shared by this CLI and the
+    dashboard's WorkerManager so pods are identical however launched."""
     env = bundle_worker_env(
         creds, spec, tag, params, role=role, bundle_id=bundle_id, worker_id=name
     )
-    return name, {
+    return {
         "name": name,
         "imageName": creds.registry.worker_image,
         **_compute_fields(resources),
@@ -137,11 +144,13 @@ def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
     bundle_id = resolve_bundle_id(creds.r2, args.bundle)
     print(f"Launching {args.num_workers} worker(s) on bundle {bundle_id} ...")
     for _ in range(args.num_workers):
-        name, body = pod_create_spec(
+        name = new_pod_name(args.tag)
+        body = pod_create_spec(
             creds,
             spec,
             args.tag,
             params,
+            name=name,
             role=args.role,
             bundle_id=bundle_id,
             resources=CpuResources(vcpus=args.vcpus, flavor=args.flavor),
