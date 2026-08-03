@@ -115,15 +115,15 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
         "spearman_acc": metrics["spearman"],
-        "spearman_base_acc": metrics["spearman_baseline"],
+        "spearman_baseline_acc": metrics["spearman_baseline"],
         "lr": lr_now,
         "elapsed_s": train_s,
     }
     for k in (1, 3, 5):
         record[f"recall{k}_acc"] = metrics[f"recall@{k}"]
-        record[f"recall{k}_base_acc"] = metrics[f"recall@{k}_baseline"]
+        record[f"recall{k}_baseline_acc"] = metrics[f"recall@{k}_baseline"]
         record[f"regret{k}"] = metrics[f"regret@{k}"]
-        record[f"regret{k}_base"] = metrics[f"regret@{k}_baseline"]
+        record[f"regret{k}_baseline"] = metrics[f"regret@{k}_baseline"]
     db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     ctx["stats"].cycle_done(
