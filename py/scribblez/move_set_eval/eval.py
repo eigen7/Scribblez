@@ -70,9 +70,8 @@ def _topk_recall(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
 
 def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
     """Teacher win-equity forfeited by keeping only the ranking's top-k: the
-    gap between the teacher's best candidate and the best it retains. Recall
-    scores dropping a near-tie like dropping a uniquely winning move; regret
-    prices the miss."""
+    gap between the teacher's best candidate and the best it retains (the
+    module docstring carries the rationale)."""
     return float(teacher.max() - teacher[_topk_indices(pred, k)].max())
 
 
