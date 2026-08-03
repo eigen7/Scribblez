@@ -33,6 +33,35 @@ def test_workload_is_registered_with_a_valid_schema():
     assert params_mod.from_env(MoveSetEvalParams, env).teacher_model == "/x/teacher.onnx"
 
 
+def test_train_role_is_registered():
+    role = SPEC.role("train")
+    assert role.singleton and role.gpu and role.kinds == ("local",)
+    assert role.runner == "scribblez.move_set_eval.trainer:run"
+    assert set(role.stats.phases) == {"train_s", "eval_s"}
+
+
+def test_split_pair_stems_is_deterministic_and_file_level():
+    stems = [f"{i:03d}-local-0" for i in range(10)]
+    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 3)
+    assert holdout == ["000-local-0", "003-local-0", "006-local-0", "009-local-0"]
+    assert sorted(train + holdout) == stems  # a pair is in exactly one side
+
+
+def test_split_pair_stems_is_stable_under_appended_pairs():
+    # Stems are timestamp-prefixed, so later pairs sort after existing ones and
+    # extend the interleaving without reassigning any earlier pair.
+    stems = [f"{i:03d}-local-0" for i in range(10)]
+    _, holdout = move_set_eval.split_pair_stems(stems, 3)
+    _, extended = move_set_eval.split_pair_stems(stems + ["010-local-0", "011-local-0"], 3)
+    assert extended[: len(holdout)] == holdout
+
+
+def test_split_pair_stems_zero_disables_holdout():
+    stems = ["b", "a", "c"]
+    train, holdout = move_set_eval.split_pair_stems(stems, 0)
+    assert train == ["a", "b", "c"] and holdout == []
+
+
 def test_target_generator_command(tmp_path, monkeypatch):
     captured = {}
 

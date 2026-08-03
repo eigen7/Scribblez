@@ -61,23 +61,39 @@ class MsetDataset:
     """Streams flattened candidate batches from .mset/.slog pairs in one or more
     directories, reconstructing pre-move board inputs by replay."""
 
-    def __init__(self, data_dir: str | Path | Iterable[str | Path]):
-        if isinstance(data_dir, (str, Path)):
-            data_dirs = [Path(data_dir)]
-        else:
-            data_dirs = [Path(d) for d in data_dir]
-
-        mset_files = sorted(
-            f for d in data_dirs for f in d.glob("*.mset") if f.with_suffix(".slog").exists()
+    def __init__(
+        self,
+        data_dir: str | Path | Iterable[str | Path] | None = None,
+        *,
+        mset_files: Iterable[str | Path] | None = None,
+    ):
+        """Exactly one source: `data_dir` (directories whose complete pairs are
+        globbed) or `mset_files` (explicit .mset paths — the file-level-split
+        case, where train and held-out pairs share a directory)."""
+        assert (data_dir is None) != (mset_files is None), (
+            "pass exactly one of data_dir or mset_files"
         )
-        if not mset_files:
-            dirs = ", ".join(str(d) for d in data_dirs)
-            raise FileNotFoundError(f"No .mset files with a companion .slog in {dirs}")
+        if mset_files is None:
+            if isinstance(data_dir, (str, Path)):
+                data_dirs = [Path(data_dir)]
+            else:
+                data_dirs = [Path(d) for d in data_dir]
+            mset_files = sorted(
+                f for d in data_dirs for f in d.glob("*.mset") if f.with_suffix(".slog").exists()
+            )
+            if not mset_files:
+                dirs = ", ".join(str(d) for d in data_dirs)
+                raise FileNotFoundError(f"No .mset files with a companion .slog in {dirs}")
+        else:
+            mset_files = [Path(f) for f in mset_files]
+            if not mset_files:
+                raise FileNotFoundError("empty mset_files list")
 
         self._slogs: list[Path] = []
         self._positions: list[_Position] = []
         model_hashes: set[str] = set()
         flags: set[int] = set()
+        dropped = 0
         for mset_path in mset_files:
             parsed = read_mset(mset_path)
             model_hashes.add(parsed.model_hash)
@@ -85,9 +101,23 @@ class MsetDataset:
             file_id = len(self._slogs)
             self._slogs.append(mset_path.with_suffix(".slog"))
             for pos in parsed.positions:
+                moves, targets = pos.moves, pos.targets
+                # The generator stores the teacher's readouts verbatim, and the
+                # FP16 score-diff std head can overflow to inf on near-terminal
+                # post-move states -- such rows carry no usable target (a
+                # generator-side clamp is the eventual fix).
+                keep = np.isfinite(targets).all(axis=1)
+                if not keep.all():
+                    dropped += int((~keep).sum())
+                    if not keep.any():
+                        continue
+                    moves, targets = moves[keep], targets[keep]
                 self._positions.append(
-                    _Position(file_id, pos.game_index, pos.turn_index, pos.moves, pos.targets)
+                    _Position(file_id, pos.game_index, pos.turn_index, moves, targets)
                 )
+        self.dropped_candidates = dropped
+        if dropped:
+            print(f"dropped {dropped} candidate(s) with non-finite teacher targets")
 
         # A corpus must come from one blessed teacher and one information
         # condition; a mix would train against inconsistent targets.
