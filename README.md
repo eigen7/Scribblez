@@ -136,14 +136,13 @@ window, and the run is restartable at any point (see
 ./py/scripts/position_eval/train.py -t mytag
 ```
 
-The trainer launches the per-tag React dashboard (loss curves, structural
-probes, calibration, Monte-Carlo position comparison, live controls); launch it
-standalone with `./py/scripts/dashboard.py`. Sibling trainers:
+The trainer launches the per-tag React dashboard (loss curves, Monte-Carlo
+position comparison, live controls); launch it standalone with
+`./py/scripts/dashboard.py`. Sibling trainers:
 `py/scripts/max_move_per_lane/train.py` (the lexical representation probe) and
 the lexical-NN experiment trainers under `py/scripts/word_validity/` and
 `py/scripts/rack_best/`. `py/scripts/generate_data.py` generates standalone
-train/test `.slog` splits; `py/scripts/position_eval/evaluate.py` runs the
-eval suites on a checkpoint.
+train/test `.slog` splits.
 
 Data flow, formats, and the replay-reconstruction invariant are documented in
 [docs/architecture.md](docs/architecture.md).

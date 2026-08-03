@@ -8,8 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest",
-    "test:run": "vitest run",
-    "render-positions": "tsx tools/render_positions.tsx"
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@bokeh/bokehjs": "3.9.1",

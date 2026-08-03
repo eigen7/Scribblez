@@ -28,7 +28,6 @@ import onnxruntime as ort
 import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
-from bokeh.layouts import column
 
 from scribblez import lane_analysis
 from scribblez.dashboard import db, master_api, plots
@@ -55,15 +54,12 @@ RECONCILE_SECONDS = 30
 
 VERSION_TABLES = (
     "metrics",
-    "monotonicity",
-    "calibration",
-    "score_belief",
     "control_event",
     "match_eval",
 )
 
 
-def _loss(conn, params, image_dir, mount_root):
+def _loss(conn, params, mount_root):
     """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
     metrics table, with control-change markers. The value-quality curves are a
     separate figure (`eval_quality`), so the client can place its own controls
@@ -71,7 +67,7 @@ def _loss(conn, params, image_dir, mount_root):
     return plots.metrics_loss_grid(conn, normalized=_truthy(params.get("normalized")))
 
 
-def _eval_quality(conn, params, image_dir, mount_root):
+def _eval_quality(conn, params, mount_root):
     """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves. `smooth`
     overlays an EMA trend; `secondary`, a second tag, overlays that tag's curves
     dashed for comparison."""
@@ -87,51 +83,30 @@ def _eval_quality(conn, params, image_dir, mount_root):
             sec_conn.close()
 
 
-def _training_metrics(conn, params, image_dir, mount_root):
+def _training_metrics(conn, params, mount_root):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
-def _mset_metrics(conn, params, image_dir, mount_root):
+def _mset_metrics(conn, params, mount_root):
     """move_set_eval's Training tab: the generic training curves plus the
     teacher-value-regret quality figure."""
     groups = plots.TRAINING + plots.MSET_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
-def _match_eval(conn, params, image_dir, mount_root):
+def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
 
-def _gen_idx(params) -> int | None:
-    """The requested generation index (`?gen_idx=`), or None for the newest."""
-    v = params.get("gen_idx")
-    return int(v) if v not in (None, "", "latest") else None
-
-
-def _positions(conn, params, image_dir, mount_root):
-    view = plots.probes_view(
-        conn, image_dir, init_gen=_gen_idx(params), follow=False, external_gen=True
-    )
-    return column(view.layout, plots.series_grid(conn, plots.PROBE_CURVES)) if view else None
-
-
-def _calibration(conn, params, image_dir, mount_root):
-    view = plots.calibration_view(conn, init_gen=_gen_idx(params), follow=False, external_gen=True)
-    return column(view.layout, plots.series_grid(conn, plots.CALIB_CURVES)) if view else None
-
-
-# Figure name -> builder(conn, params, image_dir, mount_root) -> Bokeh model | None.
+# Figure name -> builder(conn, params, mount_root) -> Bokeh model | None.
 # Reuses the plots.py builders; the model is serialized with json_item for client-
-# side embedding. `image_dir` is the tag's board-image dir (only the probes view
-# uses it); `mount_root` lets a builder open a second tag's DB (eval_quality's
+# side embedding. `mount_root` lets a builder open a second tag's DB (eval_quality's
 # secondary-tag overlay).
 FIGURES = {
     "loss": _loss,
     "eval_quality": _eval_quality,
     "training_metrics": _training_metrics,
     "mset_metrics": _mset_metrics,
-    "positions": _positions,
-    "calibration": _calibration,
     "match_eval": _match_eval,
 }
 
@@ -152,27 +127,13 @@ def version_token(conn: sqlite3.Connection) -> dict:
     return {table: _row_count(conn, table) for table in VERSION_TABLES}
 
 
-# Tables a per-generation tab (Positions, Calibration) scrubs with a GenerationSlider.
-_GENERATION_TABLES = ("monotonicity", "calibration")
-
-
-def _table_generations(conn: sqlite3.Connection, table: str) -> list:
-    """The recorded epochs in `table`, oldest first (the slider's generation list)."""
-    try:
-        return [r[0] for r in conn.execute(f"SELECT epoch FROM {table} ORDER BY epoch")]
-    except sqlite3.OperationalError:
-        return []
-
-
-def build_figure_item(
-    conn: sqlite3.Connection, name: str, params: dict, image_dir, mount_root: str
-):
+def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, mount_root: str):
     """The Bokeh ``json_item`` dict for figure `name`, or None when there's no data
     (or no such figure). The handler turns None into ``{"item": null}``."""
     builder = FIGURES.get(name)
     if builder is None:
         return None
-    model = builder(conn, params, image_dir, mount_root)
+    model = builder(conn, params, mount_root)
     return json_item(model) if model is not None else None
 
 
@@ -506,12 +467,6 @@ class _Base(tornado.web.RequestHandler):
             self.mount_root, self.get_query_argument("task"), self.get_query_argument("tag")
         )
 
-    def _image_dir(self):
-        """The tag's board-image dir (the probes figure renders boards from it)."""
-        return TagPaths(
-            self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
-        ).test_subset_dir
-
 
 class TagsHandler(_Base):
     def get(self):
@@ -601,25 +556,6 @@ class ControlsHandler(_Base):
             conn.close()
 
 
-class GenerationsHandler(_Base):
-    """The generations (epochs) recorded in a table -- drives a tab's GenerationSlider."""
-
-    def get(self):
-        table = self.get_query_argument("table")
-        if table not in _GENERATION_TABLES:
-            self.set_status(404)
-            self.write({"error": "unknown table"})
-            return
-        conn = self._open_conn()
-        if conn is None:
-            self.write({"generations": []})
-            return
-        try:
-            self.write({"generations": _table_generations(conn, table)})
-        finally:
-            conn.close()
-
-
 class FigureHandler(_Base):
     def get(self, name: str):
         if name not in FIGURES:
@@ -632,7 +568,7 @@ class FigureHandler(_Base):
             self.write({"error": "unknown tag"})
             return
         try:
-            item = build_figure_item(conn, name, self._params(), self._image_dir(), self.mount_root)
+            item = build_figure_item(conn, name, self._params(), self.mount_root)
             self.write({"item": item})
         finally:
             conn.close()
@@ -811,7 +747,6 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
             (r"/api/version", VersionHandler),
             (r"/api/meta", MetaHandler),
             (r"/api/controls", ControlsHandler),
-            (r"/api/generations", GenerationsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
             (r"/api/lane/positions", LanePositionsHandler),
             (r"/api/lane/generations", LaneGenerationsHandler),

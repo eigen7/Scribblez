@@ -100,26 +100,10 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
 
     def test_all_figures_routable(self):
         # Every registered figure resolves (item may be null when its data isn't seeded).
-        for fig in (
-            "loss",
-            "eval_quality",
-            "training_metrics",
-            "mset_metrics",
-            "positions",
-            "calibration",
-        ):
+        for fig in ("loss", "eval_quality", "training_metrics", "mset_metrics", "match_eval"):
             r = self.fetch(f"/api/figure/{fig}?task={MAX_MOVE_PER_LANE}&tag=run1")
             assert r.code == 200, fig
             assert "item" in json.loads(r.body), fig
-
-    def test_generations_endpoint(self):
-        r = self.fetch(f"/api/generations?task={MAX_MOVE_PER_LANE}&tag=run1&table=monotonicity")
-        assert r.code == 200
-        assert json.loads(r.body)["generations"] == []  # none seeded for this tag
-
-    def test_generations_unknown_table_404(self):
-        r = self.fetch(f"/api/generations?task={MAX_MOVE_PER_LANE}&tag=run1&table=bogus")
-        assert r.code == 404
 
     def test_lane_positions(self):
         body = json.loads(self.fetch("/api/lane/positions").body)
