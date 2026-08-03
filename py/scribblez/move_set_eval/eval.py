@@ -58,6 +58,26 @@ def _topk_recall(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
     return len(teacher_top & pred_top) / k
 
 
+def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
+    """Teacher win-equity forfeited by keeping only the ranking's top-k: the
+    gap between the teacher's best candidate and the best it retains. Recall
+    scores dropping a near-tie like dropping a uniquely winning move; regret
+    prices the miss."""
+    k = min(k, len(teacher))
+    kept = np.argsort(-pred)[:k]
+    return float(teacher.max() - teacher[kept].max())
+
+
+def _baseline_ranking(n: int) -> np.ndarray:
+    """The incumbent's ranking, encoded descending-by-stored-index: the
+    generator stores the played move first (HastyBot's own choice -- the
+    equity argmax outside the endgame, the solver's move inside it), then the
+    equity ranking's head. Beyond the top stratum the stored order is a
+    shuffled sample, so baseline rank metrics over the full set (Spearman)
+    are a floor, while top-k metrics for k <= 1 + quota_top are exact."""
+    return -np.arange(n, dtype=np.float64)
+
+
 @torch.no_grad()
 def evaluate(
     model,
@@ -67,15 +87,22 @@ def evaluate(
     ks=DEFAULT_KS,
     seed: int = 0,
 ) -> dict[str, float]:
-    """Run the model over `dataset` and return the ranking-recall metrics.
+    """Run the model over `dataset` and return the ranking metrics, each
+    paired with the incumbent baseline computed on the same positions (see
+    _baseline_ranking).
 
-    Returns {"recall@K": ..., "spearman": ..., "positions": n} where the
-    recall keys are one per K in `ks`.
+    Returns, per K in `ks`: "recall@K" / "recall@K_baseline" (top-k set
+    overlap with the teacher's) and "regret@K" / "regret@K_baseline" (mean
+    teacher win-equity forfeited by the top-k, lower is better); plus
+    "spearman" / "spearman_baseline" and "positions".
     """
     model.eval()
-    recall_sums = {k: 0.0 for k in ks}
+    sums = {}
+    for k in ks:
+        sums[f"recall@{k}"] = sums[f"recall@{k}_baseline"] = 0.0
+        sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
     n_positions = 0
-    spearman_sum = 0.0
+    spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
 
     for batch in dataset.iter_batches(positions_per_batch, seed=seed):
@@ -89,15 +116,19 @@ def evaluate(
         for p in np.unique(pos_id):
             sel = pos_id == p
             t = teacher_eq[sel]
-            q = pred_eq[sel]
+            rankings = {"": pred_eq[sel], "_baseline": _baseline_ranking(len(t))}
             n_positions += 1
-            for k in ks:
-                recall_sums[k] += _topk_recall(t, q, k)
+            for suffix, q in rankings.items():
+                for k in ks:
+                    sums[f"recall@{k}{suffix}"] += _topk_recall(t, q, k)
+                    sums[f"regret@{k}{suffix}"] += _regret(t, q, k)
             if len(t) >= 2:
-                spearman_sum += _spearman(t, q)
+                for suffix, q in rankings.items():
+                    spearman_sums[f"spearman{suffix}"] += _spearman(t, q)
                 n_ranked += 1
 
-    metrics = {f"recall@{k}": recall_sums[k] / max(n_positions, 1) for k in ks}
-    metrics["spearman"] = spearman_sum / max(n_ranked, 1)
+    metrics = {name: total / max(n_positions, 1) for name, total in sums.items()}
+    for name, total in spearman_sums.items():
+        metrics[name] = total / max(n_ranked, 1)
     metrics["positions"] = n_positions
     return metrics

@@ -174,6 +174,13 @@ LOSS = [
 # The learning rate is stepped down multiplicatively (by hand from the Controls
 # tab) and spans orders of magnitude, so it reads best on a log y-axis.
 TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elapsed_s"])]
+# Move-set-eval distillation quality: the teacher win-equity the student's
+# top-K forfeits (lower is better), with the incumbent ranking's regret@1
+# (played move + equity head) as the flat reference line. The recall/Spearman
+# curves and their baselines ride the Loss tab's Accuracy panel instead.
+MSET_QUALITY = [
+    ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_base"]),
+]
 PROBE_CURVES = [
     ("Structural probe", ["probe_mean_structural_score", "probe_mean_sigmoid_r2"]),
     ("Monotonicity violations", ["probe_total_violations"]),

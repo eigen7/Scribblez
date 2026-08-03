@@ -45,7 +45,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
   ],
   move_set_eval: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    trainingTab('training_metrics', 'metrics', 'No per-epoch training metrics yet.'),
+    trainingTab('mset_metrics', 'metrics', 'No per-epoch training metrics yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],

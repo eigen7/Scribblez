@@ -166,8 +166,13 @@ def test_train_step_and_eval(corpus_dir):
     metrics = evaluate(model, ds, device, positions_per_batch=8)
     assert metrics["positions"] == ds.num_positions
     for k in (1, 3, 5):
-        assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
-    assert -1.0 <= metrics["spearman"] <= 1.0
+        for suffix in ("", "_baseline"):
+            assert 0.0 <= metrics[f"recall@{k}{suffix}"] <= 1.0
+            assert metrics[f"regret@{k}{suffix}"] >= 0.0
+    # Larger K keeps a superset of the candidates, so regret can only shrink.
+    assert metrics["regret@5"] <= metrics["regret@3"] <= metrics["regret@1"]
+    for suffix in ("", "_baseline"):
+        assert -1.0 <= metrics[f"spearman{suffix}"] <= 1.0
 
 
 def _write_mset(path, positions):
@@ -205,3 +210,16 @@ def test_dataset_drops_non_finite_teacher_targets(tmp_path):
     assert ds.num_positions == 2  # the all-bad position is gone entirely
     assert ds.num_candidates == 5  # 3 finite + 2 surviving from the partly-bad
     assert ds.dropped_candidates == 3
+
+
+def test_regret_and_baseline_ranking_semantics():
+    from scribblez.move_set_eval import eval as mset_eval
+
+    teacher = np.array([0.5, 0.9, 0.4])  # teacher-best is index 1
+    baseline = mset_eval._baseline_ranking(3)  # prefers stored order: 0, 1, 2
+    assert mset_eval._topk_recall(teacher, baseline, 1) == 0.0
+    assert mset_eval._topk_recall(teacher, baseline, 3) == 1.0
+    assert mset_eval._regret(teacher, baseline, 1) == pytest.approx(0.4)
+    assert mset_eval._regret(teacher, baseline, 2) == 0.0  # index 1 retained at k=2
+    assert mset_eval._regret(teacher, teacher, 1) == 0.0  # perfect ranking forfeits nothing
+    assert mset_eval._regret(teacher, baseline, 5) == 0.0  # k caps at the candidate count
