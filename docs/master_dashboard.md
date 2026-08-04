@@ -62,8 +62,9 @@ Selecting a tag opens its task view, with tabs:
   disk-only); only a non-running worker can be removed, so removal never
   silently discards an in-flight cycle. Tag deletion (local data dir only —
   the bucket archive is kept) is refused while the tag has workers.
-- **Stats** — generic per-role worker statistics: a summary table plus Bokeh
-  figures (cumulative units, units/hour, per-phase cycle-time breakdown),
+- **Stats** — generic per-role worker statistics: fleet-aggregate tiles
+  (units/hour, totals, cycle time, worker health), Bokeh figures (units/hour
+  over time, per-phase cycle-time breakdown), and a per-worker detail table,
   driven by the role's declared stats schema. Each worker maintains a stats
   JSON under the tag (cumulative counters plus a bounded window of per-cycle
   samples); cloud workers upload it every cycle and it rides the normal sync,

@@ -261,38 +261,40 @@ export default function MasterApp() {
       fontFamily: 'system-ui, sans-serif', padding: '14px 18px', color: '#1a1f28', fontSize: 15,
       background: '#f4f6f8', minHeight: '100vh',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
-        <strong style={{ fontSize: 19 }}>Scribblez</strong>
-        <label style={{ fontSize: 15 }}>
-          Workload{' '}
-          <select
-            value={workloadName}
-            onChange={(e) => { setWorkloadName(e.target.value); setOpenTag(null); }}
-          >
-            {workloads.map((w) => (
-              <option key={w.name} value={w.name}>{w.title}</option>
-            ))}
-          </select>
-        </label>
-        {openTag && (
-          <>
-            <span
-              onClick={() => setOpenTag(null)}
-              style={{ color: '#1f77b4', cursor: 'pointer', fontSize: 14 }}
+      <div className="page-cap">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
+          <strong style={{ fontSize: 19 }}>Scribblez</strong>
+          <label style={{ fontSize: 15 }}>
+            Workload{' '}
+            <select
+              value={workloadName}
+              onChange={(e) => { setWorkloadName(e.target.value); setOpenTag(null); }}
             >
-              ← all tags
-            </span>
-            <b>{openTag}</b>
-          </>
+              {workloads.map((w) => (
+                <option key={w.name} value={w.name}>{w.title}</option>
+              ))}
+            </select>
+          </label>
+          {openTag && (
+            <>
+              <span
+                onClick={() => setOpenTag(null)}
+                style={{ color: '#1f77b4', cursor: 'pointer', fontSize: 14 }}
+              >
+                ← all tags
+              </span>
+              <b>{openTag}</b>
+            </>
+          )}
+        </div>
+        {!workload ? (
+          <div style={{ color: '#556070', fontStyle: 'italic' }}>Connecting to the data API…</div>
+        ) : openTag ? (
+          <TaskView workload={workload} tag={openTag} />
+        ) : (
+          <HomePage workload={workload} onOpen={setOpenTag} />
         )}
       </div>
-      {!workload ? (
-        <div style={{ color: '#556070', fontStyle: 'italic' }}>Connecting to the data API…</div>
-      ) : openTag ? (
-        <TaskView workload={workload} tag={openTag} />
-      ) : (
-        <HomePage workload={workload} onOpen={setOpenTag} />
-      )}
     </div>
   );
 }

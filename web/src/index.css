@@ -1198,3 +1198,56 @@ h1 {
 @keyframes scz-spin {
   to { transform: rotate(360deg); }
 }
+
+/* =========================================================================
+   Master-dashboard shared primitives: content-width cap, KPI stat tiles,
+   worker-health badges, data-table conventions, and the two-up chart grid.
+   Components live in web/src/components/master/ui.tsx.
+   ========================================================================= */
+
+/* Full-bleed layouts scatter on wide monitors (tables spread their columns,
+   stretch-width figures turn into 17:1 ribbons), so every master-dashboard
+   view renders inside this centered capped column. */
+.page-cap { max-width: 1560px; margin: 0 auto; }
+
+/* One row of headline aggregates above the detail views. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.tile { background: white; border: 1px solid #e3e3ea; border-radius: 8px; padding: 10px 14px 9px; min-width: 0; }
+.tile-label { font-size: 11px; color: #7c8694; text-transform: uppercase; letter-spacing: 0.05em; }
+.tile-value { font-size: 24px; font-weight: 600; color: #2c3540; margin-top: 2px; }
+.tile-value small { font-size: 13px; font-weight: 400; color: #7c8694; }
+.tile-sub { font-size: 12px; color: #7c8694; margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+
+/* Health encoded as form: a green dot for a fresh worker, an amber pill for
+   one whose stats record has stopped updating. */
+.health-ok { display: inline-flex; align-items: center; gap: 6px; }
+.dot-ok { width: 7px; height: 7px; border-radius: 50%; background: #2a7a2a; display: inline-block; }
+.pill-stale {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; border-radius: 999px; padding: 1px 8px;
+  background: #fdf3dd; color: #8a5b00; font-weight: 500;
+}
+.pill-stale::before { content: "▲"; font-size: 8px; color: #d99a00; }
+
+/* Data-table conventions: auto width (never stretched to the viewport),
+   muted headers, right-aligned tabular numerals for numeric columns. */
+.data-table { border-collapse: collapse; font-size: 13px; color: #2c3540; }
+.data-table th {
+  text-align: left; color: #7c8694; font-weight: 600; font-size: 12px;
+  padding: 5px 22px 5px 0; white-space: nowrap;
+}
+.data-table td { padding: 5px 22px 5px 0; border-top: 1px solid #ecedf1; white-space: nowrap; }
+.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table td:first-child { font-weight: 600; }
+.data-table .dim { color: #7c8694; }
+
+/* Figures render inside half-width cells at a sane aspect ratio instead of
+   stretching across the viewport; single column when narrow. */
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 980px) { .charts-grid { grid-template-columns: 1fr; } }
+
+/* A role's Stats section: header line, tile row, chart grid, detail table. */
+.role-section { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.role-head { display: flex; align-items: baseline; gap: 10px; }
+.role-head b { font-size: 15px; color: #2c3540; }
+.role-head span { font-size: 12.5px; color: #7c8694; }

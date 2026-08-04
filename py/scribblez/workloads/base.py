@@ -34,7 +34,7 @@ def resolve(dotted: str):
 @dataclass(frozen=True)
 class StatsSpec:
     """The shape of a role's per-cycle stats samples, driving the generic
-    Stats tab (summary table + throughput/breakdown/timeline figures)."""
+    Stats tab (aggregate tiles, rate/breakdown figures, summary table)."""
 
     unit: str  # what a cycle delivers: "pairs", "games", "rows"
     phases: dict[str, str]  # sample key -> display label, in stacking order
