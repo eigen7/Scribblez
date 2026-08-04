@@ -17,6 +17,11 @@ import * as Bokeh from '@bokeh/bokehjs';
 // ranges and, if the user had zoomed away from the auto extent, re-apply them to the
 // matching plot in the new figure. A range still at the auto extent (never touched,
 // or reset via the toolbar) is left to keep following the incoming data.
+//
+// Scroll preservation: the same teardown/re-embed would also momentarily collapse
+// the page (the embed is async), making the browser clamp the scroll position to
+// the shorter document. The container is pinned at its old height across the gap
+// via min-height, released once the new figure has laid out.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyModel = any;
@@ -93,7 +98,10 @@ export default function BokehFigure({ item }: { item: unknown | null }) {
     const el = ref.current;
     if (!el) return;
     el.replaceChildren();
-    if (!item) return;
+    if (!item) {
+      el.style.minHeight = '';
+      return;
+    }
 
     let cancelled = false;
     let views: AnyModel = null;
@@ -118,14 +126,23 @@ export default function BokehFigure({ item }: { item: unknown | null }) {
             const r = pinnedRef.current[i];
             if (r) applyRange(p, r);
           });
+          el.style.minHeight = '';
         });
       })
       .catch((e: unknown) => {
-        if (!cancelled) console.error('Bokeh embed failed', e);
+        if (cancelled) return;
+        console.error('Bokeh embed failed', e);
+        el.style.minHeight = '';
       });
 
     return () => {
       cancelled = true;
+      // Hold the container at its current height across the teardown/re-embed gap
+      // (the next effect's embed is async): letting the page collapse in between
+      // makes the browser clamp the scroll position, yanking the user back to the
+      // top on every data refresh. The next effect releases the hold once its
+      // figure has laid out (or it has nothing to embed).
+      el.style.minHeight = `${el.offsetHeight}px`;
       // Capture each plot's current view vs. its snapshotted auto extent; a range
       // still matching the auto extent (untouched or reset) is left to follow the
       // data, otherwise it is pinned for the next embed to restore.
