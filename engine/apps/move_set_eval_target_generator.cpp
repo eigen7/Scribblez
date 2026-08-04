@@ -2,22 +2,20 @@
 // sidecars) for .slog self-play data (docs/roadmap.md, track A).
 //
 // For every training-eligible position of each game (or a per-game sample),
-// the tool replays to the pre-move decision point, draws a STRATIFIED sample
-// of the legal candidates, encodes each candidate's post-move state exactly
-// as a position evaluation model training row, and evaluates the batch with
-// the teacher position evaluation model (TensorRT). Each .slog file gets a
-// same-stem .mset sidecar recording the sampled Moves and the teacher's
-// readouts (move_set_eval::kTargetFloatsV1); files whose sidecar already
-// exists are skipped, so interrupted runs resume by rerunning.
+// the tool replays to the pre-move decision point, selects the candidates to
+// label, encodes each candidate's post-move state exactly as a position
+// evaluation model training row, and evaluates the batch with the teacher
+// position evaluation model (TensorRT). Each .slog file gets a same-stem .mset
+// sidecar recording the selected Moves and the teacher's readouts
+// (move_set_eval::kTargetFloatsV1); files whose sidecar already exists are
+// skipped, so interrupted runs resume by rerunning.
 //
-// The stratified sample balances the filter's two failure modes: dense
-// coverage at the top of the equity ranking (where ranking precision
-// matters), a slice of the contention zone, uniform coverage of the tail
-// (junk rejection -- and where surprising constructive plays live), and
-// exchange candidates (the exchange head starves otherwise). The actually-
-// played move is always included. Distillation needs coverage, not
-// unbiasedness: the sampler only has to visit a move for the teacher to
-// value it honestly.
+// Two selections, chosen per run by --full-sweep and both defined in
+// training/move_set_eval_candidates.h: the stratified sample that feeds
+// training, and the capped sweep of every legal candidate that the A3 gate
+// metrics are measured on. A sweep run stamps kTargetFlagFullSweep into its
+// .mset, which routes the whole file to the held-out side -- swept positions
+// are evaluation-only.
 //
 // Information condition: the teacher's input arm comes from its ONNX metadata,
 // and each .mset records the variant of the games it labeled (the source
@@ -25,9 +23,9 @@
 //
 // Threading: encoding a post-move row costs roughly a move generation (the
 // contingent-map block), so CPU encoding -- not GPU inference -- is the
-// bottleneck. Encoder workers produce whole-position row blocks into a
-// bounded queue; a single inference thread packs them into TensorRT batches
-// and scatters the readouts back.
+// bottleneck. Encoder workers produce encoded candidate slices into a bounded
+// queue; a single inference thread packs them into TensorRT batches and
+// scatters the readouts back.
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -39,6 +37,7 @@
 #include "nn/trt_util.h"
 #include "selfplay/game_runner.h"
 #include "selfplay/sim_runner.h"
+#include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "util/math.h"
 #include "util/misc.h"
@@ -69,18 +68,25 @@ using namespace scribblez;
 using binlog::FileHeader;
 using binlog::GameMetadata;
 
+// Candidates per encoded slice. An input row is ~80 KB, so a sweep position's
+// worth of them (up to sweep_cap) is far too much to hold, hand off, or stage
+// for inference at once; slicing bounds all three. A stratified position stays
+// a single slice.
+constexpr int kSliceCandidates = 64;
+
 struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
-  int quota_top = 4;
-  int quota_mid = 4;
-  int quota_tail = 4;
-  int quota_exchange = 2;
-  int mid_rank_limit = 32;
+  move_set_eval::StratumQuotas quotas;
+  bool full_sweep = false;
+  int sweep_cap = 1500;
   int positions_per_game = 0;  // 0 = every training-eligible turn
   int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
+  // Derived in main() from the inference batch size, not a CLI flag: a slice
+  // must fit the inference thread's staging buffer.
+  int slice_candidates = kSliceCandidates;
 };
 
 // Identifies one decision point: (game, turn) within the file being
@@ -92,124 +98,132 @@ struct GamePositionIndex {
   auto operator<=>(const GamePositionIndex&) const = default;
 };
 
-// A position's sampled candidates with their encoded post-move rows, produced
-// by an encoder worker and consumed by the inference thread, which fills
-// `targets` (num candidates x move_set_eval::kTargetFloatsV1).
-struct MoveSet {
+// One contiguous run of a position's candidates with their encoded post-move
+// rows, produced by an encoder worker and consumed by the inference thread,
+// which fills `targets` (candidates.size() x move_set_eval::kTargetFloatsV1).
+// A position's slices partition its candidate set in order.
+struct CandidateSlice {
   GamePositionIndex pos;
+  uint32_t first;                // this slice's first candidate within the position's set
+  uint32_t position_candidates;  // candidates in the whole position
+  uint32_t num_legal_moves;      // the position's legal-move count (swept positions only)
   std::vector<Move> candidates;
   std::vector<float> rows;  // candidates.size() x input_floats(spec)
   std::vector<float> targets;
+
+  bool completes_position() const { return first + candidates.size() == position_candidates; }
 };
 
-bool move_set_order(const MoveSet& a, const MoveSet& b) { return a.pos < b.pos; }
+bool slice_order(const CandidateSlice& a, const CandidateSlice& b) {
+  if (a.pos != b.pos) return a.pos < b.pos;
+  return a.first < b.first;
+}
 
 // Bounded handoff between the encoder pool and the inference thread. Bounding
-// keeps memory flat when encoding outpaces the GPU.
-class MoveSetQueue {
+// keeps memory flat when encoding outpaces the GPU; the bound is in rows rather
+// than slices because rows are the memory that matters and a slice's row count
+// varies with the selection.
+class SliceQueue {
  public:
-  explicit MoveSetQueue(size_t capacity) : capacity_(capacity) {}
+  explicit SliceQueue(size_t row_budget) : row_budget_(row_budget) {}
 
   void add_producer();
-  void push(MoveSet&& item);
-  // Pops one item; returns false when the queue is drained AND every producer
+  void push(CandidateSlice&& item);
+  // Pops one slice; returns false when the queue is drained AND every producer
   // has finished.
-  bool pop(MoveSet* out);
+  bool pop(CandidateSlice* out);
   void producer_done();
 
  private:
-  size_t capacity_;
+  size_t row_budget_;
+  size_t queued_rows_ = 0;
   std::mutex mutex_;
   std::condition_variable can_push_;
   std::condition_variable can_pop_;
-  std::deque<MoveSet> items_;
+  std::deque<CandidateSlice> items_;
   int active_producers_ = 0;
 };
 
-void MoveSetQueue::add_producer() {
+void SliceQueue::add_producer() {
   std::lock_guard<std::mutex> lock(mutex_);
   ++active_producers_;
 }
 
-void MoveSetQueue::push(MoveSet&& item) {
+void SliceQueue::push(CandidateSlice&& item) {
+  const size_t rows = item.candidates.size();
   std::unique_lock<std::mutex> lock(mutex_);
-  can_push_.wait(lock, [&] { return items_.size() < capacity_; });
+  // An empty queue also admits a slice larger than the whole budget, so no
+  // budget setting can deadlock a push.
+  can_push_.wait(lock, [&] { return queued_rows_ + rows <= row_budget_ || items_.empty(); });
+  queued_rows_ += rows;
   items_.push_back(std::move(item));
   can_pop_.notify_one();
 }
 
-bool MoveSetQueue::pop(MoveSet* out) {
+bool SliceQueue::pop(CandidateSlice* out) {
   std::unique_lock<std::mutex> lock(mutex_);
   can_pop_.wait(lock, [&] { return !items_.empty() || active_producers_ == 0; });
   if (items_.empty()) return false;
   *out = std::move(items_.front());
   items_.pop_front();
-  can_push_.notify_one();
+  queued_rows_ -= out->candidates.size();
+  can_push_.notify_all();
   return true;
 }
 
-void MoveSetQueue::producer_done() {
+void SliceQueue::producer_done() {
   std::lock_guard<std::mutex> lock(mutex_);
   --active_producers_;
   can_pop_.notify_all();
 }
 
-// Append `count` distinct picks from ranked[lo, hi) (uniform, without
-// replacement) that are not already in *out.
-void sample_range(const std::vector<Move>& ranked, int lo, int hi, int count, std::mt19937_64& rng,
-                  std::vector<Move>* out) {
-  std::vector<int> pool;
-  for (int i = lo; i < hi && i < static_cast<int>(ranked.size()); ++i) {
-    if (std::find(out->begin(), out->end(), ranked[i]) == out->end()) pool.push_back(i);
+// One position's selected candidates, plus the legal-move count the .mset
+// records for a sweep (0 for the stratified sample, whose candidate count says
+// nothing about the position's size).
+struct PositionCandidates {
+  std::vector<Move> candidates;
+  uint32_t num_legal_moves;
+};
+
+// The run's selection over `ranked` -- every legal play and exchange,
+// best-equity first -- for the position whose game actually played `played`.
+PositionCandidates select_candidates(const std::vector<Move>& ranked, const Move& played,
+                                     const Options& opt, std::mt19937_64& rng) {
+  if (opt.full_sweep) {
+    return {move_set_eval::full_sweep_candidates(ranked, played, opt.sweep_cap),
+            static_cast<uint32_t>(ranked.size())};
   }
-  std::shuffle(pool.begin(), pool.end(), rng);
-  for (int j = 0; j < count && j < static_cast<int>(pool.size()); ++j) {
-    out->push_back(ranked[static_cast<size_t>(pool[j])]);
+  return {move_set_eval::stratified_candidates(ranked, played, opt.quotas, rng), 0u};
+}
+
+// Encode `sel`'s candidates for the position `encoder` is replayed to, handing
+// the inference thread one slice at a time.
+void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
+                   const GamePositionIndex& w, int mover, const PositionCandidates& sel,
+                   int slice_candidates, int row_floats, SliceQueue* queue) {
+  const size_t total = sel.candidates.size();
+  for (size_t first = 0; first < total; first += static_cast<size_t>(slice_candidates)) {
+    const size_t count = std::min(static_cast<size_t>(slice_candidates), total - first);
+    CandidateSlice slice;
+    slice.pos = w;
+    slice.first = static_cast<uint32_t>(first);
+    slice.position_candidates = static_cast<uint32_t>(total);
+    slice.num_legal_moves = sel.num_legal_moves;
+    slice.candidates.assign(sel.candidates.begin() + static_cast<ptrdiff_t>(first),
+                            sel.candidates.begin() + static_cast<ptrdiff_t>(first + count));
+    slice.rows.resize(count * static_cast<size_t>(row_floats));
+    binlog::encode_candidate_rows(encoder, g, static_cast<int>(w.turn_idx), mover, slice.candidates,
+                                  slice.rows.data());
+    queue->push(std::move(slice));
   }
 }
 
-// The stratified candidate sample for one position (see the file comment).
-// `ranked` is every legal play and exchange, best-equity first; `played` is
-// the move the self-play game actually made there.
-std::vector<Move> sample_candidates(const std::vector<Move>& ranked, const Move& played,
-                                    const Options& opt, std::mt19937_64& rng) {
-  std::vector<Move> out;
-  out.reserve(
-    static_cast<size_t>(1 + opt.quota_top + opt.quota_mid + opt.quota_tail + opt.quota_exchange));
-  out.push_back(played);
-  const int n = static_cast<int>(ranked.size());
-
-  // Top stratum: the head of the ranking, dense.
-  for (int i = 0; i < n && static_cast<int>(out.size()) < 1 + opt.quota_top; ++i) {
-    if (std::find(out.begin(), out.end(), ranked[i]) == out.end()) out.push_back(ranked[i]);
-  }
-  // Contention zone, then the tail, uniform within each.
-  sample_range(ranked, opt.quota_top, opt.mid_rank_limit, opt.quota_mid, rng, &out);
-  sample_range(ranked, opt.mid_rank_limit, n, opt.quota_tail, rng, &out);
-
-  // Exchange stratum: uniform among the non-PLAY candidates.
-  std::vector<Move> non_plays;
-  for (const Move& m : ranked) {
-    if (m.type() != MoveType::PLAY) non_plays.push_back(m);
-  }
-  std::shuffle(non_plays.begin(), non_plays.end(), rng);
-  int taken = 0;
-  for (const Move& m : non_plays) {
-    if (taken >= opt.quota_exchange) break;
-    if (std::find(out.begin(), out.end(), m) == out.end()) {
-      out.push_back(m);
-      ++taken;
-    }
-  }
-  return out;
-}
-
-// Encoder worker: claims positions, replays to the pre-move state, samples
+// Encoder worker: claims positions, replays to the pre-move state, selects
 // candidates, and encodes each candidate's post-move row exactly as a
 // post-move-model training row.
 void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
                    const Options& opt, const std::vector<GamePositionIndex>& work,
-                   std::atomic<size_t>* next, MoveSetQueue* queue) {
+                   std::atomic<size_t>* next, SliceQueue* queue) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(spec);
   const int row_floats = input_floats(spec);
@@ -230,7 +244,7 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     const int bag_size = total_tiles - on_board - encoder.rack(0).size() - encoder.rack(1).size();
 
     // Rank every candidate by HastyBot equity (the opponent's replayed rack is
-    // hidden information the ranking must not use), then sample the strata.
+    // hidden information the ranking must not use), then select from it.
     const Rack hidden_opp;
     MoveRequest req{
       board,   dict, rack, hidden_opp, encoder.enc().score(mover), encoder.enc().score(1 - mover),
@@ -238,39 +252,33 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
     std::mt19937_64 rng(util::splitmix64(
       opt.seed ^ util::splitmix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
-    MoveSet item;
-    item.pos = w;
-    item.candidates = sample_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
-
-    item.rows.resize(item.candidates.size() * static_cast<size_t>(row_floats));
-    binlog::encode_candidate_rows(encoder, g, static_cast<int>(w.turn_idx), mover, item.candidates,
-                                  item.rows.data());
-    queue->push(std::move(item));
+    const PositionCandidates sel = select_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
+    encode_slices(encoder, g, w, mover, sel, opt.slice_candidates, row_floats, queue);
   }
   queue->producer_done();
 }
 
-// Inference thread: packs queued positions into TensorRT batches (whole
-// positions, up to the batch limit), evaluates, and scatters the teacher's
-// readouts into each position's target block.
+// Inference thread: packs queued slices into TensorRT batches (whole slices, up
+// to the batch limit), evaluates, and scatters the teacher's readouts into each
+// slice's target block.
 void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_size,
-                    util::ProgressMeter* meter, MoveSetQueue* queue, std::vector<MoveSet>* done,
-                    std::mutex* done_mutex) {
-  std::vector<MoveSet> pending;
+                    util::ProgressMeter* meter, SliceQueue* queue,
+                    std::vector<CandidateSlice>* done, std::mutex* done_mutex) {
+  std::vector<CandidateSlice> pending;
   std::vector<float> inputs(static_cast<size_t>(batch_size) * row_floats);
   std::vector<nn::Eval> evals(static_cast<size_t>(batch_size));
 
   auto flush = [&]() {
     if (pending.empty()) return;
     int rows = 0;
-    for (const MoveSet& p : pending) {
+    for (const CandidateSlice& p : pending) {
       std::memcpy(inputs.data() + static_cast<size_t>(rows) * row_floats, p.rows.data(),
                   p.rows.size() * sizeof(float));
       rows += static_cast<int>(p.candidates.size());
     }
     service->evaluate(inputs.data(), rows, evals.data());
     int cursor = 0;
-    for (MoveSet& p : pending) {
+    for (CandidateSlice& p : pending) {
       p.targets.resize(p.candidates.size() * move_set_eval::kTargetFloatsV1);
       for (size_t c = 0; c < p.candidates.size(); ++c) {
         const nn::Eval& e = evals[static_cast<size_t>(cursor++)];
@@ -282,18 +290,19 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
         t[4] = move_set_eval::clamped_sd_std(e.score_diff_std);
       }
       // Free the encoded rows now that they are consumed; `done` accumulates
-      // a whole file's positions and must not hold every encoding.
+      // a whole file's slices and must not hold every encoding.
       p.rows.clear();
       p.rows.shrink_to_fit();
-      meter->add_done();
+      // The meter counts positions, so only a position's last slice advances it.
+      if (p.completes_position()) meter->add_done();
     }
     std::lock_guard<std::mutex> lock(*done_mutex);
-    for (MoveSet& p : pending) done->push_back(std::move(p));
+    for (CandidateSlice& p : pending) done->push_back(std::move(p));
     pending.clear();
   };
 
   int pending_rows = 0;
-  MoveSet item;
+  CandidateSlice item;
   while (queue->pop(&item)) {
     if (pending_rows + static_cast<int>(item.candidates.size()) > batch_size) {
       flush();
@@ -303,6 +312,31 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
     pending.push_back(std::move(item));
   }
   flush();
+}
+
+// Reassemble each position from its slices and write it as one .mset record.
+// `slices` arrive in thread-completion order; sorting restores the file's
+// canonical position order and each position's candidate order.
+void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetWriter* writer) {
+  std::sort(slices.begin(), slices.end(), slice_order);
+  size_t i = 0;
+  while (i < slices.size()) {
+    const CandidateSlice& head = slices[i];
+    std::vector<Move> candidates;
+    std::vector<float> targets;
+    candidates.reserve(head.position_candidates);
+    targets.reserve(static_cast<size_t>(head.position_candidates) * move_set_eval::kTargetFloatsV1);
+    size_t j = i;
+    for (; j < slices.size() && slices[j].pos == head.pos; ++j) {
+      const CandidateSlice& s = slices[j];
+      candidates.insert(candidates.end(), s.candidates.begin(), s.candidates.end());
+      targets.insert(targets.end(), s.targets.begin(), s.targets.end());
+    }
+    assert(candidates.size() == head.position_candidates);
+    writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets,
+                         head.num_legal_moves);
+    i = j;
+  }
 }
 
 // Generate the .mset sidecar for one loaded .slog file.
@@ -333,8 +367,10 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   }
   std::sort(work.begin(), work.end());
 
-  MoveSetQueue queue(/*capacity=*/64);
-  std::vector<MoveSet> done;
+  // A few batches in flight keeps the GPU fed without letting encoded rows
+  // (~80 KB each) accumulate.
+  SliceQueue queue(/*row_budget=*/static_cast<size_t>(4 * batch_size));
+  std::vector<CandidateSlice> done;
   std::mutex done_mutex;
   std::atomic<size_t> next{0};
   const int encoders = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
@@ -349,13 +385,11 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   for (auto& w : workers) w.join();
   gpu.join();
 
-  // Canonical order, independent of thread scheduling.
-  std::sort(done.begin(), done.end(), move_set_order);
+  const uint32_t flags = move_set_eval::target_flags_from_slog(hdr->flags) |
+                         (opt.full_sweep ? move_set_eval::kTargetFlagFullSweep : 0u);
   move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1, model_hash,
-                                     move_set_eval::target_flags_from_slog(hdr->flags));
-  for (const MoveSet& p : done) {
-    writer.add_position(p.pos.game_idx, p.pos.turn_idx, p.candidates, p.targets);
-  }
+                                     flags);
+  write_positions(done, &writer);
   writer.close();
 }
 
@@ -381,16 +415,23 @@ int main(int argc, char** argv) {
       "directory of .slog files; each without a .mset sidecar gets one")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
-      "quota-top", po::value<int>(&opt.quota_top)->default_value(opt.quota_top),
+      "full-sweep", po::bool_switch(&opt.full_sweep),
+      "label every legal candidate (capped by --sweep-cap) instead of the stratified sample; "
+      "the .mset is stamped full-sweep, which makes it evaluation-only")(
+      "sweep-cap", po::value<int>(&opt.sweep_cap)->default_value(opt.sweep_cap),
+      "with --full-sweep, the most plays to label per position, by static-equity rank "
+      "(exchanges and the played move are kept beyond it)")(
+      "quota-top", po::value<int>(&opt.quotas.top)->default_value(opt.quotas.top),
       "candidates from the head of the equity ranking")(
-      "quota-mid", po::value<int>(&opt.quota_mid)->default_value(opt.quota_mid),
+      "quota-mid", po::value<int>(&opt.quotas.mid)->default_value(opt.quotas.mid),
       "candidates sampled from the contention zone (ranks quota-top..mid-rank-limit)")(
-      "quota-tail", po::value<int>(&opt.quota_tail)->default_value(opt.quota_tail),
+      "quota-tail", po::value<int>(&opt.quotas.tail)->default_value(opt.quotas.tail),
       "candidates sampled uniformly from the remaining ranks")(
-      "quota-exchange", po::value<int>(&opt.quota_exchange)->default_value(opt.quota_exchange),
-      "exchange candidates")("mid-rank-limit",
-                             po::value<int>(&opt.mid_rank_limit)->default_value(opt.mid_rank_limit),
-                             "exclusive rank bound of the contention zone")(
+      "quota-exchange", po::value<int>(&opt.quotas.exchange)->default_value(opt.quotas.exchange),
+      "exchange candidates")(
+      "mid-rank-limit",
+      po::value<int>(&opt.quotas.mid_rank_limit)->default_value(opt.quotas.mid_rank_limit),
+      "exclusive rank bound of the contention zone")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (0 = every eligible turn)")(
@@ -411,6 +452,7 @@ int main(int argc, char** argv) {
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
+    opt.slice_candidates = std::min(kSliceCandidates, params.max_batch_size);
 
     std::vector<fs::path> slogs;
     if (!opt.slog_files.empty()) {
@@ -461,9 +503,11 @@ int main(int argc, char** argv) {
       pending.emplace_back(slog, std::move(buf));
     }
     if (pending.empty()) return 0;
+    const std::string selection =
+      opt.full_sweep ? "full sweep (cap " + std::to_string(opt.sweep_cap) + ")" : "stratified";
     std::cerr << "move set eval targets: " << pending.size() << " file(s), " << total_positions
-              << " positions; teacher " << model_hash.substr(0, 12) << ", " << opt.threads
-              << " encoder threads\n";
+              << " positions, " << selection << "; teacher " << model_hash.substr(0, 12) << ", "
+              << opt.threads << " encoder threads\n";
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const auto& [slog, buf] : pending) {

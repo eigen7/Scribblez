@@ -52,6 +52,7 @@ add_library(scribblez_core STATIC
   src/belief/rack_inference.cpp
   src/selfplay/sim_observation_log.cpp
   src/training/move_set_eval_target_log.cpp
+  src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
   src/agent/sim_agent.cpp
   src/agent/player_factory.cpp

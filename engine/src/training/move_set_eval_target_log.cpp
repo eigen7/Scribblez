@@ -44,13 +44,14 @@ TargetWriter::~TargetWriter() {
 
 void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
-                                const std::vector<float>& targets) {
+                                const std::vector<float>& targets, uint32_t num_legal_moves) {
   assert(!closed_);
   assert(targets.size() == candidates.size() * record_floats_);
   TargetPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
   ph.num_candidates = static_cast<uint32_t>(candidates.size());
+  ph.num_legal_moves = num_legal_moves;
   append_bytes(&buffer_, &ph, sizeof(ph));
   for (size_t c = 0; c < candidates.size(); ++c) {
     append_bytes(&buffer_, &candidates[c], sizeof(Move));

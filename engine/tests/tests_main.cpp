@@ -29,6 +29,7 @@
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/move_set_encoder.h"
+#include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "training/training_task.h"
@@ -4148,17 +4149,22 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   {
     move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, "abc123");
     w.add_position(3, 11, {m1, m2}, targets);
+    // A swept position records the legal-move count its candidates were drawn
+    // from, so a cap-truncated sweep is visible as a shortfall.
+    w.add_position(3, 12, {m1, m2}, targets, /*num_legal_moves=*/9184);
     w.close();
   }
 
   move_set_eval::TargetReader r(path);
   ASSERT_EQ(r.record_floats(), move_set_eval::kTargetFloatsV1);
   ASSERT_EQ(r.model_hash(), "abc123");
-  ASSERT_EQ(r.num_positions(), 1);
+  ASSERT_EQ(r.num_positions(), 2);
   const move_set_eval::TargetReader::Position p0 = r.position(0);
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);
   ASSERT_EQ(p0.header->num_candidates, 2);
+  ASSERT_EQ(p0.header->num_legal_moves, 0u);  // stratified: not recorded
+  ASSERT_EQ(r.position(1).header->num_legal_moves, 9184u);
   ASSERT_EQ(r.move_at(p0, 0), m1);
   ASSERT_EQ(r.move_at(p0, 1), m2);
   for (int c = 0; c < 2; ++c) {
@@ -4177,6 +4183,62 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   ASSERT_THROW(move_set_eval::TargetReader r2(path), std::runtime_error);
 
   fs::remove_all(tmp);
+}
+
+// `count` distinct plays, standing in for a position's static-equity ranking.
+static std::vector<Move> ranked_plays(int count) {
+  std::vector<Move> out;
+  for (int i = 0; i < count; ++i) {
+    out.push_back(make_play_full(i % 15, 0, /*horizontal=*/true, 0b1,
+                                 static_cast<uint16_t>(1000 - i),
+                                 {Glyph::of(Tile::from_char('A'))}));
+  }
+  return out;
+}
+
+static Move exchange_of(char c) {
+  TileCounts tiles;
+  tiles.add(Tile::from_char(c));
+  return Move::exchange(tiles);
+}
+
+// The full sweep's selection rule: capped by static-equity rank, but never at
+// the cost of an exchange candidate, the played move, or the rank order that
+// makes the stored order an exact static-equity ranking.
+TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
+  std::vector<Move> ranked = ranked_plays(10);
+  const Move buried_exchange = exchange_of('Q');
+  const Move buried_play = ranked[8];
+  ranked.insert(ranked.begin() + 6, exchange_of('A'));  // inside the cap
+  ranked.push_back(buried_exchange);                    // beyond it
+
+  const std::vector<Move> swept =
+    move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/4);
+
+  // Everything kept, in `ranked`'s order: the head under the cap, then the two
+  // exchanges and the played move from beyond it.
+  ASSERT_EQ(swept.size(), 7u);
+  for (int i = 0; i < 4; ++i) EXPECT_EQ(swept[static_cast<size_t>(i)], ranked[i]);
+  EXPECT_EQ(swept[4], ranked[6]);  // the in-cap exchange, past the cap by rank
+  EXPECT_EQ(swept[5], buried_play);
+  EXPECT_EQ(swept[6], buried_exchange);
+
+  // Uncapped, the sweep is the whole ranking verbatim.
+  const std::vector<Move> whole =
+    move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/1000);
+  EXPECT_EQ(whole, ranked);
+}
+
+// A played move the generator never enumerates (a PASS chosen while plays were
+// legal) has no equity rank, so it is kept last rather than dropped.
+TEST(MoveSetEvalCandidates, FullSweepKeepsAnUnrankedPlayedMove) {
+  const std::vector<Move> ranked = ranked_plays(3);
+  const std::vector<Move> swept =
+    move_set_eval::full_sweep_candidates(ranked, Move::pass(), /*cap=*/2);
+  ASSERT_EQ(swept.size(), 3u);
+  EXPECT_EQ(swept[0], ranked[0]);
+  EXPECT_EQ(swept[1], ranked[1]);
+  EXPECT_EQ(swept[2], Move::pass());
 }
 
 // The stored std must be finite even when FP16 teacher inference overflows the
