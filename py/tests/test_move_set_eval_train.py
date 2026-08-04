@@ -4,6 +4,7 @@ tiny generated .mset/.slog corpus (GPU, since the target generator builds a
 TensorRT engine).
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,8 +14,11 @@ import torch
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 
-TARGET_GENERATOR = Path("/workspace/repo/target/engine/move_set_eval_target_generator")
-SLOG_WRITER = Path("/workspace/repo/target/engine/test_slog_writer")
+# This checkout's own binaries, so a worktree's tests exercise the code built
+# beside them rather than the primary checkout's (as in test_move_set_eval_targets.py).
+_ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+TARGET_GENERATOR = _ENGINE_DIR / "move_set_eval_target_generator"
+SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 QUOTAS = {"top": 3, "mid": 2, "tail": 2, "exchange": 1}
@@ -101,6 +105,66 @@ def corpus_dir(tmp_path_factory) -> Path:
     assert result.returncode == 0, f"target generator failed: {result.stderr}"
     assert sorted(d.glob("*.mset")), "no .mset produced"
     return d
+
+
+@pytest.fixture(scope="module")
+def sweep_dir(corpus_dir, tmp_path_factory) -> Path:
+    """The same games labeled in the generator's full-sweep mode: the held-out
+    evaluation slice, whose positions carry hundreds of candidates each."""
+    d = tmp_path_factory.mktemp("move_set_eval_sweep")
+    for slog in sorted(corpus_dir.glob("*.slog")):
+        shutil.copy(slog, d / slog.name)
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={d}",
+            f"--model={corpus_dir / 'teacher.onnx'}",
+            "--fast-build",
+            "--full-sweep",
+            "--sweep-cap=400",
+            "--positions-per-game=1",
+            "--threads=4",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"full-sweep generator failed: {result.stderr}"
+    return d
+
+
+def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
+    """The A3 gate path end to end: a swept holdout is far larger per position
+    than a stratified one, so this exercises the candidate-budget batching and
+    the metrics over full legal sets."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.eval import evaluate
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    ds = MsetDataset(sweep_dir)
+    assert ds.full_sweep
+    assert ds.num_candidates / ds.num_positions > 20  # nothing like a 15-candidate sample
+    coverage, _ = ds.sweep_coverage
+    assert 0.0 < coverage <= 1.0
+
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        spatial_planes=ds.spatial_planes,
+        scalar_size=ds.scalar_size,
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    metrics = evaluate(
+        model, ds, torch.device("cpu"), positions_per_batch=64, max_candidates_per_batch=256
+    )
+    assert metrics["positions"] == ds.num_positions
+    for k in (1, 3, 5):
+        assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
+        assert metrics[f"regret@{k}"] >= 0.0
+    # The baseline over a sweep is the exact static-equity ranking, which is a
+    # real move ordering rather than a shuffle: it must beat a coin flip.
+    assert metrics["spearman_baseline"] > 0.0
 
 
 def test_dataset_batches_flatten_candidates(corpus_dir):

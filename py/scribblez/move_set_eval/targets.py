@@ -1,7 +1,7 @@
 """Pure-numpy reader for .mset move set evaluation model distillation-target
 sidecars.
 
-The binary layout is owned by engine/include/scribblez/move_set_eval_target_log.h (one
+The binary layout is owned by engine/include/training/move_set_eval_target_log.h (one
 TargetFileHeader, then per position a TargetPositionHeader followed by
 its (Move, targets) records); the dtypes below mirror those packed structs and
 are guarded by itemsize checks so a C++ layout change fails loudly here rather
@@ -11,6 +11,7 @@ than misparsing. The record's target width comes from the header
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,7 +97,7 @@ def read_mset_flags(path: str | Path) -> int:
     return int(hdr["flags"])
 
 
-def partition_full_sweep(paths) -> tuple[list[Path], list[Path]]:
+def partition_full_sweep(paths: Iterable[str | Path]) -> tuple[list[Path], list[Path]]:
     """(stratified, full_sweep) partition of .mset paths by header flag: the
     training pairs and the evaluation-only swept pairs, which a corpus holds
     side by side in one store."""
