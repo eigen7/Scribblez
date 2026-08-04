@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { getJSON } from '../../lib/api';
 import BokehFigure from '../BokehFigure';
-import { relTime } from './MasterApp';
+import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
 
-// The generic worker Stats tab: per-role summary tables and figures, driven
-// entirely by the stats schema the API reports (each role's unit noun and
-// timing phases), so any workload role that publishes stats renders here
-// without workload-specific code.
+// The generic worker Stats tab, driven entirely by the stats schema the API
+// reports (each role's unit noun and timing phases), so any workload role
+// that publishes stats renders here without workload-specific code. Per
+// role: a row of fleet-aggregate tiles, the rate and cycle-breakdown
+// figures side by side, and a compact per-worker detail table.
 
 type RoleStats = { title: string; unit: string; phases: Record<string, string> };
 type WorkerRow = {
@@ -17,8 +18,10 @@ type WorkerRow = {
 };
 type StatsPayload = { roles: Record<string, RoleStats>; workers: WorkerRow[]; updated_at: number };
 
-const fmt = (v: number | null | undefined, digits = 1, suffix = '') =>
-  v == null ? '—' : `${v.toFixed(digits)}${suffix}`;
+const fmt = (v: number | null | undefined, digits = 1) => (v == null ? '—' : v.toFixed(digits));
+
+const cycleSeconds = (w: WorkerRow) => Object.values(w.phases).reduce((a, b) => a + b, 0);
+const workerStale = (w: WorkerRow) => isStale(w.updated_at, cycleSeconds(w));
 
 function StatsFigure({ workload, tag, role, name, version }: {
   workload: string; tag: string; role: string; name: string; version: number;
@@ -32,36 +35,94 @@ function StatsFigure({ workload, tag, role, name, version }: {
       .catch(() => setItem(null));
   }, [workload, tag, role, name, version]);
   if (!item) return null;
-  return <div style={{ marginTop: 12 }}><BokehFigure item={item} /></div>;
+  return <div className="card"><BokehFigure item={item} /></div>;
 }
 
-// Column headers + sort keys for one role's table, derived from its phase schema.
-function columns(stats: RoleStats): [string, (w: WorkerRow) => string | number | null][] {
+// Fleet aggregates for one role's tile row. Stale workers are excluded from
+// the rates and means so a dead worker's last recorded window doesn't keep
+// inflating the fleet numbers.
+function aggregates(workers: WorkerRow[]) {
+  const fresh = workers.filter((w) => !workerStale(w));
+  const rates = fresh.map((w) => w.units_per_hour).filter((v): v is number => v != null);
+  const uploads = fresh.map((w) => w.upload_mbps).filter((v): v is number => v != null);
+  return {
+    fresh,
+    staleCount: workers.length - fresh.length,
+    rate: rates.length ? rates.reduce((a, b) => a + b, 0) : null,
+    total: workers.reduce((a, w) => a + w.units_total, 0),
+    cycle: fresh.length
+      ? fresh.reduce((a, w) => a + cycleSeconds(w), 0) / fresh.length
+      : null,
+    upload: uploads.length ? uploads.reduce((a, b) => a + b, 0) : null,
+  };
+}
+
+// "self-play 1.0 · deliver 0.1": the cycle tile's per-phase mean split.
+function phaseSplit(stats: RoleStats, fresh: WorkerRow[]): string {
+  if (fresh.length === 0) return '';
+  return Object.entries(stats.phases)
+    .map(([key, label]) => {
+      const mean = fresh.reduce((a, w) => a + (w.phases[key] ?? 0), 0) / fresh.length;
+      return `${label} ${fmt(mean)}`;
+    })
+    .join(' · ');
+}
+
+// One column of the per-worker table: header, sort key, numeric alignment,
+// and an optional display renderer (the sort key formatted, by default).
+type Col = {
+  header: string;
+  key: (w: WorkerRow) => string | number | null;
+  numeric?: boolean;
+  render?: (w: WorkerRow) => ReactNode;
+};
+
+const dim = (s: string) => <span className="dim">{s}</span>;
+
+function defaultRender(col: Col, w: WorkerRow): ReactNode {
+  const v = col.key(w);
+  if (v == null) return dim('—');
+  return typeof v === 'number' && !Number.isInteger(v) ? fmt(v) : String(v);
+}
+
+function archLabel(w: WorkerRow): ReactNode {
+  if (w.host_arch == null) return dim('—');
+  const runs = w.bundle_arch && w.bundle_arch !== w.host_arch ? ` (runs ${w.bundle_arch})` : '';
+  return `${w.host_arch}${runs}`;
+}
+
+function columns(stats: RoleStats): Col[] {
   return [
-    ['worker', (w) => w.worker_id],
-    ['kind', (w) => w.kind],
-    ['threads', (w) => w.threads],
-    ['arch', (w) => w.host_arch],
-    [stats.unit, (w) => w.units_total],
-    [`${stats.unit}/hr`, (w) => w.units_per_hour],
-    ...Object.entries(stats.phases).map(
-      ([key, label]): [string, (w: WorkerRow) => number | null] => [
-        `${label} s`, (w) => w.phases[key] ?? null,
-      ],
-    ),
-    ['upload MB/s', (w) => w.upload_mbps],
-    ['updated', (w) => w.updated_at],
+    { header: 'worker', key: (w) => w.worker_id },
+    { header: 'kind', key: (w) => w.kind },
+    { header: 'threads', key: (w) => w.threads, numeric: true },
+    { header: 'arch', key: (w) => w.host_arch, render: archLabel },
+    {
+      header: stats.unit, key: (w) => w.units_total, numeric: true,
+      render: (w) => fmtCompact(w.units_total),
+    },
+    {
+      // A stale worker's rate is a reading of a window that ended long ago,
+      // so it shows as absent rather than as a misleading number.
+      header: `${stats.unit}/hr`, key: (w) => w.units_per_hour, numeric: true,
+      render: (w) => (workerStale(w) ? dim('—') : fmtCompact(w.units_per_hour)),
+    },
+    ...Object.entries(stats.phases).map(([key, label]): Col => ({
+      header: `${label} s`, key: (w) => w.phases[key] ?? null, numeric: true,
+    })),
+    { header: 'upload MB/s', key: (w) => w.upload_mbps, numeric: true },
+    {
+      header: 'updated', key: (w) => w.updated_at,
+      render: (w) => <HealthBadge updatedAt={w.updated_at} stale={workerStale(w)} />,
+    },
   ];
 }
 
-function RoleSection({ workload, tag, role, stats, workers, version }: {
-  workload: string; tag: string; role: string; stats: RoleStats;
-  workers: WorkerRow[]; version: number;
-}) {
+function WorkerTable({ stats, workers }: { stats: RoleStats; workers: WorkerRow[] }) {
   const [sortCol, setSortCol] = useState(0);
   const [sortAsc, setSortAsc] = useState(true);
   const cols = columns(stats);
-  const key = cols[sortCol]?.[1] ?? cols[0][1];
+  const key = cols[sortCol]?.key ?? cols[0].key;
   const sorted = [...workers].sort((a, b) => {
     const [ka, kb] = [key(a), key(b)];
     if (ka == null || kb == null) return (ka == null ? 1 : 0) - (kb == null ? 1 : 0); // nulls last
@@ -73,48 +134,81 @@ function RoleSection({ workload, tag, role, stats, workers, version }: {
     else { setSortCol(i); setSortAsc(true); }
   };
 
-  const cell = (w: WorkerRow, i: number): string => {
-    const v = cols[i][1](w);
-    if (v == null) return '—';
-    if (cols[i][0] === 'updated') return relTime(Number(v));
-    if (cols[i][0] === 'arch') {
-      return `${w.host_arch}${w.bundle_arch && w.bundle_arch !== w.host_arch ? ` (runs ${w.bundle_arch})` : ''}`;
-    }
-    return typeof v === 'number' && !Number.isInteger(v) ? fmt(v) : String(v);
-  };
-
   return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <b style={{ fontSize: 15 }}>{stats.title}s</b>
-      <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%', marginTop: 8 }}>
+    <div className="card" style={{ overflowX: 'auto' }}>
+      <table className="data-table">
         <thead>
-          <tr style={{ textAlign: 'left', color: '#445063' }}>
-            {cols.map(([h], i) => (
+          <tr>
+            {cols.map((c, i) => (
               <th
-                key={h}
+                key={c.header}
+                className={c.numeric ? 'num' : undefined}
                 onClick={() => clickHeader(i)}
-                style={{ padding: '4px 12px 4px 0', cursor: 'pointer', userSelect: 'none' }}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
               >
-                {h}{i === sortCol ? (sortAsc ? ' ▲' : ' ▼') : ''}
+                {c.header}{i === sortCol ? (sortAsc ? ' ▲' : ' ▼') : ''}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {sorted.map((w) => (
-            <tr key={w.worker_id} style={{ borderTop: '1px solid #e2e8ee' }}>
-              {cols.map(([h], i) => (
-                <td key={h} style={{ padding: '5px 12px 5px 0', fontWeight: i === 0 ? 600 : 400 }}>
-                  {cell(w, i)}
+            <tr key={w.worker_id}>
+              {cols.map((c) => (
+                <td key={c.header} className={c.numeric ? 'num' : undefined}>
+                  {c.render ? c.render(w) : defaultRender(c, w)}
                 </td>
               ))}
             </tr>
           ))}
         </tbody>
       </table>
-      <StatsFigure workload={workload} tag={tag} role={role} name="timeline" version={version} />
-      <StatsFigure workload={workload} tag={tag} role={role} name="throughput" version={version} />
-      <StatsFigure workload={workload} tag={tag} role={role} name="cycle_breakdown" version={version} />
+    </div>
+  );
+}
+
+function RoleSection({ workload, tag, role, stats, workers, version }: {
+  workload: string; tag: string; role: string; stats: RoleStats;
+  workers: WorkerRow[]; version: number;
+}) {
+  const agg = aggregates(workers);
+  return (
+    <div className="role-section">
+      <div className="role-head">
+        <b>{stats.title}s</b>
+        <span>{workers.length} worker{workers.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="tiles">
+        <Tile
+          label={`${stats.unit} / hr`}
+          value={fmtCompact(agg.rate)}
+          sub="recent window"
+        />
+        <Tile label={`${stats.unit} total`} value={fmtCompact(agg.total)} />
+        <Tile
+          label="cycle time"
+          value={fmt(agg.cycle)}
+          unit={agg.cycle == null ? undefined : 's'}
+          sub={phaseSplit(stats, agg.fresh)}
+        />
+        {agg.upload != null && <Tile label="upload" value={fmt(agg.upload)} unit="MB/s" />}
+        <Tile
+          label="workers"
+          value={String(workers.length)}
+          sub={agg.staleCount > 0 ? (
+            <span className="pill-stale">{agg.staleCount} stale</span>
+          ) : (
+            <span className="health-ok"><span className="dot-ok" /> all fresh</span>
+          )}
+        />
+      </div>
+      <div className="charts-grid">
+        <StatsFigure workload={workload} tag={tag} role={role} name="rate" version={version} />
+        <StatsFigure
+          workload={workload} tag={tag} role={role} name="cycle_breakdown" version={version}
+        />
+      </div>
+      <WorkerTable stats={stats} workers={workers} />
     </div>
   );
 }
