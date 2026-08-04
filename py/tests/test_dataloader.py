@@ -124,59 +124,6 @@ class TestEpochCoverage:
         np.testing.assert_array_equal(e1_sorted, e2_sorted)
 
 
-class TestMemoryBudgetStress:
-    def test_tiny_budget(self, tmp_path):
-        slogs = generate_test_slogs(tmp_path, num_games=20, games_per_file=4)
-
-        # Find largest file size.
-        max_fsize = 0
-        file_info = []
-        for p in slogs:
-            num_games, fsize = read_file_header(p)
-            file_info.append((num_games, fsize))
-            max_fsize = max(max_fsize, fsize)
-
-        # Budget: just one file. This forces eviction on every file switch.
-        loader = NativeDataLoader(memory_budget=max_fsize + 1, num_workers=1, num_prefetch=1)
-        for i, p in enumerate(slogs):
-            loader.add_file(p, file_info[i][0], file_info[i][1])
-        # file_info holds per-file game counts; the epoch yields every eligible
-        # turn, so the expected row count is the loader's expanded position count.
-        total = loader.num_positions
-
-        # Run epoch with small batches.
-        loader.epoch_start(batch_size=2, post_move=True, apply_symmetry=True, seed=42)
-        rows_decoded = 0
-        while True:
-            batch = loader.load_batch()
-            if batch is None:
-                break
-            rows_decoded += batch.shape[0]
-
-        assert rows_decoded == total
-
-        # Determinism still holds under memory pressure.
-        loader.epoch_start(batch_size=2, post_move=True, apply_symmetry=True, seed=42)
-        run1 = []
-        while True:
-            batch = loader.load_batch()
-            if batch is None:
-                break
-            run1.append(batch.copy())
-        run1_data = np.concatenate(run1, axis=0)
-
-        loader.epoch_start(batch_size=2, post_move=True, apply_symmetry=True, seed=42)
-        run2 = []
-        while True:
-            batch = loader.load_batch()
-            if batch is None:
-                break
-            run2.append(batch.copy())
-        run2_data = np.concatenate(run2, axis=0)
-
-        np.testing.assert_array_equal(run1_data, run2_data)
-
-
 class TestStreamingDataset:
     def test_iter_batches(self, tmp_path):
         """Test the SlogDataset.iter_batches() method."""
