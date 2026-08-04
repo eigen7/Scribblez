@@ -3,24 +3,25 @@
 Built from the per-worker stats records (stats/<worker_id>.json under the
 tag's root; see scribblez/workloads/worker.py) and shaped by the role's
 StatsSpec (unit noun + timing phases), so any workload role that publishes
-stats gets the same summary table and figures. Each builder takes the parsed
-records plus the StatsSpec and returns a Bokeh model or None when there is
-nothing to plot; the API serializes with json_item for the React BokehFigure
-embed.
+stats gets the same summary tiles/table and figures. Each builder takes the
+parsed records plus the StatsSpec and returns a Bokeh model or None when
+there is nothing to plot; the API serializes with json_item for the React
+BokehFigure embed.
 """
 
 import json
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 from bokeh.models import ColumnDataSource, HoverTool
-from bokeh.palettes import Category10
+from bokeh.palettes import Blues, Category10
 from bokeh.plotting import figure
 
 from scribblez.workloads.base import StatsSpec
 
-# Worker throughput/breakdown figures average over this many trailing cycles,
-# so they track current behavior rather than the whole run.
+# Worker summary rates and phase means average over this many trailing
+# cycles, so they track current behavior rather than the whole run.
 WINDOW = 20
 
 
@@ -64,88 +65,90 @@ def worker_summary(record: dict, stats: StatsSpec) -> dict:
     }
 
 
-def _workers_figure(title: str, workers: list[str], y_label: str):
+def _rate_points(samples: list[dict]) -> tuple[list[datetime], list[float]]:
+    """Units/hour between consecutive samples, stamped at each interval's end."""
+    steps = [(a, b) for a, b in pairwise(samples) if b["t"] > a["t"]]
+    xs = [datetime.fromtimestamp(b["t"], tz=UTC) for _, b in steps]
+    ys = [(b["units_total"] - a["units_total"]) / (b["t"] - a["t"]) * 3600 for a, b in steps]
+    return xs, ys
+
+
+def rate(records: list[dict], stats: StatsSpec):
+    """Units/hour per worker over its recent samples: the slope the old
+    cumulative timeline made the reader eyeball, plotted directly, so
+    throughput dips and stalls are visible. A worker that stops reporting
+    reads as a line that simply ends."""
     fig = figure(
-        title=title,
-        x_range=workers,
-        height=300,
+        title=f"{stats.unit.capitalize()} per hour (recent window)",
+        x_axis_type="datetime",
+        height=280,
         sizing_mode="stretch_width",
-        toolbar_location=None,
     )
-    fig.yaxis.axis_label = y_label
-    fig.xaxis.major_label_orientation = 0.6
+    fig.yaxis.axis_label = f"{stats.unit} / hour"
     fig.y_range.start = 0
-    return fig
-
-
-def throughput(records: list[dict], stats: StatsSpec):
-    """Units/hour per worker over its recent cycles."""
-    rows = [worker_summary(r, stats) for r in records]
-    rows = [r for r in rows if r["units_per_hour"] is not None]
-    if not rows:
+    palette = Category10[10]
+    plotted = 0
+    for i, record in enumerate(records):
+        xs, ys = _rate_points(record.get("recent", []))
+        if not xs:
+            continue
+        fig.line(xs, ys, color=palette[i % 10], legend_label=record["worker_id"], line_width=2)
+        plotted += 1
+    if plotted == 0:
         return None
-    workers = [r["worker_id"] for r in rows]
-    fig = _workers_figure("Recent throughput", workers, f"{stats.unit} / hour")
-    fig.vbar(x=workers, top=[r["units_per_hour"] for r in rows], width=0.7, color="#1f77b4")
+    fig.legend.location = "top_left"
     return fig
+
+
+def _phase_colors(n: int) -> list[str]:
+    """A dark-to-light single-hue ramp: phases are ordered stages of one
+    cycle, not independent series. Drawn from the (n+1)-step palette so the
+    near-white lightest step is never used."""
+    return list(Blues[max(3, n + 1)])[:n]
 
 
 def cycle_breakdown(records: list[dict], stats: StatsSpec):
-    """Mean seconds per cycle phase, stacked per worker: where each worker's
-    wall time goes. A dominant upload share means the worker is network-bound
-    rather than CPU-bound."""
+    """Mean seconds per cycle phase, stacked horizontally with one row per
+    worker: where each worker's wall time goes, on a common seconds scale
+    that stays readable as the fleet grows. A dominant upload share means
+    the worker is network-bound rather than CPU-bound."""
     rows = [worker_summary(r, stats) for r in records if _recent(r)]
     if not rows:
         return None
     phases = list(stats.phases)
+    workers = [r["worker_id"] for r in rows]
     source = ColumnDataSource(
         {
-            "worker": [r["worker_id"] for r in rows],
+            "worker": workers,
             **{p: [r["phases"][p] for r in rows] for p in phases},
         }
     )
-    fig = _workers_figure("Cycle time breakdown", [r["worker_id"] for r in rows], "seconds / cycle")
-    renderers = fig.vbar_stack(
+    fig = figure(
+        title="Cycle time by phase",
+        y_range=list(reversed(workers)),  # records order, top to bottom
+        height=110 + 34 * len(workers),
+        sizing_mode="stretch_width",
+        toolbar_location=None,
+    )
+    fig.xaxis.axis_label = "seconds / cycle"
+    fig.x_range.start = 0
+    renderers = fig.hbar_stack(
         phases,
-        x="worker",
-        width=0.7,
+        y="worker",
+        height=0.55,
         source=source,
-        color=Category10[max(3, len(phases))][: len(phases)],
+        color=_phase_colors(len(phases)),
         legend_label=[stats.phases[p] for p in phases],
     )
     fig.add_tools(
         HoverTool(renderers=renderers, tooltips=[("worker", "@worker")]
                   + [(stats.phases[p], f"@{p}{{0.0}} s") for p in phases])
     )  # fmt: skip
-    fig.legend.location = "top_left"
-    return fig
-
-
-def timeline(records: list[dict], stats: StatsSpec):
-    """Cumulative units produced per worker, from each record's recent-sample
-    window (older history ages out of the window)."""
-    lines = [(r["worker_id"], r.get("recent", [])) for r in records]
-    lines = [(w, s) for w, s in lines if len(s) > 1]
-    if not lines:
-        return None
-    fig = figure(
-        title=f"{stats.unit.capitalize()} over time (recent window)",
-        x_axis_type="datetime",
-        height=300,
-        sizing_mode="stretch_width",
-    )
-    fig.yaxis.axis_label = f"cumulative {stats.unit}"
-    palette = Category10[10]
-    for i, (worker, samples) in enumerate(lines):
-        xs = [datetime.fromtimestamp(s["t"], tz=UTC) for s in samples]
-        ys = [s["units_total"] for s in samples]
-        fig.line(xs, ys, color=palette[i % 10], legend_label=worker, line_width=2)
-    fig.legend.location = "top_left"
+    fig.legend.location = "top_right"
     return fig
 
 
 FIGURES = {
-    "throughput": throughput,
+    "rate": rate,
     "cycle_breakdown": cycle_breakdown,
-    "timeline": timeline,
 }
