@@ -287,6 +287,14 @@ Then the spine proper:
   migrates from the kill-test's position-evaluation harness onto the move set
   evaluation model, enabling the two-round re-rank. Gated on E3.
 
+  Implementation note for the trajectory generator: the value-labeled subset
+  must always include the proposer's simmed candidates, the way the mset
+  sampler always includes the played move. The trajectory proposer follows
+  the current model, so a conditionally-strong but equity-buried candidate
+  gains evidence coverage and proves-best labels as generations advance —
+  but its dense value labels stay at the static tail stratum's rate unless
+  the value labeling follows the proposer too.
+
 ## Track B: rack inference — parked
 
 Face-up leaves removes the need to infer anything, so this track is dormant
