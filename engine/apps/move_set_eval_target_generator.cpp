@@ -177,29 +177,18 @@ void SliceQueue::producer_done() {
   can_pop_.notify_all();
 }
 
-// One position's selected candidates, plus the legal-move count the .mset
-// records for a sweep (0 for the stratified sample, whose candidate count says
-// nothing about the position's size).
-struct PositionCandidates {
-  std::vector<Move> candidates;
-  uint32_t num_legal_moves;
-};
-
 // The run's selection over `ranked` -- every legal play and exchange,
 // best-equity first -- for the position whose game actually played `played`.
-PositionCandidates select_candidates(const std::vector<Move>& ranked, const Move& played,
-                                     const Options& opt, std::mt19937_64& rng) {
-  if (opt.full_sweep) {
-    return {move_set_eval::full_sweep_candidates(ranked, played, opt.sweep_cap),
-            static_cast<uint32_t>(ranked.size())};
-  }
-  return {move_set_eval::stratified_candidates(ranked, played, opt.quotas, rng), 0u};
+move_set_eval::Selection select_candidates(const std::vector<Move>& ranked, const Move& played,
+                                           const Options& opt, std::mt19937_64& rng) {
+  if (opt.full_sweep) return move_set_eval::full_sweep_candidates(ranked, played, opt.sweep_cap);
+  return move_set_eval::stratified_candidates(ranked, played, opt.quotas, rng);
 }
 
 // Encode `sel`'s candidates for the position `encoder` is replayed to, handing
 // the inference thread one slice at a time.
 void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
-                   const GamePositionIndex& w, int mover, const PositionCandidates& sel,
+                   const GamePositionIndex& w, int mover, const move_set_eval::Selection& sel,
                    int slice_candidates, int row_floats, SliceQueue* queue) {
   const size_t total = sel.candidates.size();
   for (size_t first = 0; first < total; first += static_cast<size_t>(slice_candidates)) {
@@ -252,7 +241,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
     std::mt19937_64 rng(util::splitmix64(
       opt.seed ^ util::splitmix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
-    const PositionCandidates sel = select_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
+    const move_set_eval::Selection sel =
+      select_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
     encode_slices(encoder, g, w, mover, sel, opt.slice_candidates, row_floats, queue);
   }
   queue->producer_done();

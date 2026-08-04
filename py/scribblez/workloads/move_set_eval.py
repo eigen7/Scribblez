@@ -20,6 +20,13 @@ in docs/cloud_compute.md -- a CUDA worker image plus a way to ship the teacher
 to pods). The generator binary already rides in the worker bundle so that
 enablement is config, not code, on this side.
 
+Every `sweep_every`-th pair is labeled in the generator's full-sweep mode
+instead -- every legal candidate of a few positions per game, capped -- and is
+the held-out slice the A3 gate metrics are read on, the stratified ~15-candidate
+sample being blind to the tail moves the filter exists to catch. Which pairs
+those are is a hash of the .slog stem (sweep_pair), so an interrupted cycle
+resumes on the same decision, and the .mset header flag carries it downstream.
+
 The singleton train role (scribblez/move_set_eval/trainer.py) distills the
 student over the tag's pair store: repeated epochs over a deterministic
 file-level split, per-epoch recall/rank metrics against the held-out pairs on
@@ -30,9 +37,11 @@ the dashboard's Loss tab. It is the lean fixed-corpus loop (roadmap A3 slice
 import subprocess
 import sys
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribblez.move_set_eval.targets import partition_full_sweep
 from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
@@ -69,6 +78,26 @@ class MoveSetEvalParams:
     quota_tail: int = param(4, "candidates sampled uniformly from the remaining ranks")
     quota_exchange: int = param(2, "exchange candidates")
     mid_rank_limit: int = param(32, "exclusive rank bound of the contention zone")
+    # The full-sweep held-out slice: the A3 gate metrics (top-K recall,
+    # teacher-value regret) have to see every candidate, which the stratified
+    # sample above structurally cannot show them.
+    sweep_every: int = param(
+        20,
+        "label every Nth pair with a full sweep of each position's legal candidates instead "
+        "of the stratified sample; such a pair is held out, never trained on (0 = none, "
+        "which leaves the trainer's holdout_every fallback to reserve stratified pairs)",
+    )
+    sweep_positions_per_game: int = param(
+        2,
+        "eligible turns swept per game in a full-sweep pair; a swept position costs "
+        "~1000x a stratified one to label, so this is small on purpose",
+    )
+    sweep_candidate_cap: int = param(
+        1500,
+        "plays labeled per swept position, by static-equity rank (exchanges and the played "
+        "move are kept beyond it); bounds the 20k-move two-blank racks, whose surplus is "
+        "redundant blank designations, and leaves normal positions complete",
+    )
     # Self-play condition (mirrors position_eval's generation params).
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
@@ -89,8 +118,10 @@ class MoveSetEvalParams:
     )
     holdout_every: int = param(
         20,
-        "hold out every Nth pair (file-level, by sorted stem) for the recall/rank metrics; "
-        "0 evaluates on the training pairs (a smoke check, not a real held-out score)",
+        "fallback holdout for a corpus with no full-sweep pairs: hold out every Nth pair "
+        "(file-level, by sorted stem) for the recall/rank metrics; 0 evaluates on the "
+        "training pairs (a smoke check, not a real held-out score). Ignored once sweep_every "
+        "produces swept pairs, which are the holdout",
     )
     batch_positions: int = param(64, "positions per training batch")
     lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
@@ -115,17 +146,45 @@ class CycleResult:
     mset_seconds: float  # target-generator wall time
 
 
-def run_target_generator(pending: list[Path], params: MoveSetEvalParams, threads: int) -> int:
+def sweep_pair(stem: str, sweep_every: int) -> bool:
+    """Whether the pair with this .slog stem is labeled as a full sweep.
+
+    A hash of the stem rather than a counter: the generator resumes by
+    reprocessing every .slog still missing its .mset, so the decision has to be
+    recoverable from the file alone, and must not depend on how many files a
+    worker happens to see in one cycle.
+    """
+    if sweep_every <= 0:
+        return False
+    return zlib.crc32(stem.encode()) % sweep_every == 0
+
+
+def run_target_generator(
+    pending: list[Path], params: MoveSetEvalParams, threads: int, full_sweep: bool = False
+) -> int:
+    """Label `pending` .slog files with the tag's teacher, in one of the
+    generator's two candidate-selection modes. The modes take disjoint
+    parameters, so a run is one or the other."""
+    if full_sweep:
+        selection = [
+            "--full-sweep",
+            f"--sweep-cap={params.sweep_candidate_cap}",
+            f"--positions-per-game={params.sweep_positions_per_game}",
+        ]
+    else:
+        selection = [
+            f"--quota-top={params.quota_top}",
+            f"--quota-mid={params.quota_mid}",
+            f"--quota-tail={params.quota_tail}",
+            f"--quota-exchange={params.quota_exchange}",
+            f"--mid-rank-limit={params.mid_rank_limit}",
+            f"--positions-per-game={params.positions_per_game}",
+        ]
     cmd = [
         TARGET_GENERATOR,
         *[f"--slog-file={p}" for p in pending],
         f"--model={params.teacher_model}",
-        f"--quota-top={params.quota_top}",
-        f"--quota-mid={params.quota_mid}",
-        f"--quota-tail={params.quota_tail}",
-        f"--quota-exchange={params.quota_exchange}",
-        f"--mid-rank-limit={params.mid_rank_limit}",
-        f"--positions-per-game={params.positions_per_game}",
+        *selection,
         f"--threads={threads}",
     ]
     return subprocess.run(cmd, capture_output=False).returncode
@@ -151,11 +210,17 @@ def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> Cyc
     if not pending:
         return CycleResult(0, gen_seconds, 0.0)
     t1 = time.monotonic()
-    rc = run_target_generator(pending, params, threads)
-    mset_seconds = time.monotonic() - t1
-    if rc != 0:
-        print(f"move_set_eval_target_generator exited with code {rc}", file=sys.stderr)
-    return CycleResult(rc, gen_seconds, mset_seconds)
+    rc = 0
+    # One generator run per selection mode over the files that mode claims.
+    for full_sweep in (False, True):
+        group = [s for s in pending if sweep_pair(s.stem, params.sweep_every) == full_sweep]
+        if not group:
+            continue
+        rc = run_target_generator(group, params, threads, full_sweep=full_sweep)
+        if rc != 0:
+            print(f"move_set_eval_target_generator exited with code {rc}", file=sys.stderr)
+            break
+    return CycleResult(rc, gen_seconds, time.monotonic() - t1)
 
 
 def _cycle(work_dir: Path, params: MoveSetEvalParams, threads: int) -> tuple[int, dict]:
@@ -195,6 +260,25 @@ def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], l
     train = [s for i, s in enumerate(ordered) if i % holdout_every != 0]
     holdout = [s for i, s in enumerate(ordered) if i % holdout_every == 0]
     return train, holdout
+
+
+def split_pairs(store: Path, holdout_every: int) -> tuple[list[Path], list[Path]]:
+    """(train, holdout) .mset paths of a tag's complete pairs.
+
+    Full-sweep pairs are the holdout whenever the corpus has any: they are
+    evaluation-only by construction, and they are the only pairs the A3 gate
+    metrics mean anything on. Their games are then trained on by nobody, which
+    is the same file-level reservation `holdout_every` makes -- so the two do
+    not compound, and holdout_every only reserves stratified pairs when a
+    corpus has no swept ones at all (sweep_every=0, or a corpus predating the
+    mode).
+    """
+    msets = [f for f in store.glob("*.mset") if f.with_suffix(".slog").exists()]
+    stratified, swept = partition_full_sweep(msets)
+    if swept:
+        return sorted(stratified), sorted(swept)
+    train, holdout = split_pair_stems([f.stem for f in stratified], holdout_every)
+    return [store / f"{s}.mset" for s in train], [store / f"{s}.mset" for s in holdout]
 
 
 SPEC = WorkloadSpec(

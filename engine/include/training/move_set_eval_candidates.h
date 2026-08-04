@@ -29,6 +29,15 @@
 namespace scribblez {
 namespace move_set_eval {
 
+// A position's selected candidates in storage order, plus the count a .mset's
+// TargetPositionHeader::num_legal_moves records: the moves the selection drew
+// from, or 0 for the stratified sample, whose size says nothing about the
+// position's. A sweep reached everything iff candidates.size() equals it.
+struct Selection {
+  std::vector<Move> candidates;
+  uint32_t num_legal_moves;
+};
+
 // Per-stratum candidate counts for stratified_candidates.
 struct StratumQuotas {
   int top = 4;              // candidates from the head of the ranking
@@ -41,8 +50,8 @@ struct StratumQuotas {
 // The stratified sample, storing the actually-played move first (so a reader
 // can recover the incumbent's own choice), then the ranking's head, then the
 // sampled strata.
-std::vector<Move> stratified_candidates(const std::vector<Move>& ranked, const Move& played,
-                                        const StratumQuotas& quotas, std::mt19937_64& rng);
+Selection stratified_candidates(const std::vector<Move>& ranked, const Move& played,
+                                const StratumQuotas& quotas, std::mt19937_64& rng);
 
 // The capped full sweep: the top `cap` candidates by static equity, plus every
 // exchange candidate and the played move wherever they rank, in equity-rank
@@ -62,8 +71,7 @@ std::vector<Move> stratified_candidates(const std::vector<Move>& ranked, const M
 // selection a subsequence of `ranked` is what makes stored order *be* the
 // static-equity ranking, so the incumbent baseline is exact at every K rather
 // than a floor.
-std::vector<Move> full_sweep_candidates(const std::vector<Move>& ranked, const Move& played,
-                                        int cap);
+Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& played, int cap);
 
 }  // namespace move_set_eval
 }  // namespace scribblez

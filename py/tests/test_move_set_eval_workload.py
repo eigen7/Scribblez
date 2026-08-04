@@ -1,11 +1,24 @@
 """Tests for the move_set_eval target-generation workload and the shared
 pair-store delivery it uses."""
 
+import struct
+
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, MSET_MAGIC, MSET_VERSION
 from scribblez.workloads import move_set_eval, pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SPEC, MoveSetEvalParams
+
+
+def write_empty_pair(store, stem, flags=0):
+    """A complete .slog/.mset pair whose .mset is a header and nothing else --
+    all that file-level routing reads."""
+    store.mkdir(parents=True, exist_ok=True)
+    (store / f"{stem}.mset").write_bytes(
+        struct.pack("<IHHIII64s", MSET_MAGIC, MSET_VERSION, 0, 0, 5, flags, b"cafe")
+    )
+    (store / f"{stem}.slog").touch()
 
 
 class RecordingSink:
@@ -62,6 +75,38 @@ def test_split_pair_stems_zero_disables_holdout():
     assert train == ["a", "b", "c"] and holdout == []
 
 
+def test_split_pairs_holds_out_the_full_sweep_pairs(tmp_path):
+    """Swept pairs are the holdout wherever they exist -- they are the only
+    pairs the A3 gate metrics mean anything on -- and holdout_every does not
+    reserve stratified pairs on top of them."""
+    for i in range(6):
+        write_empty_pair(tmp_path, f"{i:03d}-local-0")
+    write_empty_pair(tmp_path, "900-local-0", flags=MSET_FLAG_FULL_SWEEP)
+
+    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=3)
+    assert [p.stem for p in holdout] == ["900-local-0"]
+    assert [p.stem for p in train] == [f"{i:03d}-local-0" for i in range(6)]
+
+
+def test_split_pairs_falls_back_to_holdout_every_without_sweeps(tmp_path):
+    for i in range(6):
+        write_empty_pair(tmp_path, f"{i:03d}-local-0")
+    (tmp_path / "orphan.mset").write_bytes(b"")  # no .slog: not a pair
+
+    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=3)
+    assert [p.stem for p in holdout] == ["000-local-0", "003-local-0"]
+    assert len(train) == 4
+
+
+def test_sweep_pair_is_a_stable_fraction_of_the_stems():
+    stems = [f"{i:06d}-local-0" for i in range(2000)]
+    swept = [s for s in stems if move_set_eval.sweep_pair(s, 20)]
+    assert 0.03 < len(swept) / len(stems) < 0.07  # ~1 in 20
+    # Recoverable from the file alone, which is what a resumed cycle relies on.
+    assert all(move_set_eval.sweep_pair(s, 20) for s in swept)
+    assert not any(move_set_eval.sweep_pair(s, 0) for s in stems)
+
+
 def test_target_generator_command(tmp_path, monkeypatch):
     captured = {}
 
@@ -97,6 +142,30 @@ def test_target_generator_command(tmp_path, monkeypatch):
     }
     for flag, value in expected.items():
         assert f"{flag}={value}" in cmd
+    assert "--full-sweep" not in cmd
+
+
+def test_target_generator_command_in_full_sweep_mode(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, capture_output):
+        captured["cmd"] = cmd
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(move_set_eval.subprocess, "run", fake_run)
+    p = MoveSetEvalParams(
+        teacher_model="/models/teacher.onnx",
+        positions_per_game=9,  # the stratified count, which must not leak into a sweep
+        sweep_positions_per_game=3,
+        sweep_candidate_cap=1200,
+    )
+    assert move_set_eval.run_target_generator([tmp_path / "a.slog"], p, 8, full_sweep=True) == 0
+    cmd = captured["cmd"]
+    assert "--full-sweep" in cmd
+    assert "--sweep-cap=1200" in cmd
+    assert "--positions-per-game=3" in cmd
+    # The two selections take disjoint parameters; the quotas are meaningless here.
+    assert not any(c.startswith("--quota") for c in cmd)
 
 
 def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
@@ -116,7 +185,7 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
 
     generated = []
 
-    def fake_generator(pending, params, threads):
+    def fake_generator(pending, params, threads, full_sweep=False):
         generated.extend(p.name for p in pending)
         for p in pending:
             p.with_suffix(".mset").touch()
@@ -127,6 +196,50 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 0
     assert sorted(generated) == ["fresh.slog", "old_pending.slog"]
+
+
+def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypatch):
+    """The two selections run as separate generator invocations over disjoint
+    files, and every pending .slog lands in exactly one of them."""
+    stems = [f"{i:03d}" for i in range(60)]
+    for stem in stems:
+        (tmp_path / f"{stem}.slog").touch()
+    expected_swept = {s for s in stems if move_set_eval.sweep_pair(s, 20)}
+    assert expected_swept, "the fixture needs at least one swept stem to be meaningful"
+
+    runs = []
+
+    def fake_generator(pending, params, threads, full_sweep=False):
+        runs.append((full_sweep, {p.stem for p in pending}))
+        for p in pending:
+            p.with_suffix(".mset").touch()
+        return 0
+
+    monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", fake_generator)
+    assert move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2).returncode == 0
+
+    by_mode = dict(runs)
+    assert len(runs) == 2
+    assert by_mode[True] == expected_swept
+    assert by_mode[False] == set(stems) - expected_swept
+
+
+def test_cycle_labels_everything_stratified_when_sweeps_are_off(tmp_path, monkeypatch):
+    for i in range(40):
+        (tmp_path / f"{i:03d}.slog").touch()
+    modes = []
+
+    def fake_generator(pending, params, threads, full_sweep=False):
+        modes.append(full_sweep)
+        for p in pending:
+            p.with_suffix(".mset").touch()
+        return 0
+
+    monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", fake_generator)
+    move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(sweep_every=0), threads=2)
+    assert modes == [False]
 
 
 def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
@@ -140,7 +253,7 @@ def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a: 0)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a, **k: 0)
     for face_up in (False, True):
         move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(face_up_leaves=face_up), threads=2)
         assert seen["face_up_leaves"] is face_up
@@ -159,7 +272,7 @@ def test_cycle_propagates_generator_failure(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a: 9)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a, **k: 9)
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 9
 

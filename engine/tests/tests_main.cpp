@@ -4212,8 +4212,9 @@ TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
   ranked.insert(ranked.begin() + 6, exchange_of('A'));  // inside the cap
   ranked.push_back(buried_exchange);                    // beyond it
 
-  const std::vector<Move> swept =
+  const move_set_eval::Selection sel =
     move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/4);
+  const std::vector<Move>& swept = sel.candidates;
 
   // Everything kept, in `ranked`'s order: the head under the cap, then the two
   // exchanges and the played move from beyond it.
@@ -4222,23 +4223,29 @@ TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
   EXPECT_EQ(swept[4], ranked[6]);  // the in-cap exchange, past the cap by rank
   EXPECT_EQ(swept[5], buried_play);
   EXPECT_EQ(swept[6], buried_exchange);
+  // The recorded legal count is what the sweep drew from, so the shortfall
+  // against it is exactly what the cap dropped.
+  EXPECT_EQ(sel.num_legal_moves, ranked.size());
 
-  // Uncapped, the sweep is the whole ranking verbatim.
-  const std::vector<Move> whole =
+  // Uncapped, the sweep is the whole ranking verbatim and nothing is truncated.
+  const move_set_eval::Selection whole =
     move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/1000);
-  EXPECT_EQ(whole, ranked);
+  EXPECT_EQ(whole.candidates, ranked);
+  EXPECT_EQ(whole.num_legal_moves, ranked.size());
 }
 
 // A played move the generator never enumerates (a PASS chosen while plays were
 // legal) has no equity rank, so it is kept last rather than dropped.
 TEST(MoveSetEvalCandidates, FullSweepKeepsAnUnrankedPlayedMove) {
   const std::vector<Move> ranked = ranked_plays(3);
-  const std::vector<Move> swept =
+  const move_set_eval::Selection sel =
     move_set_eval::full_sweep_candidates(ranked, Move::pass(), /*cap=*/2);
-  ASSERT_EQ(swept.size(), 3u);
-  EXPECT_EQ(swept[0], ranked[0]);
-  EXPECT_EQ(swept[1], ranked[1]);
-  EXPECT_EQ(swept[2], Move::pass());
+  ASSERT_EQ(sel.candidates.size(), 3u);
+  EXPECT_EQ(sel.candidates[0], ranked[0]);
+  EXPECT_EQ(sel.candidates[1], ranked[1]);
+  EXPECT_EQ(sel.candidates[2], Move::pass());
+  // It counts toward the legal total too, so the sweep still reads complete.
+  EXPECT_EQ(sel.num_legal_moves, ranked.size() + 1);
 }
 
 // The stored std must be finite even when FP16 teacher inference overflows the

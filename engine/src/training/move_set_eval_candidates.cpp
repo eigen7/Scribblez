@@ -23,8 +23,8 @@ void sample_range(const std::vector<Move>& ranked, int lo, int hi, int count, st
 
 }  // namespace
 
-std::vector<Move> stratified_candidates(const std::vector<Move>& ranked, const Move& played,
-                                        const StratumQuotas& quotas, std::mt19937_64& rng) {
+Selection stratified_candidates(const std::vector<Move>& ranked, const Move& played,
+                                const StratumQuotas& quotas, std::mt19937_64& rng) {
   std::vector<Move> out;
   out.reserve(static_cast<size_t>(1 + quotas.top + quotas.mid + quotas.tail + quotas.exchange));
   out.push_back(played);
@@ -52,11 +52,10 @@ std::vector<Move> stratified_candidates(const std::vector<Move>& ranked, const M
       ++taken;
     }
   }
-  return out;
+  return {std::move(out), 0u};
 }
 
-std::vector<Move> full_sweep_candidates(const std::vector<Move>& ranked, const Move& played,
-                                        int cap) {
+Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& played, int cap) {
   std::vector<Move> out;
   bool played_kept = false;
   for (int i = 0; i < static_cast<int>(ranked.size()); ++i) {
@@ -68,9 +67,14 @@ std::vector<Move> full_sweep_candidates(const std::vector<Move>& ranked, const M
   }
   // A played move the generator never enumerates -- a PASS chosen while other
   // moves were legal -- has no equity rank, so it can only go last; every other
-  // candidate keeps its rank order.
-  if (!played_kept) out.push_back(played);
-  return out;
+  // candidate keeps its rank order. It counts toward the legal total all the
+  // same: it was legal, and the sweep did reach it.
+  uint32_t legal = static_cast<uint32_t>(ranked.size());
+  if (!played_kept) {
+    out.push_back(played);
+    ++legal;
+  }
+  return {std::move(out), legal};
 }
 
 }  // namespace move_set_eval

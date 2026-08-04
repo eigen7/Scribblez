@@ -257,11 +257,18 @@ Then the spine proper:
   teacher-value gap between its best candidate and the best candidate the
   filter retains, since recall alone scores dropping a near-tie like
   dropping a uniquely winning move. Both are measured on a full-sweep
-  held-out slice (a generator mode that scores every legal candidate for a
-  few positions per game), because the stratified ~15-candidate training
-  samples cannot see the tail moves the filter exists to catch. A3 ships
-  curves, not a bar; setting the bar belongs to A4, which owns the
-  measurement that defines it.
+  held-out slice, because the stratified ~15-candidate training samples
+  cannot see the tail moves the filter exists to catch. That slice is
+  built: the generator's `--full-sweep` mode labels every legal candidate
+  of a few positions per game — capped by static-equity rank, since a
+  two-blank rack's 20k moves are overwhelmingly redundant blank
+  designations, with each position's true legal count stored so truncation
+  is visible — and the whole `.mset` is flagged, which routes it to the
+  held-out side and keeps swept positions out of training. Storing a sweep
+  in equity-rank order also makes the incumbent baseline the exact
+  static-equity ranking rather than a floor. A3 ships curves, not a bar;
+  setting the bar belongs to A4, which owns the measurement that defines
+  it.
 - **A4 — the move-set-evaluation agent.** Two agents, in order:
   - *The position-evaluation-top-K agent*: exact per-candidate evaluation
     by the position evaluation model over a generous static-equity
