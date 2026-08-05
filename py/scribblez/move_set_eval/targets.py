@@ -99,9 +99,9 @@ def read_mset_flags(path: str | Path) -> int:
 
 def complete_pairs(directory: str | Path) -> list[Path]:
     """The .mset paths in `directory` whose companion .slog is present, sorted.
-    A sidecar without its log is inert -- delivery writes the sidecar first, so
-    an interrupted one can leave exactly that -- and every consumer needs both
-    halves, the targets and the replay the inputs come from."""
+    Every consumer needs both halves -- the targets, and the replay the inputs
+    are recomputed from -- and a store can hold an orphaned sidecar
+    (scribblez.workloads.pair_store documents when)."""
     directory = Path(directory)
     return sorted(f for f in directory.glob("*.mset") if f.with_suffix(".slog").exists())
 

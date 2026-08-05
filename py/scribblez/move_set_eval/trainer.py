@@ -3,16 +3,15 @@
 Sibling to the position_eval / max_move_per_lane trainers, but a fixed-corpus
 loop rather than a generational consumer: the corpus is the tag's slogs/ pair
 store (grown by the generate role, usually paused during training), split at
-file level into train and held-out pairs -- the held-out side being the store's
-full-sweep pairs, the only ones the A3 gate metrics mean anything on -- and
-trained for `train_epochs` epochs. Each epoch records losses and the held-out
-top-K recall / Spearman
-metrics to the tag's dashboard DB (the Loss tab's curves), publishes a stats
-sample (the Stats tab), and saves the rolling checkpoint -- pausing and
-restarting the worker resumes at the next epoch. The base learning rate is a
-live control (Controls tab), adopted at the next epoch. The generational
-consume->train lifecycle (docs/generational_teacher.md) replaces this loop
-when it lands.
+file level into train and held-out pairs -- the held-out side being the
+store's full-sweep pairs, the only ones the A3 gate metrics mean anything on
+-- and trained for `train_epochs` epochs. Each epoch records losses and the
+held-out top-K recall / Spearman metrics to the tag's dashboard DB (the Loss
+tab's curves), publishes a stats sample (the Stats tab), and saves the rolling
+checkpoint -- pausing and restarting the worker resumes at the next epoch. The
+base learning rate is a live control (Controls tab), adopted at the next
+epoch. The generational consume->train lifecycle
+(docs/generational_teacher.md) replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train); scripts/move_set_eval/train.py
