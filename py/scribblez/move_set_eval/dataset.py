@@ -47,7 +47,7 @@ from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows
 
 from . import moves as move_enc
-from .targets import MSET_FLAG_FULL_SWEEP, MSET_FLAG_OPEN_LEAVES, read_mset
+from .targets import MSET_FLAG_FULL_SWEEP, MSET_FLAG_OPEN_LEAVES, complete_pairs, read_mset
 
 
 class _Position:
@@ -87,9 +87,7 @@ class MsetDataset:
                 data_dirs = [Path(data_dir)]
             else:
                 data_dirs = [Path(d) for d in data_dir]
-            mset_files = sorted(
-                f for d in data_dirs for f in d.glob("*.mset") if f.with_suffix(".slog").exists()
-            )
+            mset_files = sorted(f for d in data_dirs for f in complete_pairs(d))
             if not mset_files:
                 dirs = ", ".join(str(d) for d in data_dirs)
                 raise FileNotFoundError(f"No .mset files with a companion .slog in {dirs}")

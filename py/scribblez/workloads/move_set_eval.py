@@ -41,7 +41,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from scribblez.move_set_eval.targets import partition_full_sweep
+from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
@@ -273,8 +273,7 @@ def split_pairs(store: Path, holdout_every: int) -> tuple[list[Path], list[Path]
     corpus has no swept ones at all (sweep_every=0, or a corpus predating the
     mode).
     """
-    msets = [f for f in store.glob("*.mset") if f.with_suffix(".slog").exists()]
-    stratified, swept = partition_full_sweep(msets)
+    stratified, swept = partition_full_sweep(complete_pairs(store))
     if swept:
         return sorted(stratified), sorted(swept)
     train, holdout = split_pair_stems([f.stem for f in stratified], holdout_every)

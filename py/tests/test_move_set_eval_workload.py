@@ -225,6 +225,30 @@ def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypat
     assert by_mode[False] == set(stems) - expected_swept
 
 
+def test_cycle_stops_at_the_first_failing_selection_group(tmp_path, monkeypatch):
+    """With both groups non-empty, a failure in the first must end the cycle
+    with its return code -- letting the second group run would overwrite the
+    failure with its own success and report a cycle that half-labeled its
+    files as complete."""
+    stems = [f"{i:03d}" for i in range(60)]
+    for stem in stems:
+        (tmp_path / f"{stem}.slog").touch()
+    assert any(move_set_eval.sweep_pair(s, 20) for s in stems)
+    assert not all(move_set_eval.sweep_pair(s, 20) for s in stems)
+
+    calls = []
+
+    def failing_generator(pending, params, threads, full_sweep=False):
+        calls.append(full_sweep)
+        return 9
+
+    monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
+    monkeypatch.setattr(move_set_eval, "run_target_generator", failing_generator)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    assert result.returncode == 9
+    assert calls == [False]  # the swept group never ran
+
+
 def test_cycle_labels_everything_stratified_when_sweeps_are_off(tmp_path, monkeypatch):
     for i in range(40):
         (tmp_path / f"{i:03d}.slog").touch()

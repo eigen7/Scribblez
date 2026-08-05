@@ -32,7 +32,8 @@ namespace move_set_eval {
 // A position's selected candidates in storage order, plus the count a .mset's
 // TargetPositionHeader::num_legal_moves records: the moves the selection drew
 // from, or 0 for the stratified sample, whose size says nothing about the
-// position's. A sweep reached everything iff candidates.size() equals it.
+// position's legal-move count. A sweep reached everything iff
+// candidates.size() equals it.
 struct Selection {
   std::vector<Move> candidates;
   uint32_t num_legal_moves;

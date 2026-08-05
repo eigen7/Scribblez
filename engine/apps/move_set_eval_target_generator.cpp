@@ -412,16 +412,17 @@ int main(int argc, char** argv) {
       "with --full-sweep, the most plays to label per position, by static-equity rank "
       "(exchanges and the played move are kept beyond it)")(
       "quota-top", po::value<int>(&opt.quotas.top)->default_value(opt.quotas.top),
-      "candidates from the head of the equity ranking")(
+      "stratified only: candidates from the head of the equity ranking")(
       "quota-mid", po::value<int>(&opt.quotas.mid)->default_value(opt.quotas.mid),
-      "candidates sampled from the contention zone (ranks quota-top..mid-rank-limit)")(
+      "stratified only: candidates sampled from the contention zone (ranks "
+      "quota-top..mid-rank-limit)")(
       "quota-tail", po::value<int>(&opt.quotas.tail)->default_value(opt.quotas.tail),
-      "candidates sampled uniformly from the remaining ranks")(
+      "stratified only: candidates sampled uniformly from the remaining ranks")(
       "quota-exchange", po::value<int>(&opt.quotas.exchange)->default_value(opt.quotas.exchange),
-      "exchange candidates")(
+      "stratified only: exchange candidates")(
       "mid-rank-limit",
       po::value<int>(&opt.quotas.mid_rank_limit)->default_value(opt.quotas.mid_rank_limit),
-      "exclusive rank bound of the contention zone")(
+      "stratified only: exclusive rank bound of the contention zone")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (0 = every eligible turn)")(
@@ -498,6 +499,16 @@ int main(int argc, char** argv) {
     std::cerr << "move set eval targets: " << pending.size() << " file(s), " << total_positions
               << " positions, " << selection << "; teacher " << model_hash.substr(0, 12) << ", "
               << opt.threads << " encoder threads\n";
+    // A swept position costs roughly `sweep_cap` encodes against a stratified
+    // one's ~15, so the position count above understates a sweep's work by
+    // orders of magnitude. Sweeping every eligible turn is virtually never
+    // what a caller wants (the mode exists to label a few positions per game),
+    // and the default --positions-per-game asks for exactly that.
+    if (opt.full_sweep && opt.positions_per_game <= 0) {
+      std::cerr << "  warning: --full-sweep with --positions-per-game=0 sweeps EVERY eligible "
+                   "turn, up to "
+                << opt.sweep_cap << " candidates each; pass --positions-per-game to bound it\n";
+    }
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const auto& [slog, buf] : pending) {

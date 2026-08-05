@@ -285,7 +285,12 @@ Then the spine proper:
     two-blank `N`), and the evaluation service API speaks flat fixed-width
     rows — so the export needs a chunked candidate axis or shared board
     keys, plus a two-input service API, decided before the ONNX graph is
-    frozen.
+    frozen. That per-move copy is not only an export problem: measured on
+    an RTX 5000 Ada, grouping the cross-attention by position instead
+    (board K/V projected once per position rather than once per move) is
+    ~36–50× on the attention at full-sweep batch shapes — ~80% of the eval
+    forward — and ~18× at stratified training shapes, so it is a training
+    and eval speedup available before any export work.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.

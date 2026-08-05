@@ -97,6 +97,15 @@ def read_mset_flags(path: str | Path) -> int:
     return int(hdr["flags"])
 
 
+def complete_pairs(directory: str | Path) -> list[Path]:
+    """The .mset paths in `directory` whose companion .slog is present, sorted.
+    A sidecar without its log is inert -- delivery writes the sidecar first, so
+    an interrupted one can leave exactly that -- and every consumer needs both
+    halves, the targets and the replay the inputs come from."""
+    directory = Path(directory)
+    return sorted(f for f in directory.glob("*.mset") if f.with_suffix(".slog").exists())
+
+
 def partition_full_sweep(paths: Iterable[str | Path]) -> tuple[list[Path], list[Path]]:
     """(stratified, full_sweep) partition of .mset paths by header flag: the
     training pairs and the evaluation-only swept pairs, which a corpus holds

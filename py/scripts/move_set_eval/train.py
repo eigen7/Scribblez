@@ -16,14 +16,13 @@ Usage:
 
 import argparse
 import sys
-from pathlib import Path
 
 import torch
 from scribblez.ffi import set_contingent_features, set_opp_leave_input
 from scribblez.move_set_eval.dataset import MsetDataset
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.targets import partition_full_sweep
+from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -75,10 +74,15 @@ def main() -> int:
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 
-    pairs = sorted(f for f in Path(args.data_dir).glob("*.mset") if f.with_suffix(".slog").exists())
+    pairs = complete_pairs(args.data_dir)
     if not pairs:
         raise FileNotFoundError(f"No .mset files with a companion .slog in {args.data_dir}")
     train_files, swept_files = partition_full_sweep(pairs)
+    if not train_files:
+        raise FileNotFoundError(
+            f"only full-sweep pairs in {args.data_dir}; those are the held-out evaluation "
+            "slice, so there is nothing to train on"
+        )
     train_ds = MsetDataset(mset_files=train_files)
     if args.holdout_dir:
         holdout_ds = MsetDataset(args.holdout_dir)
