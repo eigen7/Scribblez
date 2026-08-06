@@ -283,15 +283,18 @@ Then the spine proper:
     export and engine runtime are a design task, not plumbing. Shared
     board keys — the cross-attention grouped by position, so the board's
     K/V project once per position rather than once per move — has landed
-    on the training and eval side (a pure re-association, outputs
-    unchanged; ~8× on the attention at stratified training shapes, ~60× at
-    full-sweep eval shapes, 1.8× on a whole training step, and the per-move
-    board-token copy that made a swept batch cost gigabytes is gone). What
-    is left is export-specific: the evaluation service API speaks flat
-    fixed-width rows, so the graph still needs a two-input service API and
-    a candidate axis — either the padded per-position grid the training
-    model now uses, or a chunked one — decided before the ONNX graph is
-    frozen.
+    on the training and eval side (a re-association, outputs unchanged to
+    float32 rounding; ~9× on the attention at stratified training shapes
+    and 24–90× at full-sweep eval shapes depending on how ragged the batch
+    is, ~1.9× on a whole training step, and the per-move board-token copy
+    that made a swept batch cost gigabytes is gone — 13.4 GiB to 302 MiB at
+    the worst reachable sweep shape). What is left is export-specific: the
+    evaluation service API speaks flat fixed-width rows, so the graph still
+    needs a two-input service API and a candidate axis — either the padded
+    per-position grid the training model now uses, or a chunked one —
+    decided before the ONNX graph is frozen. The padded grid also carries a
+    host sync (its `maxK` is a data-dependent host value); an export will
+    have to source that shape from the batcher instead.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.

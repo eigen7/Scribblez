@@ -37,16 +37,15 @@ from .model import win_equity
 
 DEFAULT_KS = (1, 3, 5)
 
-# Moves per forward pass. The board tokens a move attends into are projected
-# once per position now, not once per move, so a candidate costs its own
-# activations (O(C) per move, plus its 225 attention weights) rather than a
-# whole copy of the board's -- the bound this exists to enforce is ~12x cheaper
-# per candidate and no longer the ceiling it was. It still exists because a
-# swept position carries hundreds of candidates against a stratified one's ~15,
-# so the position count alone stops describing what a batch costs; over
-# stratified positions it never binds before the position bound does.
-# Measured (RTX 5000 Ada, C=192, 64 positions, no_grad): +358 MiB peak here,
-# against +874 MiB at the 1024 this was before the re-association.
+# Moves per forward pass. A swept position carries hundreds of candidates
+# against a stratified one's ~15, so over full-sweep positions the position
+# count alone stops describing what a batch costs and the candidate count takes
+# over. What the model builds is a padded (positions x largest candidate set)
+# query grid, so a batch mixing one near-cap position with small ones costs more
+# than its candidate count suggests -- and its peak is set by that grid, not by
+# this budget: the worst shape reachable here, 64 positions with one at the
+# generator's 1500 sweep cap, peaks at +302 MiB under no_grad at C=192. Over
+# stratified positions this never binds before the position bound does.
 MAX_CANDIDATES_PER_BATCH = 16384
 
 # Move-input tensors passed positionally to the model's forward.

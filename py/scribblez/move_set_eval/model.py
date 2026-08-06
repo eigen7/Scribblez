@@ -167,8 +167,11 @@ class MoveSetEvalModel(nn.Module):
         rank, max_k = _rank_within_position(move_pos_id, board.shape[0])
         queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
         queries[move_pos_id, rank] = e
-        attended, _ = self.cross_attn(queries, board, board)  # (P, maxK, C)
-        attended = attended[move_pos_id, rank]  # (M, C)
+        # The per-square attention weights are not a model output, and asking
+        # for them would both materialize a (P, maxK, 225) tensor -- the padded
+        # grid's largest by far -- and hold the call off the fused kernels.
+        attended, _ = self.cross_attn(queries, board, board, need_weights=False)
+        attended = attended[move_pos_id, rank]  # (P, maxK, C) -> (M, C)
 
         head_in = torch.cat([attended, g[move_pos_id]], dim=1)  # (M, 4C)
         out = self.head(head_in)  # (M, 5)

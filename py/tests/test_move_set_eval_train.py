@@ -77,16 +77,16 @@ def _ragged_batch(counts: list[int], seed: int = 0) -> dict[str, torch.Tensor]:
     }
 
 
-_FORWARD_KEYS = (
-    "input_spatial",
-    "input_scalar",
+_BOARD_KEYS = ("input_spatial", "input_scalar")
+_MOVE_KEYS = (
     "move_letters",
     "move_blanks",
     "move_squares",
     "move_tile_mask",
     "move_scalars",
-    "move_pos_id",
 )
+# MoveSetEvalModel.forward's positional order.
+_FORWARD_KEYS = (*_BOARD_KEYS, *_MOVE_KEYS, "move_pos_id")
 
 
 def test_scoring_is_independent_across_positions():
@@ -120,9 +120,9 @@ def test_scoring_is_independent_across_positions():
     start = 0
     for i, k in enumerate(counts):
         moves = slice(start, start + k)
-        solo_args = [batch["input_spatial"][i : i + 1], batch["input_scalar"][i : i + 1]]
-        solo_args += [batch[key][moves] for key in _FORWARD_KEYS[2:-1]]
-        solo_args.append(torch.zeros(k, dtype=torch.int64))
+        solo_args = [batch[key][i : i + 1] for key in _BOARD_KEYS]
+        solo_args += [batch[key][moves] for key in _MOVE_KEYS]
+        solo_args.append(torch.zeros(k, dtype=torch.int64))  # all moves on row 0
         with torch.no_grad():
             solo = model(*solo_args)
         for name, value in solo.items():
