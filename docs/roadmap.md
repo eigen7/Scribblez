@@ -287,9 +287,10 @@ Then the spine proper:
     float32 rounding; ~9× on the attention at stratified training shapes
     and 24–90× at full-sweep eval shapes depending on how ragged the batch
     is, ~1.9× on a whole training step, and the per-move board-token copy
-    that made a swept batch cost gigabytes is gone — 13.4 GiB to 302 MiB at
-    the worst reachable sweep shape). What is left is export-specific: the
-    evaluation service API speaks flat fixed-width rows, so the graph still
+    that made a swept batch cost gigabytes is gone — a forward at the worst
+    reachable sweep shape peaks at 429 MiB against 13573 MiB). What is
+    left is export-specific: the evaluation service API speaks flat
+    fixed-width rows, so the graph still
     needs a two-input service API and a candidate axis — either the padded
     per-position grid the training model now uses, or a chunked one —
     decided before the ONNX graph is frozen. The padded grid also carries a

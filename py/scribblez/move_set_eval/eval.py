@@ -42,9 +42,11 @@ DEFAULT_KS = (1, 3, 5)
 # count alone stops describing what a batch costs and the candidate count takes
 # over. What the model builds is a padded (positions x largest candidate set)
 # query grid, so a batch mixing one near-cap position with small ones costs more
-# than its candidate count suggests -- and its peak is set by that grid, not by
-# this budget: the worst shape reachable here, 64 positions with one at the
-# generator's 1500 sweep cap, peaks at +302 MiB under no_grad at C=192. Over
+# than its candidate count suggests. The worst shape this budget admits --
+# positions_per_batch at its 64 default, one position at the generator's 1500
+# sweep cap, M=16305 -- peaks at +429 MiB under no_grad at C=192, against
+# +366 MiB for the same M with every position the same size. That grid, not this
+# number, is what a batch costs, and it grows with positions_per_batch. Over
 # stratified positions this never binds before the position bound does.
 MAX_CANDIDATES_PER_BATCH = 16384
 
