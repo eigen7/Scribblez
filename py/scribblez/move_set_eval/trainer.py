@@ -26,7 +26,7 @@ from dataclasses import asdict
 import torch
 
 from scribblez.dashboard import db
-from scribblez.ffi import set_contingent_features, set_opp_leave_input
+from scribblez.ffi import set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
@@ -35,7 +35,7 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.move_set_eval.dataset import MsetDataset
+from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
@@ -49,11 +49,13 @@ def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
     """(train, holdout) datasets from the tag's pair store, split at file level
     (scribblez.workloads.move_set_eval.split_pairs). With no held-out pairs at
     all the metrics run on the training pairs (a smoke check); both datasets
-    must agree on the teacher."""
+    must agree on the teacher. The corpus's information condition is adopted
+    here because it must precede the first dataset."""
     store = paths.data_dir / SLOGS_DIR
     train_files, holdout_files = split_pairs(store, params.holdout_every)
     if not train_files:
         raise FileNotFoundError(f"no complete .slog/.mset training pairs in {store}")
+    adopt_information_condition(train_files)
     train_ds = MsetDataset(mset_files=train_files)
     if not holdout_files:
         timed_print("no held-out pairs; metrics are on-train")
@@ -144,10 +146,6 @@ def run(ctx: WorkerContext) -> int:
 
     set_contingent_features(params.contingent_features)
     train_ds, holdout_ds = load_datasets(paths, params)
-    # The board input arm must carry the opponent-leave block iff the targets
-    # were generated under the open-leaves condition.
-    if train_ds.open_leaves:
-        set_opp_leave_input(True)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
         f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates "

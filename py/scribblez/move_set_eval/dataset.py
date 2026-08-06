@@ -44,10 +44,30 @@ import numpy as np
 import torch
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import decode_rows
+from scribblez.ffi import decode_rows, set_opp_leave_input
 
 from . import moves as move_enc
-from .targets import MSET_FLAG_FULL_SWEEP, MSET_FLAG_OPEN_LEAVES, complete_pairs, read_mset
+from .targets import (
+    MSET_FLAG_FULL_SWEEP,
+    MSET_FLAG_OPEN_LEAVES,
+    complete_pairs,
+    read_mset,
+    read_mset_flags,
+)
+
+
+def adopt_information_condition(mset_files: Iterable[str | Path]):
+    """Point the FFI session's opponent-leave input arm at the arm `mset_files`
+    were labeled under, before any of them is opened as a dataset.
+
+    The arm is baked into the process-wide session when it is created, and a
+    dataset creates it just by asking for the row layout -- so the condition has
+    to be read from a header (read_mset_flags), which touches no session, rather
+    than from a constructed dataset's `open_leaves`. One file answers for the
+    corpus: MsetDataset refuses a set that mixes header flags.
+    """
+    first = next(iter(mset_files))
+    set_opp_leave_input(bool(read_mset_flags(first) & MSET_FLAG_OPEN_LEAVES))
 
 
 class _Position:
