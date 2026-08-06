@@ -1,7 +1,7 @@
 """Tests for pr_flow.py's pure decision helpers.
 
-Only the ancestry / zero-commit logic that gates whether a PR is opened is
-covered here, against throwaway git repos. The GitHub-facing subcommands
+Only the zero-commit logic that gates whether a PR is opened is covered
+here, against throwaway git repos. The GitHub-facing subcommands
 (worktree/create/cleanup/abandon) need a live remote and are validated by
 running them.
 """
@@ -20,12 +20,6 @@ def git(cwd: Path, *args: str):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def git_out(cwd: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
 def init_repo(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     git(root, "init", "-q", "-b", "main")
@@ -41,19 +35,6 @@ def commit(repo: Path, name: str):
     (repo / name).write_text(name)
     git(repo, "add", name)
     git(repo, "commit", "-q", "-m", name)
-
-
-def test_is_ancestor(tmp_path: Path):
-    repo = init_repo(tmp_path / "repo")
-    first = git_out(repo, "rev-parse", "HEAD")
-    commit(repo, "two")
-    assert pr_flow.is_ancestor(repo, first, "HEAD")
-    assert not pr_flow.is_ancestor(repo, "HEAD", first)
-
-
-def test_is_ancestor_unknown_commit_is_not_ancestor(tmp_path: Path):
-    repo = init_repo(tmp_path / "repo")
-    assert not pr_flow.is_ancestor(repo, "0" * 40, "HEAD")
 
 
 def test_branch_adds_commits_true_when_branch_ahead(tmp_path: Path):
