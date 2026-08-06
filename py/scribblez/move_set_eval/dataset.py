@@ -26,6 +26,12 @@ property of the process-wide FFI session; the caller must configure it (via
 scribblez.ffi.set_contingent_features / set_opp_leave_input) to match the model
 being trained before iterating. The .mset open-leaves flag is surfaced as
 `open_leaves` so the caller can honor it.
+
+A dataset is stratified or full-sweep throughout, after the .mset header flag
+(`full_sweep`); mixing the two is refused. Swept positions are the held-out
+evaluation slice the A3 gate metrics need and are never trained on, so a shared
+store is split at file level before construction
+(scribblez.move_set_eval.targets.partition_full_sweep).
 """
 
 from __future__ import annotations
@@ -41,20 +47,23 @@ from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows
 
 from . import moves as move_enc
-from .targets import MSET_FLAG_OPEN_LEAVES, read_mset
+from .targets import MSET_FLAG_FULL_SWEEP, MSET_FLAG_OPEN_LEAVES, complete_pairs, read_mset
 
 
 class _Position:
     """One labeled position: where to reconstruct its input, and its targets."""
 
-    __slots__ = ("file_id", "game_index", "turn_index", "moves", "targets")
+    __slots__ = ("file_id", "game_index", "turn_index", "moves", "targets", "num_legal_moves")
 
-    def __init__(self, file_id: int, game_index: int, turn_index: int, moves, targets):
+    def __init__(
+        self, file_id: int, game_index: int, turn_index: int, moves, targets, num_legal_moves: int
+    ):
         self.file_id = file_id
         self.game_index = game_index
         self.turn_index = turn_index
         self.moves = moves  # (K,) MOVE_DTYPE
         self.targets = targets  # (K, 5) float32: [p_win, p_draw, p_loss, sd_mean, sd_std]
+        self.num_legal_moves = num_legal_moves  # 0 unless swept (see targets.MsetPosition)
 
 
 class MsetDataset:
@@ -78,9 +87,7 @@ class MsetDataset:
                 data_dirs = [Path(data_dir)]
             else:
                 data_dirs = [Path(d) for d in data_dir]
-            mset_files = sorted(
-                f for d in data_dirs for f in d.glob("*.mset") if f.with_suffix(".slog").exists()
-            )
+            mset_files = sorted(f for d in data_dirs for f in complete_pairs(d))
             if not mset_files:
                 dirs = ", ".join(str(d) for d in data_dirs)
                 raise FileNotFoundError(f"No .mset files with a companion .slog in {dirs}")
@@ -115,14 +122,25 @@ class MsetDataset:
                         continue
                     moves, targets = moves[keep], targets[keep]
                 self._positions.append(
-                    _Position(file_id, pos.game_index, pos.turn_index, moves, targets)
+                    _Position(
+                        file_id,
+                        pos.game_index,
+                        pos.turn_index,
+                        moves,
+                        targets,
+                        pos.num_legal_moves,
+                    )
                 )
         self.dropped_candidates = dropped
         if dropped:
             print(f"dropped {dropped} candidate(s) with non-finite teacher targets")
 
         # A corpus must come from one blessed teacher and one information
-        # condition; a mix would train against inconsistent targets.
+        # condition; a mix would train against inconsistent targets. The
+        # full-sweep bit is held to the same rule for a different reason: swept
+        # files are evaluation-only, so a dataset that mixed them with
+        # stratified ones is exactly the leak file-level routing prevents
+        # (targets.partition_full_sweep is how a shared store is split).
         if len(model_hashes) != 1:
             raise ValueError(f"mset corpus mixes teacher hashes: {sorted(model_hashes)}")
         if len(flags) != 1:
@@ -149,6 +167,25 @@ class MsetDataset:
         return sum(len(p.moves) for p in self._positions)
 
     @property
+    def full_sweep(self) -> bool:
+        """Whether these positions are capped sweeps of their legal candidates
+        rather than stratified samples -- the evaluation-only slice the A3 gate
+        metrics are read on, never trained against."""
+        return bool(self._flags & MSET_FLAG_FULL_SWEEP)
+
+    @property
+    def sweep_coverage(self) -> tuple[float, int]:
+        """(mean fraction of legal moves swept, positions the cap truncated),
+        over the positions carrying a legal-move count. (1.0, 0) when none do
+        -- a stratified corpus records no counts, and nothing was truncated."""
+        swept = [p for p in self._positions if p.num_legal_moves > 0]
+        if not swept:
+            return 1.0, 0
+        covered = sum(len(p.moves) / p.num_legal_moves for p in swept)
+        truncated = sum(1 for p in swept if len(p.moves) < p.num_legal_moves)
+        return covered / len(swept), truncated
+
+    @property
     def open_leaves(self) -> bool:
         """Whether the teacher labeled these positions under the open-leaves
         information condition (the caller must then enable the opponent-leave
@@ -163,19 +200,47 @@ class MsetDataset:
     def scalar_size(self) -> int:
         return self._scalar_width
 
-    def iter_batches(self, positions_per_batch: int, seed: int = 0, epoch_index: int = 0):
+    def iter_batches(
+        self,
+        positions_per_batch: int,
+        seed: int = 0,
+        epoch_index: int = 0,
+        max_candidates: int | None = None,
+    ):
         """Yield one epoch of batch dicts.
 
         Positions are shuffled globally (deterministically for a given
         seed/epoch); each batch reconstructs its positions' board inputs and
-        flattens their candidate sets. `positions_per_batch` is the number of
-        positions (not candidates) per batch.
+        flattens their candidate sets. `positions_per_batch` bounds the
+        positions in a batch and `max_candidates`, if given, the moves: a swept
+        position carries hundreds of candidates against a stratified one's ~15,
+        so over full-sweep positions the position count alone no longer bounds
+        what a batch costs (every move materializes its own copy of its
+        position's 225 board tokens to attend to).
         """
         rng = np.random.default_rng(seed + epoch_index)
         order = rng.permutation(len(self._positions))
-        for start in range(0, len(order), positions_per_batch):
-            chunk = order[start : start + positions_per_batch]
+        for chunk in self._batches_of(order, positions_per_batch, max_candidates):
             yield self._build_batch([self._positions[i] for i in chunk])
+
+    def _batches_of(self, order, positions_per_batch: int, max_candidates: int | None):
+        """Split a position ordering into batches under both bounds. A position
+        whose candidate set alone exceeds `max_candidates` still forms a batch:
+        candidate sets are indivisible here, and the whole point of the sweep is
+        the positions with the most of them."""
+        chunk: list[int] = []
+        candidates = 0
+        for i in order:
+            k = len(self._positions[i].moves)
+            if len(chunk) >= positions_per_batch or (
+                max_candidates is not None and chunk and candidates + k > max_candidates
+            ):
+                yield chunk
+                chunk, candidates = [], 0
+            chunk.append(i)
+            candidates += k
+        if chunk:
+            yield chunk
 
     def _build_batch(self, batch: list[_Position]) -> dict[str, torch.Tensor]:
         p = len(batch)

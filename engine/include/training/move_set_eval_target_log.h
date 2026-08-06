@@ -22,6 +22,11 @@
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file, addressing the PRE-move decision point; each record's targets
 // describe the post-move state its Move produces.
+//
+// A file holds one kind of position throughout, declared by
+// kTargetFlagFullSweep: either the stratified training sample or the full-sweep
+// evaluation slice. The two never mix, because a swept position is held out by
+// construction and a mixed file could not be routed at file granularity.
 
 #include "game/move.h"
 
@@ -41,6 +46,12 @@ inline constexpr uint32_t kTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_me
 
 // TargetFileHeader::flags bits, mirroring the .sobs convention.
 inline constexpr uint32_t kTargetFlagOpenLeaves = 2u;
+// Every position in this file is a full sweep of its legal candidates (capped;
+// see TargetPositionHeader::num_legal_moves) rather than a stratified sample.
+// Such a file is evaluation-only -- the A3 gate metrics need the tail moves the
+// stratified sample cannot see -- so the trainer assigns it to the held-out
+// side and never trains on it.
+inline constexpr uint32_t kTargetFlagFullSweep = 4u;
 
 // FP16 teacher inference can overflow the score-diff std readout to +inf on
 // near-terminal states: the exported graph's Softplus is evaluated naively in
@@ -78,7 +89,11 @@ struct TargetPositionHeader {
   uint32_t game_index;      // game within the companion .slog file
   uint32_t turn_index;      // pre-move turn the candidates were sampled at
   uint32_t num_candidates;  // records that follow
-  uint32_t reserved;
+  // Legal moves the position had, so a sweep truncated by the candidate cap is
+  // visible as num_candidates < num_legal_moves rather than passing for a
+  // complete sweep. 0 means "not recorded" -- every stratified position, whose
+  // candidate count says nothing about the position's size.
+  uint32_t num_legal_moves;
 };
 static_assert(sizeof(TargetPositionHeader) == 16, "TargetPositionHeader must be 16 bytes");
 
@@ -97,8 +112,10 @@ class TargetWriter {
   TargetWriter& operator=(const TargetWriter&) = delete;
 
   // `targets` is candidates.size() x record_floats, candidate-major.
+  // `num_legal_moves` is the position's legal-move count for a swept position,
+  // 0 for a stratified one (see TargetPositionHeader).
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
-                    const std::vector<float>& targets);
+                    const std::vector<float>& targets, uint32_t num_legal_moves = 0);
 
   void close();
 

@@ -19,6 +19,13 @@ Every metric is paired with an incumbent-baseline value computed on the same
 positions from the stored candidate order (_baseline_ranking). Ranking is by
 win-equity P(win)+0.5*P(draw), the same scalar both models are scored on, so
 the comparison is apples-to-apples.
+
+The metrics mean what the roadmap's A3 gate asks only on a full-sweep dataset,
+where a position's candidates are all of its legal moves: over a stratified
+sample they score the model on ~15 candidates it was trained on and cannot see
+the tail moves the filter exists to catch. Nothing here treats the two
+differently -- a swept position is just a position with far more candidates --
+so the caller chooses the dataset the numbers are read on.
 """
 
 from __future__ import annotations
@@ -30,6 +37,13 @@ from .model import win_equity
 
 DEFAULT_KS = (1, 3, 5)
 
+# Moves per forward pass. Each move materializes its own copy of its position's
+# 225 board tokens to attend into, so it is the candidate count -- not the
+# position count -- that bounds activation memory once swept positions carry
+# hundreds of candidates apiece. Over stratified positions (~15 candidates) this
+# bound never binds before the position bound does.
+MAX_CANDIDATES_PER_BATCH = 1024
+
 # Move-input tensors passed positionally to the model's forward.
 _MOVE_KEYS = (
     "move_letters",
@@ -39,6 +53,21 @@ _MOVE_KEYS = (
     "move_scalars",
     "move_pos_id",
 )
+
+
+def eval_slice_line(dataset) -> str:
+    """One line describing what the gate metrics are being read on, for a
+    trainer's startup log. Recall and regret are A3 gate numbers only over full
+    sweeps; over a stratified holdout they are a provisional reading, and that
+    belongs next to them. For a sweep, how much of each position the generator's
+    candidate cap reached is part of the reading."""
+    if not dataset.full_sweep:
+        return "eval slice: stratified (recall/regret are provisional -- no tail coverage)"
+    coverage, truncated = dataset.sweep_coverage
+    return (
+        f"eval slice: full sweep, {coverage:.3f} mean coverage of legal moves, "
+        f"{truncated}/{dataset.num_positions} positions truncated by the cap"
+    )
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
@@ -76,15 +105,23 @@ def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
 
 
 def _baseline_ranking(n: int) -> np.ndarray:
-    """The incumbent's ranking, encoded descending-by-stored-index: the
-    generator stores the played move first (HastyBot's own choice -- the
-    equity argmax outside the endgame, the solver's move inside it), then the
-    equity ranking's head. Beyond the top stratum the stored order is a
-    shuffled sample, so baseline rank metrics over the full set (Spearman)
-    are a floor, while top-k metrics for k <= 1 + quota_top are exact. One
-    known smudge: on the rare positions where the dataset's non-finite-target
-    filter dropped the stored-first candidate, index 0 is the next surviving
-    candidate rather than the move the incumbent played."""
+    """The incumbent's ranking, encoded descending-by-stored-index, which the
+    generator's storage order is chosen to make exact.
+
+    On a full-sweep position the stored order IS the static-equity ranking
+    (move_set_eval_candidates.h keeps the sweep a subsequence of it), so every
+    baseline metric here is the true incumbent's -- which is what the A3 gate
+    compares the learned filter against.
+
+    On a stratified position the generator stores the played move first
+    (HastyBot's own choice: the equity argmax outside the endgame, the solver's
+    move inside it), then the equity ranking's head; beyond the top stratum the
+    order is a shuffled sample. Baseline rank metrics over the full set
+    (Spearman) are then a floor, and top-k metrics are exact only for
+    k <= 1 + quota_top. One known smudge: on the rare positions where the
+    dataset's non-finite-target filter dropped the stored-first candidate,
+    index 0 is the next surviving candidate rather than the move the incumbent
+    played."""
     return -np.arange(n, dtype=np.float64)
 
 
@@ -96,6 +133,7 @@ def evaluate(
     positions_per_batch: int = 64,
     ks=DEFAULT_KS,
     seed: int = 0,
+    max_candidates_per_batch: int = MAX_CANDIDATES_PER_BATCH,
 ) -> dict[str, float]:
     """Run the model over `dataset` and return the ranking metrics, each
     paired with the incumbent baseline computed on the same positions (see
@@ -115,7 +153,9 @@ def evaluate(
     spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
 
-    for batch in dataset.iter_batches(positions_per_batch, seed=seed):
+    for batch in dataset.iter_batches(
+        positions_per_batch, seed=seed, max_candidates=max_candidates_per_batch
+    ):
         inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
         move_args = tuple(batch[key].to(device) for key in _MOVE_KEYS)
         out = model(*inputs, *move_args)

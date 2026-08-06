@@ -20,8 +20,9 @@ import sys
 import torch
 from scribblez.ffi import set_contingent_features, set_opp_leave_input
 from scribblez.move_set_eval.dataset import MsetDataset
-from scribblez.move_set_eval.eval import evaluate
+from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -31,12 +32,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Train the move set evaluation model from .mset/.slog pairs.",
         formatter_class=ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--data-dir", required=True, help="Directory of .mset/.slog training pairs.")
+    p.add_argument(
+        "--data-dir",
+        required=True,
+        help="Directory of .mset/.slog pairs. Its full-sweep pairs, if any, become the "
+        "held-out set for the recall/regret metrics and are never trained on.",
+    )
     p.add_argument(
         "--holdout-dir",
         default=None,
-        help="Directory of held-out .mset/.slog pairs for the recall metric. "
-        "Defaults to evaluating on the training set (a smoke check, not a real held-out score).",
+        help="Directory of held-out .mset/.slog pairs for the recall metric, overriding any "
+        "full-sweep pairs in --data-dir. With neither, the metrics run on the training set "
+        "(a smoke check, not a real held-out score).",
     )
     p.add_argument("--epochs", type=int, default=20, help="Training epochs.")
     p.add_argument("--batch-positions", type=int, default=64, help="Positions per batch.")
@@ -67,8 +74,22 @@ def main() -> int:
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 
-    train_ds = MsetDataset(args.data_dir)
-    holdout_ds = MsetDataset(args.holdout_dir) if args.holdout_dir else train_ds
+    pairs = complete_pairs(args.data_dir)
+    if not pairs:
+        raise FileNotFoundError(f"No .mset files with a companion .slog in {args.data_dir}")
+    train_files, swept_files = partition_full_sweep(pairs)
+    if not train_files:
+        raise FileNotFoundError(
+            f"only full-sweep pairs in {args.data_dir}; those are the held-out evaluation "
+            "slice, so there is nothing to train on"
+        )
+    train_ds = MsetDataset(mset_files=train_files)
+    if args.holdout_dir:
+        holdout_ds = MsetDataset(args.holdout_dir)
+    elif swept_files:
+        holdout_ds = MsetDataset(mset_files=swept_files)
+    else:
+        holdout_ds = train_ds
     # The board input arm must carry the opponent-leave block iff the targets
     # were generated under the open-leaves condition.
     if train_ds.open_leaves:
@@ -77,6 +98,7 @@ def main() -> int:
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
         f"eval: {holdout_ds.num_positions} positions (open_leaves={train_ds.open_leaves})"
     )
+    print(eval_slice_line(holdout_ds))
 
     model = MoveSetEvalModel(
         spatial_planes=train_ds.spatial_planes,

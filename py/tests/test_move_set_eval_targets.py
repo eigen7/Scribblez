@@ -126,6 +126,72 @@ def test_mset_model_hash_consistent_across_files(mset_dir):
     assert len(hashes) == 1
 
 
+def _run_full_sweep(slog_dir: Path, onnx_path: Path, cap: int):
+    return subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={slog_dir}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            "--full-sweep",
+            f"--sweep-cap={cap}",
+            "--positions-per-game=2",
+            "--threads=4",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path):
+    """The evaluation slice: an uncapped sweep labels a position's whole legal
+    move set -- orders of magnitude past the stratified quota -- and stamps the
+    file full-sweep so the trainer holds it out."""
+    _skip_unless_runnable()
+    subprocess.run([str(SLOG_WRITER), str(tmp_path), "4", "4"], check=True, capture_output=True)
+    onnx_path = tmp_path / "teacher.onnx"
+    _export_tiny_teacher(onnx_path)
+
+    result = _run_full_sweep(tmp_path, onnx_path, cap=100000)
+    assert result.returncode == 0, f"full-sweep run failed: {result.stderr}"
+    msets = sorted(tmp_path.glob("*.mset"))
+    assert msets, "no .mset produced"
+
+    biggest = 0
+    for path in msets:
+        parsed = read_mset(path)
+        assert parsed.full_sweep
+        for pos in parsed.positions:
+            # Uncapped, the sweep is complete: candidates == the legal count.
+            assert pos.num_legal_moves == len(pos.moves)
+            assert pos.targets.shape == (len(pos.moves), len(TARGET_NAMES_V1))
+            biggest = max(biggest, len(pos.moves))
+    assert biggest > 1 + sum(QUOTAS.values()), "a sweep should dwarf the stratified sample"
+
+
+def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path):
+    """Under a cap the sweep is a prefix of the equity ranking plus the
+    exchanges and the played move, and the shortfall against the recorded legal
+    count is what makes the truncation visible."""
+    _skip_unless_runnable()
+    subprocess.run([str(SLOG_WRITER), str(tmp_path), "4", "4"], check=True, capture_output=True)
+    onnx_path = tmp_path / "teacher.onnx"
+    _export_tiny_teacher(onnx_path)
+
+    assert _run_full_sweep(tmp_path, onnx_path, cap=3).returncode == 0
+    truncated = 0
+    for path in sorted(tmp_path.glob("*.mset")):
+        buf = read_slog_bytes(path.with_suffix(".slog"))
+        metas = game_metas(buf)
+        for pos in read_mset(path).positions:
+            assert len(pos.moves) <= pos.num_legal_moves
+            truncated += len(pos.moves) < pos.num_legal_moves
+            played = move_at(buf, metas[pos.game_index], pos.turn_index).tobytes()
+            assert any(pos.moves[i].tobytes() == played for i in range(len(pos.moves)))
+    assert truncated > 0, "a cap of 3 should truncate some position"
+
+
 def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
     """The pre-scan guard: a face-up-leaves .slog paired with a teacher whose
     ONNX does not declare opp_leave_input must fail before any .mset is

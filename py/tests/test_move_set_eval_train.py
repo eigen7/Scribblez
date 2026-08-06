@@ -4,6 +4,7 @@ tiny generated .mset/.slog corpus (GPU, since the target generator builds a
 TensorRT engine).
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,8 +14,11 @@ import torch
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 
-TARGET_GENERATOR = Path("/workspace/repo/target/engine/move_set_eval_target_generator")
-SLOG_WRITER = Path("/workspace/repo/target/engine/test_slog_writer")
+# This checkout's own binaries, so a worktree's tests exercise the code built
+# beside them rather than the primary checkout's (as in test_move_set_eval_targets.py).
+_ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+TARGET_GENERATOR = _ENGINE_DIR / "move_set_eval_target_generator"
+SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 QUOTAS = {"top": 3, "mid": 2, "tail": 2, "exchange": 1}
@@ -103,6 +107,66 @@ def corpus_dir(tmp_path_factory) -> Path:
     return d
 
 
+@pytest.fixture(scope="module")
+def sweep_dir(corpus_dir, tmp_path_factory) -> Path:
+    """The same games labeled in the generator's full-sweep mode: the held-out
+    evaluation slice, whose positions carry hundreds of candidates each."""
+    d = tmp_path_factory.mktemp("move_set_eval_sweep")
+    for slog in sorted(corpus_dir.glob("*.slog")):
+        shutil.copy(slog, d / slog.name)
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={d}",
+            f"--model={corpus_dir / 'teacher.onnx'}",
+            "--fast-build",
+            "--full-sweep",
+            "--sweep-cap=400",
+            "--positions-per-game=1",
+            "--threads=4",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"full-sweep generator failed: {result.stderr}"
+    return d
+
+
+def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
+    """The A3 gate path end to end: a swept holdout is far larger per position
+    than a stratified one, so this exercises the candidate-budget batching and
+    the metrics over full legal sets."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.eval import evaluate
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    ds = MsetDataset(sweep_dir)
+    assert ds.full_sweep
+    assert ds.num_candidates / ds.num_positions > 20  # nothing like a 15-candidate sample
+    coverage, _ = ds.sweep_coverage
+    assert 0.0 < coverage <= 1.0
+
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        spatial_planes=ds.spatial_planes,
+        scalar_size=ds.scalar_size,
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    metrics = evaluate(
+        model, ds, torch.device("cpu"), positions_per_batch=64, max_candidates_per_batch=256
+    )
+    assert metrics["positions"] == ds.num_positions
+    for k in (1, 3, 5):
+        assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
+        assert metrics[f"regret@{k}"] >= 0.0
+    # The baseline over a sweep is the exact static-equity ranking, which is a
+    # real move ordering rather than a shuffle: it must beat a coin flip.
+    assert metrics["spearman_baseline"] > 0.0
+
+
 def test_dataset_batches_flatten_candidates(corpus_dir):
     from scribblez.move_set_eval.dataset import MsetDataset
 
@@ -176,41 +240,114 @@ def test_train_step_and_eval(corpus_dir):
         assert -1.0 <= metrics[f"spearman{suffix}"] <= 1.0
 
 
-def _write_mset(path, positions):
-    """Hand-pack a minimal v1 .mset (layout mirrored by targets.py's dtypes)."""
+def _write_mset(path, positions, flags=0):
+    """Hand-pack a minimal v1 .mset (layout mirrored by targets.py's dtypes),
+    plus its companion .slog. A position is (game_index, turn_index, targets),
+    optionally followed by the swept position's legal-move count."""
     from scribblez.move_set_eval import targets as T
 
     parts = []
     hdr = np.zeros(1, dtype=T._FILE_HEADER)
     hdr["magic"], hdr["version"] = T.MSET_MAGIC, T.MSET_VERSION
     hdr["num_positions"], hdr["record_floats"] = len(positions), 5
+    hdr["flags"] = flags
     hdr["model_hash"] = b"cafe"
     parts.append(hdr.tobytes())
-    for game_index, turn_index, targets in positions:
+    for game_index, turn_index, targets, *legal in positions:
         ph = np.zeros(1, dtype=T._POSITION_HEADER)
         ph["game_index"], ph["turn_index"] = game_index, turn_index
         ph["num_candidates"] = len(targets)
+        ph["num_legal_moves"] = legal[0] if legal else 0
         parts.append(ph.tobytes())
         rec = np.zeros(len(targets), dtype=T._record_dtype(5))
         rec["targets"] = targets
         parts.append(rec.tobytes())
     path.write_bytes(b"".join(parts))
+    path.with_suffix(".slog").touch()
+
+
+def _targets(k):
+    return np.tile(np.array([0.2, 0.1, 0.7, 3.0, 5.0], dtype=np.float32), (k, 1))
 
 
 def test_dataset_drops_non_finite_teacher_targets(tmp_path):
     from scribblez.move_set_eval.dataset import MsetDataset
 
-    finite = np.tile(np.array([0.2, 0.1, 0.7, 3.0, 5.0], dtype=np.float32), (3, 1))
+    finite = _targets(3)
     partly_bad = finite.copy()
     partly_bad[1, 4] = np.inf
     all_bad = np.full((2, 5), np.inf, dtype=np.float32)
     _write_mset(tmp_path / "a.mset", [(0, 0, finite), (0, 1, partly_bad), (0, 2, all_bad)])
-    (tmp_path / "a.slog").touch()
 
     ds = MsetDataset(tmp_path)
     assert ds.num_positions == 2  # the all-bad position is gone entirely
     assert ds.num_candidates == 5  # 3 finite + 2 surviving from the partly-bad
     assert ds.dropped_candidates == 3
+
+
+def test_dataset_reads_the_sweep_flag_and_its_truncation(tmp_path):
+    """A swept file declares itself full-sweep and carries each position's
+    legal-move count, so how much of the position the generator's cap actually
+    reached is readable rather than assumed."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.eval import eval_slice_line
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    _write_mset(
+        tmp_path / "sweep.mset",
+        [(0, 0, _targets(4), 4), (0, 1, _targets(6), 12)],  # complete, then capped at half
+        flags=MSET_FLAG_FULL_SWEEP,
+    )
+    ds = MsetDataset(tmp_path)
+    assert ds.full_sweep
+    coverage, truncated = ds.sweep_coverage
+    assert coverage == pytest.approx(0.75)  # mean of 4/4 and 6/12
+    assert truncated == 1
+    assert "full sweep" in eval_slice_line(ds)
+
+    # A stratified corpus records no legal counts, so nothing is claimed about
+    # coverage and the eval line says the metrics are provisional.
+    _write_mset(tmp_path / "strat.mset", [(0, 0, _targets(3))])
+    (tmp_path / "sweep.mset").unlink()
+    strat = MsetDataset(tmp_path)
+    assert not strat.full_sweep
+    assert strat.sweep_coverage == (1.0, 0)
+    assert "provisional" in eval_slice_line(strat)
+
+
+def test_dataset_refuses_to_mix_swept_and_stratified_files(tmp_path):
+    """Swept positions are evaluation-only; one dataset holding both kinds is
+    exactly the leak the file-level routing exists to prevent."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, partition_full_sweep
+
+    _write_mset(tmp_path / "strat.mset", [(0, 0, _targets(3))])
+    _write_mset(tmp_path / "sweep.mset", [(0, 0, _targets(9), 40)], flags=MSET_FLAG_FULL_SWEEP)
+    with pytest.raises(ValueError, match="mixes header flags"):
+        MsetDataset(tmp_path)
+
+    stratified, swept = partition_full_sweep(sorted(tmp_path.glob("*.mset")))
+    assert [p.name for p in stratified] == ["strat.mset"]
+    assert [p.name for p in swept] == ["sweep.mset"]
+    assert not MsetDataset(mset_files=stratified).full_sweep
+    assert MsetDataset(mset_files=swept).full_sweep
+
+
+def test_batches_are_bounded_by_candidates_not_just_positions(tmp_path):
+    """A swept position carries hundreds of candidates, so the position count
+    alone stops bounding what a batch costs; the candidate budget takes over,
+    and a position too big for it still forms a batch of its own."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    _write_mset(tmp_path / "a.mset", [(0, t, _targets(10), 10) for t in range(6)])
+    ds = MsetDataset(tmp_path)
+
+    batches = list(ds._batches_of(range(ds.num_positions), 100, max_candidates=25))
+    assert [len(b) for b in batches] == [2, 2, 2]  # 20 candidates fits, 30 does not
+    # Without a candidate budget the position bound is the only one.
+    assert [len(b) for b in ds._batches_of(range(ds.num_positions), 4, None)] == [4, 2]
+    # A single position over budget is not splittable, so it batches alone.
+    assert [len(b) for b in ds._batches_of(range(ds.num_positions), 100, 4)] == [1] * 6
 
 
 def test_regret_and_baseline_ranking_semantics():

@@ -3,14 +3,15 @@
 Sibling to the position_eval / max_move_per_lane trainers, but a fixed-corpus
 loop rather than a generational consumer: the corpus is the tag's slogs/ pair
 store (grown by the generate role, usually paused during training), split at
-file level into train and held-out pairs, and trained for `train_epochs`
-epochs. Each epoch records losses and the held-out top-K recall / Spearman
-metrics to the tag's dashboard DB (the Loss tab's curves), publishes a stats
-sample (the Stats tab), and saves the rolling checkpoint -- pausing and
-restarting the worker resumes at the next epoch. The base learning rate is a
-live control (Controls tab), adopted at the next epoch. The generational
-consume->train lifecycle (docs/generational_teacher.md) replaces this loop
-when it lands.
+file level into train and held-out pairs -- the held-out side being the
+store's full-sweep pairs, the only ones the A3 gate metrics mean anything on
+-- and trained for `train_epochs` epochs. Each epoch records losses and the
+held-out top-K recall / Spearman metrics to the tag's dashboard DB (the Loss
+tab's curves), publishes a stats sample (the Stats tab), and saves the rolling
+checkpoint -- pausing and restarting the worker resumes at the next epoch. The
+base learning rate is a live control (Controls tab), adopted at the next
+epoch. The generational consume->train lifecycle
+(docs/generational_teacher.md) replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train); scripts/move_set_eval/train.py
@@ -35,29 +36,29 @@ from scribblez.generational.controls import (
     progress_line,
 )
 from scribblez.move_set_eval.dataset import MsetDataset
-from scribblez.move_set_eval.eval import evaluate
+from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pair_stems
+from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 
 def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
-    """(train, holdout) datasets from the tag's pair store, split at file
-    level. With holdout disabled the metrics run on the training pairs (a
-    smoke check); both datasets must agree on the teacher."""
+    """(train, holdout) datasets from the tag's pair store, split at file level
+    (scribblez.workloads.move_set_eval.split_pairs). With no held-out pairs at
+    all the metrics run on the training pairs (a smoke check); both datasets
+    must agree on the teacher."""
     store = paths.data_dir / SLOGS_DIR
-    stems = [f.stem for f in store.glob("*.mset") if f.with_suffix(".slog").exists()]
-    if not stems:
-        raise FileNotFoundError(f"no complete .slog/.mset pairs in {store}")
-    train_stems, holdout_stems = split_pair_stems(stems, params.holdout_every)
-    train_ds = MsetDataset(mset_files=[store / f"{s}.mset" for s in train_stems])
-    if not holdout_stems:
-        timed_print("holdout disabled (holdout_every=0); metrics are on-train")
+    train_files, holdout_files = split_pairs(store, params.holdout_every)
+    if not train_files:
+        raise FileNotFoundError(f"no complete .slog/.mset training pairs in {store}")
+    train_ds = MsetDataset(mset_files=train_files)
+    if not holdout_files:
+        timed_print("no held-out pairs; metrics are on-train")
         return train_ds, train_ds
-    holdout_ds = MsetDataset(mset_files=[store / f"{s}.mset" for s in holdout_stems])
+    holdout_ds = MsetDataset(mset_files=holdout_files)
     assert holdout_ds.model_hash == train_ds.model_hash, (
         "train/holdout pairs disagree on the teacher hash"
     )
@@ -149,8 +150,10 @@ def run(ctx: WorkerContext) -> int:
         set_opp_leave_input(True)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
-        f"eval: {holdout_ds.num_positions} positions (open_leaves={train_ds.open_leaves})"
+        f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates "
+        f"(open_leaves={train_ds.open_leaves})"
     )
+    print(eval_slice_line(holdout_ds))
 
     model = MoveSetEvalModel(
         spatial_planes=train_ds.spatial_planes,
