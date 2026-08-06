@@ -215,8 +215,8 @@ class MsetDataset:
         positions in a batch and `max_candidates`, if given, the moves: a swept
         position carries hundreds of candidates against a stratified one's ~15,
         so over full-sweep positions the position count alone no longer bounds
-        what a batch costs (every move materializes its own copy of its
-        position's 225 board tokens to attend to).
+        what a batch costs (each candidate carries its own move activations and
+        attention weights on top of its position's board encoding).
         """
         rng = np.random.default_rng(seed + epoch_index)
         order = rng.permutation(len(self._positions))

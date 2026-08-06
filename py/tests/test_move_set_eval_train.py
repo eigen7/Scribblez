@@ -52,6 +52,84 @@ def test_encode_moves_matches_footprint():
     np.testing.assert_allclose(enc["scalars"][0], [0.50, 3 / 7, 1.0], atol=1e-6)
 
 
+def _ragged_batch(counts: list[int], seed: int = 0) -> dict[str, torch.Tensor]:
+    """A random flattened candidate batch shaped the way the dataset emits one:
+    per-position blocks concatenated in position order, `counts[i]` moves for
+    position i. Float inputs are float64 so an equivalence check can be tight."""
+    from scribblez.dataset import row_layout
+
+    input_shapes, _ = row_layout()
+    spatial_shape = tuple(input_shapes[0].dims)
+    scalar_size = int(input_shapes[1].dims[0])
+    max_tiles, num_scalars, letter_vocab, cells = move_enc.move_encoding_dims()
+
+    p, m = len(counts), sum(counts)
+    gen = torch.Generator().manual_seed(seed)
+    return {
+        "input_spatial": torch.rand(p, *spatial_shape, generator=gen, dtype=torch.float64),
+        "input_scalar": torch.rand(p, scalar_size, generator=gen, dtype=torch.float64),
+        "move_letters": torch.randint(0, letter_vocab, (m, max_tiles), generator=gen),
+        "move_blanks": torch.randint(0, 2, (m, max_tiles), generator=gen),
+        "move_squares": torch.randint(0, cells, (m, max_tiles), generator=gen),
+        "move_tile_mask": (torch.rand(m, max_tiles, generator=gen) > 0.4).double(),
+        "move_scalars": torch.randn(m, num_scalars, generator=gen, dtype=torch.float64),
+        "move_pos_id": torch.repeat_interleave(torch.arange(p), torch.tensor(counts)),
+    }
+
+
+_FORWARD_KEYS = (
+    "input_spatial",
+    "input_scalar",
+    "move_letters",
+    "move_blanks",
+    "move_squares",
+    "move_tile_mask",
+    "move_scalars",
+    "move_pos_id",
+)
+
+
+def test_scoring_is_independent_across_positions():
+    """A candidate's outputs depend only on its own features and its own
+    position's board -- never on which other candidates share the batch.
+
+    The cross-attention packs the flattened move set into a padded (P, maxK)
+    query grid so the board's key/value projections run once per position, and
+    this independence is what makes that safe: queries never attend to each
+    other, so the pad rows cannot reach the real ones and the ragged counts
+    cannot leak across positions. Scoring a ragged batch in one call must
+    therefore reproduce scoring each of its positions alone.
+    """
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    counts = [1, 5, 12, 3, 8]  # ragged, including the maxK position and a singleton
+    batch = _ragged_batch(counts)
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        spatial_planes=batch["input_spatial"].shape[1],
+        scalar_size=batch["input_scalar"].shape[1],
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    model = model.double().eval()
+
+    with torch.no_grad():
+        joint = model(*(batch[k] for k in _FORWARD_KEYS))
+
+    start = 0
+    for i, k in enumerate(counts):
+        moves = slice(start, start + k)
+        solo_args = [batch["input_spatial"][i : i + 1], batch["input_scalar"][i : i + 1]]
+        solo_args += [batch[key][moves] for key in _FORWARD_KEYS[2:-1]]
+        solo_args.append(torch.zeros(k, dtype=torch.int64))
+        with torch.no_grad():
+            solo = model(*solo_args)
+        for name, value in solo.items():
+            torch.testing.assert_close(value, joint[name][moves], rtol=0, atol=1e-12)
+        start += k
+
+
 @pytest.fixture(scope="module")
 def corpus_dir(tmp_path_factory) -> Path:
     """A tiny .slog corpus labeled with .mset targets from a small teacher."""

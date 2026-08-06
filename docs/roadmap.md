@@ -280,17 +280,18 @@ Then the spine proper:
   - *The move-set-evaluation agent itself*: top-K by the move set
     evaluation model → sim → pick by sim, matched against the sim agent
     baseline and against the exact-evaluation agent. Its missing ONNX
-    export and engine runtime are a design task, not plumbing: the current
-    model materializes a per-move copy of the board tokens (gigabytes at
-    two-blank `N`), and the evaluation service API speaks flat fixed-width
-    rows — so the export needs a chunked candidate axis or shared board
-    keys, plus a two-input service API, decided before the ONNX graph is
-    frozen. That per-move copy is not only an export problem: measured on
-    an RTX 5000 Ada, grouping the cross-attention by position instead
-    (board K/V projected once per position rather than once per move) is
-    ~36–50× on the attention at full-sweep batch shapes — ~80% of the eval
-    forward — and ~18× at stratified training shapes, so it is a training
-    and eval speedup available before any export work.
+    export and engine runtime are a design task, not plumbing. Shared
+    board keys — the cross-attention grouped by position, so the board's
+    K/V project once per position rather than once per move — has landed
+    on the training and eval side (a pure re-association, outputs
+    unchanged; ~8× on the attention at stratified training shapes, ~60× at
+    full-sweep eval shapes, 1.8× on a whole training step, and the per-move
+    board-token copy that made a swept batch cost gigabytes is gone). What
+    is left is export-specific: the evaluation service API speaks flat
+    fixed-width rows, so the graph still needs a two-input service API and
+    a candidate axis — either the padded per-position grid the training
+    model now uses, or a chunked one — decided before the ONNX graph is
+    frozen.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.
