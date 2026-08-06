@@ -519,41 +519,60 @@ def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
     assert trainer.store_is_ready(store, _params(warmup_pairs=3, sweep_every=0)) == (True, "")
 
 
-def test_corpus_is_final_only_at_the_generation_target(tmp_path):
-    """The trainer's signal that its corpus is done. A declared target answers
-    outright; without one it falls back to 'nothing new arrived'."""
-    from types import SimpleNamespace
-
+def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
+    """The trainer's signal that its corpus is done. Reaching the declared size
+    is not enough on its own: a second generate worker that was mid-cycle when
+    the first crossed the target still has pairs to land, and epochs counted
+    before they do would be scored against a different holdout than the ones
+    after."""
     from scribblez.move_set_eval import trainer
 
     store = tmp_path / "slogs"
     store.mkdir()
-    paths = SimpleNamespace(data_dir=tmp_path)
     for i in range(2):
         _pair(store, f"s{i}")
+    clock = trainer.CorpusClock(store, _params(target_pairs=3))
 
-    targeted = _params(target_pairs=3)
-    assert not trainer.corpus_is_final(paths, targeted, absorbed=0)  # short, despite a quiet pass
+    assert not clock.is_final(absorbed=0)  # short of the target
     _pair(store, "s2")
-    assert trainer.corpus_is_final(paths, targeted, absorbed=99)  # at target, despite new data
+    assert not clock.is_final(absorbed=40)  # at the target, but pairs still landing
+    assert clock.is_final(absorbed=0)  # quiet at the target
 
-    untargeted = _params(target_pairs=0)
-    assert trainer.corpus_is_final(paths, untargeted, absorbed=0)
-    assert not trainer.corpus_is_final(paths, untargeted, absorbed=1)
+
+def test_corpus_clock_will_not_call_a_growing_store_final_without_a_target(tmp_path):
+    """With no declared size, a single quiet pass says only that the pass fell
+    between two deliveries -- the trainer must not retire on it. A store that
+    has never grown under this worker is a different case: nothing is behind
+    it, so it is final at once."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "s0")
+    params = _params(target_pairs=0)
+
+    static = trainer.CorpusClock(store, params)
+    assert static.is_final(absorbed=0)  # an existing corpus, no generator behind it
+
+    growing = trainer.CorpusClock(store, params)
+    assert not growing.is_final(absorbed=12)
+    assert not growing.is_final(absorbed=0)  # quiet, but only since a moment ago
+    assert not growing.is_final(absorbed=0)
+    growing._last_growth -= trainer.QUIET_SECONDS  # the generator has been gone a while
+    assert growing.is_final(absorbed=0)
 
 
 def test_a_growing_corpus_never_exhausts_the_epoch_budget():
     """The failure this budget rule exists to prevent: passes taken while the
     generator is still delivering must not spend `train_epochs`, or a trainer
     started early retires having only ever seen the corpus's first minutes."""
-    from scribblez.generational.checkpoint import GenerationalState
-    from scribblez.move_set_eval.trainer import epochs_left
+    from scribblez.move_set_eval.trainer import MsetTrainState, epochs_left
 
     params = _params(train_epochs=20)
-    growing = GenerationalState(generation_index=500, settled_epochs=0)
+    growing = MsetTrainState(generation_index=500, settled_epochs=0)
     assert epochs_left(params, growing)
 
-    settled = GenerationalState(generation_index=520, settled_epochs=20)
+    settled = MsetTrainState(generation_index=520, settled_epochs=20)
     assert not epochs_left(params, settled)
     assert epochs_left(_params(train_epochs=0), settled)  # 0 = run until paused
 
@@ -606,7 +625,6 @@ def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path)
     """
     from types import SimpleNamespace
 
-    from scribblez.generational.checkpoint import GenerationalState
     from scribblez.move_set_eval import trainer
     from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
 
@@ -630,12 +648,13 @@ def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path)
 
     train_ds, holdout_ds = trainer.load_datasets(paths, params)
     started_with = train_ds.num_positions
-    state = GenerationalState()
+    state = trainer.MsetTrainState()
+    clock = trainer.CorpusClock(store, params)
 
     passes = 0
     while trainer.epochs_left(params, state):
         absorbed = trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds)
-        settled = trainer.corpus_is_final(paths, params, absorbed)
+        settled = clock.is_final(absorbed)
         state.settled_epochs += int(settled)
         state.generation_index += 1
         passes += 1
@@ -649,3 +668,122 @@ def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path)
     assert train_ds.num_positions == (len(delivered) - swept_pairs) * 4
     assert holdout_ds.num_positions == swept_pairs * 4
     assert train_ds.num_positions > started_with  # it did not train the snapshot it started on
+
+
+def test_a_small_generation_target_releases_the_wait_rather_than_hanging(tmp_path):
+    """A target below warmup_pairs, or too small to have drawn a swept pair,
+    would otherwise leave the trainer polling for pairs no one will ever
+    deliver -- a tag that can never finish, with both workers looking alive."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    params = _params(warmup_pairs=100, target_pairs=3, sweep_every=20)
+
+    for i in range(2):
+        _pair(store, f"s{i}")
+    assert not trainer.store_is_ready(store, params)[0]  # still short of the target
+
+    _pair(store, "s2")  # target reached, though warmup and the sweep gate are not
+    assert trainer.store_is_ready(store, params) == (True, "")
+
+
+# Drives trainer.run() in its own process: run() fixes the FFI session's
+# feature arm, which is process-wide and already set by the time any other test
+# in this file has touched the dataset.
+_DRIVE_RUN = """
+import sys, torch
+from types import SimpleNamespace
+from pathlib import Path
+from scribblez.move_set_eval import trainer
+from scribblez.workloads.move_set_eval import MoveSetEvalParams
+
+root = Path(sys.argv[1])
+pairs = len(list((root / "slogs").glob("*.mset")))
+params = MoveSetEvalParams(
+    warmup_pairs=1,
+    target_pairs=pairs,   # already at size, so every pass is over a final corpus
+    train_epochs=2,
+    batch_positions=8,
+    trunk_channels=8,
+    num_blocks=2,
+    num_heads=2,
+)
+paths = SimpleNamespace(
+    root=root,
+    data_dir=root,
+    dashboard_db=root / "dashboard.db",
+    rolling_checkpoint=root / "checkpoints" / "model.pt",
+)
+ctx = SimpleNamespace(
+    params=params, tag="t", worker_id="w0", threads=1,
+    sink=SimpleNamespace(kind="local", push_json=lambda *a, **k: None),
+    role=SimpleNamespace(name="train"), provenance={},
+    tag_paths=lambda: paths,
+)
+assert trainer.run(ctx) == 0, "run() did not exit cleanly"
+
+saved = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
+assert saved["settled_epochs"] == 2, saved["settled_epochs"]
+assert saved["generation_index"] == 2, saved["generation_index"]
+assert saved["rows_trained"] > 0, saved["rows_trained"]
+print("OK")
+"""
+
+
+def test_run_stops_after_its_budget_over_the_finished_corpus(corpus_dir, sweep_dir, tmp_path):
+    """trainer.run() itself, end to end on a real corpus: it must spend its
+    budget on passes over the finished store and then stop.
+
+    The hand-driven test above exercises the helpers; only calling run() proves
+    the loop spends the budget where the trainer actually spends it.
+    """
+    # The sweep fixture relabels the SAME .slog stems, so the swept pairs are
+    # copied under their own stems rather than overwriting the stratified ones.
+    store = tmp_path / "slogs"
+    store.mkdir()
+    for src in corpus_dir.glob("*.mset"):
+        for member in (src, src.with_suffix(".slog")):
+            shutil.copy(member, store / member.name)
+    for src in sweep_dir.glob("*.mset"):
+        for member in (src, src.with_suffix(".slog")):
+            shutil.copy(member, store / f"sweep-{member.name}")
+    assert len(list(store.glob("*.mset"))) > len(list(corpus_dir.glob("*.mset")))
+
+    script = tmp_path / "drive_run.py"
+    script.write_text(_DRIVE_RUN)
+    # Bounded: a budget that never advances makes run() loop forever, which is
+    # the production symptom -- it has to surface as a failure, not a hang.
+    try:
+        out = subprocess.run(
+            [sys.executable, str(script), str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("trainer.run() did not stop: the epoch budget is not being spent")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "OK" in out.stdout
+
+
+def test_absorb_grows_a_shared_holdout_once(tmp_path):
+    """With no held-out pairs the metrics run on the training set, and the two
+    dataset handles are the same object -- which must be ingested into once,
+    not twice, or every later pair is counted double."""
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(sweep_every=0, holdout_every=0)  # no holdout at all
+    _pair(store, "a", positions=4)
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    assert holdout_ds is train_ds
+
+    _pair(store, "b", positions=6)
+    assert trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds) == 6
+    assert train_ds.num_positions == 10  # not 16

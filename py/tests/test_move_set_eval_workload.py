@@ -53,20 +53,40 @@ def test_train_role_is_registered():
     assert set(role.stats.phases) == {"train_s", "eval_s"}
 
 
+def _stems(n, off=0, worker=0):
+    """Stems as the generator emits them: a nanosecond timestamp, a worker id."""
+    return [f"{1786038233456124324 + (i + off) * 4_800_000_000}-local-{worker}" for i in range(n)]
+
+
 def test_split_pair_stems_is_deterministic_and_file_level():
-    stems = [f"{i:03d}-local-0" for i in range(10)]
-    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 3)
-    assert holdout == ["000-local-0", "003-local-0", "006-local-0", "009-local-0"]
-    assert sorted(train + holdout) == stems  # a pair is in exactly one side
+    stems = _stems(60)
+    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 20)
+    assert holdout  # a corpus this size gets a holdout
+    assert sorted(train + holdout) == sorted(stems)  # a pair is in exactly one side
+    assert not set(train) & set(holdout)
+    assert move_set_eval.split_pair_stems(stems, 20) == (train, holdout)  # order-free
 
 
-def test_split_pair_stems_is_stable_under_appended_pairs():
-    # Stems are timestamp-prefixed, so later pairs sort after existing ones and
-    # extend the interleaving without reassigning any earlier pair.
-    stems = [f"{i:03d}-local-0" for i in range(10)]
-    _, holdout = move_set_eval.split_pair_stems(stems, 3)
-    _, extended = move_set_eval.split_pair_stems(stems + ["010-local-0", "011-local-0"], 3)
-    assert extended[: len(holdout)] == holdout
+def test_split_pair_stems_holds_out_about_one_in_n():
+    stems = _stems(2000)
+    _, holdout = move_set_eval.split_pair_stems(stems, 20)
+    assert 0.03 < len(holdout) / len(stems) < 0.07
+
+
+def test_split_pair_stems_never_moves_a_pair_between_the_sides():
+    """The trainer re-takes this split as the store grows, so a pair's side has
+    to be a property of the pair. Two generate workers interleave deliveries,
+    so a new stem can sort BEFORE existing ones -- and a pair that changed
+    sides would be one trained on and then scored as held out."""
+    stems = _stems(60)
+    train, holdout = move_set_eval.split_pair_stems(stems, 20)
+
+    # A second worker's late deliveries, timestamped among the existing ones.
+    grown = stems + _stems(20, off=5, worker=1)
+    train2, holdout2 = move_set_eval.split_pair_stems(grown, 20)
+    assert set(holdout).issubset(holdout2)
+    assert set(train).issubset(train2)
+    assert not set(train) & set(holdout2)  # nothing trained on became held out
 
 
 def test_split_pair_stems_zero_disables_holdout():
@@ -89,13 +109,16 @@ def test_split_pairs_holds_out_the_full_sweep_pairs(tmp_path):
 
 
 def test_split_pairs_falls_back_to_holdout_every_without_sweeps(tmp_path):
-    for i in range(6):
-        write_empty_pair(tmp_path, f"{i:03d}-local-0")
+    stems = _stems(60)
+    for stem in stems:
+        write_empty_pair(tmp_path, stem)
     (tmp_path / "orphan.mset").write_bytes(b"")  # no .slog: not a pair
 
-    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=3)
-    assert [p.stem for p in holdout] == ["000-local-0", "003-local-0"]
-    assert len(train) == 4
+    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=20)
+    expected_train, expected_holdout = move_set_eval.split_pair_stems(stems, 20)
+    assert [p.stem for p in holdout] == expected_holdout
+    assert [p.stem for p in train] == expected_train
+    assert holdout and len(train) + len(holdout) == 60
 
 
 def test_sweep_pair_is_a_stable_fraction_of_the_stems():

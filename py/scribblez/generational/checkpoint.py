@@ -7,7 +7,7 @@ loads this and continues exactly where it left off.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 
 import torch
 
@@ -23,16 +23,14 @@ class GenerationalState:
     generation_index: the next generation to train. Each generation is trained
         exactly once, so this is also the metrics / ONNX index its checkpoint
         will be written under.
-    settled_epochs: how many of those passes ran over a corpus that had stopped
-        growing. A trainer whose store is still being written by a generator
-        spends its epoch budget from this rather than from generation_index, so
-        the budget buys passes over the finished corpus; one whose corpus is
-        complete before it starts advances the two together.
+
+    A trainer needing more cursor than this subclasses it and names the subclass
+    to resume(); the checkpoint persists whatever fields the class declares, so
+    the extra state rides along without every other trainer carrying it.
     """
 
     rows_trained: int = 0
     generation_index: int = 0
-    settled_epochs: int = 0
 
 
 def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: dict):
@@ -42,9 +40,7 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "rows_trained": state.rows_trained,
-            "generation_index": state.generation_index,
-            "settled_epochs": state.settled_epochs,
+            **asdict(state),
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "config": config,
@@ -53,20 +49,21 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     )
 
 
-def resume(paths: TagPaths, model, optimizer, device) -> GenerationalState:
-    """Load the rolling checkpoint into `model`/`optimizer` and return the cursor.
-    Returns a fresh zero cursor when no checkpoint exists yet."""
+def resume(
+    paths: TagPaths, model, optimizer, device, state_cls: type = GenerationalState
+) -> GenerationalState:
+    """Load the rolling checkpoint into `model`/`optimizer` and return the cursor,
+    as `state_cls` (a GenerationalState or a subclass of it carrying more).
+    Returns a fresh zero cursor when no checkpoint exists yet; a field the
+    checkpoint predates keeps its default."""
     path = paths.rolling_checkpoint
     if not path.exists():
-        return GenerationalState()
+        return state_cls()
     ckpt = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    state = GenerationalState(
-        rows_trained=int(ckpt["rows_trained"]),
-        generation_index=int(ckpt["generation_index"]),
-        settled_epochs=int(ckpt.get("settled_epochs", 0)),
-    )
+    names = {f.name for f in fields(state_cls)}
+    state = state_cls(**{k: v for k, v in ckpt.items() if k in names})
     print(
         f"Resuming from {path.name}: generation {state.generation_index}, "
         f"{state.rows_trained} rows trained"
