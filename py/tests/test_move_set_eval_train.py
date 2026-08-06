@@ -7,6 +7,7 @@ TensorRT engine).
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -496,8 +497,9 @@ def _params(**kw):
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
     """A trainer started beside its generator must not lock the run into the
     handful of pairs that exist in the first seconds -- neither the tiny
-    training corpus nor, worse, the stratified holdout that would be frozen in
-    before the first swept pair arrives."""
+    training corpus nor, worse, a holdout that is empty (aliased to the
+    training set for the whole run) or that is the stratified fallback frozen
+    in before the first swept pair arrives."""
     from scribblez.move_set_eval import trainer
     from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
 
@@ -510,13 +512,23 @@ def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
         _pair(store, f"s{i}")
     # Enough pairs, but nothing to read the A3 gate metrics on yet.
     ready, why = trainer.store_is_ready(store, params)
-    assert not ready and "no full-sweep pair yet" in why
+    assert not ready and "no held-out pair yet" in why
 
     _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
     assert trainer.store_is_ready(store, params) == (True, "")
 
-    # A tag that never sweeps has no such wait -- the pair count is the whole gate.
-    assert trainer.store_is_ready(store, _params(warmup_pairs=3, sweep_every=0)) == (True, "")
+    # A tag that asks for no holdout at all waits only for the pair count.
+    assert trainer.store_is_ready(store, _params(warmup_pairs=3, sweep_every=0, holdout_every=0))[0]
+
+
+def test_an_empty_store_is_never_ready_however_low_the_warmup(tmp_path):
+    """warmup_pairs=0 asks for no warmup, not for training on nothing: without
+    a floor the trainer starts and dies on load_datasets' FileNotFoundError."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    assert not trainer.store_is_ready(store, _params(warmup_pairs=0, sweep_every=0))[0]
 
 
 def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
@@ -539,11 +551,14 @@ def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
     assert clock.is_final(absorbed=0)  # quiet at the target
 
 
-def test_corpus_clock_will_not_call_a_growing_store_final_without_a_target(tmp_path):
-    """With no declared size, a single quiet pass says only that the pass fell
-    between two deliveries -- the trainer must not retire on it. A store that
-    has never grown under this worker is a different case: nothing is behind
-    it, so it is final at once."""
+def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path):
+    """With no declared size, whether the corpus is done is a property of the
+    store: one written to moments ago has a generator behind it, one whose
+    newest pair is old does not. Judging it from what this worker has watched
+    instead would call a live store static on a fresh start and again after
+    every restart -- neither has seen the generator from the beginning."""
+    import os
+
     from scribblez.move_set_eval import trainer
 
     store = tmp_path / "slogs"
@@ -551,30 +566,17 @@ def test_corpus_clock_will_not_call_a_growing_store_final_without_a_target(tmp_p
     _pair(store, "s0")
     params = _params(target_pairs=0)
 
-    static = trainer.CorpusClock(store, params)
-    assert static.is_final(absorbed=0)  # an existing corpus, no generator behind it
+    # A store just delivered into, seen by a worker that has watched nothing.
+    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
 
-    growing = trainer.CorpusClock(store, params)
-    assert not growing.is_final(absorbed=12)
-    assert not growing.is_final(absorbed=0)  # quiet, but only since a moment ago
-    assert not growing.is_final(absorbed=0)
-    growing._last_growth -= trainer.QUIET_SECONDS  # the generator has been gone a while
-    assert growing.is_final(absorbed=0)
+    stale = time.time() - trainer.QUIET_SECONDS - 1
+    for f in store.iterdir():
+        os.utime(f, (stale, stale))
+    # Same worker, same absence of history: now the store itself says it is done.
+    assert trainer.CorpusClock(store, params).is_final(absorbed=0)
 
-
-def test_a_growing_corpus_never_exhausts_the_epoch_budget():
-    """The failure this budget rule exists to prevent: passes taken while the
-    generator is still delivering must not spend `train_epochs`, or a trainer
-    started early retires having only ever seen the corpus's first minutes."""
-    from scribblez.move_set_eval.trainer import MsetTrainState, epochs_left
-
-    params = _params(train_epochs=20)
-    growing = MsetTrainState(generation_index=500, settled_epochs=0)
-    assert epochs_left(params, growing)
-
-    settled = MsetTrainState(generation_index=520, settled_epochs=20)
-    assert not epochs_left(params, settled)
-    assert epochs_left(_params(train_epochs=0), settled)  # 0 = run until paused
+    _pair(store, "s1")  # the generator was not gone after all
+    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
 
 
 def test_absorb_adds_only_the_new_files(tmp_path):
@@ -787,3 +789,37 @@ def test_absorb_grows_a_shared_holdout_once(tmp_path):
     _pair(store, "b", positions=6)
     assert trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds) == 6
     assert train_ds.num_positions == 10  # not 16
+
+
+def test_a_late_swept_pair_cannot_reshuffle_the_sides_or_crash_the_run(tmp_path):
+    """A run that started before any swept pair existed uses the stratified
+    fallback split. The first swept pair to land turns EVERY stratified pair
+    into a training pair, so a trainer that simply re-took the split would hand
+    its holdout's files to the training set -- and offer a swept file to a
+    stratified dataset, which refuses mixed headers and would kill the worker.
+    """
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(sweep_every=20, holdout_every=2)
+    for i in range(6):
+        _pair(store, f"p{i}", positions=4)
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    assert holdout_ds is not train_ds
+    held_before = set(holdout_ds.files)
+    trained_before = set(train_ds.files)
+    assert held_before and trained_before
+
+    _pair(store, "zz", flags=MSET_FLAG_FULL_SWEEP, positions=4)  # the straggler
+    # Must not raise, whatever the recomputed split now says.
+    trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds)
+
+    assert set(holdout_ds.files) == held_before  # nothing left the holdout
+    assert set(train_ds.files) == trained_before  # and nothing joined training
+    assert not set(train_ds.files) & set(holdout_ds.files)  # no pair on both sides

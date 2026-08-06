@@ -142,6 +142,13 @@ class MsetDataset:
         self._sd_index, self._sd_scale = move_enc.score_diff_input_layout()
 
     @property
+    def flags(self) -> int:
+        """The header flags every file in this corpus carries -- what a caller
+        holding a growing store checks a candidate file against before offering
+        it, since a dataset cannot mix them."""
+        return self._flags
+
+    @property
     def files(self) -> list[Path]:
         """The .mset files ingested so far, in ingest order -- what a caller
         watching a growing store diffs against to find the new ones."""

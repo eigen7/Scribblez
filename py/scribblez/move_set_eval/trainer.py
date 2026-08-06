@@ -44,12 +44,11 @@ from scribblez.generational.controls import (
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
+from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
-from scribblez.workloads.pair_store import count_pairs
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -72,15 +71,16 @@ def store_is_ready(store, params) -> tuple[bool, str]:
     """Whether the pair store holds enough to start training, and why not.
 
     Two conditions, both about not locking the run into a corpus the generator
-    has barely started: enough pairs to be worth a pass, and -- when the tag
-    sweeps at all -- at least one swept pair, so the holdout is the full-sweep
-    slice the A3 gate is read on rather than the stratified fallback that would
-    otherwise be frozen in for good.
+    has barely started: enough pairs to be worth a pass, and -- for a tag that
+    asks for a holdout at all -- a split that actually yields one. Starting
+    without a holdout aliases it to the training set for the whole run, and
+    starting a sweeping tag before its first swept pair would read the gate
+    metrics off the stratified fallback instead of the full-sweep slice.
 
     A store that has reached the tag's generation size overrides both: nothing
     more is coming, so waiting on either could only wait forever. That is what
     keeps a small `target_pairs` -- below `warmup_pairs`, or too small to have
-    drawn a swept pair -- a short run rather than a hung one.
+    drawn a holdout pair -- a short run rather than a hung one.
     """
     pairs = complete_pairs(store) if store.is_dir() else []
     if params.target_pairs and len(pairs) >= params.target_pairs:
@@ -88,10 +88,10 @@ def store_is_ready(store, params) -> tuple[bool, str]:
     needed = max(1, params.warmup_pairs)
     if len(pairs) < needed:
         return False, f"{len(pairs)}/{needed} pairs"
-    if params.sweep_every:
-        _, swept = partition_full_sweep(pairs)
-        if not swept:
-            return False, f"{len(pairs)} pairs, no full-sweep pair yet"
+    if (params.sweep_every or params.holdout_every) and not split_pairs(
+        store, params.holdout_every
+    )[1]:
+        return False, f"{len(pairs)} pairs, no held-out pair yet"
     return True, ""
 
 
@@ -137,12 +137,31 @@ def absorb_new_pairs(paths, params, train_ds: MsetDataset, holdout_ds: MsetDatas
     which is what makes every budgeted epoch's metrics comparable without any
     freezing step. A holdout that is the training set (the no-held-out-pairs
     smoke case) is grown once, not twice.
+
+    A pair's side is fixed the first time it is seen. The store's split can
+    change shape underneath a running trainer -- the first swept pair to land
+    turns every stratified pair into a training pair -- and a file that moved
+    would be one trained on and then scored as held out.
     """
     train_files, holdout_files = split_pairs(paths.data_dir / SLOGS_DIR, params.holdout_every)
-    added = train_ds.absorb(sorted(set(train_files) - set(train_ds.files)))
+    seen = set(train_ds.files) | set(holdout_ds.files)
+    added = train_ds.absorb(_ingestible(train_files, seen, train_ds))
     if holdout_ds is not train_ds:
-        added += holdout_ds.absorb(sorted(set(holdout_files) - set(holdout_ds.files)))
+        added += holdout_ds.absorb(_ingestible(holdout_files, seen, holdout_ds))
     return added
+
+
+def _ingestible(files, seen: set, ds: MsetDataset) -> list:
+    """The files `ds` can take: ones neither side already holds, whose header
+    matches the corpus it holds. A file matching neither side's header sits out
+    the run rather than crashing it -- a swept pair delivered to a tag whose
+    trainer started before any swept pair existed has no side to join, since a
+    dataset cannot mix header flags."""
+    fresh = sorted(f for f in files if f not in seen)
+    usable = [f for f in fresh if read_mset_flags(f) == ds.flags]
+    for skipped in set(fresh) - set(usable):
+        timed_print(f"{skipped.name}: header does not match its side's corpus; left out of the run")
+    return usable
 
 
 # How long the store must sit untouched before a tag that declared no
@@ -163,34 +182,37 @@ class CorpusClock:
     deliver, and counting the budget from before they land would score the
     run's epochs against two different holdouts.
 
-    With no declared size there is no end to read, so growth has to be
-    inferred. A store this worker has never seen grow is static -- an existing
-    corpus being trained on, with no generator behind it -- and is final at
-    once. One that has grown must then stay quiet for QUIET_SECONDS, which a
-    trainer outrunning its generator cannot satisfy in the gap between two
-    deliveries.
+    With no declared size there is no end to read, so growth is judged from
+    when the store was last written: a corpus whose newest pair is older than
+    QUIET_SECONDS has no generator behind it, and one being delivered into
+    never is. That is a property of the store rather than of this worker's own
+    history, so it reads the same on a fresh start, mid-run, and after a
+    restart -- none of which have watched the generator from the beginning.
     """
 
     def __init__(self, store, params):
         self._store = store
         self._params = params
-        self._last_growth = None
 
     def is_final(self, absorbed: int) -> bool:
-        if absorbed:
-            self._last_growth = time.monotonic()
         if self._params.target_pairs:
-            held = count_pairs(self._store, ".mset")
+            # Complete pairs, as every other reader of the store counts: a
+            # sidecar whose .slog has not landed yet is not one the trainer can
+            # use, and delivery writes the sidecar first.
+            held = len(complete_pairs(self._store)) if self._store.is_dir() else 0
             return not absorbed and held >= self._params.target_pairs
-        if self._last_growth is None:
-            return True
-        return time.monotonic() - self._last_growth >= QUIET_SECONDS
+        return time.time() - self._last_delivery() >= QUIET_SECONDS
+
+    def _last_delivery(self) -> float:
+        """When the store was last written to, or 0.0 while it is empty."""
+        if not self._store.is_dir():
+            return 0.0
+        return max((f.stat().st_mtime for f in self._store.glob("*.mset")), default=0.0)
 
 
 def epochs_left(params, state: MsetTrainState) -> bool:
-    """Whether the epoch budget has passes left. It is spent by
-    GenerationalState.settled_epochs rather than by the pass counter, so passes
-    taken while the generator is still delivering do not consume it."""
+    """Whether the epoch budget has passes left -- spent by
+    state.settled_epochs, whose reasoning is on MsetTrainState."""
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
 
 
