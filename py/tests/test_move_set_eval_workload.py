@@ -383,3 +383,63 @@ def test_count_pairs(tmp_path):
     (tmp_path / "a.slog").touch()
     (tmp_path / "b.slog").touch()
     assert pair_store.count_pairs(tmp_path, ".mset") == 1
+
+
+class StoringSink:
+    """A sink that lands pairs in the tag's own data tree, as the local sink
+    does -- which is what a generation target reads to know when to stop."""
+
+    kind = "local"
+
+    def __init__(self, root):
+        self.root = root
+
+    def deliver(self, src, data_rel):
+        dest = self.root / data_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dest)
+        return dest.stat().st_size
+
+    def push_json(self, rel_path, obj):
+        pass
+
+
+def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
+    """A tag with a generation size finishes on its own: the target is read off
+    the store, so it counts what the tag holds rather than what this worker
+    made."""
+    cycles = []
+
+    def fake_cycle(work_dir, params, threads):
+        cycles.append(1)
+        stem = f"c{len(cycles)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {"gen_s": 0.1, "mset_s": 0.2}
+
+    ctx = StubCtx(tmp_path, None, max_cycles=0)  # unbounded but for the target
+    ctx.sink = StoringSink(ctx.tag_paths().data_dir)
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
+    assert len(cycles) == 3
+    assert pair_store.count_pairs(ctx.tag_paths().data_dir / "slogs", ".mset") == 3
+
+    # Restarting against a store already at the target does no work at all.
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
+    assert len(cycles) == 3
+
+
+def test_pair_generate_without_a_target_is_unbounded(tmp_path):
+    """The shared loop is used by workloads that declare no size; they must
+    keep the run-until-paused behavior, and must not have their store counted."""
+    calls = []
+
+    def fake_cycle(work_dir, params, threads):
+        calls.append(1)
+        stem = f"c{len(calls)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {}
+
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=4)
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs") == 0
+    assert len(calls) == 4

@@ -479,3 +479,173 @@ def test_regret_and_baseline_ranking_semantics():
     assert mset_eval._regret(teacher, baseline, 2) == 0.0  # index 1 retained at k=2
     assert mset_eval._regret(teacher, teacher, 1) == 0.0  # perfect ranking forfeits nothing
     assert mset_eval._regret(teacher, baseline, 5) == 0.0  # k caps at the candidate count
+
+
+def _pair(store, stem, flags=0, positions=4):
+    _write_mset(
+        store / f"{stem}.mset", [(0, t, _targets(3)) for t in range(positions)], flags=flags
+    )
+
+
+def _params(**kw):
+    from scribblez.workloads.move_set_eval import MoveSetEvalParams
+
+    return MoveSetEvalParams(**kw)
+
+
+def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
+    """A trainer started beside its generator must not lock the run into the
+    handful of pairs that exist in the first seconds -- neither the tiny
+    training corpus nor, worse, the stratified holdout that would be frozen in
+    before the first swept pair arrives."""
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    params = _params(warmup_pairs=3, sweep_every=20)
+
+    assert trainer.store_is_ready(store, params) == (False, "0/3 pairs")
+    for i in range(3):
+        _pair(store, f"s{i}")
+    # Enough pairs, but nothing to read the A3 gate metrics on yet.
+    ready, why = trainer.store_is_ready(store, params)
+    assert not ready and "no full-sweep pair yet" in why
+
+    _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
+    assert trainer.store_is_ready(store, params) == (True, "")
+
+    # A tag that never sweeps has no such wait -- the pair count is the whole gate.
+    assert trainer.store_is_ready(store, _params(warmup_pairs=3, sweep_every=0)) == (True, "")
+
+
+def test_corpus_is_final_only_at_the_generation_target(tmp_path):
+    """The trainer's signal that its corpus is done. A declared target answers
+    outright; without one it falls back to 'nothing new arrived'."""
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    for i in range(2):
+        _pair(store, f"s{i}")
+
+    targeted = _params(target_pairs=3)
+    assert not trainer.corpus_is_final(paths, targeted, absorbed=0)  # short, despite a quiet pass
+    _pair(store, "s2")
+    assert trainer.corpus_is_final(paths, targeted, absorbed=99)  # at target, despite new data
+
+    untargeted = _params(target_pairs=0)
+    assert trainer.corpus_is_final(paths, untargeted, absorbed=0)
+    assert not trainer.corpus_is_final(paths, untargeted, absorbed=1)
+
+
+def test_a_growing_corpus_never_exhausts_the_epoch_budget():
+    """The failure this budget rule exists to prevent: passes taken while the
+    generator is still delivering must not spend `train_epochs`, or a trainer
+    started early retires having only ever seen the corpus's first minutes."""
+    from scribblez.generational.checkpoint import GenerationalState
+    from scribblez.move_set_eval.trainer import epochs_left
+
+    params = _params(train_epochs=20)
+    growing = GenerationalState(generation_index=500, settled_epochs=0)
+    assert epochs_left(params, growing)
+
+    settled = GenerationalState(generation_index=520, settled_epochs=20)
+    assert not epochs_left(params, settled)
+    assert epochs_left(_params(train_epochs=0), settled)  # 0 = run until paused
+
+
+def test_absorb_adds_only_the_new_files(tmp_path):
+    """Keeping up with a running generator costs the new pairs, not a re-read
+    of the corpus, and the two sides of the split track their own files."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "a", positions=4)
+    ds = MsetDataset(mset_files=[store / "a.mset"])
+    assert ds.num_positions == 4
+    assert [p.name for p in ds.files] == ["a.mset"]
+
+    _pair(store, "b", positions=6)
+    assert ds.absorb([store / "b.mset"]) == 6
+    assert ds.num_positions == 10
+    assert [p.name for p in ds.files] == ["a.mset", "b.mset"]
+    assert ds.absorb([]) == 0  # a quiet pass changes nothing
+
+    # Batches address the absorbed file by its own replay, not the first one's.
+    assert {p.file_id for p in ds._positions} == {0, 1}
+
+
+def test_absorb_refuses_a_file_from_another_corpus(tmp_path):
+    """The mixed-teacher / mixed-condition guard has to hold for files arriving
+    later, not just the ones present at construction."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "a")
+    _pair(store, "swept", flags=MSET_FLAG_FULL_SWEEP)
+    ds = MsetDataset(mset_files=[store / "a.mset"])
+    with pytest.raises(ValueError, match="mixes header flags"):
+        ds.absorb([store / "swept.mset"])
+
+
+def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path):
+    """The whole point, end to end: a trainer started when the store held a
+    fraction of the corpus must finish having trained on all of it, spending
+    its epoch budget only once generation is done.
+
+    This drives run()'s loop verbatim with the training call removed -- the
+    wait, the per-pass absorb, the budget rule -- against a store that grows
+    underneath it, as the generate worker grows the real one.
+    """
+    from types import SimpleNamespace
+
+    from scribblez.generational.checkpoint import GenerationalState
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(warmup_pairs=2, target_pairs=8, train_epochs=3, sweep_every=20)
+
+    delivered = []
+
+    def deliver_one():
+        """One generator cycle: every 3rd pair swept, as sweep_every does."""
+        i = len(delivered)
+        swept = i % 3 == 2
+        _pair(store, f"p{i:02d}", flags=MSET_FLAG_FULL_SWEEP if swept else 0, positions=4)
+        delivered.append(swept)
+
+    for _ in range(3):  # the store as it stands when the trainer is started
+        deliver_one()
+    assert trainer.store_is_ready(store, params)[0]
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    started_with = train_ds.num_positions
+    state = GenerationalState()
+
+    passes = 0
+    while trainer.epochs_left(params, state):
+        absorbed = trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds)
+        settled = trainer.corpus_is_final(paths, params, absorbed)
+        state.settled_epochs += int(settled)
+        state.generation_index += 1
+        passes += 1
+        assert passes < 50, "loop failed to converge"
+        if len(delivered) < params.target_pairs:
+            deliver_one()  # the generator is still running
+
+    swept_pairs = sum(delivered)
+    assert state.settled_epochs == 3  # the budget bought passes over the finished corpus
+    assert state.generation_index > 3  # and the growth passes were free
+    assert train_ds.num_positions == (len(delivered) - swept_pairs) * 4
+    assert holdout_ds.num_positions == swept_pairs * 4
+    assert train_ds.num_positions > started_with  # it did not train the snapshot it started on

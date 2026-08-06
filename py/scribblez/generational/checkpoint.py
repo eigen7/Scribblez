@@ -23,10 +23,16 @@ class GenerationalState:
     generation_index: the next generation to train. Each generation is trained
         exactly once, so this is also the metrics / ONNX index its checkpoint
         will be written under.
+    settled_epochs: how many of those passes ran over a corpus that had stopped
+        growing. A trainer whose store is still being written by a generator
+        spends its epoch budget from this rather than from generation_index, so
+        the budget buys passes over the finished corpus; one whose corpus is
+        complete before it starts advances the two together.
     """
 
     rows_trained: int = 0
     generation_index: int = 0
+    settled_epochs: int = 0
 
 
 def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: dict):
@@ -38,6 +44,7 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
         {
             "rows_trained": state.rows_trained,
             "generation_index": state.generation_index,
+            "settled_epochs": state.settled_epochs,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "config": config,
@@ -58,6 +65,7 @@ def resume(paths: TagPaths, model, optimizer, device) -> GenerationalState:
     state = GenerationalState(
         rows_trained=int(ckpt["rows_trained"]),
         generation_index=int(ckpt["generation_index"]),
+        settled_epochs=int(ckpt.get("settled_epochs", 0)),
     )
     print(
         f"Resuming from {path.name}: generation {state.generation_index}, "
