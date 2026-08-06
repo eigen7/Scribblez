@@ -18,8 +18,8 @@ import argparse
 import sys
 
 import torch
-from scribblez.ffi import set_contingent_features, set_opp_leave_input
-from scribblez.move_set_eval.dataset import MsetDataset
+from scribblez.ffi import set_contingent_features
+from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
@@ -83,6 +83,7 @@ def main() -> int:
             f"only full-sweep pairs in {args.data_dir}; those are the held-out evaluation "
             "slice, so there is nothing to train on"
         )
+    adopt_information_condition(train_files)
     train_ds = MsetDataset(mset_files=train_files)
     if args.holdout_dir:
         holdout_ds = MsetDataset(args.holdout_dir)
@@ -90,10 +91,6 @@ def main() -> int:
         holdout_ds = MsetDataset(mset_files=swept_files)
     else:
         holdout_ds = train_ds
-    # The board input arm must carry the opponent-leave block iff the targets
-    # were generated under the open-leaves condition.
-    if train_ds.open_leaves:
-        set_opp_leave_input(True)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
         f"eval: {holdout_ds.num_positions} positions (open_leaves={train_ds.open_leaves})"

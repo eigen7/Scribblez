@@ -6,6 +6,7 @@ TensorRT engine).
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -346,6 +347,45 @@ def _write_mset(path, positions, flags=0):
 
 def _targets(k):
     return np.tile(np.array([0.2, 0.1, 0.7, 3.0, 5.0], dtype=np.float32), (k, 1))
+
+
+def test_open_leaves_corpus_sets_the_input_arm_before_the_session(tmp_path):
+    """A trainer loading an open-leaves corpus must pick the opponent-leave
+    input arm before the first dataset creates the FFI session, which bakes the
+    arm in permanently. Reading the condition off a constructed dataset is too
+    late -- it raises, and it would have built the datasets against the wrong
+    row layout. Runs in a subprocess: the session is process-wide, so a test
+    that creates one cannot be undone.
+    """
+    from scribblez.move_set_eval import targets as T
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    # Two pairs: holdout_every reserves the first, so the second is the train
+    # side the condition is read from.
+    for stem in ("a", "b"):
+        _write_mset(
+            store / f"{stem}.mset",
+            [(0, t, _targets(3)) for t in range(4)],
+            flags=T.MSET_FLAG_OPEN_LEAVES,
+        )
+
+    code = (
+        "from pathlib import Path\n"
+        "from types import SimpleNamespace\n"
+        "from scribblez.ffi import set_opp_leave_input\n"
+        "from scribblez.move_set_eval.trainer import load_datasets\n"
+        f"paths = SimpleNamespace(data_dir=Path({str(tmp_path)!r}))\n"
+        "train_ds, _ = load_datasets(paths, SimpleNamespace(holdout_every=20))\n"
+        "assert train_ds.open_leaves\n"
+        # A no-op iff the session was created with the arm already on; the
+        # guard in set_opp_leave_input raises on any other ordering.
+        "set_opp_leave_input(True)\n"
+        "print('ok')\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert "ok" in out.stdout
 
 
 def test_dataset_drops_non_finite_teacher_targets(tmp_path):
