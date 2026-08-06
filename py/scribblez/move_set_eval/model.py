@@ -75,6 +75,22 @@ class MoveEncoder(nn.Module):
         return self.fuse(torch.cat([tile_pool, scalar_feat], dim=1))
 
 
+def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
+    """Each move's index within its own position's candidate block, plus the
+    largest block -- the (row, column) address that packs the flattened move set
+    into a padded (P, maxK) grid.
+
+    Assumes the dataset's layout: each position's moves are one contiguous run
+    and the runs are in position order (move_set_eval.dataset._build_batch
+    concatenates per-position blocks), so this is arithmetic on the block
+    offsets rather than a sort.
+    """
+    counts = torch.bincount(pos_id, minlength=num_positions)  # (P,)
+    starts = torch.cumsum(counts, dim=0) - counts  # (P,)
+    rank = torch.arange(pos_id.shape[0], device=pos_id.device) - starts[pos_id]  # (M,)
+    return rank, int(counts.max())
+
+
 class MoveSetEvalModel(nn.Module):
     """Board trunk + move encoder + single-pass cross-attention scoring."""
 
@@ -143,12 +159,19 @@ class MoveSetEvalModel(nn.Module):
             move_letters, move_blanks, move_tile_mask, move_scalars, tile_board
         )  # (M, C)
 
-        # Each move attends into its own position's board tokens. Gathering the
-        # key/value set per move keeps positions independent while scoring the
-        # whole flattened set in one attention call.
-        kv = board[move_pos_id]  # (M, 225, C)
-        attended, _ = self.cross_attn(e.unsqueeze(1), kv, kv)  # (M, 1, C)
-        attended = attended.squeeze(1)  # (M, C)
+        # Each move attends into its own position's board tokens. Grouping the
+        # queries by position keeps the key/value set at one copy per position,
+        # so the attention's W_k/W_v projections -- a function of the board
+        # alone, and ~C times the arithmetic of the attention math they feed --
+        # are amortized across candidates the same way the trunk is.
+        rank, max_k = _rank_within_position(move_pos_id, board.shape[0])
+        queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
+        queries[move_pos_id, rank] = e
+        # The per-square attention weights are not a model output, and asking
+        # for them would both materialize a (P, maxK, 225) tensor -- the padded
+        # grid's largest by far -- and hold the call off the fused kernels.
+        attended, _ = self.cross_attn(queries, board, board, need_weights=False)
+        attended = attended[move_pos_id, rank]  # (P, maxK, C) -> (M, C)
 
         head_in = torch.cat([attended, g[move_pos_id]], dim=1)  # (M, 4C)
         out = self.head(head_in)  # (M, 5)

@@ -37,12 +37,19 @@ from .model import win_equity
 
 DEFAULT_KS = (1, 3, 5)
 
-# Moves per forward pass. Each move materializes its own copy of its position's
-# 225 board tokens to attend into, so it is the candidate count -- not the
-# position count -- that bounds activation memory once swept positions carry
-# hundreds of candidates apiece. Over stratified positions (~15 candidates) this
-# bound never binds before the position bound does.
-MAX_CANDIDATES_PER_BATCH = 1024
+# Moves per forward pass. A swept position carries hundreds of candidates
+# against a stratified one's ~15, so over full-sweep positions the position
+# count alone stops describing what a batch costs and the candidate count takes
+# over -- but not alone: the model also builds a padded (positions x largest
+# candidate set) query grid, so a batch mixing one near-cap position with small
+# ones costs more than its candidate count suggests. The two terms are
+# comparable, and this budget bounds only the first. Whole-forward peaks under
+# no_grad at C=192, positions_per_batch at its 64 default: +429 MiB at the worst
+# shape admitted here (one position at the generator's 1500 sweep cap, M=16305),
+# +366 MiB for that M with every position the same size, +342 MiB for that grid
+# at M=1563. Over stratified positions this never binds before the position
+# bound does.
+MAX_CANDIDATES_PER_BATCH = 16384
 
 # Move-input tensors passed positionally to the model's forward.
 _MOVE_KEYS = (
