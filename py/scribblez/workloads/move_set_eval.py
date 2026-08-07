@@ -28,10 +28,14 @@ those are is a hash of the .slog stem (sweep_pair), so an interrupted cycle
 resumes on the same decision, and the .mset header flag carries it downstream.
 
 The singleton train role (scribblez/move_set_eval/trainer.py) distills the
-student over the tag's pair store: repeated epochs over a deterministic
-file-level split, per-epoch recall/rank metrics against the held-out pairs on
-the dashboard's Loss tab. It is the lean fixed-corpus loop (roadmap A3 slice
-1); the generational consume->train lifecycle is docs/generational_teacher.md.
+student over the tag's pair store: repeated passes over a deterministic
+file-level split, per-pass recall/rank metrics against the held-out pairs on
+the dashboard's Loss tab. It runs alongside the generator rather than after it,
+absorbing each pass's new pairs and holding its epoch budget until the store
+reaches `target_pairs` -- so a tag with a worker of each type started together
+grows its corpus, trains on all of it, and stops, unattended. It is the lean
+growing-corpus loop (roadmap A3 slice 1); the generational consume->train
+lifecycle is docs/generational_teacher.md.
 """
 
 import subprocess
@@ -112,9 +116,29 @@ class MoveSetEvalParams:
         "teacher must then be an open-leaves model (the generator refuses the mismatch), "
         "and each .mset records the condition so the student trains under it too",
     )
+    target_pairs: int = param(
+        600,
+        "stop generating once the store holds this many pairs (0 = generate until paused). "
+        "It is also what tells the trainer its corpus is final, so a tag with both workers "
+        "started runs to completion unattended",
+    )
     # Student training (the train role; scribblez/move_set_eval/trainer.py).
     train_epochs: int = param(
-        20, "stop the trainer after this many epochs over the pair store (0 = run until paused)"
+        20,
+        "epochs over the finished corpus before the trainer stops (0 = run until paused). "
+        "Passes taken while the store is still growing keep up with the generator and do "
+        "not spend this budget, so it always buys passes over the whole corpus. With "
+        "target_pairs = 0 there is no declared end to read, so 'finished' falls back to a "
+        "pass during which nothing new arrived -- which a trainer outrunning a slow "
+        "generator can hit early",
+    )
+    warmup_pairs: int = param(
+        100,
+        "pairs the store must hold before training starts. Below this a pass is mostly "
+        "reuse of a corpus too small to learn from, and the held-out slice is too thin to "
+        "read; the trainer waits (it also waits for the first swept pair, so the gate "
+        "metrics are read on the full-sweep slice from the first pass). Reaching "
+        "target_pairs releases the wait regardless, so a run smaller than this still runs",
     )
     holdout_every: int = param(
         20,
@@ -236,7 +260,9 @@ def run_generate(ctx: WorkerContext) -> int:
     if not p.teacher_model or not Path(p.teacher_model).is_file():
         print(f"error: teacher_model {p.teacher_model!r} is not a readable file", file=sys.stderr)
         return 1
-    return pair_store.run_pair_generate(ctx, _cycle, ".mset", SLOGS_DIR)
+    return pair_store.run_pair_generate(
+        ctx, _cycle, ".mset", SLOGS_DIR, target_pairs=ctx.params.target_pairs
+    )
 
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
@@ -250,15 +276,23 @@ def slog_dir(tag: str) -> Path:
 
 
 def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], list[str]]:
-    """(train, holdout) stems: every `holdout_every`-th of the sorted stems is
-    held out. File-level (whole pairs) because position-level splits leak
-    through shared game prefixes; deterministic so a resumed trainer holds out
-    the same pairs, and pairs generated later join the same interleaving."""
+    """(train, holdout) stems: about one in `holdout_every` is held out.
+
+    File-level (whole pairs) because position-level splits leak through shared
+    game prefixes, and decided by a hash of the stem rather than by a position
+    in the list -- like sweep_pair, and for a sharper reason here. A trainer
+    re-takes this split as the store grows, so an assignment that depended on
+    where a stem sat in the sorted list would move pairs between the sides
+    whenever one arrived out of order (two generate workers interleave their
+    deliveries), and a pair that changed sides is a pair trained on and then
+    scored as held out.
+    """
     ordered = sorted(stems)
     if holdout_every <= 0:
         return ordered, []
-    train = [s for i, s in enumerate(ordered) if i % holdout_every != 0]
-    holdout = [s for i, s in enumerate(ordered) if i % holdout_every == 0]
+    held = [zlib.crc32(s.encode()) % holdout_every == 0 for s in ordered]
+    train = [s for s, h in zip(ordered, held, strict=True) if not h]
+    holdout = [s for s, h in zip(ordered, held, strict=True) if h]
     return train, holdout
 
 

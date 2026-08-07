@@ -31,15 +31,27 @@ def deliver_pairs(
     return moved, nbytes, time.monotonic() - t0
 
 
-def run_pair_generate(ctx, run_cycle, sidecar_ext: str, dest_dir: str) -> int:
+def run_pair_generate(
+    ctx, run_cycle, sidecar_ext: str, dest_dir: str, target_pairs: int = 0
+) -> int:
     """The generate-role loop shared by the pair-producing workloads: flush any
     completed pairs a previous run left undelivered, then alternate
     `run_cycle(work_dir, params, threads) -> (returncode, phases)` with pair
-    delivery until max_cycles or SIGTERM. `phases` is the cycle's per-phase
-    timing sample (the role's StatsSpec keys), to which the delivery time is
-    appended as `upload_s`; a nonzero cycle returncode ends the run with it."""
+    delivery until max_cycles, `target_pairs`, or SIGTERM. `phases` is the
+    cycle's per-phase timing sample (the role's StatsSpec keys), to which the
+    delivery time is appended as `upload_s`; a nonzero cycle returncode ends
+    the run with it.
+
+    `target_pairs` (0 = unbounded) is a size the store is grown to rather than a
+    count this worker produces: it is read from the store, so restarting a
+    worker resumes toward the same total instead of starting over, and several
+    workers on one tag converge on it together. Only a role whose sink leaves
+    pairs in the tag's own data tree can ask for it -- a worker uploading to a
+    bucket cannot see the store to count it.
+    """
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
+    store = ctx.tag_paths().data_dir / dest_dir
     stats = WorkerStats(ctx)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {ctx.params}")
 
@@ -47,6 +59,9 @@ def run_pair_generate(ctx, run_cycle, sidecar_ext: str, dest_dir: str) -> int:
     try:
         deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir)
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
+            if target_pairs and count_pairs(store, sidecar_ext) >= target_pairs:
+                print(f"target of {target_pairs} pair(s) reached; exiting")
+                return 0
             cycle += 1
             returncode, phases = run_cycle(work_dir, ctx.params, ctx.threads)
             if returncode != 0:
@@ -55,7 +70,9 @@ def run_pair_generate(ctx, run_cycle, sidecar_ext: str, dest_dir: str) -> int:
                 ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir
             )
             stats.cycle_done({**phases, "upload_s": secs}, units=moved, nbytes=nbytes)
-            print(f"cycle {cycle}: {moved} pair(s) delivered")
+            toward = f"/{target_pairs}" if target_pairs else ""
+            held = f", {count_pairs(store, sidecar_ext)}{toward} in store" if target_pairs else ""
+            print(f"cycle {cycle}: {moved} pair(s) delivered{held}")
     except WorkerStopped:
         moved, _, _ = deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir)
         print(f"SIGTERM: flushed {moved} completed pair(s); exiting")

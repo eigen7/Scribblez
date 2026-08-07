@@ -53,20 +53,40 @@ def test_train_role_is_registered():
     assert set(role.stats.phases) == {"train_s", "eval_s"}
 
 
+def _stems(n, off=0, worker=0):
+    """Stems as the generator emits them: a nanosecond timestamp, a worker id."""
+    return [f"{1786038233456124324 + (i + off) * 4_800_000_000}-local-{worker}" for i in range(n)]
+
+
 def test_split_pair_stems_is_deterministic_and_file_level():
-    stems = [f"{i:03d}-local-0" for i in range(10)]
-    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 3)
-    assert holdout == ["000-local-0", "003-local-0", "006-local-0", "009-local-0"]
-    assert sorted(train + holdout) == stems  # a pair is in exactly one side
+    stems = _stems(60)
+    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 20)
+    assert holdout  # a corpus this size gets a holdout
+    assert sorted(train + holdout) == sorted(stems)  # a pair is in exactly one side
+    assert not set(train) & set(holdout)
+    assert move_set_eval.split_pair_stems(stems, 20) == (train, holdout)  # order-free
 
 
-def test_split_pair_stems_is_stable_under_appended_pairs():
-    # Stems are timestamp-prefixed, so later pairs sort after existing ones and
-    # extend the interleaving without reassigning any earlier pair.
-    stems = [f"{i:03d}-local-0" for i in range(10)]
-    _, holdout = move_set_eval.split_pair_stems(stems, 3)
-    _, extended = move_set_eval.split_pair_stems(stems + ["010-local-0", "011-local-0"], 3)
-    assert extended[: len(holdout)] == holdout
+def test_split_pair_stems_holds_out_about_one_in_n():
+    stems = _stems(2000)
+    _, holdout = move_set_eval.split_pair_stems(stems, 20)
+    assert 0.03 < len(holdout) / len(stems) < 0.07
+
+
+def test_split_pair_stems_never_moves_a_pair_between_the_sides():
+    """The trainer re-takes this split as the store grows, so a pair's side has
+    to be a property of the pair. Two generate workers interleave deliveries,
+    so a new stem can sort BEFORE existing ones -- and a pair that changed
+    sides would be one trained on and then scored as held out."""
+    stems = _stems(60)
+    train, holdout = move_set_eval.split_pair_stems(stems, 20)
+
+    # A second worker's late deliveries, timestamped among the existing ones.
+    grown = stems + _stems(20, off=5, worker=1)
+    train2, holdout2 = move_set_eval.split_pair_stems(grown, 20)
+    assert set(holdout).issubset(holdout2)
+    assert set(train).issubset(train2)
+    assert not set(train) & set(holdout2)  # nothing trained on became held out
 
 
 def test_split_pair_stems_zero_disables_holdout():
@@ -89,13 +109,16 @@ def test_split_pairs_holds_out_the_full_sweep_pairs(tmp_path):
 
 
 def test_split_pairs_falls_back_to_holdout_every_without_sweeps(tmp_path):
-    for i in range(6):
-        write_empty_pair(tmp_path, f"{i:03d}-local-0")
+    stems = _stems(60)
+    for stem in stems:
+        write_empty_pair(tmp_path, stem)
     (tmp_path / "orphan.mset").write_bytes(b"")  # no .slog: not a pair
 
-    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=3)
-    assert [p.stem for p in holdout] == ["000-local-0", "003-local-0"]
-    assert len(train) == 4
+    train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=20)
+    expected_train, expected_holdout = move_set_eval.split_pair_stems(stems, 20)
+    assert [p.stem for p in holdout] == expected_holdout
+    assert [p.stem for p in train] == expected_train
+    assert holdout and len(train) + len(holdout) == 60
 
 
 def test_sweep_pair_is_a_stable_fraction_of_the_stems():
@@ -383,3 +406,63 @@ def test_count_pairs(tmp_path):
     (tmp_path / "a.slog").touch()
     (tmp_path / "b.slog").touch()
     assert pair_store.count_pairs(tmp_path, ".mset") == 1
+
+
+class StoringSink:
+    """A sink that lands pairs in the tag's own data tree, as the local sink
+    does -- which is what a generation target reads to know when to stop."""
+
+    kind = "local"
+
+    def __init__(self, root):
+        self.root = root
+
+    def deliver(self, src, data_rel):
+        dest = self.root / data_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dest)
+        return dest.stat().st_size
+
+    def push_json(self, rel_path, obj):
+        pass
+
+
+def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
+    """A tag with a generation size finishes on its own: the target is read off
+    the store, so it counts what the tag holds rather than what this worker
+    made."""
+    cycles = []
+
+    def fake_cycle(work_dir, params, threads):
+        cycles.append(1)
+        stem = f"c{len(cycles)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {"gen_s": 0.1, "mset_s": 0.2}
+
+    ctx = StubCtx(tmp_path, None, max_cycles=0)  # unbounded but for the target
+    ctx.sink = StoringSink(ctx.tag_paths().data_dir)
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
+    assert len(cycles) == 3
+    assert pair_store.count_pairs(ctx.tag_paths().data_dir / "slogs", ".mset") == 3
+
+    # Restarting against a store already at the target does no work at all.
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
+    assert len(cycles) == 3
+
+
+def test_pair_generate_without_a_target_is_unbounded(tmp_path):
+    """The shared loop is used by workloads that declare no size; they must
+    keep the run-until-paused behavior, and must not have their store counted."""
+    calls = []
+
+    def fake_cycle(work_dir, params, threads):
+        calls.append(1)
+        stem = f"c{len(calls)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {}
+
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=4)
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs") == 0
+    assert len(calls) == 4

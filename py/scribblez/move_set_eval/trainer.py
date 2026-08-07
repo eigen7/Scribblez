@@ -1,17 +1,23 @@
 """The move-set-eval train role: distill the student over a tag's pair store.
 
-Sibling to the position_eval / max_move_per_lane trainers, but a fixed-corpus
+Sibling to the position_eval / max_move_per_lane trainers, but a growing-corpus
 loop rather than a generational consumer: the corpus is the tag's slogs/ pair
-store (grown by the generate role, usually paused during training), split at
-file level into train and held-out pairs -- the held-out side being the
-store's full-sweep pairs, the only ones the A3 gate metrics mean anything on
--- and trained for `train_epochs` epochs. Each epoch records losses and the
-held-out top-K recall / Spearman metrics to the tag's dashboard DB (the Loss
-tab's curves), publishes a stats sample (the Stats tab), and saves the rolling
-checkpoint -- pausing and restarting the worker resumes at the next epoch. The
-base learning rate is a live control (Controls tab), adopted at the next
-epoch. The generational consume->train lifecycle
-(docs/generational_teacher.md) replaces this loop when it lands.
+store, split at file level into train and held-out pairs -- the held-out side
+being the store's full-sweep pairs, the only ones the A3 gate metrics mean
+anything on.
+
+The generate role writes that store while this runs, so the loop keeps pace
+with a corpus being written underneath it instead of snapshotting one -- which
+is what lets a tag with a worker of each type run to completion unattended.
+store_is_ready, absorb_new_pairs and CorpusClock below are that pacing, and
+carry its reasoning.
+
+Each pass records losses and the held-out top-K recall / Spearman metrics to
+the tag's dashboard DB (the Loss tab's curves), publishes a stats sample (the
+Stats tab), and saves the rolling checkpoint -- pausing and restarting the
+worker resumes at the next pass. The base learning rate is a live control
+(Controls tab), adopted at the next pass. The generational consume->train
+lifecycle (docs/generational_teacher.md) replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train); scripts/move_set_eval/train.py
@@ -21,7 +27,7 @@ remains the headless CLI for ad-hoc runs outside any tag.
 import functools
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 import torch
 
@@ -38,11 +44,67 @@ from scribblez.generational.controls import (
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
+
+POLL_SECONDS = 30
+
+
+@dataclass
+class MsetTrainState(GenerationalState):
+    """The generational cursor plus this loop's epoch-budget clock.
+
+    settled_epochs: passes that ran over a corpus which had stopped growing.
+        The budget is spent from this rather than from the pass counter, so a
+        worker started while its generator is still delivering does not retire
+        having only seen the corpus's first minutes.
+    """
+
+    settled_epochs: int = 0
+
+
+def store_is_ready(store, params) -> tuple[bool, str]:
+    """Whether the pair store holds enough to start training, and why not.
+
+    Two conditions, both about not locking the run into a corpus the generator
+    has barely started: enough pairs to be worth a pass, and -- for a tag that
+    asks for a holdout at all -- a split that actually yields one. Starting
+    without a holdout aliases it to the training set for the whole run, and
+    starting a sweeping tag before its first swept pair would read the gate
+    metrics off the stratified fallback instead of the full-sweep slice.
+
+    A store that has reached the tag's generation size overrides both: nothing
+    more is coming, so waiting on either could only wait forever. That is what
+    keeps a small `target_pairs` -- below `warmup_pairs`, or too small to have
+    drawn a holdout pair -- a short run rather than a hung one.
+    """
+    pairs = complete_pairs(store) if store.is_dir() else []
+    if params.target_pairs and len(pairs) >= params.target_pairs:
+        return True, ""
+    needed = max(1, params.warmup_pairs)
+    if len(pairs) < needed:
+        return False, f"{len(pairs)}/{needed} pairs"
+    if (params.sweep_every or params.holdout_every) and not split_pairs(
+        store, params.holdout_every
+    )[1]:
+        return False, f"{len(pairs)} pairs, no held-out pair yet"
+    return True, ""
+
+
+def wait_for_store(store, params):
+    """Block until the store is ready to train on (store_is_ready), reporting
+    progress. A worker started alongside its generator lands here rather than
+    dying on an empty store or snapshotting a corpus minutes old."""
+    while True:
+        ready, why = store_is_ready(store, params)
+        if ready:
+            return
+        timed_print(f"waiting for the pair store: {why}")
+        time.sleep(POLL_SECONDS)  # SIGTERM raises WorkerStopped through this
 
 
 def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
@@ -67,15 +129,98 @@ def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
     return train_ds, holdout_ds
 
 
-def epochs_left(params, state: GenerationalState) -> bool:
-    """The epoch counter rides GenerationalState.generation_index, so the
-    rolling checkpoint's resume machinery is reused verbatim."""
-    return params.train_epochs == 0 or state.generation_index < params.train_epochs
+def absorb_new_pairs(paths, params, train_ds: MsetDataset, holdout_ds: MsetDataset) -> int:
+    """Ingest every pair delivered since the last pass, into whichever side the
+    file-level split assigns it to, and return how many positions arrived.
+
+    Both sides grow, so once the generator stops the holdout stops with it --
+    which is what makes every budgeted epoch's metrics comparable without any
+    freezing step. A holdout that is the training set (the no-held-out-pairs
+    smoke case) is grown once, not twice.
+
+    A pair's side is fixed the first time it is seen. The store's split can
+    change shape underneath a running trainer -- the first swept pair to land
+    turns every stratified pair into a training pair -- and a file that moved
+    would be one trained on and then scored as held out.
+    """
+    train_files, holdout_files = split_pairs(paths.data_dir / SLOGS_DIR, params.holdout_every)
+    seen = set(train_ds.files) | set(holdout_ds.files)
+    added = train_ds.absorb(_ingestible(train_files, seen, train_ds))
+    if holdout_ds is not train_ds:
+        added += holdout_ds.absorb(_ingestible(holdout_files, seen, holdout_ds))
+    return added
 
 
-def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
+def _ingestible(files, seen: set, ds: MsetDataset) -> list:
+    """The files `ds` can take: ones neither side already holds, whose header
+    matches the corpus it holds. A file matching neither side's header sits out
+    the run rather than crashing it -- a swept pair delivered to a tag whose
+    trainer started before any swept pair existed has no side to join, since a
+    dataset cannot mix header flags."""
+    fresh = sorted(f for f in files if f not in seen)
+    usable = [f for f in fresh if read_mset_flags(f) == ds.flags]
+    for skipped in set(fresh) - set(usable):
+        timed_print(f"{skipped.name}: header does not match its side's corpus; left out of the run")
+    return usable
+
+
+# How long the store must sit untouched before a tag that declared no
+# generation size is taken to be done. A generation cycle is 200 self-play
+# games plus teacher labeling -- minutes -- and a training pass over an early,
+# small corpus is far quicker, so a single quiet pass says only that the pass
+# fell between two deliveries.
+QUIET_SECONDS = 900
+
+
+class CorpusClock:
+    """Decides when the tag's pair store has stopped growing -- the point from
+    which a pass is over the whole corpus and may spend the epoch budget.
+
+    A tag with a declared `target_pairs` is answered by the store reaching it,
+    and by nothing having arrived on the pass that saw it: a second generate
+    worker mid-cycle when the first crossed the target still has pairs to
+    deliver, and counting the budget from before they land would score the
+    run's epochs against two different holdouts.
+
+    With no declared size there is no end to read, so growth is judged from
+    when the store was last written: a corpus whose newest pair is older than
+    QUIET_SECONDS has no generator behind it, and one being delivered into
+    never is. That is a property of the store rather than of this worker's own
+    history, so it reads the same on a fresh start, mid-run, and after a
+    restart -- none of which have watched the generator from the beginning.
+    """
+
+    def __init__(self, store, params):
+        self._store = store
+        self._params = params
+
+    def is_final(self, absorbed: int) -> bool:
+        if self._params.target_pairs:
+            # Complete pairs, as every other reader of the store counts: a
+            # sidecar whose .slog has not landed yet is not one the trainer can
+            # use, and delivery writes the sidecar first.
+            held = len(complete_pairs(self._store)) if self._store.is_dir() else 0
+            return not absorbed and held >= self._params.target_pairs
+        return time.time() - self._last_delivery() >= QUIET_SECONDS
+
+    def _last_delivery(self) -> float:
+        """When the store was last written to, or 0.0 while it is empty."""
+        if not self._store.is_dir():
+            return 0.0
+        return max((f.stat().st_mtime for f in self._store.glob("*.mset")), default=0.0)
+
+
+def epochs_left(params, state: MsetTrainState) -> bool:
+    """Whether the epoch budget has passes left -- spent by
+    state.settled_epochs, whose reasoning is on MsetTrainState."""
+    return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
+
+
+def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, settled: bool):
     """One pass over the training pairs, then held-out metrics, the dashboard
-    metric record, the rolling checkpoint, and a stats sample."""
+    metric record, the rolling checkpoint, and a stats sample. `settled` says
+    whether the corpus was final for this pass, which is what decides if the
+    pass spends the epoch budget."""
     epoch = state.generation_index
     batches = ctx["train_ds"].iter_batches(params.batch_positions, seed=0, epoch_index=epoch)
     t0 = time.time()
@@ -92,6 +237,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
     )
     state.rows_trained = result.rows_trained
     state.generation_index = epoch + 1
+    state.settled_epochs += int(settled)
     train_s = time.time() - t0
 
     t1 = time.time()
@@ -101,12 +247,19 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
     avg = result.losses
     lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
+    # Whether the pass counted, so the log says which of the two phases the run
+    # is in without the reader having to infer it from the corpus size.
+    budget = (
+        f"{state.settled_epochs}/{params.train_epochs}"
+        if settled
+        else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
+    )
     timed_print(
-        f"[epoch {epoch}] rows={state.rows_trained} loss={avg['total']:.4f} "
+        f"[pass {epoch}] rows={state.rows_trained} loss={avg['total']:.4f} "
         f"{recall} spearman={metrics['spearman']:.3f} "
         f"regret@1={metrics['regret@1']:.4f} (incumbent r@1="
         f"{metrics['recall@1_baseline']:.3f} regret@1={metrics['regret@1_baseline']:.4f}) "
-        f"lr={lr_now:.2e} {train_s:.1f}s"
+        f"lr={lr_now:.2e} {train_s:.1f}s [{budget}]"
     )
     # recall@K / Spearman (and their incumbent baselines, flat reference
     # lines) land on the Loss tab's Accuracy panel, which plots every *_acc
@@ -114,6 +267,12 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx):
     record = {
         "epoch": epoch,
         "positions": state.rows_trained,
+        # Whether this pass's metrics are comparable with the rest: a pass over
+        # a still-growing corpus is scored against a holdout that is itself
+        # still growing, so its curve is not on the same footing as the
+        # budgeted ones (plots.py charts only loss*/`*_acc`, so this rides in
+        # the metrics table for a reader rather than onto the Loss tab).
+        "settled": int(settled),
         "loss": avg["total"],
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
@@ -145,6 +304,7 @@ def run(ctx: WorkerContext) -> int:
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
     set_contingent_features(params.contingent_features)
+    wait_for_store(paths.data_dir / SLOGS_DIR, params)
     train_ds, holdout_ds = load_datasets(paths, params)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
@@ -182,13 +342,19 @@ def run(ctx: WorkerContext) -> int:
         "stats": WorkerStats(ctx),
     }
 
-    state = checkpoint.resume(paths, model, optimizer, device)
+    state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
     try:
+        clock = CorpusClock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):
-            train_one_epoch(model, optimizer, conn, paths, device, params, state, run_ctx)
+            # Take up whatever the generator delivered during the last pass
+            # before deciding whether this one is over a finished corpus.
+            absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds)
+            settled = clock.is_final(absorbed)
+            train_one_epoch(model, optimizer, conn, paths, device, params, state, run_ctx, settled)
         timed_print(
-            f"Training complete: {state.generation_index} epochs, "
-            f"{state.rows_trained} rows. Pause the worker (raising train_epochs "
+            f"Training complete: {state.settled_epochs} epochs over the finished corpus "
+            f"({state.generation_index} passes, {state.rows_trained} rows, "
+            f"{train_ds.num_positions} positions). Pause the worker (raising train_epochs "
             "needs a new tag; params are frozen)."
         )
     except (KeyboardInterrupt, WorkerStopped):

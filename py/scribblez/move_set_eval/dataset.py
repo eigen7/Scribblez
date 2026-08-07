@@ -118,55 +118,18 @@ class MsetDataset:
 
         self._slogs: list[Path] = []
         self._positions: list[_Position] = []
-        model_hashes: set[str] = set()
-        flags: set[int] = set()
-        dropped = 0
-        for mset_path in mset_files:
-            parsed = read_mset(mset_path)
-            model_hashes.add(parsed.model_hash)
-            flags.add(parsed.flags)
-            file_id = len(self._slogs)
-            self._slogs.append(mset_path.with_suffix(".slog"))
-            for pos in parsed.positions:
-                moves, targets = pos.moves, pos.targets
-                # The generator stores the teacher's readouts verbatim, and the
-                # FP16 score-diff std head can overflow to inf on near-terminal
-                # post-move states. The generator now clamps the stored std
-                # (kSdStdCap in engine/include/training/move_set_eval_target_log.h),
-                # so this drop only fires on corpora generated before the clamp;
-                # it goes when those corpora are retired.
-                keep = np.isfinite(targets).all(axis=1)
-                if not keep.all():
-                    dropped += int((~keep).sum())
-                    if not keep.any():
-                        continue
-                    moves, targets = moves[keep], targets[keep]
-                self._positions.append(
-                    _Position(
-                        file_id,
-                        pos.game_index,
-                        pos.turn_index,
-                        moves,
-                        targets,
-                        pos.num_legal_moves,
-                    )
-                )
-        self.dropped_candidates = dropped
-        if dropped:
-            print(f"dropped {dropped} candidate(s) with non-finite teacher targets")
-
+        self._files: list[Path] = []
+        self.dropped_candidates = 0
         # A corpus must come from one blessed teacher and one information
         # condition; a mix would train against inconsistent targets. The
         # full-sweep bit is held to the same rule for a different reason: swept
         # files are evaluation-only, so a dataset that mixed them with
         # stratified ones is exactly the leak file-level routing prevents
-        # (targets.partition_full_sweep is how a shared store is split).
-        if len(model_hashes) != 1:
-            raise ValueError(f"mset corpus mixes teacher hashes: {sorted(model_hashes)}")
-        if len(flags) != 1:
-            raise ValueError(f"mset corpus mixes header flags: {sorted(flags)}")
-        self.model_hash = next(iter(model_hashes))
-        self._flags = next(iter(flags))
+        # (targets.partition_full_sweep is how a shared store is split). The
+        # first file sets both; absorb() holds every later one to them.
+        self.model_hash: str | None = None
+        self._flags: int | None = None
+        self.absorb(mset_files)
 
         input_shapes, _ = row_layout()
         self._spatial_shape = tuple(input_shapes[0].dims)
@@ -177,6 +140,77 @@ class MsetDataset:
         # scalar input, so each candidate's resultant post-move differential
         # feature can be formed from the same value the board trunk sees.
         self._sd_index, self._sd_scale = move_enc.score_diff_input_layout()
+
+    @property
+    def flags(self) -> int:
+        """The header flags every file in this corpus carries -- what a caller
+        holding a growing store checks a candidate file against before offering
+        it, since a dataset cannot mix them."""
+        return self._flags
+
+    @property
+    def files(self) -> list[Path]:
+        """The .mset files ingested so far, in ingest order -- what a caller
+        watching a growing store diffs against to find the new ones."""
+        return list(self._files)
+
+    def absorb(self, mset_files: Iterable[str | Path]) -> int:
+        """Ingest `mset_files` on top of what is already held, returning the
+        positions added.
+
+        A .mset is immutable once delivered, so a store that is still being
+        written is absorbed by reading only its new files -- the cost of
+        keeping up with a running generator is the new data, not a re-read of
+        the corpus. Every file is held to the first one's teacher and header
+        flags.
+        """
+        before, dropped_before = len(self._positions), self.dropped_candidates
+        for mset_path in (Path(f) for f in mset_files):
+            parsed = read_mset(mset_path)
+            if self.model_hash is None:
+                self.model_hash, self._flags = parsed.model_hash, parsed.flags
+            if parsed.model_hash != self.model_hash:
+                raise ValueError(
+                    f"mset corpus mixes teacher hashes: {self.model_hash}, {parsed.model_hash}"
+                )
+            if parsed.flags != self._flags:
+                raise ValueError(f"mset corpus mixes header flags: {self._flags}, {parsed.flags}")
+            self._files.append(mset_path)
+            file_id = len(self._slogs)
+            self._slogs.append(mset_path.with_suffix(".slog"))
+            self._ingest_positions(parsed.positions, file_id)
+        if self.dropped_candidates > dropped_before:
+            n = self.dropped_candidates - dropped_before
+            print(f"dropped {n} candidate(s) with non-finite teacher targets")
+        return len(self._positions) - before
+
+    def _ingest_positions(self, positions, file_id: int):
+        """Append one file's positions, dropping candidates the teacher labeled
+        non-finitely."""
+        for pos in positions:
+            moves, targets = pos.moves, pos.targets
+            # The generator stores the teacher's readouts verbatim, and the
+            # FP16 score-diff std head can overflow to inf on near-terminal
+            # post-move states. The generator now clamps the stored std
+            # (kSdStdCap in engine/include/training/move_set_eval_target_log.h),
+            # so this drop only fires on corpora generated before the clamp;
+            # it goes when those corpora are retired.
+            keep = np.isfinite(targets).all(axis=1)
+            if not keep.all():
+                self.dropped_candidates += int((~keep).sum())
+                if not keep.any():
+                    continue
+                moves, targets = moves[keep], targets[keep]
+            self._positions.append(
+                _Position(
+                    file_id,
+                    pos.game_index,
+                    pos.turn_index,
+                    moves,
+                    targets,
+                    pos.num_legal_moves,
+                )
+            )
 
     @property
     def num_positions(self) -> int:

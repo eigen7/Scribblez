@@ -7,6 +7,7 @@ TensorRT engine).
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -479,3 +480,346 @@ def test_regret_and_baseline_ranking_semantics():
     assert mset_eval._regret(teacher, baseline, 2) == 0.0  # index 1 retained at k=2
     assert mset_eval._regret(teacher, teacher, 1) == 0.0  # perfect ranking forfeits nothing
     assert mset_eval._regret(teacher, baseline, 5) == 0.0  # k caps at the candidate count
+
+
+def _pair(store, stem, flags=0, positions=4):
+    _write_mset(
+        store / f"{stem}.mset", [(0, t, _targets(3)) for t in range(positions)], flags=flags
+    )
+
+
+def _params(**kw):
+    from scribblez.workloads.move_set_eval import MoveSetEvalParams
+
+    return MoveSetEvalParams(**kw)
+
+
+def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
+    """A trainer started beside its generator must not lock the run into the
+    handful of pairs that exist in the first seconds -- neither the tiny
+    training corpus nor, worse, a holdout that is empty (aliased to the
+    training set for the whole run) or that is the stratified fallback frozen
+    in before the first swept pair arrives."""
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    params = _params(warmup_pairs=3, sweep_every=20)
+
+    assert trainer.store_is_ready(store, params) == (False, "0/3 pairs")
+    for i in range(3):
+        _pair(store, f"s{i}")
+    # Enough pairs, but nothing to read the A3 gate metrics on yet.
+    ready, why = trainer.store_is_ready(store, params)
+    assert not ready and "no held-out pair yet" in why
+
+    _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
+    assert trainer.store_is_ready(store, params) == (True, "")
+
+    # A tag that asks for no holdout at all waits only for the pair count.
+    assert trainer.store_is_ready(store, _params(warmup_pairs=3, sweep_every=0, holdout_every=0))[0]
+
+
+def test_an_empty_store_is_never_ready_however_low_the_warmup(tmp_path):
+    """warmup_pairs=0 asks for no warmup, not for training on nothing: without
+    a floor the trainer starts and dies on load_datasets' FileNotFoundError."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    assert not trainer.store_is_ready(store, _params(warmup_pairs=0, sweep_every=0))[0]
+
+
+def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
+    """The trainer's signal that its corpus is done. Reaching the declared size
+    is not enough on its own: a second generate worker that was mid-cycle when
+    the first crossed the target still has pairs to land, and epochs counted
+    before they do would be scored against a different holdout than the ones
+    after."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    for i in range(2):
+        _pair(store, f"s{i}")
+    clock = trainer.CorpusClock(store, _params(target_pairs=3))
+
+    assert not clock.is_final(absorbed=0)  # short of the target
+    _pair(store, "s2")
+    assert not clock.is_final(absorbed=40)  # at the target, but pairs still landing
+    assert clock.is_final(absorbed=0)  # quiet at the target
+
+
+def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path):
+    """With no declared size, whether the corpus is done is a property of the
+    store: one written to moments ago has a generator behind it, one whose
+    newest pair is old does not. Judging it from what this worker has watched
+    instead would call a live store static on a fresh start and again after
+    every restart -- neither has seen the generator from the beginning."""
+    import os
+
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "s0")
+    params = _params(target_pairs=0)
+
+    # A store just delivered into, seen by a worker that has watched nothing.
+    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
+
+    stale = time.time() - trainer.QUIET_SECONDS - 1
+    for f in store.iterdir():
+        os.utime(f, (stale, stale))
+    # Same worker, same absence of history: now the store itself says it is done.
+    assert trainer.CorpusClock(store, params).is_final(absorbed=0)
+
+    _pair(store, "s1")  # the generator was not gone after all
+    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
+
+
+def test_absorb_adds_only_the_new_files(tmp_path):
+    """Keeping up with a running generator costs the new pairs, not a re-read
+    of the corpus, and the two sides of the split track their own files."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "a", positions=4)
+    ds = MsetDataset(mset_files=[store / "a.mset"])
+    assert ds.num_positions == 4
+    assert [p.name for p in ds.files] == ["a.mset"]
+
+    _pair(store, "b", positions=6)
+    assert ds.absorb([store / "b.mset"]) == 6
+    assert ds.num_positions == 10
+    assert [p.name for p in ds.files] == ["a.mset", "b.mset"]
+    assert ds.absorb([]) == 0  # a quiet pass changes nothing
+
+    # Batches address the absorbed file by its own replay, not the first one's.
+    assert {p.file_id for p in ds._positions} == {0, 1}
+
+
+def test_absorb_refuses_a_file_from_another_corpus(tmp_path):
+    """The mixed-teacher / mixed-condition guard has to hold for files arriving
+    later, not just the ones present at construction."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    _pair(store, "a")
+    _pair(store, "swept", flags=MSET_FLAG_FULL_SWEEP)
+    ds = MsetDataset(mset_files=[store / "a.mset"])
+    with pytest.raises(ValueError, match="mixes header flags"):
+        ds.absorb([store / "swept.mset"])
+
+
+def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path):
+    """The whole point, end to end: a trainer started when the store held a
+    fraction of the corpus must finish having trained on all of it, spending
+    its epoch budget only once generation is done.
+
+    This drives run()'s loop verbatim with the training call removed -- the
+    wait, the per-pass absorb, the budget rule -- against a store that grows
+    underneath it, as the generate worker grows the real one.
+    """
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(warmup_pairs=2, target_pairs=8, train_epochs=3, sweep_every=20)
+
+    delivered = []
+
+    def deliver_one():
+        """One generator cycle: every 3rd pair swept, as sweep_every does."""
+        i = len(delivered)
+        swept = i % 3 == 2
+        _pair(store, f"p{i:02d}", flags=MSET_FLAG_FULL_SWEEP if swept else 0, positions=4)
+        delivered.append(swept)
+
+    for _ in range(3):  # the store as it stands when the trainer is started
+        deliver_one()
+    assert trainer.store_is_ready(store, params)[0]
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    started_with = train_ds.num_positions
+    state = trainer.MsetTrainState()
+    clock = trainer.CorpusClock(store, params)
+
+    passes = 0
+    while trainer.epochs_left(params, state):
+        absorbed = trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds)
+        settled = clock.is_final(absorbed)
+        state.settled_epochs += int(settled)
+        state.generation_index += 1
+        passes += 1
+        assert passes < 50, "loop failed to converge"
+        if len(delivered) < params.target_pairs:
+            deliver_one()  # the generator is still running
+
+    swept_pairs = sum(delivered)
+    assert state.settled_epochs == 3  # the budget bought passes over the finished corpus
+    assert state.generation_index > 3  # and the growth passes were free
+    assert train_ds.num_positions == (len(delivered) - swept_pairs) * 4
+    assert holdout_ds.num_positions == swept_pairs * 4
+    assert train_ds.num_positions > started_with  # it did not train the snapshot it started on
+
+
+def test_a_small_generation_target_releases_the_wait_rather_than_hanging(tmp_path):
+    """A target below warmup_pairs, or too small to have drawn a swept pair,
+    would otherwise leave the trainer polling for pairs no one will ever
+    deliver -- a tag that can never finish, with both workers looking alive."""
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    params = _params(warmup_pairs=100, target_pairs=3, sweep_every=20)
+
+    for i in range(2):
+        _pair(store, f"s{i}")
+    assert not trainer.store_is_ready(store, params)[0]  # still short of the target
+
+    _pair(store, "s2")  # target reached, though warmup and the sweep gate are not
+    assert trainer.store_is_ready(store, params) == (True, "")
+
+
+# Drives trainer.run() in its own process: run() fixes the FFI session's
+# feature arm, which is process-wide and already set by the time any other test
+# in this file has touched the dataset.
+_DRIVE_RUN = """
+import sys, torch
+from types import SimpleNamespace
+from pathlib import Path
+from scribblez.move_set_eval import trainer
+from scribblez.workloads.move_set_eval import MoveSetEvalParams
+
+root = Path(sys.argv[1])
+pairs = len(list((root / "slogs").glob("*.mset")))
+params = MoveSetEvalParams(
+    warmup_pairs=1,
+    target_pairs=pairs,   # already at size, so every pass is over a final corpus
+    train_epochs=2,
+    batch_positions=8,
+    trunk_channels=8,
+    num_blocks=2,
+    num_heads=2,
+)
+paths = SimpleNamespace(
+    root=root,
+    data_dir=root,
+    dashboard_db=root / "dashboard.db",
+    rolling_checkpoint=root / "checkpoints" / "model.pt",
+)
+ctx = SimpleNamespace(
+    params=params, tag="t", worker_id="w0", threads=1,
+    sink=SimpleNamespace(kind="local", push_json=lambda *a, **k: None),
+    role=SimpleNamespace(name="train"), provenance={},
+    tag_paths=lambda: paths,
+)
+assert trainer.run(ctx) == 0, "run() did not exit cleanly"
+
+saved = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
+assert saved["settled_epochs"] == 2, saved["settled_epochs"]
+assert saved["generation_index"] == 2, saved["generation_index"]
+assert saved["rows_trained"] > 0, saved["rows_trained"]
+print("OK")
+"""
+
+
+def test_run_stops_after_its_budget_over_the_finished_corpus(corpus_dir, sweep_dir, tmp_path):
+    """trainer.run() itself, end to end on a real corpus: it must spend its
+    budget on passes over the finished store and then stop.
+
+    The hand-driven test above exercises the helpers; only calling run() proves
+    the loop spends the budget where the trainer actually spends it.
+    """
+    # The sweep fixture relabels the SAME .slog stems, so the swept pairs are
+    # copied under their own stems rather than overwriting the stratified ones.
+    store = tmp_path / "slogs"
+    store.mkdir()
+    for src in corpus_dir.glob("*.mset"):
+        for member in (src, src.with_suffix(".slog")):
+            shutil.copy(member, store / member.name)
+    for src in sweep_dir.glob("*.mset"):
+        for member in (src, src.with_suffix(".slog")):
+            shutil.copy(member, store / f"sweep-{member.name}")
+    assert len(list(store.glob("*.mset"))) > len(list(corpus_dir.glob("*.mset")))
+
+    script = tmp_path / "drive_run.py"
+    script.write_text(_DRIVE_RUN)
+    # Bounded: a budget that never advances makes run() loop forever, which is
+    # the production symptom -- it has to surface as a failure, not a hang.
+    try:
+        out = subprocess.run(
+            [sys.executable, str(script), str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("trainer.run() did not stop: the epoch budget is not being spent")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "OK" in out.stdout
+
+
+def test_absorb_grows_a_shared_holdout_once(tmp_path):
+    """With no held-out pairs the metrics run on the training set, and the two
+    dataset handles are the same object -- which must be ingested into once,
+    not twice, or every later pair is counted double."""
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(sweep_every=0, holdout_every=0)  # no holdout at all
+    _pair(store, "a", positions=4)
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    assert holdout_ds is train_ds
+
+    _pair(store, "b", positions=6)
+    assert trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds) == 6
+    assert train_ds.num_positions == 10  # not 16
+
+
+def test_a_late_swept_pair_cannot_reshuffle_the_sides_or_crash_the_run(tmp_path):
+    """A run that started before any swept pair existed uses the stratified
+    fallback split. The first swept pair to land turns EVERY stratified pair
+    into a training pair, so a trainer that simply re-took the split would hand
+    its holdout's files to the training set -- and offer a swept file to a
+    stratified dataset, which refuses mixed headers and would kill the worker.
+    """
+    from types import SimpleNamespace
+
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    paths = SimpleNamespace(data_dir=tmp_path)
+    params = _params(sweep_every=20, holdout_every=2)
+    for i in range(6):
+        _pair(store, f"p{i}", positions=4)
+
+    train_ds, holdout_ds = trainer.load_datasets(paths, params)
+    assert holdout_ds is not train_ds
+    held_before = set(holdout_ds.files)
+    trained_before = set(train_ds.files)
+    assert held_before and trained_before
+
+    _pair(store, "zz", flags=MSET_FLAG_FULL_SWEEP, positions=4)  # the straggler
+    # Must not raise, whatever the recomputed split now says.
+    trainer.absorb_new_pairs(paths, params, train_ds, holdout_ds)
+
+    assert set(holdout_ds.files) == held_before  # nothing left the holdout
+    assert set(train_ds.files) == trained_before  # and nothing joined training
+    assert not set(train_ds.files) & set(holdout_ds.files)  # no pair on both sides
