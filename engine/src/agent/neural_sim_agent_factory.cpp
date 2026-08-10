@@ -92,11 +92,6 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
     throw std::runtime_error(std::string("bad --type=neural-sim options: ") + e.what());
   }
 
-  // Sizing the engine batch to at least the shortlist just lets the whole
-  // shortlist be scored in a single chunk; the agent chunks to the engine
-  // batch either way. shortlist == 0 (all moves) is chunked to batch_size.
-  const nn::NeuralNetParams net_params = opts.service.net_params(opts.shortlist);
-
   HastyEquity::ensure_initialized(Lexicon::instance().name());
 
   Params params;
@@ -112,6 +107,14 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
   params.sim.threads = opts.sim_threads;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
+  // Fail on a bad scalar option now, before net_params() and the constructor
+  // spend seconds loading the model and building the TensorRT engine.
+  validate(params);
+
+  // Sizing the engine batch to at least the shortlist just lets the whole
+  // shortlist be scored in a single chunk; the agent chunks to the engine
+  // batch either way. shortlist == 0 (all moves) is chunked to batch_size.
+  const nn::NeuralNetParams net_params = opts.service.net_params(opts.shortlist);
   return std::make_unique<NeuralSimAgent>(params, net_params);
 }
 

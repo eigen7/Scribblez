@@ -239,6 +239,50 @@ TEST_F(NeuralSimAgentTest, OneSeedGivesOneDecision) {
   EXPECT_TRUE(moves[0] == moves[1]);
 }
 
+TEST_F(NeuralSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
+  // A rack with no legal play and a bag too small for exchanges leaves a lone
+  // PASS candidate. drop_best_prob=1 makes this the sharpest edge: were the
+  // sole candidate ranked and dropped, the sim set would be empty -- the
+  // size-1 early return must fire before either can happen.
+  NeuralSimAgent::Params p = params();
+  p.drop_best_prob = 1.0;
+  auto stub = std::make_unique<CountingStubEvalService>();
+  CountingStubEvalService* sp = stub.get();
+  NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
+  agent.begin_game();
+
+  const Rack unplayable = rack_from("QQQQQQ");  // no dict word uses Q
+  MoveRequest req{board_,          dict_,         unplayable, opp_leave_, /*my_score=*/13,
+                  /*opp_score=*/7, /*bag_size=*/3};  // < RACK_SIZE: exchanges illegal
+  const Move played = agent.make_move(req).move;
+  EXPECT_EQ(played.type(), MoveType::PASS);
+  EXPECT_EQ(sp->total_rows, 0);  // the model was never consulted
+}
+
+TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
+  // sim_top_k above the candidate count (here also shaved by a certain drop)
+  // must clamp to what exists: the drop excludes the model's favourite, the
+  // remaining two candidates sim, and one of them plays.
+  NeuralSimAgent::Params p = params();
+  p.shortlist = 3;
+  p.sim_top_k = 10;
+  p.drop_best_prob = 1.0;
+  const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
+  ASSERT_EQ(candidates.size(), 3u);
+
+  auto stub = std::make_unique<CountingStubEvalService>();
+  CountingStubEvalService* sp = stub.get();
+  sp->scripted = script_favouring(candidates.size(), {1});
+  NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
+  agent.begin_game();
+
+  const Move played = agent.make_move(request()).move;
+  EXPECT_EQ(sp->total_rows, 3);
+  // The favourite (equity rank 1) was dropped; the survivors are ranks 0 and 2.
+  EXPECT_TRUE(played == candidates[0] || played == candidates[2]);
+  EXPECT_FALSE(played == candidates[1]);
+}
+
 TEST_F(NeuralSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();

@@ -285,11 +285,12 @@ if(SCRIBBLEZ_BUILD_TESTS)
 
   # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
   # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
-  # parity. Compiles the agent's selection TU (not the factory) directly. The
-  # factory TU holds the production constructor and make_service(), the only
-  # references to NNEvaluationService, so this binary links neither scribblez_nn
-  # nor CUDA/TensorRT: the tests use the injecting constructor and never touch the
-  # GPU.
+  # parity. Compiles the selection TUs (not the factory) directly. The factory
+  # TU holds the production constructor, whose nn::make_loaded_service() call
+  # (defined in scribblez_nn's nn_evaluation_service.cpp) is where the concrete
+  # service gets built -- by not compiling the factory, this binary links
+  # neither scribblez_nn nor CUDA/TensorRT: the tests use the injecting
+  # constructor and never touch the GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
     src/agent/candidate_evaluator.cpp

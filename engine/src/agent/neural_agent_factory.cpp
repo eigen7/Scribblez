@@ -5,7 +5,8 @@
 // unit tests, which inject a stub through the other constructor -- carry no
 // CUDA/TensorRT dependency. Parsing the `--type=neural` option string
 // additionally pulls in Boost.program_options, the process-wide Lexicon, and
-// the TensorRT precision parser, all confined to this file.
+// the shared NeuralServiceOptions block (neural_service_options.cpp, which
+// owns the TensorRT precision parsing), all kept out of the core agent TU.
 
 #include "agent/neural_agent.h"
 #include "agent/neural_service_options.h"

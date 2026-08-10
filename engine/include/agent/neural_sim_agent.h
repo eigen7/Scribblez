@@ -91,8 +91,10 @@ class NeuralSimAgent : public Agent {
   bool drop_best(int ply) const;
 
  private:
-  // Validate parameters.
-  void init();
+  // Throws on out-of-range scalar params. The constructors run it, and
+  // from_spec additionally runs it BEFORE the production constructor, so a bad
+  // flag fails fast instead of after the TensorRT engine build.
+  static void validate(const Params& params);
 
   // Fills rank_ with indices into `candidates` in descending model-objective
   // order (ties keeping equity order), evaluating every candidate.

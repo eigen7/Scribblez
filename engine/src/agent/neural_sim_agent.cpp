@@ -42,14 +42,14 @@ NeuralSimAgent::NeuralSimAgent(const Params& params, std::unique_ptr<nn::EvalSer
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
       runner_(*params.dict, params.sim),
       endgame_(params.thread_id, params.endgame) {
-  init();
+  validate(params);
 }
 
-void NeuralSimAgent::init() {
-  if (shortlist_ < 0)
+void NeuralSimAgent::validate(const Params& params) {
+  if (params.shortlist < 0)
     throw std::runtime_error("neural-sim agent: --shortlist must be >= 0 (0 = all moves)");
-  if (sim_top_k_ < 1) throw std::runtime_error("neural-sim agent: --sim-top-k must be >= 1");
-  if (drop_best_prob_ < 0.0 || drop_best_prob_ > 1.0)
+  if (params.sim_top_k < 1) throw std::runtime_error("neural-sim agent: --sim-top-k must be >= 1");
+  if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw std::runtime_error("neural-sim agent: --drop-best-prob must be in [0, 1]");
 }
 
