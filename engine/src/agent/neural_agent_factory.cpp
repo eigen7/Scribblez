@@ -6,7 +6,8 @@
 // CUDA/TensorRT dependency. Parsing the `--type=neural` option string
 // additionally pulls in Boost.program_options, the process-wide Lexicon, and
 // the shared NeuralServiceOptions block (neural_service_options.cpp, which
-// owns the TensorRT precision parsing), all kept out of the core agent TU.
+// resolves --precision through nn::parse_precision), all kept out of the core
+// agent TU.
 
 #include "agent/neural_agent.h"
 #include "agent/neural_service_options.h"
