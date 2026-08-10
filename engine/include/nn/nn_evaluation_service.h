@@ -3,6 +3,7 @@
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
 
+#include <memory>
 #include <vector>
 
 // Synchronous front-end over a NeuralNet: de-interleave each encoder row into
@@ -41,6 +42,10 @@ class NNEvaluationService : public EvalService {
 
   NeuralNet net_;
 };
+
+// Construct and load() the service for `params` -- the one call an agent
+// factory needs to stand up production inference.
+std::unique_ptr<EvalService> make_loaded_service(const NeuralNetParams& params);
 
 }  // namespace nn
 }  // namespace scribblez

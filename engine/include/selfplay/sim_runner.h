@@ -20,6 +20,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace scribblez {
@@ -65,6 +66,21 @@ struct SimObservation {
 };
 static_assert(sizeof(SimObservation) == 32 + 4 * 2 * SimObservation::kCells,
               "SimObservation is serialized verbatim; its layout must stay packed");
+
+// Which simulated quantity ranks a candidate set: how often the rollouts were
+// won, or the average final score differential they ended on.
+enum class SimObjective { kWinRate, kSpread };
+
+double sim_objective_value(const SimObservation& o, SimObjective objective);
+
+// Index of the candidate `observations` rank highest under `objective`, ties
+// going to the lower index -- so the caller's own candidate order (static
+// equity for SimAgent, model rank for NeuralSimAgent) breaks them.
+int best_observation_index(const std::vector<SimObservation>& observations, SimObjective objective);
+
+// "winrate" or "spread"; anything else throws std::runtime_error naming `flag`
+// as the offending option.
+SimObjective parse_sim_objective(const std::string& name, const std::string& flag);
 
 class SimRunner {
  public:

@@ -84,15 +84,13 @@ target_link_libraries(scribblez_core PUBLIC Eigen3::Eigen)
 # that exposes only the symbols declared in serve/scribblez_ffi.h.
 # The streaming pipeline plays self-play games inside the library, so it pulls
 # in the agent/runner code that parses --player specs via Boost.ProgramOptions.
-# player_factory.cpp (in scribblez_core) dispatches to NeuralAgent::from_spec,
-# so the neural agent TUs and scribblez_nn must also be linked here.
+# player_factory.cpp (in scribblez_core) dispatches to the model-driven agents'
+# from_spec, so scribblez_neural_agents must also be linked here.
 add_library(scribblez_ffi SHARED
-  src/serve/scribblez_ffi.cpp
-  src/agent/neural_agent.cpp
-  src/agent/neural_agent_factory.cpp)
+  src/serve/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
   scribblez_core
-  scribblez_nn
+  scribblez_neural_agents
   Boost::program_options
   Boost::filesystem
   Boost::system
@@ -148,18 +146,30 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The NeuralAgent TUs are the only agent sources not already in scribblez_core;
-# they are kept out of the core library so it carries no CUDA/TensorRT
-# dependency. Compile them directly into play_game and link scribblez_nn, which
-# supplies the NNEvaluationService the agent drives. Every other agent
-# (HastyBot, human, greedy) and the runner come from scribblez_core.
-add_executable(play_game
-  apps/play_game.cpp
+# The model-driven agents (NeuralAgent) and their shared
+# evaluation core -- the only agent sources not in scribblez_core, kept out so
+# the core game library carries no CUDA/TensorRT dependency. Every consumer
+# that builds --player specs (play_game, scribblez_ffi, test_game_runner)
+# links this; scribblez_nn supplies the NNEvaluationService the agents drive.
+# Every other agent (HastyBot, human, greedy) and the runner come from
+# scribblez_core. The GPU-free unit-test binaries instead compile the
+# selection TUs directly, factories excluded (see their comments below).
+add_library(scribblez_neural_agents STATIC
+  src/agent/candidate_evaluator.cpp
   src/agent/neural_agent.cpp
-  src/agent/neural_agent_factory.cpp)
-target_link_libraries(play_game PRIVATE
+  src/agent/neural_agent_factory.cpp
+  src/agent/neural_service_options.cpp)
+set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
   scribblez_nn
+  Boost::program_options)
+
+add_executable(play_game
+  apps/play_game.cpp)
+target_link_libraries(play_game PRIVATE
+  scribblez_core
+  scribblez_neural_agents
   Boost::program_options
   Boost::json
   Boost::filesystem
@@ -280,6 +290,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
+    src/agent/candidate_evaluator.cpp
     src/agent/neural_agent.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
@@ -307,15 +318,13 @@ if(SCRIBBLEZ_BUILD_TESTS)
 
   # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
   # --results-file per-game JSON stream. Builds real agents through
-  # PlayerFactory, whose dispatch references every agent type, so it compiles
-  # the NeuralAgent TUs and links scribblez_nn the same way play_game does.
+  # PlayerFactory, whose dispatch references every agent type, so it links
+  # scribblez_neural_agents the same way play_game does.
   add_executable(test_game_runner
-    tests/test_game_runner.cpp
-    src/agent/neural_agent.cpp
-    src/agent/neural_agent_factory.cpp)
+    tests/test_game_runner.cpp)
   target_link_libraries(test_game_runner PRIVATE
     scribblez_core
-    scribblez_nn
+    scribblez_neural_agents
     Boost::program_options
     Boost::json
     Boost::filesystem

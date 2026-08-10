@@ -31,10 +31,6 @@ class Dictionary;
 
 class SimAgent : public Agent {
  public:
-  // Which simulated quantity ranks the candidates: how often the rollouts were
-  // won, or the average final score differential they ended on.
-  enum class Objective { kWinRate, kSpread };
-
   // `dict` is required and must outlive the agent. An `endgame` budget of 0
   // turns endgame solving off, leaving the greedy static-equity move to play
   // the endgame out.
@@ -49,7 +45,7 @@ class SimAgent : public Agent {
     // and the agent plays WORSE than the static equity it started from -- 35%
     // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
     SimRunner::Params sim = {400, 1};
-    Objective objective = Objective::kWinRate;
+    SimObjective objective = SimObjective::kWinRate;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
@@ -73,12 +69,8 @@ class SimAgent : public Agent {
   uint64_t sim_seed(int ply) const;
 
  private:
-  // Index of the candidate the observations rank highest, ties going to the
-  // better static equity (the order equity_top_k returns).
-  int best_index(const std::vector<SimObservation>& observations) const;
-
   int top_k_;
-  Objective objective_;
+  SimObjective objective_;
   uint64_t seed_;
   SimRunner runner_;
   EndgameTurnPolicy endgame_;

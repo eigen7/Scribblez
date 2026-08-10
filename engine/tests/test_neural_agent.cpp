@@ -34,6 +34,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/eval_service.h"
+#include "stub_eval_service.h"
 #include "synthetic_equity.h"
 
 #include <gtest/gtest.h>
@@ -163,48 +164,11 @@ class NeuralAgentEquityTest : public ::testing::Test {
   std::filesystem::path tmp_;
 };
 
-// An EvalService that returns pre-set evals, one per candidate in *per-call*
-// order, ignoring the input rows. Suits tests that re-script and call make_move
-// repeatedly on the same agent (the scripted index resets every call).
-class StubEvalService : public nn::EvalService {
- public:
-  std::vector<nn::Eval> scripted;
-  bool contingent_features() const override { return true; }
-  bool opp_leave_input() const override { return false; }
-  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  void evaluate(const float* /*inputs*/, int count, nn::Eval* out) override {
-    for (int i = 0; i < count; ++i) {
-      out[i] = (i < static_cast<int>(scripted.size())) ? scripted[i] : nn::Eval{};
-    }
-  }
-};
-
-// An EvalService that returns pre-set evals indexed in *global* candidate order
-// across however many chunked evaluate() calls a single make_move().move makes, and
-// records the total rows seen, the largest chunk, and the call count. Suits the
-// all-moves and chunking tests (one make_move per agent).
-class CountingStubEvalService : public nn::EvalService {
- public:
-  std::vector<nn::Eval> scripted;
-  bool contingent_features() const override { return true; }
-  bool opp_leave_input() const override { return false; }
-  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  int total_rows = 0;
-  int max_chunk = 0;
-  int calls = 0;
-
-  void evaluate(const float* /*inputs*/, int count, nn::Eval* out) override {
-    ++calls;
-    max_chunk = std::max(max_chunk, count);
-    for (int i = 0; i < count; ++i) {
-      const int g = total_rows + i;
-      out[i] = (g < static_cast<int>(scripted.size())) ? scripted[g] : nn::Eval{};
-    }
-    total_rows += count;
-  }
-};
+// The scripted EvalService stubs (per-call StubEvalService, globally-indexed
+// CountingStubEvalService) live in stub_eval_service.h, shared with the other
+// model-driven agents' tests.
+using scribblez::testing::CountingStubEvalService;
+using scribblez::testing::StubEvalService;
 
 // Layout shorthands for the full input layout these tests encode.
 static const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
@@ -239,7 +203,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .name = "stub",
                        .dict = &pos.dict,
                        .top_k = top_k,
-                       .objective = NeuralAgent::Objective::kScoreDiff},
+                       .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
@@ -254,7 +218,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .name = "stub",
                        .dict = &pos.dict,
                        .top_k = top_k,
-                       .objective = NeuralAgent::Objective::kScoreDiff},
+                       .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {sd(9.0f), sd(1.0f)};
@@ -269,7 +233,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .name = "stub-wp",
                        .dict = &pos.dict,
                        .top_k = top_k,
-                       .objective = NeuralAgent::Objective::kWinProb},
+                       .objective = EvalObjective::kWinProb},
                       std::move(stub));
     agent.begin_game();
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
@@ -294,7 +258,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
                      .name = "topk",
                      .dict = &pos.dict,
                      .top_k = top_k,
-                     .objective = NeuralAgent::Objective::kScoreDiff},
+                     .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
   agent.begin_game();
 
@@ -327,7 +291,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
                      .name = "full",
                      .dict = &pos.dict,
                      .top_k = 0,
-                     .objective = NeuralAgent::Objective::kScoreDiff},
+                     .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
   agent.begin_game();
 
@@ -354,7 +318,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
                      .name = "chunk",
                      .dict = &pos.dict,
                      .top_k = 0,
-                     .objective = NeuralAgent::Objective::kScoreDiff},
+                     .objective = EvalObjective::kScoreDiff},
                     std::move(stub), /*max_batch=*/2);
   agent.begin_game();
 
@@ -387,7 +351,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
                      .name = "stub",
                      .dict = &dict,
                      .top_k = 4,
-                     .objective = NeuralAgent::Objective::kScoreDiff},
+                     .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move_a);
@@ -494,7 +458,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
                      .name = "stub",
                      .dict = &dict,
                      .top_k = 4,
-                     .objective = NeuralAgent::Objective::kScoreDiff},
+                     .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
   agent.begin_game();
   agent.observe_move(move0);
@@ -528,7 +492,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                         .name = "greedy",
                         .dict = &pos.dict,
                         .top_k = top_k,
-                        .objective = NeuralAgent::Objective::kScoreDiff,
+                        .objective = EvalObjective::kScoreDiff,
                         .temperature = 0.0},
                        std::move(stub));
     greedy.begin_game();
@@ -546,7 +510,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                          .name = "sampler",
                          .dict = &pos.dict,
                          .top_k = top_k,
-                         .objective = NeuralAgent::Objective::kScoreDiff,
+                         .objective = EvalObjective::kScoreDiff,
                          .temperature = 5.0,
                          .seed = 12345},
                         std::move(stub));
@@ -621,7 +585,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                          .name = "solving",
                          .dict = &d,
                          .top_k = 0,
-                         .objective = NeuralAgent::Objective::kScoreDiff,
+                         .objective = EvalObjective::kScoreDiff,
                          .endgame = solver_params(kSolveBudget)},
                         std::move(solving_stub));
     // begin_game() clears the shared transposition table, matching the
@@ -639,7 +603,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                           .name = "disabled",
                           .dict = &d,
                           .top_k = 0,
-                          .objective = NeuralAgent::Objective::kScoreDiff,
+                          .objective = EvalObjective::kScoreDiff,
                           .endgame = solver_params(/*budget=*/0)},
                          std::move(disabled_stub));
     disabled.begin_game();

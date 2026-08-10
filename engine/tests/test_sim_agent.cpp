@@ -84,10 +84,10 @@ class SimAgentTest : public ::testing::Test {
 
 // The agent's own ranking rule, so the reproduction below breaks ties the way
 // the agent does rather than the way a test author guessed.
-int best_of(const std::vector<SimObservation>& obs, SimAgent::Objective objective) {
+int best_of(const std::vector<SimObservation>& obs, SimObjective objective) {
   auto value = [&](const SimObservation& o) {
     if (o.n == 0) return 0.0;
-    return objective == SimAgent::Objective::kWinRate
+    return objective == SimObjective::kWinRate
              ? (o.wins + 0.5 * o.draws) / static_cast<double>(o.n)
              : static_cast<double>(o.delta_sum) / static_cast<double>(o.n);
   };
@@ -100,8 +100,7 @@ int best_of(const std::vector<SimObservation>& obs, SimAgent::Objective objectiv
 }  // namespace
 
 TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
-  for (SimAgent::Objective objective :
-       {SimAgent::Objective::kWinRate, SimAgent::Objective::kSpread}) {
+  for (SimObjective objective : {SimObjective::kWinRate, SimObjective::kSpread}) {
     SimAgent::Params p = params();
     p.objective = objective;
     SimAgent agent(p);
