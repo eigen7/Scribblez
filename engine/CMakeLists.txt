@@ -146,7 +146,7 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent) and their shared
+# The model-driven agents (NeuralAgent, NeuralSimAgent) and their shared
 # evaluation core -- the only agent sources not in scribblez_core, kept out so
 # the core game library carries no CUDA/TensorRT dependency. Every consumer
 # that builds --player specs (play_game, scribblez_ffi, test_game_runner)
@@ -158,7 +158,9 @@ add_library(scribblez_neural_agents STATIC
   src/agent/candidate_evaluator.cpp
   src/agent/neural_agent.cpp
   src/agent/neural_agent_factory.cpp
-  src/agent/neural_service_options.cpp)
+  src/agent/neural_service_options.cpp
+  src/agent/neural_sim_agent.cpp
+  src/agent/neural_sim_agent_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
@@ -315,6 +317,20 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_sim_agent)
+
+  # NeuralSimAgent, the position-evaluation-top-K agent: that the sim set is
+  # the scripted model's top K (not static equity's), that the rollouts decide
+  # among them, that drop-best-prob excludes the model's favourite, and that a
+  # bag-empty turn falls back to static equity. Compiles the selection TUs (not
+  # the factory), so like test_neural_agent it links neither scribblez_nn nor
+  # CUDA/TensorRT: the tests inject a scripted EvalService stub.
+  add_executable(test_neural_sim_agent
+    tests/test_neural_sim_agent.cpp
+    src/agent/candidate_evaluator.cpp
+    src/agent/neural_sim_agent.cpp)
+  target_link_libraries(test_neural_sim_agent PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_neural_sim_agent)
 
   # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
   # --results-file per-game JSON stream. Builds real agents through
