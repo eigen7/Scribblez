@@ -1,8 +1,8 @@
 #pragma once
 
 #include "agent/agent.h"
+#include "agent/candidate_evaluator.h"
 #include "agent/endgame_turn_policy.h"
-#include "encoding/game_state_encoder.h"
 #include "endgame/endgame_solver.h"
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
@@ -17,10 +17,11 @@
 namespace scribblez {
 
 // Position evaluation model agent. On its turn it picks a candidate set of
-// legal plays, encodes each resulting post-move position from its own POV,
-// batch-evaluates them with the model, and selects among them by the configured
-// objective -- greedily at temperature 0, else by a
-// softmax(objective / temperature) sample.
+// legal plays, hands them to its CandidateEvaluator (which encodes each
+// resulting post-move position from the agent's POV and batch-evaluates them
+// with the model), and selects among them by the configured objective --
+// greedily at temperature 0, else by a softmax(objective / temperature)
+// sample.
 //
 // top_k == 0 evaluates every legal play, keeping the move distribution
 // independent of HastyBot and so yielding the most diverse self-play data, at
@@ -32,16 +33,8 @@ namespace scribblez {
 // trains on bag-empty positions and evaluates them poorly -- and hands the turn
 // to an EndgameTurnPolicy's exact solve, falling back to the greedy HastyBot
 // move on the turns the solver declines (or when a zero budget disables it).
-//
-// The agent's GameStateEncoder mirrors the real game through begin_game() /
-// observe_move(), since its placement-plane features depend on both players'
-// most-recent moves, which make_move() alone cannot see.
 class NeuralAgent : public Agent {
  public:
-  // Which model head ranks the candidates: the ScoreDiff head's predicted mean
-  // final differential, or P(win) + 0.5*P(draw) from the WLD head.
-  enum class Objective { kScoreDiff, kWinProb };
-
   // `dict` is required and must outlive the agent; `seed` is read only when
   // temperature is positive. An `endgame` budget of 0 turns endgame solving off,
   // leaving the greedy HastyBot move to play the endgame out.
@@ -50,7 +43,7 @@ class NeuralAgent : public Agent {
     std::string name;
     const Dictionary* dict = nullptr;
     int top_k = 0;
-    Objective objective = Objective::kWinProb;
+    EvalObjective objective = EvalObjective::kWinProb;
     double temperature = 0.0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
@@ -83,13 +76,7 @@ class NeuralAgent : public Agent {
                         float* dst) const;
 
  private:
-  static std::unique_ptr<nn::EvalService> make_service(const nn::NeuralNetParams& net_params);
-
-  // The arm the model's ONNX metadata_props declare, validated against its
-  // input widths through input_encoder.h's registry (a disagreement throws).
-  static InputEncodingSpec derive_spec(const Dictionary& dict, const nn::EvalService& service);
-
-  // Validate parameters and size the input scratch buffer.
+  // Validate parameters.
   void init();
 
   std::vector<double> candidate_equities(const MoveRequest& req,
@@ -100,28 +87,18 @@ class NeuralAgent : public Agent {
   // Fills cand_idx_ with this turn's candidates and returns their count.
   int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
-  float objective_value(const nn::Eval& e) const;
-
-  // Fills eval_buf_[0..k), chunked to max_batch_ rows per evaluate() call.
-  void evaluate_candidates(const MoveRequest& req, const std::vector<Move>& plays, int k);
-
-  // Index, into the first `k` candidates, of the one to play.
+  // Index, into the first `k` evaluated candidates, of the one to play.
   int select_index(int k);
 
   int top_k_;
-  Objective objective_;
+  EvalObjective objective_;
   double temperature_;
-  int max_batch_;
-  std::unique_ptr<nn::EvalService> service_;
-  InputEncodingSpec spec_;
-  GameStateEncoder encoder_;
+  CandidateEvaluator evaluator_;
   EndgameTurnPolicy endgame_;
   std::mt19937_64 rng_;
 
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<int> cand_idx_;
-  std::vector<float> input_buf_;
-  std::vector<nn::Eval> eval_buf_;
   std::vector<double> obj_values_;
   util::SoftmaxSampler sampler_;
 };

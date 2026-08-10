@@ -83,5 +83,11 @@ std::vector<Eval> NNEvaluationService::evaluate(const float* inputs, int count) 
   return out;
 }
 
+std::unique_ptr<EvalService> make_loaded_service(const NeuralNetParams& params) {
+  auto svc = std::make_unique<NNEvaluationService>(params);
+  svc->load();
+  return svc;
+}
+
 }  // namespace nn
 }  // namespace scribblez

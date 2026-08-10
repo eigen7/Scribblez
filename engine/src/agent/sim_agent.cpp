@@ -48,24 +48,11 @@ po::options_description make_options_description(SimOptions& o) {
   return desc;
 }
 
-SimAgent::Objective parse_objective(const std::string& name) {
-  if (name == "winrate") return SimAgent::Objective::kWinRate;
-  if (name == "spread") return SimAgent::Objective::kSpread;
-  throw std::runtime_error("--objective must be 'winrate' or 'spread', got '" + name + "'");
-}
-
 // Checked in the initializer list, where the SimRunner member dereferences it
 // before any constructor body could look.
 const Dictionary& require_dict(const Dictionary* dict) {
   if (dict == nullptr) throw std::runtime_error("sim agent: a dictionary is required");
   return *dict;
-}
-
-double objective_value(const SimObservation& o, SimAgent::Objective objective) {
-  if (o.n == 0) return 0.0;
-  const double n = o.n;
-  if (objective == SimAgent::Objective::kWinRate) return (o.wins + 0.5 * o.draws) / n;
-  return static_cast<double>(o.delta_sum) / n;
 }
 
 }  // namespace
@@ -94,17 +81,6 @@ void SimAgent::observe_move(const Move& move) {
   ++ply_;
 }
 
-int SimAgent::best_index(const std::vector<SimObservation>& observations) const {
-  int best = 0;
-  for (size_t i = 1; i < observations.size(); ++i) {
-    if (objective_value(observations[i], objective_) >
-        objective_value(observations[best], objective_)) {
-      best = static_cast<int>(i);
-    }
-  }
-  return best;
-}
-
 MoveDecision SimAgent::make_move(const MoveRequest& req) {
   // The endgame belongs to the exact solver, which needs no candidates of ours.
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
@@ -128,7 +104,7 @@ MoveDecision SimAgent::make_move(const MoveRequest& req) {
   pos.opp_leave = req.opp_rack;
 
   const std::vector<SimObservation> observations = runner_.run(pos, candidates, sim_seed(ply_));
-  return candidates[static_cast<size_t>(best_index(observations))];
+  return candidates[static_cast<size_t>(best_observation_index(observations, objective_))];
 }
 
 std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& tokens, int thread_id,
@@ -155,7 +131,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   params.top_k = opts.top_k;
   params.sim.rollouts = opts.rollouts;
   params.sim.threads = opts.sim_threads;
-  params.objective = parse_objective(opts.objective);
+  params.objective = parse_sim_objective(opts.objective, "--objective");
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
   return std::make_unique<SimAgent>(params);

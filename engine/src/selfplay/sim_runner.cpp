@@ -10,6 +10,7 @@
 #include <cassert>
 #include <functional>
 #include <numeric>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -152,6 +153,31 @@ void merge(const SimObservation& from, SimObservation* into) {
 }
 
 }  // namespace
+
+double sim_objective_value(const SimObservation& o, SimObjective objective) {
+  if (o.n == 0) return 0.0;
+  const double n = o.n;
+  if (objective == SimObjective::kWinRate) return (o.wins + 0.5 * o.draws) / n;
+  return static_cast<double>(o.delta_sum) / n;
+}
+
+int best_observation_index(const std::vector<SimObservation>& observations,
+                           SimObjective objective) {
+  int best = 0;
+  for (size_t i = 1; i < observations.size(); ++i) {
+    if (sim_objective_value(observations[i], objective) >
+        sim_objective_value(observations[best], objective)) {
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+
+SimObjective parse_sim_objective(const std::string& name, const std::string& flag) {
+  if (name == "winrate") return SimObjective::kWinRate;
+  if (name == "spread") return SimObjective::kSpread;
+  throw std::runtime_error(flag + " must be 'winrate' or 'spread', got '" + name + "'");
+}
 
 std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
   std::vector<Move> candidates = generate_legal_plays(req);
