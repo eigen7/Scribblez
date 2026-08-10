@@ -25,6 +25,10 @@
 - **[endgame_bench_results.md](endgame_bench_results.md)** — the endgame
   solver's measured cost/strength curve vs its node budget (methodology, the
   seat-mirrored head-to-head protocol, the shipped default of 400).
+- **[move_set_eval_results.md](move_set_eval_results.md)** — the A3 curves:
+  how well the distilled candidate filter reproduces the teacher's ranking,
+  measured on a full-sweep held-out slice against the incumbent static-equity
+  shortlist, with what the numbers do and do not establish.
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
