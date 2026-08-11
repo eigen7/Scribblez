@@ -60,13 +60,23 @@ def _export_tiny_teacher(onnx_path: Path):
 
 
 @pytest.fixture(scope="module")
-def mset_dir(tmp_path_factory) -> Path:
+def tiny_teacher(tmp_path_factory) -> Path:
+    """The blind teacher every test below labels with. It is the same model in
+    each of them, so exporting it per test only re-pays the export; it lives
+    outside any slog directory so the generator never sees it as corpus."""
+    _skip_unless_runnable()
+    path = tmp_path_factory.mktemp("tiny_teacher") / "teacher.onnx"
+    _export_tiny_teacher(path)
+    return path
+
+
+@pytest.fixture(scope="module")
+def mset_dir(tmp_path_factory, tiny_teacher) -> Path:
     """A directory of .slog files labeled by the tool with a tiny teacher."""
     _skip_unless_runnable()
     d = tmp_path_factory.mktemp("move_set_eval_targets")
     subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
-    onnx_path = d / "teacher.onnx"
-    _export_tiny_teacher(onnx_path)
+    onnx_path = tiny_teacher
 
     result = subprocess.run(
         [
@@ -144,16 +154,17 @@ def _run_full_sweep(slog_dir: Path, onnx_path: Path, cap: int):
     )
 
 
-def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path):
+def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path, tiny_teacher):
     """The evaluation slice: an uncapped sweep labels a position's whole legal
     move set -- orders of magnitude past the stratified quota -- and stamps the
     file full-sweep so the trainer holds it out."""
     _skip_unless_runnable()
-    subprocess.run([str(SLOG_WRITER), str(tmp_path), "4", "4"], check=True, capture_output=True)
-    onnx_path = tmp_path / "teacher.onnx"
-    _export_tiny_teacher(onnx_path)
+    # Two games: an uncapped sweep labels every legal move of every position it
+    # takes, so each extra position costs hundreds of records to re-parse here
+    # while asserting nothing the first ones do not.
+    subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "4"], check=True, capture_output=True)
 
-    result = _run_full_sweep(tmp_path, onnx_path, cap=100000)
+    result = _run_full_sweep(tmp_path, tiny_teacher, cap=100000)
     assert result.returncode == 0, f"full-sweep run failed: {result.stderr}"
     msets = sorted(tmp_path.glob("*.mset"))
     assert msets, "no .mset produced"
@@ -170,16 +181,14 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path)
     assert biggest > 1 + sum(QUOTAS.values()), "a sweep should dwarf the stratified sample"
 
 
-def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path):
+def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path, tiny_teacher):
     """Under a cap the sweep is a prefix of the equity ranking plus the
     exchanges and the played move, and the shortfall against the recorded legal
     count is what makes the truncation visible."""
     _skip_unless_runnable()
-    subprocess.run([str(SLOG_WRITER), str(tmp_path), "4", "4"], check=True, capture_output=True)
-    onnx_path = tmp_path / "teacher.onnx"
-    _export_tiny_teacher(onnx_path)
+    subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "4"], check=True, capture_output=True)
 
-    assert _run_full_sweep(tmp_path, onnx_path, cap=3).returncode == 0
+    assert _run_full_sweep(tmp_path, tiny_teacher, cap=3).returncode == 0
     truncated = 0
     for path in sorted(tmp_path.glob("*.mset")):
         buf = read_slog_bytes(path.with_suffix(".slog"))
@@ -192,7 +201,7 @@ def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path):
     assert truncated > 0, "a cap of 3 should truncate some position"
 
 
-def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
+def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path, tiny_teacher):
     """The pre-scan guard: a face-up-leaves .slog paired with a teacher whose
     ONNX does not declare opp_leave_input must fail before any .mset is
     written -- a blind teacher's labels would describe games nobody played."""
@@ -202,13 +211,11 @@ def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
         check=True,
         capture_output=True,
     )
-    onnx_path = tmp_path / "teacher.onnx"
-    _export_tiny_teacher(onnx_path)  # a blind teacher: opp_leave_input=False
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={tmp_path}",
-            f"--model={onnx_path}",
+            f"--model={tiny_teacher}",  # a blind teacher: opp_leave_input=False
             "--fast-build",
             f"--quota-top={QUOTAS['top']}",
             f"--quota-mid={QUOTAS['mid']}",
@@ -281,7 +288,7 @@ def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
     assert all(read_mset(p).flags == MSET_FLAG_OPEN_LEAVES for p in msets)
 
 
-def test_generator_loads_a_teacher_with_external_data(tmp_path):
+def test_generator_loads_a_teacher_with_external_data(tmp_path, tiny_teacher):
     """A teacher whose initializers live in an external-data blob beside the
     .onnx must load regardless of the process CWD: TensorRT resolves external
     references against the model path the engine passes (neural_net.cpp), not
@@ -291,12 +298,12 @@ def test_generator_loads_a_teacher_with_external_data(tmp_path):
 
     _skip_unless_runnable()
     subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "2"], check=True, capture_output=True)
-    plain = tmp_path / "teacher.onnx"
-    _export_tiny_teacher(plain)
 
+    # The generator is pointed at this copy alone, so the only initializers it
+    # can reach are the ones in the blob beside it.
     ext_dir = tmp_path / "ext"
     ext_dir.mkdir()
-    model = onnx.load(str(plain))
+    model = onnx.load(str(tiny_teacher))
     onnx.save_model(
         model,
         str(ext_dir / "teacher.onnx"),
@@ -305,7 +312,6 @@ def test_generator_loads_a_teacher_with_external_data(tmp_path):
         location="teacher_data.bin",
         size_threshold=0,
     )
-    plain.unlink()  # only the external-data variant remains loadable
 
     result = subprocess.run(
         [
