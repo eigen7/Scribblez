@@ -12,6 +12,7 @@ from bokeh.models import (
     Label,
     Range1d,
     Span,
+    Whisker,
 )
 from bokeh.palettes import Category10
 from bokeh.plotting import figure
@@ -287,6 +288,53 @@ def match_eval_grid(conn):
     games_fig.add_tools(HoverTool(tooltips=_MATCH_TOOLTIPS, renderers=[games_dots]))
 
     return column(row(score_fig, llr_fig, games_fig))
+
+
+def match_arms_grid(conn):
+    """The Arms tab: each arm's mean pair score with its CI whisker against the
+    experiment's fixed opponent, in the experiment's declared arm order, the
+    0.5 line dashed. None when no arm has been measured."""
+    rows = db.read_all_match_arms(conn)
+    if not rows:
+        return None
+    names = [r["arm"] for r in rows]
+    src = ColumnDataSource(
+        {
+            "x": names,
+            "score": [r["score"] for r in rows],
+            "lower": [r["score"] - r["ci_half_width"] for r in rows],
+            "upper": [r["score"] + r["ci_half_width"] for r in rows],
+            "games": [r["games"] for r in rows],
+            "wdl": [f"{r['wins']}/{r['draws']}/{r['losses']}" for r in rows],
+            "spec": [r["player_spec"] for r in rows],
+        }
+    )
+    opponents = " / ".join(sorted({r["opponent"] for r in rows}))
+    fig = figure(
+        width=2 * SERIES_SIZE,
+        height=SERIES_SIZE,
+        x_range=names,
+        title=f"Arm win rates vs {opponents}",
+        x_axis_label="arm",
+        y_axis_label="pair score",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+    fig.add_layout(Whisker(source=src, base="x", upper="upper", lower="lower"))
+    dots = fig.scatter(x="x", y="score", source=src, size=9)
+    fig.add_tools(
+        HoverTool(
+            tooltips=[
+                ("arm", "@x"),
+                ("score", "@score{0.000}"),
+                ("games", "@games"),
+                ("W/D/L", "@wdl"),
+                ("player", "@spec"),
+            ],
+            renderers=[dots],
+        )
+    )
+    _dashed_hline(fig, 0.5)
+    return fig
 
 
 # ---------------------------------------------------------------------------

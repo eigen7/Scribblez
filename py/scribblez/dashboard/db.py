@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS match_eval (
   decision TEXT,                -- 'H0' | 'H1' | 'continue' (= budget-capped)
   elapsed_s REAL
 );
+CREATE TABLE IF NOT EXISTS match_arm (
+  arm TEXT PRIMARY KEY,         -- arm name from the task's frozen arms param
+  player_spec TEXT,             -- the arm's --player spec (player 0)
+  opponent TEXT,                -- the fixed opponent's --player spec
+  games INTEGER, wins INTEGER, draws INTEGER, losses INTEGER,
+  pair_counts TEXT,             -- JSON [5]: pentanomial pair-score counts
+  score REAL,                   -- mean pair score (win rate, draws at 0.5)
+  ci_half_width REAL,           -- pointwise CI half-width around score
+  elapsed_s REAL
+);
 CREATE TABLE IF NOT EXISTS control (
   name       TEXT PRIMARY KEY,  -- live operator knob (e.g. 'base_lr')
   value      REAL,              -- its current value
@@ -360,6 +370,45 @@ def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
 def read_all_match_eval(conn: sqlite3.Connection) -> list[dict]:
     """Every match-eval row, oldest generation first, pair_counts decoded."""
     rows = [dict(r) for r in conn.execute("SELECT * FROM match_eval ORDER BY epoch")]
+    for r in rows:
+        r["pair_counts"] = json.loads(r["pair_counts"])
+    return rows
+
+
+def write_match_arm(conn: sqlite3.Connection, arm: str, record: dict):
+    """Store one arm's finished match (the match_arms runner's write path).
+    Idempotent: replaying an arm replaces its row."""
+    conn.execute(
+        "INSERT INTO match_arm "
+        "(arm, player_spec, opponent, games, wins, draws, losses, pair_counts, "
+        "score, ci_half_width, elapsed_s) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(arm) DO UPDATE SET player_spec=excluded.player_spec, "
+        "opponent=excluded.opponent, games=excluded.games, wins=excluded.wins, "
+        "draws=excluded.draws, losses=excluded.losses, pair_counts=excluded.pair_counts, "
+        "score=excluded.score, ci_half_width=excluded.ci_half_width, "
+        "elapsed_s=excluded.elapsed_s",
+        (
+            arm,
+            record["player_spec"],
+            record["opponent"],
+            int(record["games"]),
+            int(record["wins"]),
+            int(record["draws"]),
+            int(record["losses"]),
+            json.dumps(record["pair_counts"]),
+            float(record["score"]),
+            float(record["ci_half_width"]),
+            float(record["elapsed_s"]),
+        ),
+    )
+    conn.commit()
+
+
+def read_all_match_arms(conn: sqlite3.Connection) -> list[dict]:
+    """Every arm row in insertion order (the experiment's declared arm order,
+    since the runner measures arms in that order), pair_counts decoded."""
+    rows = [dict(r) for r in conn.execute("SELECT * FROM match_arm ORDER BY rowid")]
     for r in rows:
         r["pair_counts"] = json.loads(r["pair_counts"])
     return rows
