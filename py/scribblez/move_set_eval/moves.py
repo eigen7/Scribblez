@@ -15,8 +15,19 @@ encoded row.
 
 from __future__ import annotations
 
-from scribblez.ffi import encode_moves, move_encoding_dims, score_diff_input_layout
+from scribblez.ffi import (
+    encode_moves,
+    move_encoding_dims,
+    move_encoding_version,
+    score_diff_input_layout,
+)
 
 BOARD = 15
 
-__all__ = ["BOARD", "encode_moves", "move_encoding_dims", "score_diff_input_layout"]
+__all__ = [
+    "BOARD",
+    "encode_moves",
+    "move_encoding_dims",
+    "move_encoding_version",
+    "score_diff_input_layout",
+]

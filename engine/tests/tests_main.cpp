@@ -4351,23 +4351,26 @@ TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
 TEST(MoveSetEncoder, Basic) {
   namespace mset = move_set;
   // A horizontal PLAY at (row 4, cols 2..4): A, a blank shown as B, C; scoring
-  // 24. And an exchange of a single tile.
+  // 24. An exchange surrendering D, A, and an undesignated blank (stored
+  // sorted: A, D, blank). And a PASS.
   const Move play = make_play_full(
     4, 2, /*horizontal=*/true, 0b111, 24,
     {Glyph::of(Tile::from_char('A')), Glyph::played(Tile::from_char('B'), /*is_blank=*/true),
      Glyph::of(Tile::from_char('C'))});
   TileCounts xchg_tiles;
+  xchg_tiles.add(Tile::from_char('D'));
   xchg_tiles.add(Tile::from_char('A'));
+  xchg_tiles.add(BLANK);
   const Move exch = Move::exchange(xchg_tiles);
-  const Move moves[2] = {play, exch};
-  const int32_t pre_diffs[2] = {10, -5};  // mover's pre-move score advantage
+  const Move moves[3] = {play, exch, Move::pass()};
+  const int32_t pre_diffs[3] = {10, -5, -5};  // mover's pre-move score advantage
 
-  std::vector<int32_t> letters(2 * mset::kMoveMaxPlaced);
-  std::vector<uint8_t> blanks(2 * mset::kMoveMaxPlaced);
-  std::vector<int32_t> squares(2 * mset::kMoveMaxPlaced);
-  std::vector<uint8_t> tile_mask(2 * mset::kMoveMaxPlaced);
-  std::vector<float> scalars(2 * mset::kMoveScalars);
-  mset::encode_moves(moves, 2, pre_diffs, letters.data(), blanks.data(), squares.data(),
+  std::vector<int32_t> letters(3 * mset::kMoveMaxPlaced);
+  std::vector<uint8_t> blanks(3 * mset::kMoveMaxPlaced);
+  std::vector<int32_t> squares(3 * mset::kMoveMaxPlaced);
+  std::vector<uint8_t> tile_mask(3 * mset::kMoveMaxPlaced);
+  std::vector<float> scalars(3 * mset::kMoveScalars);
+  mset::encode_moves(moves, 3, pre_diffs, letters.data(), blanks.data(), squares.data(),
                      tile_mask.data(), scalars.data());
 
   // PLAY: three placed tiles in lane order; the middle is a blank. Letters are
@@ -4385,12 +4388,29 @@ TEST(MoveSetEncoder, Basic) {
   ASSERT_LT(std::abs(scalars[1] - 3.0f / 7.0f), 1e-6f);
   ASSERT_EQ(scalars[2], 1.0f);
 
-  // EXCHANGE: no placed tiles; resultant diff is the pre-move diff (score 0),
-  // and is_play is 0.
-  for (int j = 0; j < mset::kMoveMaxPlaced; ++j) ASSERT_EQ(tile_mask[mset::kMoveMaxPlaced + j], 0);
+  // EXCHANGE: the surrendered tiles (sorted A, D, blank) fill the letter/
+  // blank/tile_mask slots so same-size exchanges differ by which tiles leave;
+  // squares stay 0. The undesignated blank has no letter -- the blank flag
+  // alone represents it. Resultant diff is the pre-move diff (score 0), and
+  // is_play is 0.
+  const int e = mset::kMoveMaxPlaced;
+  ASSERT_TRUE(tile_mask[e + 0] == 1 && tile_mask[e + 1] == 1 && tile_mask[e + 2] == 1);
+  ASSERT_TRUE(tile_mask[e + 3] == 0 && tile_mask[e + 6] == 0);
+  ASSERT_EQ(letters[e + 0], Tile::from_char('A').index() + 1);
+  ASSERT_EQ(letters[e + 1], Tile::from_char('D').index() + 1);
+  ASSERT_EQ(letters[e + 2], 0);  // the blank: letter stays the pad value
+  ASSERT_TRUE(blanks[e + 0] == 0 && blanks[e + 1] == 0 && blanks[e + 2] == 1);
+  for (int j = 0; j < mset::kMoveMaxPlaced; ++j) ASSERT_EQ(squares[e + j], 0);
   ASSERT_LT(std::abs(scalars[mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
-  ASSERT_LT(std::abs(scalars[mset::kMoveScalars + 1] - 1.0f / 7.0f), 1e-6f);
+  ASSERT_LT(std::abs(scalars[mset::kMoveScalars + 1] - 3.0f / 7.0f), 1e-6f);
   ASSERT_EQ(scalars[mset::kMoveScalars + 2], 0.0f);
+
+  // PASS: no tiles at all; only the carried-through differential is nonzero.
+  const int p = 2 * mset::kMoveMaxPlaced;
+  for (int j = 0; j < mset::kMoveMaxPlaced; ++j) ASSERT_EQ(tile_mask[p + j], 0);
+  ASSERT_LT(std::abs(scalars[2 * mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
+  ASSERT_EQ(scalars[2 * mset::kMoveScalars + 1], 0.0f);
+  ASSERT_EQ(scalars[2 * mset::kMoveScalars + 2], 0.0f);
 }
 
 TEST(SimObservationLog, Roundtrip) {

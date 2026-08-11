@@ -141,6 +141,11 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
                                   int32_t* cells);
 
+// The move-feature semantics version (move_set_encoder.h kMoveEncodingVersion):
+// recorded in checkpoints and stamped into mset ONNX exports, so a model can
+// never silently run against an encoder whose rows it was not trained on.
+int32_t scribblez_move_set_encoding_version(void);
+
 // Where the board input's score-differential scalar sits, so the move set
 // dataset can read a position's pre-move differential straight out of the
 // encoded row instead of recomputing it: points =

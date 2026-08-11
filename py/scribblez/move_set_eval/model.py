@@ -153,8 +153,13 @@ class MoveSetEvalModel(nn.Module):
         # Gather the board token at each placed tile's square from that move's
         # own position, so the move encoder reads the board's representation of
         # the squares it plays on (pad squares gather token 0, masked out).
+        # Exchange tiles carry letters but no squares (move_set_encoder.h):
+        # gating by is_play zeroes the square-(0,0) tokens their zero squares
+        # would otherwise gather, so a surrendered tile contributes its letter
+        # and blank embeddings alone.
         t = move_squares.shape[1]
         tile_board = board[move_pos_id.unsqueeze(1).expand(-1, t), move_squares]  # (M, T, C)
+        tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
         e = self.move_encoder(
             move_letters, move_blanks, move_tile_mask, move_scalars, tile_board
         )  # (M, C)

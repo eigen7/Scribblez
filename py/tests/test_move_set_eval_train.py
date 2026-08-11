@@ -245,6 +245,14 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
     # The baseline over a sweep is the exact static-equity ranking, which is a
     # real move ordering rather than a shuffle: it must beat a coin flip.
     assert metrics["spearman_baseline"] > 0.0
+    # Exchange-slice metrics (the A4 dedicated-head readout): a sweep keeps
+    # every exchange candidate, so eligible positions exist in any corpus with
+    # bag >= 7 turns, and both metrics stay in range.
+    assert metrics["positions_with_exchanges"] > 0
+    for suffix in ("", "_baseline"):
+        assert metrics[f"exch_rank_regret{suffix}"] >= 0.0
+        for k in (1, 3, 5):
+            assert 0.0 <= metrics[f"exch_retention@{k}{suffix}"] <= 1.0
 
 
 def test_dataset_batches_flatten_candidates(corpus_dir):
@@ -318,6 +326,15 @@ def test_train_step_and_eval(corpus_dir):
     assert metrics["regret@5"] <= metrics["regret@3"] <= metrics["regret@1"]
     for suffix in ("", "_baseline"):
         assert -1.0 <= metrics[f"spearman{suffix}"] <= 1.0
+    assert metrics["positions_with_exchanges"] >= 0  # stratified: may be sparse
+
+
+def test_move_encoding_version_is_the_engines():
+    from scribblez.move_set_eval.moves import move_encoding_version
+
+    # v1 = exchanges carry their surrendered tiles (move_set_encoder.h). A bump
+    # without a coordinated retrain story should fail loudly here.
+    assert move_encoding_version() == 1
 
 
 def _write_mset(path, positions, flags=0):

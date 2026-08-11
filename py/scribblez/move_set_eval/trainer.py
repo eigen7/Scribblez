@@ -44,6 +44,7 @@ from scribblez.generational.controls import (
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
@@ -333,8 +334,19 @@ def run(ctx: WorkerContext) -> int:
     db.write_loss_weights(conn, {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd})
     init_controls(conn, params.lr)
 
+    # Beyond the frozen task params, the checkpoint config records what the
+    # model was actually built against -- the adopted information-condition
+    # arm, the input widths, and the engine's move-encoding version -- so a
+    # standalone exporter can reconstruct and stamp the model without the
+    # corpus, and a checkpoint can never silently meet a mismatched encoder.
     run_ctx = {
-        "config": asdict(params),
+        "config": {
+            **asdict(params),
+            "open_leaves": train_ds.open_leaves,
+            "spatial_planes": train_ds.spatial_planes,
+            "scalar_size": train_ds.scalar_size,
+            "move_encoding_version": move_encoding_version(),
+        },
         "train_ds": train_ds,
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
