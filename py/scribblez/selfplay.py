@@ -8,7 +8,9 @@ kill-test cycle, and the generational generator role.
 import subprocess
 from pathlib import Path
 
-PLAY_GAME = "/workspace/repo/target/engine/play_game"
+# Resolved relative to this checkout (py/scribblez/ -> repo root), so a git
+# worktree runs its own build rather than the primary checkout's.
+PLAY_GAME = str(Path(__file__).resolve().parents[2] / "target" / "engine" / "play_game")
 
 
 def run_play_game(args: list[str]) -> int:

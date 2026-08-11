@@ -11,7 +11,11 @@ import numpy as np
 # Library discovery
 # ---------------------------------------------------------------------------
 
-_FFI_LIB_PATH = "/workspace/repo/target/engine/libscribblez_ffi.so"
+# Resolved relative to this checkout (py/scribblez/ -> repo root), so a git
+# worktree tests against its own build rather than the primary checkout's.
+_FFI_LIB_PATH = str(
+    Path(__file__).resolve().parents[2] / "target" / "engine" / "libscribblez_ffi.so"
+)
 _LIB: ctypes.CDLL | None = None
 
 
@@ -162,6 +166,9 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int32),
         ctypes.POINTER(ctypes.c_int32),
     ]
+
+    lib.scribblez_move_set_encoding_version.restype = ctypes.c_int32
+    lib.scribblez_move_set_encoding_version.argtypes = []
 
     lib.scribblez_score_diff_input_layout.restype = None
     lib.scribblez_score_diff_input_layout.argtypes = [
@@ -460,6 +467,13 @@ def move_encoding_dims() -> tuple[int, int, int, int]:
         ctypes.byref(cells),
     )
     return max_placed.value, num_scalars.value, letter_vocab.value, cells.value
+
+
+def move_encoding_version() -> int:
+    """The engine's move-feature semantics version (move_set_encoder.h
+    kMoveEncodingVersion). Recorded in mset checkpoints and ONNX metadata; a
+    model trained under one version must never run against another."""
+    return int(_lib().scribblez_move_set_encoding_version())
 
 
 def score_diff_input_layout() -> tuple[int, float]:
