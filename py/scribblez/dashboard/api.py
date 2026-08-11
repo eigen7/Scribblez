@@ -56,6 +56,7 @@ VERSION_TABLES = (
     "metrics",
     "control_event",
     "match_eval",
+    "match_arm",
 )
 
 
@@ -98,6 +99,10 @@ def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
 
+def _match_arms(conn, params, mount_root):
+    return plots.match_arms_grid(conn)
+
+
 # Figure name -> builder(conn, params, mount_root) -> Bokeh model | None.
 # Reuses the plots.py builders; the model is serialized with json_item for client-
 # side embedding. `mount_root` lets a builder open a second tag's DB (eval_quality's
@@ -108,6 +113,7 @@ FIGURES = {
     "training_metrics": _training_metrics,
     "mset_metrics": _mset_metrics,
     "match_eval": _match_eval,
+    "match_arms": _match_arms,
 }
 
 
