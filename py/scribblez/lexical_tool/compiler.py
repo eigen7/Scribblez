@@ -94,17 +94,25 @@ class CompiledLexicon:
 
     def words(self) -> list[str]:
         """De-assemble: recover every word by depth-first walk of the table."""
+        # The walk touches every transition of every reachable state, so on a
+        # real lexicon it is hundreds of thousands of element reads: take the
+        # tables over to plain lists once rather than paying tensor indexing
+        # (and a per-cell scalar unwrap) on each.
+        accept = self.accept.tolist()
+        transitions = self.next.tolist()
+        letters = [chr(ord("A") + letter) for letter in range(N_LETTERS)]
+
         out: list[str] = []
         stack = [(self.root, "")]
         while stack:
             state, prefix = stack.pop()
-            acc_row = self.accept[state]
-            next_row = self.next[state]
+            acc_row = accept[state]
+            next_row = transitions[state]
             for letter in range(N_LETTERS):
-                ch = prefix + chr(ord("A") + letter)
+                ch = prefix + letters[letter]
                 if acc_row[letter]:
                     out.append(ch)
-                nxt = int(next_row[letter])
+                nxt = next_row[letter]
                 if nxt != self.dead_state:
                     stack.append((nxt, ch))
         return out

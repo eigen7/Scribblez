@@ -41,7 +41,11 @@ def sobs_dir(tmp_path_factory) -> Path:
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
     d = tmp_path_factory.mktemp("sim_evidence")
-    subprocess.run([str(SLOG_WRITER), str(d), "12", "6"], check=True, capture_output=True)
+    # Four games is what the assertions below read: several files to iterate,
+    # each with enough turns that the sampled positions span opening and
+    # midgame. The tool's cost is linear in the corpus, so a larger one buys
+    # runtime rather than coverage.
+    subprocess.run([str(SLOG_WRITER), str(d), "4", "6"], check=True, capture_output=True)
     result = subprocess.run(
         [
             str(SIM_OBS_TOOL),

@@ -387,7 +387,11 @@ TEST(EndgameAgent, FastTrackReducesPrompts) {
     params.solver.spread_matters = false;
     EndgameHastyBotAgent inner0(params), inner1(params);
     PromptCountingAgent a0(inner0), a1(inner1);
-    for (int i = 0; i < 20; ++i) {
+    // Each game is a full real-lexicon self-play run played twice over, so the
+    // batch is the whole cost of this test. Ten is what the margin needs: a
+    // proven endgame fast-tracks in most games, so the prompt gap it opens is
+    // many times the run-to-run wobble.
+    for (int i = 0; i < 10; ++i) {
       Game g(a0, a1, d, /*seed=*/9000 + i);
       g.set_respect_projections(respect);
       g.play();

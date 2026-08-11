@@ -10,6 +10,23 @@ import time
 import pytest
 from scribblez.dashboard import react_server
 
+# Generous ceilings on how long the listener takes to come up and to die: both
+# are normally reached in milliseconds, so waiting on the condition rather than
+# sleeping a fixed span costs nothing when it holds and still fails the test
+# (rather than hanging) when it does not.
+_APPEAR_TIMEOUT = 5.0
+_VANISH_TIMEOUT = 5.0
+
+
+def _wait_until(predicate, timeout: float) -> bool:
+    """Poll `predicate` until it holds or `timeout` elapses. Returns whether it held."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
 
 def test_reclaim_port_kills_listener():
     if not shutil.which("lsof"):
@@ -30,10 +47,10 @@ def test_reclaim_port_kills_listener():
         ]
     )
     try:
-        time.sleep(1.0)
-        assert holder.pid in react_server._listening_pids(port)
+        assert _wait_until(
+            lambda: holder.pid in react_server._listening_pids(port), _APPEAR_TIMEOUT
+        )
         react_server.reclaim_port(port)
-        time.sleep(0.5)
-        assert react_server._listening_pids(port) == []
+        assert _wait_until(lambda: react_server._listening_pids(port) == [], _VANISH_TIMEOUT)
     finally:
         holder.kill()
