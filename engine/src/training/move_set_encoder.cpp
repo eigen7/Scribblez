@@ -14,18 +14,32 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
   std::fill_n(squares, kMoveMaxPlaced, 0);
   std::fill_n(tile_mask, kMoveMaxPlaced, static_cast<uint8_t>(0));
 
-  // visit_placed_squares yields the newly placed squares in lane order, the
-  // same order Move stores its glyphs, so a single counter indexes both. A
-  // placed tile always carries a letter (natural or a designated blank).
-  int placed = 0;
-  visit_placed_squares(m, [&](int r, int c) {
-    const Glyph g = m.glyph(placed);
-    letters[placed] = g.letter().index() + 1;  // 1..26; 0 is the empty slot
-    blanks[placed] = g.is_blank() ? 1 : 0;
-    squares[placed] = r * BOARD_SIZE + c;
-    tile_mask[placed] = 1;
-    ++placed;
-  });
+  if (m.type() == MoveType::PLAY) {
+    // visit_placed_squares yields the newly placed squares in lane order, the
+    // same order Move stores its glyphs, so a single counter indexes both. A
+    // placed tile always carries a letter (natural or a designated blank).
+    int placed = 0;
+    visit_placed_squares(m, [&](int r, int c) {
+      const Glyph g = m.glyph(placed);
+      letters[placed] = g.letter().index() + 1;  // 1..26; 0 is the empty slot
+      blanks[placed] = g.is_blank() ? 1 : 0;
+      squares[placed] = r * BOARD_SIZE + c;
+      tile_mask[placed] = 1;
+      ++placed;
+    });
+  } else {
+    // An EXCHANGE has no placed squares (visit_placed_squares yields nothing);
+    // its glyphs are the surrendered tiles, encoded so same-size exchanges
+    // differ by WHICH tiles leave. An undesignated blank has no letter --
+    // letters stays 0 (the pad value; the blank flag alone represents it).
+    // A PASS has no glyphs and stays all-zero.
+    for (int i = 0; i < m.num_glyphs(); ++i) {
+      const Glyph g = m.glyph(i);
+      letters[i] = g.has_letter() ? g.letter().index() + 1 : 0;
+      blanks[i] = g.is_blank() ? 1 : 0;
+      tile_mask[i] = 1;
+    }
+  }
 
   // Resultant post-move differential (mover POV): the mover's score advantage
   // plus this move's score, on the board trunk's score-diff scale.

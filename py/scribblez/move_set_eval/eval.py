@@ -13,7 +13,14 @@ stored win-equity and by this model's predicted win-equity -- and report:
     the top-K -- recall scores dropping a near-tie like dropping a uniquely
     winning move; regret prices the miss;
   * rank correlation: the Spearman correlation between the two rankings over the
-    whole candidate set (averaged over positions with >= 2 candidates).
+    whole candidate set (averaged over positions with >= 2 candidates);
+  * exchange-slice metrics, the readout that decides whether exchanges need a
+    dedicated head (docs/roadmap.md A4): exch_retention@K -- how often the
+    teacher's best exchange survives into the model's global top-K, over
+    positions with any exchange -- and exch_rank_regret, the teacher win-equity
+    lost by taking the model's favourite exchange instead of the teacher's,
+    over positions with >= 2 exchanges. The latter is exactly the
+    which-tiles-to-keep ranking the pre-v1 encoding could not express.
 
 Every metric is paired with an incumbent-baseline value computed on the same
 positions from the stored candidate order (_baseline_ranking). Ranking is by
@@ -111,6 +118,12 @@ def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
     return float(teacher.max() - teacher[_topk_indices(pred, k)].max())
 
 
+def _exchange_mask(scalars: np.ndarray) -> np.ndarray:
+    """Which candidates are EXCHANGE moves, off the encoded scalars: not a
+    play, at least one tile surrendered (a pass has neither)."""
+    return (scalars[:, 2] == 0.0) & (scalars[:, 1] > 0.0)
+
+
 def _baseline_ranking(n: int) -> np.ndarray:
     """The incumbent's ranking, encoded descending-by-stored-index, which the
     generator's storage order is chosen to make exact.
@@ -149,16 +162,23 @@ def evaluate(
     Returns, per K in `ks`: "recall@K" / "recall@K_baseline" (top-k set
     overlap with the teacher's) and "regret@K" / "regret@K_baseline" (mean
     teacher win-equity forfeited by the top-k, lower is better); plus
-    "spearman" / "spearman_baseline" and "positions".
+    "spearman" / "spearman_baseline", the exchange-slice metrics
+    ("exch_retention@K", "exch_rank_regret", each with its baseline; see the
+    module docstring), and the "positions" / "positions_with_exchanges"
+    denominators.
     """
     model.eval()
     sums = {}
+    exch_sums = {"exch_rank_regret": 0.0, "exch_rank_regret_baseline": 0.0}
     for k in ks:
         sums[f"recall@{k}"] = sums[f"recall@{k}_baseline"] = 0.0
         sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
+        exch_sums[f"exch_retention@{k}"] = exch_sums[f"exch_retention@{k}_baseline"] = 0.0
     n_positions = 0
     spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
+    n_exch = 0  # positions with any exchange candidate (retention denominator)
+    n_exch_ranked = 0  # positions with >= 2 exchanges (rank-regret denominator)
 
     for batch in dataset.iter_batches(
         positions_per_batch, seed=seed, max_candidates=max_candidates_per_batch
@@ -169,6 +189,7 @@ def evaluate(
         pred_eq = win_equity(out["wld"].softmax(dim=1)).cpu().numpy()
         teacher_eq = win_equity(batch["target_wld"]).numpy()
         pos_id = batch["move_pos_id"].numpy()
+        exchange = _exchange_mask(batch["move_scalars"].numpy())
 
         for p in np.unique(pos_id):
             sel = pos_id == p
@@ -184,8 +205,27 @@ def evaluate(
                     spearman_sums[f"spearman{suffix}"] += _spearman(t, q)
                 n_ranked += 1
 
+            exch_idx = np.flatnonzero(exchange[sel])
+            if len(exch_idx) == 0:
+                continue
+            n_exch += 1
+            best_exch = exch_idx[np.argmax(t[exch_idx])]
+            for suffix, q in rankings.items():
+                for k in ks:
+                    retained = best_exch in _topk_indices(q, k)
+                    exch_sums[f"exch_retention@{k}{suffix}"] += float(retained)
+            if len(exch_idx) >= 2:
+                n_exch_ranked += 1
+                for suffix, q in rankings.items():
+                    picked = exch_idx[np.argmax(q[exch_idx])]
+                    exch_sums[f"exch_rank_regret{suffix}"] += float(t[best_exch] - t[picked])
+
     metrics = {name: total / max(n_positions, 1) for name, total in sums.items()}
     for name, total in spearman_sums.items():
         metrics[name] = total / max(n_ranked, 1)
+    for name, total in exch_sums.items():
+        denom = n_exch_ranked if name.startswith("exch_rank_regret") else n_exch
+        metrics[name] = total / max(denom, 1)
     metrics["positions"] = n_positions
+    metrics["positions_with_exchanges"] = n_exch
     return metrics

@@ -15,6 +15,14 @@
 // evaluates, on the same scale as the board trunk's score-diff input, so the
 // two compare directly. The leave is deliberately absent, being recoverable
 // from the mover's rack (which the trunk sees) minus the placed tiles.
+//
+// EXCHANGE moves have no placed squares, but their surrendered tiles fill the
+// same letter/blank/tile_mask slots (squares stay 0, masked spatially
+// downstream by is_play): without them every same-size exchange from one rack
+// encodes identically while the teacher's value depends on exactly which
+// tiles are kept, an irreducible target error. An unassigned blank -- an
+// exchange surrenders undesignated blanks -- encodes as letters=0/blanks=1,
+// represented by the blank flag alone. PASS stays all-zero.
 
 #include "game/board.h"
 #include "game/move.h"
@@ -34,13 +42,25 @@ inline constexpr int kMoveLetterVocab = 27;
 // One embedding index per board cell.
 inline constexpr int kMoveCells = BOARD_SIZE * BOARD_SIZE;
 
+// The move-feature SEMANTICS version: bumped whenever encode_move changes what
+// the same Move encodes to (v1: exchanges carry their surrendered tiles). A
+// checkpoint is only valid with the encoder version its training rows used, and
+// nothing structural detects a mismatch -- the tensor shapes are unchanged --
+// so the version rides the checkpoint config and the exported ONNX metadata,
+// where the engine-side loader rejects a stale model instead of silently
+// feeding it off-distribution rows.
+inline constexpr int kMoveEncodingVersion = 1;
+
 // `pre_move_score_diff` is the mover's score advantage in points before the
 // move, from which the resultant post-move differential is formed.
-//   letters   int32[kMoveMaxPlaced]  placed-tile letters 1..26 (0 in empty slots)
-//   blanks    uint8[kMoveMaxPlaced]  1 iff that placed tile is a blank
-//   squares   int32[kMoveMaxPlaced]  board indices r*BOARD_SIZE+c (0 in empty
-//                                     slots, masked out downstream)
-//   tile_mask uint8[kMoveMaxPlaced]  1 for real placed tiles, else 0
+//   letters   int32[kMoveMaxPlaced]  tile letters 1..26 (0 in empty slots, and
+//                                     for an exchange's unassigned blanks)
+//   blanks    uint8[kMoveMaxPlaced]  1 iff that tile is a blank
+//   squares   int32[kMoveMaxPlaced]  board indices r*BOARD_SIZE+c for placed
+//                                     tiles (0 in empty slots and for
+//                                     exchanges, masked out downstream)
+//   tile_mask uint8[kMoveMaxPlaced]  1 for real tiles (placed or surrendered),
+//                                     else 0
 //   scalars   float[kMoveScalars]
 void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8_t* blanks,
                  int32_t* squares, uint8_t* tile_mask, float* scalars);

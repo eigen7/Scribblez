@@ -371,6 +371,10 @@ void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int
   *cells = scribblez::move_set::kMoveCells;
 }
 
+int32_t scribblez_move_set_encoding_version(void) {
+  return scribblez::move_set::kMoveEncodingVersion;
+}
+
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale) {
   *scalar_index = scribblez::scalar_block_offset(s->spec, scribblez::ScalarBlockId::kScoreDiff);
   *scale = scribblez::kScoreDiffInputScale;
