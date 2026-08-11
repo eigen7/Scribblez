@@ -12,12 +12,12 @@ import shutil
 import signal
 import subprocess
 import sys
-from pathlib import Path
 from urllib.parse import quote
 
+from scribblez.paths import REPO_ROOT
 from scribblez.service_urls import service_url
 
-WEB_DIR = Path(__file__).resolve().parents[3] / "web"
+WEB_DIR = REPO_ROOT / "web"
 
 # Ports distinct from the C++ web tools' (8080 / 5173-5). The Vite dev server is
 # the page the browser opens; it is routed by the gateway as

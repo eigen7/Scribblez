@@ -32,6 +32,12 @@ from pathlib import Path
 
 DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 
+# The checkout this package was imported from (py/scribblez/ -> repo root) --
+# not a hard-coded /workspace/repo, so code running in a git worktree resolves
+# the worktree's own binaries and data rather than the primary checkout's.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ENGINE_DIR = REPO_ROOT / "target" / "engine"
+
 # Workload identifiers: the `<task>` level of the tags/ tree, the workload
 # registry keys, and the dashboard's task slugs. The single source of truth.
 POSITION_EVAL = "position_eval"

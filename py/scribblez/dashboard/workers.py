@@ -56,9 +56,9 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.hardware import default_thread_count
+from scribblez.paths import REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
 
-REPO_ROOT = Path("/workspace/repo")
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 

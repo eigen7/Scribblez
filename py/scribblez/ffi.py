@@ -7,15 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
+from scribblez.paths import ENGINE_DIR
+
 # ---------------------------------------------------------------------------
 # Library discovery
 # ---------------------------------------------------------------------------
 
-# Resolved relative to this checkout (py/scribblez/ -> repo root), so a git
-# worktree tests against its own build rather than the primary checkout's.
-_FFI_LIB_PATH = str(
-    Path(__file__).resolve().parents[2] / "target" / "engine" / "libscribblez_ffi.so"
-)
+_FFI_LIB_PATH = str(ENGINE_DIR / "libscribblez_ffi.so")
 _LIB: ctypes.CDLL | None = None
 
 
