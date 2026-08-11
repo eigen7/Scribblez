@@ -22,6 +22,10 @@ from scribblez.ffi import (
     row_size_floats,
 )
 
+# This checkout's own binaries, not the primary checkout's -- see the note in
+# test_move_set_eval_targets.py.
+_ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+
 # ---------------------------------------------------------------------------
 # Fixture: generate .slog files using the test_slog_writer binary.
 # ---------------------------------------------------------------------------
@@ -29,7 +33,7 @@ from scribblez.ffi import (
 
 def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int = 4) -> list[Path]:
     """Generate .slog files for testing using the test_slog_writer binary."""
-    binary = Path("/workspace/repo/target/engine/test_slog_writer")
+    binary = _ENGINE_DIR / "test_slog_writer"
     if not binary.is_file():
         pytest.skip("test_slog_writer not built -- run 'make test_slog_writer' first")
 
@@ -168,7 +172,7 @@ class TestStreamingDataset:
 def test_slice_row_batch_matches_dataset():
     """slice_row_batch reproduces the named tensors with correct shapes/values
     (guards the row-slicing SlogDataset applies to every loaded batch)."""
-    if not Path("/workspace/repo/target/engine/libscribblez_ffi.so").is_file():
+    if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
         pytest.skip("libscribblez_ffi.so not built -- run py/build.py first")
     rf = row_size_floats()
     rng = np.random.default_rng(0)

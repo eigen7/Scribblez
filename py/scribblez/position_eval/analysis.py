@@ -20,13 +20,13 @@ import torch
 from natsort import natsorted
 
 from scribblez.ffi import analyze_position_eval_gcg
+from scribblez.paths import REPO_ROOT
 
 # The frozen evaluation sets: penultimate-bingo positions whose Monte-Carlo ground
 # truth lives in monte-carlo-sim-results.json next to the GCGs. DEFAULT_DATASET is the
 # small hand-built set (loose .gcg files) the Positions tab scrubs; LARGE_DATASET is
 # the machine-harvested set (committed as part-*.gcgs bundles) the Loss tab's
 # aggregate quality curves are measured over.
-REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset"
 LARGE_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large"
 GROUND_TRUTH_FILENAME = "monte-carlo-sim-results.json"

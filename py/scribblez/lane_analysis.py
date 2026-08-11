@@ -16,9 +16,9 @@ import torch
 from natsort import natsorted
 
 from scribblez.ffi import analyze_gcg
+from scribblez.paths import REPO_ROOT
 
 # The default frozen evaluation set: hand-built realistic endgame-ish positions.
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = REPO_ROOT / "positions" / "NWL23" / "max-move-per-lane-test-dataset"
 
 BOARD_SIZE = 15

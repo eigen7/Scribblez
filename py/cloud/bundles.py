@@ -27,11 +27,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from build import SUPPORTED_ARCHS, arch_build_dir
+from scribblez.paths import REPO_ROOT
 
 from cloud.credentials import R2Credentials
 from cloud.r2 import bucket_path, rclone
-
-REPO_ROOT = Path("/workspace/repo")
 
 # Engine artifacts shipped to workers. Sourced from each arch's build dir and
 # placed at target/engine/<name> inside the tarball -- the fixed path all

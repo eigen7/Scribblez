@@ -47,11 +47,12 @@ from pathlib import Path
 
 from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
+from scribblez.paths import ENGINE_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 
-TARGET_GENERATOR = "/workspace/repo/target/engine/move_set_eval_target_generator"
+TARGET_GENERATOR = str(ENGINE_DIR / "move_set_eval_target_generator")
 
 # The tag's pair store, under the tag's data/ dir (locally and in the bucket).
 SLOGS_DIR = "slogs"

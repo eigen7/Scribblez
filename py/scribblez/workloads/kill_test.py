@@ -19,11 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scribblez.params import param
+from scribblez.paths import ENGINE_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 
-SIM_OBS_TOOL = "/workspace/repo/target/engine/sim_obs_tool"
+SIM_OBS_TOOL = str(ENGINE_DIR / "sim_obs_tool")
 
 # The tag's pair store, under the tag's data/ dir (locally and in the bucket).
 SLOGS_DIR = "slogs"
