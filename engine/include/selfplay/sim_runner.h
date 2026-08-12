@@ -84,8 +84,13 @@ SimObjective parse_sim_objective(const std::string& name, const std::string& fla
 
 class SimRunner {
  public:
+  // Rollouts per candidate are counted in u16 planes, so this bounds them.
+  // Public because an agent validates its own --rollouts against it, to reject
+  // the flag with a message rather than trip the constructor's assert.
+  static constexpr int kMaxRollouts = 65535;
+
   struct Params {
-    int rollouts = 300;  // rollouts per candidate; capped at 65535 (u16 counts)
+    int rollouts = 300;  // per candidate; at most kMaxRollouts
     int threads = 1;
   };
 

@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,29 @@ class MsetSimAgentTest : public ::testing::Test {
 };
 
 }  // namespace
+
+TEST_F(MsetSimAgentTest, OutOfRangeScalarParamsAreRejected) {
+  // Every guard in validate(), including its boundaries. --rollouts is the one
+  // whose absence was silent rather than loud: SimRunner only asserts its
+  // bound, so a Release build ran 0 rollouts and played the model's rank-0
+  // candidate every turn (see validate()'s comment).
+  const auto build = [&](int shortlist, int sim_top_k, int rollouts) {
+    MsetSimAgent::Params p = params();
+    p.shortlist = shortlist;
+    p.sim_top_k = sim_top_k;
+    p.sim.rollouts = rollouts;
+    return MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>());
+  };
+
+  EXPECT_THROW(build(-1, 2, 8), std::runtime_error);  // --shortlist
+  EXPECT_THROW(build(0, 0, 8), std::runtime_error);   // --sim-top-k
+  EXPECT_THROW(build(0, 2, 0), std::runtime_error);   // --rollouts, lower
+  EXPECT_THROW(build(0, 2, SimRunner::kMaxRollouts + 1), std::runtime_error);
+
+  // The accepted boundaries, so the bounds cannot silently tighten.
+  EXPECT_NO_THROW(build(0, 1, 1));
+  EXPECT_NO_THROW(build(0, 1, SimRunner::kMaxRollouts));
+}
 
 TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const MsetSimAgent::Params p = params();

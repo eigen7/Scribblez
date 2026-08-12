@@ -91,10 +91,16 @@ class MsetSimAgent : public Agent {
   void encode_board_row(const MoveRequest& req, float* dst) const;
 
  private:
-  // Throws on out-of-range scalar params. The constructors run it, and
-  // from_spec additionally runs it BEFORE the production constructor, so a bad
-  // flag fails fast instead of after the TensorRT engine build.
+  // Throws on out-of-range scalar params. from_spec runs it BEFORE the
+  // production constructor, so a bad flag fails fast instead of after the
+  // TensorRT engine build.
   static void validate(const Params& params);
+
+  // validate(), returning the rollout params runner_ is built from. The
+  // constructors validate through this rather than in their body so that a
+  // rejected --rollouts throws instead of tripping SimRunner's own assert --
+  // which fires first in a Debug build, and is compiled out of a Release one.
+  static const SimRunner::Params& validated_sim(const Params& params);
 
   // Score `candidates` in one pass and fill rank_ with indices into them in
   // descending model-objective order. Ties keep equity order: the candidate

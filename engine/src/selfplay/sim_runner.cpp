@@ -226,7 +226,7 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
 }
 
 SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict), params_(params) {
-  assert(params_.rollouts >= 1 && params_.rollouts <= 65535);  // u16 count planes
+  assert(params_.rollouts >= 1 && params_.rollouts <= kMaxRollouts);
 }
 
 std::vector<SimObservation> SimRunner::run(const SimPosition& pos,

@@ -409,7 +409,7 @@ lead with the spine, interleave the others as experiments block on data).
 |---|---|---|---|
 | 1 | Face-up leaves in the game loop; the sim agent baseline; A1 match eval | — | E1 fleet lands; E2 match statistics |
 | 2 | A2 in-variant regeneration; A3 v1 curves | D1 truncated rollouts; C1 novelty dedup | **E3 re-ranking experiment** |
-| 3 | A4 sensitivity sweep → recall bar; move-set-evaluation agent | C2 proves-best head | — |
+| 3 | A4 sensitivity sweep → recall bar; equal-budget match vs. exact eval | C2 proves-best head | — |
 | 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 proves-best scheduling | — |
 | 5 | — | D3 endgame-solver port | volunteer-compute hardening |
 
