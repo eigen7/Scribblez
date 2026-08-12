@@ -10,7 +10,7 @@
 
 #include "data/binary_log.h"
 #include "data/data_loader.h"
-#include "selfplay/game_runner.h"
+#include "lexicon/lexicon.h"
 
 #include <algorithm>
 #include <chrono>
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   int n_samples = 64;
   DataLoader::Params params;
-  params.spec = {&scribblez::GameRunner::load_dictionary_or_throw(), true};
+  params.spec = {&scribblez::load_dictionary_or_throw(), true};
   bool post_move = false;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];

@@ -20,13 +20,12 @@
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
+#include "data/sim_observation_log.h"
 #include "encoding/position_encoder.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
-#include "selfplay/sim_observation_log.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -278,7 +277,7 @@ int main(int argc, char** argv) {
     util::parse_command_line(argc, argv, desc);
     validate(opt);
 
-    const Dictionary& dict = GameRunner::load_dictionary_or_throw();
+    const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
     std::vector<fs::path> slogs;

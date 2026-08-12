@@ -2,10 +2,13 @@
 
 #include "agent/agent.h"
 #include "agent/player_factory.h"
+#include "arena/game_engine.h"
+#include "arena/streaming_game_producer.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
 #include "data/gcg_reader.h"
+#include "data/sim_observation_log.h"
 #include "data/slog_subset.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/game_state_encoder.h"
@@ -13,11 +16,7 @@
 #include "encoding/row_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
-#include "selfplay/self_play_engine.h"
-#include "selfplay/sim_observation_log.h"
-#include "selfplay/sim_runner.h"
-#include "selfplay/streaming_game_producer.h"
+#include "sim/sim_runner.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
 #include "training/max_move_per_lane_input_encoder.h"
@@ -96,7 +95,7 @@ namespace {
 const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
   scribblez::Lexicon& lex = scribblez::Lexicon::instance();
   lex.set_params({.name = lexicon_name, .dir = lex.dir()});
-  return scribblez::GameRunner::load_dictionary_or_throw();
+  return scribblez::load_dictionary_or_throw();
 }
 
 }  // namespace
@@ -583,7 +582,7 @@ struct StreamHandle {
   scribblez::binlog::StreamingGameProducer producer;
 
   StreamHandle(float* const* slots, int num_slots, int rows_per_slot, int row_floats,
-               const scribblez::SelfPlayEngine::Params& engine_params,
+               const scribblez::GameEngine::Params& engine_params,
                const scribblez::PlayerFactory::Params& player_params,
                const scribblez::binlog::StreamingGameProducer::Params& stream_params)
       : ring(slots, num_slots, rows_per_slot, row_floats),
@@ -609,7 +608,7 @@ StreamHandle* new_stream(float* const* slot_ptrs, int num_slots, int rows_per_sl
     if (!player_specs[i]) return nullptr;
     player_params.specs.emplace_back(player_specs[i]);
   }
-  scribblez::SelfPlayEngine::Params engine_params;
+  scribblez::GameEngine::Params engine_params;
   engine_params.threads = num_threads;
   engine_params.seed = seed;
   engine_params.handicap_max = handicap_max;

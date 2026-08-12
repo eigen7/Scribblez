@@ -1,4 +1,4 @@
-#include "selfplay/self_play_engine.h"
+#include "arena/game_engine.h"
 
 #include "game/game.h"
 #include "lexicon/lexicon.h"
@@ -40,7 +40,7 @@ int pick_random_opening_plies(uint64_t game_seed, double mean) {
 
 }  // namespace
 
-SelfPlayEngine::SelfPlayEngine(const Params& params, const PlayerFactory::Params& player_params)
+GameEngine::GameEngine(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params) {
   if (params_.threads < 1) {
     std::cerr << "Error: threads must be >= 1\n";
@@ -58,13 +58,13 @@ SelfPlayEngine::SelfPlayEngine(const Params& params, const PlayerFactory::Params
   }
 }
 
-std::array<std::string, 2> SelfPlayEngine::player_names() const {
+std::array<std::string, 2> GameEngine::player_names() const {
   return {agents_[0][0]->name(), agents_[0][1]->name()};
 }
 
-std::pair<EndGameAction, EndGameAction> SelfPlayEngine::play(int thread_idx,
-                                                             const std::array<int, 2>& seats,
-                                                             uint64_t game_idx, GameSink& sink) {
+std::pair<EndGameAction, EndGameAction> GameEngine::play(int thread_idx,
+                                                         const std::array<int, 2>& seats,
+                                                         uint64_t game_idx, GameSink& sink) {
   Agent& seat0 = *agents_[thread_idx][seats[0]];
   Agent& seat1 = *agents_[thread_idx][seats[1]];
   const uint64_t game_seed = params_.seed + game_idx;

@@ -20,7 +20,7 @@
 #include "endgame/endgame_solver.h"
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include <cstdint>
 #include <memory>

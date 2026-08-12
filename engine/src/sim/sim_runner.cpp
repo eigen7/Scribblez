@@ -1,4 +1,4 @@
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include "agent/agent.h"
 #include "agent/macondo_bot.h"

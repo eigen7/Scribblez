@@ -28,7 +28,7 @@ generate_data.py ─▶ play_game ─▶ GameRunner ─▶ Game ─▶ GameLog
 | Stage | Owner | Notes |
 |-------|-------|-------|
 | Launch self-play | [py/scripts/generate_data.py](../py/scripts/generate_data.py) | Shells out to the `play_game` binary with two HastyBots and `--binary-log-dir`. |
-| Game loop / threading | [GameRunner](../engine/src/selfplay/game_runner.cpp) | Owns agents, seeds (one per game), the win tally, and the parallel game loop. |
+| Game loop / threading | [GameRunner](../engine/src/arena/game_runner.cpp) | Owns agents, seeds (one per game), the win tally, and the parallel game loop. |
 | One game | [Game](../engine/src/game/game.cpp) | Plays a single game and accumulates a [GameLog](../engine/include/game/game.h) (initial racks, every move + draw, final scores). |
 | Serialize | [BinaryLogWriter](../engine/src/data/binary_log.cpp) | Batches finished games and flushes them to one `.slog` file per `--games-per-file`. |
 | On-disk format | [binary_log.h](../engine/include/data/binary_log.h) | **Authoritative** layout (see below). |
@@ -115,7 +115,7 @@ dropped by the writer.
 
 ## Determinism and seeding
 
-- [SeedProducer](../engine/src/selfplay/seed_producer.cpp) is the global RNG
+- [SeedProducer](../engine/src/util/seed_producer.cpp) is the global RNG
   source; `GameRunner` pulls one base seed and gives game *g* the seed
   `base + g` (`base + g/2` under `--paired`, where games 2k and 2k+1
   deliberately share a seed with the seats swapped), which seeds that game's

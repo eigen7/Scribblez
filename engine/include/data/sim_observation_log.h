@@ -20,7 +20,7 @@
 // evidence encoding pairing each observation with the move behind it.
 
 #include "game/move.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include <cstdint>
 #include <string>

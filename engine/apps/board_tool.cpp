@@ -4,7 +4,6 @@
 #include "game/tile_counts.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
 #include "util/misc.h"
@@ -293,7 +292,7 @@ int main(int argc, char** argv) {
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
-    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "board", "board", 5175);
     if (!vite.wait_until_ready()) {

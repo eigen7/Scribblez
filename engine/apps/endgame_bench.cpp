@@ -51,7 +51,6 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/string.h"
@@ -730,7 +729,7 @@ int main(int argc, char** argv) {
     scribblez::util::parse_command_line(argc, argv, desc);
 
     scribblez::init_equity(leaves_file, peg_file);
-    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     const std::vector<uint64_t> budgets = budgets_csv.empty()
                                             ? std::vector<uint64_t>{params.budget}
                                             : scribblez::parse_budgets(budgets_csv);

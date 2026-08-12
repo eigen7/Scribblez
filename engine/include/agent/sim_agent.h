@@ -18,7 +18,7 @@
 #include "agent/agent.h"
 #include "agent/endgame_turn_policy.h"
 #include "endgame/endgame_solver.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include <cstdint>
 #include <memory>

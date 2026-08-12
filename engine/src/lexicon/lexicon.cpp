@@ -1,7 +1,10 @@
 #include "lexicon/lexicon.h"
 
+#include "util/exception.h"
+
 #include <boost/program_options.hpp>
 
+#include <iostream>
 #include <stdexcept>
 
 namespace scribblez {
@@ -35,6 +38,18 @@ const Dictionary& Lexicon::dict() {
     dict_ = std::make_unique<Dictionary>(Dictionary::load_kwg(kwg_path()));
   }
   return *dict_;
+}
+
+const Dictionary& load_dictionary_or_throw() {
+  try {
+    return Lexicon::instance().dict();
+  } catch (const std::exception& e) {
+    std::cerr << "Error: " << e.what() << "\n"
+              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
+              << Lexicon::instance().kwg_path() << ".\n"
+              << "Run setup_wizard.py outside the Docker container to install it.\n";
+    throw Exception(e.what());
+  }
 }
 
 }  // namespace scribblez

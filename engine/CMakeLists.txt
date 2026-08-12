@@ -28,15 +28,15 @@ add_library(scribblez_core STATIC
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
   src/data/streaming_row_buffer.cpp
-  src/selfplay/streaming_game_producer.cpp
+  src/arena/streaming_game_producer.cpp
   src/data/block_decoder.cpp
   src/data/slog_subset.cpp
   src/serve/position_json.cpp
   src/data/data_loader.cpp
   src/agent/agent.cpp
   src/agent/agent_options.cpp
-  src/selfplay/self_play_engine.cpp
-  src/selfplay/game_runner.cpp
+  src/arena/game_engine.cpp
+  src/arena/game_runner.cpp
   src/lexicon/hasty_equity.cpp
   src/agent/human_web_agent.cpp
   src/serve/service_url.cpp
@@ -45,19 +45,19 @@ add_library(scribblez_core STATIC
   src/agent/macondo_bot.cpp
   src/agent/endgame_turn_policy.cpp
   src/agent/endgame_hasty_bot.cpp
-  src/selfplay/monte_carlo_sim.cpp
-  src/selfplay/sim_runner.cpp
+  src/sim/monte_carlo_sim.cpp
+  src/sim/sim_runner.cpp
   src/belief/leave_prior.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
-  src/selfplay/sim_observation_log.cpp
+  src/data/sim_observation_log.cpp
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
   src/agent/sim_agent.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
-  src/selfplay/seed_producer.cpp
+  src/util/seed_producer.cpp
   src/serve/web_server.cpp
   src/util/string.cpp
   src/util/io.cpp

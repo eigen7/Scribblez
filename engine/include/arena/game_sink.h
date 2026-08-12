@@ -6,10 +6,10 @@
 
 namespace scribblez {
 
-// Destination for finished self-play games. SelfPlayEngine moves each game's
-// log storage in, and the sink may retain it (the disk writer) or discard it
-// (the streaming encoder). A GameLog view must be taken *after* the move, or
-// its pointers dangle.
+// Destination for finished games. GameEngine moves each game's log storage in,
+// and the sink may retain it (the disk writer) or discard it (the streaming
+// encoder). A GameLog view must be taken *after* the move, or its pointers
+// dangle.
 class GameSink {
  public:
   virtual ~GameSink() = default;

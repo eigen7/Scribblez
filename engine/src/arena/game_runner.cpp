@@ -1,13 +1,13 @@
-#include "selfplay/game_runner.h"
+#include "arena/game_runner.h"
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
 #include "game/game.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/seed_producer.h"
 #include "util/exception.h"
 #include "util/misc.h"
+#include "util/seed_producer.h"
 #include "util/string.h"
 
 #include <boost/json.hpp>
@@ -33,18 +33,6 @@ namespace scribblez {
 // Games per .slog file. One file is also the unit a self-play generator stages
 // as a chunk, so this fixes the chunk size fleet-wide.
 constexpr int kGamesPerFile = 1000;
-
-const Dictionary& GameRunner::load_dictionary_or_throw() {
-  try {
-    return Lexicon::instance().dict();
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n"
-              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
-              << Lexicon::instance().kwg_path() << ".\n"
-              << "Run setup_wizard.py outside the Docker container to install it.\n";
-    throw Exception(e.what());
-  }
-}
 
 // --------------------------- Results -------------------------------------
 
@@ -199,9 +187,9 @@ void GameRunner::run_progress_monitor(const std::atomic<bool>& done,
 GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params),
       seed_(SeedProducer::instance().next()),
-      engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max,
-                                     params.random_opening_mean, params.respect_projections,
-                                     params.face_up_leaves},
+      engine_(GameEngine::Params{params.threads, seed_, params.random_handicap_max,
+                                 params.random_opening_mean, params.respect_projections,
+                                 params.face_up_leaves},
               player_params) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";

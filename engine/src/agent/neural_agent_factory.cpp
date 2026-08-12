@@ -16,7 +16,7 @@
 #include "lexicon/lexicon.h"
 #include "nn/neural_net.h"
 #include "nn/nn_evaluation_service.h"
-#include "selfplay/seed_producer.h"
+#include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 

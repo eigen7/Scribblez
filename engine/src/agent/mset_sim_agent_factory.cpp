@@ -11,7 +11,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/move_set_eval_service.h"
-#include "selfplay/seed_producer.h"
+#include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 

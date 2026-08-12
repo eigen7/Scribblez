@@ -1,4 +1,4 @@
-#include "selfplay/monte_carlo_sim.h"
+#include "sim/monte_carlo_sim.h"
 
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
@@ -8,7 +8,7 @@
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/tile.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include <algorithm>
 #include <functional>
