@@ -258,14 +258,16 @@ Then the spine proper:
     and 24–90× at full-sweep eval shapes depending on how ragged the batch
     is, ~1.9× on a whole training step, and the per-move board-token copy
     that made a swept batch cost gigabytes is gone — a forward at the worst
-    reachable sweep shape peaks at 429 MiB against 13573 MiB). What is
-    left is export-specific: the evaluation service API speaks flat
-    fixed-width rows, so the graph still
-    needs a two-input service API and a candidate axis — either the padded
-    per-position grid the training model now uses, or a chunked one —
-    decided before the ONNX graph is frozen. The padded grid also carries a
-    host sync (its `maxK` is a data-dependent host value); an export will
-    have to source that shape from the batcher instead.
+    reachable sweep shape peaks at 429 MiB against 13573 MiB). The ONNX
+    export has landed as the P=1 specialization
+    ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)): at a
+    decision point the agent holds one position, under which the padded
+    grid's scatter/gather and its data-dependent `maxK` host sync degenerate
+    away entirely, leaving one board pair plus a single dynamic
+    candidate axis — and the TensorRT parse/build/refit path is
+    gate-proven (trt_refit_probe.py). What is left is the engine runtime:
+    a move-set service API beside the flat fixed-width position one, and
+    the agent that drives it.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.

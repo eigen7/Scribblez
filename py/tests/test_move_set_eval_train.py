@@ -712,6 +712,7 @@ def test_a_small_generation_target_releases_the_wait_rather_than_hanging(tmp_pat
 # in this file has touched the dataset.
 _DRIVE_RUN = """
 import sys, torch
+import onnx
 from types import SimpleNamespace
 from pathlib import Path
 from scribblez.move_set_eval import trainer
@@ -733,6 +734,7 @@ paths = SimpleNamespace(
     data_dir=root,
     dashboard_db=root / "dashboard.db",
     rolling_checkpoint=root / "checkpoints" / "model.pt",
+    onnx_path=lambda epoch: root / "models" / f"model_epoch_{epoch:04d}.onnx",
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1,
@@ -746,6 +748,13 @@ saved = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=Fa
 assert saved["settled_epochs"] == 2, saved["settled_epochs"]
 assert saved["generation_index"] == 2, saved["generation_index"]
 assert saved["rows_trained"] > 0, saved["rows_trained"]
+# The per-pass ONNX exports landed beside the checkpoint, metadata stamped
+# from the run's own config (the self-describing fields).
+for epoch in (0, 1):
+    meta = {e.key: e.value for e in onnx.load(str(paths.onnx_path(epoch))).metadata_props}
+    assert meta["graph"] == "move_set_eval", meta
+    assert meta["move_encoding_version"] == "1", meta
+    assert meta["opp_leave_input"] == "false", meta
 print("OK")
 """
 

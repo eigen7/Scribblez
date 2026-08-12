@@ -45,6 +45,7 @@ from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condi
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import move_encoding_version
+from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
@@ -289,6 +290,20 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         record[f"regret{k}_baseline"] = metrics[f"regret@{k}_baseline"]
     db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    # Per-pass ONNX beside the rolling checkpoint, under the pass index the
+    # metrics row above used -- the artifact the engine runtime loads and any
+    # match-eval consumer keys on. The config's recorded arm/version stamp the
+    # metadata, so the export can never claim an encoding its rows didn't use.
+    cfg = ctx["config"]
+    export_onnx(
+        model,
+        paths.onnx_path(epoch),
+        cfg["spatial_planes"],
+        cfg["scalar_size"],
+        contingent_features=cfg["contingent_features"],
+        opp_leave_input=cfg["open_leaves"],
+        move_encoding_version=cfg["move_encoding_version"],
+    )
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,
