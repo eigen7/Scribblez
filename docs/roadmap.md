@@ -265,9 +265,10 @@ Then the spine proper:
     grid's scatter/gather and its data-dependent `maxK` host sync degenerate
     away entirely, leaving one board pair plus a single dynamic
     candidate axis — and the TensorRT parse/build/refit path is
-    gate-proven (trt_refit_probe.py). What is left is the engine runtime:
-    a move-set service API beside the flat fixed-width position one, and
-    the agent that drives it.
+    gate-proven (trt_refit_probe.py). The engine runtime has landed with
+    it ([move_set_net.h](../engine/include/nn/move_set_net.h) and the
+    move-set service API beside the flat fixed-width position one), so
+    what is left is the agent that drives it.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.

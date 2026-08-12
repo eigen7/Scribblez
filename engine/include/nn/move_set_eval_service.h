@@ -20,19 +20,11 @@ namespace nn {
 
 // Abstract so agents and their GPU-free unit tests depend on this interface
 // rather than on TensorRT, injecting either the TensorRT-backed service or a
-// scripted stub -- as EvalService already does for the position model.
-class MoveSetEvalService {
+// scripted stub -- as EvalService already does for the position model. Both
+// describe their served model's board rows through ServedModelInputs, so the
+// arm-and-width validation an agent does is written once for either.
+class MoveSetEvalService : public ServedModelInputs {
  public:
-  virtual ~MoveSetEvalService() = default;
-
-  // The served model's input-encoding arm and the board-row widths it consumes.
-  // An agent builds its InputEncodingSpec from the arm and validates the widths
-  // against it through the layout registry.
-  virtual bool contingent_features() const = 0;
-  virtual bool opp_leave_input() const = 0;
-  virtual int spatial_planes() const = 0;
-  virtual int scalar_floats() const = 0;
-
   // `board_row` is the pre-move position, laid out as
   // GameStateEncoder::encode_input() writes it; `moves` are that position's
   // candidates. Writes moves.count Evals to `out`.

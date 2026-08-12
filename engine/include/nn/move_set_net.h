@@ -33,6 +33,13 @@ struct MoveSetNetParams {
   // Upper bound on the candidates one predict() call scores, and the profile's
   // maximum, so it keys the engine-plan cache. MoveSetEvalService splits a
   // larger candidate set into chunks of this size.
+  //
+  // Size it to the realistic move-set ceiling rather than trimming it: every
+  // chunk past the first re-pays a full synchronous round trip and another
+  // board trunk pass -- the per-position work this architecture exists to pay
+  // once -- while buying back almost no memory. Measured on the parity fixture
+  // at M=4000: 0.37 ms in one chunk, 0.94 ms at max_moves=1024, 1.98 ms at 512,
+  // against device memory of 46 MiB at 4096 and 42 MiB at 256.
   int max_moves = 4096;
 
   Precision precision = Precision::kFP16;
@@ -52,9 +59,10 @@ class MoveSetNet {
   MoveSetNet(const MoveSetNet&) = delete;
   MoveSetNet& operator=(const MoveSetNet&) = delete;
 
-  // Build the engine from params.onnx_path, or deserialize a cached plan and
-  // refit it with this model's weights -- the same architecture-keyed cache
-  // NeuralNet::load() uses, under this net's own profile tag. Exactly once,
+  // Build the engine from params.onnx_path, or deserialize the cached plan
+  // built from this very file -- the mset cache is keyed on model content, so
+  // a hit needs no refit (see the .cpp for why this graph cannot use the
+  // position runtime's architecture-keyed, refitted cache). Exactly once,
   // before predict().
   //
   // Throws unless the model declares the move-set graph and the very

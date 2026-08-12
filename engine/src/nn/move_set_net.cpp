@@ -34,11 +34,22 @@ constexpr const char* kMoveScalars = "move_scalars";
 constexpr const char* kOutputWld = "wld";
 constexpr const char* kOutputScoreDiff = "score_diff";
 
+// The width every move tensor must have. The board tensors' widths are read off
+// the engine and passed on to the caller, but these are not negotiable: the
+// service stages move rows at move_set_encoder.h's own constants, so a model
+// whose rows are narrower would be a buffer overrun rather than a mismatch.
+// Nothing else would catch it -- tensor shapes are not part of the metadata the
+// loader checks.
+struct MoveInputWidth {
+  const char* name;
+  int elems_per_row;
+};
+
 // The candidate count the plan is tuned for. Bounds are 1 and params.max_moves;
 // this is the middle of the profile, near a typical full move set.
 constexpr int kOptMoves = 512;
 
-// This file duplicates NeuralNet's logger, refit, and load-or-build flow rather
+// This file duplicates NeuralNet's logger and its load-or-build flow rather
 // than sharing them. That is deliberate and temporary: the shared TensorRT
 // graph abstraction neural_net.cpp's own TODO asks for is worth extracting from
 // two runtimes that have both been proven against real engines, not designed
@@ -103,10 +114,6 @@ struct MoveSetNet::Impl {
   // Builds the plan in memory; touches no disk.
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
 
-  // For after deserializing a cached plan, which shares the architecture but
-  // holds whatever same-architecture checkpoint first populated the cache.
-  void refit_engine(const std::vector<char>& onnx_bytes);
-
   // Context, stream, and the binding table, once the engine exists.
   void allocate_buffers();
 
@@ -155,7 +162,7 @@ void MoveSetNet::Impl::deserialize_engine(const std::vector<char>& plan) {
 }
 
 std::vector<char> MoveSetNet::Impl::build_plan(const std::vector<char>& onnx_bytes) {
-  std::cerr << "[TRT] Building move set engine from ONNX (one-time; cached per architecture "
+  std::cerr << "[TRT] Building move set engine from ONNX (one-time per checkpoint; cached "
                "afterward)...\n";
 
   std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
@@ -172,10 +179,10 @@ std::vector<char> MoveSetNet::Impl::build_plan(const std::vector<char>& onnx_byt
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
   if (params.precision == Precision::kFP16) config->setFlag(nvinfer1::BuilderFlag::kFP16);
-  // Every plan must be refittable so a cache hit can swap in the loaded
-  // checkpoint's weights (see load()).
-  config->setFlag(nvinfer1::BuilderFlag::kREFIT);
   if (params.fast_build) config->setBuilderOptimizationLevel(0);
+  // No kREFIT, unlike the position runtime: a plan here is only ever reused for
+  // the model that built it (load()), so nothing would refit it, and leaving
+  // the flag off lets TensorRT fold the weights into its kernels.
 
   // Only the move tensors carry the dynamic candidate axis; the board inputs
   // are the P=1 graph's single row, fully static, and need no profile entry.
@@ -205,29 +212,6 @@ std::vector<char> MoveSetNet::Impl::build_plan(const std::vector<char>& onnx_byt
   return std::vector<char>(data, data + plan->size());
 }
 
-void MoveSetNet::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
-  std::unique_ptr<nvinfer1::IRefitter> refitter(nvinfer1::createInferRefitter(*engine, logger));
-  std::unique_ptr<nvonnxparser::IParserRefitter> parser_refitter(
-    nvonnxparser::createParserRefitter(*refitter, logger));
-  // Model path for external-data resolution, as in build_plan().
-  //
-  // The boolean this returns is deliberately not the verdict. TensorRT 10.11
-  // counts one more ONNX-side weight than the engine exposes a slot for -- an
-  // anonymous fusion product -- and fails its own strict count on a refit that
-  // left nothing unmapped. getMissingWeights() is the question that matters and
-  // the one the A4 refit gate (py/scripts/move_set_eval/trt_refit_probe.py)
-  // validated against ground-truth outputs.
-  parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str());
-  const int missing = refitter->getMissingWeights(0, nullptr);
-  if (missing != 0) {
-    std::string msg = "TensorRT refit left " + std::to_string(missing) + " weights unmapped";
-    if (parser_refitter->getNbErrors() > 0)
-      msg += std::string(": ") + parser_refitter->getError(0)->desc();
-    throw std::runtime_error(msg);
-  }
-  if (!refitter->refitCudaEngine()) throw std::runtime_error("Failed to refit TensorRT engine");
-}
-
 void MoveSetNet::Impl::allocate_buffers() {
   context.reset(engine->createExecutionContext());
   if (!context) throw std::runtime_error("Failed to create TensorRT execution context");
@@ -248,6 +232,20 @@ void MoveSetNet::Impl::allocate_buffers() {
     b.host = host_malloc(capacity);
     context->setTensorAddress(b.name.c_str(), b.device);
     bindings.push_back(b);
+  }
+
+  const MoveInputWidth required[] = {
+    {kMoveLetters, move_set::kMoveMaxPlaced}, {kMoveBlanks, move_set::kMoveMaxPlaced},
+    {kMoveSquares, move_set::kMoveMaxPlaced}, {kMoveTileMask, move_set::kMoveMaxPlaced},
+    {kMoveScalars, move_set::kMoveScalars},
+  };
+  for (const MoveInputWidth& want : required) {
+    const int got = binding(want.name).elems_per_row;
+    if (got != want.elems_per_row) {
+      throw std::runtime_error("Move-feature width mismatch: " + params.onnx_path + " declares " +
+                               want.name + " " + std::to_string(got) +
+                               " wide, this engine encodes " + std::to_string(want.elems_per_row));
+    }
   }
 
   spatial_planes = engine->getTensorShape(kInputSpatial).d[1];
@@ -283,17 +281,25 @@ void MoveSetNet::load() {
   impl_->contingent_features = meta.contingent_features;
   impl_->opp_leave_input = meta.opp_leave_input;
 
+  // Keyed on the model's exact contents rather than its architecture, so a hit
+  // is this very file and its plan already holds the right weights: nothing is
+  // refitted here. The position runtime shares one plan across every checkpoint
+  // of an architecture because it refits and can tell a bad refit from a good
+  // one; on this graph that is not available. TensorRT 10.11 reports an
+  // ONNX-parser refit that mapped every weight and one that left a weight
+  // behind identically -- same false return, same error code, and
+  // getMissingWeights() zero for both, since a deserialized plan already
+  // carries a value for every weight -- differing only in a count inside a
+  // free-text assertion message. An unverifiable refit would mean serving a
+  // model that is neither checkpoint, so the cost of a build per new checkpoint
+  // (paid once, then cached) buys correctness by construction.
   std::string cache_path =
-    engine_plan_cache_path(meta.architecture_signature, impl_->params.precision,
+    engine_plan_cache_path(content_hash(onnx_bytes), impl_->params.precision,
                            "moves_" + std::to_string(impl_->params.max_moves),
                            impl_->params.fast_build, impl_->params.mount_root);
 
-  // A cache hit yields a plan with the right structure but, in general, another
-  // checkpoint's weights; refitting swaps in this model's, far more cheaply
-  // than an engine build.
   if (std::filesystem::exists(cache_path)) {
     impl_->deserialize_engine(read_file_bytes(cache_path));
-    impl_->refit_engine(onnx_bytes);
   } else {
     std::vector<char> plan = impl_->build_plan(onnx_bytes);
     write_file_bytes(cache_path, plan.data(), plan.size());

@@ -49,13 +49,12 @@ std::string content_hash(const std::vector<char>& bytes) {
   return std::string(buf);
 }
 
-std::string engine_plan_cache_path(const std::string& architecture_signature, Precision precision,
+std::string engine_plan_cache_path(const std::string& model_key, Precision precision,
                                    const std::string& profile_tag, bool fast_build,
                                    const std::string& mount_root) {
   const std::string build_tag = fast_build ? "/build_fast" : "";
   return mount_root + "/TensorRT-cache/sm_" + sm_tag() + "/trt_" + trt_version_tag() + build_tag +
-         "/fp_" + precision_to_string(precision) + "/" + profile_tag + "/" +
-         architecture_signature + ".engine";
+         "/fp_" + precision_to_string(precision) + "/" + profile_tag + "/" + model_key + ".engine";
 }
 
 std::vector<char> read_file_bytes(const std::string& path) {
