@@ -7,6 +7,9 @@ board-global context through the tower. The result is a (B, C, 15, 15) feature
 map that each model's task-specific heads (and, for the per-lane model, a lane
 sequence model) build on. This module owns that trunk and its building blocks so
 the post-move and max-move-per-lane models share one implementation.
+
+docs/model_architectures.md diagrams this trunk; any change to the architecture
+belongs in the same commit as the corresponding change there.
 """
 
 import torch
