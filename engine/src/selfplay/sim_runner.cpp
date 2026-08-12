@@ -199,6 +199,16 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
   return top;
 }
 
+const SimRunner::Params& validated_sim_params(const SimRunner::Params& params,
+                                              const std::string& who) {
+  if (params.rollouts < 1 || params.rollouts > SimRunner::kMaxRollouts) {
+    throw std::runtime_error(who + ": --rollouts must be in [1, " +
+                             std::to_string(SimRunner::kMaxRollouts) + "]");
+  }
+  if (params.threads < 1) throw std::runtime_error(who + ": --sim-threads must be >= 1");
+  return params;
+}
+
 SimPosition sim_position_from(const MoveRequest& req) {
   SimPosition pos;
   pos.board = req.board;

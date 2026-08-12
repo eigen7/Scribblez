@@ -37,8 +37,9 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
       service_(std::move(service)),
       spec_(derive_input_spec(require_dict(params.dict), *service_, "mset-sim agent")),
       encoder_(spec_),
-      runner_(*params.dict, validated_sim(params)),
+      runner_(*params.dict, validated_sim_params(params.sim, "mset-sim agent")),
       endgame_(params.thread_id, params.endgame) {
+  validate(params);
   board_row_.resize(static_cast<size_t>(input_floats(spec_)));
 }
 
@@ -46,28 +47,15 @@ void MsetSimAgent::validate(const Params& params) {
   if (params.shortlist < 0)
     throw std::runtime_error("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw std::runtime_error("mset-sim agent: --sim-top-k must be >= 1");
-  // SimRunner only asserts its bound, so a Release build would take
-  // --rollouts=0 and run every rollout count to 0: every SimObservation's mean
-  // is then 0/0, every NaN comparison in best_observation_index is false, and
-  // the agent silently plays its rank-0 candidate -- a non-simulating agent,
-  // with no diagnostic.
-  if (params.sim.rollouts < 1 || params.sim.rollouts > SimRunner::kMaxRollouts) {
-    throw std::runtime_error("mset-sim agent: --rollouts must be in [1, " +
-                             std::to_string(SimRunner::kMaxRollouts) + "]");
-  }
-}
-
-const SimRunner::Params& MsetSimAgent::validated_sim(const Params& params) {
-  validate(params);
-  return params.sim;
+  validated_sim_params(params.sim, "mset-sim agent");
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {
   return util::splitmix64(seed_ ^ util::splitmix64(static_cast<uint64_t>(ply)));
 }
 
-void MsetSimAgent::begin_game() {
-  encoder_ = GameStateEncoder(spec_);
+void MsetSimAgent::begin_game(std::array<int, 2> initial_scores) {
+  encoder_ = GameStateEncoder(spec_, initial_scores);
   endgame_.begin_game();
   ply_ = 0;
 }

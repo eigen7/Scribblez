@@ -42,7 +42,9 @@ CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
   input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
 }
 
-void CandidateEvaluator::begin_game() { encoder_ = GameStateEncoder(spec_); }
+void CandidateEvaluator::begin_game(std::array<int, 2> initial_scores) {
+  encoder_ = GameStateEncoder(spec_, initial_scores);
+}
 
 void CandidateEvaluator::observe_move(const Move& move) { encoder_.apply_move(move); }
 

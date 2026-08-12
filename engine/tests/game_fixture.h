@@ -42,11 +42,14 @@ void append_pod(std::vector<char>& buf, const T& v) {
 }
 
 // FileHeader, one GameMetadata (with a caller-chosen sampled_turn), then the
-// game's InitialRacks and TurnBlob[]. Scores are left at zero: a fixture built
-// this way is for comparing input rows, not the score-derived targets.
+// game's InitialRacks and TurnBlob[]. FINAL scores are left at zero: a fixture
+// built this way is for comparing input rows, not the score-derived targets.
+// `initial_scores` is the head-start handicap the replay decoder seeds its
+// score accumulator from -- {0, 0} for an ordinary game.
 inline std::vector<char> build_slog(const binlog::InitialRacks& ir,
                                     const std::vector<binlog::TurnBlob>& turns,
-                                    uint32_t sampled_turn) {
+                                    uint32_t sampled_turn,
+                                    std::array<int, 2> initial_scores = {0, 0}) {
   binlog::FileHeader hdr{};
   hdr.magic = binlog::kMagic;
   hdr.version = binlog::kVersion;
@@ -56,6 +59,8 @@ inline std::vector<char> build_slog(const binlog::InitialRacks& ir,
   gm.start_offset = sizeof(binlog::FileHeader) + sizeof(binlog::GameMetadata);
   gm.num_turns = static_cast<uint32_t>(turns.size());
   gm.sampled_turn = sampled_turn;
+  gm.initial_score_p0 = static_cast<int16_t>(initial_scores[0]);
+  gm.initial_score_p1 = static_cast<int16_t>(initial_scores[1]);
 
   std::vector<char> buf;
   append_pod(buf, hdr);

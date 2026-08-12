@@ -4,6 +4,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 
+#include <array>
 #include <memory>
 #include <random>
 #include <string>
@@ -84,7 +85,16 @@ class Agent {
   // Called once at the start of each game, before any make_move() on it. One
   // Agent instance is reused across a series of games, so this is where a
   // stateful agent resets.
-  virtual void begin_game() {}
+  //
+  // `initial_scores` is each seat's score before the first move -- {0, 0} in a
+  // normal game, and the head-start handicap when one was set
+  // (Game::set_initial_scores). An agent that mirrors the game through a
+  // GameStateEncoder must seed it with these, because the score differential
+  // is a model input and the training replay seeds its own encoder from the
+  // handicap the .slog records: an agent starting at 0-0 in a handicapped game
+  // would feed the model a differential wrong by the head start for the whole
+  // game. Agents that read scores straight off the MoveRequest need not.
+  virtual void begin_game(std::array<int, 2> initial_scores) {}
 
   // Called after every applied move of the game, the agent's own and the
   // opponent's, in turn order. Lets a stateful agent mirror the whole game

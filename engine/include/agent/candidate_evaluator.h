@@ -51,7 +51,7 @@ class CandidateEvaluator {
   // The owning agent forwards its own begin_game() / observe_move() here, so
   // the mirrored encoder sees both seats' moves; its placement-plane features
   // depend on them, which make_move() alone cannot see.
-  void begin_game();
+  void begin_game(std::array<int, 2> initial_scores);
   void observe_move(const Move& move);
 
   // Seat to move in the mirrored game -- the owning agent's own seat when it

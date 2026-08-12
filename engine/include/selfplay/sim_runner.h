@@ -118,6 +118,15 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 // being hidden; it only influences equity near the endgame.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
+// `params`, checked against what SimRunner will accept, so a caller can reject
+// a bad rollout count with a message naming `who`. SimRunner's constructor only
+// ASSERTS the bound, which a Release build compiles out -- 0 rollouts then give
+// every observation a 0/0 mean, whose NaN comparisons make best_observation_index
+// return the first candidate every time, so the agent silently stops simulating.
+// Returns `params` so a member-init list can validate on its way into SimRunner.
+const SimRunner::Params& validated_sim_params(const SimRunner::Params& params,
+                                              const std::string& who);
+
 // The rollout position for an agent deciding `req`: the one place a turn is
 // translated into a SimPosition, so the three simulating agents cannot drift on
 // the seating convention or on what of the opponent's rack a rollout may seed

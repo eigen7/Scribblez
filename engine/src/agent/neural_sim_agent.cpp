@@ -40,7 +40,7 @@ NeuralSimAgent::NeuralSimAgent(const Params& params, std::unique_ptr<nn::EvalSer
       drop_best_prob_(params.drop_best_prob),
       seed_(params.seed),
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
-      runner_(*params.dict, params.sim),
+      runner_(*params.dict, validated_sim_params(params.sim, "neural-sim agent")),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
 }
@@ -51,6 +51,7 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.sim_top_k < 1) throw std::runtime_error("neural-sim agent: --sim-top-k must be >= 1");
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw std::runtime_error("neural-sim agent: --drop-best-prob must be in [0, 1]");
+  validated_sim_params(params.sim, "neural-sim agent");
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {
@@ -65,8 +66,8 @@ bool NeuralSimAgent::drop_best(int ply) const {
   return static_cast<double>(draw >> 11) * 0x1.0p-53 < drop_best_prob_;
 }
 
-void NeuralSimAgent::begin_game() {
-  evaluator_.begin_game();
+void NeuralSimAgent::begin_game(std::array<int, 2> initial_scores) {
+  evaluator_.begin_game(initial_scores);
   endgame_.begin_game();
   ply_ = 0;
 }

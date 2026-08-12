@@ -56,7 +56,7 @@ class NeuralAgent : public Agent {
   NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service, int max_batch = 256);
 
   MoveDecision make_move(const MoveRequest& req) override;
-  void begin_game() override;
+  void begin_game(std::array<int, 2> initial_scores) override;
   void observe_move(const Move& move) override;
   bool supports_parallelism() const override { return true; }
 

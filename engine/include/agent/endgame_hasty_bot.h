@@ -25,7 +25,7 @@ class EndgameHastyBotAgent : public HastyBotAgent {
 
   MoveDecision make_move(const MoveRequest& req) override;
   void observe_move(const Move& move) override;
-  void begin_game() override;
+  void begin_game(std::array<int, 2> initial_scores) override;
 
   // Exposed for the endgame benchmark, which reads the solve totals and toggles
   // individual solver features.

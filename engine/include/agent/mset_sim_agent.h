@@ -68,7 +68,7 @@ class MsetSimAgent : public Agent {
   MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service);
 
   MoveDecision make_move(const MoveRequest& req) override;
-  void begin_game() override;
+  void begin_game(std::array<int, 2> initial_scores) override;
   void observe_move(const Move& move) override;
   bool supports_parallelism() const override { return true; }
 
@@ -93,14 +93,10 @@ class MsetSimAgent : public Agent {
  private:
   // Throws on out-of-range scalar params. from_spec runs it BEFORE the
   // production constructor, so a bad flag fails fast instead of after the
-  // TensorRT engine build.
+  // TensorRT engine build. The rollout params are additionally validated on
+  // their way into runner_, so a rejected --rollouts throws rather than trips
+  // SimRunner's own assert (which fires first, and only in a Debug build).
   static void validate(const Params& params);
-
-  // validate(), returning the rollout params runner_ is built from. The
-  // constructors validate through this rather than in their body so that a
-  // rejected --rollouts throws instead of tripping SimRunner's own assert --
-  // which fires first in a Debug build, and is compiled out of a Release one.
-  static const SimRunner::Params& validated_sim(const Params& params);
 
   // Score `candidates` in one pass and fill rank_ with indices into them in
   // descending model-objective order. Ties keep equity order: the candidate
