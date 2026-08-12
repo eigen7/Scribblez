@@ -1,7 +1,7 @@
-#include "selfplay/streaming_game_producer.h"
+#include "arena/streaming_game_producer.h"
 
+#include "arena/game_sink.h"
 #include "encoding/row_encoder.h"
-#include "selfplay/game_sink.h"
 
 #include <array>
 #include <memory>
@@ -55,7 +55,7 @@ class RingBufferGameSink : public GameSink {
 
 }  // namespace
 
-StreamingGameProducer::StreamingGameProducer(const SelfPlayEngine::Params& engine_params,
+StreamingGameProducer::StreamingGameProducer(const GameEngine::Params& engine_params,
                                              const PlayerFactory::Params& player_params,
                                              const Params& params, StreamingRowBuffer& ring)
     : engine_(engine_params, player_params), params_(params), ring_(ring) {}

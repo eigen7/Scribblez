@@ -28,15 +28,15 @@ add_library(scribblez_core STATIC
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
   src/data/streaming_row_buffer.cpp
-  src/selfplay/streaming_game_producer.cpp
+  src/arena/streaming_game_producer.cpp
   src/data/block_decoder.cpp
   src/data/slog_subset.cpp
   src/serve/position_json.cpp
   src/data/data_loader.cpp
   src/agent/agent.cpp
   src/agent/agent_options.cpp
-  src/selfplay/self_play_engine.cpp
-  src/selfplay/game_runner.cpp
+  src/arena/game_engine.cpp
+  src/arena/game_runner.cpp
   src/lexicon/hasty_equity.cpp
   src/agent/human_web_agent.cpp
   src/serve/service_url.cpp

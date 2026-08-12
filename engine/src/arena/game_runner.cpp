@@ -1,4 +1,4 @@
-#include "selfplay/game_runner.h"
+#include "arena/game_runner.h"
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
@@ -187,9 +187,9 @@ void GameRunner::run_progress_monitor(const std::atomic<bool>& done,
 GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params),
       seed_(SeedProducer::instance().next()),
-      engine_(SelfPlayEngine::Params{params.threads, seed_, params.random_handicap_max,
-                                     params.random_opening_mean, params.respect_projections,
-                                     params.face_up_leaves},
+      engine_(GameEngine::Params{params.threads, seed_, params.random_handicap_max,
+                                 params.random_opening_mean, params.respect_projections,
+                                 params.face_up_leaves},
               player_params) {
   if (params_.games < 1) {
     std::cerr << "Error: --games must be >= 1\n";

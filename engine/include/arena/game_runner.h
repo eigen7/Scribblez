@@ -1,9 +1,9 @@
 #pragma once
 
 #include "agent/player_factory.h"
+#include "arena/game_engine.h"
+#include "arena/game_sink.h"
 #include "game/game.h"
-#include "selfplay/game_sink.h"
-#include "selfplay/self_play_engine.h"
 #include "util/misc.h"
 
 #include <array>
@@ -25,17 +25,19 @@ class BinaryLogWriter;
 
 class Dictionary;
 
-// Drives a fixed series of self-play games to disk. Owns a SelfPlayEngine (the
-// agents plus the per-game primitive) and the win/loss tally, and is itself the
-// GameSink. It alternates seats each game and honors each agent's EndGameResult
-// to extend (PLAY_AGAIN) or shorten (QUIT) the series past `--games`.
+// Drives a fixed series of games between two agents to disk -- a bot-vs-bot
+// match, a human game, or self-play generation, according to the --player
+// specs. Owns a GameEngine (the agents plus the per-game primitive) and the
+// win/loss tally, and is itself the GameSink. It alternates seats each game and
+// honors each agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT)
+// the series past `--games`.
 class GameRunner : public GameSink {
  public:
   struct Params {
     int games = 1;               // minimum number of games to play
     std::string log_dir;         // if non-empty, one <id>.gcg per game
     std::string binary_log_dir;  // if non-empty, batched .slog files
-    // SelfPlayEngine downgrades to 1 thread, with a warning, when a player does
+    // GameEngine downgrades to 1 thread, with a warning, when a player does
     // not support parallelism.
     int threads = util::default_thread_count();
     int random_handicap_max = 0;       // if > 0, gift a random player a head-start of
@@ -89,7 +91,7 @@ class GameRunner : public GameSink {
 
   Params params_;
   uint64_t seed_;
-  SelfPlayEngine engine_;
+  GameEngine engine_;
 
   std::unique_ptr<Results> results_;
   std::unique_ptr<binlog::BinaryLogWriter> binary_writer_;

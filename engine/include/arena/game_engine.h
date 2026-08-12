@@ -1,13 +1,15 @@
 #pragma once
 
-// Owns the per-thread agent pairs and the self-play primitive: build the agents
-// once, then play individual games on a chosen thread, routing each finished
-// log to a GameSink. The shared core under both GameRunner and the streaming
-// producer, which differ only in their driving loop and their sink.
+// Owns the per-thread agent pairs and the play-one-game primitive: build the
+// agents once, then play individual games on a chosen thread, routing each
+// finished log to a GameSink. The shared core under both GameRunner and the
+// streaming producer, which differ only in their driving loop and their sink.
+// The two agents are whatever the --player specs named, so this drives a bot
+// match or a human game as readily as self-play generation.
 
 #include "agent/agent.h"
 #include "agent/player_factory.h"
-#include "selfplay/game_sink.h"
+#include "arena/game_sink.h"
 
 #include <array>
 #include <cstdint>
@@ -17,7 +19,7 @@
 
 namespace scribblez {
 
-class SelfPlayEngine {
+class GameEngine {
  public:
   struct Params {
     int threads = 1;       // requested number of parallel game threads
@@ -40,7 +42,7 @@ class SelfPlayEngine {
   // Builds `params.threads` agent pairs, downgrading to 1 (with a warning) if
   // any agent does not support parallelism. Throws scribblez::Exception on bad
   // params.
-  SelfPlayEngine(const Params& params, const PlayerFactory::Params& player_params);
+  GameEngine(const Params& params, const PlayerFactory::Params& player_params);
 
   // Agent pairs actually built, which may be below params.threads; see the
   // constructor.

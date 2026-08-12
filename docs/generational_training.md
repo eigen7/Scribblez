@@ -96,7 +96,7 @@ rewrite.
 
 Today each self-play worker thread owns an agent pair and plays one whole
 game start to finish
-([self_play_engine.h](../engine/include/selfplay/self_play_engine.h)), with
+([game_engine.h](../engine/include/arena/game_engine.h)), with
 the thread count fixed at construction. The proposed pool decouples in-flight
 games from worker threads — G active game slots with G ≫ T workers, each
 advancing one game by one unit of work — buying:

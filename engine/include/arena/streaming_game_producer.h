@@ -3,16 +3,16 @@
 // Runs unbounded HastyBot self-play across a thread pool, encoding each
 // finished game's sampled position straight into a StreamingRowBuffer slot --
 // no disk, no .slog round-trip. GameRunner's streaming counterpart: both drive
-// a SelfPlayEngine, differing in the loop and the sink.
+// a GameEngine, differing in the loop and the sink.
 //
 // Each worker thread owns its GameSink, which picks the sampled turn and
 // encodes BEFORE claiming a ring-buffer row, so a game with no eligible turn is
 // dropped without claiming one -- which would stall that slot forever.
 
 #include "agent/player_factory.h"
+#include "arena/game_engine.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/row_encoder.h"
-#include "selfplay/self_play_engine.h"
 
 #include <atomic>
 #include <cstdint>
@@ -37,7 +37,7 @@ class StreamingGameProducer {
   };
 
   // Builds the agent pool and binds to `ring`, producing nothing until start().
-  StreamingGameProducer(const SelfPlayEngine::Params& engine_params,
+  StreamingGameProducer(const GameEngine::Params& engine_params,
                         const PlayerFactory::Params& player_params, const Params& params,
                         StreamingRowBuffer& ring);
   ~StreamingGameProducer();
@@ -56,7 +56,7 @@ class StreamingGameProducer {
  private:
   void worker_loop(int thread_idx);
 
-  SelfPlayEngine engine_;
+  GameEngine engine_;
   Params params_;
   StreamingRowBuffer& ring_;
 

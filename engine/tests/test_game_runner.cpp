@@ -5,8 +5,8 @@
 // than joining scribblez_tests. Needs the real lexicon mount; skips without it.
 
 #include "agent/player_factory.h"
+#include "arena/game_runner.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "selfplay/seed_producer.h"
 #include "synthetic_equity.h"
 #include "util/exception.h"
