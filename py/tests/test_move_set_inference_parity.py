@@ -19,6 +19,7 @@ The model is randomly initialized: this tests the plumbing's fidelity, not any
 trained weights, so the tests stay hermetic (no checkpoint, no GPU).
 """
 
+import json
 import subprocess
 import sys
 
@@ -255,26 +256,36 @@ got = legacy_checkpoint_condition(
 )
 assert got["move_encoding_version"] == 0, got  # pre-fix rows, never the live constant
 assert got["open_leaves"] == bool(flags & T.MSET_FLAG_OPEN_LEAVES), got
-assert got["spatial_planes"] > 0 and got["scalar_size"] > 0, got
-print("OK")
+import json
+print("RESULT " + json.dumps(got))
 """
 
 
-@pytest.mark.parametrize("open_leaves", [False, True])
-def test_legacy_checkpoint_condition_recovers_the_arm(tmp_path, open_leaves):
-    """The standalone exporter's fallback for checkpoints predating the
-    self-describing config: the arm comes off the corpus header and the
-    version is pinned to 0, the stamp an engine enforcing the move-encoding
-    version will rightly refuse against a newer encoder."""
-    from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES
-
+def _run_legacy_condition(tmp_path, name: str, flags: int) -> dict:
     script = tmp_path / "driver.py"
     script.write_text(_LEGACY_CONDITION_DRIVER)
-    flags = MSET_FLAG_OPEN_LEAVES if open_leaves else 0
     out = subprocess.run(
-        [sys.executable, str(script), str(tmp_path / "tag"), str(flags)],
+        [sys.executable, str(script), str(tmp_path / name), str(flags)],
         capture_output=True,
         text=True,
     )
     assert out.returncode == 0, out.stdout + out.stderr
-    assert "OK" in out.stdout
+    line = next(ln for ln in out.stdout.splitlines() if ln.startswith("RESULT "))
+    return json.loads(line.removeprefix("RESULT "))
+
+
+def test_legacy_checkpoint_condition_recovers_the_arm(tmp_path):
+    """The standalone exporter's fallback for checkpoints predating the
+    self-describing config: the arm comes off the corpus header and the
+    version is pinned to 0, the stamp an engine enforcing the move-encoding
+    version will rightly refuse against a newer encoder. Both arms run (each
+    in its own subprocess -- the session arm is process-wide), and the
+    open-leaves corpus must yield a strictly wider scalar block: the
+    inequality is what proves the adopted arm actually reached the layout,
+    not just the returned flag."""
+    from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES
+
+    hidden = _run_legacy_condition(tmp_path, "hidden", 0)
+    open_ = _run_legacy_condition(tmp_path, "open", MSET_FLAG_OPEN_LEAVES)
+    assert hidden["spatial_planes"] == open_["spatial_planes"] > 0
+    assert open_["scalar_size"] > hidden["scalar_size"] > 0  # the opp-leave block
