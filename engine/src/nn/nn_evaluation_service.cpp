@@ -1,35 +1,14 @@
 #include "nn/nn_evaluation_service.h"
 
 #include "encoding/input_encoder.h"
+#include "nn/eval_decode.h"
 #include "training/training_targets.h"
-
-#include <Eigen/Core>
 
 #include <algorithm>
 #include <cstring>
 
 namespace scribblez {
 namespace nn {
-
-namespace {
-
-// Softmax the 3 WLD logits [win, draw, loss] into the WLD fields of `e`. The
-// win-probability scalar treats a draw as half a win (expected game points).
-void fill_wld(const float* logits, Eval& e) {
-  // Map the raw float pointer to an Eigen array (zero-copy).
-  Eigen::Map<const Eigen::Array3f> v(logits);
-
-  // Numerically stable softmax: subtract the max before exponentiating.
-  Eigen::Array3f probs = (v - v.maxCoeff()).exp();
-  probs /= probs.sum();
-
-  e.p_win = probs[0];
-  e.p_draw = probs[1];
-  e.p_loss = probs[2];
-  e.win_prob = e.p_win + 0.5f * e.p_draw;
-}
-
-}  // namespace
 
 NNEvaluationService::NNEvaluationService(const NeuralNetParams& params) : net_(params) {}
 
@@ -66,14 +45,8 @@ void NNEvaluationService::evaluate_chunk(const float* inputs, int chunk, Eval* o
   const float* wld = net_.wld_host();
   const float* sd = net_.score_diff_host();
   for (int r = 0; r < chunk; ++r) {
-    Eval e;
-    fill_wld(wld + static_cast<size_t>(r) * kWldFloats, e);
-    // The score-diff head emits a Gaussian: [mean, std] of the final
-    // differential. std is already positive (softplus is applied in-graph).
-    const float* row = sd + static_cast<size_t>(r) * kScoreDiffOutputFloats;
-    e.score_diff_mean = row[0];
-    e.score_diff_std = row[1];
-    out[r] = e;
+    out[r] = decode_eval(wld + static_cast<size_t>(r) * kWldFloats,
+                         sd + static_cast<size_t>(r) * kScoreDiffOutputFloats);
   }
 }
 

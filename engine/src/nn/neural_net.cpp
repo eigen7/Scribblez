@@ -2,21 +2,17 @@
 
 #include "encoding/input_encoder.h"
 #include "nn/cuda_util.h"
+#include "nn/onnx_metadata.h"
 #include "training/training_targets.h"
 
 #include <boost/program_options.hpp>
-#include <onnx/onnx_pb.h>
 
 #include <NvInfer.h>
 #include <NvInferRuntime.h>
 #include <NvOnnxParser.h>
-#include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <random>
 #include <stdexcept>
-#include <unistd.h>
 #include <vector>
 
 namespace scribblez {
@@ -42,71 +38,6 @@ class Logger : public nvinfer1::ILogger {
     if (severity <= Severity::kWARNING) std::cerr << "[TRT] " << msg << "\n";
   }
 };
-
-std::vector<char> read_file_bytes(const std::string& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) throw std::runtime_error("Failed to open file: " + path);
-  std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
-  f.read(bytes.data(), size);
-  return bytes;
-}
-
-// Write `bytes` to `path` atomically (tmp file + rename), creating parents.
-// The temp name carries the
-// pid and a random suffix, so two processes building the same plan concurrently
-// -- self-play workers sharing one cache directory -- cannot corrupt each
-// other's rename.
-void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
-  std::filesystem::path p(path);
-  std::filesystem::create_directories(p.parent_path());
-  std::string tmp =
-    path + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(std::random_device{}());
-  {
-    std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw std::runtime_error("Failed to open temp file: " + tmp);
-    f.write(bytes, static_cast<std::streamsize>(size));
-  }
-  std::filesystem::rename(tmp, p);
-}
-
-// The metadata_props entries the exporter stamps into every ONNX model that
-// the serving side consumes: the input-encoding arm and the architecture
-// signature keying the engine-plan cache. An arm entry the exporter did not
-// write reads as off, so a model states which optional blocks it takes rather
-// than leaving a consumer to infer them from its input widths -- and a
-// consumer that knows of a block the exporter never heard of still reads the
-// model correctly.
-struct OnnxMetadata {
-  bool contingent_features = false;
-  bool opp_leave_input = false;
-  std::string architecture_signature;
-};
-
-// An unparseable model, or one without the architecture signature its cached
-// engine plan is keyed on, throws. The arm entries do not: absent means off.
-OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
-  onnx::ModelProto model;
-  if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
-    throw std::runtime_error("Failed to parse ONNX model bytes");
-  }
-  OnnxMetadata meta;
-  for (int i = 0; i < model.metadata_props_size(); ++i) {
-    const auto& kv = model.metadata_props(i);
-    if (kv.key() == "contingent_features") {
-      meta.contingent_features = kv.value() == "true";
-    } else if (kv.key() == "opp_leave_input") {
-      meta.opp_leave_input = kv.value() == "true";
-    } else if (kv.key() == "model-architecture-signature") {
-      meta.architecture_signature = kv.value();
-    }
-  }
-  if (meta.architecture_signature.empty()) {
-    throw std::runtime_error("ONNX model missing the model-architecture-signature metadata entry");
-  }
-  return meta;
-}
 
 nvinfer1::Dims spatial_dims(int rows, int planes) {
   nvinfer1::Dims d;
@@ -335,11 +266,21 @@ void NeuralNet::load() {
 
   std::vector<char> onnx_bytes = read_file_bytes(impl_->params.onnx_path);
   OnnxMetadata meta = parse_onnx_metadata(onnx_bytes);
+  // A model that names its graph must name this one. An export predating the
+  // entry names nothing and is accepted: the position graph is the only one
+  // that existed then, and this runtime's tensor names would reject anything
+  // else at bind time anyway.
+  if (!meta.graph.empty() && meta.graph != kGraphPositionEval) {
+    throw std::runtime_error("NeuralNet serves the " + std::string(kGraphPositionEval) +
+                             " graph, but " + impl_->params.onnx_path + " declares graph '" +
+                             meta.graph + "'");
+  }
   impl_->contingent_features = meta.contingent_features;
   impl_->opp_leave_input = meta.opp_leave_input;
-  std::string cache_path = engine_plan_cache_path(
-    meta.architecture_signature, impl_->params.precision, impl_->params.max_batch_size,
-    impl_->params.fast_build, impl_->params.mount_root);
+  std::string cache_path =
+    engine_plan_cache_path(meta.architecture_signature, impl_->params.precision,
+                           "batch_" + std::to_string(impl_->params.max_batch_size),
+                           impl_->params.fast_build, impl_->params.mount_root);
 
   // The cache is keyed on the model's architecture signature, so a hit yields
   // a plan with the right structure but (in general) another checkpoint's

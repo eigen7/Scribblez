@@ -129,8 +129,12 @@ endif()
 add_library(scribblez_nn STATIC
   src/nn/cuda_util.cpp
   src/nn/trt_util.cpp
+  src/nn/onnx_metadata.cpp
+  src/nn/eval_decode.cpp
   src/nn/neural_net.cpp
-  src/nn/nn_evaluation_service.cpp)
+  src/nn/nn_evaluation_service.cpp
+  src/nn/move_set_net.cpp
+  src/nn/move_set_eval_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -362,6 +366,18 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
   gtest_discover_tests(test_nn_inference_parity)
 
+  # MoveSetNet against the PyTorch move set evaluation model, including the
+  # plan-cache refit and the service's chunking. Same shape as the parity test
+  # above: self-generates its fixture through SCRIBBLEZ_PY_DIR (skipping cleanly
+  # if torch/onnx is absent), needs a GPU at run time, and takes an optional
+  # fixture directory as its first argument, so it carries its own main().
+  add_executable(test_mset_inference_parity tests/test_mset_inference_parity.cpp)
+  target_link_libraries(test_mset_inference_parity PRIVATE
+    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
+  target_compile_definitions(test_mset_inference_parity PRIVATE
+    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
+  gtest_discover_tests(test_mset_inference_parity)
+
   # Test helper: writes .slog files using an in-memory dictionary for integration
   # testing (Python FFI tests, etc.).
   add_executable(test_slog_writer apps/test_slog_writer.cpp)
@@ -378,6 +394,12 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 # any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
+
+# The same for the move set evaluation model: load an ONNX model, score a
+# synthetic candidate set, print the decoded Evals. Exercises the MoveSetNet
+# path on a real checkpoint without any game logic.
+add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
+target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # Move set evaluation model distillation-target generator: stratified
 # candidate sampling + batched teacher (position evaluation model) inference

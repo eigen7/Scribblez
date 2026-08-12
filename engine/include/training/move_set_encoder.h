@@ -29,6 +29,7 @@
 #include "game/tile.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace scribblez {
 namespace move_set {
@@ -70,6 +71,24 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
 void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_diffs,
                   int32_t* letters, uint8_t* blanks, int32_t* squares, uint8_t* tile_mask,
                   float* scalars);
+
+// One encoded candidate set, owning the five buffers encode_moves fills so it
+// crosses an API boundary as a single object (nn::MoveSetEvalService takes
+// one). Row-major, `count` rows of kMoveMaxPlaced -- kMoveScalars for scalars.
+// The training path keeps writing into its own tensors through the pointer form
+// above; this is the inference side's convenience.
+struct MoveFeatureArrays {
+  std::vector<int32_t> letters;
+  std::vector<uint8_t> blanks;
+  std::vector<int32_t> squares;
+  std::vector<uint8_t> tile_mask;
+  std::vector<float> scalars;
+  int count = 0;
+
+  // Size the buffers for `n` moves and encode them, one `pre_move_score_diffs`
+  // entry per move.
+  void encode(const Move* moves, int n, const int32_t* pre_move_score_diffs);
+};
 
 }  // namespace move_set
 }  // namespace scribblez

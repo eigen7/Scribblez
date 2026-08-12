@@ -264,10 +264,19 @@ Then the spine proper:
     decision point the agent holds one position, under which the padded
     grid's scatter/gather and its data-dependent `maxK` host sync degenerate
     away entirely, leaving one board pair plus a single dynamic
-    candidate axis — and the TensorRT parse/build/refit path is
-    gate-proven (trt_refit_probe.py). What is left is the engine runtime:
-    a move-set service API beside the flat fixed-width position one, and
-    the agent that drives it.
+    candidate axis. The engine runtime has landed with it
+    ([move_set_net.h](../engine/include/nn/move_set_net.h) and the
+    move-set service API beside the flat fixed-width position one), so
+    what is left is the agent that drives it. That runtime keys its plan
+    cache on model content and builds per checkpoint rather than refitting
+    a shared one, because TensorRT reports a refit that mapped every weight
+    and one that left a weight behind identically (trt_refit_probe.py, and
+    the probes on PR #37). Two follow-ups wait for both nets to be proven
+    against real engines: extracting the TensorRT graph they share
+    (neural_net.cpp's own TODO), and persisting a builder timing cache
+    inside it — measured at 13.0 s cold against 2.3 s warm on a
+    production-shape build, a saving the position net's cold build would
+    take too.
 
   Until the learned filter beats exact evaluation at equal budget, exact
   evaluation stays the selector.
