@@ -129,6 +129,8 @@ endif()
 add_library(scribblez_nn STATIC
   src/nn/cuda_util.cpp
   src/nn/trt_util.cpp
+  src/nn/onnx_metadata.cpp
+  src/nn/eval_decode.cpp
   src/nn/neural_net.cpp
   src/nn/nn_evaluation_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)

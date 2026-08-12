@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -31,8 +32,25 @@ std::string content_hash(const std::vector<char>& bytes);
 // encodes the GPU's compute capability and the TensorRT version, since a plan
 // is invalid across either, and `fast_build` plans live in a separate subtree
 // so one can never satisfy a full-optimization load.
+//
+// `profile_tag` names the optimization profile the plan was built for, and is a
+// caller's string rather than a number because the two model families size
+// different axes: the position net bounds a row batch ("batch_256"), the move
+// set net a candidate count ("moves_4096"). A plan is only valid within the
+// bounds it was built with, so the tag has to separate them.
 std::string engine_plan_cache_path(const std::string& architecture_signature, Precision precision,
-                                   int batch_size, bool fast_build, const std::string& mount_root);
+                                   const std::string& profile_tag, bool fast_build,
+                                   const std::string& mount_root);
+
+// Whole-file read, for the ONNX models and cached plans the loaders consume.
+// Throws if the file cannot be opened.
+std::vector<char> read_file_bytes(const std::string& path);
+
+// Write `bytes` to `path` atomically (temp file + rename), creating parents.
+// The temp name carries the pid and a random suffix, so two processes building
+// the same plan concurrently -- self-play workers sharing one cache directory
+// -- cannot corrupt each other's rename.
+void write_file_bytes(const std::string& path, const char* bytes, size_t size);
 
 }  // namespace nn
 }  // namespace scribblez
