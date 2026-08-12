@@ -19,6 +19,9 @@ The model is randomly initialized: this tests the plumbing's fidelity, not any
 trained weights, so the tests stay hermetic (no checkpoint, no GPU).
 """
 
+import subprocess
+import sys
+
 import numpy as np
 import onnx
 import pytest
@@ -224,3 +227,54 @@ def test_exported_file_contract(tmp_path):
         assert any(proj in n for n in init_names), proj
     aliased = [n for n in m.graph.node if n.op_type == "Identity" and n.input[0] in init_names]
     assert not aliased
+
+
+# The legacy-checkpoint path runs in a subprocess: adopting the information
+# condition sets the process-wide FFI session arm, which this test process may
+# already have created under a different arm (the same isolation the trainer
+# tests use).
+_LEGACY_CONDITION_DRIVER = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from scribblez.move_set_eval import targets as T
+from scribblez.move_set_eval.onnx_export import legacy_checkpoint_condition
+
+root, flags = Path(sys.argv[1]), int(sys.argv[2])
+store = root / "slogs"
+store.mkdir(parents=True)
+hdr = np.zeros(1, dtype=T._FILE_HEADER)
+hdr["magic"], hdr["version"] = T.MSET_MAGIC, T.MSET_VERSION
+hdr["record_floats"], hdr["flags"] = 5, flags
+hdr["model_hash"] = b"cafe"
+(store / "x.mset").write_bytes(hdr.tobytes())
+
+got = legacy_checkpoint_condition(
+    SimpleNamespace(data_dir=root), {"contingent_features": False}
+)
+assert got["move_encoding_version"] == 0, got  # pre-fix rows, never the live constant
+assert got["open_leaves"] == bool(flags & T.MSET_FLAG_OPEN_LEAVES), got
+assert got["spatial_planes"] > 0 and got["scalar_size"] > 0, got
+print("OK")
+"""
+
+
+@pytest.mark.parametrize("open_leaves", [False, True])
+def test_legacy_checkpoint_condition_recovers_the_arm(tmp_path, open_leaves):
+    """The standalone exporter's fallback for checkpoints predating the
+    self-describing config: the arm comes off the corpus header and the
+    version is pinned to 0, the stamp an engine enforcing the move-encoding
+    version will rightly refuse against a newer encoder."""
+    from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES
+
+    script = tmp_path / "driver.py"
+    script.write_text(_LEGACY_CONDITION_DRIVER)
+    flags = MSET_FLAG_OPEN_LEAVES if open_leaves else 0
+    out = subprocess.run(
+        [sys.executable, str(script), str(tmp_path / "tag"), str(flags)],
+        capture_output=True,
+        text=True,
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "OK" in out.stdout

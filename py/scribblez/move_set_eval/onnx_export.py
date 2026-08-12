@@ -31,17 +31,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.ffi import DEFAULT_LEXICON
+from scribblez.dataset import row_layout
+from scribblez.ffi import set_contingent_features
 from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
+    common_metadata,
     undo_initializer_dedup,
     write_metadata,
 )
 from scribblez.spatial_trunk import mean_max_pool
 
+from .dataset import adopt_information_condition
 from .model import MoveSetEvalModel
 from .moves import move_encoding_dims
+from .targets import MSET_FLAG_OPEN_LEAVES, read_mset_flags
 
 MOVE_INPUT_NAMES = (
     "move_letters",
@@ -167,6 +171,7 @@ def export_onnx(
     silently running against an encoder whose rows it was not trained on)."""
     path = Path(path)
     was_training = model.training
+    model.eval()  # explicit, not via the wrapper's aliasing of the submodules
     device = next(model.parameters()).device
     # .to(device) is a no-op for the shared trained modules and moves only the
     # wrapper's own materialized sub-Linears, which construct on the CPU.
@@ -205,9 +210,7 @@ def export_onnx(
         write_metadata(
             tmp_path,
             {
-                "contingent_features": "true" if contingent_features else "false",
-                "opp_leave_input": "true" if opp_leave_input else "false",
-                "lexicon": DEFAULT_LEXICON,
+                **common_metadata(contingent_features, opp_leave_input),
                 "model-architecture-signature": architecture_signature(wrapper, opset),
                 "graph": "move_set_eval",
                 "move_encoding_version": str(move_encoding_version),
@@ -215,3 +218,29 @@ def export_onnx(
         )
     if was_training:
         model.train()
+
+
+def legacy_checkpoint_condition(paths, config: dict) -> dict:
+    """Recover the self-describing config fields for a checkpoint that predates
+    them: adopt the information-condition arm from the tag's .mset corpus (the
+    trainer's own path), then read the input widths off the session layout.
+    Raises FileNotFoundError when the tag holds no corpus to read the arm from.
+    The recovered move_encoding_version is 0 -- pre-exchange-fix rows -- which
+    an engine loader enforcing the version will rightly refuse to run against
+    a newer encoder."""
+    mset_files = sorted(Path(paths.data_dir).glob("slogs/*.mset"))
+    if not mset_files:
+        raise FileNotFoundError(
+            f"checkpoint config predates the self-describing fields and "
+            f"{Path(paths.data_dir) / 'slogs'} holds no .mset to re-adopt the arm from"
+        )
+    set_contingent_features(config["contingent_features"])
+    adopt_information_condition(mset_files)
+    input_shapes, _ = row_layout()
+    dims = {s.name: s.dims for s in input_shapes}
+    return {
+        "open_leaves": bool(read_mset_flags(mset_files[0]) & MSET_FLAG_OPEN_LEAVES),
+        "spatial_planes": dims["input_spatial"][0],
+        "scalar_size": dims["input_scalar"][0],
+        "move_encoding_version": 0,
+    }

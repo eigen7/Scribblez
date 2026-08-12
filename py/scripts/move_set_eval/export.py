@@ -24,39 +24,10 @@ import sys
 
 import torch
 from scribblez import paths as paths_mod
-from scribblez.dataset import row_layout
-from scribblez.ffi import set_contingent_features
-from scribblez.move_set_eval.dataset import adopt_information_condition
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.onnx_export import export_onnx
-from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES, read_mset_flags
+from scribblez.move_set_eval.onnx_export import export_onnx, legacy_checkpoint_condition
 from scribblez.paths import TagPaths
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
-
-
-def _legacy_condition(paths: TagPaths, config: dict) -> dict:
-    """Recover the self-describing fields for a checkpoint that predates them:
-    adopt the arm from the tag's .mset corpus (the trainer's own path), then
-    read the input widths off the session layout. Requires the corpus."""
-    mset_files = sorted(paths.data_dir.glob("slogs/*.mset"))
-    if not mset_files:
-        sys.exit(
-            f"error: checkpoint config predates the self-describing fields and "
-            f"{paths.data_dir / 'slogs'} holds no .mset to re-adopt the arm from"
-        )
-    set_contingent_features(config["contingent_features"])
-    adopt_information_condition(mset_files)
-    input_shapes, _ = row_layout()
-    dims = {s.name: s.dims for s in input_shapes}
-    spatial_planes = dims["input_spatial"][0]
-    scalar_size = dims["input_scalar"][0]
-    return {
-        "open_leaves": bool(read_mset_flags(mset_files[0]) & MSET_FLAG_OPEN_LEAVES),
-        "spatial_planes": spatial_planes,
-        "scalar_size": scalar_size,
-        # Pre-fix rows: the version constant did not exist when this trained.
-        "move_encoding_version": 0,
-    }
 
 
 def main() -> int:
@@ -73,7 +44,10 @@ def main() -> int:
     config = dict(ckpt["config"])
 
     if "move_encoding_version" not in config:
-        config.update(_legacy_condition(paths, config))
+        try:
+            config.update(legacy_checkpoint_condition(paths, config))
+        except FileNotFoundError as e:
+            sys.exit(f"error: {e}")
 
     model = MoveSetEvalModel(
         spatial_planes=config["spatial_planes"],
@@ -85,9 +59,11 @@ def main() -> int:
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    # The pass index the checkpoint is at names the export, matching the
-    # trainer's own per-pass naming.
-    out = args.out or paths.onnx_path(ckpt["generation_index"])
+    # checkpoint.save persists the post-increment cursor, so the weights on
+    # disk are those of pass generation_index - 1 -- name the export the way
+    # the trainer named that same pass's own export.
+    last_pass = ckpt["generation_index"] - 1
+    out = args.out or paths.onnx_path(last_pass)
     export_onnx(
         model,
         out,
@@ -98,7 +74,7 @@ def main() -> int:
         move_encoding_version=config["move_encoding_version"],
     )
     print(
-        f"exported {ckpt_path} (pass {ckpt['generation_index']}, "
+        f"exported {ckpt_path} (pass {last_pass}, "
         f"{ckpt['rows_trained']} rows) -> {out}\n"
         f"  open_leaves={config['open_leaves']} "
         f"move_encoding_version={config['move_encoding_version']}"

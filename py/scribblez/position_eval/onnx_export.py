@@ -16,10 +16,10 @@ import onnx
 import torch
 from onnx import TensorProto, numpy_helper
 
-from scribblez.ffi import DEFAULT_LEXICON
 from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
+    common_metadata,
     undo_initializer_dedup,
     write_metadata,
 )
@@ -87,13 +87,8 @@ def export_onnx(
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Trace `model` and write an ONNX graph to `path` (eval mode, dynamic batch),
-    stamping the input-encoding arm into its metadata_props.
-
-    The export is atomic: the graph and its in-place transforms land on a temp
-    file beside `path` first, which is then renamed onto `path` with a single
-    `os.replace`. A reader that sees `path` exist therefore always sees a
-    complete file -- never a partially written or partially transformed one."""
+    """Trace `model` and write an ONNX graph to `path` atomically (eval mode,
+    dynamic batch), stamping the input-encoding arm into its metadata_props."""
     path = Path(path)
     was_training = model.training
     model.eval()
@@ -137,9 +132,7 @@ def export_onnx(
         write_metadata(
             tmp_path,
             {
-                "contingent_features": "true" if contingent_features else "false",
-                "opp_leave_input": "true" if opp_leave_input else "false",
-                "lexicon": DEFAULT_LEXICON,
+                **common_metadata(contingent_features, opp_leave_input),
                 "model-architecture-signature": architecture_signature(model, opset),
                 "graph": "position_eval",
             },

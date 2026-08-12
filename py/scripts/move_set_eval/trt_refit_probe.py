@@ -8,7 +8,7 @@ match results while passing every ORT-level parity test).
 What it does, on the GPU:
   1. Exports two RANDOMLY-INITIALIZED production-shape models A and B.
   2. Parses A and builds a refittable FP32 engine (optimization level 0; the
-     dynamic-M profile PR 4's runtime will use).
+     dynamic-M profile the C++ TensorRT runtime will use).
   3. Refits that engine with B's weights through the ONNX parser-refitter --
      the exact path the C++ plan cache takes for a new checkpoint of a cached
      architecture -- asserting no weights go missing.
@@ -20,6 +20,7 @@ Exit code 0 = gate passed. Uses torch CUDA tensors as TRT buffers, so no
 pycuda dependency.
 """
 
+import argparse
 import sys
 import tempfile
 from pathlib import Path
@@ -157,6 +158,12 @@ def _run_trt(engine, feeds: dict, m: int) -> dict:
 
 
 def main() -> int:
+    # No options -- but --help must print this docstring and exit rather than
+    # silently running a GPU job on what may be a busy, shared GPU.
+    argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    ).parse_args()
+
     import onnxruntime as ort
     import tensorrt as trt
 

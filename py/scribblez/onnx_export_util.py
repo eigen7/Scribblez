@@ -17,6 +17,8 @@ from pathlib import Path
 import onnx
 import torch
 
+from scribblez.ffi import DEFAULT_LEXICON
+
 
 def undo_initializer_dedup(path: Path):
     """torch.onnx.export emits a single initializer for byte-identical parameter
@@ -69,6 +71,16 @@ def write_metadata(path: Path, entries: dict[str, str]):
         entry = m.metadata_props.add()
         entry.key, entry.value = key, value
     onnx.save(m, str(path))
+
+
+def common_metadata(contingent_features: bool, opp_leave_input: bool) -> dict[str, str]:
+    """The metadata entries every exporter stamps -- the input-encoding arm and
+    the lexicon -- for the exporter to extend with its graph-specific keys."""
+    return {
+        "contingent_features": "true" if contingent_features else "false",
+        "opp_leave_input": "true" if opp_leave_input else "false",
+        "lexicon": DEFAULT_LEXICON,
+    }
 
 
 @contextlib.contextmanager
