@@ -6,6 +6,10 @@
 // mirrors the live game through a GameStateEncoder, and batch-evaluates the
 // post-move rows of a turn's candidates -- so every model-driven agent feeds
 // the model identical inputs and none can drift from the training encoding.
+//
+// Deriving that spec is the one part every model-driven agent needs, whichever
+// model family it serves, so it lives here as a free function (MsetSimAgent
+// calls it too).
 
 #include "encoding/game_state_encoder.h"
 #include "nn/eval_service.h"
@@ -28,6 +32,14 @@ float objective_value(const nn::Eval& e, EvalObjective objective);
 // "scorediff" or "winprob"; anything else throws std::runtime_error naming
 // `flag` as the offending option.
 EvalObjective parse_eval_objective(const std::string& name, const std::string& flag);
+
+// The InputEncodingSpec implied by the input-encoding arm a served model
+// declares, cross-checked against the input widths that model accepts -- a
+// disagreement means the exporter's metadata and the exported graph describe
+// different rows, and neither can be trusted to encode one, so it throws with
+// `who` naming the caller.
+InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedModelInputs& model,
+                                    const std::string& who);
 
 class CandidateEvaluator {
  public:
@@ -61,10 +73,6 @@ class CandidateEvaluator {
                         float* dst) const;
 
  private:
-  // The arm the model's ONNX metadata_props declare, validated against its
-  // input widths through input_encoder.h's registry (a disagreement throws).
-  static InputEncodingSpec derive_spec(const Dictionary& dict, const nn::EvalService& service);
-
   int max_batch_;
   std::unique_ptr<nn::EvalService> service_;
   InputEncodingSpec spec_;

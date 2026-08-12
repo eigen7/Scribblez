@@ -150,8 +150,8 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent) and their shared
-# evaluation core -- the only agent sources not in scribblez_core, kept out so
+# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent) and their
+# shared evaluation core -- the only agent sources not in scribblez_core, kept out so
 # the core game library carries no CUDA/TensorRT dependency. Every consumer
 # that builds --player specs (play_game, scribblez_ffi, test_game_runner)
 # links this; scribblez_nn supplies the NNEvaluationService the agents drive.
@@ -160,6 +160,8 @@ target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobu
 # selection TUs directly, factories excluded (see their comments below).
 add_library(scribblez_neural_agents STATIC
   src/agent/candidate_evaluator.cpp
+  src/agent/mset_sim_agent.cpp
+  src/agent/mset_sim_agent_factory.cpp
   src/agent/neural_agent.cpp
   src/agent/neural_agent_factory.cpp
   src/agent/neural_service_options.cpp
@@ -336,6 +338,21 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_neural_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_sim_agent)
+
+  # MsetSimAgent, the move-set-evaluation agent: that the sim set is the
+  # scripted model's top K (not static equity's), that the rollouts decide among
+  # them, that the whole candidate set reaches the model in one pass carrying the
+  # shared encoder's own move features, and that the pre-move board row matches
+  # the training decoder's. Compiles the selection TUs (not the factory), so like
+  # test_neural_sim_agent it links neither scribblez_nn nor CUDA/TensorRT: the
+  # tests inject a scripted MoveSetEvalService stub.
+  add_executable(test_mset_sim_agent
+    tests/test_mset_sim_agent.cpp
+    src/agent/candidate_evaluator.cpp
+    src/agent/mset_sim_agent.cpp)
+  target_link_libraries(test_mset_sim_agent PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_mset_sim_agent)
 
   # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
   # --results-file per-game JSON stream. Builds real agents through

@@ -85,9 +85,10 @@ struct MoveFeatureArrays {
   std::vector<float> scalars;
   int count = 0;
 
-  // Size the buffers for `n` moves and encode them, one `pre_move_score_diffs`
-  // entry per move.
-  void encode(const Move* moves, int n, const int32_t* pre_move_score_diffs);
+  // Size the buffers for `n` moves and encode them. One differential covers the
+  // set: a candidate set is one position's alternatives, so every move in it
+  // resolves the same pre-move score advantage.
+  void encode(const Move* moves, int n, int pre_move_score_diff);
 };
 
 }  // namespace move_set

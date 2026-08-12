@@ -31,6 +31,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "game/tile.h"
+#include "game_fixture.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/eval_service.h"
@@ -53,6 +54,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::build_slog;
+using scribblez::testing::make_play_full;
 
 static Rack rack_from(const std::string& s) {
   Rack r;
@@ -63,23 +66,6 @@ static Rack rack_from(const std::string& s) {
       r.add(Tile::from_char(c));
   }
   return r;
-}
-
-// Build a PLAY Move with an explicit per-tile layout. `rel_mask` is relative to
-// the first lane cell (bit 0 == the start cell); `gs` are the placed glyphs in
-// word order (count == popcount(rel_mask)).
-static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
-                           std::initializer_list<Glyph> gs) {
-  std::array<Glyph, RACK_SIZE> played{};
-  int n = 0;
-  for (Glyph g : gs) {
-    if (n >= RACK_SIZE) break;
-    played[n++] = g;
-  }
-  const int lane0 = horizontal ? col : row;
-  const int start = horizontal ? row : col;
-  uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
-  return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
 // A modest word list with enough overlapping racks to yield many opening plays
@@ -379,38 +365,6 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
 
   for (size_t i = 0; i < agent_row.size(); ++i)
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
-}
-
-// Append the raw bytes of a trivially-copyable value to a byte buffer.
-template <class T>
-static void append_pod(std::vector<char>& buf, const T& v) {
-  const char* p = reinterpret_cast<const char*>(&v);
-  buf.insert(buf.end(), p, p + sizeof(T));
-}
-
-// Serialize a single game into an in-memory .slog buffer the real BlockDecoder
-// can read: FileHeader, one GameMetadata (with a caller-chosen sampled_turn),
-// then the game's InitialRacks and TurnBlob[]. Scores are left at zero because
-// this fixture only compares the input row, not the score-derived targets.
-static std::vector<char> build_slog(const binlog::InitialRacks& ir,
-                                    const std::vector<binlog::TurnBlob>& turns,
-                                    uint32_t sampled_turn) {
-  binlog::FileHeader hdr{};
-  hdr.magic = binlog::kMagic;
-  hdr.version = binlog::kVersion;
-  hdr.num_games = 1;
-
-  binlog::GameMetadata gm{};
-  gm.start_offset = sizeof(binlog::FileHeader) + sizeof(binlog::GameMetadata);
-  gm.num_turns = static_cast<uint32_t>(turns.size());
-  gm.sampled_turn = sampled_turn;
-
-  std::vector<char> buf;
-  append_pod(buf, hdr);
-  append_pod(buf, gm);
-  append_pod(buf, ir);
-  for (const binlog::TurnBlob& t : turns) append_pod(buf, t);
-  return buf;
 }
 
 TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {

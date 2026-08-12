@@ -19,27 +19,27 @@ EvalObjective parse_eval_objective(const std::string& name, const std::string& f
   throw std::runtime_error(flag + " must be 'scorediff' or 'winprob' (got '" + name + "')");
 }
 
+InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedModelInputs& model,
+                                    const std::string& who) {
+  const InputEncodingSpec spec{&dict, model.contingent_features(), model.opp_leave_input()};
+  if (model.spatial_planes() != spatial_planes(spec) ||
+      model.scalar_floats() != scalar_floats(spec)) {
+    throw std::runtime_error(who + ": the model declares an input arm (contingent=" +
+                             std::to_string(model.contingent_features()) +
+                             ", opp_leave=" + std::to_string(model.opp_leave_input()) +
+                             ") whose layout does not match the input widths it accepts");
+  }
+  return spec;
+}
+
 CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
                                        std::unique_ptr<nn::EvalService> service, int max_batch)
     : max_batch_(max_batch),
       service_(std::move(service)),
-      spec_(derive_spec(dict, *service_)),
+      spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
       encoder_(spec_) {
   if (max_batch_ < 1) throw std::runtime_error("candidate evaluator: max batch must be >= 1");
   input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
-}
-
-InputEncodingSpec CandidateEvaluator::derive_spec(const Dictionary& dict,
-                                                  const nn::EvalService& service) {
-  const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
-  if (service.spatial_planes() != spatial_planes(spec) ||
-      service.scalar_floats() != scalar_floats(spec)) {
-    throw std::runtime_error("candidate evaluator: the model declares an input arm (contingent=" +
-                             std::to_string(service.contingent_features()) +
-                             ", opp_leave=" + std::to_string(service.opp_leave_input()) +
-                             ") whose layout does not match the input widths it accepts");
-  }
-  return spec;
 }
 
 void CandidateEvaluator::begin_game() { encoder_ = GameStateEncoder(spec_); }
