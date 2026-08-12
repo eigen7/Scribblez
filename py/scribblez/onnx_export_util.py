@@ -63,9 +63,9 @@ def write_metadata(path: Path, entries: dict[str, str]):
     """Record `entries` in the ONNX metadata_props -- the explicit contract
     consumers recover model properties from (the dashboard's what-if runner
     reads the encoding arm; C++ loaders cross-check the arm against the
-    declared input dims, key the TensorRT engine-plan cache on the
-    architecture signature, and reject a mismatched graph kind or move
-    encoding)."""
+    declared input dims and key the TensorRT engine-plan cache on the
+    architecture signature; the graph/version keys let a loader reject a
+    mismatched graph kind or move encoding once it checks them)."""
     m = onnx.load(str(path), load_external_data=False)
     for key, value in entries.items():
         entry = m.metadata_props.add()
