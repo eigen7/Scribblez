@@ -48,4 +48,11 @@ class Lexicon {
   std::unique_ptr<Dictionary> dict_;
 };
 
+// Lexicon::instance().dict(), but a failure is first explained on stderr as an
+// uninstalled lexicon, naming the path and the setup step that provides it,
+// before rethrowing as scribblez::Exception. The way every command-line entry
+// point loads the dictionary: a missing .kwg is a setup mistake, not an
+// internal error, and deserves an actionable message rather than a raw I/O one.
+const Dictionary& load_dictionary_or_throw();
+
 }  // namespace scribblez

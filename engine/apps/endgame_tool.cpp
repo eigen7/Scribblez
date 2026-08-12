@@ -18,7 +18,6 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "util/exception.h"
 #include "util/misc.h"
 
@@ -46,7 +45,7 @@ void run(const std::string& gcg_path, const EndgameSolver::Params& params) {
     throw Exception("GCG endgame lift failed: " + error);
   const int mover = endgame.mover;
 
-  const Dictionary& dict = GameRunner::load_dictionary_or_throw();
+  const Dictionary& dict = load_dictionary_or_throw();
 
   std::cout << "position after " << endgame.turns << " turns (" << endgame.player_names[mover]
             << " to move):\n"
@@ -58,16 +57,19 @@ void run(const std::string& gcg_path, const EndgameSolver::Params& params) {
 
   EndgameSolver solver;
   solver.set_trace(&std::cout, move_notation);
-  const EndgameResult r = solver.solve(
-    {&dict, endgame.board, endgame.racks[mover], endgame.racks[1 - mover], endgame.scores[mover],
-     endgame.scores[1 - mover], /*scoreless_turns=*/0},
-    params);
+  const EndgameResult r =
+    solver.solve({&dict, endgame.board, endgame.racks[mover], endgame.racks[1 - mover],
+                  endgame.scores[mover], endgame.scores[1 - mover], /*scoreless_turns=*/0},
+                 params);
 
   std::cout << "\nverdict: ";
   if (r.proven_class == EndgameResult::kClassUnknown) {
     std::cout << "class unproven";
   } else {
-    std::cout << "proven " << (r.proven_class > 0 ? "WIN" : r.proven_class < 0 ? "LOSS" : "DRAW")
+    std::cout << "proven "
+              << (r.proven_class > 0   ? "WIN"
+                  : r.proven_class < 0 ? "LOSS"
+                                       : "DRAW")
               << " for " << endgame.player_names[mover];
   }
   std::cout << "; value " << r.value << (r.proven ? " (proven)" : " (estimate)") << ", depth "

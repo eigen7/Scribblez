@@ -35,7 +35,6 @@
 #include "lexicon/lexicon.h"
 #include "nn/nn_evaluation_service.h"
 #include "nn/trt_util.h"
-#include "selfplay/game_runner.h"
 #include "selfplay/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
@@ -436,7 +435,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
 
-    const Dictionary& dict = GameRunner::load_dictionary_or_throw();
+    const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
     nn::NNEvaluationService service(params);

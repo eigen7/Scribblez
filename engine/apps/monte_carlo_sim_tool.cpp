@@ -11,7 +11,6 @@
 
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "selfplay/monte_carlo_sim.h"
 #include "util/io.h"
 #include "util/misc.h"
@@ -52,7 +51,7 @@ int main(int argc, char** argv) {
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
-    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     const std::string& lexicon = scribblez::Lexicon::instance().name();
     const fs::path dataset = fs::path("positions") / lexicon / dataset_name;
     std::cerr << "Lexicon: " << lexicon << "; dataset: " << dataset.string() << "; " << games

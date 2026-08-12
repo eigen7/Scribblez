@@ -24,7 +24,6 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "selfplay/sim_observation_log.h"
 #include "selfplay/sim_runner.h"
 #include "util/math.h"
@@ -253,7 +252,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
 
-    const Dictionary& dict = GameRunner::load_dictionary_or_throw();
+    const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
     std::vector<fs::path> slogs;

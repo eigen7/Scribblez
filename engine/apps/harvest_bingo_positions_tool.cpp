@@ -23,7 +23,6 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "util/misc.h"
 
 #include <boost/program_options.hpp>
@@ -139,7 +138,7 @@ int main(int argc, char** argv) {
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
-    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     const std::string& lexicon = scribblez::Lexicon::instance().name();
     const std::filesystem::path dir = std::filesystem::path("positions") / lexicon / dataset_name;
     std::filesystem::create_directories(dir);

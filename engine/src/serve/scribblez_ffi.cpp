@@ -13,7 +13,6 @@
 #include "encoding/row_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "selfplay/self_play_engine.h"
 #include "selfplay/sim_observation_log.h"
 #include "selfplay/sim_runner.h"
@@ -96,7 +95,7 @@ namespace {
 const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
   scribblez::Lexicon& lex = scribblez::Lexicon::instance();
   lex.set_params({.name = lexicon_name, .dir = lex.dir()});
-  return scribblez::GameRunner::load_dictionary_or_throw();
+  return scribblez::load_dictionary_or_throw();
 }
 
 }  // namespace

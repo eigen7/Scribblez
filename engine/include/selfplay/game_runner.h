@@ -69,9 +69,6 @@ class GameRunner : public GameSink {
   // params.games games in parallel.
   void run();
 
-  // Prints a user-facing setup hint and throws Exception on failure.
-  static const Dictionary& load_dictionary_or_throw();
-
   // Writes the finished game as an optional .gcg, tallies it, and appends it to
   // the .slog writer. Called from every game thread; thread-safe.
   void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) override;

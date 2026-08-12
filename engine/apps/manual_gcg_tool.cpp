@@ -5,7 +5,6 @@
 #include "game/movegen.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/game_runner.h"
 #include "serve/position_json.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
@@ -1107,7 +1106,7 @@ int main(int argc, char** argv) {
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
-    const scribblez::Dictionary& dict = scribblez::GameRunner::load_dictionary_or_throw();
+    const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual", "manual", 5174);
     if (!vite.wait_until_ready()) {

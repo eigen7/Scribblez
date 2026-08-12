@@ -34,18 +34,6 @@ namespace scribblez {
 // as a chunk, so this fixes the chunk size fleet-wide.
 constexpr int kGamesPerFile = 1000;
 
-const Dictionary& GameRunner::load_dictionary_or_throw() {
-  try {
-    return Lexicon::instance().dict();
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n"
-              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
-              << Lexicon::instance().kwg_path() << ".\n"
-              << "Run setup_wizard.py outside the Docker container to install it.\n";
-    throw Exception(e.what());
-  }
-}
-
 // --------------------------- Results -------------------------------------
 
 class GameRunner::Results {
