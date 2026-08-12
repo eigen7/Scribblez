@@ -72,11 +72,11 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
                   int32_t* letters, uint8_t* blanks, int32_t* squares, uint8_t* tile_mask,
                   float* scalars);
 
-// One encoded candidate set, owning the five buffers encode_moves fills so it
+// One encoded candidate set, owning the five buffers encode_move fills so it
 // crosses an API boundary as a single object (nn::MoveSetEvalService takes
 // one). Row-major, `count` rows of kMoveMaxPlaced -- kMoveScalars for scalars.
-// The training path keeps writing into its own tensors through the pointer form
-// above; this is the inference side's convenience.
+// The training path keeps writing into its own tensors through the batch
+// pointer form above; this is the inference side's convenience.
 struct MoveFeatureArrays {
   std::vector<int32_t> letters;
   std::vector<uint8_t> blanks;

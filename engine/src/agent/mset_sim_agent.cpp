@@ -18,6 +18,9 @@ namespace scribblez {
 
 namespace {
 
+// SimRunner counts a candidate's rollouts in u16 planes.
+constexpr int kMaxRollouts = 65535;
+
 // The dictionary reference the members that need it read before any
 // constructor body could check it.
 const Dictionary& require_dict(const Dictionary* dict) {
@@ -47,6 +50,14 @@ void MsetSimAgent::validate(const Params& params) {
   if (params.shortlist < 0)
     throw std::runtime_error("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw std::runtime_error("mset-sim agent: --sim-top-k must be >= 1");
+  // SimRunner only asserts this, so a Release build would take --rollouts=0 and
+  // run every rollout count to 0: every SimObservation's mean is then 0/0, every
+  // NaN comparison in best_observation_index is false, and the agent silently
+  // plays its rank-0 candidate -- a non-simulating agent, with no diagnostic.
+  if (params.sim.rollouts < 1 || params.sim.rollouts > kMaxRollouts) {
+    throw std::runtime_error("mset-sim agent: --rollouts must be in [1, " +
+                             std::to_string(kMaxRollouts) + "]");
+  }
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {
@@ -87,9 +98,9 @@ void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Mov
   // differential is exactly that feature plus the move's score -- the plain sum
   // the two representations were designed to share (input_encoder.h).
   const int me = encoder_.active_player();
-  moves_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
+  move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
   evals_.resize(static_cast<size_t>(n));
-  service_->evaluate(board_row_.data(), moves_, evals_.data());
+  service_->evaluate(board_row_.data(), move_features_, evals_.data());
 
   rank_.resize(static_cast<size_t>(n));
   std::iota(rank_.begin(), rank_.end(), 0);
@@ -118,17 +129,7 @@ MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
   for (int j = 0; j < k; ++j) sim_moves_.push_back(candidates[static_cast<size_t>(rank_[j])]);
   if (k == 1) return sim_moves_.front();
 
-  SimPosition pos;
-  pos.board = req.board;
-  // The rollouts run from the mover's point of view, so seating them as player
-  // 0 costs nothing and spares the agent having to know its own seat.
-  pos.mover = 0;
-  pos.scores = {req.my_score, req.opp_score};
-  pos.rack = req.my_rack;
-  // Whatever we legitimately know of the opponent's rack (see MoveRequest):
-  // under face-up leaves their retained tiles, which then seed every rollout
-  // instead of being drawn from the pool.
-  pos.opp_leave = req.opp_rack;
+  const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
   // Ties in the observations go to the earlier candidate -- the better model

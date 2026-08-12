@@ -113,4 +113,10 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 // being hidden; it only influences equity near the endgame.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
+// The rollout position for an agent deciding `req`: the one place a turn is
+// translated into a SimPosition, so the three simulating agents cannot drift on
+// the seating convention or on what of the opponent's rack a rollout may seed
+// from -- and so a new SimPosition field is filled for all of them at once.
+SimPosition sim_position_from(const MoveRequest& req);
+
 }  // namespace scribblez

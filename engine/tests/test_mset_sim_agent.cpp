@@ -21,7 +21,7 @@
 #include "agent/mset_sim_agent.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
-#include "data/data_loader.h"
+#include "data/data_loader.h"  // kLabelFloats
 #include "encoding/input_encoder.h"
 #include "game/board.h"
 #include "game/glyph.h"
@@ -30,8 +30,8 @@
 #include "game/tile.h"
 #include "game_fixture.h"
 #include "lexicon/dictionary.h"
-#include "lexicon/hasty_equity.h"
 #include "selfplay/sim_runner.h"
+#include "sim_agent_fixture.h"
 #include "stub_move_set_eval_service.h"
 #include "synthetic_equity.h"
 #include "training/move_set_encoder.h"
@@ -40,56 +40,21 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <limits>
 #include <memory>
-#include <numeric>
 #include <string>
 #include <vector>
 
 using namespace scribblez;
 using scribblez::testing::build_slog;
 using scribblez::testing::make_play_full;
+using scribblez::testing::model_rank;
+using scribblez::testing::opening_dict;
+using scribblez::testing::rack_from;
+using scribblez::testing::script_favouring;
+using scribblez::testing::shortlist_candidates;
 using scribblez::testing::StubMoveSetEvalService;
 
 namespace {
-
-Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) r.add(c == '?' ? BLANK : Tile::from_char(c));
-  return r;
-}
-
-Dictionary opening_dict() {
-  return Dictionary::build_from_words(
-    {"AE",    "AR",     "AT",    "ARC",    "ARCS", "ARE",   "ART",   "ARTS", "ATE",   "CAR",
-     "CARE",  "CARES",  "CARET", "CARETS", "CARS", "CART",  "CARTS", "CAT",  "CATS",  "CATER",
-     "CRATE", "CRATES", "EAR",   "EARS",   "EAT",  "EATS",  "ERA",   "ETA",  "RACE",  "RACES",
-     "RAT",   "RATE",   "RATES", "RATS",   "SCAR", "SCARE", "SET",   "TARE", "TEA",   "TEAR",
-     "TEARS", "TRACE",  "DON",   "DOT",    "DOTS", "NOD",   "SNORT", "TONE", "TONES", "STONED"});
-}
-
-// The candidate space the agent ranks: every legal play and exchange in
-// descending static-equity order, capped the way the agent caps it.
-std::vector<Move> shortlist_candidates(const MoveRequest& req, int shortlist) {
-  return equity_top_k(req, shortlist == 0 ? std::numeric_limits<int>::max() : shortlist);
-}
-
-// Mirror MsetSimAgent's model ranking: candidate indices in descending scripted
-// value order, ties keeping equity order (the agent's stable_sort).
-std::vector<int> model_rank(const std::vector<nn::Eval>& scripted, EvalObjective objective) {
-  std::vector<int> idx(scripted.size());
-  std::iota(idx.begin(), idx.end(), 0);
-  std::stable_sort(idx.begin(), idx.end(), [&](int a, int b) {
-    return objective_value(scripted[a], objective) > objective_value(scripted[b], objective);
-  });
-  return idx;
-}
-
-nn::Eval wp(float win_prob) {
-  nn::Eval e;
-  e.win_prob = win_prob;
-  return e;
-}
 
 // The full contingent-features input layout the stub declares.
 const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
@@ -120,18 +85,6 @@ class MsetSimAgentTest : public ::testing::Test {
   MoveRequest request() const {
     return MoveRequest{board_,          dict_,    my_rack_, opp_leave_, /*my_score=*/13,
                        /*opp_score=*/7, bag_size_};
-  }
-
-  // Scripted evals for every candidate: `favoured` (indices into the equity
-  // ranking) get descending high win probabilities, the rest a low one.
-  std::vector<nn::Eval> script_favouring(size_t n, const std::vector<int>& favoured) const {
-    std::vector<nn::Eval> scripted(n, wp(0.1f));
-    float v = 0.9f;
-    for (int idx : favoured) {
-      scripted[static_cast<size_t>(idx)] = wp(v);
-      v -= 0.05f;
-    }
-    return scripted;
   }
 
   Dictionary dict_ = opening_dict();
@@ -281,6 +234,60 @@ TEST_F(MsetSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   const Move played = agent.make_move(req).move;
   EXPECT_TRUE(played == equity_top_k(req, 1).front());
   EXPECT_EQ(sp->calls, 0);  // the model was never consulted
+}
+
+TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
+  // Every other rollout test decides at ply 0, where sim_seed(ply_) and a
+  // hardcoded sim_seed(0) are indistinguishable. Here two moves have been
+  // observed first, so a decision seeded off a stale ply would draw different
+  // rollouts and, on this scripted pair, play the other candidate.
+  const MsetSimAgent::Params p = params();
+  const Move opening =
+    make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
+                   {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                    Glyph::of(Tile::from_char('T'))});
+  const Move reply =
+    make_play_full(6, 7, /*horizontal=*/false, 0b11, 5,
+                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('T'))});
+
+  Board board;
+  board.apply(opening);
+  board.apply(reply);
+  const MoveRequest req{board,
+                        dict_,
+                        my_rack_,
+                        opp_leave_,
+                        /*my_score=*/5,
+                        /*opp_score=*/10,
+                        /*bag_size=*/72};
+  const std::vector<Move> candidates = shortlist_candidates(req, p.shortlist);
+  ASSERT_GT(candidates.size(), 4u);
+  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {2, 3});
+
+  auto stub = std::make_unique<StubMoveSetEvalService>();
+  stub->scripted = scripted;
+  MsetSimAgent agent(p, std::move(stub));
+  agent.begin_game();
+  agent.observe_move(opening);
+  agent.observe_move(reply);
+  const Move played = agent.make_move(req).move;
+
+  // Replay at ply 2 -- the ply the agent is actually at -- and separately at
+  // ply 0, the value a stale-seed regression would use. The decision must
+  // follow the former; the latter must be a different decision, or this test
+  // could not tell them apart.
+  const std::vector<int> rank = model_rank(scripted, p.rank_objective);
+  const std::vector<Move> simmed = {candidates[static_cast<size_t>(rank[0])],
+                                    candidates[static_cast<size_t>(rank[1])]};
+  const SimRunner runner(dict_, p.sim);
+  const SimPosition pos = sim_position_from(req);
+  const Move at_ply_2 = simmed[static_cast<size_t>(
+    best_observation_index(runner.run(pos, simmed, agent.sim_seed(2)), p.sim_objective))];
+  const Move at_ply_0 = simmed[static_cast<size_t>(
+    best_observation_index(runner.run(pos, simmed, agent.sim_seed(0)), p.sim_objective))];
+
+  ASSERT_FALSE(at_ply_2 == at_ply_0) << "the two plies agree here; the test proves nothing";
+  EXPECT_TRUE(played == at_ply_2);
 }
 
 TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {

@@ -22,6 +22,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "selfplay/sim_runner.h"
+#include "sim_agent_fixture.h"
 #include "stub_eval_service.h"
 #include "synthetic_equity.h"
 
@@ -29,55 +30,20 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <limits>
 #include <memory>
-#include <numeric>
 #include <string>
 #include <vector>
 
 using namespace scribblez;
 using scribblez::testing::CountingStubEvalService;
+using scribblez::testing::model_rank;
+using scribblez::testing::opening_dict;
+using scribblez::testing::rack_from;
+using scribblez::testing::script_favouring;
+using scribblez::testing::shortlist_candidates;
 using scribblez::testing::StubEvalService;
 
 namespace {
-
-Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) r.add(c == '?' ? BLANK : Tile::from_char(c));
-  return r;
-}
-
-Dictionary opening_dict() {
-  return Dictionary::build_from_words(
-    {"AE",   "AR",    "AT",    "ARC",    "ARCS",   "ARE",   "ART",  "ARTS",  "ATE",
-     "CAR",  "CARE",  "CARES", "CARET",  "CARETS", "CARS",  "CART", "CARTS", "CAT",
-     "CATS", "CATER", "CRATE", "CRATES", "EAR",    "EARS",  "EAT",  "EATS",  "ERA",
-     "ETA",  "RACE",  "RACES", "RAT",    "RATE",   "RATES", "RATS", "SCAR",  "SCARE",
-     "SET",  "TARE",  "TEA",   "TEAR",   "TEARS",  "TRACE"});
-}
-
-// The candidate space the agent ranks: every legal play and exchange in
-// descending static-equity order, capped the way the agent caps it.
-std::vector<Move> shortlist_candidates(const MoveRequest& req, int shortlist) {
-  return equity_top_k(req, shortlist == 0 ? std::numeric_limits<int>::max() : shortlist);
-}
-
-// Mirror NeuralSimAgent's model ranking: candidate indices in descending
-// scripted-value order, ties keeping equity order (the agent's stable_sort).
-std::vector<int> model_rank(const std::vector<nn::Eval>& scripted, EvalObjective objective) {
-  std::vector<int> idx(scripted.size());
-  std::iota(idx.begin(), idx.end(), 0);
-  std::stable_sort(idx.begin(), idx.end(), [&](int a, int b) {
-    return objective_value(scripted[a], objective) > objective_value(scripted[b], objective);
-  });
-  return idx;
-}
-
-nn::Eval wp(float win_prob) {
-  nn::Eval e;
-  e.win_prob = win_prob;
-  return e;
-}
 
 class NeuralSimAgentTest : public ::testing::Test {
  protected:
@@ -106,18 +72,6 @@ class NeuralSimAgentTest : public ::testing::Test {
   MoveRequest request() const {
     return MoveRequest{board_,          dict_,    my_rack_, opp_leave_, /*my_score=*/13,
                        /*opp_score=*/7, bag_size_};
-  }
-
-  // Scripted evals for every candidate: `favoured` (indices into the equity
-  // ranking) get descending high win probabilities, the rest a low one.
-  std::vector<nn::Eval> script_favouring(size_t n, const std::vector<int>& favoured) const {
-    std::vector<nn::Eval> scripted(n, wp(0.1f));
-    float v = 0.9f;
-    for (int idx : favoured) {
-      scripted[static_cast<size_t>(idx)] = wp(v);
-      v -= 0.05f;
-    }
-    return scripted;
   }
 
   Dictionary dict_ = opening_dict();

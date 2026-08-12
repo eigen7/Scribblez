@@ -91,17 +91,7 @@ MoveDecision SimAgent::make_move(const MoveRequest& req) {
   // which is what equity_top_k already ranked first.
   if (req.bag_size == 0 || candidates.size() == 1) return candidates.front();
 
-  SimPosition pos;
-  pos.board = req.board;
-  // The rollouts run from the mover's point of view, so seating them as player
-  // 0 costs nothing and spares the agent having to know its own seat.
-  pos.mover = 0;
-  pos.scores = {req.my_score, req.opp_score};
-  pos.rack = req.my_rack;
-  // Whatever we legitimately know of the opponent's rack (see MoveRequest):
-  // under face-up leaves their retained tiles, which then seed every rollout
-  // instead of being drawn from the pool.
-  pos.opp_leave = req.opp_rack;
+  const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, candidates, sim_seed(ply_));
   return candidates[static_cast<size_t>(best_observation_index(observations, objective_))];

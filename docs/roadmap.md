@@ -266,8 +266,15 @@ Then the spine proper:
     away entirely, leaving one board pair plus a single dynamic
     candidate axis. The engine runtime has landed with it
     ([move_set_net.h](../engine/include/nn/move_set_net.h) and the
-    move-set service API beside the flat fixed-width position one), so
-    what is left is the agent that drives it. That runtime keys its plan
+    move-set service API beside the flat fixed-width position one), and so
+    has the agent that drives it
+    ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h),
+    `--player "--type=mset-sim"`) — scoring a turn's whole candidate set in
+    one pass and simulating the model's top K, with no static-equity
+    shortlist by default, since the cost no longer scales with the
+    candidate count. What is left is the verdict: the sensitivity sweep
+    that sets the recall bar, and the equal-budget match against the
+    exact-evaluation agent. That runtime keys its plan
     cache on model content and builds per checkpoint rather than refitting
     a shared one, because TensorRT reports a refit that mapped every weight
     and one that left a weight behind identically (trt_refit_probe.py, and
