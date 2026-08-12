@@ -18,6 +18,9 @@
 - **[architecture.md](architecture.md)** — how a self-play game becomes a
   training row: the component chain, the `.slog` format, the
   replay-reconstruction invariant, random openings.
+- **[model_architectures.md](model_architectures.md)** — wiring diagrams for the
+  two trained networks and the spatial trunk they share: layer-by-layer shapes,
+  the head fan-out of each, and their loss tables.
 - **[generational_training.md](generational_training.md)** — the generate→train
   lifecycle (rows-clock, sliding window, reuse-driven epochs, live controls),
   plus the forward-looking game-pool producer, resource-contention manager, and

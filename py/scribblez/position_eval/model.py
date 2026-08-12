@@ -27,6 +27,9 @@ The two model input widths come from the engine session's input-encoding spec
 85 / 936 without) and, with the six head output shapes, are fixed by the
 training pipeline and the C++ inference contract; the trunk between them is
 free to change.
+
+docs/model_architectures.md diagrams this network; any change to the
+architecture belongs in the same commit as the corresponding change there.
 """
 
 import math

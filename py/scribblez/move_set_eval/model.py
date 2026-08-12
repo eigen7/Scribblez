@@ -21,6 +21,9 @@ carry a `pos_id` into [0, P). Each move:
 The heads predict what the teacher position evaluation model would output for
 the candidate's post-move state, from the mover's POV -- this model is a
 distillation of the position evaluation model over the candidate set.
+
+docs/model_architectures.md diagrams this network; any change to the
+architecture belongs in the same commit as the corresponding change there.
 """
 
 from __future__ import annotations
