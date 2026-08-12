@@ -151,6 +151,17 @@ TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elaps
 # panel instead.
 MSET_QUALITY = [
     ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_baseline"]),
+    # The exchange slice (the A4 dedicated-head readout): how well the student
+    # ranks WHICH tiles to keep, against the incumbent leave-value ordering,
+    # and how often the teacher's best exchange survives the global top-K.
+    (
+        "Exchange rank regret (win-equity)",
+        ["exch_rank_regret", "exch_rank_regret_baseline"],
+    ),
+    (
+        "Best-exchange retention@K",
+        ["exch_retention1", "exch_retention3", "exch_retention5", "exch_retention1_baseline"],
+    ),
 ]
 # Aggregate model-vs-Monte-Carlo quality curves over the large penultimate-bingo
 # dataset, shown on the Loss tab beneath the training curves. Lower is better for all:

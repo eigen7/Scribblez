@@ -283,11 +283,19 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         "lr": lr_now,
         "elapsed_s": train_s,
     }
+    # The exchange-slice series (docs/roadmap.md A4 exchange analysis): named
+    # without the _acc suffix, so they land on their own Training-tab figures
+    # (plots.MSET_QUALITY) instead of crowding the Loss tab's Accuracy panel.
+    record["exch_rank_regret"] = metrics["exch_rank_regret"]
+    record["exch_rank_regret_baseline"] = metrics["exch_rank_regret_baseline"]
+    record["positions_with_exchanges"] = metrics["positions_with_exchanges"]
     for k in (1, 3, 5):
         record[f"recall{k}_acc"] = metrics[f"recall@{k}"]
         record[f"recall{k}_baseline_acc"] = metrics[f"recall@{k}_baseline"]
         record[f"regret{k}"] = metrics[f"regret@{k}"]
         record[f"regret{k}_baseline"] = metrics[f"regret@{k}_baseline"]
+        record[f"exch_retention{k}"] = metrics[f"exch_retention@{k}"]
+        record[f"exch_retention{k}_baseline"] = metrics[f"exch_retention@{k}_baseline"]
     db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     # Per-pass ONNX beside the rolling checkpoint, under the pass index the
