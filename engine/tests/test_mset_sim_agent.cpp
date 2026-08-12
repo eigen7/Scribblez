@@ -133,7 +133,7 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   stub->scripted = scripted;
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 
   // Replay the same decision independently: the model's top-2 by scripted
@@ -164,7 +164,7 @@ TEST_F(MsetSimAgentTest, ShortlistCapsWhatTheModelScores) {
   StubMoveSetEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Move played = agent.make_move(request()).move;
   EXPECT_EQ(sp->total_moves, 3);  // exactly the shortlist reached the model
@@ -191,7 +191,7 @@ TEST_F(MsetSimAgentTest, TheModelCanPromoteAnExchange) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   stub->scripted = script_favouring(candidates.size(), {exchange_idx});
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   EXPECT_TRUE(agent.make_move(request()).move == candidates[static_cast<size_t>(exchange_idx)]);
 }
 
@@ -205,7 +205,7 @@ TEST_F(MsetSimAgentTest, OneSeedGivesOneDecision) {
     auto stub = std::make_unique<StubMoveSetEvalService>();
     stub->scripted = scripted;
     MsetSimAgent agent(p, std::move(stub));
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     moves[i] = agent.make_move(request()).move;
   }
   EXPECT_TRUE(moves[0] == moves[1]);
@@ -217,7 +217,7 @@ TEST_F(MsetSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   StubMoveSetEvalService* sp = stub.get();
   MsetSimAgent agent(params(), std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Rack unplayable = rack_from("QQQQQQ");  // no dict word uses Q
   MoveRequest req{board_,          dict_,         unplayable, opp_leave_, /*my_score=*/13,
@@ -240,7 +240,7 @@ TEST_F(MsetSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
   StubMoveSetEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Move played = agent.make_move(request()).move;
   EXPECT_EQ(sp->total_moves, 3);
@@ -252,7 +252,7 @@ TEST_F(MsetSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   StubMoveSetEvalService* sp = stub.get();
   MsetSimAgent agent(params(), std::move(stub));  // endgame budget 0: solver declines
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
   const Move played = agent.make_move(req).move;
@@ -291,7 +291,7 @@ TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   stub->scripted = scripted;
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   agent.observe_move(opening);
   agent.observe_move(reply);
   const Move played = agent.make_move(req).move;
@@ -340,7 +340,7 @@ TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
   StubMoveSetEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {0});
   MsetSimAgent agent(p, std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   agent.observe_move(opening);
   agent.make_move(req);
 
@@ -432,7 +432,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   p.name = "MS";
   p.dict = &dict;
   MsetSimAgent agent(p, std::make_unique<StubMoveSetEvalService>());
-  agent.begin_game(initial_scores);
+  agent.begin_game({initial_scores});
   agent.observe_move(move0);
   agent.observe_move(move1);
 

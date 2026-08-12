@@ -105,7 +105,7 @@ TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
     SimAgent::Params p = params();
     p.objective = objective;
     SimAgent agent(p);
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     const Move played = agent.make_move(request()).move;
 
     // Replay the same decision independently: the same candidate set, the same
@@ -160,7 +160,7 @@ TEST_F(SimAgentTest, SimulatesAgainstTheOpponentsPublicLeave) {
 
     discriminated = true;
     SimAgent agent(p);
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     EXPECT_TRUE(agent.make_move(req).move == candidates[static_cast<size_t>(with)])
       << "leave=" << text << ": the agent simmed as though the leave were hidden";
     break;
@@ -170,7 +170,7 @@ TEST_F(SimAgentTest, SimulatesAgainstTheOpponentsPublicLeave) {
 
 TEST_F(SimAgentTest, PicksFromTheCandidatesItSimmed) {
   SimAgent agent(params());
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 
   const std::vector<Move> candidates = equity_top_k(request(), params().top_k);
@@ -181,8 +181,8 @@ TEST_F(SimAgentTest, PicksFromTheCandidatesItSimmed) {
 
 TEST_F(SimAgentTest, OneSeedGivesOneGame) {
   SimAgent a(params()), b(params());
-  a.begin_game({0, 0});
-  b.begin_game({0, 0});
+  a.begin_game({});
+  b.begin_game({});
   // Step both through the same few turns: the seed advances with the ply
   // count, so agreeing once is weaker than agreeing as the game moves on.
   for (int turn = 0; turn < 3; ++turn) {
@@ -196,7 +196,7 @@ TEST_F(SimAgentTest, OneSeedGivesOneGame) {
 
 TEST_F(SimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   SimAgent agent(params());  // endgame budget 0, so the solver declines
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
   const Move played = agent.make_move(req).move;

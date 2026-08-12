@@ -21,7 +21,8 @@
 namespace scribblez {
 
 class Dictionary;
-struct MoveRequest;  // agent.h
+struct MoveRequest;       // agent.h
+struct BeginGameRequest;  // agent.h
 
 // Which model head orders candidates: the ScoreDiff head's predicted mean
 // final differential, or P(win) + 0.5*P(draw) from the WLD head.
@@ -51,7 +52,7 @@ class CandidateEvaluator {
   // The owning agent forwards its own begin_game() / observe_move() here, so
   // the mirrored encoder sees both seats' moves; its placement-plane features
   // depend on them, which make_move() alone cannot see.
-  void begin_game(std::array<int, 2> initial_scores);
+  void begin_game(const BeginGameRequest& req);
   void observe_move(const Move& move);
 
   // Seat to move in the mirrored game -- the owning agent's own seat when it

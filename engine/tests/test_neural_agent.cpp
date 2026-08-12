@@ -191,7 +191,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
@@ -206,7 +206,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     sp->scripted = {sd(9.0f), sd(1.0f)};
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[0]]));
   }
@@ -221,7 +221,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kWinProb},
                       std::move(stub));
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
@@ -246,7 +246,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
                      .top_k = top_k,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
@@ -279,7 +279,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
                      .top_k = 0,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
@@ -306,7 +306,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
                      .top_k = 0,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub), /*max_batch=*/2);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[target]));  // the globally best-rated candidate
@@ -339,7 +339,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   agent.observe_move(move_a);
   agent.observe_move(move_b);
 
@@ -415,7 +415,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
-  agent.begin_game(initial_scores);
+  agent.begin_game({initial_scores});
   agent.observe_move(move0);
   agent.observe_move(move1);
 
@@ -464,7 +464,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                         .objective = EvalObjective::kScoreDiff,
                         .temperature = 0.0},
                        std::move(stub));
-    greedy.begin_game({0, 0});
+    greedy.begin_game({});
     gp->scripted = {sd(2.0f), sd(0.0f)};
     for (int i = 0; i < 50; ++i)
       ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
@@ -483,7 +483,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                          .temperature = 5.0,
                          .seed = 12345},
                         std::move(stub));
-    sampler.begin_game({0, 0});
+    sampler.begin_game({});
     sp->scripted = {sd(2.0f), sd(0.0f)};
     int high = 0, low = 0;
     for (int i = 0; i < 400; ++i) {
@@ -559,7 +559,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                         std::move(solving_stub));
     // begin_game() clears the shared transposition table, matching the
     // freshly-cleared reference solve above.
-    solving.begin_game({0, 0});
+    solving.begin_game({});
     const MoveDecision decision = solving.make_move(req);
     EXPECT_EQ(decision.move, r.best);
     EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size());
@@ -575,7 +575,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                           .objective = EvalObjective::kScoreDiff,
                           .endgame = solver_params(/*budget=*/0)},
                          std::move(disabled_stub));
-    disabled.begin_game({0, 0});
+    disabled.begin_game({});
     const MoveDecision fallback = disabled.make_move(req);
     EXPECT_EQ(fallback.move, greedy);
     EXPECT_TRUE(fallback.projected_remaining_moves.empty());

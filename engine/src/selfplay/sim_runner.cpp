@@ -199,16 +199,6 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
   return top;
 }
 
-const SimRunner::Params& validated_sim_params(const SimRunner::Params& params,
-                                              const std::string& who) {
-  if (params.rollouts < 1 || params.rollouts > SimRunner::kMaxRollouts) {
-    throw std::runtime_error(who + ": --rollouts must be in [1, " +
-                             std::to_string(SimRunner::kMaxRollouts) + "]");
-  }
-  if (params.threads < 1) throw std::runtime_error(who + ": --sim-threads must be >= 1");
-  return params;
-}
-
 SimPosition sim_position_from(const MoveRequest& req) {
   SimPosition pos;
   pos.board = req.board;
@@ -235,8 +225,21 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   return pool;
 }
 
+// Rejected here rather than asserted, so a Release build cannot run a SimRunner
+// that quietly does nothing: at 0 rollouts every observation's mean is 0/0, and
+// those NaNs compare false against everything, so best_observation_index hands
+// back the first candidate every time and the caller stops simulating without
+// ever being told.
+void SimRunner::validate(const Params& params) {
+  if (params.rollouts < 1 || params.rollouts > kMaxRollouts) {
+    throw std::runtime_error("sim runner: rollouts must be in [1, " + std::to_string(kMaxRollouts) +
+                             "]");
+  }
+  if (params.threads < 1) throw std::runtime_error("sim runner: threads must be >= 1");
+}
+
 SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict), params_(params) {
-  assert(params_.rollouts >= 1 && params_.rollouts <= kMaxRollouts);
+  validate(params_);
 }
 
 std::vector<SimObservation> SimRunner::run(const SimPosition& pos,

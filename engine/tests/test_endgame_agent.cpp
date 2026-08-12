@@ -120,7 +120,7 @@ class PromptCountingAgent : public Agent {
     return inner_.make_move(req);
   }
   void observe_move(const Move& move) override { inner_.observe_move(move); }
-  void begin_game(std::array<int, 2> initial_scores) override { inner_.begin_game(initial_scores); }
+  void begin_game(const BeginGameRequest& req) override { inner_.begin_game(req); }
   int prompts = 0;
 
  private:
@@ -350,7 +350,7 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
     // Reset the agent per position: its solver's transposition table is only
     // cleared between games, and a warm table would make its capped solve
     // diverge from the freshly-cleared reference solve above.
-    wld.begin_game({0, 0});
+    wld.begin_game({});
     const MoveRequest req = endgame_request(p, d);
     const MoveDecision decision = wld.make_move(req);
     if (r.proven_class == -1 && r.continuation.empty()) {

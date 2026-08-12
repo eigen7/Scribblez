@@ -62,7 +62,7 @@ SimAgent::SimAgent(const Params& params)
       top_k_(params.top_k),
       objective_(params.objective),
       seed_(params.seed),
-      runner_(require_dict(params.dict), validated_sim_params(params.sim, "sim agent")),
+      runner_(require_dict(params.dict), params.sim),
       endgame_(params.thread_id, params.endgame) {
   if (top_k_ < 1) throw std::runtime_error("sim agent: --top-k must be >= 1");
 }
@@ -71,7 +71,7 @@ uint64_t SimAgent::sim_seed(int ply) const {
   return util::splitmix64(seed_ ^ util::splitmix64(static_cast<uint64_t>(ply)));
 }
 
-void SimAgent::begin_game(std::array<int, 2> /*initial_scores*/) {
+void SimAgent::begin_game(const BeginGameRequest& /*req*/) {
   endgame_.begin_game();
   ply_ = 0;
 }

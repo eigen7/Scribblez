@@ -97,7 +97,7 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   auto stub = std::make_unique<StubEvalService>();
   stub->scripted = scripted;
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 
   // Replay the same decision independently: the model's top-2 by scripted
@@ -128,7 +128,7 @@ TEST_F(NeuralSimAgentTest, ShortlistCapsWhatTheModelEvaluates) {
   CountingStubEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Move played = agent.make_move(request()).move;
   EXPECT_EQ(sp->total_rows, 3);  // exactly the shortlist reached the model
@@ -154,7 +154,7 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   auto stub = std::make_unique<StubEvalService>();
   stub->scripted = script_favouring(candidates.size(), {exchange_idx});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   EXPECT_TRUE(agent.make_move(request()).move == candidates[static_cast<size_t>(exchange_idx)]);
 }
 
@@ -169,7 +169,7 @@ TEST_F(NeuralSimAgentTest, DropBestProbExcludesTheModelsFavourite) {
     stub->scripted = scripted;
     p.drop_best_prob = prob;
     NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     EXPECT_EQ(agent.drop_best(0), prob == 1.0);
     // Undropped, the model's favourite (equity rank 2) plays; dropped, the
     // runner-up (equity rank 3) does.
@@ -188,7 +188,7 @@ TEST_F(NeuralSimAgentTest, OneSeedGivesOneDecision) {
     auto stub = std::make_unique<StubEvalService>();
     stub->scripted = scripted;
     NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-    agent.begin_game({0, 0});
+    agent.begin_game({});
     moves[i] = agent.make_move(request()).move;
   }
   EXPECT_TRUE(moves[0] == moves[1]);
@@ -204,7 +204,7 @@ TEST_F(NeuralSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Rack unplayable = rack_from("QQQQQQ");  // no dict word uses Q
   MoveRequest req{board_,          dict_,         unplayable, opp_leave_, /*my_score=*/13,
@@ -229,7 +229,7 @@ TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
   CountingStubEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
-  agent.begin_game({0, 0});
+  agent.begin_game({});
 
   const Move played = agent.make_move(request()).move;
   EXPECT_EQ(sp->total_rows, 3);
@@ -243,7 +243,7 @@ TEST_F(NeuralSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   CountingStubEvalService* sp = stub.get();
   NeuralSimAgent agent(params(), std::move(stub),
                        /*max_batch=*/1024);  // endgame budget 0: solver declines
-  agent.begin_game({0, 0});
+  agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
   const Move played = agent.make_move(req).move;

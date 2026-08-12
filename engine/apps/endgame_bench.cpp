@@ -143,7 +143,7 @@ class FirstEndgameCapturer : public Agent {
       ++scoreless_;
   }
 
-  void begin_game(std::array<int, 2> /*initial_scores*/) override { scoreless_ = 0; }
+  void begin_game(const BeginGameRequest& /*req*/) override { scoreless_ = 0; }
 
  private:
   HastyBotAgent bot_;
