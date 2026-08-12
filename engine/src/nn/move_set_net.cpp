@@ -3,6 +3,7 @@
 #include "nn/cuda_util.h"
 #include "nn/onnx_metadata.h"
 #include "training/move_set_encoder.h"
+#include "training/training_targets.h"
 
 #include <NvInfer.h>
 #include <NvInferRuntime.h>
@@ -34,15 +35,19 @@ constexpr const char* kMoveScalars = "move_scalars";
 constexpr const char* kOutputWld = "wld";
 constexpr const char* kOutputScoreDiff = "score_diff";
 
-// The width every move tensor must have. The board tensors' widths are read off
-// the engine and passed on to the caller, but these are not negotiable: the
-// service stages move rows at move_set_encoder.h's own constants, so a model
-// whose rows are narrower would be a buffer overrun rather than a mismatch.
-// Nothing else would catch it -- tensor shapes are not part of the metadata the
-// loader checks.
-struct MoveInputWidth {
+// What this runtime assumes about each tensor it reads or writes: the element
+// type it casts the buffer to, and -- where the encoder or the target layout
+// fixes it -- the row width it stages or decodes. A model chooses its own board
+// widths, which are read off the engine and passed to the caller, but it does
+// not get to choose these: the staging and decode loops are written at these
+// constants against buffers the engine's own declarations size, so a model that
+// disagrees overruns those buffers rather than failing. Nothing else would
+// catch it -- neither shapes nor dtypes are part of the metadata the loader
+// checks, and both survive an encoding-version bump untouched.
+struct TensorLayout {
   const char* name;
-  int elems_per_row;
+  size_t elem_size;
+  int elems_per_row;  // 0 where the model's own declaration decides
 };
 
 // The candidate count the plan is tuned for. Bounds are 1 and params.max_moves;
@@ -181,8 +186,10 @@ std::vector<char> MoveSetNet::Impl::build_plan(const std::vector<char>& onnx_byt
   if (params.precision == Precision::kFP16) config->setFlag(nvinfer1::BuilderFlag::kFP16);
   if (params.fast_build) config->setBuilderOptimizationLevel(0);
   // No kREFIT, unlike the position runtime: a plan here is only ever reused for
-  // the model that built it (load()), so nothing would refit it, and leaving
-  // the flag off lets TensorRT fold the weights into its kernels.
+  // the model that built it (load()), so nothing would refit it. What that
+  // saves is build time -- 31.7 s to 13.0 s at production shape, and a plan a
+  // megabyte smaller -- not inference: refittable and non-refittable plans
+  // measure at the same latency and both pick FP16 kernels there.
 
   // Only the move tensors carry the dynamic candidate axis; the board inputs
   // are the P=1 graph's single row, fully static, and need no profile entry.
@@ -234,16 +241,28 @@ void MoveSetNet::Impl::allocate_buffers() {
     bindings.push_back(b);
   }
 
-  const MoveInputWidth required[] = {
-    {kMoveLetters, move_set::kMoveMaxPlaced}, {kMoveBlanks, move_set::kMoveMaxPlaced},
-    {kMoveSquares, move_set::kMoveMaxPlaced}, {kMoveTileMask, move_set::kMoveMaxPlaced},
-    {kMoveScalars, move_set::kMoveScalars},
+  static constexpr TensorLayout kRequired[] = {
+    {kInputSpatial, sizeof(float), 0},
+    {kInputScalar, sizeof(float), 0},
+    {kMoveLetters, sizeof(int32_t), move_set::kMoveMaxPlaced},
+    {kMoveBlanks, sizeof(uint8_t), move_set::kMoveMaxPlaced},
+    {kMoveSquares, sizeof(int32_t), move_set::kMoveMaxPlaced},
+    {kMoveTileMask, sizeof(uint8_t), move_set::kMoveMaxPlaced},
+    {kMoveScalars, sizeof(float), move_set::kMoveScalars},
+    {kOutputWld, sizeof(float), kWldFloats},
+    {kOutputScoreDiff, sizeof(float), kScoreDiffOutputFloats},
   };
-  for (const MoveInputWidth& want : required) {
-    const int got = binding(want.name).elems_per_row;
-    if (got != want.elems_per_row) {
+  for (const TensorLayout& want : kRequired) {
+    const Binding& got = binding(want.name);
+    if (got.elem_size != want.elem_size) {
+      throw std::runtime_error("Move-feature dtype mismatch: " + params.onnx_path + " declares " +
+                               want.name + " at " + std::to_string(got.elem_size) +
+                               " bytes per element, this engine reads it at " +
+                               std::to_string(want.elem_size));
+    }
+    if (want.elems_per_row != 0 && got.elems_per_row != want.elems_per_row) {
       throw std::runtime_error("Move-feature width mismatch: " + params.onnx_path + " declares " +
-                               want.name + " " + std::to_string(got) +
+                               want.name + " " + std::to_string(got.elems_per_row) +
                                " wide, this engine encodes " + std::to_string(want.elems_per_row));
     }
   }

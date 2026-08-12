@@ -59,18 +59,18 @@ struct Tolerance {
 // FP32 deviates from the reference only by kernel and reduction order; FP16
 // additionally by its own precision, over an attention softmax across 225 board
 // tokens. Both are far tighter than any real defect: a mis-bound tensor or a
-// wrong refit moves the outputs by order-one amounts, not by these. The test
-// prints the actual deviations, so tune here if a future model legitimately
-// needs more slack.
+// plan-cache hit serving the wrong checkpoint moves the outputs by order-one
+// amounts, not by these. The test prints the actual deviations, so tune here if
+// a future model legitimately needs more slack.
 //
 // The FP16 tolerance is the loose one for a reason worth knowing: the flag only
-// permits reduced precision, so whether TensorRT actually picks FP16 kernels
-// depends on what else constrains the build. It does here (the FP16 run deviates
-// from the FP32 run by ~6e-05, so this case is testing FP16 arithmetic and not
-// just the FP16 code path) -- but while these plans were still built refittable,
-// TensorRT chose FP32 kernels throughout and the two runs agreed bit for bit. A
-// future constraint could do the same, in which case this case quietly narrows
-// to the path alone rather than failing.
+// permits reduced precision, and whether TensorRT then picks FP16 kernels is
+// sensitive to builder configuration that has nothing to do with precision --
+// asking for a refittable plan is enough to make it choose FP32 throughout, at
+// which point the FP16 run reproduces the FP32 run bit for bit. As configured
+// it does pick them (the FP16 run deviates by ~6e-05), so this case tests FP16
+// arithmetic; under a future constraint it would quietly narrow to covering the
+// FP16 path alone rather than failing.
 constexpr Tolerance kFp32Tol{1e-4f, 0.01f};
 constexpr Tolerance kFp16Tol{5e-3f, 0.2f};
 
@@ -147,8 +147,8 @@ class MsetInferenceParityTest : public ::testing::Test {
   // the service's chunking).
   std::vector<Eval> run(const std::string& onnx_path, Precision precision, int max_moves);
 
-  // Engine plans sitting in this test's scratch cache.
-  int cached_plans() const;
+  // Engine plans sitting in this test's scratch cache, in no particular order.
+  std::vector<std::filesystem::path> cached_plans() const;
 
   // Worst deviation of `got` from a reference decode, per field group.
   Tolerance worst_deviation(const std::vector<Eval>& got, const std::vector<float>& expected) const;
@@ -216,10 +216,10 @@ std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Pre
   return evals;
 }
 
-int MsetInferenceParityTest::cached_plans() const {
-  int plans = 0;
+std::vector<std::filesystem::path> MsetInferenceParityTest::cached_plans() const {
+  std::vector<std::filesystem::path> plans;
   for (const auto& entry : std::filesystem::recursive_directory_iterator(cache_root_)) {
-    if (entry.path().extension() == ".engine") ++plans;
+    if (entry.path().extension() == ".engine") plans.push_back(entry.path());
   }
   return plans;
 }
@@ -288,15 +288,21 @@ TEST_F(MsetInferenceParityTest, ChunksACandidateSetLargerThanTheEngine) {
 TEST_F(MsetInferenceParityTest, ReusesAPlanPerCheckpointAndNeverMixesThem) {
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_, "A cold",
                  kFp32Tol);
-  ASSERT_EQ(cached_plans(), 1);
+  const std::vector<std::filesystem::path> after_cold = cached_plans();
+  ASSERT_EQ(after_cold.size(), 1u);
+  const std::filesystem::file_time_type built_at = std::filesystem::last_write_time(after_cold[0]);
 
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_,
                  "A cached", kFp32Tol);
-  EXPECT_EQ(cached_plans(), 1) << "the same model must reuse its plan, not build a second";
+  // A rebuild would land at the same content-keyed path and overwrite it, so
+  // the file count cannot tell reuse from a silent rebuild -- the write time
+  // can.
+  EXPECT_EQ(std::filesystem::last_write_time(after_cold[0]), built_at)
+    << "the same model must reuse its plan, not rebuild it";
 
   const std::vector<Eval> from_b = run(model("model_b.onnx"), Precision::kFP32, moves_.count);
   expect_matches(from_b, expected_b_, "B", kFp32Tol);
-  EXPECT_EQ(cached_plans(), 2) << "a different checkpoint must get its own plan";
+  EXPECT_EQ(cached_plans().size(), 2u) << "a different checkpoint must get its own plan";
 
   // Guard the guard: if the two random-init models happened to agree, the
   // comparison above would pass even on A's weights.
@@ -304,12 +310,14 @@ TEST_F(MsetInferenceParityTest, ReusesAPlanPerCheckpointAndNeverMixesThem) {
     << "the two fixture models are too alike to detect a mixed-up plan";
 }
 
-// The move-feature encoding is a semantics version, not a shape: a checkpoint
-// trained on older rows loads and runs without complaint, silently off
-// distribution. The version guard is the only thing standing between an agent
-// and that, which makes it worth a test of its own -- as is the graph guard on
-// the other side, which keeps a move set model out of the position runtime.
-TEST_F(MsetInferenceParityTest, RejectsAStaleEncodingVersionOrTheWrongGraph) {
+// The ways a model can be one this engine must not feed, none of which anything
+// downstream would catch. A checkpoint trained on older rows has the same
+// shapes and would simply run off distribution; a move set model in the
+// position runtime is a different graph entirely; and a model whose move rows
+// are narrower, or whose elements are smaller, builds and loads fine while the
+// service stages rows at the encoder's own constants -- so feeding it would
+// overrun the engine's buffers rather than fail.
+TEST_F(MsetInferenceParityTest, RejectsModelsThisEncoderMustNotFeed) {
   // Each rejection is matched against what it should have objected to, so a
   // load that failed for some unrelated reason -- a fixture file that stopped
   // being written, say -- cannot pass for the guard doing its job.
@@ -326,6 +334,19 @@ TEST_F(MsetInferenceParityTest, RejectsAStaleEncodingVersionOrTheWrongGraph) {
   position.fast_build = true;
   const std::string graph_error = load_failure_message<scribblez::nn::NeuralNet>(position);
   EXPECT_NE(graph_error.find("declares graph 'move_set_eval'"), std::string::npos) << graph_error;
+
+  scribblez::nn::MoveSetNetParams narrow;
+  narrow.onnx_path = model("model_narrow.onnx");
+  narrow.mount_root = cache_root_.string();
+  narrow.fast_build = true;
+  narrow.max_moves = moves_.count;
+  const std::string width_error = load_failure_message<scribblez::nn::MoveSetNet>(narrow);
+  EXPECT_NE(width_error.find("Move-feature width mismatch"), std::string::npos) << width_error;
+
+  scribblez::nn::MoveSetNetParams small_elements = narrow;
+  small_elements.onnx_path = model("model_uint8_letters.onnx");
+  const std::string dtype_error = load_failure_message<scribblez::nn::MoveSetNet>(small_elements);
+  EXPECT_NE(dtype_error.find("Move-feature dtype mismatch"), std::string::npos) << dtype_error;
 }
 
 }  // namespace

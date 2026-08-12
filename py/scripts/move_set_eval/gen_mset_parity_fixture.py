@@ -7,17 +7,23 @@ This script captures the PyTorch side as ground truth so the C++ test can
 confirm the TensorRT path -- engine build, the dtype-aware bindings, the
 chunking, and the C++ Eval decode -- reproduces it.
 
-Two models of the same architecture are exported, because the engine-plan cache
-is keyed on architecture: loading the second one hits the plan the first built
-and refits it with the second's weights. Its own reference outputs are what
-proves the refit actually swapped the weights in, rather than leaving an A/B
-chimera that no shape or metadata check would notice.
+Two models of the same architecture are exported to prove the engine-plan cache
+never confuses them. The cache is keyed on the model's exact content, so the
+second one must build and cache its own plan rather than reuse the first's; its
+own reference outputs are what shows which weights were actually served, a
+question no shape or metadata check can answer, since two checkpoints of one
+architecture differ in nothing but their numbers.
 
 Files written into --out-dir:
   * model_a.onnx / model_b.onnx -- randomly-initialized MoveSetEvalModels of one
     architecture, exported at the current move-encoding version.
   * model_stale.onnx -- model A stamped with move-encoding version 0, for the
     version-skew guard.
+  * model_narrow.onnx / model_uint8_letters.onnx -- model A with one fewer tile
+    slot per move, and model A declaring move_letters as uint8, for the two
+    halves of the engine's move-feature layout guard (row width and element
+    size). Both still build under TensorRT: the point is a model the engine must
+    refuse to feed, not one it cannot parse.
   * board.bin -- one position's encoder row (spatial floats then scalar floats),
     float32, laid out as GameStateEncoder::encode_input writes it.
   * move_{letters,blanks,squares,tile_mask,scalars}.bin -- the candidate set, in
@@ -34,6 +40,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+import onnx
 import torch
 from scribblez.ffi import get_input_shapes, set_contingent_features
 from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -145,6 +152,42 @@ def reference_evals(model, board_row: np.ndarray, moves: dict, shape: tuple[int,
     )
 
 
+def write_narrowed(src: Path, dst: Path):
+    """Copy `src` with one fewer tile slot per move, for the engine's
+    move-feature width guard.
+
+    Every per-tile input is narrowed together, because the move encoder adds
+    their embeddings elementwise: narrowing one alone would be a graph
+    TensorRT refuses to build, and the guard is meant to catch a model that
+    builds fine and is simply not the one this encoder feeds. Nothing else in
+    the graph fixes the tile count -- the pooling is a sum over that axis -- so
+    the result is a valid model of a slightly different encoding.
+    """
+    per_tile = {"move_letters", "move_blanks", "move_squares", "move_tile_mask"}
+    model = onnx.load(src)
+    for tensor in model.graph.input:
+        if tensor.name in per_tile:
+            slot = tensor.type.tensor_type.shape.dim[1]
+            slot.dim_value = slot.dim_value - 1
+    onnx.save(model, dst)
+
+
+def write_uint8_letters(src: Path, dst: Path):
+    """Copy `src` declaring move_letters as uint8, for the element-size half of
+    the same guard.
+
+    A letter fits in a byte, so this is the plausible version of the mistake --
+    and the graph is still valid, because the first thing done with the input
+    is a cast. Only the engine's staging buffer, sized from the declaration and
+    written at the encoder's int32, would notice.
+    """
+    model = onnx.load(src)
+    for tensor in model.graph.input:
+        if tensor.name == "move_letters":
+            tensor.type.tensor_type.elem_type = onnx.TensorProto.UINT8
+    onnx.save(model, dst)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out-dir", required=True, type=Path)
@@ -174,6 +217,8 @@ def main() -> int:
     export(model_a, "model_a.onnx", version)
     export(model_b, "model_b.onnx", version)
     export(model_a, "model_stale.onnx", 0)
+    write_narrowed(args.out_dir / "model_a.onnx", args.out_dir / "model_narrow.onnx")
+    write_uint8_letters(args.out_dir / "model_a.onnx", args.out_dir / "model_uint8_letters.onnx")
 
     rng = np.random.default_rng(args.seed)
     board_row = rng.standard_normal(

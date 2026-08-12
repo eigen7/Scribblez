@@ -9,9 +9,14 @@ What it does, on the GPU:
   1. Exports two RANDOMLY-INITIALIZED production-shape models A and B.
   2. Parses A and builds a refittable FP32 engine (optimization level 0; the
      dynamic-M profile the C++ TensorRT runtime will use).
-  3. Refits that engine with B's weights through the ONNX parser-refitter --
-     the exact path the C++ plan cache takes for a new checkpoint of a cached
-     architecture -- asserting no weights go missing.
+  3. Refits that engine with B's weights through the ONNX parser-refitter,
+     asserting no weights go missing. This is the path the POSITION runtime's
+     plan cache takes for a new checkpoint of a cached architecture; MoveSetNet
+     no longer takes it at all, keying its cache on model content and building
+     per checkpoint instead (engine/src/nn/move_set_net.cpp). What sent it
+     there is step 3's own finding, pursued further: TensorRT reports a refit
+     that mapped every weight and one that left a weight behind identically,
+     so "no weights go missing" is not the assurance it reads as.
   4. Runs the refitted engine at several Ms and compares against ONNXRuntime
      on B: if the refit silently mapped anything wrong, the outputs are A/B
      chimeras and the comparison fails loudly.
