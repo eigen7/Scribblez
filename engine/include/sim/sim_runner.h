@@ -119,6 +119,9 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 // and capped at `k`, or a lone PASS when nothing is legal. HastyEquity must be
 // initialized. The opponent rack in `req` should be empty mid-game, their tiles
 // being hidden; it only influences equity near the endgame.
+//
+// Throws std::runtime_error on k < 1. "All moves" is spelled as a large cap,
+// not as 0: a caller wanting no cap passes INT_MAX.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
 // The rollout position for an agent deciding `req`: the one place a turn is

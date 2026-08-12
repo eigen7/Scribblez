@@ -9,6 +9,8 @@
 //  * two agents on one seed agree, turn after turn.
 //  * a bag-empty turn with solving disabled falls back to static equity rather
 //    than simulating without a bag to draw from.
+//  * an unusable rollout count or candidate cap is rejected -- in every build,
+//    since these are the bounds a Release build once let through.
 
 #include "agent/agent.h"
 #include "agent/sim_agent.h"
@@ -204,10 +206,10 @@ TEST_F(SimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 }
 
 TEST_F(SimAgentTest, AnUnusableRolloutCountIsRejected) {
-  // SimRunner only asserts its bound, so before this guard a Release build
-  // accepted --rollouts=0 and ran none: every observation mean became 0/0, and
-  // the NaN comparisons made the agent play its first candidate every turn
-  // without a word of complaint.
+  // SimRunner once only ASSERTED its bound, so a Release build accepted
+  // --rollouts=0 and ran none: every observation mean became 0/0, and the NaN
+  // comparisons made the agent play its first candidate every turn without a
+  // word of complaint. The bound throws now, from the constructor.
   const auto build = [&](int rollouts) {
     SimAgent::Params p = params();
     p.sim.rollouts = rollouts;
@@ -217,4 +219,14 @@ TEST_F(SimAgentTest, AnUnusableRolloutCountIsRejected) {
   EXPECT_THROW(build(SimRunner::kMaxRollouts + 1), std::runtime_error);
   EXPECT_NO_THROW(build(1));
   EXPECT_NO_THROW(build(SimRunner::kMaxRollouts));
+}
+
+TEST_F(SimAgentTest, AnUnusableCandidateCapIsRejected) {
+  // The same rule one level down, where every simming caller gets its cap
+  // checked whatever it validated for itself: k == 0 silently returns no
+  // candidates at all, and k < 0 walks partial_sort's middle iterator before
+  // the range's start.
+  EXPECT_THROW(equity_top_k(request(), 0), std::runtime_error);
+  EXPECT_THROW(equity_top_k(request(), -1), std::runtime_error);
+  EXPECT_EQ(equity_top_k(request(), 1).size(), 1u);
 }

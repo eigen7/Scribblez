@@ -40,6 +40,7 @@
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -62,6 +63,32 @@ struct Options {
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
 };
+
+// The SimRunner params every worker builds from `opt`. Parallelism here is
+// across positions rather than within one, so each worker's runner is
+// single-threaded (see position_worker).
+SimRunner::Params sim_params(const Options& opt) {
+  SimRunner::Params p;
+  p.rollouts = opt.rollouts;
+  p.threads = 1;
+  return p;
+}
+
+// Reject an unusable invocation before a single .slog is read -- and, for the
+// SimRunner params, before any worker thread exists: the runners are built
+// inside the workers, where a constructor throw would escape the thread and
+// terminate the process instead of printing an error.
+//
+// Both caps are rejected at 0 rather than read as "no cap". A run that samples
+// no positions, or ranks no candidates, still writes a .sobs sidecar for every
+// input file, and a sidecar's existence is what makes later runs skip its
+// .slog -- so the empty output would silently stand in for the real evidence
+// until someone noticed the corpus was hollow.
+void validate(const Options& opt) {
+  SimRunner::validate(sim_params(opt));
+  if (opt.top_k < 1) throw std::runtime_error("--top-k must be >= 1");
+  if (opt.positions_per_game < 1) throw std::runtime_error("--positions-per-game must be >= 1");
+}
 
 // One sampled decision point of the file being processed.
 struct PositionWork {
@@ -112,10 +139,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
                      std::vector<PositionResult>* results, util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict, false});
-  SimRunner::Params params;
-  params.rollouts = opt.rollouts;
-  params.threads = 1;
-  const SimRunner runner(dict, params);
+  const SimRunner runner(dict, sim_params(opt));
   const int total_tiles = Bag(0).size();
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
@@ -251,6 +275,7 @@ int main(int argc, char** argv) {
       "process only the first N games of each file (0 = all); for smoke runs");
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
+    validate(opt);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
