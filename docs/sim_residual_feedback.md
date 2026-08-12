@@ -54,13 +54,39 @@ often", so each is paired with a marginal occupancy head
 (`opp_next_placement` / `self_next_placement`) to let the network
 disentangle the two.
 
+### Per-move placement planes
+
+The heads above read whatever position they are given, so the position
+evaluation model already yields a candidate's four planes when run on that
+candidate's **post-move state** — which is the only form the evidence loop
+can use (see [sim evidence](#sim-evidence) for why the root's planes are the
+wrong comparison). The move set evaluation model, which scores all `N`
+candidates against one board encode, therefore gains **per-move** versions of
+the same four planes, distilled from the teacher's masks at each candidate's
+post-move state exactly as its value heads are distilled from the teacher's
+WLD.
+
+Decoding a 15×15 plane from a per-move vector needs a spatial readout the
+scoring path does not otherwise have: the move's attended embedding scores
+against each of the 225 board tokens, one such readout per head. The heads
+are *read* only for the handful of simmed candidates, but they are *trained*
+over the labeled subset, which is where their cost lands
+([open questions](#open-questions)).
+
 ## Sim evidence
 
 The sim of candidate `M` (`S` rollouts from `M`'s post-move state) yields,
-per head, an **empirical map** directly comparable to the network's
-prediction for `M`, plus a **sim value estimate** (empirical WLD) and the
-**rollout counts** — a confidence signal, so the network knows how much to
-trust maps built from few rollouts.
+per head, an **empirical map**, plus a **sim value estimate** (empirical WLD)
+and the **rollout counts** — a confidence signal, so the network knows how
+much to trust maps built from few rollouts.
+
+The map is comparable only to the network's prediction **for `M`'s post-move
+state**, not to the root position's planes. The rollouts observe plies played
+after `M`; the root planes predict the reply to whatever we end up playing.
+Differencing the two would charge `M` with a change it caused — and for a
+blocking candidate, causing that change *is* the merit being measured, so the
+mismatch erases exactly the signal the loop hunts for. This is what the
+[per-move placement planes](#per-move-placement-planes) exist to supply.
 
 Sims across candidates at one position share their random draws (the same
 sampled opponent racks; a fixed shuffled bag order consumed as needed) —
@@ -83,13 +109,31 @@ attentive-neural-process shape):
 
 - **Evidence tokens.** One per simmed candidate: its move encoding (the move
   set evaluation model's move encoder, reused) fused with its sim
-  observations (maps, value, counts) plus the network's own first-pass
-  predictions for it — handing the network the residual contrast directly.
+  observations (maps, value, counts) **and the network's own predicted
+  placement planes for that candidate**, the two plane stacks concatenated
+  channel-wise so the encoder sees observation and prediction for the same
+  square side by side. The residual is formed *inside* the encoder rather
+  than precomputed, which keeps the raw halves available (a confident
+  prediction contradicted by 40 rollouts and an unsure one contradicted by
+  2000 have the same difference and warrant different updates).
 - **Evidence self-attention.** Contrasts between pairs are the point.
 - **Fusion into the board encoding.** The evidence tokens cross-attend with
   the board's spatial map `H`, producing an evidence-conditioned `H′`; the
   per-move scoring machinery is unchanged, attending into `H′` exactly as it
   attends into `H`.
+
+**The predictions have to be inputs; the network cannot recover them.** An
+evidence encoder that reads observations alone (the kill-test's
+[model.py](../py/scribblez/sim_evidence/model.py), whose fusion is a plain
+additive `x + ev_spatial` with the encoder blind to `x`) can express
+`posterior = prior + g(observation)` but not
+`posterior = prior + k·(observation − prior)`: the second needs a term that
+scales the prior down, and nothing downstream of an additive merge can
+separate the two summands again. Such a model learns a correction *marginal*
+over its own belief states — the same shift whether it had already priced the
+danger in or was blind to it, which double-counts confirmations and damps
+genuine surprises toward the average. Feeding the predictions in as
+channels restores the contrast without disturbing the fusion's placement.
 
 An **empty evidence set** must degrade to the plain one-pass model; training
 covers this case explicitly. The fusion stage sits between the shared trunk
@@ -103,6 +147,13 @@ and the cheap re-scoring pass run, with outputs bit-identical to a full
 recompute. This makes **late fusion a load-bearing constraint**: evidence
 must not modulate the trunk's own layers, or the trunk cannot be cached
 across rounds.
+
+The predicted planes carried by an evidence token are the **evidence-free
+first-pass** predictions, so they cache with the move encodings and a token
+never changes once created. Taking them from the conditioned pass instead
+would make round `r`'s stored prediction a function of round `r−1`'s
+evidence — a token that drifts as the set grows, defeating the caching and
+turning the residual into a difference against an already-corrected belief.
 
 A learned recurrent memory (fixed-size state updated as evidence arrives) is
 rejected: it is lossy compression, and the candidate that matters most here
@@ -249,7 +300,9 @@ Per labeled position: run the proposal/sim schedule, record the evidence
 trajectory, and store the **raw sim observations** alongside the `.slog`
 data. Raw observations are model-independent and never go stale; the
 network's own predictions (the other half of each evidence token) are
-recomputed live at train time. Targets are unchanged (WLD, ScoreDiff,
+recomputed live at train time — one extra evidence-free forward per simmed
+candidate, at the post-move state the replay already reconstructs, so no new
+head and no new stored artifact. Targets are unchanged (WLD, ScoreDiff,
 conjunction heads). Rows train at multiple evidence-prefix sizes including
 **zero** — the zero-evidence rows keep the evidence-free pass from degrading
 and are free.
@@ -262,6 +315,12 @@ fusion stage; the label-a-subset/mask-the-loss strategy applies unchanged.
 The proves-best head is the one output trained directly on sim outcomes
 (see [candidate selection](#candidate-selection)); the value heads train by
 distillation alone.
+
+The [per-move placement planes](#per-move-placement-planes) distill the same
+way, from the teacher's four masks at each labeled candidate's post-move
+state, and on the same labeled subset. Once they exist the proposer supplies
+its own evidence tokens' predictions, and the position evaluation model's
+extra per-candidate forwards are needed only for its own training rows.
 
 ### Evidence-trajectory generation
 
@@ -388,8 +447,8 @@ the condition, so mixing modes within a tag fails loudly.
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/selfplay/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/selfplay/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
-| 4 | Evidence encoder + fusion stage in the shared trunk; multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
-| 5 | The move set evaluation model inherits the heads and the fusion stage; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | — |
+| 4 | Evidence encoder + fusion stage in the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps (extra evidence-free forwards, no new head); multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
+| 5 | The move set evaluation model inherits the heads and the fusion stage, and gains per-move placement planes (spatial readout against the board tokens) so it predicts its own evidence tokens' half; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | — |
 | 6 | Multi-round agent (the decision procedure above); the proves-best acquisition head (footprint novelty penalty covers the batch-mode fallback); budget tuning; match-play eval vs. the one-round agent. | 5 | — |
 
 ## Open questions
@@ -398,9 +457,24 @@ the condition, so mixing modes within a tag fails loudly.
   early-stopping threshold for the sequential schedule.
 - **Proves-best head details** — the bulleted list under
   [candidate selection](#candidate-selection).
-- **Evidence-map encoding** — pooled vs spatial; cheap to ablate inside the
-  kill-test.
-- **Whether scalar evidence alone captures most of the win** — if so, the
-  spatial machinery can be deferred (cheap-before-rich).
+- **Whether the spatial machinery pays at all.** Settled against the cheap
+  option so far: the kill-test's `full` arm matched its `scalar` arm to
+  ±0.0003, so at a root-WLD readout the planes are inert
+  ([sim_obs_experiment_results.md](sim_obs_experiment_results.md)) — as
+  expected, since a position-level scalar has no use for per-move spatial
+  discrimination. The plan above nonetheless commits to spatial, per-move,
+  prediction-paired evidence, because the effect it is built for is
+  *promotion* — a move no earlier round ranked highly rising once a hot
+  square is exposed — which the root readout structurally cannot exhibit.
+  That commitment is a bet, and **E3 is the experiment that settles it**; a
+  null there sends the loop back to the scalar rung, not just back a step.
+- **The cost of per-move placement targets.** A `.mset` record is 5 floats
+  today; four 15×15 planes add 900. The format is head-extensible by design
+  (`record_floats` in
+  [move_set_eval_target_log.h](../engine/include/training/move_set_eval_target_log.h)),
+  so this is a size question, not a format one — but a 180× record blow-up
+  wants a decision on quantization (probabilities fit a byte), sparsity
+  (only the hot squares carry signal — reply footprints are ~2–7 of 225), or
+  labeling the planes on a narrower subset than the value heads use.
 - **Sim reuse across rounds** — candidates retained across rounds keep their
   rollouts; whether to top up counts as the evidence set grows.

@@ -99,6 +99,12 @@ shape everything below:
   are roughly equal, highly correlated estimators of root WLD; fusing them buys
   thousandths. The remaining prizes are *decision quality* (which move gets
   played) and *sim quality* (what the rollouts know), not root cross-entropy.
+- **The spatial half of the evidence is still unproven.** The `full` arm
+  matched the `scalar` arm to ±0.0003: at a root-WLD readout the per-move
+  planes are inert. That readout structurally cannot show what they are for —
+  promoting a move no earlier round ranked highly — so A5 keeps them (and now
+  pairs them with the model's own predictions), and E3 is where they are
+  priced.
 - **Sim quality had two independent limiters, and the variant removes one.**
   Opponent-rack uncertainty is settled by rule now that leaves are face up;
   what remains is rollout variance, which value-truncated rollouts attack (D1).
@@ -163,6 +169,14 @@ post-move state.
 - **Exchange head**: the exchange and pass moves leave the board unchanged, so a
   dedicated head reads `g` and outputs the best keep-mask and its value,
   competing directly with the best word play.
+- **Per-move placement planes** (arrives with A5): the four placement maps the
+  position evaluation model predicts — opponent/self next-move occupancy and
+  each conjoined with that player winning — but predicted *per candidate*, for
+  that candidate's post-move state. The scoring path holds one vector per move,
+  so decoding a 15×15 map means scoring that vector against the 225 board
+  tokens, one readout per head; targets come from the teacher's own masks at
+  the same post-move states. These are the quantity the sim evidence is
+  differenced against ([sim_residual_feedback.md](sim_residual_feedback.md)).
 
 **No upfront candidate filtering.** `N` ranges from 1 to 10,000+ (blanks), and
 collapsing near-duplicate blank designations before scoring is both unnecessary
@@ -285,6 +299,19 @@ Then the spine proper:
   migrates from the kill-test's position-evaluation harness onto the move set
   evaluation model, enabling the two-round re-rank. Gated on E3.
 
+  Each evidence token pairs a simmed candidate's observed maps with **the
+  model's own predicted planes for that same candidate**, stacked channel-wise
+  so the encoder forms the residual itself. Both halves are required: the
+  kill-test's fusion is additive with the encoder blind to the trunk, which can
+  express "shift the features when this observation appears" but not "shift
+  them in proportion to how far the observation missed" — the update that makes
+  a surprise count for more than a confirmation. The predictions must be the
+  *evidence-free* first pass (so a token is stable across rounds and caches
+  with the move encodings) and must be read at the candidate's *post-move*
+  state (the rollouts observe plies after the candidate; the root's planes
+  describe a different conditional, and differencing against them would cancel
+  the very effect a blocking move is being credited for).
+
   Implementation note for the trajectory generator: the value-labeled subset
   must always include the proposer's simmed candidates, the way the mset
   sampler always includes the played move. The trajectory proposer follows
@@ -389,7 +416,15 @@ localized payoff.
   (b) a two-round agent that sims top-K, re-ranks the *unsimmed* candidates with
   the evidence-conditioned model, sims the promoted moves, and picks. Runnable
   with the kill-test's position-evaluation-based fusion model before the move
-  set evaluation model exists; A5 productionizes it only if E3 says yes.
+  set evaluation model exists — that model has no per-move placement heads, but
+  it needs none here: running it on each simmed candidate's post-move state
+  yields those planes directly, at K extra forwards per decision, negligible
+  against K·S rollouts. Carry them: E3 is the gate that can veto A5, and a null
+  from an encoder that cannot represent the residual would not distinguish
+  "re-ranking does not pay" from "this encoder cannot express the update".
+  Needs an ONNX export and an engine-side evidence path, neither of which
+  exists.
+  A5 productionizes it only if E3 says yes.
 
 ---
 
