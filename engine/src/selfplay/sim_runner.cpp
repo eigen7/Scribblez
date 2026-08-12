@@ -180,6 +180,12 @@ SimObjective parse_sim_objective(const std::string& name, const std::string& fla
 }
 
 std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
+  // Rejected rather than asserted, for the same reason SimRunner::validate
+  // throws: a Release build would otherwise take a bad cap silently. k == 0
+  // hands back an empty candidate set, which every caller reads as "nothing to
+  // choose from" rather than as a misconfiguration, and k < 0 walks
+  // partial_sort's middle iterator before the range's start.
+  if (k < 1) throw std::runtime_error("equity_top_k: k must be >= 1");
   std::vector<Move> candidates = generate_legal_plays(req);
   const std::vector<Move> exchanges = generate_legal_exchanges(req);
   candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
