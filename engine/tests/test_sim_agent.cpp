@@ -18,7 +18,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 #include "synthetic_equity.h"
 
 #include <gtest/gtest.h>

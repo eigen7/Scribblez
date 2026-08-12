@@ -5,9 +5,9 @@
 #include "game/game.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/seed_producer.h"
 #include "util/exception.h"
 #include "util/misc.h"
+#include "util/seed_producer.h"
 #include "util/string.h"
 
 #include <boost/json.hpp>

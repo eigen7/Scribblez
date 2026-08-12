@@ -78,9 +78,9 @@ prerequisite rather than a nicety — every remaining track's final readout is
 match play, because root cross-entropy demonstrably cannot see re-ranking
 value.
 
-**Sim machinery.** [sim_runner.h](../engine/include/selfplay/sim_runner.h) runs
+**Sim machinery.** [sim_runner.h](../engine/include/sim/sim_runner.h) runs
 common-random-number rollouts over a position's candidates and
-[sim_observation_log.h](../engine/include/selfplay/sim_observation_log.h) stores
+[sim_observation_log.h](../engine/include/data/sim_observation_log.h) stores
 them in `.sobs` sidecars alongside the `.slog` data.
 
 ## What the kill-test established

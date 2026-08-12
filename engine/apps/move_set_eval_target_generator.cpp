@@ -35,7 +35,7 @@
 #include "lexicon/lexicon.h"
 #include "nn/nn_evaluation_service.h"
 #include "nn/trt_util.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "util/math.h"

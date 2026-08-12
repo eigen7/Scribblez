@@ -30,7 +30,7 @@
 #include "game/tile.h"
 #include "game_fixture.h"
 #include "lexicon/dictionary.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 #include "sim_agent_fixture.h"
 #include "stub_move_set_eval_service.h"
 #include "synthetic_equity.h"

@@ -45,19 +45,19 @@ add_library(scribblez_core STATIC
   src/agent/macondo_bot.cpp
   src/agent/endgame_turn_policy.cpp
   src/agent/endgame_hasty_bot.cpp
-  src/selfplay/monte_carlo_sim.cpp
-  src/selfplay/sim_runner.cpp
+  src/sim/monte_carlo_sim.cpp
+  src/sim/sim_runner.cpp
   src/belief/leave_prior.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
-  src/selfplay/sim_observation_log.cpp
+  src/data/sim_observation_log.cpp
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
   src/agent/sim_agent.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
-  src/selfplay/seed_producer.cpp
+  src/util/seed_producer.cpp
   src/serve/web_server.cpp
   src/util/string.cpp
   src/util/io.cpp

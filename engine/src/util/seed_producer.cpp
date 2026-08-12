@@ -1,4 +1,4 @@
-#include "selfplay/seed_producer.h"
+#include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 

@@ -115,7 +115,7 @@ dropped by the writer.
 
 ## Determinism and seeding
 
-- [SeedProducer](../engine/src/selfplay/seed_producer.cpp) is the global RNG
+- [SeedProducer](../engine/src/util/seed_producer.cpp) is the global RNG
   source; `GameRunner` pulls one base seed and gives game *g* the seed
   `base + g` (`base + g/2` under `--paired`, where games 2k and 2k+1
   deliberately share a seed with the seats swapped), which seeds that game's

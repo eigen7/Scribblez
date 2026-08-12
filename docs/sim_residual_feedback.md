@@ -91,7 +91,7 @@ mismatch erases exactly the signal the loop hunts for. This is what the
 Sims across candidates at one position share their random draws (the same
 sampled opponent racks; a fixed shuffled bag order consumed as needed) —
 **common random numbers (CRN)**, implemented in
-[sim_runner.h](../engine/include/selfplay/sim_runner.h). Rack and draw luck
+[sim_runner.h](../engine/include/sim/sim_runner.h). Rack and draw luck
 then cancel in *comparisons* between candidates, which is what the final
 pick and the stopping rule ride on.
 
@@ -445,7 +445,7 @@ the condition, so mixing modes within a tag fails loudly.
 | Step | Build | Depends on | Status |
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
-| 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/selfplay/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/selfplay/sim_observation_log.h) (the versioned `.sobs` sidecar). |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/sim/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
 | 4 | Evidence encoder + fusion stage in the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps (extra evidence-free forwards, no new head); multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
 | 5 | The move set evaluation model inherits the heads and the fusion stage, and gains per-move placement planes (spatial readout against the board tokens) so it predicts its own evidence tokens' half; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | — |

@@ -1,4 +1,4 @@
-#include "selfplay/sim_observation_log.h"
+#include "data/sim_observation_log.h"
 
 #include <cassert>
 #include <cstring>

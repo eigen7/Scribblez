@@ -4,8 +4,8 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/seed_producer.h"
 #include "util/math.h"
+#include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 

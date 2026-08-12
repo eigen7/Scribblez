@@ -11,7 +11,7 @@
 
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/monte_carlo_sim.h"
+#include "sim/monte_carlo_sim.h"
 #include "util/io.h"
 #include "util/misc.h"
 #include "util/string.h"

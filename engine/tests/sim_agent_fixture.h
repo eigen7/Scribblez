@@ -14,7 +14,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "nn/eval_service.h"
-#include "selfplay/sim_runner.h"
+#include "sim/sim_runner.h"
 
 #include <algorithm>
 #include <limits>

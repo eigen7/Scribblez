@@ -7,9 +7,9 @@
 #include "agent/player_factory.h"
 #include "arena/game_runner.h"
 #include "lexicon/lexicon.h"
-#include "selfplay/seed_producer.h"
 #include "synthetic_equity.h"
 #include "util/exception.h"
+#include "util/seed_producer.h"
 
 #include <boost/json.hpp>
 #include <gtest/gtest.h>
