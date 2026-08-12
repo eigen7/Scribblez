@@ -4,6 +4,7 @@
 #include "agent/endgame_hasty_bot.h"
 #include "agent/human_web_agent.h"
 #include "agent/macondo_bot.h"
+#include "agent/mset_sim_agent.h"
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
 #include "agent/sim_agent.h"
@@ -38,10 +39,11 @@ namespace po = boost::program_options;
 // the documented ones share one source of truth.
 po::options_description universal_player_options(std::string& type_str, std::string& name) {
   po::options_description desc;
-  desc.add_options()                                                                           //
-    ("type", po::value<std::string>(&type_str)->required(),                                    //
-     "player type: greedy | human | hastybot | hastybot-endgame | neural | neural-sim | sim")  //
-    ("name", po::value<std::string>(&name),                                                    //
+  desc.add_options()                                         //
+    ("type", po::value<std::string>(&type_str)->required(),  //
+     "player type: greedy | human | hastybot | hastybot-endgame | mset-sim | neural | "
+     "neural-sim | sim")                     //
+    ("name", po::value<std::string>(&name),  //
      "display name shown in the UI");
   return desc;
 }
@@ -74,11 +76,11 @@ PlayerSpec parse_player_spec(const std::string& spec) {
 
   out.type = boost::to_lower_copy(type_str);
   if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
-      out.type != "hastybot-endgame" && out.type != "neural" && out.type != "neural-sim" &&
-      out.type != "sim") {
+      out.type != "hastybot-endgame" && out.type != "mset-sim" && out.type != "neural" &&
+      out.type != "neural-sim" && out.type != "sim") {
     throw std::runtime_error("bad --player spec \"" + spec + "\": unknown type '" + type_str +
-                             "' (expected greedy, human, hastybot, hastybot-endgame, neural, "
-                             "neural-sim, or sim)");
+                             "' (expected greedy, human, hastybot, hastybot-endgame, mset-sim, "
+                             "neural, neural-sim, or sim)");
   }
   return out;
 }
@@ -95,6 +97,9 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
   }
   if (spec.type == "hastybot-endgame") {
     return EndgameHastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
+  }
+  if (spec.type == "mset-sim") {
+    return MsetSimAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "neural") {
     return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name);
@@ -119,6 +124,7 @@ std::string PlayerSpec::display_name() const {
   if (type == "hastybot") return "HastyBot";
   if (type == "hastybot-endgame") return "EndgameHastyBot";
   if (type == "greedy") return "Greedy";
+  if (type == "mset-sim") return "MsetSim";
   if (type == "neural") return "Neural";
   if (type == "neural-sim") return "NeuralSim";
   if (type == "sim") return "SimBot";
@@ -166,6 +172,7 @@ std::string PlayerFactory::all_player_types_help() {
   o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
   o << "--player \"--type=hastybot-endgame [options]\"\n"
     << EndgameHastyBotAgent::options_help() << "\n";
+  o << "--player \"--type=mset-sim [options]\"\n" << MsetSimAgent::options_help() << "\n";
   o << "--player \"--type=neural [options]\"\n" << NeuralAgent::options_help() << "\n";
   o << "--player \"--type=neural-sim [options]\"\n" << NeuralSimAgent::options_help() << "\n";
   o << "--player \"--type=sim [options]\"\n" << SimAgent::options_help() << "\n";

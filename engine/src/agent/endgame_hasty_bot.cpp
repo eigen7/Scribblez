@@ -24,9 +24,9 @@ void EndgameHastyBotAgent::observe_move(const Move& move) {
   HastyBotAgent::observe_move(move);
 }
 
-void EndgameHastyBotAgent::begin_game() {
+void EndgameHastyBotAgent::begin_game(const BeginGameRequest& req) {
   endgame_.begin_game();
-  HastyBotAgent::begin_game();
+  HastyBotAgent::begin_game(req);
 }
 
 std::unique_ptr<EndgameHastyBotAgent> EndgameHastyBotAgent::from_spec(

@@ -32,8 +32,8 @@ void NeuralAgent::init() {
   if (temperature_ < 0.0) throw std::runtime_error("neural agent: --temperature must be >= 0");
 }
 
-void NeuralAgent::begin_game() {
-  evaluator_.begin_game();
+void NeuralAgent::begin_game(const BeginGameRequest& req) {
+  evaluator_.begin_game(req);
   endgame_.begin_game();
 }
 

@@ -199,6 +199,21 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
   return top;
 }
 
+SimPosition sim_position_from(const MoveRequest& req) {
+  SimPosition pos;
+  pos.board = req.board;
+  // The rollouts run from the mover's point of view, so seating them as player
+  // 0 costs nothing and spares the agent having to know its own seat.
+  pos.mover = 0;
+  pos.scores = {req.my_score, req.opp_score};
+  pos.rack = req.my_rack;
+  // Whatever we legitimately know of the opponent's rack (see MoveRequest):
+  // under face-up leaves their retained tiles, which then seed every rollout
+  // instead of being drawn from the pool.
+  pos.opp_leave = req.opp_rack;
+  return pos;
+}
+
 Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   Bag pool(seed);
   for (int r = 0; r < BOARD_SIZE; ++r)
@@ -210,8 +225,21 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   return pool;
 }
 
+// Rejected here rather than asserted, so a Release build cannot run a SimRunner
+// that quietly does nothing: at 0 rollouts every observation's mean is 0/0, and
+// those NaNs compare false against everything, so best_observation_index hands
+// back the first candidate every time and the caller stops simulating without
+// ever being told.
+void SimRunner::validate(const Params& params) {
+  if (params.rollouts < 1 || params.rollouts > kMaxRollouts) {
+    throw std::runtime_error("sim runner: rollouts must be in [1, " + std::to_string(kMaxRollouts) +
+                             "]");
+  }
+  if (params.threads < 1) throw std::runtime_error("sim runner: threads must be >= 1");
+}
+
 SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict), params_(params) {
-  assert(params_.rollouts >= 1 && params_.rollouts <= 65535);  // u16 count planes
+  validate(params_);
 }
 
 std::vector<SimObservation> SimRunner::run(const SimPosition& pos,

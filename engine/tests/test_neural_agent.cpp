@@ -31,6 +31,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "game/tile.h"
+#include "game_fixture.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/eval_service.h"
@@ -53,6 +54,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::build_slog;
+using scribblez::testing::make_play_full;
 
 static Rack rack_from(const std::string& s) {
   Rack r;
@@ -63,23 +66,6 @@ static Rack rack_from(const std::string& s) {
       r.add(Tile::from_char(c));
   }
   return r;
-}
-
-// Build a PLAY Move with an explicit per-tile layout. `rel_mask` is relative to
-// the first lane cell (bit 0 == the start cell); `gs` are the placed glyphs in
-// word order (count == popcount(rel_mask)).
-static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
-                           std::initializer_list<Glyph> gs) {
-  std::array<Glyph, RACK_SIZE> played{};
-  int n = 0;
-  for (Glyph g : gs) {
-    if (n >= RACK_SIZE) break;
-    played[n++] = g;
-  }
-  const int lane0 = horizontal ? col : row;
-  const int start = horizontal ? row : col;
-  uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
-  return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
 // A modest word list with enough overlapping racks to yield many opening plays
@@ -205,7 +191,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
-    agent.begin_game();
+    agent.begin_game({});
     sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
@@ -220,7 +206,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
-    agent.begin_game();
+    agent.begin_game({});
     sp->scripted = {sd(9.0f), sd(1.0f)};
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[0]]));
   }
@@ -235,7 +221,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .top_k = top_k,
                        .objective = EvalObjective::kWinProb},
                       std::move(stub));
-    agent.begin_game();
+    agent.begin_game({});
     sp->scripted = {eval_with(9.0f, 0.1f), eval_with(1.0f, 0.9f)};
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
@@ -260,7 +246,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
                      .top_k = top_k,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
-  agent.begin_game();
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
@@ -293,7 +279,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
                      .top_k = 0,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub));
-  agent.begin_game();
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
@@ -320,7 +306,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
                      .top_k = 0,
                      .objective = EvalObjective::kScoreDiff},
                     std::move(stub), /*max_batch=*/2);
-  agent.begin_game();
+  agent.begin_game({});
 
   Move got = agent.make_move(req).move;
   ASSERT_TRUE(same_move(got, pos.plays[target]));  // the globally best-rated candidate
@@ -353,7 +339,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
-  agent.begin_game();
+  agent.begin_game({});
   agent.observe_move(move_a);
   agent.observe_move(move_b);
 
@@ -381,39 +367,8 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
 }
 
-// Append the raw bytes of a trivially-copyable value to a byte buffer.
-template <class T>
-static void append_pod(std::vector<char>& buf, const T& v) {
-  const char* p = reinterpret_cast<const char*>(&v);
-  buf.insert(buf.end(), p, p + sizeof(T));
-}
-
-// Serialize a single game into an in-memory .slog buffer the real BlockDecoder
-// can read: FileHeader, one GameMetadata (with a caller-chosen sampled_turn),
-// then the game's InitialRacks and TurnBlob[]. Scores are left at zero because
-// this fixture only compares the input row, not the score-derived targets.
-static std::vector<char> build_slog(const binlog::InitialRacks& ir,
-                                    const std::vector<binlog::TurnBlob>& turns,
-                                    uint32_t sampled_turn) {
-  binlog::FileHeader hdr{};
-  hdr.magic = binlog::kMagic;
-  hdr.version = binlog::kVersion;
-  hdr.num_games = 1;
-
-  binlog::GameMetadata gm{};
-  gm.start_offset = sizeof(binlog::FileHeader) + sizeof(binlog::GameMetadata);
-  gm.num_turns = static_cast<uint32_t>(turns.size());
-  gm.sampled_turn = sampled_turn;
-
-  std::vector<char> buf;
-  append_pod(buf, hdr);
-  append_pod(buf, gm);
-  append_pod(buf, ir);
-  for (const binlog::TurnBlob& t : turns) append_pod(buf, t);
-  return buf;
-}
-
-TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
+// The training-decoder cross-check, run at a chosen head-start handicap.
+static void check_candidate_row_matches_decoder(std::array<int, 2> initial_scores) {
   // A three-turn game. The sampled turn (2, post-move) is player 0's, so the
   // decoded POV is player 0 and both players already have a prior move, which
   // exercises the last-self / last-opp placement-plane features.
@@ -441,7 +396,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
   binlog::TurnBlob t2{};
   t2.move = move2;
 
-  std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn);
+  std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
   // Training path: decode the post-move sampled row (no symmetry flip). The
   // same dictionary drives both paths' cross-check planes.
@@ -460,7 +415,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
                     std::make_unique<StubEvalService>());
-  agent.begin_game();
+  agent.begin_game({initial_scores});
   agent.observe_move(move0);
   agent.observe_move(move1);
 
@@ -473,6 +428,20 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
     any_nonzero = any_nonzero || agent_row[i] != 0.0f;
   }
   ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
+}
+
+TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
+  check_candidate_row_matches_decoder({0, 0});
+}
+
+TEST(NeuralAgent, AHandicapReachesTheModelRow) {
+  // The mirrored encoder must start from the head start the .slog records, as
+  // the training replay's does. An agent that began every game at 0-0 would
+  // feed the model a score differential wrong by the handicap for the whole
+  // game -- invisibly, since the row's shape is unchanged. This covers the
+  // CandidateEvaluator both NeuralAgent and NeuralSimAgent mirror through.
+  check_candidate_row_matches_decoder({50, 0});
+  check_candidate_row_matches_decoder({0, 37});
 }
 
 TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
@@ -495,7 +464,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                         .objective = EvalObjective::kScoreDiff,
                         .temperature = 0.0},
                        std::move(stub));
-    greedy.begin_game();
+    greedy.begin_game({});
     gp->scripted = {sd(2.0f), sd(0.0f)};
     for (int i = 0; i < 50; ++i)
       ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
@@ -514,7 +483,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
                          .temperature = 5.0,
                          .seed = 12345},
                         std::move(stub));
-    sampler.begin_game();
+    sampler.begin_game({});
     sp->scripted = {sd(2.0f), sd(0.0f)};
     int high = 0, low = 0;
     for (int i = 0; i < 400; ++i) {
@@ -590,7 +559,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                         std::move(solving_stub));
     // begin_game() clears the shared transposition table, matching the
     // freshly-cleared reference solve above.
-    solving.begin_game();
+    solving.begin_game({});
     const MoveDecision decision = solving.make_move(req);
     EXPECT_EQ(decision.move, r.best);
     EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size());
@@ -606,7 +575,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                           .objective = EvalObjective::kScoreDiff,
                           .endgame = solver_params(/*budget=*/0)},
                          std::move(disabled_stub));
-    disabled.begin_game();
+    disabled.begin_game({});
     const MoveDecision fallback = disabled.make_move(req);
     EXPECT_EQ(fallback.move, greedy);
     EXPECT_TRUE(fallback.projected_remaining_moves.empty());

@@ -83,8 +83,9 @@ void Game::play() {
 
   // Let stateful agents reset to a clean position (seats alternate across a
   // series, so the same Agent instances are reused game to game).
-  players_[0]->begin_game();
-  players_[1]->begin_game();
+  const BeginGameRequest start{scores_};
+  players_[0]->begin_game(start);
+  players_[1]->begin_game(start);
 
   play_loop(0);
 }
@@ -110,8 +111,9 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   log_.initial_racks[0] = racks_[0];
   log_.initial_racks[1] = racks_[1];
 
-  players_[0]->begin_game();
-  players_[1]->begin_game();
+  const BeginGameRequest start{scores_};
+  players_[0]->begin_game(start);
+  players_[1]->begin_game(start);
 
   play_loop(to_move);
 }

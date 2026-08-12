@@ -51,6 +51,7 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.sim_top_k < 1) throw std::runtime_error("neural-sim agent: --sim-top-k must be >= 1");
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw std::runtime_error("neural-sim agent: --drop-best-prob must be in [0, 1]");
+  SimRunner::validate(params.sim);
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {
@@ -65,8 +66,8 @@ bool NeuralSimAgent::drop_best(int ply) const {
   return static_cast<double>(draw >> 11) * 0x1.0p-53 < drop_best_prob_;
 }
 
-void NeuralSimAgent::begin_game() {
-  evaluator_.begin_game();
+void NeuralSimAgent::begin_game(const BeginGameRequest& req) {
+  evaluator_.begin_game(req);
   endgame_.begin_game();
   ply_ = 0;
 }
@@ -112,17 +113,7 @@ MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
     sim_moves_.push_back(candidates[static_cast<size_t>(rank_[first + j])]);
   if (k == 1) return sim_moves_.front();
 
-  SimPosition pos;
-  pos.board = req.board;
-  // The rollouts run from the mover's point of view, so seating them as player
-  // 0 costs nothing and spares the agent having to know its own seat.
-  pos.mover = 0;
-  pos.scores = {req.my_score, req.opp_score};
-  pos.rack = req.my_rack;
-  // Whatever we legitimately know of the opponent's rack (see MoveRequest):
-  // under face-up leaves their retained tiles, which then seed every rollout
-  // instead of being drawn from the pool.
-  pos.opp_leave = req.opp_rack;
+  const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
   // Ties in the observations go to the earlier candidate -- the better model

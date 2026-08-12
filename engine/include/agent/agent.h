@@ -4,6 +4,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 
+#include <array>
 #include <memory>
 #include <random>
 #include <string>
@@ -38,6 +39,18 @@ struct MoveRequest {
   int my_score;
   int opp_score;
   int bag_size;
+};
+
+// What an agent is told at the start of a game, before any make_move(). Its own
+// struct, as MoveRequest is for a turn, so a later addition to the game-start
+// information reaches every agent without touching a single signature.
+struct BeginGameRequest {
+  // Each seat's score before the first move: {0, 0} ordinarily, and the
+  // head-start handicap when one was set (Game::set_initial_scores). An agent
+  // that mirrors the game through a GameStateEncoder must seed it with these,
+  // as the training replay seeds its own from the handicap the .slog records;
+  // one that reads scores straight off the MoveRequest need not.
+  std::array<int, 2> initial_scores{0, 0};
 };
 
 std::vector<Move> generate_legal_plays(const MoveRequest& req);
@@ -84,7 +97,7 @@ class Agent {
   // Called once at the start of each game, before any make_move() on it. One
   // Agent instance is reused across a series of games, so this is where a
   // stateful agent resets.
-  virtual void begin_game() {}
+  virtual void begin_game(const BeginGameRequest& req) {}
 
   // Called after every applied move of the game, the agent's own and the
   // opponent's, in turn order. Lets a stateful agent mirror the whole game

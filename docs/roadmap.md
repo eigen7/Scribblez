@@ -280,8 +280,15 @@ Then the spine proper:
     away entirely, leaving one board pair plus a single dynamic
     candidate axis. The engine runtime has landed with it
     ([move_set_net.h](../engine/include/nn/move_set_net.h) and the
-    move-set service API beside the flat fixed-width position one), so
-    what is left is the agent that drives it. That runtime keys its plan
+    move-set service API beside the flat fixed-width position one), and so
+    has the agent that drives it
+    ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h),
+    `--player "--type=mset-sim"`) — scoring a turn's whole candidate set in
+    one pass and simulating the model's top K, with no static-equity
+    shortlist by default, since the cost no longer scales with the
+    candidate count. What is left is the verdict: the sensitivity sweep
+    that sets the recall bar, and the equal-budget match against the
+    exact-evaluation agent. That runtime keys its plan
     cache on model content and builds per checkpoint rather than refitting
     a shared one, because TensorRT reports a refit that mapped every weight
     and one that left a weight behind identically (trt_refit_probe.py, and
@@ -437,7 +444,7 @@ lead with the spine, interleave the others as experiments block on data).
 |---|---|---|---|
 | 1 | Face-up leaves in the game loop; the sim agent baseline; A1 match eval | — | E1 fleet lands; E2 match statistics |
 | 2 | A2 in-variant regeneration; A3 v1 curves | D1 truncated rollouts; C1 novelty dedup | **E3 re-ranking experiment** |
-| 3 | A4 sensitivity sweep → recall bar; move-set-evaluation agent | C2 proves-best head | — |
+| 3 | A4 sensitivity sweep → recall bar; equal-budget match vs. exact eval | C2 proves-best head | — |
 | 4 | A5 evidence-conditioned move set evaluation *if E3 says re-ranking pays* | D2 self-model plies; C3 proves-best scheduling | — |
 | 5 | — | D3 endgame-solver port | volunteer-compute hardening |
 

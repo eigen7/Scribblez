@@ -84,10 +84,18 @@ SimObjective parse_sim_objective(const std::string& name, const std::string& fla
 
 class SimRunner {
  public:
+  // Rollouts per candidate are counted in u16 planes, so this bounds them.
+  static constexpr int kMaxRollouts = 65535;
+
   struct Params {
-    int rollouts = 300;  // rollouts per candidate; capped at 65535 (u16 counts)
+    int rollouts = 300;  // per candidate; at most kMaxRollouts
     int threads = 1;
   };
+
+  // Throws std::runtime_error on params no SimRunner can honour. The
+  // constructor calls it; an agent may call it earlier, to reject a bad flag
+  // before spending seconds loading a model.
+  static void validate(const Params& params);
 
   SimRunner(const Dictionary& dict, const Params& params);
 
@@ -112,5 +120,11 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 // initialized. The opponent rack in `req` should be empty mid-game, their tiles
 // being hidden; it only influences equity near the endgame.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
+
+// The rollout position for an agent deciding `req`: the one place a turn is
+// translated into a SimPosition, so the three simulating agents cannot drift on
+// the seating convention or on what of the opponent's rack a rollout may seed
+// from -- and so a new SimPosition field is filled for all of them at once.
+SimPosition sim_position_from(const MoveRequest& req);
 
 }  // namespace scribblez
