@@ -59,5 +59,16 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
   }
 }
 
+void MoveFeatureArrays::encode(const Move* moves, int n, const int32_t* pre_move_score_diffs) {
+  count = n;
+  letters.resize(static_cast<size_t>(n) * kMoveMaxPlaced);
+  blanks.resize(static_cast<size_t>(n) * kMoveMaxPlaced);
+  squares.resize(static_cast<size_t>(n) * kMoveMaxPlaced);
+  tile_mask.resize(static_cast<size_t>(n) * kMoveMaxPlaced);
+  scalars.resize(static_cast<size_t>(n) * kMoveScalars);
+  encode_moves(moves, n, pre_move_score_diffs, letters.data(), blanks.data(), squares.data(),
+               tile_mask.data(), scalars.data());
+}
+
 }  // namespace move_set
 }  // namespace scribblez
