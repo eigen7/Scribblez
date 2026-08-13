@@ -190,13 +190,36 @@ model.
 
 ### 3. The proves-best head
 
-A per-move head on the evidence-conditioned model predicting the probability
-that a candidate's sim strictly exceeds the best simmed so far (C2). This is the
-acquisition function that drives the loop, and at `B = 1` it is load-bearing: a
-greedy value proposer tends to propose near-duplicates of the current best.
+A per-move head on the evidence-conditioned model predicting the **expected
+improvement** a candidate's sim would contribute over the best simmed so far —
+`E[max(0, p(w) − best)]`, not the probability that it improves at all (C2). This
+is the acquisition function that drives the loop, and it is what keeps the loop
+off near-duplicates of the current best.
 
-Labels come free from CRN sims: any evidence prefix plus a held-out simmed
-candidate is a labeled row.
+That distinction is load-bearing at `B = 1`. Under common random numbers two
+cosmetically-different candidates — a blank designated differently, placed tiles
+reordered — place the same tiles, leave the same rack, and refill from the same
+pool, so rollout `i` returns the *same* outcome for both. Their paired
+difference is near-zero with almost no spread, so their expected gain is ~0 and
+they are suppressed automatically. The probability form is only correct on an
+*exact* tie (which never strictly exceeds, so reads 0); once the difference is
+small but non-zero it reads ~0.5 when noise-dominated, or ~1 when the duplicate
+is reliably a hair better, and spends the sim either way.
+
+Once D1 truncates rollouts, the cancellation stops being exact: two near-identical
+leaves get slightly different values from the leaf model, and because that
+differential is deterministic given the boards it is a *bias* — more rollouts
+converge to it rather than average it away. It is bounded by the leaf model's
+local smoothness, measurable against D1's anchor fraction of terminal rollouts
+(which do cancel exactly), and does not change the ordering unless it exceeds a
+real candidate's improvement. See
+[sim_residual_feedback.md](sim_residual_feedback.md).
+
+**Labels come free from CRN sims**: any evidence prefix plus a held-out simmed
+candidate is a labeled row. The improvement must be measured against the
+best-so-far **over the same seed set** — that pairing is what makes a
+duplicate's target ~0 rather than a small random number, and it is satisfied
+automatically by labels drawn from one position's `.sobs`.
 
 ### 4. Evidence-trajectory generation
 
@@ -329,9 +352,14 @@ belief system of design.md §3.
 
 - **Batched multi-round scheduling.** The sequential loop subsumes it; batch
   mode returns only if sequential proposal underperforms it.
-- **Interim diversity heuristics** (the old C1 footprint/lane-overlap penalty).
-  The proves-best head is the acquisition mechanism; a hand-built novelty
-  penalty was a stand-in for not having one.
+- **Interim diversity heuristics** (the old C1 footprint/lane-overlap penalty),
+  and footprint dedup at sim-selection time. Redundancy is handled twice over
+  without them: the expected-improvement target rates a CRN-duplicate at ~0 by
+  construction, and evidence conditioning propagates a disappointing sim to
+  every candidate sharing its blind spot, since corrections are written onto
+  board squares and near-duplicates attend to the same ones. A hand-built
+  novelty penalty is both redundant and lossier — it can only express
+  "identical footprint or not", where the model grades similarity by degree.
 - **Backtracking self-play** — rewind to a decision point and play out a
   different candidate. Needs a `.slog` branch-point extension and a branching
   `GameRunner` mode; parked until training signal is demonstrably
