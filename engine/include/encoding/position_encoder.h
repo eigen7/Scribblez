@@ -11,7 +11,7 @@
 
 #include "encoding/encode_context.h"
 #include "encoding/game_state_encoder.h"
-#include "game/game.h"
+#include "game/game_log.h"
 #include "game/rack.h"
 
 #include <array>

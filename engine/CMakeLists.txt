@@ -19,6 +19,7 @@ add_library(scribblez_core STATIC
   src/training/max_move_per_lane_task.cpp
   src/encoding/row_encoder.cpp
   src/game/game.cpp
+  src/game/game_log.cpp
   src/data/gcg_reader.cpp
   src/data/gcg_writer.cpp
   src/data/binary_log.cpp

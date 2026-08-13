@@ -1,6 +1,6 @@
 #include "data/binary_log.h"
 
-#include "game/game.h"
+#include "game/game_log.h"
 #include "util/misc.h"
 
 #include <algorithm>
