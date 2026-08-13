@@ -14,14 +14,35 @@
 //
 // File layout
 // -----------
-//   [TargetFileHeader                              84 B]
+//   [TargetFileHeader                              88 B]
 //   For each position p in [0, num_positions):
 //     [TargetPositionHeader                        16 B]
-//     [num_candidates(p) x (Move 16 B + record_floats x float)]
+//     [num_candidates(p) records, each:
+//        Move                                      16 B
+//        record_floats x float                     value targets
+//        record_planes x float                     plane scales
+//        record_planes x kPlaneCells x uint8       quantized planes]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file, addressing the PRE-move decision point; each record's targets
 // describe the post-move state its Move produces.
+//
+// Placement planes
+// ----------------
+// A record's planes are the teacher's four placement masks at the candidate's
+// post-move state -- per-cell probabilities in mask-head order (opp_next,
+// self_next, opp_win, self_win; the SimObservation plane order). Each plane is
+// absmax-quantized to a byte per cell: scale = max/255, cell = round(v/scale),
+// value = cell * scale -- worst-case error max/510 per plane, ample for
+// distillation targets. The planes stay dense: they are sigmoid outputs,
+// near-zero rather than zero, so a nonzero-mask encoding saves an unreliable
+// amount while costing the fixed-size records both readers index by; residual
+// zero runs are left for generic file compression to collect.
+//
+// record_planes is 0 or kTargetPlanes for the whole file. Stratified (training)
+// files carry planes; full-sweep files carry none -- they are evaluation-only
+// and their gate metrics are value-based, while their positions run to
+// thousands of candidates, which planes would grow 26x for no reader.
 //
 // A file holds one kind of position throughout, declared by
 // kTargetFlagFullSweep: either the stratified training sample or the full-sweep
@@ -40,9 +61,12 @@ namespace move_set_eval {
 
 // "MSET" in little-endian (bytes 'M','S','E','T' on disk).
 inline constexpr uint32_t kTargetMagic = 0x5445534Du;
-inline constexpr uint16_t kTargetVersion = 1;
+inline constexpr uint16_t kTargetVersion = 2;
 // Mover POV.
 inline constexpr uint32_t kTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_mean, sd_std]
+// Quantized placement planes per candidate record, when the file carries them.
+inline constexpr uint32_t kTargetPlanes = 4;
+inline constexpr uint32_t kPlaneCells = BOARD_SIZE * BOARD_SIZE;
 
 // TargetFileHeader::flags bits, mirroring the .sobs convention.
 inline constexpr uint32_t kTargetFlagOpenLeaves = 2u;
@@ -72,6 +96,13 @@ inline constexpr int kTargetModelHashChars = 64;
 // which the trainer must match with the student's input arm.
 uint32_t target_flags_from_slog(uint16_t slog_flags);
 
+// Absmax-quantize one placement plane of kPlaneCells probabilities into
+// `out`, returning the scale (see "Placement planes" above). An all-zero
+// plane gets scale 0 and all-zero cells, which dequantizes back to zero.
+float quantize_plane(const float* values, uint8_t* out);
+
+inline float dequantized_plane_value(uint8_t cell, float scale) { return cell * scale; }
+
 #pragma pack(push, 1)
 
 struct TargetFileHeader {
@@ -80,10 +111,11 @@ struct TargetFileHeader {
   uint16_t reserved;
   uint32_t num_positions;
   uint32_t record_floats;                  // target floats per candidate record
+  uint32_t record_planes;                  // quantized planes per record: 0 or kTargetPlanes
   uint32_t flags;                          // kTargetFlag* bits
   char model_hash[kTargetModelHashChars];  // hex, NUL-padded
 };
-static_assert(sizeof(TargetFileHeader) == 84, "TargetFileHeader must be 84 bytes");
+static_assert(sizeof(TargetFileHeader) == 88, "TargetFileHeader must be 88 bytes");
 
 struct TargetPositionHeader {
   uint32_t game_index;      // game within the companion .slog file
@@ -104,24 +136,28 @@ static_assert(sizeof(TargetPositionHeader) == 16, "TargetPositionHeader must be 
 // skips existing sidecars -- to silently keep.
 class TargetWriter {
  public:
-  TargetWriter(const std::string& path, uint32_t record_floats, const std::string& model_hash,
-               uint32_t flags = 0);
+  TargetWriter(const std::string& path, uint32_t record_floats, uint32_t record_planes,
+               const std::string& model_hash, uint32_t flags = 0);
   ~TargetWriter();  // closes if close() was not called
 
   TargetWriter(const TargetWriter&) = delete;
   TargetWriter& operator=(const TargetWriter&) = delete;
 
-  // `targets` is candidates.size() x record_floats, candidate-major.
+  // `targets` is candidates.size() x record_floats and `planes` is
+  // candidates.size() x record_planes x kPlaneCells (empty when the writer
+  // carries no planes), both candidate-major; the writer quantizes each plane.
   // `num_legal_moves` is the position's legal-move count for a swept position,
   // 0 for a stratified one (see TargetPositionHeader).
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
-                    const std::vector<float>& targets, uint32_t num_legal_moves = 0);
+                    const std::vector<float>& targets, const std::vector<float>& planes,
+                    uint32_t num_legal_moves = 0);
 
   void close();
 
  private:
   std::string path_;
   uint32_t record_floats_;
+  uint32_t record_planes_;
   std::vector<char> buffer_;
   uint32_t num_positions_ = 0;
   bool closed_ = false;
@@ -133,8 +169,9 @@ class TargetWriter {
 class TargetReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.
-  // `records` holds candidate-major (Move, record_floats() floats) pairs, whose
-  // offsets move_at/targets_at compute.
+  // `records` holds candidate-major records at the layout the file comment
+  // documents, whose offsets move_at/targets_at/plane_scales_at/planes_at
+  // compute.
   struct Position {
     const TargetPositionHeader* header;
     const char* records;
@@ -143,6 +180,7 @@ class TargetReader {
   explicit TargetReader(const std::string& path);
 
   uint32_t record_floats() const { return header_.record_floats; }
+  uint32_t record_planes() const { return header_.record_planes; }
   uint32_t flags() const { return header_.flags; }
   std::string model_hash() const;
   int num_positions() const { return static_cast<int>(positions_.size()); }
@@ -150,9 +188,16 @@ class TargetReader {
 
   Move move_at(const Position& p, int candidate) const;
   const float* targets_at(const Position& p, int candidate) const;
+  // record_planes() scales / record_planes() x kPlaneCells quantized cells;
+  // meaningless (zero-length) on a plane-less file.
+  const float* plane_scales_at(const Position& p, int candidate) const;
+  const uint8_t* planes_at(const Position& p, int candidate) const;
 
  private:
-  size_t record_bytes() const { return sizeof(Move) + sizeof(float) * header_.record_floats; }
+  size_t record_bytes() const {
+    return sizeof(Move) + sizeof(float) * header_.record_floats +
+           header_.record_planes * (sizeof(float) + kPlaneCells);
+  }
 
   TargetFileHeader header_{};
   std::vector<char> buffer_;

@@ -12,7 +12,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from scribblez.move_set_eval.targets import MSET_FLAG_OPEN_LEAVES, TARGET_NAMES_V1, read_mset
+from scribblez.move_set_eval.targets import (
+    MSET_FLAG_OPEN_LEAVES,
+    PLANE_CELLS,
+    PLANE_NAMES,
+    TARGET_NAMES_V1,
+    dequantize_planes,
+    read_mset,
+)
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
@@ -106,6 +113,7 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
     for path in sorted(mset_dir.glob("*.mset")):
         parsed = read_mset(path)
         assert parsed.record_floats == len(TARGET_NAMES_V1)
+        assert parsed.record_planes == len(PLANE_NAMES)
         assert len(parsed.model_hash) > 0
         assert parsed.flags == 0
         for pos in parsed.positions:
@@ -118,6 +126,18 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
             assert np.allclose(wld.sum(axis=1), 1.0, atol=1e-3)
             # The std head is softplus-floored positive.
             assert np.all(pos.targets[:, 4] > 0)
+            # Placement planes: sigmoid probabilities, absmax-quantized -- the
+            # scale is at most 1/255, and dequantizing lands back in [0, 1].
+            assert pos.planes.shape == (len(pos.moves), len(PLANE_NAMES), PLANE_CELLS)
+            assert pos.planes.dtype == np.uint8
+            assert pos.plane_scales.shape == (len(pos.moves), len(PLANE_NAMES))
+            assert np.all(pos.plane_scales >= 0)
+            assert np.all(pos.plane_scales <= 1 / 255 + 1e-6)
+            probs = dequantize_planes(pos.planes, pos.plane_scales)
+            assert np.all(probs >= 0) and np.all(probs <= 1 + 1e-6)
+            # A sigmoid head's masks are strictly positive, so every plane has
+            # a max cell that quantizes to 255.
+            assert np.all(pos.planes.max(axis=2) == 255)
     assert total > 0
 
 
@@ -173,10 +193,14 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path,
     for path in msets:
         parsed = read_mset(path)
         assert parsed.full_sweep
+        # The evaluation slice carries no placement planes; its metrics are
+        # value-based and its positions run to the sweep cap.
+        assert parsed.record_planes == 0
         for pos in parsed.positions:
             # Uncapped, the sweep is complete: candidates == the legal count.
             assert pos.num_legal_moves == len(pos.moves)
             assert pos.targets.shape == (len(pos.moves), len(TARGET_NAMES_V1))
+            assert pos.planes is None and pos.plane_scales is None
             biggest = max(biggest, len(pos.moves))
     assert biggest > 1 + sum(QUOTAS.values()), "a sweep should dwarf the stratified sample"
 

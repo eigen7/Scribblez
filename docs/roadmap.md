@@ -151,10 +151,13 @@ everything below.
 - **Model**: four per-move readouts on the move set evaluation model.
 - **Targets**: the teacher's own masks at the same post-move states — the
   generator already runs the teacher there for the value targets.
-- **Format**: a `.mset` candidate record grows from 5 floats to
-  5 + 4×225 = **905**. The format tolerates it, but the size wants a
-  quantization or sparsity decision *before* a corpus is generated at scale —
-  masks are mostly near-zero, and this is the cheapest point to choose.
+- **Format** (settled, `.mset` v2): each stratified candidate record carries the
+  four planes dense and absmax-quantized — per plane a float32 scale
+  (max/255) plus 225 bytes, ~950 B per record against 36 B for v1 and ~3.6 KB
+  for float32 planes. Dense-over-sparse because the masks are sigmoid outputs
+  (near-zero, not zero, so a nonzero-mask encoding saves an unreliable amount),
+  and fixed-size records keep both readers' vectorized indexing; full-sweep
+  files stay plane-less (evaluation-only, value-based metrics).
 - **Consequence**: the existing 600-pair corpus cannot be reused. Regeneration
   is required, which is why the format decision comes first.
 

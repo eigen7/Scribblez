@@ -26,10 +26,16 @@ constexpr const char* kInputSpatial = "input_spatial";
 constexpr const char* kInputScalar = "input_scalar";
 constexpr const char* kOutputWld = "wld";
 constexpr const char* kOutputScoreDiff = "score_diff";
-constexpr const char* kOutputOpp = "opp_next_placement";
-constexpr const char* kOutputSelfNext = "self_next_placement";
-constexpr const char* kOutputOppWin = "opp_win_placement";
-constexpr const char* kOutputSelfWin = "self_win_placement";
+// Mask-head order (kNumMaskHeads entries; see neural_net.h).
+constexpr const char* kOutputMasks[kNumMaskHeads] = {
+  "opp_next_placement",
+  "self_next_placement",
+  "opp_win_placement",
+  "self_win_placement",
+};
+static_assert(kOppNextPlacementFloats == kBoardCells && kSelfNextPlacementFloats == kBoardCells &&
+                kOppWinPlacementFloats == kBoardCells && kSelfWinPlacementFloats == kBoardCells,
+              "every placement mask is one float per board cell");
 
 // Drops anything below a warning, so the build logs stay readable.
 class Logger : public nvinfer1::ILogger {
@@ -113,19 +119,16 @@ struct NeuralNet::Impl {
   void* d_input_scalar = nullptr;
   void* d_wld = nullptr;
   void* d_score_diff = nullptr;
-  void* d_opp = nullptr;
-  void* d_self_next = nullptr;
-  void* d_opp_win = nullptr;
-  void* d_self_win = nullptr;
+  void* d_mask[kNumMaskHeads] = {};
 
   float* h_input_spatial = nullptr;
   float* h_input_scalar = nullptr;
   float* h_wld = nullptr;
   float* h_score_diff = nullptr;
-  // No host buffers for the auxiliary mask outputs (opp_next_placement,
-  // self_next_placement, opp_win_placement, self_win_placement): the engine
-  // produces them into device buffers, which must stay bound for enqueueV3, but
-  // no inference consumer reads them, so they are never copied back.
+  // The mask outputs always occupy device buffers (they must stay bound for
+  // enqueueV3), but get host buffers -- and copies back -- only under
+  // params.copy_masks; agent inference never reads them.
+  float* h_mask[kNumMaskHeads] = {};
 
   int last_rows = -1;
 };
@@ -136,14 +139,14 @@ NeuralNet::Impl::~Impl() {
     if (d_input_scalar) device_free(d_input_scalar);
     if (d_wld) device_free(d_wld);
     if (d_score_diff) device_free(d_score_diff);
-    if (d_opp) device_free(d_opp);
-    if (d_self_next) device_free(d_self_next);
-    if (d_opp_win) device_free(d_opp_win);
-    if (d_self_win) device_free(d_self_win);
+    for (void* d : d_mask)
+      if (d) device_free(d);
     if (h_input_spatial) host_free(h_input_spatial);
     if (h_input_scalar) host_free(h_input_scalar);
     if (h_wld) host_free(h_wld);
     if (h_score_diff) host_free(h_score_diff);
+    for (float* h : h_mask)
+      if (h) host_free(h);
     destroy_stream(stream);
   }
 }
@@ -233,24 +236,21 @@ void NeuralNet::Impl::allocate_buffers() {
   d_input_scalar = dev(scalar_size(b));
   d_wld = dev(b * kWldFloats);
   d_score_diff = dev(b * kScoreDiffOutputFloats);
-  d_opp = dev(b * kOppNextPlacementFloats);
-  d_self_next = dev(b * kSelfNextPlacementFloats);
-  d_opp_win = dev(b * kOppWinPlacementFloats);
-  d_self_win = dev(b * kSelfWinPlacementFloats);
+  for (int h = 0; h < kNumMaskHeads; ++h) d_mask[h] = dev(b * kBoardCells);
 
   h_input_spatial = host(spatial_floats(b));
   h_input_scalar = host(scalar_size(b));
   h_wld = host(b * kWldFloats);
   h_score_diff = host(b * kScoreDiffOutputFloats);
+  if (params.copy_masks) {
+    for (int h = 0; h < kNumMaskHeads; ++h) h_mask[h] = host(b * kBoardCells);
+  }
 
   context->setTensorAddress(kInputSpatial, d_input_spatial);
   context->setTensorAddress(kInputScalar, d_input_scalar);
   context->setTensorAddress(kOutputWld, d_wld);
   context->setTensorAddress(kOutputScoreDiff, d_score_diff);
-  context->setTensorAddress(kOutputOpp, d_opp);
-  context->setTensorAddress(kOutputSelfNext, d_self_next);
-  context->setTensorAddress(kOutputOppWin, d_opp_win);
-  context->setTensorAddress(kOutputSelfWin, d_self_win);
+  for (int h = 0; h < kNumMaskHeads; ++h) context->setTensorAddress(kOutputMasks[h], d_mask[h]);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +307,7 @@ float* NeuralNet::input_spatial_host() { return impl_->h_input_spatial; }
 float* NeuralNet::input_scalar_host() { return impl_->h_input_scalar; }
 const float* NeuralNet::wld_host() const { return impl_->h_wld; }
 const float* NeuralNet::score_diff_host() const { return impl_->h_score_diff; }
+const float* NeuralNet::mask_host(int head) const { return impl_->h_mask[head]; }
 
 void NeuralNet::predict(int num_rows) {
   Impl& m = *impl_;
@@ -330,6 +331,12 @@ void NeuralNet::predict(int num_rows) {
   device_to_host_async(m.stream, m.h_wld, m.d_wld, sizeof(float) * num_rows * kWldFloats);
   device_to_host_async(m.stream, m.h_score_diff, m.d_score_diff,
                        sizeof(float) * num_rows * kScoreDiffOutputFloats);
+  if (m.params.copy_masks) {
+    for (int h = 0; h < kNumMaskHeads; ++h) {
+      device_to_host_async(m.stream, m.h_mask[h], m.d_mask[h],
+                           sizeof(float) * num_rows * kBoardCells);
+    }
+  }
 
   synchronize_stream(m.stream);
 }

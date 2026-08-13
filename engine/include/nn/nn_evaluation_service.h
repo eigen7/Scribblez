@@ -31,14 +31,18 @@ class NNEvaluationService : public EvalService {
   int spatial_planes() const override { return net_.spatial_planes(); }
   int scalar_floats() const override { return net_.scalar_floats(); }
 
-  // Blocks until inference completes.
+  // Blocks until inference completes. A non-null masks_out additionally
+  // receives each row's four placement masks -- count x kNumMaskHeads x
+  // kBoardCells sigmoid probabilities, mask-head order -- and requires the
+  // service was constructed with params.copy_masks.
   void evaluate(const float* inputs, int count, Eval* out) override;
+  void evaluate(const float* inputs, int count, Eval* out, float* masks_out);
 
   std::vector<Eval> evaluate(const float* inputs, int count);
 
  private:
-  // Run one chunk of at most max_batch_size rows.
-  void evaluate_chunk(const float* inputs, int chunk, Eval* out);
+  // Run one chunk of at most max_batch_size rows; masks_out may be null.
+  void evaluate_chunk(const float* inputs, int chunk, Eval* out, float* masks_out);
 
   NeuralNet net_;
 };
