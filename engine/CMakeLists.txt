@@ -35,6 +35,7 @@ add_library(scribblez_core STATIC
   src/data/data_loader.cpp
   src/agent/agent.cpp
   src/agent/agent_options.cpp
+  src/agent/greedy_agent.cpp
   src/arena/game_engine.cpp
   src/arena/game_runner.cpp
   src/lexicon/hasty_equity.cpp
