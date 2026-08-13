@@ -449,7 +449,7 @@ the condition, so mixing modes within a tag fails loudly.
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
 | 4 | Evidence encoder + fusion stage in the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps (extra evidence-free forwards, no new head); multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
 | 5 | The move set evaluation model inherits the heads and the fusion stage, and gains per-move placement planes (spatial readout against the board tokens) so it predicts its own evidence tokens' half; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | — |
-| 6 | Multi-round agent (the decision procedure above); the proves-best acquisition head (footprint novelty penalty covers the batch-mode fallback); budget tuning; match-play eval vs. the one-round agent. | 5 | — |
+| 6 | The sequential agent (the decision procedure above at `B = 1, R = K`) and the proves-best acquisition head that drives it; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way ([roadmap.md](roadmap.md)). | 5 | — |
 
 ## Open questions
 
@@ -466,8 +466,11 @@ the condition, so mixing modes within a tag fails loudly.
   prediction-paired evidence, because the effect it is built for is
   *promotion* — a move no earlier round ranked highly rising once a hot
   square is exposed — which the root readout structurally cannot exhibit.
-  That commitment is a bet, and **E3 is the experiment that settles it**; a
-  null there sends the loop back to the scalar rung, not just back a step.
+  That commitment is a bet. It is settled after the build, by the
+  placement-plane ablation in [evaluation_plan.md](evaluation_plan.md) —
+  evidence tokens with and without the model's predicted planes, read at
+  promotion rather than at root WLD; a null there sends the loop back to the
+  scalar rung, not just back a step.
 - **The cost of per-move placement targets.** A `.mset` record is 5 floats
   today; four 15×15 planes add 900. The format is head-extensible by design
   (`record_floats` in
