@@ -266,6 +266,9 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_dl_resident_bytes.restype = ctypes.c_int64
     lib.scribblez_dl_resident_bytes.argtypes = [ctypes.c_void_p]
 
+    lib.scribblez_format_layout_json.restype = ctypes.c_char_p
+    lib.scribblez_format_layout_json.argtypes = []
+
 
 _SETUP_DONE = False
 
@@ -277,6 +280,48 @@ def _lib() -> ctypes.CDLL:
         _setup_lib(lib)
         _SETUP_DONE = True
     return lib
+
+
+# ---------------------------------------------------------------------------
+# Sidecar-format layout
+# ---------------------------------------------------------------------------
+
+_FORMAT_LAYOUT: dict | None = None
+_STRUCT_DTYPES: dict[str, np.dtype] = {}
+
+
+def format_layout() -> dict:
+    """The engine's description of the sidecar binary formats (.slog / .sobs /
+    .mset): per struct the field names, offsets, and numpy dtype codes --
+    compiler-derived, so they cannot drift from the packed C++ structs -- plus
+    magics, versions, flag bits, and the Move/Glyph code tables
+    (engine/include/data/format_layout.h documents the shape). Sessionless;
+    parsed once per process."""
+    global _FORMAT_LAYOUT
+    if _FORMAT_LAYOUT is None:
+        _FORMAT_LAYOUT = json.loads(_lib().scribblez_format_layout_json().decode())
+    return _FORMAT_LAYOUT
+
+
+def struct_dtype(name: str) -> np.dtype:
+    """The numpy dtype of one engine-described struct (format_layout's
+    "structs" keys), nested struct references resolved recursively."""
+    if name not in _STRUCT_DTYPES:
+        desc = format_layout()["structs"][name]
+        names, formats, offsets = [], [], []
+        for f in desc["fields"]:
+            names.append(f["name"])
+            fmt = f["dtype"]
+            if isinstance(fmt, dict):
+                fmt = struct_dtype(fmt["struct"])
+            if "shape" in f:
+                fmt = (fmt, tuple(f["shape"]))
+            formats.append(fmt)
+            offsets.append(f["offset"])
+        _STRUCT_DTYPES[name] = np.dtype(
+            {"names": names, "formats": formats, "offsets": offsets, "itemsize": desc["itemsize"]}
+        )
+    return _STRUCT_DTYPES[name]
 
 
 # The lexicon this process's FFI session binds to. Every dictionary-dependent

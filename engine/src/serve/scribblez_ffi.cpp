@@ -7,6 +7,7 @@
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
+#include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_subset.h"
@@ -495,6 +496,8 @@ int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
   }
   return scribblez::binlog::write_slog_subset(dst_path, picks) ? 0 : -1;
 }
+
+const char* scribblez_format_layout_json(void) { return scribblez::format_layout_json().c_str(); }
 
 int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
                                int64_t* out_file_size) {

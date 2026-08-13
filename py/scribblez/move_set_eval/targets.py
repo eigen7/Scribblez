@@ -1,13 +1,15 @@
 """Pure-numpy reader for .mset move set evaluation model distillation-target
 sidecars.
 
-The binary layout is owned by engine/include/training/move_set_eval_target_log.h (one
-TargetFileHeader, then per position a TargetPositionHeader followed by
-its (Move, targets, plane scales, quantized planes) records); the dtypes below
-mirror those packed structs and are guarded by itemsize checks so a C++ layout
-change fails loudly here rather than misparsing. The record's target width and
-plane count come from the header (`record_floats`, `record_planes`), so the
-record dtype is built per file.
+The binary layout is owned by
+engine/include/training/move_set_eval_target_log.h (one TargetFileHeader, then
+per position a TargetPositionHeader followed by its (Move, targets, plane
+scales, quantized planes) records). The dtypes and constants below are built
+from the engine's own format-layout document (scribblez.ffi.format_layout),
+whose offsets and sizes come from the C++ compiler -- so they cannot drift
+from the packed structs. The record's target width and plane count come from
+each file's header (`record_floats`, `record_planes`), so the record dtype is
+built per file.
 """
 
 from __future__ import annotations
@@ -18,59 +20,32 @@ from pathlib import Path
 
 import numpy as np
 
+from scribblez.ffi import format_layout, struct_dtype
 from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
-MSET_MAGIC = 0x5445534D  # "MSET"
-MSET_VERSION = 2
+_CONST = format_layout()["constants"]
+
+MSET_MAGIC = _CONST["mset"]["magic"]
+MSET_VERSION = _CONST["mset"]["version"]
 
 # Version-1 target floats per candidate, in record order (mover's POV).
-TARGET_NAMES_V1 = ("p_win", "p_draw", "p_loss", "sd_mean", "sd_std")
+TARGET_NAMES_V1 = tuple(_CONST["mset"]["target_names_v1"])
 
 # A record's placement planes, in plane order: the teacher's four masks at the
-# candidate's post-move state (position_eval.model.MASK_HEAD_NAMES, also the
-# SimObservation plane order). Stored absmax-quantized: per plane a float scale
-# and PLANE_CELLS bytes, value = byte * scale (scale = plane max / 255).
-PLANE_NAMES = (
-    "opp_next_placement",
-    "self_next_placement",
-    "opp_win_placement",
-    "self_win_placement",
-)
-PLANE_CELLS = 225
+# candidate's post-move state (the placement heads of training_targets.h, also
+# the SimObservation plane order). Stored absmax-quantized: per plane a float
+# scale and PLANE_CELLS bytes, value = byte * scale (scale = plane max / 255).
+PLANE_NAMES = tuple(_CONST["placement_head_names"])
+PLANE_CELLS = _CONST["mset"]["plane_cells"]
 
-# TargetFileHeader.flags bits (mirrors the .sobs convention).
-MSET_FLAG_OPEN_LEAVES = 2
-# Every position in the file is a capped sweep of its legal candidates rather
-# than a stratified sample -- an evaluation-only file, held out by construction.
-# Such files carry no placement planes (record_planes == 0).
-MSET_FLAG_FULL_SWEEP = 4
+# TargetFileHeader.flags bits (mirrors the .sobs convention). Full-sweep files
+# -- capped sweeps of every legal candidate, evaluation-only and held out by
+# construction -- carry no placement planes (record_planes == 0).
+MSET_FLAG_OPEN_LEAVES = _CONST["mset"]["flag_open_leaves"]
+MSET_FLAG_FULL_SWEEP = _CONST["mset"]["flag_full_sweep"]
 
-_FILE_HEADER = np.dtype(
-    {
-        "names": [
-            "magic",
-            "version",
-            "reserved",
-            "num_positions",
-            "record_floats",
-            "record_planes",
-            "flags",
-            "model_hash",
-        ],
-        "formats": ["<u4", "<u2", "<u2", "<u4", "<u4", "<u4", "<u4", "S64"],
-        "offsets": [0, 4, 6, 8, 12, 16, 20, 24],
-        "itemsize": 88,
-    }
-)
-
-_POSITION_HEADER = np.dtype(
-    {
-        "names": ["game_index", "turn_index", "num_candidates", "num_legal_moves"],
-        "formats": ["<u4", "<u4", "<u4", "<u4"],
-        "offsets": [0, 4, 8, 12],
-        "itemsize": 16,
-    }
-)
+_FILE_HEADER = struct_dtype("MsetFileHeader")
+_POSITION_HEADER = struct_dtype("MsetPositionHeader")
 
 
 def _record_dtype(record_floats: int, record_planes: int) -> np.dtype:

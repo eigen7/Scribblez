@@ -20,18 +20,19 @@ namespace nn {
 
 namespace {
 
-// Names of the engine's I/O tensors. These match the input_names / output_names
-// passed to torch.onnx.export in py/scribblez/position_eval/onnx_export.py.
+// Names of the engine's I/O tensors. The exporter's output names are the
+// target names of training_targets.h (served to Python over the FFI), so the
+// output constants reference them rather than restate them.
 constexpr const char* kInputSpatial = "input_spatial";
 constexpr const char* kInputScalar = "input_scalar";
-constexpr const char* kOutputWld = "wld";
-constexpr const char* kOutputScoreDiff = "score_diff";
+constexpr const char* kOutputWld = WldTarget::kName;
+constexpr const char* kOutputScoreDiff = ScoreDiffTarget::kName;
 // Mask-head order (kNumMaskHeads entries; see neural_net.h).
 constexpr const char* kOutputMasks[kNumMaskHeads] = {
-  "opp_next_placement",
-  "self_next_placement",
-  "opp_win_placement",
-  "self_win_placement",
+  OppNextPlacementTarget::kName,
+  SelfNextPlacementTarget::kName,
+  OppWinPlacementTarget::kName,
+  SelfWinPlacementTarget::kName,
 };
 static_assert(kOppNextPlacementFloats == kBoardCells && kSelfNextPlacementFloats == kBoardCells &&
                 kOppWinPlacementFloats == kBoardCells && kSelfWinPlacementFloats == kBoardCells,

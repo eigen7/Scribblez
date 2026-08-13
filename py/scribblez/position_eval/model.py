@@ -38,6 +38,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scribblez.ffi import format_layout
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
@@ -47,13 +48,11 @@ MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
 
 
 # The placement-mask heads, in the channel order mask_conv emits them (also
-# the order they appear in forward()'s output dict and the ONNX export).
-MASK_HEAD_NAMES = (
-    "opp_next_placement",
-    "self_next_placement",
-    "opp_win_placement",
-    "self_win_placement",
-)
+# the order they appear in forward()'s output dict and the ONNX export). The
+# names and order are training_targets.h's placement targets, served over the
+# FFI -- the same single source the C++ TensorRT decode binds output tensors
+# by, so the export and the engine cannot disagree.
+MASK_HEAD_NAMES = tuple(format_layout()["constants"]["placement_head_names"])
 
 
 class PositionEvalModel(nn.Module):

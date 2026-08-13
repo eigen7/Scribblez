@@ -1,10 +1,9 @@
 """Pure-numpy reader for .sobs sim-observation sidecars.
 
-The binary layout is owned by engine/include/scribblez/sim_observation_log.h
-(one SimObsFileHeader, then per position a SimObsPositionHeader followed by
-its SimObsRecords); the dtypes below mirror those packed structs field for
-field and are guarded by itemsize checks so a C++ layout change fails loudly
-here rather than misparsing.
+The binary layout is owned by engine/include/data/sim_observation_log.h; the
+dtypes and constants below are built from the engine's own format-layout
+document (scribblez.ffi.format_layout), whose offsets and sizes come from the
+C++ compiler -- so they cannot drift from the packed structs.
 """
 
 from __future__ import annotations
@@ -14,82 +13,50 @@ from pathlib import Path
 
 import numpy as np
 
-SOBS_MAGIC = 0x53424F53  # "SOBS"
-SOBS_VERSION = 1
+from scribblez.ffi import format_layout, struct_dtype
 
-# SimObsFileHeader.flags bits (engine/include/scribblez/sim_observation_log.h).
-# Bit 0x1 is retired (full-open-rack sims, an information condition no
-# consumer supports); readers must reject files carrying it.
-SOBS_FLAG_RETIRED_OPEN_RACK = 1
-SOBS_FLAG_OPEN_LEAVES = 2
+_CONST = format_layout()["constants"]
 
-BOARD = 15
+SOBS_MAGIC = _CONST["sobs"]["magic"]
+SOBS_VERSION = _CONST["sobs"]["version"]
+
+# SimObsFileHeader.flags bits. The retired bit marked full-open-rack sims, an
+# information condition no consumer supports; readers must reject files
+# carrying it.
+SOBS_FLAG_RETIRED_OPEN_RACK = _CONST["sobs"]["flag_retired_open_rack"]
+SOBS_FLAG_OPEN_LEAVES = _CONST["sobs"]["flag_open_leaves"]
+
+BOARD = _CONST["board_size"]
 CELLS = BOARD * BOARD
 
-# MoveType enum values (engine/include/scribblez/move.h).
-MOVE_PLAY = 0
-MOVE_EXCHANGE = 1
-MOVE_PASS = 2
+# MoveType enum values (game/move.h).
+MOVE_PLAY = _CONST["move_type"]["play"]
+MOVE_EXCHANGE = _CONST["move_type"]["exchange"]
+MOVE_PASS = _CONST["move_type"]["pass"]
 
 
 def glyph_char(code: int) -> str:
-    """Decode one Glyph byte (engine/include/scribblez/glyph.h): codes 1-26
-    are played letters A-Z, 27 an undesignated blank, 28-52 designated blanks
-    (lowercased, matching the engine's move-description convention)."""
+    """Decode one Glyph byte: played letters (1..26) show A-Z, designated
+    blanks (27..52) their lowercased letter (matching the engine's
+    move-description convention), and everything else -- empty (0) or an
+    unassigned blank (53) -- "?".
+
+    The code table is game/glyph.h's, deliberately replicated rather than
+    served: it is effectively frozen, and unit tests in both languages pin
+    the same table (test_format_layout.py; tests_main.cpp's Glyph
+    CodeTablePinnedForCrossLanguageReaders). A change on either side must be
+    mirrored on the other."""
     if 1 <= code <= 26:
         return chr(ord("A") + code - 1)
-    if 28 <= code <= 52:
-        return chr(ord("a") + code - 28)
+    if 27 <= code <= 52:
+        return chr(ord("a") + code - 27)
     return "?"
 
 
-_FILE_HEADER = np.dtype(
-    {
-        "names": ["magic", "version", "reserved", "num_positions", "flags"],
-        "formats": ["<u4", "<u2", "<u2", "<u4", "<u4"],
-        "offsets": [0, 4, 6, 8, 12],
-        "itemsize": 16,
-    }
-)
-
-_POSITION_HEADER = np.dtype(
-    {
-        "names": ["game_index", "turn_index", "num_candidates", "rollouts", "base_seed"],
-        "formats": ["<u4", "<u4", "<u4", "<u4", "<u8"],
-        "offsets": [0, 4, 8, 12, 16],
-        "itemsize": 24,
-    }
-)
-
-# Move packs into 16 bytes with one padding byte before the 2-aligned
-# square_mask (see the sizeof static_assert in move.h).
-MOVE_DTYPE = np.dtype(
-    {
-        "names": ["type", "horizontal", "start", "num_played", "glyphs", "square_mask", "score"],
-        "formats": ["<u1", "<u1", "<i1", "<u1", ("<u1", (7,)), "<u2", "<u2"],
-        "offsets": [0, 1, 2, 3, 4, 12, 14],
-        "itemsize": 16,
-    }
-)
-
-_OBSERVATION = np.dtype(
-    [
-        ("n", "<u4"),
-        ("wins", "<u4"),
-        ("draws", "<u4"),
-        ("losses", "<u4"),
-        ("delta_sum", "<i8"),
-        ("delta_sq_sum", "<i8"),
-        ("opp_next_count", "<u2", (CELLS,)),
-        ("self_next_count", "<u2", (CELLS,)),
-        ("opp_win_count", "<u2", (CELLS,)),
-        ("self_win_count", "<u2", (CELLS,)),
-    ]
-)
-
-RECORD_DTYPE = np.dtype([("move", MOVE_DTYPE), ("obs", _OBSERVATION)])
-assert _OBSERVATION.itemsize == 32 + 4 * 2 * CELLS
-assert RECORD_DTYPE.itemsize == 16 + _OBSERVATION.itemsize
+_FILE_HEADER = struct_dtype("SobsFileHeader")
+_POSITION_HEADER = struct_dtype("SobsPositionHeader")
+MOVE_DTYPE = struct_dtype("Move")
+RECORD_DTYPE = struct_dtype("SobsRecord")
 
 
 @dataclass
