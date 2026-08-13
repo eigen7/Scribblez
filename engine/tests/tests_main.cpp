@@ -4204,8 +4204,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
         continue;
       }
       for (uint32_t i = 0; i < kCells; ++i) {
-        const float back =
-          move_set_eval::dequantized_plane_value(cells[h * kCells + i], scales[h]);
+        const float back = move_set_eval::dequantized_plane_value(cells[h * kCells + i], scales[h]);
         ASSERT_NEAR(back, plane[i], scales[h] / 2 + 1e-6f);
       }
       ASSERT_EQ(cells[h * kCells + (kCells - 1)], 255);  // the max cell
@@ -4233,8 +4232,8 @@ TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
   fs::create_directories(tmp);
   const std::string path = (tmp / "test.mset").string();
 
-  const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b1, 24,
-                                 {Glyph::of(Tile::from_char('A'))});
+  const Move m1 =
+    make_play_full(4, 2, /*horizontal=*/true, 0b1, 24, {Glyph::of(Tile::from_char('A'))});
   const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f, 41.0f};
   {
     move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
@@ -4363,10 +4362,10 @@ TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
 
     const std::string mset = (dir / "targets.mset").string();
     {
-      move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, "abc123",
-                                    move_set_eval::target_flags_from_slog(hdr.flags));
+      move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
+                                    "abc123", move_set_eval::target_flags_from_slog(hdr.flags));
       w.add_position(0, 0, {Move::pass()},
-                     std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f));
+                     std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f), /*planes=*/{});
       w.close();
     }
     const uint32_t expected = face_up ? move_set_eval::kTargetFlagOpenLeaves : 0u;

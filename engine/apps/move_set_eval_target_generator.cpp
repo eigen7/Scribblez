@@ -100,8 +100,7 @@ struct GamePositionIndex {
 
 // Placement-plane floats per candidate: the teacher's four masks, which the
 // writer quantizes into the record's plane block.
-constexpr size_t kPlaneFloats =
-  static_cast<size_t>(nn::kNumMaskHeads) * move_set_eval::kPlaneCells;
+constexpr size_t kPlaneFloats = static_cast<size_t>(nn::kNumMaskHeads) * move_set_eval::kPlaneCells;
 
 // One contiguous run of a position's candidates with their encoded post-move
 // rows, produced by an encoder worker and consumed by the inference thread,
@@ -283,9 +282,9 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
     for (CandidateSlice& p : pending) {
       p.targets.resize(p.candidates.size() * move_set_eval::kTargetFloatsV1);
       if (with_planes) {
-        p.planes.assign(masks.data() + static_cast<size_t>(cursor) * kPlaneFloats,
-                        masks.data() + (static_cast<size_t>(cursor) + p.candidates.size()) *
-                                         kPlaneFloats);
+        p.planes.assign(
+          masks.data() + static_cast<size_t>(cursor) * kPlaneFloats,
+          masks.data() + (static_cast<size_t>(cursor) + p.candidates.size()) * kPlaneFloats);
       }
       for (size_t c = 0; c < p.candidates.size(); ++c) {
         const nn::Eval& e = evals[static_cast<size_t>(cursor++)];

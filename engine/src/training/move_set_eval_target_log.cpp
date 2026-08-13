@@ -63,8 +63,8 @@ TargetWriter::~TargetWriter() {
 
 void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
-                                const std::vector<float>& targets,
-                                const std::vector<float>& planes, uint32_t num_legal_moves) {
+                                const std::vector<float>& targets, const std::vector<float>& planes,
+                                uint32_t num_legal_moves) {
   assert(!closed_);
   assert(targets.size() == candidates.size() * record_floats_);
   assert(planes.size() == candidates.size() * record_planes_ * kPlaneCells);

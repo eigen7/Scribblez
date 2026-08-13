@@ -4,6 +4,7 @@ tiny generated .mset/.slog corpus (GPU, since the target generator builds a
 TensorRT engine).
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,17 @@ from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 # This checkout's own binaries, so a worktree's tests exercise the code built
 # beside them rather than the primary checkout's (as in test_move_set_eval_targets.py).
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+
+# The same principle for subprocesses running a script file: their sys.path[0]
+# is the script's directory, so without this override the image-wide
+# PYTHONPATH=/workspace/repo/py would hand a worktree's subprocess the primary
+# checkout's scribblez.
+_SUBPROCESS_ENV = {
+    **os.environ,
+    "PYTHONPATH": os.pathsep.join(
+        [str(Path(__file__).resolve().parents[1]), os.environ.get("PYTHONPATH", "")]
+    ),
+}
 TARGET_GENERATOR = _ENGINE_DIR / "move_set_eval_target_generator"
 SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
@@ -788,6 +800,7 @@ def test_run_stops_after_its_budget_over_the_finished_corpus(corpus_dir, sweep_d
             capture_output=True,
             text=True,
             timeout=120,
+            env=_SUBPROCESS_ENV,
         )
     except subprocess.TimeoutExpired:
         pytest.fail("trainer.run() did not stop: the epoch budget is not being spent")
