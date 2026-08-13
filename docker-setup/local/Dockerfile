@@ -45,6 +45,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100 && \
     update-alternatives --install /usr/bin/clang-tidy   clang-tidy   /usr/bin/clang-tidy-19   100
 
+# 2b) GCC 16, for experimenting with C++26 reflection (-std=c++26 -freflection,
+#     experimental as of GCC 16.1). Ubuntu 24.04's own archive tops out at
+#     gcc-14, so this pulls from the ubuntu-toolchain-r/test PPA. Installed
+#     alongside gcc-13/g++-13 rather than replacing them via
+#     update-alternatives: the CMake build still targets C++20 on gcc-13;
+#     invoke gcc-16/g++-16 explicitly.
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC8EC952E2A0E1FBDC5090F6A2C277A0A352154E5" \
+      | gpg --dearmor -o /etc/apt/keyrings/ubuntu-toolchain-r.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain-r.gpg] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu noble main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gcc-16 g++-16 && \
+    rm -rf /var/lib/apt/lists/*
+
 # 3) Node.js 22 (NodeSource) for the Vite-based web UI.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
