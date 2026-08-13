@@ -41,6 +41,9 @@ def test_magics_spell_their_extensions():
 
 
 def test_glyph_char_follows_the_engine_code_table():
+    """glyph_char's code table is a deliberate replica of glyph.h's (the
+    encoding is effectively frozen); this pin and its C++ twin
+    (Glyph.CodeTablePinnedForCrossLanguageReaders) keep the two in lockstep."""
     from scribblez.sim_evidence.sobs import glyph_char
 
     assert glyph_char(0) == "?"  # empty

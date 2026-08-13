@@ -4166,9 +4166,22 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   const bj::object& c = doc.at("constants").as_object();
   EXPECT_EQ(c.at("mset").at("magic").to_number<uint32_t>(), move_set_eval::kTargetMagic);
   EXPECT_EQ(c.at("mset").at("version").to_number<uint32_t>(), move_set_eval::kTargetVersion);
-  EXPECT_EQ(c.at("glyph").at("blank").to_number<int>(), Glyph::blank().code());
   EXPECT_EQ(c.at("placement_head_names").as_array().at(0).as_string(),
             OppNextPlacementTarget::kName);
+}
+
+// The Glyph byte code table is deliberately replicated in Python
+// (sim_evidence/sobs.py glyph_char) rather than served over the FFI: it is
+// effectively frozen. This pin and its Python twin (test_format_layout.py)
+// keep the two replicas in lockstep; a change on either side must be
+// mirrored on the other.
+TEST(Glyph, CodeTablePinnedForCrossLanguageReaders) {
+  EXPECT_EQ(Glyph::empty().code(), 0);
+  EXPECT_EQ(Glyph::of(Tile::from_char('A')).code(), 1);
+  EXPECT_EQ(Glyph::of(Tile::from_char('Z')).code(), 26);
+  EXPECT_EQ(Glyph::of_blank(Tile::from_char('A')).code(), 27);
+  EXPECT_EQ(Glyph::of_blank(Tile::from_char('Z')).code(), 52);
+  EXPECT_EQ(Glyph::blank().code(), 53);
 }
 
 TEST(MoveSetEvalTargetLog, Roundtrip) {

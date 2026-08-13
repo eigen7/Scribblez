@@ -34,18 +34,22 @@ MOVE_PLAY = _CONST["move_type"]["play"]
 MOVE_EXCHANGE = _CONST["move_type"]["exchange"]
 MOVE_PASS = _CONST["move_type"]["pass"]
 
-_GLYPH = _CONST["glyph"]
-
 
 def glyph_char(code: int) -> str:
-    """Decode one Glyph byte (game/glyph.h's code table, served constants):
-    played letters show A-Z, designated blanks their lowercased letter
-    (matching the engine's move-description convention), and everything else
-    -- empty or an unassigned blank -- "?"."""
-    if _GLYPH["letter_min"] <= code <= _GLYPH["letter_max"]:
-        return chr(ord("A") + code - _GLYPH["letter_min"])
-    if _GLYPH["designated_blank_min"] <= code <= _GLYPH["designated_blank_max"]:
-        return chr(ord("a") + code - _GLYPH["designated_blank_min"])
+    """Decode one Glyph byte: played letters (1..26) show A-Z, designated
+    blanks (27..52) their lowercased letter (matching the engine's
+    move-description convention), and everything else -- empty (0) or an
+    unassigned blank (53) -- "?".
+
+    The code table is game/glyph.h's, deliberately replicated rather than
+    served: it is effectively frozen, and unit tests in both languages pin
+    the same table (test_format_layout.py; tests_main.cpp's Glyph
+    CodeTablePinnedForCrossLanguageReaders). A change on either side must be
+    mirrored on the other."""
+    if 1 <= code <= 26:
+        return chr(ord("A") + code - 1)
+    if 27 <= code <= 52:
+        return chr(ord("a") + code - 27)
     return "?"
 
 

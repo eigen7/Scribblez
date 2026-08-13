@@ -221,7 +221,7 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
 // A JSON document describing the sidecar binary formats (.slog / .sobs /
 // .mset): per struct the field names, offsets, and numpy dtype codes -- taken
 // from the compiler, so it cannot drift from the structs -- plus magics,
-// versions, flag bits, and the Move/Glyph code tables (data/format_layout.h
+// versions, flag bits, and the MoveType values (data/format_layout.h
 // documents the shape). Python builds its numpy dtypes from this instead of
 // hand-mirroring the packed structs. Static storage; never freed. Needs no
 // session.
