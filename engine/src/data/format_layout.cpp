@@ -8,6 +8,7 @@
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
+#include "util/metaprogramming.h"
 
 #include <boost/json.hpp>
 
@@ -41,31 +42,24 @@ struct FieldInfo {
 // little-endian to match the on-disk packed structs. One-byte enums and
 // wrappers (MoveType, Glyph, bool) serialize as their underlying byte.
 consteval const char* scalar_code(std::meta::info t) {
-  if (t == std::meta::dealias(^^uint8_t) || t == ^^Glyph || t == ^^MoveType || t == ^^bool)
+  if (util::type_is<uint8_t>(t) || util::type_is<Glyph>(t) || util::type_is<MoveType>(t) ||
+      util::type_is<bool>(t))
     return "u1";
-  if (t == std::meta::dealias(^^int8_t)) return "i1";
-  if (t == std::meta::dealias(^^uint16_t)) return "<u2";
-  if (t == std::meta::dealias(^^int16_t)) return "<i2";
-  if (t == std::meta::dealias(^^uint32_t)) return "<u4";
-  if (t == std::meta::dealias(^^int32_t)) return "<i4";
-  if (t == std::meta::dealias(^^uint64_t)) return "<u8";
-  if (t == std::meta::dealias(^^int64_t)) return "<i8";
-  if (t == std::meta::dealias(^^float)) return "<f4";
+  if (util::type_is<int8_t>(t)) return "i1";
+  if (util::type_is<uint16_t>(t)) return "<u2";
+  if (util::type_is<int16_t>(t)) return "<i2";
+  if (util::type_is<uint32_t>(t)) return "<u4";
+  if (util::type_is<int32_t>(t)) return "<i4";
+  if (util::type_is<uint64_t>(t)) return "<u8";
+  if (util::type_is<int64_t>(t)) return "<i8";
+  if (util::type_is<float>(t)) return "<f4";
   return nullptr;
 }
 
 // Member types that are themselves served structs become nested references,
 // keyed by the type's own identifier (build_structs serves them under it).
-consteval bool is_served_struct(std::meta::info t) { return t == ^^Move || t == ^^SimObservation; }
-
-// std::to_string is not yet constexpr in this libstdc++.
-consteval std::string dec(std::size_t v) {
-  std::string s;
-  do {
-    s.insert(s.begin(), static_cast<char>('0' + v % 10));
-    v /= 10;
-  } while (v != 0);
-  return s;
+consteval bool is_served_struct(std::meta::info t) {
+  return util::type_is<Move>(t) || util::type_is<SimObservation>(t);
 }
 
 // The dtype half of one field: a nested reference, a text field (char array
@@ -75,47 +69,33 @@ consteval std::string dec(std::size_t v) {
 consteval void describe_type(FieldInfo* f, std::meta::info type, std::size_t member_size) {
   std::meta::info t = std::meta::dealias(type);
   if (is_served_struct(t)) {
-    f->struct_ref = std::define_static_string(std::meta::identifier_of(t));
+    f->struct_ref = util::static_string(std::meta::identifier_of(t));
     return;
   }
   if (std::meta::is_array_type(t)) {
     if (std::meta::remove_all_extents(t) != ^^char) throw "non-char array member in format layout";
-    f->dtype = std::define_static_string("S" + dec(member_size));
+    f->dtype = util::static_string("S" + util::dec_string(member_size));
     return;
   }
-  if (t == ^^Rack) {
-    f->dtype = std::define_static_string("V" + dec(member_size));
+  if (util::type_is<Rack>(t)) {
+    f->dtype = util::static_string("V" + util::dec_string(member_size));
     return;
   }
-  if (std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::array) {
-    const auto args = std::meta::template_arguments_of(t);
-    f->count = std::meta::extract<std::size_t>(args[1]);
-    t = std::meta::dealias(args[0]);
+  if (util::is_specialization_of(t, ^^std::array)) {
+    f->count = util::std_array_extent(t);
+    t = util::std_array_element(t);
   }
   f->dtype = scalar_code(t);
   if (!f->dtype) throw "unmapped member type in format layout";
 }
 
-// Move's private members end in '_'; the on-disk field names do not.
-consteval const char* clean_name(std::string_view raw) {
-  std::string n(raw);
-  if (!n.empty() && n.back() == '_') n.pop_back();
-  return std::define_static_string(n);
-}
-
-template <typename T>
-consteval std::size_t num_members() {
-  return std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked()).size();
-}
-
 template <typename T>
 consteval auto reflect_fields() {
-  std::array<FieldInfo, num_members<T>()> out{};
-  const auto members =
-    std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked());
+  std::array<FieldInfo, util::num_members<T>()> out{};
+  const auto members = util::nonstatic_data_members<T>();
   for (std::size_t i = 0; i < members.size(); ++i) {
     const auto m = members[i];
-    out[i].name = clean_name(std::meta::identifier_of(m));
+    out[i].name = util::member_name(m);
     out[i].offset = static_cast<std::size_t>(std::meta::offset_of(m).bytes);
     describe_type(&out[i], std::meta::type_of(m), std::meta::size_of(m));
   }
