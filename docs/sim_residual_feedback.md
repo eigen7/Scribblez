@@ -231,8 +231,9 @@ We considered two different approaches:
 1. **Covariance modeling.** If we can model the covariance between candidates,
    this helps with B.
 
-2. **Directly modeling "proves-best".** Predict the likelihood that a given
-   next candidate will yield a sim that strictly exceeds the best-so-far.
+2. **Directly modeling "proves-best".** Predict how much a given next
+   candidate's sim would improve on the best-so-far (the exact form is settled
+   below: expected gain, not probability of gain).
 
 Option 1 faces some challenges. Defining a target that corresponds to
 covariance seems difficult. It also only helps with requirement B; it is unclear
@@ -241,9 +242,9 @@ favor Option 2.
 
 Two structural facts about the proves-best target:
 
-- **It is a thin transform of the conditioned value.** "Proves best" is
-  approximately `P(conditioned value of the candidate + sim noise >
-  best-so-far)` — a calibrated comparison of the evidence-conditioned value
+- **It is a thin transform of the conditioned value.** The acquisition score
+  is approximately `E[max(0, conditioned value of the candidate + sim noise −
+  best-so-far)]` — a calibrated comparison of the evidence-conditioned value
   against a known scalar, at a noise level given by the rollout counts. The
   hard part is the conditioned value, which dense distillation trains; the
   head is a thin output on that backbone, fine-tuned on sim outcomes. The
@@ -261,10 +262,36 @@ Two structural facts about the proves-best target:
 
 Details to be worked out with Option 2:
 
-- **Probability vs expected gain.** The final pick is by sim value, so what a
-  sim contributes is `E[max(0, p(w) − best)]`; the Bernoulli target ignores
-  the margin of improvement. Start with the probability (cleaner target),
-  keeping the expected-gain variant as a target swap.
+- **Expected gain, not probability** (settled). The target is
+  `E[max(0, p(w) − best)]` — what a sim actually contributes, the final pick
+  being by sim value — rather than the Bernoulli probability that it improves
+  at all. Common random numbers make this decisive rather than merely tidier.
+  Two candidates differing only cosmetically (a blank designated differently,
+  placed tiles reordered) place the same tiles, so they leave the same rack
+  and refill from the same pool; under a shared seed, rollout `i` then runs
+  against a board differing in a few inert letters and returns the *same*
+  outcome. Their paired difference is near-zero with almost no spread, so
+  their expected gain is ~0 and the target suppresses redundant sims **by
+  construction** — no novelty penalty or footprint dedup required.
+
+  The probability form is adequate only in the *exact*-tie case requirement B
+  above describes: if a candidate sims identically, it never strictly exceeds,
+  and the probability is 0. That case is rarer than it looks — a differently
+  designated blank puts different letters on the board, changing hooks and
+  cross-checks, so rollouts eventually diverge. Once the difference is small
+  but non-zero the probability form breaks in both directions: ~0.5 when the
+  difference is noise-dominated, and ~1 when the duplicate is reliably a hair
+  better (two more points off a premium square), spending a whole sim to
+  discover two points of spread. Expected gain rates all three cases at ~0,
+  which is the correct answer in all three.
+- **The label must be CRN-paired.** The improvement is measured against the
+  best-so-far *over the same seed set*, which is what makes a duplicate's
+  target ~0 rather than a small random number. Labels drawn from one
+  position's `.sobs` satisfy this automatically, its candidates sharing a seed
+  base; an improvement computed against a value from a different sim run does
+  not, and silently reintroduces the very noise the pairing cancels. The
+  aggregate record suffices — with identical seed sets, the difference of
+  means *is* the paired mean difference.
 - **Winner's curse.** The best-so-far is a max of noisy sim estimates and is
   biased upward, and near-ties make the label a coin flip driven by rollout
   noise. The rollout-count inputs exist for exactly this; the head is
