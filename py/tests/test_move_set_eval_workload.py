@@ -16,7 +16,7 @@ def write_empty_pair(store, stem, flags=0):
     all that file-level routing reads."""
     store.mkdir(parents=True, exist_ok=True)
     (store / f"{stem}.mset").write_bytes(
-        struct.pack("<IHHIII64s", MSET_MAGIC, MSET_VERSION, 0, 0, 5, flags, b"cafe")
+        struct.pack("<IHHIIII64s", MSET_MAGIC, MSET_VERSION, 0, 0, 5, 0, flags, b"cafe")
     )
     (store / f"{stem}.slog").touch()
 

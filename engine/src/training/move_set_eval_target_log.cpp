@@ -2,7 +2,10 @@
 
 #include "data/binary_log.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -25,14 +28,30 @@ uint32_t target_flags_from_slog(uint16_t slog_flags) {
   return (slog_flags & binlog::kFlagFaceUpLeaves) != 0 ? kTargetFlagOpenLeaves : 0u;
 }
 
-TargetWriter::TargetWriter(const std::string& path, uint32_t record_floats,
+float quantize_plane(const float* values, uint8_t* out) {
+  float max = 0.0f;
+  for (uint32_t i = 0; i < kPlaneCells; ++i) max = std::max(max, values[i]);
+  if (max <= 0.0f) {
+    std::memset(out, 0, kPlaneCells);
+    return 0.0f;
+  }
+  const float scale = max / 255.0f;
+  for (uint32_t i = 0; i < kPlaneCells; ++i) {
+    const float q = std::round(values[i] / scale);
+    out[i] = static_cast<uint8_t>(std::clamp(q, 0.0f, 255.0f));
+  }
+  return scale;
+}
+
+TargetWriter::TargetWriter(const std::string& path, uint32_t record_floats, uint32_t record_planes,
                            const std::string& model_hash, uint32_t flags)
-    : path_(path), record_floats_(record_floats) {
+    : path_(path), record_floats_(record_floats), record_planes_(record_planes) {
   TargetFileHeader hdr{};
   hdr.magic = kTargetMagic;
   hdr.version = kTargetVersion;
   hdr.num_positions = 0;  // patched in close()
   hdr.record_floats = record_floats;
+  hdr.record_planes = record_planes;
   hdr.flags = flags;
   std::strncpy(hdr.model_hash, model_hash.c_str(), sizeof(hdr.model_hash) - 1);
   append_bytes(&buffer_, &hdr, sizeof(hdr));
@@ -44,18 +63,32 @@ TargetWriter::~TargetWriter() {
 
 void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
-                                const std::vector<float>& targets, uint32_t num_legal_moves) {
+                                const std::vector<float>& targets,
+                                const std::vector<float>& planes, uint32_t num_legal_moves) {
   assert(!closed_);
   assert(targets.size() == candidates.size() * record_floats_);
+  assert(planes.size() == candidates.size() * record_planes_ * kPlaneCells);
   TargetPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
   ph.num_candidates = static_cast<uint32_t>(candidates.size());
   ph.num_legal_moves = num_legal_moves;
   append_bytes(&buffer_, &ph, sizeof(ph));
+  std::array<uint8_t, kPlaneCells> quantized;
   for (size_t c = 0; c < candidates.size(); ++c) {
     append_bytes(&buffer_, &candidates[c], sizeof(Move));
     append_bytes(&buffer_, targets.data() + c * record_floats_, sizeof(float) * record_floats_);
+    // Scales first, then the quantized planes, so each stays a contiguous
+    // fixed-width block (the reader's accessors and the numpy dtype both
+    // address them as such).
+    const float* cand_planes = planes.data() + c * record_planes_ * kPlaneCells;
+    const size_t scales_offset = buffer_.size();
+    buffer_.resize(buffer_.size() + sizeof(float) * record_planes_);
+    for (uint32_t h = 0; h < record_planes_; ++h) {
+      const float scale = quantize_plane(cand_planes + h * kPlaneCells, quantized.data());
+      std::memcpy(buffer_.data() + scales_offset + h * sizeof(float), &scale, sizeof(float));
+      append_bytes(&buffer_, quantized.data(), kPlaneCells);
+    }
   }
   ++num_positions_;
 }
@@ -128,6 +161,15 @@ Move TargetReader::move_at(const Position& p, int candidate) const {
 
 const float* TargetReader::targets_at(const Position& p, int candidate) const {
   return reinterpret_cast<const float*>(p.records + candidate * record_bytes() + sizeof(Move));
+}
+
+const float* TargetReader::plane_scales_at(const Position& p, int candidate) const {
+  return reinterpret_cast<const float*>(p.records + candidate * record_bytes() + sizeof(Move) +
+                                        sizeof(float) * header_.record_floats);
+}
+
+const uint8_t* TargetReader::planes_at(const Position& p, int candidate) const {
+  return reinterpret_cast<const uint8_t*>(plane_scales_at(p, candidate) + header_.record_planes);
 }
 
 }  // namespace move_set_eval

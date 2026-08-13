@@ -22,6 +22,11 @@ class options_description;
 namespace scribblez {
 namespace nn {
 
+// The model's four placement-mask outputs, in export order (onnx_export.py's
+// MASK_HEAD_NAMES): opp_next, self_next, opp_win, self_win -- also the
+// SimObservation plane order and the .mset plane order.
+inline constexpr int kNumMaskHeads = 4;
+
 struct NeuralNetParams {
   std::string onnx_path;  // exported ONNX model load() builds from
   int cuda_device_id = 0;
@@ -35,6 +40,12 @@ struct NeuralNetParams {
   // a few, at the cost of much slower inference -- for tests and quick checks,
   // not production agents. Cached separately from full-optimization plans.
   bool fast_build = false;
+
+  // Copy the four placement-mask outputs back to host on every predict(),
+  // making mask_host() valid. Off by default: agent inference discards the
+  // masks, so it should not pay their per-batch device-to-host copy. The
+  // target generator is the consumer that turns this on.
+  bool copy_masks = false;
 
   // Register the command-line-facing subset, bound to this struct's fields.
   // Call before parsing argv.
@@ -75,10 +86,13 @@ class NeuralNet {
   // Blocks until the outputs are back. Requires 1 <= num_rows <= max.
   void predict(int num_rows);
 
-  // Valid after predict(), for its first num_rows rows. wld is raw logits. The
-  // auxiliary mask outputs are not exposed: they are never copied back.
+  // Valid after predict(), for its first num_rows rows. wld is raw logits.
   const float* wld_host() const;         // num_rows x kWldFloats
   const float* score_diff_host() const;  // num_rows x [mean, std], std positive
+  // The placement-mask output for one of the kNumMaskHeads heads, num_rows x
+  // 225 raw logits. Requires params.copy_masks; without it the masks stay on
+  // the device (agents never read them).
+  const float* mask_host(int head) const;
 
  private:
   struct Impl;

@@ -6,8 +6,9 @@
 // label, encodes each candidate's post-move state exactly as a position
 // evaluation model training row, and evaluates the batch with the teacher
 // position evaluation model (TensorRT). Each .slog file gets a same-stem .mset
-// sidecar recording the selected Moves and the teacher's readouts
-// (move_set_eval::kTargetFloatsV1); files whose sidecar already exists are
+// sidecar recording the selected Moves, the teacher's value readouts
+// (move_set_eval::kTargetFloatsV1), and -- on stratified runs -- its four
+// placement planes per candidate; files whose sidecar already exists are
 // skipped, so interrupted runs resume by rerunning.
 //
 // Two selections, chosen per run by --full-sweep and both defined in
@@ -97,9 +98,15 @@ struct GamePositionIndex {
   auto operator<=>(const GamePositionIndex&) const = default;
 };
 
+// Placement-plane floats per candidate: the teacher's four masks, which the
+// writer quantizes into the record's plane block.
+constexpr size_t kPlaneFloats =
+  static_cast<size_t>(nn::kNumMaskHeads) * move_set_eval::kPlaneCells;
+
 // One contiguous run of a position's candidates with their encoded post-move
 // rows, produced by an encoder worker and consumed by the inference thread,
-// which fills `targets` (candidates.size() x move_set_eval::kTargetFloatsV1).
+// which fills `targets` (candidates.size() x move_set_eval::kTargetFloatsV1)
+// and, on a stratified run, `planes` (candidates.size() x kPlaneFloats).
 // A position's slices partition its candidate set in order.
 struct CandidateSlice {
   GamePositionIndex pos;
@@ -109,6 +116,7 @@ struct CandidateSlice {
   std::vector<Move> candidates;
   std::vector<float> rows;  // candidates.size() x input_floats(spec)
   std::vector<float> targets;
+  std::vector<float> planes;
 
   bool completes_position() const { return first + candidates.size() == position_candidates; }
 };
@@ -249,13 +257,14 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
 
 // Inference thread: packs queued slices into TensorRT batches (whole slices, up
 // to the batch limit), evaluates, and scatters the teacher's readouts into each
-// slice's target block.
+// slice's target block (plus its plane block, on a run that labels planes).
 void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_size,
-                    util::ProgressMeter* meter, SliceQueue* queue,
+                    bool with_planes, util::ProgressMeter* meter, SliceQueue* queue,
                     std::vector<CandidateSlice>* done, std::mutex* done_mutex) {
   std::vector<CandidateSlice> pending;
   std::vector<float> inputs(static_cast<size_t>(batch_size) * row_floats);
   std::vector<nn::Eval> evals(static_cast<size_t>(batch_size));
+  std::vector<float> masks(with_planes ? static_cast<size_t>(batch_size) * kPlaneFloats : 0);
 
   auto flush = [&]() {
     if (pending.empty()) return;
@@ -265,10 +274,19 @@ void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_
                   p.rows.size() * sizeof(float));
       rows += static_cast<int>(p.candidates.size());
     }
-    service->evaluate(inputs.data(), rows, evals.data());
+    if (with_planes) {
+      service->evaluate_with_masks(inputs.data(), rows, evals.data(), masks.data());
+    } else {
+      service->evaluate(inputs.data(), rows, evals.data());
+    }
     int cursor = 0;
     for (CandidateSlice& p : pending) {
       p.targets.resize(p.candidates.size() * move_set_eval::kTargetFloatsV1);
+      if (with_planes) {
+        p.planes.assign(masks.data() + static_cast<size_t>(cursor) * kPlaneFloats,
+                        masks.data() + (static_cast<size_t>(cursor) + p.candidates.size()) *
+                                         kPlaneFloats);
+      }
       for (size_t c = 0; c < p.candidates.size(); ++c) {
         const nn::Eval& e = evals[static_cast<size_t>(cursor++)];
         float* t = p.targets.data() + c * move_set_eval::kTargetFloatsV1;
@@ -313,6 +331,7 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
     const CandidateSlice& head = slices[i];
     std::vector<Move> candidates;
     std::vector<float> targets;
+    std::vector<float> planes;
     candidates.reserve(head.position_candidates);
     targets.reserve(static_cast<size_t>(head.position_candidates) * move_set_eval::kTargetFloatsV1);
     size_t j = i;
@@ -320,9 +339,10 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
       const CandidateSlice& s = slices[j];
       candidates.insert(candidates.end(), s.candidates.begin(), s.candidates.end());
       targets.insert(targets.end(), s.targets.begin(), s.targets.end());
+      planes.insert(planes.end(), s.planes.begin(), s.planes.end());
     }
     assert(candidates.size() == head.position_candidates);
-    writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets,
+    writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets, planes,
                          head.num_legal_moves);
     i = j;
   }
@@ -369,15 +389,19 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
     workers.emplace_back(encode_worker, buf.data(), std::cref(dict), std::cref(spec),
                          std::cref(opt), std::cref(work), &next, &queue);
   const int row_floats = input_floats(spec);
-  std::thread gpu(inference_loop, service, row_floats, batch_size, meter, &queue, &done,
-                  &done_mutex);
+  std::thread gpu(inference_loop, service, row_floats, batch_size, !opt.full_sweep, meter, &queue,
+                  &done, &done_mutex);
   for (auto& w : workers) w.join();
   gpu.join();
 
   const uint32_t flags = move_set_eval::target_flags_from_slog(hdr->flags) |
                          (opt.full_sweep ? move_set_eval::kTargetFlagFullSweep : 0u);
-  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1, model_hash,
-                                     flags);
+  // Stratified (training) files carry the teacher's placement planes; a
+  // full-sweep file does not -- it is evaluation-only with value-based metrics,
+  // and its positions run to sweep_cap candidates (move_set_eval_target_log.h).
+  const uint32_t record_planes = opt.full_sweep ? 0u : move_set_eval::kTargetPlanes;
+  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1,
+                                     record_planes, model_hash, flags);
   write_positions(done, &writer);
   writer.close();
 }
@@ -438,6 +462,9 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
+    // A stratified run labels placement planes, so the teacher's masks must
+    // come back from the device (a sweep labels values alone).
+    params.copy_masks = !opt.full_sweep;
     nn::NNEvaluationService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};

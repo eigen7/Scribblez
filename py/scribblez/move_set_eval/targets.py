@@ -3,10 +3,11 @@ sidecars.
 
 The binary layout is owned by engine/include/training/move_set_eval_target_log.h (one
 TargetFileHeader, then per position a TargetPositionHeader followed by
-its (Move, targets) records); the dtypes below mirror those packed structs and
-are guarded by itemsize checks so a C++ layout change fails loudly here rather
-than misparsing. The record's target width comes from the header
-(`record_floats`), so the record dtype is built per file.
+its (Move, targets, plane scales, quantized planes) records); the dtypes below
+mirror those packed structs and are guarded by itemsize checks so a C++ layout
+change fails loudly here rather than misparsing. The record's target width and
+plane count come from the header (`record_floats`, `record_planes`), so the
+record dtype is built per file.
 """
 
 from __future__ import annotations
@@ -20,15 +21,28 @@ import numpy as np
 from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
 MSET_MAGIC = 0x5445534D  # "MSET"
-MSET_VERSION = 1
+MSET_VERSION = 2
 
 # Version-1 target floats per candidate, in record order (mover's POV).
 TARGET_NAMES_V1 = ("p_win", "p_draw", "p_loss", "sd_mean", "sd_std")
+
+# A record's placement planes, in plane order: the teacher's four masks at the
+# candidate's post-move state (position_eval.model.MASK_HEAD_NAMES, also the
+# SimObservation plane order). Stored absmax-quantized: per plane a float scale
+# and PLANE_CELLS bytes, value = byte * scale (scale = plane max / 255).
+PLANE_NAMES = (
+    "opp_next_placement",
+    "self_next_placement",
+    "opp_win_placement",
+    "self_win_placement",
+)
+PLANE_CELLS = 225
 
 # TargetFileHeader.flags bits (mirrors the .sobs convention).
 MSET_FLAG_OPEN_LEAVES = 2
 # Every position in the file is a capped sweep of its legal candidates rather
 # than a stratified sample -- an evaluation-only file, held out by construction.
+# Such files carry no placement planes (record_planes == 0).
 MSET_FLAG_FULL_SWEEP = 4
 
 _FILE_HEADER = np.dtype(
@@ -39,12 +53,13 @@ _FILE_HEADER = np.dtype(
             "reserved",
             "num_positions",
             "record_floats",
+            "record_planes",
             "flags",
             "model_hash",
         ],
-        "formats": ["<u4", "<u2", "<u2", "<u4", "<u4", "<u4", "S64"],
-        "offsets": [0, 4, 6, 8, 12, 16, 20],
-        "itemsize": 84,
+        "formats": ["<u4", "<u2", "<u2", "<u4", "<u4", "<u4", "<u4", "S64"],
+        "offsets": [0, 4, 6, 8, 12, 16, 20, 24],
+        "itemsize": 88,
     }
 )
 
@@ -58,8 +73,20 @@ _POSITION_HEADER = np.dtype(
 )
 
 
-def _record_dtype(record_floats: int) -> np.dtype:
-    return np.dtype([("move", MOVE_DTYPE), ("targets", "<f4", (record_floats,))])
+def _record_dtype(record_floats: int, record_planes: int) -> np.dtype:
+    fields = [("move", MOVE_DTYPE), ("targets", "<f4", (record_floats,))]
+    if record_planes:
+        fields += [
+            ("plane_scales", "<f4", (record_planes,)),
+            ("planes", "u1", (record_planes, PLANE_CELLS)),
+        ]
+    return np.dtype(fields)
+
+
+def dequantize_planes(planes: np.ndarray, plane_scales: np.ndarray) -> np.ndarray:
+    """(..., P, PLANE_CELLS) uint8 planes with their (..., P) scales -> float32
+    probabilities."""
+    return planes.astype(np.float32) * plane_scales[..., None]
 
 
 @dataclass
@@ -70,6 +97,10 @@ class MsetPosition:
     turn_index: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     targets: np.ndarray  # (K, record_floats) float32
+    # Quantized placement planes and their scales (dequantize_planes recovers
+    # probabilities); None on a plane-less (full-sweep) file.
+    plane_scales: np.ndarray | None  # (K, record_planes) float32
+    planes: np.ndarray | None  # (K, record_planes, PLANE_CELLS) uint8
     # Legal moves the position had, recorded for a swept position so that a
     # sweep the generator's cap truncated is visible as num_legal_moves > K.
     # 0 ("not recorded") on every stratified position.
@@ -81,6 +112,7 @@ class MsetFile:
     model_hash: str  # hex content hash of the teacher position evaluation model ONNX
     flags: int
     record_floats: int
+    record_planes: int
     positions: list[MsetPosition]
 
     @property
@@ -127,7 +159,8 @@ def read_mset(path: str | Path) -> MsetFile:
     if hdr["version"] != MSET_VERSION:
         raise ValueError(f".mset version mismatch in {path}: file={hdr['version']}")
     record_floats = int(hdr["record_floats"])
-    rec_dtype = _record_dtype(record_floats)
+    record_planes = int(hdr["record_planes"])
+    rec_dtype = _record_dtype(record_floats, record_planes)
 
     positions: list[MsetPosition] = []
     off = _FILE_HEADER.itemsize
@@ -144,6 +177,8 @@ def read_mset(path: str | Path) -> MsetFile:
                 turn_index=int(ph["turn_index"]),
                 moves=records["move"],
                 targets=records["targets"],
+                plane_scales=records["plane_scales"] if record_planes else None,
+                planes=records["planes"] if record_planes else None,
                 num_legal_moves=int(ph["num_legal_moves"]),
             )
         )
@@ -153,5 +188,6 @@ def read_mset(path: str | Path) -> MsetFile:
         model_hash=bytes(hdr["model_hash"]).rstrip(b"\x00").decode(),
         flags=int(hdr["flags"]),
         record_floats=record_floats,
+        record_planes=record_planes,
         positions=positions,
     )

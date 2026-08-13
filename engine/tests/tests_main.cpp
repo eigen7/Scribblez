@@ -4137,6 +4137,10 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   fs::create_directories(tmp);
   const std::string path = (tmp / "test.mset").string();
 
+  constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
+  constexpr uint32_t kPlanes = move_set_eval::kTargetPlanes;
+  constexpr uint32_t kCells = move_set_eval::kPlaneCells;
+
   const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                   Glyph::of(Tile::from_char('C'))});
@@ -4145,18 +4149,31 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
   const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f,  41.0f,
                                       0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
+  // Per candidate, kPlanes probability planes with distinct per-plane maxima;
+  // candidate 1's last plane is all-zero (the scale-0 case).
+  std::vector<float> planes(2 * kPlanes * kCells, 0.0f);
+  for (uint32_t c = 0; c < 2; ++c) {
+    for (uint32_t h = 0; h < kPlanes; ++h) {
+      if (c == 1 && h == kPlanes - 1) continue;
+      float* plane = planes.data() + (c * kPlanes + h) * kCells;
+      for (uint32_t i = 0; i < kCells; ++i) {
+        plane[i] = (0.9f - 0.2f * h) * static_cast<float>(i) / (kCells - 1);
+      }
+    }
+  }
 
   {
-    move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, "abc123");
-    w.add_position(3, 11, {m1, m2}, targets);
+    move_set_eval::TargetWriter w(path, kFloats, kPlanes, "abc123");
+    w.add_position(3, 11, {m1, m2}, targets, planes);
     // A swept position records the legal-move count its candidates were drawn
     // from, so a cap-truncated sweep is visible as a shortfall.
-    w.add_position(3, 12, {m1, m2}, targets, /*num_legal_moves=*/9184);
+    w.add_position(3, 12, {m1, m2}, targets, planes, /*num_legal_moves=*/9184);
     w.close();
   }
 
   move_set_eval::TargetReader r(path);
-  ASSERT_EQ(r.record_floats(), move_set_eval::kTargetFloatsV1);
+  ASSERT_EQ(r.record_floats(), kFloats);
+  ASSERT_EQ(r.record_planes(), kPlanes);
   ASSERT_EQ(r.model_hash(), "abc123");
   ASSERT_EQ(r.num_positions(), 2);
   const move_set_eval::TargetReader::Position p0 = r.position(0);
@@ -4168,8 +4185,30 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   ASSERT_EQ(r.move_at(p0, 0), m1);
   ASSERT_EQ(r.move_at(p0, 1), m2);
   for (int c = 0; c < 2; ++c) {
-    for (int j = 0; j < static_cast<int>(move_set_eval::kTargetFloatsV1); ++j) {
-      ASSERT_EQ(r.targets_at(p0, c)[j], targets[c * move_set_eval::kTargetFloatsV1 + j]);
+    for (int j = 0; j < static_cast<int>(kFloats); ++j) {
+      ASSERT_EQ(r.targets_at(p0, c)[j], targets[c * kFloats + j]);
+    }
+  }
+
+  // Planes dequantize to the written probabilities within absmax-quantization
+  // error (half a step, scale/2), with the plane max reconstructed exactly.
+  for (int c = 0; c < 2; ++c) {
+    const float* scales = r.plane_scales_at(p0, c);
+    const uint8_t* cells = r.planes_at(p0, c);
+    for (uint32_t h = 0; h < kPlanes; ++h) {
+      const float* plane = planes.data() + (c * kPlanes + h) * kCells;
+      const float max = *std::max_element(plane, plane + kCells);
+      ASSERT_FLOAT_EQ(scales[h], max / 255.0f);
+      if (max == 0.0f) {
+        for (uint32_t i = 0; i < kCells; ++i) ASSERT_EQ(cells[h * kCells + i], 0);
+        continue;
+      }
+      for (uint32_t i = 0; i < kCells; ++i) {
+        const float back =
+          move_set_eval::dequantized_plane_value(cells[h * kCells + i], scales[h]);
+        ASSERT_NEAR(back, plane[i], scales[h] / 2 + 1e-6f);
+      }
+      ASSERT_EQ(cells[h * kCells + (kCells - 1)], 255);  // the max cell
     }
   }
 
@@ -4181,6 +4220,37 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
     f.write(reinterpret_cast<const char*>(&bad), sizeof(bad));
   }
   ASSERT_THROW(move_set_eval::TargetReader r2(path), std::runtime_error);
+
+  fs::remove_all(tmp);
+}
+
+// The plane-less layout full-sweep files use: record_planes 0 shrinks the
+// record back to Move + value targets, and the plane accessors address a
+// zero-length block.
+TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_mset_noplanes";
+  fs::create_directories(tmp);
+  const std::string path = (tmp / "test.mset").string();
+
+  const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b1, 24,
+                                 {Glyph::of(Tile::from_char('A'))});
+  const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f, 41.0f};
+  {
+    move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
+                                  "abc123", move_set_eval::kTargetFlagFullSweep);
+    w.add_position(0, 5, {m1}, targets, /*planes=*/{}, /*num_legal_moves=*/1);
+    w.close();
+  }
+
+  move_set_eval::TargetReader r(path);
+  ASSERT_EQ(r.record_planes(), 0u);
+  ASSERT_EQ(r.num_positions(), 1);
+  const move_set_eval::TargetReader::Position p0 = r.position(0);
+  ASSERT_EQ(r.move_at(p0, 0), m1);
+  for (int j = 0; j < static_cast<int>(move_set_eval::kTargetFloatsV1); ++j) {
+    ASSERT_EQ(r.targets_at(p0, 0)[j], targets[j]);
+  }
 
   fs::remove_all(tmp);
 }

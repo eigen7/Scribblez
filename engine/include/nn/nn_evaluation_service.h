@@ -36,9 +36,14 @@ class NNEvaluationService : public EvalService {
 
   std::vector<Eval> evaluate(const float* inputs, int count);
 
+  // As evaluate(), also writing each row's four placement masks: count x
+  // kNumMaskHeads x kBoardCells sigmoid probabilities, mask-head order.
+  // Requires the service was constructed with params.copy_masks.
+  void evaluate_with_masks(const float* inputs, int count, Eval* out, float* masks_out);
+
  private:
-  // Run one chunk of at most max_batch_size rows.
-  void evaluate_chunk(const float* inputs, int chunk, Eval* out);
+  // Run one chunk of at most max_batch_size rows; masks_out may be null.
+  void evaluate_chunk(const float* inputs, int chunk, Eval* out, float* masks_out);
 
   NeuralNet net_;
 };

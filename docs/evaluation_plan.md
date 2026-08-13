@@ -155,7 +155,8 @@ In rough order of what each answers.
 4. **The placement-plane ablation.** Evidence tokens with and without the model's
    predicted planes. The kill-test could not price them at a root-WLD readout;
    promotion is the readout that can, and this is the experiment that settles
-   whether the 905-float `.mset` record earns its size.
+   whether the plane-carrying `.mset` record (~950 B against v1's 36 B) earns
+   its size.
 5. **Rollout-ladder rungs**, each behind its `.sobs` flag: value truncation
    against terminal rollouts (with the anchor fraction giving a free read on the
    value model's bias), then self-model plies, then the endgame solver on a

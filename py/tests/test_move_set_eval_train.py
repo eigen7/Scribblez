@@ -338,9 +338,9 @@ def test_move_encoding_version_is_the_engines():
 
 
 def _write_mset(path, positions, flags=0):
-    """Hand-pack a minimal v1 .mset (layout mirrored by targets.py's dtypes),
-    plus its companion .slog. A position is (game_index, turn_index, targets),
-    optionally followed by the swept position's legal-move count."""
+    """Hand-pack a minimal plane-less .mset (layout mirrored by targets.py's
+    dtypes), plus its companion .slog. A position is (game_index, turn_index,
+    targets), optionally followed by the swept position's legal-move count."""
     from scribblez.move_set_eval import targets as T
 
     parts = []
@@ -356,7 +356,7 @@ def _write_mset(path, positions, flags=0):
         ph["num_candidates"] = len(targets)
         ph["num_legal_moves"] = legal[0] if legal else 0
         parts.append(ph.tobytes())
-        rec = np.zeros(len(targets), dtype=T._record_dtype(5))
+        rec = np.zeros(len(targets), dtype=T._record_dtype(5, 0))
         rec["targets"] = targets
         parts.append(rec.tobytes())
     path.write_bytes(b"".join(parts))
