@@ -44,7 +44,7 @@ move set evaluation model scores all N in ONE pass
   → per-candidate WLD, score differential, and placement planes
       │
       ▼
-sim the model's top-ranked candidate            ← the only unconditioned pick
+sim the highest-SCORING move (the greedy anchor)   ← model-independent
       │
       ▼
   ┌─→ append (move, sim observation, that move's predicted planes)
@@ -65,10 +65,19 @@ Rollouts inside the loop climb the [policy ladder](#7-rollout-policy-ladder):
 value-truncated, then self-model plies, then the endgame solver once the bag
 empties.
 
+**The first sim is a mechanical anchor**, not a model choice: the
+highest-raw-score move, as the greedy agent would pick it, regardless of how the
+model ranks it. Two reasons, both from
+[sim_residual_feedback.md](sim_residual_feedback.md). It is cheap insurance
+against model blind spots — the one candidate guaranteed to be simmed is chosen
+by a rule the model cannot be wrong about. And its sim is unusually informative
+evidence: the residual on the obvious move calibrates the rest of the evidence
+set, which a pick correlated with the model's own errors would not do.
+
 **The loop is sequential by design.** Every sim is informed by all prior
 evidence, and if the agent sims `N` candidates it queries the proves-best head
-`N − 1` times — the first pick is the model's own top-ranked candidate and needs
-no query. This is `(B = 1, R = K)` in
+`N − 1` times — the anchor needs no query, and every pick after it is
+evidence-conditioned. This is `(B = 1, R = K)` in
 [sim_residual_feedback.md](sim_residual_feedback.md)'s schedule spectrum, which
 that document already identifies as the design center; batched multi-round
 variants are a fallback, not a step on the way.
@@ -174,7 +183,10 @@ model.
 - **Late fusion is load-bearing**: evidence must not modulate the trunk's own
   layers, or the trunk cannot be cached across loop iterations.
 - **Empty evidence must degrade to the plain one-pass model**, and training
-  covers that case explicitly — it is what the first pick of every turn uses.
+  covers that case explicitly. Every turn starts there: the unconditioned pass
+  is what produces the predicted planes the first evidence token carries, even
+  though the candidate it is carried for is chosen by the greedy anchor rather
+  than by that pass.
 
 ### 3. The proves-best head
 
@@ -216,6 +228,13 @@ including zero — the distribution the deployed agent actually walks.
 The loop from [the destination](#the-destination), as a new `--player --type=`.
 Reuses `mset_sim_agent`'s candidate generation, encoding, and endgame handoff;
 replaces its fixed top-K sim set with the proves-best loop.
+
+- **First sim: the greedy anchor** — the highest-raw-score candidate, taken
+  straight off the generated move list, not from the model's ranking. It is the
+  one pick in the turn that does not depend on a network.
+- **Every later sim**: argmax of the proves-best head over the unsimmed
+  candidates, conditioned on the evidence so far.
+- **Final pick**: best simmed candidate by simulation value.
 
 Admits early stopping — halt when no unsimmed candidate is likely to prove best
 — which is where a budget saving turns directly into strength per second.
@@ -284,9 +303,9 @@ Three networks, trained in this order. Each depends on the one above it.
   stage sits between trunk and heads, which is also what lets the position
   evaluation model take the same evidence through the same stage.
 - **Bootstrapping**: the first trajectory corpus is generated with the
-  unconditioned student as proposer (an empty evidence set is exactly what its
-  first pick uses); later generations propose with the current conditioned
-  model.
+  unconditioned student as proposer — it is already correct at the empty
+  evidence set, and the greedy anchor supplies the first sim regardless of the
+  proposer. Later generations propose with the current conditioned model.
 
 ## Rack inference — parked
 
