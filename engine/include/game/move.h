@@ -71,11 +71,6 @@ class Move {
                                            // (.slog / .sobs) are byte-deterministic
   uint16_t square_mask_ = 0;               // 2 B; PLAY only; see class comment
   uint16_t score_ = 0;                     // 2 B; a play's max is well under 2^16
-
-  // Serialized Moves are read cross-language; the format-layout document
-  // (data/format_layout.h) describes these members' offsets through this
-  // friend.
-  friend struct FormatFieldAccess;
 };
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");

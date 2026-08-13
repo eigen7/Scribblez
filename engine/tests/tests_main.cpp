@@ -35,6 +35,7 @@
 #include "training/training_targets.h"
 #include "training/training_task.h"
 #include "util/math.h"
+#include "util/metaprogramming.h"
 #include "util/string.h"
 
 #include <boost/json.hpp>
@@ -4131,6 +4132,43 @@ TEST(SimRunner, OppLeaveFromReplay) {
   // Mover at turn 0: the opponent has not acted; nothing is known.
   ASSERT_EQ(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size(), 0);
 }
+
+// util/metaprogramming.h's consteval reflection helpers, exercised on a
+// local struct. The assertions are static_asserts -- the test body passing
+// is the compile succeeding -- with a TEST wrapper so the coverage is
+// visible in the suite.
+namespace metaprog_test {
+struct Sample {
+ public:
+  uint32_t plain;
+
+ private:
+  std::array<uint16_t, 3> squares_;
+
+ public:
+  // squares_ is only reflected on, never read; silence -Wunused-private-field
+  // style diagnostics by touching it.
+  const void* touch() const { return &squares_; }
+};
+
+consteval bool helpers_hold() {
+  if (scribblez::util::num_members<Sample>() != 2) return false;
+  const auto members = scribblez::util::nonstatic_data_members<Sample>();
+  if (!scribblez::util::type_is<uint32_t>(std::meta::type_of(members[0]))) return false;
+  // The private member reflects, and its reader-facing name drops the
+  // trailing underscore.
+  if (std::string_view(scribblez::util::member_name(members[1])) != "squares") return false;
+  const auto arr = std::meta::dealias(std::meta::type_of(members[1]));
+  if (!scribblez::util::is_specialization_of(arr, ^^std::array)) return false;
+  if (!scribblez::util::type_is<uint16_t>(scribblez::util::std_array_element(arr))) return false;
+  if (scribblez::util::std_array_extent(arr) != 3) return false;
+  if (std::string_view(scribblez::util::dec_string(0)) != "0") return false;
+  if (std::string_view(scribblez::util::dec_string(1048576)) != "1048576") return false;
+  return true;
+}
+}  // namespace metaprog_test
+
+TEST(Metaprogramming, ConstevalReflectionHelpers) { static_assert(metaprog_test::helpers_hold()); }
 
 // The FFI-served format-layout document: itemsizes and constants are the
 // compiler's own, so this exercises the JSON transport, the nested-struct
