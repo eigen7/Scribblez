@@ -1,7 +1,10 @@
-cmake_minimum_required(VERSION 3.16)
+# 3.30 is required for CXX_STANDARD 26 to resolve to -std=c++26 on GCC (the
+# GNU compiler tables gate that mapping on CMake >= 3.30 and GCC >= 14); the
+# Docker image's cmake is upgraded past Ubuntu 24.04's stock 3.28 to match.
+cmake_minimum_required(VERSION 3.30)
 project(scribblez CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

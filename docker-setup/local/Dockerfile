@@ -28,14 +28,19 @@ RUN apt-get update && \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# 2) Core toolchain + Boost (for the C++ engine).
+# 2) Core toolchain + Boost (for the C++ engine). libonnx-dev/libprotobuf-dev
+#    supply the generated ONNX message headers and libprotobuf.so that
+#    scribblez_nn uses to read the input-encoding arm out of an exported
+#    model's metadata_props from C++. cmake is installed separately in 2c,
+#    from a repo new enough to know the C++26 flags for gcc-16.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sudo gosu curl wget rsync git vim tmux ack gdb lsof ca-certificates \
-      build-essential cmake ninja-build pkg-config \
+      build-essential ninja-build pkg-config \
       gcc-13 g++-13 clang-19 clangd-19 clang-format-19 clang-tidy-19 \
       libgtest-dev \
       libboost-program-options-dev libboost-filesystem-dev libboost-json-dev \
       libboost-system-dev \
+      libeigen3-dev libprotobuf-dev sqlite3 \
       python3 python3-pip python3-dev python-is-python3 \
       golang-go libonnx-dev && \
     rm -rf /var/lib/apt/lists/* && \
@@ -45,10 +50,56 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100 && \
     update-alternatives --install /usr/bin/clang-tidy   clang-tidy   /usr/bin/clang-tidy-19   100
 
-# 3) Node.js 22 (NodeSource) for the Vite-based web UI.
+# 2b) Upgrade the default gcc/g++ to GCC 16, for C++26 reflection
+#     (-std=c++26 -freflection, experimental as of GCC 16.1). Ubuntu 24.04's
+#     own archive tops out at gcc-14, so this pulls from the
+#     ubuntu-toolchain-r/test PPA.
+#     /usr/bin/gcc and /usr/bin/g++ ship as plain symlinks (not
+#     update-alternatives slaves) owned by the gcc/g++ packages that
+#     build-essential pulls in, so registering both versions with
+#     update-alternatives and selecting gcc-16 is what flips the default;
+#     cc/c++ already resolve through /usr/bin/gcc and /usr/bin/g++, so they
+#     follow automatically. gcc-13/g++-13 stay installed (build-essential
+#     depends on them directly) and remain selectable via
+#     `update-alternatives --config gcc` as a rollback.
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC8EC952E2A0E1FBDC5090F6A2C277A0A352154E5" \
+      | gpg --dearmor -o /etc/apt/keyrings/ubuntu-toolchain-r.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain-r.gpg] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu noble main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gcc-16 g++-16 && \
+    rm -rf /var/lib/apt/lists/* && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 130 \
+      --slave /usr/bin/g++ g++ /usr/bin/g++-13 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160 \
+      --slave /usr/bin/g++ g++ /usr/bin/g++-16 && \
+    update-alternatives --set gcc /usr/bin/gcc-16
+
+# 2c) Upgrade cmake past what Ubuntu 24.04 ships (3.28.3), from Kitware's own
+#     apt repo: CMake only maps CXX_STANDARD 26 to -std=c++26 for GCC >= 14
+#     as of CMake 3.30, well past what noble carries. This also deletes the
+#     cmake/cpack/ctest binaries the TensorRT base image bakes into
+#     /usr/local/bin (untracked by dpkg, so apt can't replace them) -- they
+#     precede /usr/bin on PATH and would otherwise keep shadowing the
+#     upgraded, apt-managed cmake.
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://apt.kitware.com/keys/kitware-archive-latest.asc \
+      | gpg --dearmor -o /etc/apt/keyrings/kitware-archive-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main" \
+      > /etc/apt/sources.list.d/kitware.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends cmake && \
+    rm -rf /var/lib/apt/lists/* \
+      /usr/local/bin/cmake /usr/local/bin/cpack /usr/local/bin/ctest
+
+# 3) Node.js 22 (NodeSource), for the Vite-based web UI, and the CLI coding
+#    agents (Claude Code, Codex) that run globally in the container.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g @anthropic-ai/claude-code @openai/codex
 
 # 4) Python deps. Install PyTorch (CUDA-12.9 build, lined up with the TensorRT
 #    base) so future training/self-play work has it ready. We use the stable
@@ -58,7 +109,9 @@ RUN pip3 install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu129 \
       torch torchvision torchaudio
 RUN pip3 install --no-cache-dir \
-      numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime
+      numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime \
+      ruff pypdf
+RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
 
 # 5) Playwright's Chromium (+ its system libraries) for headless rendering of
 #    board positions into web-styled PNGs (py/scripts/sample_test_subset.py).
@@ -70,40 +123,7 @@ RUN npx --yes playwright@1.61.0 install --with-deps chromium && \
     chmod -R a+rx /opt/ms-playwright && \
     rm -rf /var/lib/apt/lists/*
 
-# 6) Temporary home for extra dependencies. Putting them here allows us to quickly rebuild the image
-#    without having to rebuild the entire image. Items here should later be moved to the more
-#    appropriate location above.
-RUN apt-get update && \
-    apt-get install -y sqlite3 && \
-    rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
-
-# 6b) Install Node.js and the CLI coding agents (Claude Code, Codex) globally
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code @openai/codex
-
-# 6c) Eigen
-RUN apt-get update && \
-    apt-get install -y libeigen3-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# 6d) ruff (python formatting)
-RUN pip3 install --no-cache-dir ruff
-
-# 6e) Protobuf headers, for reading ONNX metadata_props from C++: scribblez_nn
-#     parses the exported model's input-encoding arm out of the model file via
-#     the system ONNX protobuf (libonnx-dev in section 2 supplies the generated
-#     message headers; this supplies google/protobuf and libprotobuf.so).
-RUN apt-get update && \
-    apt-get install -y libprotobuf-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# 6f) pypdf (pdf reading)
-RUN pip3 install --no-cache-dir pypdf
-
-# 6g) rclone, for moving data to/from the R2 results bucket (py/cloud tooling:
+# 6) rclone, for moving data to/from the R2 results bucket (py/cloud tooling:
 #     credential checks, result syncing, binary pushes). Installed from
 #     rclone.org: Ubuntu's packaged rclone (1.60) predates the Cloudflare-R2
 #     provider accommodations and mishandles R2 uploads.
