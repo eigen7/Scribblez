@@ -206,6 +206,15 @@ they are suppressed automatically. The probability form is only correct on an
 small but non-zero it reads ~0.5 when noise-dominated, or ~1 when the duplicate
 is reliably a hair better, and spends the sim either way.
 
+Once D1 truncates rollouts, the cancellation stops being exact: two near-identical
+leaves get slightly different values from the leaf model, and because that
+differential is deterministic given the boards it is a *bias* — more rollouts
+converge to it rather than average it away. It is bounded by the leaf model's
+local smoothness, measurable against D1's anchor fraction of terminal rollouts
+(which do cancel exactly), and does not change the ordering unless it exceeds a
+real candidate's improvement. See
+[sim_residual_feedback.md](sim_residual_feedback.md).
+
 **Labels come free from CRN sims**: any evidence prefix plus a held-out simmed
 candidate is a labeled row. The improvement must be measured against the
 best-so-far **over the same seed set** — that pairing is what makes a

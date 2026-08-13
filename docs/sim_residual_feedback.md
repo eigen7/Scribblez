@@ -272,7 +272,9 @@ Details to be worked out with Option 2:
   against a board differing in a few inert letters and returns the *same*
   outcome. Their paired difference is near-zero with almost no spread, so
   their expected gain is ~0 and the target suppresses redundant sims **by
-  construction** — no novelty penalty or footprint dedup required.
+  construction** — no novelty penalty or footprint dedup required. (That
+  cancellation is exact only while rollouts run to a terminal state; see the
+  truncation caveat below.)
 
   The probability form is adequate only in the *exact*-tie case requirement B
   above describes: if a candidate sims identically, it never strictly exceeds,
@@ -292,6 +294,33 @@ Details to be worked out with Option 2:
   not, and silently reintroduces the very noise the pairing cancels. The
   aggregate record suffices — with identical seed sets, the difference of
   means *is* the paired mean difference.
+- **Value truncation weakens the cancellation, and does so as a bias.** Once
+  D1 truncates rollouts and reads the value model at the horizon, two
+  cosmetically-different candidates no longer return identical outcomes: their
+  leaves differ by those few letters, and the model evaluates them slightly
+  differently. That differential is *deterministic given the boards*, so it is
+  bias rather than variance — the paired mean difference converges to it
+  instead of averaging to zero, and more rollouts do not remove it. A
+  duplicate's expected gain under truncation is therefore not structurally 0
+  but bounded by the leaf model's local smoothness, and the effect is worst at
+  shallow horizons, where genuine divergence has not yet accumulated and the
+  difference between leaves is nearly pure model idiosyncrasy.
+
+  The argument survives, for two reasons. The comparison that matters is a
+  duplicate's expected gain against a genuinely different candidate's, and the
+  spurious term has to exceed a real improvement to misorder them. And the
+  head *predicts* expected gain from the move and the evidence rather than
+  computing it: per-instantiation leaf error is not generalizable, so a
+  regularized head regresses it toward zero. It survives only where the leaf
+  model's bias is systematic enough to be learnable — consistently preferring
+  one blank designation, say — which is a leaf-model calibration problem, not
+  an acquisition-target one.
+
+  Detection is already free. D1 keeps an anchor fraction of terminal rollouts
+  per candidate, and those cancel exactly under CRN; the gap between a
+  near-duplicate pair's measured gain on the terminal subset and on the
+  truncated estimate isolates the spurious component directly. This is one of
+  the things the anchor fraction is for.
 - **Winner's curse.** The best-so-far is a max of noisy sim estimates and is
   biased upward, and near-ties make the label a coin flip driven by rollout
   noise. The rollout-count inputs exist for exactly this; the head is
