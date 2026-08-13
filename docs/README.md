@@ -6,12 +6,15 @@
   beatable (context-blind leave evaluation, naive rack inference), and the
   target architecture — public belief system, unified Q/V network, GADDAG +
   Monte Carlo search.
-- **[roadmap.md](roadmap.md)** — the variant we develop in (face-up leaves),
-  what is built (the position evaluation model, self-play diversification, the
-  evaluation machinery), and the plan from here:
-  the move set evaluation model, rack inference, sim scheduling, the
-  rollout-policy ladder (value truncation, self-model plies, endgame solver),
-  and the experiments that gate each track.
+- **[roadmap.md](roadmap.md)** — the implementation plan: the variant we
+  develop in (face-up leaves), the agent everything converges on (one-pass
+  candidate scoring, then a sequential sim loop driven by a proves-best head
+  over evidence), what is already built, what is left to write, and the three
+  models that have to be trained to feed it.
+- **[evaluation_plan.md](evaluation_plan.md)** — the other half: what past
+  measurements established, the match/eval machinery and its known gaps, and
+  the evaluation to run once the agent is built. Deliberately separate, because
+  nothing in the roadmap is gated on a result.
 
 ## The system as built
 

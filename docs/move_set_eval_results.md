@@ -1,11 +1,12 @@
 # Move set evaluation v1: the A3 curves
 
-What the first in-variant distillation run measured. A3's deliverable is these
-curves, not a verdict: the bar they are read against belongs to A4
-([roadmap.md](roadmap.md)), which prices what a recall miss costs in win rate.
-Read this as "how well does the learned filter reproduce the teacher's ranking,
-and by how much does it beat the incumbent" — not as "the filter is ready to
-replace exact evaluation".
+What the first in-variant distillation run measured. These are curves, not a
+verdict. Read them as "how well does the learned filter reproduce the teacher's
+ranking, and by how much does it beat the incumbent" — not as "the filter is
+ready to replace exact evaluation". The sensitivity sweep that was meant to
+convert them into a win-rate bar returned a null
+([evaluation_plan.md](evaluation_plan.md)), so the direct comparison against
+exact evaluation is what settles that question.
 
 ## What the filter is for
 
@@ -111,11 +112,12 @@ decisively on the slice where a filter's failures actually show up. The
 previous shakeout's numbers were provisional — generated out-of-variant against
 a hidden-leave teacher — and this run is their re-derivation.
 
-**Not established.** Whether that margin is *enough*. The A4 sensitivity sweep
-sets the recall/regret bar by measuring the match-play cost of a miss; until it
-runs, 0.687 is a number without a target. The filter must also beat the
-exact-evaluation agent at equal budget before it replaces exact evaluation
-anywhere.
+**Not established.** Whether that margin is *enough*. The sensitivity sweep that
+was to price a recall miss in win-rate terms found no measurable cost at 400
+games per arm ([evaluation_plan.md](evaluation_plan.md)), so 0.687 still has no
+target attached. What settles it is the direct comparison against per-candidate
+exact evaluation at equal rollout budget — a non-inferiority test, since the
+filter is ~13× cheaper per turn.
 
 **Not comparable.** The earlier shakeout reported recall@1 0.761 against equity
 0.591. That was measured on a *stratified* holdout — ~15 candidates per
