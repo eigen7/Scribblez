@@ -135,7 +135,7 @@ add_library(scribblez_nn STATIC
   src/nn/neural_net.cpp
   src/nn/nn_evaluation_service.cpp
   src/nn/move_set_net.cpp
-  src/nn/move_set_eval_service.cpp)
+  src/nn/trt_move_set_eval_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}

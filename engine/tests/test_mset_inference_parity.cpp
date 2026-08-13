@@ -20,9 +20,9 @@
 // its own plans and the cache case counts only the plans it built itself.
 
 #include "nn/eval_service.h"
-#include "nn/move_set_eval_service.h"
 #include "nn/move_set_net.h"
 #include "nn/neural_net.h"
+#include "nn/trt_move_set_eval_service.h"
 #include "training/move_set_encoder.h"
 
 #include <gtest/gtest.h>
