@@ -14,7 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
+#include <meta>
 #include <string>
 
 namespace scribblez {
@@ -23,103 +23,139 @@ namespace {
 
 namespace json = boost::json;
 
-// How each member type describes itself into a field object -- one mapping
-// per line. Scalars carry a numpy dtype code (little-endian, matching the
-// on-disk packed structs); one-byte enums and wrappers serialize as their
-// underlying byte; std::array members add a shape; char arrays are numpy
-// fixed bytes; structs that are themselves described reference their entry
-// by name; Rack is opaque to readers and maps to a numpy void of its size.
+// Each struct's field list is enumerated with P2996 reflection, so a member
+// added, removed, renamed, retyped, or reordered in a struct re-derives the
+// document with no restatement to keep in sync. What remains hand-written is
+// exactly the policy: the type -> dtype-code table below, and which structs
+// are served (build_structs).
+
+struct FieldInfo {
+  const char* name;  // reader-facing (trailing '_' stripped)
+  std::size_t offset;
+  const char* dtype;       // numpy code, or null when struct_ref is set
+  const char* struct_ref;  // referenced struct's document key, or null
+  std::size_t count;       // subarray element count; 0 = scalar
+};
+
+// The numpy dtype code of one scalar member type -- one mapping per line,
+// little-endian to match the on-disk packed structs. One-byte enums and
+// wrappers (MoveType, Glyph, bool) serialize as their underlying byte.
+consteval const char* scalar_code(std::meta::info t) {
+  if (t == std::meta::dealias(^^uint8_t) || t == ^^Glyph || t == ^^MoveType || t == ^^bool)
+    return "u1";
+  if (t == std::meta::dealias(^^int8_t)) return "i1";
+  if (t == std::meta::dealias(^^uint16_t)) return "<u2";
+  if (t == std::meta::dealias(^^int16_t)) return "<i2";
+  if (t == std::meta::dealias(^^uint32_t)) return "<u4";
+  if (t == std::meta::dealias(^^int32_t)) return "<i4";
+  if (t == std::meta::dealias(^^uint64_t)) return "<u8";
+  if (t == std::meta::dealias(^^int64_t)) return "<i8";
+  if (t == std::meta::dealias(^^float)) return "<f4";
+  return nullptr;
+}
+
+// Member types that are themselves served structs become nested references,
+// keyed by the type's own identifier (build_structs serves them under it).
+consteval bool is_served_struct(std::meta::info t) { return t == ^^Move || t == ^^SimObservation; }
+
+// std::to_string is not yet constexpr in this libstdc++.
+consteval std::string dec(std::size_t v) {
+  std::string s;
+  do {
+    s.insert(s.begin(), static_cast<char>('0' + v % 10));
+    v /= 10;
+  } while (v != 0);
+  return s;
+}
+
+// The dtype half of one field: a nested reference, a text field (char array
+// -> numpy fixed bytes), an opaque aggregate readers skip over (Rack -> numpy
+// void), a subarray, or a scalar. A member type none of those cover is a
+// compile-time error naming the gap.
+consteval void describe_type(FieldInfo* f, std::meta::info type, std::size_t member_size) {
+  std::meta::info t = std::meta::dealias(type);
+  if (is_served_struct(t)) {
+    f->struct_ref = std::define_static_string(std::meta::identifier_of(t));
+    return;
+  }
+  if (std::meta::is_array_type(t)) {
+    if (std::meta::remove_all_extents(t) != ^^char) throw "non-char array member in format layout";
+    f->dtype = std::define_static_string("S" + dec(member_size));
+    return;
+  }
+  if (t == ^^Rack) {
+    f->dtype = std::define_static_string("V" + dec(member_size));
+    return;
+  }
+  if (std::meta::has_template_arguments(t) && std::meta::template_of(t) == ^^std::array) {
+    const auto args = std::meta::template_arguments_of(t);
+    f->count = std::meta::extract<std::size_t>(args[1]);
+    t = std::meta::dealias(args[0]);
+  }
+  f->dtype = scalar_code(t);
+  if (!f->dtype) throw "unmapped member type in format layout";
+}
+
+// Move's private members end in '_'; the on-disk field names do not.
+consteval const char* clean_name(std::string_view raw) {
+  std::string n(raw);
+  if (!n.empty() && n.back() == '_') n.pop_back();
+  return std::define_static_string(n);
+}
+
 template <typename T>
-struct MemberDtype;
+consteval std::size_t num_members() {
+  return std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked()).size();
+}
 
-#define SCRIBBLEZ_DTYPE(T, code)                                    \
-  template <>                                                       \
-  struct MemberDtype<T> {                                           \
-    static void describe(json::object* f) { (*f)["dtype"] = code; } \
+template <typename T>
+consteval auto reflect_fields() {
+  std::array<FieldInfo, num_members<T>()> out{};
+  const auto members =
+    std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked());
+  for (std::size_t i = 0; i < members.size(); ++i) {
+    const auto m = members[i];
+    out[i].name = clean_name(std::meta::identifier_of(m));
+    out[i].offset = static_cast<std::size_t>(std::meta::offset_of(m).bytes);
+    describe_type(&out[i], std::meta::type_of(m), std::meta::size_of(m));
   }
-#define SCRIBBLEZ_STRUCT_REF(T)                                                             \
-  template <>                                                                               \
-  struct MemberDtype<T> {                                                                   \
-    static void describe(json::object* f) { (*f)["dtype"] = json::object{{"struct", #T}}; } \
-  }
+  return out;
+}
 
-SCRIBBLEZ_DTYPE(uint8_t, "u1");
-SCRIBBLEZ_DTYPE(int8_t, "i1");
-SCRIBBLEZ_DTYPE(uint16_t, "<u2");
-SCRIBBLEZ_DTYPE(int16_t, "<i2");
-SCRIBBLEZ_DTYPE(uint32_t, "<u4");
-SCRIBBLEZ_DTYPE(int32_t, "<i4");
-SCRIBBLEZ_DTYPE(uint64_t, "<u8");
-SCRIBBLEZ_DTYPE(int64_t, "<i8");
-SCRIBBLEZ_DTYPE(float, "<f4");
-SCRIBBLEZ_DTYPE(bool, "u1");
-SCRIBBLEZ_DTYPE(MoveType, "u1");
-SCRIBBLEZ_DTYPE(Glyph, "u1");
-SCRIBBLEZ_DTYPE(Rack, "V" + std::to_string(sizeof(Rack)));
-SCRIBBLEZ_STRUCT_REF(Move);
-SCRIBBLEZ_STRUCT_REF(SimObservation);
-
-#undef SCRIBBLEZ_DTYPE
-#undef SCRIBBLEZ_STRUCT_REF
-
-template <std::size_t N>
-struct MemberDtype<char[N]> {
-  static void describe(json::object* f) { (*f)["dtype"] = "S" + std::to_string(N); }
-};
-
-template <typename E, std::size_t N>
-struct MemberDtype<std::array<E, N>> {
-  static void describe(json::object* f) {
-    MemberDtype<E>::describe(f);
-    (*f)["shape"] = json::array{N};
-  }
-};
-
-// Accumulates one struct's fields and enforces coverage: the described
-// fields must tile sizeof(struct) exactly. These formats are packed, with
-// any reserved byte an explicit member, so every byte belongs to exactly one
-// member -- and a member added to the struct without being described here
-// leaves a hole that build() rejects. That turns the field lists' apparent
-// duplication into a checked restatement: add-a-field breaks the coverage
-// sum, remove/rename breaks offsetof at compile time, and a type or order
-// change re-derives automatically.
-class StructBuilder {
- public:
-  StructBuilder(const char* name, std::size_t itemsize) : name_(name), itemsize_(itemsize) {}
-
-  template <typename T>
-  void add(const char* field_name, std::size_t offset) {
+template <typename T>
+json::object struct_json() {
+  static constexpr auto fields = reflect_fields<T>();
+  json::array out;
+  for (const FieldInfo& fi : fields) {
     json::object f;
-    f["name"] = field_name;
-    f["offset"] = offset;
-    MemberDtype<T>::describe(&f);
-    fields_.push_back(std::move(f));
-    covered_ += sizeof(T);
-  }
-
-  json::object build() && {
-    if (covered_ != itemsize_) {
-      throw std::logic_error(std::string("format_layout: fields of ") + name_ + " cover " +
-                             std::to_string(covered_) + " of " + std::to_string(itemsize_) +
-                             " bytes; a member was added without describing it");
+    f["name"] = fi.name;
+    f["offset"] = fi.offset;
+    if (fi.struct_ref) {
+      f["dtype"] = json::object{{"struct", fi.struct_ref}};
+    } else {
+      f["dtype"] = fi.dtype;
     }
-    return {{"itemsize", itemsize_}, {"fields", std::move(fields_)}};
+    if (fi.count > 0) f["shape"] = json::array{fi.count};
+    out.push_back(std::move(f));
   }
+  return {{"itemsize", sizeof(T)}, {"fields", std::move(out)}};
+}
 
- private:
-  const char* name_;
-  std::size_t itemsize_;
-  std::size_t covered_ = 0;
-  json::array fields_;
-};
-
-// The stringized member is the reader-facing field name, so it must be the
-// clean on-disk name -- use FIELD only on structs whose members carry no
-// trailing underscore; FIELD_AS names the field explicitly.
-#define FIELD(b, Struct, member) \
-  (b).add<decltype(Struct::member)>(#member, offsetof(Struct, member))
-#define FIELD_AS(b, Struct, member, name) \
-  (b).add<decltype(Struct::member)>(name, offsetof(Struct, member))
+json::object build_structs() {
+  json::object s;
+  s["Move"] = struct_json<Move>();
+  s["SimObservation"] = struct_json<SimObservation>();
+  s["SobsFileHeader"] = struct_json<SimObsFileHeader>();
+  s["SobsPositionHeader"] = struct_json<SimObsPositionHeader>();
+  s["SobsRecord"] = struct_json<SimObsRecord>();
+  s["MsetFileHeader"] = struct_json<move_set_eval::TargetFileHeader>();
+  s["MsetPositionHeader"] = struct_json<move_set_eval::TargetPositionHeader>();
+  s["SlogFileHeader"] = struct_json<binlog::FileHeader>();
+  s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
+  s["SlogInitialRacks"] = struct_json<binlog::InitialRacks>();
+  s["SlogTurnBlob"] = struct_json<binlog::TurnBlob>();
+  return s;
+}
 
 json::object build_constants() {
   json::object c;
@@ -152,140 +188,11 @@ json::object build_constants() {
   return c;
 }
 
-json::object build_structs();  // needs FormatFieldAccess, defined after it
-
-json::value build() { return {{"structs", build_structs()}, {"constants", build_constants()}}; }
-
-}  // namespace
-
-// Move's members are private; this friend (declared in move.h) is the one
-// place outside the class that reads their offsets.
-struct FormatFieldAccess {
-  static json::object move_struct() {
-    StructBuilder b("Move", sizeof(Move));
-    FIELD_AS(b, Move, type_, "type");
-    FIELD_AS(b, Move, horizontal_, "horizontal");
-    FIELD_AS(b, Move, start_, "start");
-    FIELD_AS(b, Move, num_played_, "num_played");
-    FIELD_AS(b, Move, glyphs_, "glyphs");
-    FIELD_AS(b, Move, reserved_, "reserved");
-    FIELD_AS(b, Move, square_mask_, "square_mask");
-    FIELD_AS(b, Move, score_, "score");
-    return std::move(b).build();
-  }
-};
-
-namespace {
-
-json::object build_structs() {
-  using binlog::FileHeader;
-  using binlog::GameMetadata;
-  using binlog::InitialRacks;
-  using binlog::TurnBlob;
-  using move_set_eval::TargetFileHeader;
-  using move_set_eval::TargetPositionHeader;
-
-  json::object s;
-  s["Move"] = FormatFieldAccess::move_struct();
-  {
-    StructBuilder b("SimObservation", sizeof(SimObservation));
-    FIELD(b, SimObservation, n);
-    FIELD(b, SimObservation, wins);
-    FIELD(b, SimObservation, draws);
-    FIELD(b, SimObservation, losses);
-    FIELD(b, SimObservation, delta_sum);
-    FIELD(b, SimObservation, delta_sq_sum);
-    FIELD(b, SimObservation, opp_next_count);
-    FIELD(b, SimObservation, self_next_count);
-    FIELD(b, SimObservation, opp_win_count);
-    FIELD(b, SimObservation, self_win_count);
-    s["SimObservation"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SobsFileHeader", sizeof(SimObsFileHeader));
-    FIELD(b, SimObsFileHeader, magic);
-    FIELD(b, SimObsFileHeader, version);
-    FIELD(b, SimObsFileHeader, reserved);
-    FIELD(b, SimObsFileHeader, num_positions);
-    FIELD(b, SimObsFileHeader, flags);
-    s["SobsFileHeader"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SobsPositionHeader", sizeof(SimObsPositionHeader));
-    FIELD(b, SimObsPositionHeader, game_index);
-    FIELD(b, SimObsPositionHeader, turn_index);
-    FIELD(b, SimObsPositionHeader, num_candidates);
-    FIELD(b, SimObsPositionHeader, rollouts);
-    FIELD(b, SimObsPositionHeader, base_seed);
-    s["SobsPositionHeader"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SobsRecord", sizeof(SimObsRecord));
-    FIELD(b, SimObsRecord, move);
-    FIELD(b, SimObsRecord, obs);
-    s["SobsRecord"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("MsetFileHeader", sizeof(TargetFileHeader));
-    FIELD(b, TargetFileHeader, magic);
-    FIELD(b, TargetFileHeader, version);
-    FIELD(b, TargetFileHeader, reserved);
-    FIELD(b, TargetFileHeader, num_positions);
-    FIELD(b, TargetFileHeader, record_floats);
-    FIELD(b, TargetFileHeader, record_planes);
-    FIELD(b, TargetFileHeader, flags);
-    FIELD(b, TargetFileHeader, model_hash);
-    s["MsetFileHeader"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("MsetPositionHeader", sizeof(TargetPositionHeader));
-    FIELD(b, TargetPositionHeader, game_index);
-    FIELD(b, TargetPositionHeader, turn_index);
-    FIELD(b, TargetPositionHeader, num_candidates);
-    FIELD(b, TargetPositionHeader, num_legal_moves);
-    s["MsetPositionHeader"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SlogFileHeader", sizeof(FileHeader));
-    FIELD(b, FileHeader, magic);
-    FIELD(b, FileHeader, version);
-    FIELD(b, FileHeader, flags);
-    FIELD(b, FileHeader, num_games);
-    FIELD(b, FileHeader, num_sample_positions);
-    s["SlogFileHeader"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SlogGameMetadata", sizeof(GameMetadata));
-    FIELD(b, GameMetadata, start_offset);
-    FIELD(b, GameMetadata, num_turns);
-    FIELD(b, GameMetadata, sampled_turn);
-    FIELD(b, GameMetadata, final_score_p0);
-    FIELD(b, GameMetadata, final_score_p1);
-    FIELD(b, GameMetadata, initial_score_p0);
-    FIELD(b, GameMetadata, initial_score_p1);
-    FIELD(b, GameMetadata, eligible_begin);
-    FIELD(b, GameMetadata, eligible_end);
-    s["SlogGameMetadata"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SlogInitialRacks", sizeof(InitialRacks));
-    FIELD(b, InitialRacks, p0);
-    FIELD(b, InitialRacks, p1);
-    s["SlogInitialRacks"] = std::move(b).build();
-  }
-  {
-    StructBuilder b("SlogTurnBlob", sizeof(TurnBlob));
-    FIELD(b, TurnBlob, move);
-    FIELD(b, TurnBlob, drawn);
-    s["SlogTurnBlob"] = std::move(b).build();
-  }
-  return s;
-}
-
 }  // namespace
 
 const std::string& format_layout_json() {
-  static const std::string doc = json::serialize(build());
+  static const std::string doc =
+    json::serialize(json::value{{"structs", build_structs()}, {"constants", build_constants()}});
   return doc;
 }
 

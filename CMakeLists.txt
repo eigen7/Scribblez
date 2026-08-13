@@ -8,6 +8,11 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# P2996 reflection, which GCC 16 gates behind a flag (data/format_layout.cpp
+# derives the sidecar-format document from the structs themselves). Drop the
+# flag once reflection stops being opt-in.
+add_compile_options(-freflection)
+
 # Emit compile_commands.json so editors (clangd, MS C/C++) can find headers.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
