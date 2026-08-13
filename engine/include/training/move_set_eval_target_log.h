@@ -52,6 +52,7 @@
 #include "game/move.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -62,8 +63,11 @@ namespace move_set_eval {
 // "MSET" in little-endian (bytes 'M','S','E','T' on disk).
 inline constexpr uint32_t kTargetMagic = 0x5445534Du;
 inline constexpr uint16_t kTargetVersion = 2;
-// Mover POV.
-inline constexpr uint32_t kTargetFloatsV1 = 5;  // [p_win, p_draw, p_loss, sd_mean, sd_std]
+// The value-target floats per candidate record, mover POV, in record order --
+// the order the generator's inference loop scatters them in.
+inline constexpr std::array<const char*, 5> kTargetNamesV1 = {"p_win", "p_draw", "p_loss",
+                                                              "sd_mean", "sd_std"};
+inline constexpr uint32_t kTargetFloatsV1 = kTargetNamesV1.size();
 // Quantized placement planes per candidate record, when the file carries them.
 inline constexpr uint32_t kTargetPlanes = 4;
 inline constexpr uint32_t kPlaneCells = BOARD_SIZE * BOARD_SIZE;

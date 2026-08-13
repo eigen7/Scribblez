@@ -1,10 +1,10 @@
 """Tests for the move_set_eval target-generation workload and the shared
 pair-store delivery it uses."""
 
-import struct
-
+import numpy as np
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.move_set_eval import targets as T
 from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, MSET_MAGIC, MSET_VERSION
 from scribblez.workloads import move_set_eval, pair_store
 from scribblez.workloads.base import WorkerContext
@@ -15,9 +15,10 @@ def write_empty_pair(store, stem, flags=0):
     """A complete .slog/.mset pair whose .mset is a header and nothing else --
     all that file-level routing reads."""
     store.mkdir(parents=True, exist_ok=True)
-    (store / f"{stem}.mset").write_bytes(
-        struct.pack("<IHHIIII64s", MSET_MAGIC, MSET_VERSION, 0, 0, 5, 0, flags, b"cafe")
-    )
+    hdr = np.zeros(1, dtype=T._FILE_HEADER)
+    hdr["magic"], hdr["version"] = MSET_MAGIC, MSET_VERSION
+    hdr["record_floats"], hdr["flags"], hdr["model_hash"] = 5, flags, b"cafe"
+    (store / f"{stem}.mset").write_bytes(hdr.tobytes())
     (store / f"{stem}.slog").touch()
 
 

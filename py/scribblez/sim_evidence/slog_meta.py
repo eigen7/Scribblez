@@ -1,12 +1,12 @@
 """Position-level metadata read directly from .slog bytes.
 
-The binary layout is owned by engine/include/scribblez/binary_log.h; the
-dtypes below mirror its packed structs (itemsize-guarded so a C++ layout
-change fails loudly here). Only the fields the sim-evidence analyses need are
-exposed: per-game turn counts and each position's preceding opponent move.
-Version enforcement is not duplicated here -- every consumer also decodes the
-same file through the FFI (scribblez_decode_rows), which rejects a version
-mismatch loudly.
+The binary layout is owned by engine/include/data/binary_log.h; the dtypes
+below are built from the engine's own format-layout document
+(scribblez.ffi.format_layout), so they cannot drift from the packed structs.
+Only the fields the sim-evidence analyses need are exposed: per-game turn
+counts and each position's preceding opponent move. Version enforcement is
+not duplicated here -- every consumer also decodes the same file through the
+FFI (scribblez_decode_rows), which rejects a version mismatch loudly.
 """
 
 from __future__ import annotations
@@ -15,32 +15,15 @@ from pathlib import Path
 
 import numpy as np
 
+from scribblez.ffi import format_layout, struct_dtype
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, SobsPosition
 
-SLOG_MAGIC = 0x474F4C53  # "SLOG"
+SLOG_MAGIC = format_layout()["constants"]["slog"]["magic"]
 
-_FILE_HEADER_SIZE = 16
-_INITIAL_RACKS_SIZE = 16
-_TURN_BLOB_SIZE = 24  # Move (16) + drawn Rack (8)
-
-GAME_METADATA = np.dtype(
-    {
-        "names": [
-            "start_offset",
-            "num_turns",
-            "sampled_turn",
-            "final_score_p0",
-            "final_score_p1",
-            "initial_score_p0",
-            "initial_score_p1",
-            "eligible_begin",
-            "eligible_end",
-        ],
-        "formats": ["<u8", "<u4", "<u2", "<i2", "<i2", "<i2", "<i2", "<u1", "<u1"],
-        "offsets": [0, 8, 12, 14, 16, 18, 20, 22, 23],
-        "itemsize": 24,
-    }
-)
+_FILE_HEADER = struct_dtype("SlogFileHeader")
+GAME_METADATA = struct_dtype("SlogGameMetadata")
+_INITIAL_RACKS = struct_dtype("SlogInitialRacks")
+_TURN_BLOB = struct_dtype("SlogTurnBlob")  # Move + the tiles drawn after it
 
 
 def read_slog_bytes(path: str | Path) -> np.ndarray:
@@ -52,14 +35,14 @@ def read_slog_bytes(path: str | Path) -> np.ndarray:
 
 
 def game_metas(buf: np.ndarray) -> np.ndarray:
-    num_games = int(np.frombuffer(buf[8:12].tobytes(), "<u4")[0])
-    end = _FILE_HEADER_SIZE + GAME_METADATA.itemsize * num_games
-    return np.frombuffer(buf[_FILE_HEADER_SIZE:end].tobytes(), GAME_METADATA)
+    hdr = np.frombuffer(buf[: _FILE_HEADER.itemsize].tobytes(), _FILE_HEADER)[0]
+    end = _FILE_HEADER.itemsize + GAME_METADATA.itemsize * int(hdr["num_games"])
+    return np.frombuffer(buf[_FILE_HEADER.itemsize : end].tobytes(), GAME_METADATA)
 
 
 def move_at(buf: np.ndarray, meta: np.void, turn: int) -> np.void:
     """The Move of `turn` within the game described by `meta`."""
-    off = int(meta["start_offset"]) + _INITIAL_RACKS_SIZE + _TURN_BLOB_SIZE * turn
+    off = int(meta["start_offset"]) + _INITIAL_RACKS.itemsize + _TURN_BLOB.itemsize * turn
     return np.frombuffer(buf[off : off + MOVE_DTYPE.itemsize].tobytes(), MOVE_DTYPE)[0]
 
 

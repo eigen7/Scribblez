@@ -218,6 +218,15 @@ int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
 int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
                                int64_t* out_file_size);
 
+// A JSON document describing the sidecar binary formats (.slog / .sobs /
+// .mset): per struct the field names, offsets, and numpy dtype codes -- taken
+// from the compiler, so it cannot drift from the structs -- plus magics,
+// versions, flag bits, and the Move/Glyph code tables (data/format_layout.h
+// documents the shape). Python builds its numpy dtypes from this instead of
+// hand-mirroring the packed structs. Static storage; never freed. Needs no
+// session.
+const char* scribblez_format_layout_json(void);
+
 typedef struct DataLoaderHandle DataLoaderHandle;
 
 // Create a loader over the session's lexicon. `task` selects the training row it

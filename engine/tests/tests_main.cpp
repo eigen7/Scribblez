@@ -6,6 +6,7 @@
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
+#include "data/format_layout.h"
 #include "data/sim_observation_log.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/board_planes.h"
@@ -4131,6 +4132,45 @@ TEST(SimRunner, OppLeaveFromReplay) {
   ASSERT_EQ(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size(), 0);
 }
 
+// The FFI-served format-layout document: itemsizes and constants are the
+// compiler's own, so this exercises the JSON transport, the nested-struct
+// references, and the document paths the Python reader walks.
+TEST(FormatLayout, DescribesTheSidecarStructs) {
+  namespace bj = boost::json;
+  const bj::value doc = bj::parse(format_layout_json());
+
+  const bj::object& structs = doc.at("structs").as_object();
+  EXPECT_EQ(structs.at("Move").at("itemsize").to_number<size_t>(), sizeof(Move));
+  EXPECT_EQ(structs.at("SimObservation").at("itemsize").to_number<size_t>(),
+            sizeof(SimObservation));
+  EXPECT_EQ(structs.at("SobsRecord").at("itemsize").to_number<size_t>(), sizeof(SimObsRecord));
+  EXPECT_EQ(structs.at("MsetFileHeader").at("itemsize").to_number<size_t>(),
+            sizeof(move_set_eval::TargetFileHeader));
+
+  // A nested field references its struct by name.
+  const bj::array& rec_fields = structs.at("SobsRecord").at("fields").as_array();
+  EXPECT_EQ(rec_fields.at(0).at("name").as_string(), "move");
+  EXPECT_EQ(rec_fields.at(0).at("dtype").at("struct").as_string(), "Move");
+
+  // A subarray field carries its element code and shape.
+  const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
+  bool found_counts = false;
+  for (const bj::value& f : obs_fields) {
+    if (f.at("name").as_string() != "opp_next_count") continue;
+    found_counts = true;
+    EXPECT_EQ(f.at("dtype").as_string(), "<u2");
+    EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+  }
+  EXPECT_TRUE(found_counts);
+
+  const bj::object& c = doc.at("constants").as_object();
+  EXPECT_EQ(c.at("mset").at("magic").to_number<uint32_t>(), move_set_eval::kTargetMagic);
+  EXPECT_EQ(c.at("mset").at("version").to_number<uint32_t>(), move_set_eval::kTargetVersion);
+  EXPECT_EQ(c.at("glyph").at("blank").to_number<int>(), Glyph::blank().code());
+  EXPECT_EQ(c.at("placement_head_names").as_array().at(0).as_string(),
+            OppNextPlacementTarget::kName);
+}
+
 TEST(MoveSetEvalTargetLog, Roundtrip) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_mset";
@@ -4364,8 +4404,8 @@ TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
     {
       move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
                                     "abc123", move_set_eval::target_flags_from_slog(hdr.flags));
-      w.add_position(0, 0, {Move::pass()},
-                     std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f), /*planes=*/{});
+      w.add_position(0, 0, {Move::pass()}, std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f),
+                     /*planes=*/{});
       w.close();
     }
     const uint32_t expected = face_up ? move_set_eval::kTargetFlagOpenLeaves : 0u;
