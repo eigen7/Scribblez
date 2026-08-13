@@ -4,8 +4,9 @@
 #include "nn/eval_decode.h"
 #include "training/training_targets.h"
 
+#include <Eigen/Core>
+
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 namespace scribblez {
@@ -13,7 +14,7 @@ namespace nn {
 
 namespace {
 
-constexpr size_t kMaskRowFloats = static_cast<size_t>(kNumMaskHeads) * kBoardCells;
+constexpr int kMaskRowFloats = kNumMaskHeads * kBoardCells;
 
 }  // namespace
 
@@ -22,18 +23,17 @@ NNEvaluationService::NNEvaluationService(const NeuralNetParams& params) : net_(p
 void NNEvaluationService::load() { net_.load(); }
 
 void NNEvaluationService::evaluate(const float* inputs, int count, Eval* out) {
-  evaluate_with_masks(inputs, count, out, nullptr);
+  evaluate(inputs, count, out, nullptr);
 }
 
-void NNEvaluationService::evaluate_with_masks(const float* inputs, int count, Eval* out,
-                                              float* masks_out) {
+void NNEvaluationService::evaluate(const float* inputs, int count, Eval* out, float* masks_out) {
   const int batch = net_.max_batch_size();
   const size_t row_floats =
     static_cast<size_t>(net_.spatial_planes()) * kBoardCells + net_.scalar_floats();
   for (int start = 0; start < count; start += batch) {
     int chunk = std::min(batch, count - start);
-    evaluate_chunk(inputs + static_cast<size_t>(start) * row_floats, chunk, out + start,
-                   masks_out ? masks_out + static_cast<size_t>(start) * kMaskRowFloats : nullptr);
+    evaluate_chunk(inputs + start * row_floats, chunk, out + start,
+                   masks_out ? masks_out + start * kMaskRowFloats : nullptr);
   }
 }
 
@@ -68,10 +68,10 @@ void NNEvaluationService::evaluate_chunk(const float* inputs, int chunk, Eval* o
     for (int h = 0; h < kNumMaskHeads; ++h) {
       const float* logits = net_.mask_host(h);
       for (int r = 0; r < chunk; ++r) {
-        float* row = masks_out + static_cast<size_t>(r) * kMaskRowFloats + h * kBoardCells;
-        for (int i = 0; i < kBoardCells; ++i) {
-          row[i] = 1.0f / (1.0f + std::exp(-logits[static_cast<size_t>(r) * kBoardCells + i]));
-        }
+        Eigen::Map<const Eigen::ArrayXf> in(logits + r * kBoardCells, kBoardCells);
+        Eigen::Map<Eigen::ArrayXf> row(masks_out + r * kMaskRowFloats + h * kBoardCells,
+                                       kBoardCells);
+        row = 1.0f / (1.0f + (-in).exp());
       }
     }
   }

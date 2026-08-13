@@ -100,7 +100,7 @@ struct GamePositionIndex {
 
 // Placement-plane floats per candidate: the teacher's four masks, which the
 // writer quantizes into the record's plane block.
-constexpr size_t kPlaneFloats = static_cast<size_t>(nn::kNumMaskHeads) * move_set_eval::kPlaneCells;
+constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneCells;
 
 // One contiguous run of a position's candidates with their encoded post-move
 // rows, produced by an encoder worker and consumed by the inference thread,
@@ -254,70 +254,100 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
   queue->producer_done();
 }
 
-// Inference thread: packs queued slices into TensorRT batches (whole slices, up
-// to the batch limit), evaluates, and scatters the teacher's readouts into each
-// slice's target block (plus its plane block, on a run that labels planes).
-void inference_loop(nn::NNEvaluationService* service, int row_floats, int batch_size,
-                    bool with_planes, util::ProgressMeter* meter, SliceQueue* queue,
-                    std::vector<CandidateSlice>* done, std::mutex* done_mutex) {
-  std::vector<CandidateSlice> pending;
-  std::vector<float> inputs(static_cast<size_t>(batch_size) * row_floats);
-  std::vector<nn::Eval> evals(static_cast<size_t>(batch_size));
-  std::vector<float> masks(with_planes ? static_cast<size_t>(batch_size) * kPlaneFloats : 0);
+// The inference thread: packs queued slices into TensorRT batches (whole
+// slices, up to the batch limit), evaluates, and scatters the teacher's
+// readouts into each slice's target block (plus its plane block, on a run that
+// labels planes -- a full-sweep run does not, matching its plane-less .mset).
+// One instance drives one file's thread; run() is the thread body, and the
+// completed slices are read from done() after it joins.
+class InferenceLoop {
+ public:
+  InferenceLoop(nn::NNEvaluationService* service, int row_floats, int batch_size, bool label_planes,
+                util::ProgressMeter* meter);
 
-  auto flush = [&]() {
-    if (pending.empty()) return;
-    int rows = 0;
-    for (const CandidateSlice& p : pending) {
-      std::memcpy(inputs.data() + static_cast<size_t>(rows) * row_floats, p.rows.data(),
-                  p.rows.size() * sizeof(float));
-      rows += static_cast<int>(p.candidates.size());
-    }
-    if (with_planes) {
-      service->evaluate_with_masks(inputs.data(), rows, evals.data(), masks.data());
-    } else {
-      service->evaluate(inputs.data(), rows, evals.data());
-    }
-    int cursor = 0;
-    for (CandidateSlice& p : pending) {
-      p.targets.resize(p.candidates.size() * move_set_eval::kTargetFloatsV1);
-      if (with_planes) {
-        p.planes.assign(
-          masks.data() + static_cast<size_t>(cursor) * kPlaneFloats,
-          masks.data() + (static_cast<size_t>(cursor) + p.candidates.size()) * kPlaneFloats);
-      }
-      for (size_t c = 0; c < p.candidates.size(); ++c) {
-        const nn::Eval& e = evals[static_cast<size_t>(cursor++)];
-        float* t = p.targets.data() + c * move_set_eval::kTargetFloatsV1;
-        t[0] = e.p_win;
-        t[1] = e.p_draw;
-        t[2] = e.p_loss;
-        t[3] = e.score_diff_mean;
-        t[4] = move_set_eval::clamped_sd_std(e.score_diff_std);
-      }
-      // Free the encoded rows now that they are consumed; `done` accumulates
-      // a whole file's slices and must not hold every encoding.
-      p.rows.clear();
-      p.rows.shrink_to_fit();
-      // The meter counts positions, so only a position's last slice advances it.
-      if (p.completes_position()) meter->add_done();
-    }
-    std::lock_guard<std::mutex> lock(*done_mutex);
-    for (CandidateSlice& p : pending) done->push_back(std::move(p));
-    pending.clear();
-  };
+  void run(SliceQueue* queue);
 
-  int pending_rows = 0;
+  // Slices in thread-completion order; call after run() returns.
+  std::vector<CandidateSlice>& done() { return done_; }
+
+ private:
+  void flush();
+
+  nn::NNEvaluationService* service_;
+  int row_floats_;
+  int batch_size_;
+  bool label_planes_;
+  util::ProgressMeter* meter_;
+
+  // Staging buffers, sized once for a full batch and reused across flushes.
+  std::vector<float> inputs_;
+  std::vector<nn::Eval> evals_;
+  std::vector<float> masks_;
+
+  std::vector<CandidateSlice> pending_;
+  int pending_rows_ = 0;
+  std::vector<CandidateSlice> done_;
+};
+
+InferenceLoop::InferenceLoop(nn::NNEvaluationService* service, int row_floats, int batch_size,
+                             bool label_planes, util::ProgressMeter* meter)
+    : service_(service),
+      row_floats_(row_floats),
+      batch_size_(batch_size),
+      label_planes_(label_planes),
+      meter_(meter),
+      inputs_(static_cast<size_t>(batch_size) * row_floats),
+      evals_(batch_size),
+      masks_(label_planes ? batch_size * kPlaneFloats : 0) {}
+
+void InferenceLoop::run(SliceQueue* queue) {
   CandidateSlice item;
   while (queue->pop(&item)) {
-    if (pending_rows + static_cast<int>(item.candidates.size()) > batch_size) {
+    const int count = static_cast<int>(item.candidates.size());
+    if (pending_rows_ + count > batch_size_) {
       flush();
-      pending_rows = 0;
+      pending_rows_ = 0;
     }
-    pending_rows += static_cast<int>(item.candidates.size());
-    pending.push_back(std::move(item));
+    pending_rows_ += count;
+    pending_.push_back(std::move(item));
   }
   flush();
+}
+
+void InferenceLoop::flush() {
+  if (pending_.empty()) return;
+  int rows = 0;
+  for (const CandidateSlice& p : pending_) {
+    std::memcpy(inputs_.data() + rows * row_floats_, p.rows.data(), p.rows.size() * sizeof(float));
+    rows += static_cast<int>(p.candidates.size());
+  }
+  service_->evaluate(inputs_.data(), rows, evals_.data(), label_planes_ ? masks_.data() : nullptr);
+  int cursor = 0;
+  for (CandidateSlice& p : pending_) {
+    const int count = static_cast<int>(p.candidates.size());
+    p.targets.resize(count * move_set_eval::kTargetFloatsV1);
+    if (label_planes_) {
+      p.planes.assign(masks_.data() + cursor * kPlaneFloats,
+                      masks_.data() + (cursor + count) * kPlaneFloats);
+    }
+    for (int c = 0; c < count; ++c) {
+      const nn::Eval& e = evals_[cursor++];
+      float* t = p.targets.data() + c * move_set_eval::kTargetFloatsV1;
+      t[0] = e.p_win;
+      t[1] = e.p_draw;
+      t[2] = e.p_loss;
+      t[3] = e.score_diff_mean;
+      t[4] = move_set_eval::clamped_sd_std(e.score_diff_std);
+    }
+    // Free the encoded rows now that they are consumed; done_ accumulates a
+    // whole file's slices and must not hold every encoding.
+    p.rows.clear();
+    p.rows.shrink_to_fit();
+    // The meter counts positions, so only a position's last slice advances it.
+    if (p.completes_position()) meter_->add_done();
+  }
+  for (CandidateSlice& p : pending_) done_.push_back(std::move(p));
+  pending_.clear();
 }
 
 // Reassemble each position from its slices and write it as one .mset record.
@@ -378,8 +408,6 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   // A few batches in flight keeps the GPU fed without letting encoded rows
   // (~80 KB each) accumulate.
   SliceQueue queue(/*row_budget=*/static_cast<size_t>(4 * batch_size));
-  std::vector<CandidateSlice> done;
-  std::mutex done_mutex;
   std::atomic<size_t> next{0};
   const int encoders = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
   for (int t = 0; t < encoders; ++t) queue.add_producer();
@@ -388,8 +416,8 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
     workers.emplace_back(encode_worker, buf.data(), std::cref(dict), std::cref(spec),
                          std::cref(opt), std::cref(work), &next, &queue);
   const int row_floats = input_floats(spec);
-  std::thread gpu(inference_loop, service, row_floats, batch_size, !opt.full_sweep, meter, &queue,
-                  &done, &done_mutex);
+  InferenceLoop inference(service, row_floats, batch_size, /*label_planes=*/!opt.full_sweep, meter);
+  std::thread gpu(&InferenceLoop::run, &inference, &queue);
   for (auto& w : workers) w.join();
   gpu.join();
 
@@ -401,7 +429,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   const uint32_t record_planes = opt.full_sweep ? 0u : move_set_eval::kTargetPlanes;
   move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1,
                                      record_planes, model_hash, flags);
-  write_positions(done, &writer);
+  write_positions(inference.done(), &writer);
   writer.close();
 }
 

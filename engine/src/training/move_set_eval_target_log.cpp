@@ -2,10 +2,10 @@
 
 #include "data/binary_log.h"
 
-#include <algorithm>
+#include <Eigen/Core>
+
 #include <array>
 #include <cassert>
-#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -29,17 +29,15 @@ uint32_t target_flags_from_slog(uint16_t slog_flags) {
 }
 
 float quantize_plane(const float* values, uint8_t* out) {
-  float max = 0.0f;
-  for (uint32_t i = 0; i < kPlaneCells; ++i) max = std::max(max, values[i]);
+  Eigen::Map<const Eigen::ArrayXf> plane(values, kPlaneCells);
+  Eigen::Map<Eigen::Array<uint8_t, Eigen::Dynamic, 1>> cells(out, kPlaneCells);
+  const float max = plane.maxCoeff();
   if (max <= 0.0f) {
-    std::memset(out, 0, kPlaneCells);
+    cells.setZero();
     return 0.0f;
   }
   const float scale = max / 255.0f;
-  for (uint32_t i = 0; i < kPlaneCells; ++i) {
-    const float q = std::round(values[i] / scale);
-    out[i] = static_cast<uint8_t>(std::clamp(q, 0.0f, 255.0f));
-  }
+  cells = (plane / scale).round().cast<uint8_t>();
   return scale;
 }
 
