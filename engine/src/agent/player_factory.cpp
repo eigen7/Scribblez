@@ -2,6 +2,7 @@
 
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
+#include "agent/greedy_agent.h"
 #include "agent/human_web_agent.h"
 #include "agent/macondo_bot.h"
 #include "agent/mset_sim_agent.h"

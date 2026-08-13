@@ -25,6 +25,7 @@
 #include "encoding/game_state_encoder.h"
 #include "endgame/endgame_solver.h"
 #include "nn/move_set_eval_service.h"
+#include "nn/move_set_net.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_encoder.h"
 

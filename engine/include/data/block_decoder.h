@@ -9,7 +9,7 @@
 
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
-#include "game/game.h"
+#include "game/game_log.h"
 
 #include <cstdint>
 #include <string>

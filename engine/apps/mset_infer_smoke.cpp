@@ -15,7 +15,7 @@
 // tool is about the engine path.
 
 #include "encoding/input_encoder.h"
-#include "nn/move_set_eval_service.h"
+#include "nn/trt_move_set_eval_service.h"
 #include "nn/trt_util.h"
 #include "training/move_set_encoder.h"
 

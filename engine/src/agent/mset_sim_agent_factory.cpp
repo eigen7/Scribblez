@@ -10,7 +10,7 @@
 #include "endgame/endgame_solver.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/move_set_eval_service.h"
+#include "nn/trt_move_set_eval_service.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>

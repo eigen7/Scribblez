@@ -1,6 +1,6 @@
 #pragma once
 
-#include "game/game.h"
+#include "game/game_log.h"
 
 #include <array>
 

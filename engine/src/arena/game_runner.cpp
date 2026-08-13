@@ -2,7 +2,7 @@
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
-#include "game/game.h"
+#include "game/game_log.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
 #include "util/exception.h"

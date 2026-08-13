@@ -3,7 +3,7 @@
 #include "agent/player_factory.h"
 #include "arena/game_engine.h"
 #include "arena/game_sink.h"
-#include "game/game.h"
+#include "game/game_log.h"
 #include "util/misc.h"
 
 #include <array>

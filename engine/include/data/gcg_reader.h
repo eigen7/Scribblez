@@ -1,7 +1,7 @@
 #pragma once
 
 #include "game/board.h"
-#include "game/game.h"
+#include "game/game_log.h"
 #include "game/rack.h"
 #include "game/tile_counts.h"
 
