@@ -61,11 +61,13 @@ class NeuralSimAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  NeuralSimAgent(const Params& params, const nn::NeuralNetParams& net_params);
+  using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
+
+  NeuralSimAgent(const Params& params, const NetParams& net_params);
 
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  NeuralSimAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
+  NeuralSimAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
                  int max_batch = 256);
 
   MoveDecision make_move(const MoveRequest& req) override;
@@ -99,6 +101,9 @@ class NeuralSimAgent : public Agent {
   // Fills rank_ with indices into `candidates` in descending model-objective
   // order (ties keeping equity order), evaluating every candidate.
   void rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
+
+  // The rank objective read off evaluated candidate `i`'s head rows.
+  float objective(int i) const;
 
   int shortlist_;
   int sim_top_k_;

@@ -92,7 +92,7 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
 
   // The model favours the equity ranking's 3rd and 4th candidates; equity's
   // own favourites score low, so the sim set differs from SimAgent's.
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {2, 3});
+  const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   auto stub = std::make_unique<StubEvalService>();
   stub->scripted = scripted;
@@ -162,7 +162,7 @@ TEST_F(NeuralSimAgentTest, DropBestProbExcludesTheModelsFavourite) {
   NeuralSimAgent::Params p = params();
   p.sim_top_k = 1;  // sim set of one: the drop decides the move outright
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {2, 3});
+  const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   for (const double prob : {0.0, 1.0}) {
     auto stub = std::make_unique<StubEvalService>();
@@ -181,7 +181,7 @@ TEST_F(NeuralSimAgentTest, DropBestProbExcludesTheModelsFavourite) {
 TEST_F(NeuralSimAgentTest, OneSeedGivesOneDecision) {
   const NeuralSimAgent::Params p = params();
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {1, 4});
+  const auto scripted = script_favouring(candidates.size(), {1, 4});
 
   Move moves[2];
   for (int i = 0; i < 2; ++i) {

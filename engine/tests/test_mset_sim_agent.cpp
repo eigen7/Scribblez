@@ -128,7 +128,7 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
 
   // The model favours the equity ranking's 3rd and 4th candidates; equity's
   // own favourites score low, so the sim set differs from SimAgent's.
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {2, 3});
+  const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   auto stub = std::make_unique<StubMoveSetEvalService>();
   stub->scripted = scripted;
@@ -198,7 +198,7 @@ TEST_F(MsetSimAgentTest, TheModelCanPromoteAnExchange) {
 TEST_F(MsetSimAgentTest, OneSeedGivesOneDecision) {
   const MsetSimAgent::Params p = params();
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {1, 4});
+  const auto scripted = script_favouring(candidates.size(), {1, 4});
 
   Move moves[2];
   for (int i = 0; i < 2; ++i) {
@@ -286,7 +286,7 @@ TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
                         /*bag_size=*/72};
   const std::vector<Move> candidates = shortlist_candidates(req, p.shortlist);
   ASSERT_GT(candidates.size(), 4u);
-  const std::vector<nn::Eval> scripted = script_favouring(candidates.size(), {2, 3});
+  const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   auto stub = std::make_unique<StubMoveSetEvalService>();
   stub->scripted = scripted;

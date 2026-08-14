@@ -10,13 +10,13 @@ What it does, on the GPU:
   2. Parses A and builds a refittable FP32 engine (optimization level 0; the
      dynamic-M profile the C++ TensorRT runtime will use).
   3. Refits that engine with B's weights through the ONNX parser-refitter,
-     asserting no weights go missing. This is the path the POSITION runtime's
-     plan cache takes for a new checkpoint of a cached architecture; MoveSetNet
-     no longer takes it at all, keying its cache on model content and building
-     per checkpoint instead (engine/src/nn/move_set_net.cpp). What sent it
-     there is step 3's own finding, pursued further: TensorRT reports a refit
-     that mapped every weight and one that left a weight behind identically,
-     so "no weights go missing" is not the assurance it reads as.
+     asserting no weights go missing. This is the path both runtimes' shared
+     plan cache takes for a new checkpoint of a cached architecture
+     (engine/src/nn/neural_net.cpp). Step 3's own finding tempers what that
+     asserts: TensorRT reports a refit that mapped every weight and one that
+     left a weight behind identically, so "no weights go missing" is not the
+     assurance it reads as -- which is why step 4's output comparison, not the
+     API, is the verification (the C++ parity test does the same per run).
   4. Runs the refitted engine at several Ms and compares against ONNXRuntime
      on B: if the refit silently mapped anything wrong, the outputs are A/B
      chimeras and the comparison fails loudly.

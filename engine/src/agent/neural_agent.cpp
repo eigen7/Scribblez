@@ -9,13 +9,13 @@
 #include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
-// nn::NNEvaluationService (and thus pulls in CUDA / TensorRT) -- lives in
+// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
 // neural_agent_factory.cpp, so this translation unit, and the agent's unit
 // tests that compile it, carry no GPU dependency.
 
 namespace scribblez {
 
-NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
+NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
                          int max_batch)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),
@@ -85,18 +85,21 @@ void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_s
 }
 
 int NeuralAgent::select_index(int k) {
-  const std::vector<nn::Eval>& evals = evaluator_.evals();
   if (temperature_ <= 0.0 || k == 1) {
     int best = 0;
-    for (int j = 1; j < k; ++j)
-      if (objective_value(evals[j], objective_) > objective_value(evals[best], objective_))
-        best = j;
+    for (int j = 1; j < k; ++j) {
+      if (objective(j) > objective(best)) best = j;
+    }
     return best;
   }
 
   if (static_cast<int>(obj_values_.size()) < k) obj_values_.resize(static_cast<size_t>(k));
-  for (int j = 0; j < k; ++j) obj_values_[j] = objective_value(evals[j], objective_);
+  for (int j = 0; j < k; ++j) obj_values_[j] = objective(j);
   return sampler_.sample(obj_values_, k, temperature_, rng_);
+}
+
+float NeuralAgent::objective(int i) const {
+  return objective_value(evaluator_.wld_row(i), evaluator_.score_diff_row(i), objective_);
 }
 
 // TODO: use the WMP/shadow-play based play-generation that the streaming data generation code

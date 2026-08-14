@@ -70,6 +70,16 @@ struct InputEncodingSpec {
   bool opp_leave_input = false;
 };
 
+// The board-row encoding SEMANTICS version: bumped whenever an encoder change
+// alters what the same position encodes to without changing any block width. A
+// checkpoint is only valid with the encoding its training rows used, and
+// nothing structural detects a semantic drift -- the arm booleans and every
+// plane count survive it -- so the version rides the exported ONNX metadata,
+// where the engine-side loader rejects a stale model instead of silently
+// feeding it off-distribution rows. Absent in exports predating the entry,
+// which read as version 0 -- the version at the entry's introduction.
+inline constexpr int kInputEncodingVersion = 0;
+
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
 

@@ -49,11 +49,14 @@ class NeuralAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  NeuralAgent(const Params& params, const nn::NeuralNetParams& net_params);
+  using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
+
+  NeuralAgent(const Params& params, const NetParams& net_params);
 
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service, int max_batch = 256);
+  NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
+              int max_batch = 256);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -89,6 +92,9 @@ class NeuralAgent : public Agent {
 
   // Index, into the first `k` evaluated candidates, of the one to play.
   int select_index(int k);
+
+  // The configured objective read off evaluated candidate `i`'s head rows.
+  float objective(int i) const;
 
   int top_k_;
   EvalObjective objective_;

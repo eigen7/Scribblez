@@ -1,7 +1,7 @@
 // Command-line construction of NeuralSimAgent, kept separate from the agent's
 // selection logic (neural_sim_agent.cpp) for the same reason as
 // neural_agent_factory.cpp: this is the only NeuralSimAgent translation unit
-// that references the concrete nn::NNEvaluationService, so the core agent TU
+// that references the concrete nn::TrtEvalService, so the core agent TU
 // -- and the agent's unit tests, which inject a stub through the other
 // constructor -- carry no CUDA/TensorRT dependency.
 
@@ -10,8 +10,7 @@
 #include "endgame/endgame_solver.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/neural_net.h"
-#include "nn/nn_evaluation_service.h"
+#include "nn/trt_eval_service.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
@@ -74,8 +73,8 @@ po::options_description make_options_description(NeuralSimOptions& o) {
 
 }  // namespace
 
-NeuralSimAgent::NeuralSimAgent(const Params& params, const nn::NeuralNetParams& net_params)
-    : NeuralSimAgent(params, nn::make_loaded_service(net_params), net_params.max_batch_size) {}
+NeuralSimAgent::NeuralSimAgent(const Params& params, const NetParams& net_params)
+    : NeuralSimAgent(params, nn::make_loaded_service(net_params), net_params.max_rows) {}
 
 std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std::string>& tokens,
                                                           int thread_id, const std::string& name) {
@@ -114,7 +113,8 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
   // Sizing the engine batch to at least the shortlist just lets the whole
   // shortlist be scored in a single chunk; the agent chunks to the engine
   // batch either way. shortlist == 0 (all moves) is chunked to batch_size.
-  const nn::NeuralNetParams net_params = opts.service.net_params(opts.shortlist);
+  const NeuralSimAgent::NetParams net_params =
+    opts.service.net_params<nn::PositionEvaluationSpec>(opts.shortlist);
   return std::make_unique<NeuralSimAgent>(params, net_params);
 }
 

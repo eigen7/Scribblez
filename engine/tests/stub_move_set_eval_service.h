@@ -8,9 +8,10 @@
 
 #include "encoding/input_encoder.h"
 #include "nn/eval_service.h"
-#include "nn/move_set_eval_service.h"
+#include "stub_eval_service.h"
 #include "training/move_set_encoder.h"
 
+#include <span>
 #include <vector>
 
 namespace scribblez {
@@ -18,9 +19,9 @@ namespace testing {
 
 class StubMoveSetEvalService : public nn::MoveSetEvalService {
  public:
-  // One Eval per candidate, in candidate order; candidates past its end score
-  // a default Eval.
-  std::vector<nn::Eval> scripted;
+  // One scripted row per candidate, in candidate order; candidates past its
+  // end score a default (all-zero) row.
+  std::vector<ScriptedEval> scripted;
 
   // What the last evaluate() saw, and how many times it was called. One call
   // per turn is the architecture's whole claim, so a test asserts on it.
@@ -34,15 +35,17 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
 
-  void evaluate(const float* board_row, const move_set::MoveFeatureArrays& moves,
-                nn::Eval* out) override {
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    const move_set::MoveFeatureArrays& moves = *batch.moves;
     ++calls;
     total_moves += moves.count;
-    last_board_row.assign(board_row, board_row + input_floats(InputEncodingSpec{nullptr, true}));
+    last_board_row.assign(batch.board_row,
+                          batch.board_row + input_floats(InputEncodingSpec{nullptr, true}));
     last_moves = moves;
     for (int i = 0; i < moves.count; ++i) {
-      out[i] =
-        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : nn::Eval{};
+      write_scripted(
+        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : ScriptedEval{},
+        i, head_out);
     }
   }
 };

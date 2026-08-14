@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
-// nn::NNEvaluationService (and thus pulls in CUDA / TensorRT) -- lives in
+// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
 // neural_sim_agent_factory.cpp, so this translation unit, and the agent's unit
 // tests that compile it, carry no GPU dependency.
 
@@ -30,8 +30,8 @@ const Dictionary& require_dict(const Dictionary* dict) {
 
 }  // namespace
 
-NeuralSimAgent::NeuralSimAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
-                               int max_batch)
+NeuralSimAgent::NeuralSimAgent(const Params& params,
+                               std::unique_ptr<nn::PositionEvalService> service, int max_batch)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),
       sim_top_k_(params.sim_top_k),
@@ -83,10 +83,12 @@ void NeuralSimAgent::rank_candidates(const MoveRequest& req, const std::vector<M
   rank_.resize(static_cast<size_t>(n));
   std::iota(rank_.begin(), rank_.end(), 0);
   evaluator_.evaluate(req, candidates, rank_, n);
-  const std::vector<nn::Eval>& evals = evaluator_.evals();
-  std::stable_sort(rank_.begin(), rank_.end(), [&](int a, int b) {
-    return objective_value(evals[a], rank_objective_) > objective_value(evals[b], rank_objective_);
-  });
+  std::stable_sort(rank_.begin(), rank_.end(),
+                   [&](int a, int b) { return objective(a) > objective(b); });
+}
+
+float NeuralSimAgent::objective(int i) const {
+  return objective_value(evaluator_.wld_row(i), evaluator_.score_diff_row(i), rank_objective_);
 }
 
 MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {

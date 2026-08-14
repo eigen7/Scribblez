@@ -28,7 +28,10 @@ struct BeginGameRequest;  // agent.h
 // final differential, or P(win) + 0.5*P(draw) from the WLD head.
 enum class EvalObjective { kScoreDiff, kWinProb };
 
-float objective_value(const nn::Eval& e, EvalObjective objective);
+// The candidate-ranking value read off one candidate's decoded scoring-head
+// rows: the score-diff mean, or expected game points under the WLD head
+// (draws counting half).
+float objective_value(const float* wld_row, const float* score_diff_row, EvalObjective objective);
 
 // "scorediff" or "winprob"; anything else throws std::runtime_error naming
 // `flag` as the offending option.
@@ -46,7 +49,7 @@ class CandidateEvaluator {
  public:
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::EvalService> service,
+  CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::PositionEvalService> service,
                      int max_batch);
 
   // The owning agent forwards its own begin_game() / observe_move() here, so
@@ -60,11 +63,14 @@ class CandidateEvaluator {
   int active_player() const { return encoder_.active_player(); }
 
   // Evaluate candidates[idx[0..k)]'s post-move rows from the mover's POV,
-  // chunked to max_batch rows per service call; results land in evals()[0..k)
-  // in the same order.
+  // chunked to max_batch rows per service call; the decoded scoring-head rows
+  // then land at wld_row()/score_diff_row() [0..k) in the same order.
   void evaluate(const MoveRequest& req, const std::vector<Move>& candidates,
                 const std::vector<int>& idx, int k);
-  const std::vector<nn::Eval>& evals() const { return eval_buf_; }
+  const float* wld_row(int i) const { return wld_buf_.data() + i * nn::WldOutput::kRowElems; }
+  const float* score_diff_row(int i) const {
+    return score_diff_buf_.data() + i * nn::ScoreDiffOutput::kRowElems;
+  }
 
   // The post-move input for candidate `mv`, encoded exactly as evaluate()
   // does. Public so the encoding the model actually sees can be checked
@@ -75,13 +81,14 @@ class CandidateEvaluator {
 
  private:
   int max_batch_;
-  std::unique_ptr<nn::EvalService> service_;
+  std::unique_ptr<nn::PositionEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
 
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<float> input_buf_;
-  std::vector<nn::Eval> eval_buf_;
+  std::vector<float> wld_buf_;         // evaluate()'s decoded WLD rows
+  std::vector<float> score_diff_buf_;  // evaluate()'s decoded score-diff rows
 };
 
 }  // namespace scribblez

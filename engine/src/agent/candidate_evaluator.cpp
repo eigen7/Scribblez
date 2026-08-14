@@ -9,8 +9,9 @@
 
 namespace scribblez {
 
-float objective_value(const nn::Eval& e, EvalObjective objective) {
-  return objective == EvalObjective::kScoreDiff ? e.score_diff_mean : e.win_prob;
+float objective_value(const float* wld_row, const float* score_diff_row, EvalObjective objective) {
+  if (objective == EvalObjective::kScoreDiff) return score_diff_row[0];
+  return wld_row[0] + 0.5f * wld_row[1];  // P(win) + 0.5 * P(draw)
 }
 
 EvalObjective parse_eval_objective(const std::string& name, const std::string& flag) {
@@ -33,7 +34,8 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
 }
 
 CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
-                                       std::unique_ptr<nn::EvalService> service, int max_batch)
+                                       std::unique_ptr<nn::PositionEvalService> service,
+                                       int max_batch)
     : max_batch_(max_batch),
       service_(std::move(service)),
       spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
@@ -59,7 +61,8 @@ void CandidateEvaluator::encode_candidate(const Move& mv, const Rack& my_rack, i
 
 void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move>& candidates,
                                   const std::vector<int>& idx, int k) {
-  if (static_cast<int>(eval_buf_.size()) < k) eval_buf_.resize(static_cast<size_t>(k));
+  wld_buf_.resize(static_cast<size_t>(k) * nn::WldOutput::kRowElems);
+  score_diff_buf_.resize(static_cast<size_t>(k) * nn::ScoreDiffOutput::kRowElems);
 
   // The encoder's active player is the owning agent's seat (it has observed
   // every prior move). Each candidate is scored from a post-move copy of the
@@ -73,7 +76,10 @@ void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move
       encode_candidate(mv, req.my_rack, my_seat, req.opp_rack,
                        input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
     }
-    service_->evaluate(input_buf_.data(), chunk, eval_buf_.data() + done);
+    float* const head_out[] = {
+      wld_buf_.data() + static_cast<size_t>(done) * nn::WldOutput::kRowElems,
+      score_diff_buf_.data() + static_cast<size_t>(done) * nn::ScoreDiffOutput::kRowElems};
+    service_->evaluate({input_buf_.data(), chunk}, head_out);
     done += chunk;
   }
 }

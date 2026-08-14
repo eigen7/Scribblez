@@ -24,8 +24,8 @@
 #include "agent/endgame_turn_policy.h"
 #include "encoding/game_state_encoder.h"
 #include "endgame/endgame_solver.h"
-#include "nn/move_set_eval_service.h"
-#include "nn/move_set_net.h"
+#include "nn/eval_service.h"
+#include "nn/neural_net.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_encoder.h"
 
@@ -62,7 +62,9 @@ class MsetSimAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  MsetSimAgent(const Params& params, const nn::MoveSetNetParams& net_params);
+  using NetParams = nn::NeuralNetParams<nn::MoveSetEvaluationSpec>;
+
+  MsetSimAgent(const Params& params, const NetParams& net_params);
 
   // Takes an already-loaded service (real or a scripted stub), loading no model
   // and touching no GPU.
@@ -103,6 +105,9 @@ class MsetSimAgent : public Agent {
   // agent's tie-break, so one seed gives one decision.
   void rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
 
+  // The rank objective read off scored candidate `i`'s head rows.
+  float objective(int i) const;
+
   int shortlist_;
   int sim_top_k_;
   EvalObjective rank_objective_;
@@ -118,7 +123,8 @@ class MsetSimAgent : public Agent {
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<float> board_row_;
   move_set::MoveFeatureArrays move_features_;
-  std::vector<nn::Eval> evals_;
+  std::vector<float> wld_buf_;         // decoded WLD rows, one per candidate
+  std::vector<float> score_diff_buf_;  // decoded score-diff rows, one per candidate
   std::vector<int> rank_;
   std::vector<Move> sim_moves_;
 };

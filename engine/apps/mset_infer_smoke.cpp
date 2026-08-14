@@ -15,7 +15,7 @@
 // tool is about the engine path.
 
 #include "encoding/input_encoder.h"
-#include "nn/trt_move_set_eval_service.h"
+#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "training/move_set_encoder.h"
 
@@ -71,11 +71,12 @@ int main(int argc, char** argv) {
   const std::string precision = argc > 3 ? argv[3] : "FP16";
 
   try {
-    scribblez::nn::MoveSetNetParams params;
+    using Spec = scribblez::nn::MoveSetEvaluationSpec;
+    scribblez::nn::NeuralNetParams<Spec> params;
     params.onnx_path = model;
     params.precision = scribblez::nn::parse_precision(precision);
 
-    scribblez::nn::TrtMoveSetEvalService service(params);
+    scribblez::nn::TrtEvalService<Spec> service(params);
     service.load();
 
     // An all-zero board row at the model's own width: the candidates are what
@@ -86,14 +87,18 @@ int main(int argc, char** argv) {
     const std::vector<float> board(row_floats, 0.0f);
 
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
-    std::vector<scribblez::nn::Eval> evals(num_moves);
-    service.evaluate(board.data(), moves, evals.data());
+    std::vector<float> wld(static_cast<size_t>(num_moves) * scribblez::nn::WldOutput::kRowElems);
+    std::vector<float> sd(static_cast<size_t>(num_moves) *
+                          scribblez::nn::ScoreDiffOutput::kRowElems);
+    float* const head_out[] = {wld.data(), sd.data()};
+    service.evaluate({board.data(), &moves}, head_out);
 
     for (int m = 0; m < num_moves; ++m) {
-      const scribblez::nn::Eval& e = evals[m];
-      std::cout << "move " << m << ": P(win)=" << e.p_win << " P(draw)=" << e.p_draw
-                << " P(loss)=" << e.p_loss << " win_prob=" << e.win_prob
-                << " score_diff_mean=" << e.score_diff_mean << "\n";
+      const float* w = wld.data() + static_cast<size_t>(m) * scribblez::nn::WldOutput::kRowElems;
+      const float* s =
+        sd.data() + static_cast<size_t>(m) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      std::cout << "move " << m << ": P(win)=" << w[0] << " P(draw)=" << w[1] << " P(loss)=" << w[2]
+                << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }
     return 0;
   } catch (const std::exception& ex) {
