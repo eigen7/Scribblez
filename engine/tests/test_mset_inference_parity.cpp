@@ -277,14 +277,19 @@ void MsetInferenceParityTest::expect_matches(const std::vector<Eval>& got,
 
 // A plan cache keyed on model content (see load()'s cache_path, above), and
 // the fixture generator's fixed --seed, which makes model_a byte-identical
-// every run: a plan built here survives to speed up every later run of this
-// binary, this process or the next. ReusesAPlanPerCheckpointAndNeverMixesThem
-// needs to see an empty cache to prove cold-build-vs-reuse, so it keeps its
-// own scratch cache instead of this one.
+// every run: a plan built here survives to speed up every later run against
+// this mount, this container or the next. So this fixture just leaves
+// mount_root at MoveSetNetParams' own default (/workspace/mount) instead of
+// pointing it at a scratch directory -- the same persistent cache production
+// loads use, with fast_build plans kept in their own subtree
+// (engine_plan_cache_path) so a test build can never satisfy a
+// full-optimization load. ReusesAPlanPerCheckpointAndNeverMixesThem needs to
+// see an empty cache to prove cold-build-vs-reuse, so it keeps its own
+// scratch cache instead of this one.
 class MsetInferenceParityCachedTest : public MsetInferenceParityTest {
  protected:
   std::filesystem::path make_cache_root() const override {
-    return std::filesystem::temp_directory_path() / "scribblez_msetparity_shared_cache";
+    return scribblez::nn::MoveSetNetParams{}.mount_root;
   }
   bool owns_cache_root() const override { return false; }
 };

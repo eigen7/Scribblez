@@ -10,7 +10,6 @@
 #include <NvOnnxParser.h>
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -63,38 +62,6 @@ constexpr TensorLayout kRequiredLayout[] = {
   {kOutputScoreDiff, sizeof(float), kScoreDiffOutputFloats},
 };
 
-// What kRequiredLayout expects of one tensor, as read off either a
-// pre-build network definition or a built engine's bindings -- the two
-// places check_required_layout is called from.
-struct ObservedTensor {
-  size_t elem_size;
-  int elems_per_row;
-};
-
-// Every entry of kRequiredLayout against what `lookup` observes, so the same
-// dtype/width guard can run before a build (on the parsed network, cheaply
-// rejecting a model that would otherwise waste a full build) and after one
-// (on the built engine, the only check a cache hit gets since it skips the
-// parse). `lookup` throws its own "no tensor named" error for a tensor this
-// model doesn't declare at all.
-void check_required_layout(const std::string& onnx_path,
-                           const std::function<ObservedTensor(const char*)>& lookup) {
-  for (const TensorLayout& want : kRequiredLayout) {
-    const ObservedTensor got = lookup(want.name);
-    if (got.elem_size != want.elem_size) {
-      throw std::runtime_error("Move-feature dtype mismatch: " + onnx_path + " declares " +
-                               want.name + " at " + std::to_string(got.elem_size) +
-                               " bytes per element, this engine reads it at " +
-                               std::to_string(want.elem_size));
-    }
-    if (want.elems_per_row != 0 && got.elems_per_row != want.elems_per_row) {
-      throw std::runtime_error("Move-feature width mismatch: " + onnx_path + " declares " +
-                               want.name + " " + std::to_string(got.elems_per_row) +
-                               " wide, this engine encodes " + std::to_string(want.elems_per_row));
-    }
-  }
-}
-
 // The candidate count the plan is tuned for. Bounds are 1 and params.max_moves;
 // this is the middle of the profile, near a typical full move set.
 constexpr int kOptMoves = 512;
@@ -135,6 +102,65 @@ int row_elements(const nvinfer1::Dims& dims) {
   return n;
 }
 
+// What kRequiredLayout expects of one tensor, as read off either a
+// pre-build network definition or a built engine's bindings -- the two
+// places check_required_layout is called from.
+struct ObservedTensor {
+  size_t elem_size;
+  int elems_per_row;
+};
+
+// Every entry of kRequiredLayout against what `lookup` observes, so the same
+// dtype/width guard can run before a build (on the parsed network, cheaply
+// rejecting a model that would otherwise waste a full build) and after one
+// (on the built engine, the only check a cache hit gets since it skips the
+// parse). `lookup(name)` throws its own "no tensor named" error for a tensor
+// this model doesn't declare at all; NetworkTensorLookup, below, and
+// MoveSetNet::Impl::BindingLookup are its two implementations.
+template <typename Lookup>
+void check_required_layout(const std::string& onnx_path, const Lookup& lookup) {
+  for (const TensorLayout& want : kRequiredLayout) {
+    const ObservedTensor got = lookup(want.name);
+    if (got.elem_size != want.elem_size) {
+      throw std::runtime_error("Move-feature dtype mismatch: " + onnx_path + " declares " +
+                               want.name + " at " + std::to_string(got.elem_size) +
+                               " bytes per element, this engine reads it at " +
+                               std::to_string(want.elem_size));
+    }
+    if (want.elems_per_row != 0 && got.elems_per_row != want.elems_per_row) {
+      throw std::runtime_error("Move-feature width mismatch: " + onnx_path + " declares " +
+                               want.name + " " + std::to_string(got.elems_per_row) +
+                               " wide, this engine encodes " + std::to_string(want.elems_per_row));
+    }
+  }
+}
+
+// check_required_layout's lookup on a parsed-but-not-yet-built network, so
+// build_plan() can reject a bad layout before spending a build on it.
+class NetworkTensorLookup {
+ public:
+  explicit NetworkTensorLookup(const nvinfer1::INetworkDefinition& network) : network_(&network) {}
+
+  ObservedTensor operator()(const char* name) const {
+    for (int i = 0; i < network_->getNbInputs(); ++i) {
+      nvinfer1::ITensor* tensor = network_->getInput(i);
+      if (std::string(tensor->getName()) == name) {
+        return {element_size(tensor->getType()), row_elements(tensor->getDimensions())};
+      }
+    }
+    for (int i = 0; i < network_->getNbOutputs(); ++i) {
+      nvinfer1::ITensor* tensor = network_->getOutput(i);
+      if (std::string(tensor->getName()) == name) {
+        return {element_size(tensor->getType()), row_elements(tensor->getDimensions())};
+      }
+    }
+    throw std::runtime_error("MoveSetNet: model has no tensor named '" + std::string(name) + "'");
+  }
+
+ private:
+  const nvinfer1::INetworkDefinition* network_;
+};
+
 }  // namespace
 
 // One of the engine's I/O tensors, with the host and device buffers bound to
@@ -171,6 +197,22 @@ struct MoveSetNet::Impl {
   // missing a tensor this runtime feeds fails here rather than at inference).
   // A linear scan over nine entries, run a handful of times per position.
   Binding& binding(const char* name);
+
+  // check_required_layout's lookup on a built engine's bindings -- the cheap
+  // guard a cache hit still gets, since it skips build_plan()'s own
+  // pre-build check (NetworkTensorLookup, above).
+  class BindingLookup {
+   public:
+    explicit BindingLookup(Impl& impl) : impl_(&impl) {}
+
+    ObservedTensor operator()(const char* name) const {
+      const Binding& b = impl_->binding(name);
+      return {b.elem_size, b.elems_per_row};
+    }
+
+   private:
+    Impl* impl_;
+  };
 
   MoveSetNetParams params;
   Logger logger;
@@ -232,22 +274,7 @@ std::vector<char> MoveSetNet::Impl::build_plan(const std::vector<char>& onnx_byt
   // graphs, and only allocate_buffers()'s post-build check (kept as the
   // cheap guard a cache hit still gets, skipping this parse) would otherwise
   // have caught the mismatch.
-  const auto network_layout = [&network](const char* name) -> ObservedTensor {
-    for (int i = 0; i < network->getNbInputs(); ++i) {
-      nvinfer1::ITensor* tensor = network->getInput(i);
-      if (std::string(tensor->getName()) == name) {
-        return {element_size(tensor->getType()), row_elements(tensor->getDimensions())};
-      }
-    }
-    for (int i = 0; i < network->getNbOutputs(); ++i) {
-      nvinfer1::ITensor* tensor = network->getOutput(i);
-      if (std::string(tensor->getName()) == name) {
-        return {element_size(tensor->getType()), row_elements(tensor->getDimensions())};
-      }
-    }
-    throw std::runtime_error("MoveSetNet: model has no tensor named '" + std::string(name) + "'");
-  };
-  check_required_layout(params.onnx_path, network_layout);
+  check_required_layout(params.onnx_path, NetworkTensorLookup(*network));
 
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
@@ -312,10 +339,7 @@ void MoveSetNet::Impl::allocate_buffers() {
   // The cheap guard a cache hit still gets: build_plan()'s own check runs
   // only on a fresh build, so this is what catches a stale plan cached
   // before an encoder layout change.
-  check_required_layout(params.onnx_path, [this](const char* name) -> ObservedTensor {
-    const Binding& b = binding(name);
-    return {b.elem_size, b.elems_per_row};
-  });
+  check_required_layout(params.onnx_path, BindingLookup(*this));
 
   spatial_planes = engine->getTensorShape(kInputSpatial).d[1];
   scalar_floats = engine->getTensorShape(kInputScalar).d[1];
