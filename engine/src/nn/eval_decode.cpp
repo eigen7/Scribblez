@@ -1,4 +1,4 @@
-#include "nn/eval_decode.h"
+#include "nn/model_specs.h"
 
 #include <Eigen/Core>
 

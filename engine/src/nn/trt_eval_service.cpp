@@ -1,7 +1,6 @@
 #include "nn/trt_eval_service.h"
 
 #include "encoding/input_encoder.h"
-#include "nn/eval_decode.h"
 
 #include <Eigen/Core>
 
@@ -74,6 +73,22 @@ void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationS
   stage_move_tensors(net, *batch.moves, start, chunk, MoveSetEvaluationSpec::MoveInputs{});
 }
 
+// One chunk's scored rows into the spec's Output values: the Outputs pack is
+// expanded once into per-head base pointers, then each row's pointers are
+// handed to the spec's own decode_row, in list order.
+template <typename Spec, TensorDescriptor... Ts>
+void decode_rows(int chunk, typename Spec::Output* out, const typename Ts::Elem*... bases) {
+  for (int r = 0; r < chunk; ++r) {
+    out[r] = Spec::decode_row((bases + static_cast<size_t>(r) * Ts::kRowElems)...);
+  }
+}
+
+template <typename Spec, TensorDescriptor... Ts>
+void decode_chunk(const NeuralNet<Spec>& net, int chunk, typename Spec::Output* out,
+                  TensorList<Ts...>) {
+  decode_rows<Spec, Ts...>(chunk, out, net.template host<Ts>()...);
+}
+
 // `chunk` rows of one aux head's raw output into the values consumers get,
 // per the head's declared decode (model_specs.h), each row `width` floats
 // landing inside a `row_stride`-float output row.
@@ -105,9 +120,7 @@ void copy_aux_outputs(const NeuralNet<Spec>& net, int chunk, float* aux_out, Ten
 }  // namespace
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Eval* out, float* aux_out) {
-  using WldHead = Spec::WldHead;
-  using ScoreDiffHead = Spec::ScoreDiffHead;
+void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Output* out, float* aux_out) {
   stage_call(net_, batch);
 
   const int rows = batch_rows(batch);
@@ -117,12 +130,7 @@ void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Eval* out, flo
     stage_chunk(net_, batch, start, chunk);
     net_.predict(chunk);
 
-    const float* wld = net_.template host<WldHead>();
-    const float* sd = net_.template host<ScoreDiffHead>();
-    for (int r = 0; r < chunk; ++r) {
-      out[start + r] = decode_eval(wld + static_cast<size_t>(r) * WldHead::kRowElems,
-                                   sd + static_cast<size_t>(r) * ScoreDiffHead::kRowElems);
-    }
+    decode_chunk(net_, chunk, out + start, typename Spec::Outputs{});
     if constexpr (Spec::AuxOutputs::size > 0) {
       constexpr int aux_row_floats = Spec::AuxOutputs::total_row_elems;
       if (aux_out) {
@@ -134,19 +142,19 @@ void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Eval* out, flo
 }
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Eval* out) {
+void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Output* out) {
   evaluate_batch(batch, out, nullptr);
 }
 
 template <typename Spec>
-std::vector<Eval> TrtEvalService<Spec>::evaluate(const SpecBatch& batch) {
-  std::vector<Eval> out(batch_rows(batch));
+std::vector<typename Spec::Output> TrtEvalService<Spec>::evaluate(const SpecBatch& batch) {
+  std::vector<Output> out(batch_rows(batch));
   if (!out.empty()) evaluate(batch, out.data());
   return out;
 }
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Eval* out, float* aux_out)
+void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Output* out, float* aux_out)
   requires(Spec::AuxOutputs::size > 0)
 {
   evaluate_batch(batch, out, aux_out);

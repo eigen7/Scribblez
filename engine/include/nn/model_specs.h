@@ -206,6 +206,29 @@ inline constexpr VersionRequirement kInputEncodingRequirement = {"input_encoding
 inline constexpr VersionRequirement kMoveEncodingRequirement = {"move_encoding_version",
                                                                 move_set::kMoveEncodingVersion, -1};
 
+// ---------- the scored-row output ---------------------------------------
+
+struct Eval {
+  // P(win) + 0.5 * P(draw), the expected game points under the WLD head.
+  float win_prob = 0.0f;
+  float p_win = 0.0f;
+  float p_draw = 0.0f;
+  float p_loss = 0.0f;
+
+  // The ScoreDiff head's Gaussian over the final differential (mover's score
+  // minus opponent's). The mean is the points-oriented selection objective,
+  // closest in spirit to HastyBot's static equity.
+  float score_diff_mean = 0.0f;
+  float score_diff_std = 0.0f;
+};
+
+// The shared decode behind both current specs' decode_row: 3 raw WLD logits
+// [win, draw, loss] softmaxed, and the score-diff head's [mean, std] (std
+// already positive; softplus is applied in-graph). One function, so the
+// families cannot drift in how raw outputs become a comparable value.
+// Implemented in eval_decode.cpp.
+Eval decode_eval(const float* wld_logits, const float* score_diff);
+
 // ---------- the two model families --------------------------------------
 
 // The position evaluation model: N independent positions per call, every
@@ -234,12 +257,14 @@ class PositionEvaluationSpec {
 
   using Inputs = TensorList<SpatialInput, ScalarInput>;
   using MoveInputs = TensorList<>;
-  // The scoring heads decode_eval turns into an Eval.
-  using WldHead = WldOutput;
-  using ScoreDiffHead = ScoreDiffOutput;
-  using Outputs = TensorList<WldHead, ScoreDiffHead>;
+  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
   using AuxOutputs =
     TensorList<OppNextMaskOutput, SelfNextMaskOutput, OppWinMaskOutput, SelfWinMaskOutput>;
+
+  // What one scored row decodes into; decode_row receives one row pointer per
+  // Outputs entry, in list order.
+  using Output = Eval;
+  static Output decode_row(const float* wld, const float* sd) { return decode_eval(wld, sd); }
 
   // count rows, each one position's [spatial | scalar] floats as
   // GameStateEncoder::encode_input() writes them.
@@ -282,11 +307,15 @@ class MoveSetEvaluationSpec {
                             MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;
   using MoveInputs = TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput,
                                 MoveTileMaskInput, MoveScalarsInput>;
-  // The scoring heads decode_eval turns into an Eval.
-  using WldHead = WldOutput;
-  using ScoreDiffHead = ScoreDiffOutput;
-  using Outputs = TensorList<WldHead, ScoreDiffHead>;
+  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
   using AuxOutputs = TensorList<>;
+
+  // Deliberately the position spec's Output and decode: an agent's
+  // EvalObjective ranks alternatives identically whichever family produced
+  // the value -- the families differ in how a value is obtained, not in what
+  // it means.
+  using Output = Eval;
+  static Output decode_row(const float* wld, const float* sd) { return decode_eval(wld, sd); }
 
   // One position's board row (as GameStateEncoder::encode_input() writes it)
   // and that position's candidates.
