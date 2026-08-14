@@ -1,5 +1,7 @@
 #include "util/string.h"
 
+#include <format>
+
 namespace scribblez::util {
 
 // Split s on delim, dropping empty tokens ("a,,b" -> {"a", "b"}).
@@ -62,14 +64,9 @@ inline std::string fmt_dur(double secs) {
   s %= 3600;
   const long m = s / 60;
   s %= 60;
-  std::ostringstream o;
-  if (h > 0)
-    o << h << "h" << m << "m";
-  else if (m > 0)
-    o << m << "m" << s << "s";
-  else
-    o << s << "s";
-  return o.str();
+  if (h > 0) return std::format("{}h{}m", h, m);
+  if (m > 0) return std::format("{}m{}s", m, s);
+  return std::format("{}s", s);
 }
 
 // Order filesystem paths by their filename in natural-sort order (so "pos-2.gcg"
