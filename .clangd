@@ -2,5 +2,10 @@ CompileFlags:
   # Resolved relative to this file, so every checkout -- the main repo and each
   # worktree -- uses its own build tree's database once py/build.py has run.
   CompilationDatabase: target
+  # clangd's embedded clang has no P2996 reflection (gcc-16-only for now), so
+  # it would reject the flag as an unknown argument and abandon every TU.
+  # Stripping it here keeps the IDE usable; only the few TUs that actually use
+  # ^^ / std::meta remain unparseable.
+  Remove: [-freflection]
 Diagnostics:
   Suppress: "pp_including_mainfile_in_preamble"
