@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a fixture for the C++ MoveSetNet parity test (docs/roadmap.md, A4).
+"""Generate a fixture for the C++ move-set inference parity test (docs/roadmap.md, A4).
 
 The agent will run the move set evaluation model through onnx_export ->
 TensorRT, while training and the dashboard run the in-memory PyTorch model.

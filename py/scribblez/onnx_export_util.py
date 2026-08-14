@@ -54,11 +54,9 @@ def architecture_signature(model: torch.nn.Module, opset: int) -> str:
     torch/onnx versions that shape the emitted graph. Two checkpoints of the
     same architecture produce the same signature.
 
-    The position runtime's C++ loader keys its engine-plan cache on it, so such
-    checkpoints share one cached plan and load by refitting it with their own
-    weights. MoveSetNet stamps the same signature but keys its cache on the
-    model's content hash instead, building a plan per checkpoint and never
-    refitting (engine/include/nn/trt_util.h)."""
+    The C++ loaders key the engine-plan cache on it, so such checkpoints share
+    one cached plan and load by refitting it with their own weights
+    (engine/include/nn/trt_util.h)."""
     components = [str(model), f"opset={opset}", torch.__version__, onnx.__version__]
     return hashlib.md5("\n".join(components).encode()).hexdigest()
 

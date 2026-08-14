@@ -61,8 +61,8 @@ void stage_move_tensors(NeuralNet<MoveSetEvaluationSpec>& net,
 
 // The chunk's rows: de-interleaved encoder rows for the position model, the
 // spec's per-move tensor list for the move set model.
-void stage_chunk(NeuralNet<PositionEvaluationSpec>& net,
-                 const PositionEvaluationSpec::Batch& batch, int start, int chunk) {
+void stage_chunk(NeuralNet<PositionEvaluationSpec>& net, const PositionEvaluationSpec::Batch& batch,
+                 int start, int chunk) {
   const size_t row_floats =
     static_cast<size_t>(net.spatial_planes()) * kBoardCells + net.scalar_floats();
   for (int r = 0; r < chunk; ++r) {

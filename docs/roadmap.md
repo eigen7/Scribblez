@@ -83,7 +83,7 @@ that document already identifies as the design center; batched multi-round
 variants are a fallback, not a step on the way.
 
 The serial queries are free. One full-candidate-set forward pass costs **0.37 ms**
-at M = 4000 ([move_set_net.h](../engine/include/nn/move_set_net.h), measured),
+at M = 4000 ([model_specs.h](../engine/include/nn/model_specs.h), measured),
 against **~16.8 thread-seconds** of rollouts per turn at K=10 × 400 (measured).
 Ten sequential passes are four orders of magnitude below the rollouts they
 schedule.
@@ -118,8 +118,9 @@ the separate reasons under [D2](#7-rollout-policy-ladder).
 - **Target generation** (A2) — the `.mset` sidecar, its generator, and the
   `move_set_eval` dashboard workload, running in-variant with a frozen
   hash-stamped teacher.
-- **Engine inference** — `MoveSetNet` and its evaluation service
-  ([move_set_net.h](../engine/include/nn/move_set_net.h)), the P=1 ONNX export
+- **Engine inference** — the move-set arm of `NeuralNet<Spec>` and its
+  evaluation service ([model_specs.h](../engine/include/nn/model_specs.h)), the
+  P=1 ONNX export
   ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)), and the
   `--type=mset-sim` agent
   ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h)): scores a
@@ -247,7 +248,7 @@ including zero — the distribution the deployed agent actually walks.
   be bit-identical to a full recompute.
 - **Engine-side evidence staging**: `SimObservation` → model input, alongside
   the stored per-candidate predicted planes.
-- Extends `MoveSetNet` or lands as a second graph beside it.
+- Extends `MoveSetEvaluationSpec` or lands as a second spec beside it.
 
 ### 6. The sequential agent
 

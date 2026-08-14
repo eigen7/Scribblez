@@ -199,6 +199,12 @@ class PositionEvaluationSpec {
  public:
   static constexpr const char* kGraph = kGraphPositionEval;
 
+  // An export predating the `graph` entry names nothing and is accepted: the
+  // position graph is the only one that existed then (every position
+  // checkpoint on the mount is such an export), and the runtime's tensor
+  // layout checks reject anything else at load anyway.
+  static constexpr bool kAcceptUntaggedGraph = true;
+
   // Names the dynamic axis in the engine-plan cache's profile tag
   // ("batch_256"): a plan is only valid within the row bounds it was built
   // for, and the two families size different axes.
@@ -233,6 +239,9 @@ class PositionEvaluationSpec {
 class MoveSetEvaluationSpec {
  public:
   static constexpr const char* kGraph = kGraphMoveSetEval;
+
+  // Every move-set export has named its graph since the family existed.
+  static constexpr bool kAcceptUntaggedGraph = false;
 
   static constexpr const char* kAxisTag = "moves";
 

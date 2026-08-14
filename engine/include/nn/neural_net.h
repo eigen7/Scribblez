@@ -85,6 +85,7 @@ struct TensorSpec {
 // The spans point at NeuralNet<Spec>'s static tables.
 struct RuntimeSpec {
   const char* graph;
+  bool accept_untagged_graph;
   std::span<const VersionRequirement> versions;
   const char* axis_tag;
   int opt_rows;
@@ -142,11 +143,10 @@ namespace detail {
 template <typename... In, typename... Out, typename... Aux>
 constexpr std::array<TensorSpec, sizeof...(In) + sizeof...(Out) + sizeof...(Aux)> tensor_specs(
   TensorList<In...>, TensorList<Out...>, TensorList<Aux...>) {
-  return {{TensorSpec{In::kName, sizeof(typename In::Elem), In::kRowElems, In::kDynamic, false}...,
-           TensorSpec{Out::kName, sizeof(typename Out::Elem), Out::kRowElems, Out::kDynamic,
-                      false}...,
-           TensorSpec{Aux::kName, sizeof(typename Aux::Elem), Aux::kRowElems, Aux::kDynamic,
-                      true}...}};
+  return {
+    {TensorSpec{In::kName, sizeof(typename In::Elem), In::kRowElems, In::kDynamic, false}...,
+     TensorSpec{Out::kName, sizeof(typename Out::Elem), Out::kRowElems, Out::kDynamic, false}...,
+     TensorSpec{Aux::kName, sizeof(typename Aux::Elem), Aux::kRowElems, Aux::kDynamic, true}...}};
 }
 
 template <typename Spec>
@@ -173,8 +173,9 @@ class NeuralNet : public NeuralNetBase {
   }
 
  private:
-  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph, Spec::kVersions, Spec::kAxisTag,
-                                               Spec::kOptRows, detail::kTensorSpecs<Spec>};
+  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph,    Spec::kAcceptUntaggedGraph,
+                                               Spec::kVersions, Spec::kAxisTag,
+                                               Spec::kOptRows,  detail::kTensorSpecs<Spec>};
 };
 
 }  // namespace nn

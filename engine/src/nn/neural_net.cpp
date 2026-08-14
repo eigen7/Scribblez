@@ -13,6 +13,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -308,8 +309,18 @@ void NeuralNetBase::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   std::unique_ptr<nvonnxparser::IParserRefitter> parser_refitter(
     nvonnxparser::createParserRefitter(*refitter, logger));
   // Model path for external-data resolution, as in build_plan().
-  if (!parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(),
-                                       params.onnx_path.c_str())) {
+  const bool clean =
+    parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str());
+  // TensorRT 10.11's parser-refitter can count one more ONNX-side weight than
+  // the engine exposes a slot for (an anonymous fusion product; the move-set
+  // graph has one) and fail its own strict count on a refit that left nothing
+  // behind, so a false return is tolerated when the engine reports no missing
+  // weights. Neither signal can prove a refit complete -- a deserialized plan
+  // carries a value for every weight, so nothing is ever "missing" -- which is
+  // why the parity tests compare a refitted engine's outputs against each
+  // checkpoint's own reference: the verification the API cannot provide
+  // (py/scripts/move_set_eval/trt_refit_probe.py reached the same verdict).
+  if (!clean && refitter->getMissingWeights(0, nullptr) != 0) {
     std::string msg = "Failed to read refit weights from ONNX model";
     if (parser_refitter->getNbErrors() > 0)
       msg += std::string(": ") + parser_refitter->getError(0)->desc();
@@ -361,9 +372,11 @@ void NeuralNetBase::Impl::allocate_buffers() {
 
 namespace {
 
-// The spec's graph, exactly: which model family a file belongs to is the first
-// thing its metadata declares.
+// The spec's graph, exactly -- which model family a file belongs to is the
+// first thing its metadata declares -- with the spec deciding whether an
+// export predating the entry is accepted (model_specs.h).
 void check_graph(const RuntimeSpec& spec, const OnnxMetadata& meta, const std::string& onnx_path) {
+  if (meta.graph.empty() && spec.accept_untagged_graph) return;
   if (meta.graph != spec.graph) {
     throw std::runtime_error("NeuralNet serves the " + std::string(spec.graph) + " graph, but " +
                              onnx_path + " declares graph '" + meta.graph + "'");
@@ -406,10 +419,10 @@ void NeuralNetBase::load() {
   m.contingent_features = meta.contingent_features;
   m.opp_leave_input = meta.opp_leave_input;
 
-  std::string cache_path = engine_plan_cache_path(
-    meta.architecture_signature, m.params.precision,
-    std::string(m.spec.axis_tag) + "_" + std::to_string(m.params.max_rows), m.params.fast_build,
-    m.params.mount_root);
+  std::string cache_path =
+    engine_plan_cache_path(meta.architecture_signature, m.params.precision,
+                           std::string(m.spec.axis_tag) + "_" + std::to_string(m.params.max_rows),
+                           m.params.fast_build, m.params.mount_root);
 
   // The cache is keyed on the model's architecture signature, so a hit yields
   // a plan with the right structure but (in general) another checkpoint's
@@ -447,8 +460,8 @@ void NeuralNetBase::predict(int num_rows) {
   if (num_rows != m.last_rows) {
     for (const Binding& b : m.bindings) {
       if (!b.input || !b.dynamic) continue;
-      m.context->setInputShape(
-        b.name.c_str(), dims_with_rows(m.engine->getTensorShape(b.name.c_str()), num_rows));
+      m.context->setInputShape(b.name.c_str(),
+                               dims_with_rows(m.engine->getTensorShape(b.name.c_str()), num_rows));
     }
     m.last_rows = num_rows;
   }

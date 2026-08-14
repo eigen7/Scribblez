@@ -262,9 +262,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
 // completed slices are read from done() after it joins.
 class InferenceLoop {
  public:
-  InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats, int batch_size,
-                bool label_planes,
-                util::ProgressMeter* meter);
+  InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats,
+                int batch_size, bool label_planes, util::ProgressMeter* meter);
 
   void run(SliceQueue* queue);
 
@@ -290,8 +289,9 @@ class InferenceLoop {
   std::vector<CandidateSlice> done_;
 };
 
-InferenceLoop::InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats, int batch_size,
-                             bool label_planes, util::ProgressMeter* meter)
+InferenceLoop::InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service,
+                             int row_floats, int batch_size, bool label_planes,
+                             util::ProgressMeter* meter)
     : service_(service),
       row_floats_(row_floats),
       batch_size_(batch_size),
@@ -381,8 +381,8 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
 
 // Generate the .mset sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& mset_path, const Dictionary& dict,
-                  const InputEncodingSpec& spec, nn::TrtEvalService<nn::PositionEvaluationSpec>* service,
-                  int batch_size,
+                  const InputEncodingSpec& spec,
+                  nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int batch_size,
                   const std::string& model_hash, const Options& opt, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
