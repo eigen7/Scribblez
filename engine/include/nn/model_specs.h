@@ -131,7 +131,11 @@ struct ScoreDiffOutput {
 
 // How a consumer turns one row of an aux head's raw output into the values it
 // hands on: the head's activation belongs to the spec, not to the service
-// reading it.
+// reading it. Only aux heads carry this switch, because only they are handed
+// on as standalone per-head planes, for which an activation is the whole
+// interpretation; the scoring outputs decode cross-head -- decode_row (below)
+// softmaxes the WLD triplet, derives win_prob, and assembles both heads into
+// one typed Output -- which no per-head switch could express.
 enum class AuxDecode : uint8_t { kSigmoid };
 
 // The four placement-mask heads -- one float per board cell, raw logits -- in

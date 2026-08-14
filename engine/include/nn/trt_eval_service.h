@@ -25,6 +25,8 @@ class TrtEvalService : public EvalService<Spec> {
  public:
   using SpecBatch = Spec::Batch;
   using Output = Spec::Output;
+  using Outputs = Spec::Outputs;
+  using AuxOutputs = Spec::AuxOutputs;
 
   explicit TrtEvalService(const NeuralNetParams<Spec>& params) : net_(params) {}
 
@@ -49,7 +51,7 @@ class TrtEvalService : public EvalService<Spec> {
   // Requires the service was constructed with params.copy_aux; aux_out may be
   // null.
   void evaluate(const SpecBatch& batch, Output* out, float* aux_out)
-    requires(Spec::AuxOutputs::size > 0);
+    requires(AuxOutputs::size > 0);
 
  private:
   // The shared driver: per-call staging, then chunked stage/predict/decode;

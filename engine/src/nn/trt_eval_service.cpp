@@ -77,15 +77,14 @@ void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationS
 // expanded once into per-head base pointers, then each row's pointers are
 // handed to the spec's own decode_row, in list order.
 template <typename Spec, TensorDescriptor... Ts>
-void decode_rows(int chunk, typename Spec::Output* out, const typename Ts::Elem*... bases) {
+void decode_rows(int chunk, auto* out, const auto*... bases) {
   for (int r = 0; r < chunk; ++r) {
     out[r] = Spec::decode_row((bases + static_cast<size_t>(r) * Ts::kRowElems)...);
   }
 }
 
 template <typename Spec, TensorDescriptor... Ts>
-void decode_chunk(const NeuralNet<Spec>& net, int chunk, typename Spec::Output* out,
-                  TensorList<Ts...>) {
+void decode_chunk(const NeuralNet<Spec>& net, int chunk, auto* out, TensorList<Ts...>) {
   decode_rows<Spec, Ts...>(chunk, out, net.template host<Ts>()...);
 }
 
@@ -130,12 +129,12 @@ void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Output* out, f
     stage_chunk(net_, batch, start, chunk);
     net_.predict(chunk);
 
-    decode_chunk(net_, chunk, out + start, typename Spec::Outputs{});
-    if constexpr (Spec::AuxOutputs::size > 0) {
-      constexpr int aux_row_floats = Spec::AuxOutputs::total_row_elems;
+    decode_chunk(net_, chunk, out + start, Outputs{});
+    if constexpr (AuxOutputs::size > 0) {
+      constexpr int aux_row_floats = AuxOutputs::total_row_elems;
       if (aux_out) {
         copy_aux_outputs(net_, chunk, aux_out + static_cast<size_t>(start) * aux_row_floats,
-                         typename Spec::AuxOutputs{});
+                         AuxOutputs{});
       }
     }
   }
@@ -147,7 +146,7 @@ void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Output* out) {
 }
 
 template <typename Spec>
-std::vector<typename Spec::Output> TrtEvalService<Spec>::evaluate(const SpecBatch& batch) {
+auto TrtEvalService<Spec>::evaluate(const SpecBatch& batch) -> std::vector<Output> {
   std::vector<Output> out(batch_rows(batch));
   if (!out.empty()) evaluate(batch, out.data());
   return out;
@@ -155,7 +154,7 @@ std::vector<typename Spec::Output> TrtEvalService<Spec>::evaluate(const SpecBatc
 
 template <typename Spec>
 void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Output* out, float* aux_out)
-  requires(Spec::AuxOutputs::size > 0)
+  requires(AuxOutputs::size > 0)
 {
   evaluate_batch(batch, out, aux_out);
 }
