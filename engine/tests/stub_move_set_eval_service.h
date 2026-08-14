@@ -33,7 +33,7 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
 
-  void evaluate(const nn::MoveSetEvaluationSpec::Batch& batch, nn::Eval* out) override {
+  void evaluate(const SpecBatch& batch, nn::Eval* out) override {
     const move_set::MoveFeatureArrays& moves = *batch.moves;
     ++calls;
     total_moves += moves.count;

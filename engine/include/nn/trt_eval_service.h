@@ -23,6 +23,8 @@ namespace nn {
 template <typename Spec>
 class TrtEvalService : public EvalService<Spec> {
  public:
+  using SpecBatch = Spec::Batch;
+
   explicit TrtEvalService(const NeuralNetParams<Spec>& params) : net_(params) {}
 
   // Call once before evaluate().
@@ -37,21 +39,21 @@ class TrtEvalService : public EvalService<Spec> {
   // Blocks until inference completes. A batch larger than the engine's
   // max_rows is split into chunks, which changes no result: rows are scored
   // independently given their staged context.
-  void evaluate(const typename Spec::Batch& batch, Eval* out) override;
+  void evaluate(const SpecBatch& batch, Eval* out) override;
 
-  std::vector<Eval> evaluate(const typename Spec::Batch& batch);
+  std::vector<Eval> evaluate(const SpecBatch& batch);
 
-  // Additionally receives each row's aux outputs -- the position model's
-  // placement masks, batch_rows x AuxOutputs floats of sigmoid probabilities
-  // in head order -- and requires the service was constructed with
-  // params.copy_aux. aux_out may be null.
-  void evaluate(const typename Spec::Batch& batch, Eval* out, float* aux_out)
+  // Additionally receives each row's aux outputs, batch_rows x AuxOutputs
+  // floats in head order, each head decoded per its declared AuxDecode.
+  // Requires the service was constructed with params.copy_aux; aux_out may be
+  // null.
+  void evaluate(const SpecBatch& batch, Eval* out, float* aux_out)
     requires(Spec::AuxOutputs::size > 0);
 
  private:
   // The shared driver: per-call staging, then chunked stage/predict/decode;
   // aux_out may be null.
-  void evaluate_batch(const typename Spec::Batch& batch, Eval* out, float* aux_out);
+  void evaluate_batch(const SpecBatch& batch, Eval* out, float* aux_out);
 
   NeuralNet<Spec> net_;
 };

@@ -49,7 +49,7 @@ void stage_move_rows(NeuralNet<MoveSetEvaluationSpec>& net,
   using Elem = typename Tensor::Elem;
   const std::vector<Elem>& src = moves.*Tensor::kBatchSource;
   std::memcpy(net.host<Tensor>(), src.data() + static_cast<size_t>(start) * Tensor::kRowElems,
-              sizeof(Elem) * static_cast<size_t>(rows) * Tensor::kRowElems);
+              sizeof(Elem) * rows * Tensor::kRowElems);
 }
 
 template <typename... Ts>
@@ -74,26 +74,30 @@ void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationS
   stage_move_tensors(net, *batch.moves, start, chunk, MoveSetEvaluationSpec::MoveInputs{});
 }
 
-// `chunk` rows of one aux head's logits into probabilities, each row `width`
-// floats landing inside a `row_stride`-float output row. The aux heads emit
-// logits; consumers get probabilities, mirroring the WLD softmax in
-// decode_eval.
-void sigmoid_rows(const float* logits, int chunk, int width, int row_stride, float* dst) {
+// `chunk` rows of one aux head's raw output into the values consumers get,
+// per the head's declared decode (model_specs.h), each row `width` floats
+// landing inside a `row_stride`-float output row.
+void decode_aux_rows(AuxDecode decode, const float* raw, int chunk, int width, int row_stride,
+                     float* dst) {
   for (int r = 0; r < chunk; ++r) {
-    Eigen::Map<const Eigen::ArrayXf> in(logits + static_cast<size_t>(r) * width, width);
+    Eigen::Map<const Eigen::ArrayXf> in(raw + static_cast<size_t>(r) * width, width);
     Eigen::Map<Eigen::ArrayXf> out(dst + static_cast<size_t>(r) * row_stride, width);
-    out = 1.0f / (1.0f + (-in).exp());
+    switch (decode) {
+      case AuxDecode::kSigmoid:
+        out = 1.0f / (1.0f + (-in).exp());
+        break;
+    }
   }
 }
 
 // Every aux head into its slot of the caller's per-row aux block, in list
 // (head) order.
-template <typename... Ts>
-void copy_aux_outputs(const NeuralNet<PositionEvaluationSpec>& net, int chunk, float* aux_out,
-                      TensorList<Ts...>) {
+template <typename Spec, TensorDescriptor... Ts>
+void copy_aux_outputs(const NeuralNet<Spec>& net, int chunk, float* aux_out, TensorList<Ts...>) {
   constexpr int row_stride = TensorList<Ts...>::total_row_elems;
   int offset = 0;
-  ((sigmoid_rows(net.host<Ts>(), chunk, Ts::kRowElems, row_stride, aux_out + offset),
+  ((decode_aux_rows(Ts::kDecode, net.template host<Ts>(), chunk, Ts::kRowElems, row_stride,
+                    aux_out + offset),
     offset += Ts::kRowElems),
    ...);
 }
@@ -101,8 +105,9 @@ void copy_aux_outputs(const NeuralNet<PositionEvaluationSpec>& net, int chunk, f
 }  // namespace
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate_batch(const typename Spec::Batch& batch, Eval* out,
-                                          float* aux_out) {
+void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, Eval* out, float* aux_out) {
+  using WldHead = Spec::WldHead;
+  using ScoreDiffHead = Spec::ScoreDiffHead;
   stage_call(net_, batch);
 
   const int rows = batch_rows(batch);
@@ -112,11 +117,11 @@ void TrtEvalService<Spec>::evaluate_batch(const typename Spec::Batch& batch, Eva
     stage_chunk(net_, batch, start, chunk);
     net_.predict(chunk);
 
-    const float* wld = net_.template host<WldOutput>();
-    const float* sd = net_.template host<ScoreDiffOutput>();
+    const float* wld = net_.template host<WldHead>();
+    const float* sd = net_.template host<ScoreDiffHead>();
     for (int r = 0; r < chunk; ++r) {
-      out[start + r] = decode_eval(wld + static_cast<size_t>(r) * WldOutput::kRowElems,
-                                   sd + static_cast<size_t>(r) * ScoreDiffOutput::kRowElems);
+      out[start + r] = decode_eval(wld + static_cast<size_t>(r) * WldHead::kRowElems,
+                                   sd + static_cast<size_t>(r) * ScoreDiffHead::kRowElems);
     }
     if constexpr (Spec::AuxOutputs::size > 0) {
       constexpr int aux_row_floats = Spec::AuxOutputs::total_row_elems;
@@ -129,19 +134,19 @@ void TrtEvalService<Spec>::evaluate_batch(const typename Spec::Batch& batch, Eva
 }
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate(const typename Spec::Batch& batch, Eval* out) {
+void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Eval* out) {
   evaluate_batch(batch, out, nullptr);
 }
 
 template <typename Spec>
-std::vector<Eval> TrtEvalService<Spec>::evaluate(const typename Spec::Batch& batch) {
+std::vector<Eval> TrtEvalService<Spec>::evaluate(const SpecBatch& batch) {
   std::vector<Eval> out(batch_rows(batch));
   if (!out.empty()) evaluate(batch, out.data());
   return out;
 }
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate(const typename Spec::Batch& batch, Eval* out, float* aux_out)
+void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, Eval* out, float* aux_out)
   requires(Spec::AuxOutputs::size > 0)
 {
   evaluate_batch(batch, out, aux_out);

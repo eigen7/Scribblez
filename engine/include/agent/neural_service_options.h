@@ -27,7 +27,7 @@ struct NeuralServiceOptions {
   // then what the help renders as the default.
   void add_options(boost::program_options::options_description& desc);
 
-  // The validated params these options describe, for either model family.
+  // The validated params these options describe, for Spec's model family.
   // `min_rows` lets an agent raise the engine's per-call ceiling to its own
   // per-turn candidate cap, so one chunk can carry the whole set. Throws
   // std::runtime_error on bad input.

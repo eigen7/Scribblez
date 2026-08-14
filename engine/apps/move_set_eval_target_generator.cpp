@@ -102,6 +102,10 @@ struct GamePositionIndex {
 // writer quantizes into the record's plane block.
 constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneCells;
 
+// The teacher: the concrete position-eval service, held by type because the
+// mask-labelling overload is constrained to specs with aux outputs.
+using TeacherService = nn::TrtEvalService<nn::PositionEvaluationSpec>;
+
 // One contiguous run of a position's candidates with their encoded post-move
 // rows, produced by an encoder worker and consumed by the inference thread,
 // which fills `targets` (candidates.size() x move_set_eval::kTargetFloatsV1)
@@ -262,8 +266,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
 // completed slices are read from done() after it joins.
 class InferenceLoop {
  public:
-  InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats,
-                int batch_size, bool label_planes, util::ProgressMeter* meter);
+  InferenceLoop(TeacherService* service, int row_floats, int batch_size, bool label_planes,
+                util::ProgressMeter* meter);
 
   void run(SliceQueue* queue);
 
@@ -273,7 +277,7 @@ class InferenceLoop {
  private:
   void flush();
 
-  nn::TrtEvalService<nn::PositionEvaluationSpec>* service_;
+  TeacherService* service_;
   int row_floats_;
   int batch_size_;
   bool label_planes_;
@@ -289,9 +293,8 @@ class InferenceLoop {
   std::vector<CandidateSlice> done_;
 };
 
-InferenceLoop::InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service,
-                             int row_floats, int batch_size, bool label_planes,
-                             util::ProgressMeter* meter)
+InferenceLoop::InferenceLoop(TeacherService* service, int row_floats, int batch_size,
+                             bool label_planes, util::ProgressMeter* meter)
     : service_(service),
       row_floats_(row_floats),
       batch_size_(batch_size),
@@ -381,8 +384,7 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
 
 // Generate the .mset sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& mset_path, const Dictionary& dict,
-                  const InputEncodingSpec& spec,
-                  nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int batch_size,
+                  const InputEncodingSpec& spec, TeacherService* service, int batch_size,
                   const std::string& model_hash, const Options& opt, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
@@ -495,7 +497,7 @@ int main(int argc, char** argv) {
     // A stratified run labels placement planes, so the teacher's masks must
     // come back from the device (a sweep labels values alone).
     params.copy_aux = !opt.full_sweep;
-    nn::TrtEvalService<nn::PositionEvaluationSpec> service(params);
+    TeacherService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));

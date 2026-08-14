@@ -62,8 +62,9 @@ class MsetSimAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  MsetSimAgent(const Params& params,
-               const nn::NeuralNetParams<nn::MoveSetEvaluationSpec>& net_params);
+  using NetParams = nn::NeuralNetParams<nn::MoveSetEvaluationSpec>;
+
+  MsetSimAgent(const Params& params, const NetParams& net_params);
 
   // Takes an already-loaded service (real or a scripted stub), loading no model
   // and touching no GPU.

@@ -31,12 +31,13 @@ int main(int argc, char** argv) {
   const std::string precision = argc > 3 ? argv[3] : "FP16";
 
   try {
-    scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
+    using Spec = scribblez::nn::PositionEvaluationSpec;
+    scribblez::nn::NeuralNetParams<Spec> params;
     params.onnx_path = model;
     params.max_rows = std::max(rows, 1);
     params.precision = scribblez::nn::parse_precision(precision);
 
-    scribblez::nn::TrtEvalService<scribblez::nn::PositionEvaluationSpec> service(params);
+    scribblez::nn::TrtEvalService<Spec> service(params);
     service.load();
 
     // All-zero inputs (the canonical game-start-ish encoding) at the model's

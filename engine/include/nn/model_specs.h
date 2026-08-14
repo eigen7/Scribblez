@@ -5,6 +5,7 @@
 #include "training/move_set_encoder.h"
 #include "training/training_targets.h"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -26,14 +27,23 @@ namespace nn {
 
 // ---------- tensor descriptors ------------------------------------------
 
-// One engine I/O tensor as the runtime stages it: the exported graph's tensor
-// name (the contract string tying a descriptor to a Python-side head/input and
-// an ONNX tensor), the element type host buffers are cast to, the row width
-// the staging and decode code is written at (0 where the model's own
-// declaration decides, e.g. the board widths the encoding arm implies), and
-// whether the tensor rides the spec's dynamic row axis. The loader validates
-// all of it against the model's own declarations -- a model that disagrees
-// would otherwise overrun buffers rather than fail.
+// One engine I/O tensor as the runtime stages it. A descriptor declares:
+//   - kName: the exported graph's tensor name -- the contract string tying the
+//     descriptor to a Python-side head/input and an ONNX tensor
+//   - Elem: the element type host buffers are cast to
+//   - kRowElems: the row width the staging and decode code is written at
+//     (0 where the model's own declaration decides, e.g. the board widths the
+//     encoding arm implies)
+//   - kDynamic: whether the tensor rides the spec's dynamic row axis
+// The loader validates all of it against the model's own declarations -- a
+// model that disagrees would otherwise overrun buffers rather than fail.
+template <typename T>
+concept TensorDescriptor = requires {
+  { T::kName } -> std::convertible_to<const char*>;
+  typename T::Elem;
+  { T::kRowElems } -> std::convertible_to<int>;
+  { T::kDynamic } -> std::convertible_to<bool>;
+};
 
 // Marks a tensor as NOT riding the dynamic row axis: the engine declares it at
 // one fixed row, staged once per call (the move-set graph's board inputs -- the
@@ -119,45 +129,50 @@ struct ScoreDiffOutput {
   static constexpr bool kDynamic = true;
 };
 
-// The four placement-mask heads, in export order (onnx_export.py's
-// MASK_HEAD_NAMES) -- also the SimObservation plane order and the .mset plane
-// order.
+// How a consumer turns one row of an aux head's raw output into the values it
+// hands on: the head's activation belongs to the spec, not to the service
+// reading it.
+enum class AuxDecode : uint8_t { kSigmoid };
+
+// The four placement-mask heads -- one float per board cell, raw logits -- in
+// export order (onnx_export.py's MASK_HEAD_NAMES), also the SimObservation
+// plane order and the .mset plane order.
 struct OppNextMaskOutput {
   static constexpr const char* kName = OppNextPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kOppNextPlacementFloats;
+  static constexpr int kRowElems = kBoardCells;
   static constexpr bool kDynamic = true;
+  static constexpr AuxDecode kDecode = AuxDecode::kSigmoid;
 };
 
 struct SelfNextMaskOutput {
   static constexpr const char* kName = SelfNextPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kSelfNextPlacementFloats;
+  static constexpr int kRowElems = kBoardCells;
   static constexpr bool kDynamic = true;
+  static constexpr AuxDecode kDecode = AuxDecode::kSigmoid;
 };
 
 struct OppWinMaskOutput {
   static constexpr const char* kName = OppWinPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kOppWinPlacementFloats;
+  static constexpr int kRowElems = kBoardCells;
   static constexpr bool kDynamic = true;
+  static constexpr AuxDecode kDecode = AuxDecode::kSigmoid;
 };
 
 struct SelfWinMaskOutput {
   static constexpr const char* kName = SelfWinPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kSelfWinPlacementFloats;
+  static constexpr int kRowElems = kBoardCells;
   static constexpr bool kDynamic = true;
+  static constexpr AuxDecode kDecode = AuxDecode::kSigmoid;
 };
-
-static_assert(kOppNextPlacementFloats == kBoardCells && kSelfNextPlacementFloats == kBoardCells &&
-                kOppWinPlacementFloats == kBoardCells && kSelfWinPlacementFloats == kBoardCells,
-              "every placement mask is one float per board cell");
 
 // ---------- type list ----------------------------------------------------
 
 // The training_targets.h TargetList idiom over tensor descriptors.
-template <typename... Ts>
+template <TensorDescriptor... Ts>
 struct TensorList {
   static constexpr std::size_t size = sizeof...(Ts);
 
@@ -219,7 +234,10 @@ class PositionEvaluationSpec {
 
   using Inputs = TensorList<SpatialInput, ScalarInput>;
   using MoveInputs = TensorList<>;
-  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
+  // The scoring heads decode_eval turns into an Eval.
+  using WldHead = WldOutput;
+  using ScoreDiffHead = ScoreDiffOutput;
+  using Outputs = TensorList<WldHead, ScoreDiffHead>;
   using AuxOutputs =
     TensorList<OppNextMaskOutput, SelfNextMaskOutput, OppWinMaskOutput, SelfWinMaskOutput>;
 
@@ -264,7 +282,10 @@ class MoveSetEvaluationSpec {
                             MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;
   using MoveInputs = TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput,
                                 MoveTileMaskInput, MoveScalarsInput>;
-  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
+  // The scoring heads decode_eval turns into an Eval.
+  using WldHead = WldOutput;
+  using ScoreDiffHead = ScoreDiffOutput;
+  using Outputs = TensorList<WldHead, ScoreDiffHead>;
   using AuxOutputs = TensorList<>;
 
   // One position's board row (as GameStateEncoder::encode_input() writes it)

@@ -65,8 +65,7 @@ po::options_description make_options_description(NeuralOptions& opts) {
 
 }  // namespace
 
-NeuralAgent::NeuralAgent(const Params& params,
-                         const nn::NeuralNetParams<nn::PositionEvaluationSpec>& net_params)
+NeuralAgent::NeuralAgent(const Params& params, const NetParams& net_params)
     : NeuralAgent(params, nn::make_loaded_service(net_params), net_params.max_rows) {}
 
 std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::string>& tokens,
@@ -89,7 +88,7 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
   // Sizing the engine batch to at least top_k just lets the whole top-K set be
   // scored in a single chunk; the agent chunks to the engine batch either way.
   // top_k == 0 (all plays) is chunked to batch_size.
-  const nn::NeuralNetParams<nn::PositionEvaluationSpec> net_params =
+  const NeuralAgent::NetParams net_params =
     opts.service.net_params<nn::PositionEvaluationSpec>(opts.top_k);
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());

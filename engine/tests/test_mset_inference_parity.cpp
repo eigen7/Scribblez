@@ -45,7 +45,11 @@
 
 using scribblez::move_set::MoveFeatureArrays;
 using scribblez::nn::Eval;
+using scribblez::nn::MoveSetEvaluationSpec;
+using scribblez::nn::PositionEvaluationSpec;
 using scribblez::nn::Precision;
+using MsetParams = scribblez::nn::NeuralNetParams<MoveSetEvaluationSpec>;
+using PositionParams = scribblez::nn::NeuralNetParams<PositionEvaluationSpec>;
 
 namespace {
 
@@ -210,7 +214,7 @@ void MsetInferenceParityTest::SetUp() {
 
 std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Precision precision,
                                                int max_moves) {
-  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> params;
+  MsetParams params;
   params.onnx_path = onnx_path;
   params.precision = precision;
   params.max_rows = max_moves;
@@ -218,7 +222,7 @@ std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Pre
   // The parity check validates the inference stack, not kernel-tactic quality,
   // so build at optimization level 0 to keep a cold build to a few seconds.
   params.fast_build = true;
-  scribblez::nn::TrtEvalService<scribblez::nn::MoveSetEvaluationSpec> service(params);
+  scribblez::nn::TrtEvalService<MoveSetEvaluationSpec> service(params);
   service.load();
 
   EXPECT_EQ(board_.size(), static_cast<size_t>(service.spatial_planes()) * 225 +
@@ -358,7 +362,7 @@ TEST_F(MsetInferenceParityTest, RejectsModelsThisEncoderMustNotFeed) {
   // Each rejection is matched against what it should have objected to, so a
   // load that failed for some unrelated reason -- a fixture file that stopped
   // being written, say -- cannot pass for the guard doing its job.
-  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> stale;
+  MsetParams stale;
   stale.onnx_path = model("model_stale.onnx");
   stale.mount_root = cache_root_.string();
   stale.fast_build = true;
@@ -366,14 +370,14 @@ TEST_F(MsetInferenceParityTest, RejectsModelsThisEncoderMustNotFeed) {
   EXPECT_NE(stale_error.find("Encoding version mismatch"), std::string::npos) << stale_error;
   EXPECT_NE(stale_error.find("move_encoding_version"), std::string::npos) << stale_error;
 
-  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> position;
+  PositionParams position;
   position.onnx_path = model("model_a.onnx");
   position.mount_root = cache_root_.string();
   position.fast_build = true;
   const std::string graph_error = load_failure_message(position);
   EXPECT_NE(graph_error.find("declares graph 'move_set_eval'"), std::string::npos) << graph_error;
 
-  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> narrow;
+  MsetParams narrow;
   narrow.onnx_path = model("model_narrow.onnx");
   narrow.mount_root = cache_root_.string();
   narrow.fast_build = true;
@@ -381,7 +385,7 @@ TEST_F(MsetInferenceParityTest, RejectsModelsThisEncoderMustNotFeed) {
   const std::string width_error = load_failure_message(narrow);
   EXPECT_NE(width_error.find("Tensor width mismatch"), std::string::npos) << width_error;
 
-  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> small_elements = narrow;
+  MsetParams small_elements = narrow;
   small_elements.onnx_path = model("model_uint8_letters.onnx");
   const std::string dtype_error = load_failure_message(small_elements);
   EXPECT_NE(dtype_error.find("Tensor dtype mismatch"), std::string::npos) << dtype_error;

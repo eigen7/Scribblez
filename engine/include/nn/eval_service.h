@@ -46,8 +46,10 @@ class ServedModelInputs {
 template <typename Spec>
 class EvalService : public ServedModelInputs {
  public:
+  using SpecBatch = Spec::Batch;
+
   // Writes one Eval per batch row to `out`.
-  virtual void evaluate(const typename Spec::Batch& batch, Eval* out) = 0;
+  virtual void evaluate(const SpecBatch& batch, Eval* out) = 0;
 };
 
 using PositionEvalService = EvalService<PositionEvaluationSpec>;

@@ -71,11 +71,12 @@ int main(int argc, char** argv) {
   const std::string precision = argc > 3 ? argv[3] : "FP16";
 
   try {
-    scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> params;
+    using Spec = scribblez::nn::MoveSetEvaluationSpec;
+    scribblez::nn::NeuralNetParams<Spec> params;
     params.onnx_path = model;
     params.precision = scribblez::nn::parse_precision(precision);
 
-    scribblez::nn::TrtEvalService<scribblez::nn::MoveSetEvaluationSpec> service(params);
+    scribblez::nn::TrtEvalService<Spec> service(params);
     service.load();
 
     // An all-zero board row at the model's own width: the candidates are what

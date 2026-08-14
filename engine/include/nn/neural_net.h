@@ -15,13 +15,7 @@ class options_description;
 }
 
 // A thin, synchronous wrapper around a TensorRT engine, specialized to a model
-// family by its spec (model_specs.h): NeuralNet<PositionEvaluationSpec> serves
-// board-row batches, NeuralNet<MoveSetEvaluationSpec> one position's candidate
-// set. All machinery -- engine build, the architecture-keyed refitted plan
-// cache, metadata gates, layout validation, buffer management -- lives in the
-// non-template NeuralNetBase, compiled once and driven by the spec's data; the
-// template adds only typed access. input_encoder.h is the single source of
-// truth for the board-row layout, move_set_encoder.h for the move features.
+// family by its spec (model_specs.h).
 //
 // One net drives one engine from one thread: predict() blocks until the
 // outputs are back, with no cross-thread batching and no async pipeline.
@@ -33,12 +27,7 @@ struct NeuralNetParamsBase {
   std::string onnx_path;  // exported ONNX model load() builds from
   int cuda_device_id = 0;
 
-  // Upper bound on the rows one predict() call takes, and the optimization
-  // profile's maximum, so it keys the engine-plan cache. What a row is -- one
-  // position of a batch, or one candidate of a move set -- is the spec's; see
-  // Spec::kDefaultMaxRows for each family's sizing rationale.
-  // NeuralNetParams<Spec> sets the family default.
-  int max_rows = 0;
+  int max_rows = 0;  // NeuralNetParams<Spec> sets the family default
 
   Precision precision = Precision::kFP16;
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
@@ -50,11 +39,10 @@ struct NeuralNetParamsBase {
   // not production agents. Cached separately from full-optimization plans.
   bool fast_build = false;
 
-  // Copy the spec's aux outputs (the position model's placement masks) back to
-  // host on every predict(), making their host buffers valid. Off by default:
-  // agent inference discards them, so it should not pay their per-batch
-  // device-to-host copy. The target generator is the consumer that turns this
-  // on. No-op for a spec with no aux outputs.
+  // Copy the spec's aux outputs back to host on every predict(), making their
+  // host buffers valid. Off by default: aux outputs always stay bound on the
+  // device, but only a consumer that reads them should pay their per-call
+  // device-to-host copy. No-op for a spec with no aux outputs.
   bool copy_aux = false;
 
   // Register the command-line-facing subset, bound to this struct's fields.
@@ -92,6 +80,10 @@ struct RuntimeSpec {
   std::span<const TensorSpec> tensors;
 };
 
+// All machinery -- engine build, the architecture-keyed refitted plan cache,
+// metadata gates, layout validation, binding-table buffer management --
+// compiled once here and driven by a RuntimeSpec; NeuralNet<Spec> below adds
+// only typed access.
 class NeuralNetBase {
  public:
   ~NeuralNetBase();
@@ -164,12 +156,14 @@ class NeuralNet : public NeuralNetBase {
   // staging for inputs (write, then predict()), readout for outputs (valid
   // after predict(), raw logits). Aux-output buffers require params.copy_aux.
   template <typename Tensor>
-  typename Tensor::Elem* host() {
-    return static_cast<typename Tensor::Elem*>(host_ptr(Tensor::kName));
+  Tensor::Elem* host() {
+    using TensorElem = Tensor::Elem;
+    return static_cast<TensorElem*>(host_ptr(Tensor::kName));
   }
   template <typename Tensor>
-  const typename Tensor::Elem* host() const {
-    return static_cast<const typename Tensor::Elem*>(host_ptr(Tensor::kName));
+  const Tensor::Elem* host() const {
+    using TensorElem = Tensor::Elem;
+    return static_cast<const TensorElem*>(host_ptr(Tensor::kName));
   }
 
  private:

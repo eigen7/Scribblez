@@ -90,7 +90,8 @@ static void pack(const Eval& e, float* dst) {
 static void check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
                             const char* label, const std::vector<float>& inputs,
                             const std::vector<float>& expected, int n) {
-  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
+  using Spec = scribblez::nn::PositionEvaluationSpec;
+  scribblez::nn::NeuralNetParams<Spec> params;
   params.onnx_path = onnx_path;
   params.max_rows = n;
   params.precision = precision;
@@ -98,7 +99,7 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
   // copies, the C++ decode), not kernel-tactic quality, so build the engine at
   // optimization level 0 to keep the cold engine build to a few seconds.
   params.fast_build = true;
-  scribblez::nn::TrtEvalService<scribblez::nn::PositionEvaluationSpec> service(params);
+  scribblez::nn::TrtEvalService<Spec> service(params);
   service.load();
 
   std::vector<Eval> evals = service.evaluate({inputs.data(), n});

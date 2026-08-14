@@ -74,8 +74,7 @@ po::options_description make_options_description(MsetSimOptions& o) {
 
 }  // namespace
 
-MsetSimAgent::MsetSimAgent(const Params& params,
-                           const nn::NeuralNetParams<nn::MoveSetEvaluationSpec>& net_params)
+MsetSimAgent::MsetSimAgent(const Params& params, const NetParams& net_params)
     : MsetSimAgent(params, nn::make_loaded_service(net_params)) {}
 
 std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::string>& tokens,

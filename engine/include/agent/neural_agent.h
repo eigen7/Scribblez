@@ -49,8 +49,9 @@ class NeuralAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  NeuralAgent(const Params& params,
-              const nn::NeuralNetParams<nn::PositionEvaluationSpec>& net_params);
+  using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
+
+  NeuralAgent(const Params& params, const NetParams& net_params);
 
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
