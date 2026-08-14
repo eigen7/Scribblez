@@ -140,6 +140,10 @@ In dependency order. Each item is part of the destination agent.
 
 ### 1. Per-move placement planes
 
+**Done** — the format, readouts, regenerated corpus, and trained student v2
+all exist; [move_set_eval_v2_results.md](move_set_eval_v2_results.md) records
+the run and its gate metrics.
+
 The four placement maps the position evaluation model already predicts, but
 predicted **per candidate**, for that candidate's post-move state. The scoring
 path holds one vector per move, so decoding a 15×15 map means scoring that

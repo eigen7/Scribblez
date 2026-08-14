@@ -35,6 +35,10 @@
   how well the distilled candidate filter reproduces the teacher's ranking,
   measured on a full-sweep held-out slice against the incumbent static-equity
   shortlist, with what the numbers do and do not establish.
+- **[move_set_eval_v2_results.md](move_set_eval_v2_results.md)** — the
+  roadmap item 1 close-out: the first `.mset` v2 (planar) corpus and the
+  student trained with the placement-plane readouts, against the v1 curves
+  and the incumbent.
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
