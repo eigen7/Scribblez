@@ -175,6 +175,8 @@ def evaluate(
         sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
         exch_sums[f"exch_retention@{k}"] = exch_sums[f"exch_retention@{k}_baseline"] = 0.0
     n_positions = 0
+    plane_bce_sum = 0.0
+    plane_candidates = 0
     spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
     n_exch = 0  # positions with any exchange candidate (retention denominator)
@@ -186,6 +188,13 @@ def evaluate(
         inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
         move_args = tuple(batch[key].to(device) for key in _MOVE_KEYS)
         out = model(*inputs, *move_args)
+        if "target_planes" in batch:
+            m = batch["move_pos_id"].shape[0]
+            bce = torch.nn.functional.binary_cross_entropy_with_logits(
+                out["planes"], batch["target_planes"].to(device)
+            )
+            plane_bce_sum += bce.item() * m
+            plane_candidates += m
         pred_eq = win_equity(out["wld"].softmax(dim=1)).cpu().numpy()
         teacher_eq = win_equity(batch["target_wld"]).numpy()
         pos_id = batch["move_pos_id"].numpy()
@@ -228,4 +237,8 @@ def evaluate(
         metrics[name] = total / max(denom, 1)
     metrics["positions"] = n_positions
     metrics["positions_with_exchanges"] = n_exch
+    # Plane-readout quality, only when the slice carries plane targets (the
+    # full-sweep holdout does not; the stratified fallback holdout does).
+    if plane_candidates:
+        metrics["plane_bce"] = plane_bce_sum / plane_candidates
     return metrics

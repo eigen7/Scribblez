@@ -278,6 +278,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         "loss": avg["total"],
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
+        "loss_planes": avg["planes"],
         "spearman_acc": metrics["spearman"],
         "spearman_baseline_acc": metrics["spearman_baseline"],
         "lr": lr_now,
@@ -286,6 +287,10 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     # The exchange-slice series (docs/roadmap.md A4 exchange analysis): named
     # without the _acc suffix, so they land on their own Training-tab figures
     # (plots.MSET_QUALITY) instead of crowding the Loss tab's Accuracy panel.
+    # Plane-readout quality on the holdout, when it carries plane targets
+    # (the stratified fallback holdout; the full-sweep slice does not).
+    if "plane_bce" in metrics:
+        record["plane_bce"] = metrics["plane_bce"]
     record["exch_rank_regret"] = metrics["exch_rank_regret"]
     record["exch_rank_regret_baseline"] = metrics["exch_rank_regret_baseline"]
     record["positions_with_exchanges"] = metrics["positions_with_exchanges"]
@@ -354,7 +359,10 @@ def run(ctx: WorkerContext) -> int:
     db.write_meta(conn, ctx.tag, asdict(params), n_params)
     # Coefficients of each loss term in the optimized total (WLD has weight 1),
     # so the dashboard can stack the weighted contributions.
-    db.write_loss_weights(conn, {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd})
+    db.write_loss_weights(
+        conn,
+        {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_planes": params.lambda_planes},
+    )
     init_controls(conn, params.lr)
 
     # Beyond the frozen task params, the checkpoint config records what the

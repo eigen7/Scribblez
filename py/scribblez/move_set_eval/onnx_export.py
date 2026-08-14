@@ -54,6 +54,10 @@ MOVE_INPUT_NAMES = (
     "move_tile_mask",
     "move_scalars",
 )
+# The P=1 export deliberately omits the placement-plane readout: the engine
+# has no consumer for per-candidate planes until the evidence path lands
+# (roadmap item 5), which also decides how the cached-vs-per-iteration graph
+# split exposes them. Until then planes are a training-time distillation head.
 OUTPUT_NAMES = ("wld", "score_diff")
 
 

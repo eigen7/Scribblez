@@ -235,6 +235,7 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
 
     ds = MsetDataset(sweep_dir)
     assert ds.full_sweep
+    assert not ds.has_planes  # the evaluation slice is plane-less by design
     assert ds.num_candidates / ds.num_positions > 20  # nothing like a 15-candidate sample
     coverage, _ = ds.sweep_coverage
     assert 0.0 < coverage <= 1.0
@@ -251,6 +252,7 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
         model, ds, torch.device("cpu"), positions_per_batch=64, max_candidates_per_batch=256
     )
     assert metrics["positions"] == ds.num_positions
+    assert "plane_bce" not in metrics  # no plane targets on this slice
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
         assert metrics[f"regret@{k}"] >= 0.0
@@ -287,6 +289,13 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
         assert int(batch["move_pos_id"].max()) < p
         assert batch["target_wld"].shape == (m, 3)
         assert batch["target_score_diff"].shape == (m, 2)
+        # A stratified corpus carries the teacher's placement planes,
+        # dequantized to per-cell probabilities.
+        assert ds.has_planes
+        assert batch["target_planes"].shape == (m, 4, 225)
+        assert batch["target_planes"].dtype == torch.float32
+        assert float(batch["target_planes"].min()) >= 0.0
+        assert float(batch["target_planes"].max()) <= 1.0
         seen_positions += p
     assert seen_positions == ds.num_positions
 
@@ -308,7 +317,9 @@ def test_train_step_and_eval(corpus_dir):
         num_heads=2,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-    loss_cfg = LossConfig(lambda_sd=0.004, huber_delta_mean=10.0, huber_delta_std=10.0)
+    loss_cfg = LossConfig(
+        lambda_sd=0.004, huber_delta_mean=10.0, huber_delta_std=10.0, lambda_planes=1.0
+    )
 
     rows = 0
     first = last = None
@@ -323,6 +334,8 @@ def test_train_step_and_eval(corpus_dir):
         )
         rows = result.rows_trained
         assert np.isfinite(result.losses["total"])
+        # The plane head trains against this corpus's plane targets.
+        assert np.isfinite(result.losses["planes"]) and result.losses["planes"] > 0.0
         first = result.losses["total"] if first is None else first
         last = result.losses["total"]
     assert rows == 3 * ds.num_candidates
@@ -330,6 +343,9 @@ def test_train_step_and_eval(corpus_dir):
 
     metrics = evaluate(model, ds, device, positions_per_batch=8)
     assert metrics["positions"] == ds.num_positions
+    # This slice carries plane targets, so the plane-readout metric is
+    # reported (and BCE is positive for any non-degenerate model).
+    assert metrics["plane_bce"] > 0.0
     for k in (1, 3, 5):
         for suffix in ("", "_baseline"):
             assert 0.0 <= metrics[f"recall@{k}{suffix}"] <= 1.0

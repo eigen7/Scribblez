@@ -61,6 +61,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "across a run but is independent of the teacher's arm.",
     )
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
+    p.add_argument("--lambda-planes", type=float, default=1.0, help="Placement-plane BCE weight.")
     p.add_argument("--huber-delta-mean", type=float, default=10.0, help="Huber delta, mean head.")
     p.add_argument("--huber-delta-std", type=float, default=10.0, help="Huber delta, std head.")
     p.add_argument("--seed", type=int, default=0, help="Shuffle/init seed.")

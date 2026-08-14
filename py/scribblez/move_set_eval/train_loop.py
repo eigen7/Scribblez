@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from .model import compute_loss
 
-LOSS_KEYS = ("total", "wld", "score_diff", "score_diff_mean", "score_diff_std")
+LOSS_KEYS = ("total", "wld", "score_diff", "score_diff_mean", "score_diff_std", "planes")
 
 # Tensors in the batch dict, split into board inputs, move inputs, and targets.
 _INPUT_KEYS = ("input_spatial", "input_scalar")
@@ -27,7 +27,8 @@ _MOVE_KEYS = (
     "move_scalars",
     "move_pos_id",
 )
-_TARGET_KEYS = ("target_wld", "target_score_diff")
+# target_planes is present only on a plane-carrying corpus (dataset.has_planes).
+_TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
 
 
 @dataclass
@@ -37,10 +38,11 @@ class LossConfig:
     lambda_sd: float
     huber_delta_mean: float
     huber_delta_std: float
+    lambda_planes: float
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
-        return cls(args.lambda_sd, args.huber_delta_mean, args.huber_delta_std)
+        return cls(args.lambda_sd, args.huber_delta_mean, args.huber_delta_std, args.lambda_planes)
 
 
 @dataclass
@@ -56,7 +58,7 @@ class EpochResult:
 def _forward_args(batch: dict, device):
     inputs = tuple(batch[k].to(device) for k in _INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
-    targets = {k: batch[k].to(device) for k in _TARGET_KEYS}
+    targets = {k: batch[k].to(device) for k in _TARGET_KEYS if k in batch}
     return inputs, move_args, targets
 
 
@@ -101,6 +103,7 @@ def run_epoch(
             lambda_sd=loss_cfg.lambda_sd,
             huber_delta_mean=loss_cfg.huber_delta_mean,
             huber_delta_std=loss_cfg.huber_delta_std,
+            lambda_planes=loss_cfg.lambda_planes,
         )
         optimizer.zero_grad()
         losses["total"].backward()
