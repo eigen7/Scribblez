@@ -51,6 +51,7 @@ from .targets import (
     MSET_FLAG_FULL_SWEEP,
     MSET_FLAG_OPEN_LEAVES,
     complete_pairs,
+    dequantize_planes,
     read_mset,
     read_mset_flags,
 )
@@ -73,16 +74,38 @@ def adopt_information_condition(mset_files: Iterable[str | Path]):
 class _Position:
     """One labeled position: where to reconstruct its input, and its targets."""
 
-    __slots__ = ("file_id", "game_index", "turn_index", "moves", "targets", "num_legal_moves")
+    __slots__ = (
+        "file_id",
+        "game_index",
+        "turn_index",
+        "moves",
+        "targets",
+        "plane_scales",
+        "planes",
+        "num_legal_moves",
+    )
 
     def __init__(
-        self, file_id: int, game_index: int, turn_index: int, moves, targets, num_legal_moves: int
+        self,
+        file_id: int,
+        game_index: int,
+        turn_index: int,
+        moves,
+        targets,
+        plane_scales,
+        planes,
+        num_legal_moves: int,
     ):
         self.file_id = file_id
         self.game_index = game_index
         self.turn_index = turn_index
         self.moves = moves  # (K,) MOVE_DTYPE
         self.targets = targets  # (K, 5) float32: [p_win, p_draw, p_loss, sd_mean, sd_std]
+        # Quantized teacher placement planes, held as stored (u8 cells + f4
+        # scales -- ~1/4 the memory of floats) and dequantized per batch; None
+        # on a plane-less (full-sweep) corpus.
+        self.plane_scales = plane_scales  # (K, 4) float32 | None
+        self.planes = planes  # (K, 4, 225) uint8 | None
         self.num_legal_moves = num_legal_moves  # 0 unless swept (see targets.MsetPosition)
 
 
@@ -129,6 +152,7 @@ class MsetDataset:
         # first file sets both; absorb() holds every later one to them.
         self.model_hash: str | None = None
         self._flags: int | None = None
+        self._record_planes: int | None = None
         self.absorb(mset_files)
 
         input_shapes, _ = row_layout()
@@ -169,12 +193,17 @@ class MsetDataset:
             parsed = read_mset(mset_path)
             if self.model_hash is None:
                 self.model_hash, self._flags = parsed.model_hash, parsed.flags
+                self._record_planes = parsed.record_planes
             if parsed.model_hash != self.model_hash:
                 raise ValueError(
                     f"mset corpus mixes teacher hashes: {self.model_hash}, {parsed.model_hash}"
                 )
             if parsed.flags != self._flags:
                 raise ValueError(f"mset corpus mixes header flags: {self._flags}, {parsed.flags}")
+            if parsed.record_planes != self._record_planes:
+                raise ValueError(
+                    f"mset corpus mixes plane counts: {self._record_planes}, {parsed.record_planes}"
+                )
             self._files.append(mset_path)
             file_id = len(self._slogs)
             self._slogs.append(mset_path.with_suffix(".slog"))
@@ -189,6 +218,7 @@ class MsetDataset:
         non-finitely."""
         for pos in positions:
             moves, targets = pos.moves, pos.targets
+            plane_scales, planes = pos.plane_scales, pos.planes
             # The generator stores the teacher's readouts verbatim, and the
             # FP16 score-diff std head can overflow to inf on near-terminal
             # post-move states. The generator now clamps the stored std
@@ -201,6 +231,8 @@ class MsetDataset:
                 if not keep.any():
                     continue
                 moves, targets = moves[keep], targets[keep]
+                if planes is not None:
+                    plane_scales, planes = plane_scales[keep], planes[keep]
             self._positions.append(
                 _Position(
                     file_id,
@@ -208,6 +240,8 @@ class MsetDataset:
                     pos.turn_index,
                     moves,
                     targets,
+                    plane_scales,
+                    planes,
                     pos.num_legal_moves,
                 )
             )
@@ -238,6 +272,13 @@ class MsetDataset:
         covered = sum(len(p.moves) / p.num_legal_moves for p in swept)
         truncated = sum(1 for p in swept if len(p.moves) < p.num_legal_moves)
         return covered / len(swept), truncated
+
+    @property
+    def has_planes(self) -> bool:
+        """Whether the records carry the teacher's quantized placement planes
+        (batches then include "target_planes"). Stratified training files do;
+        the full-sweep evaluation slice does not."""
+        return bool(self._record_planes)
 
     @property
     def open_leaves(self) -> bool:
@@ -330,7 +371,7 @@ class MsetDataset:
         move_pre_diffs = pre_diff_points[pos_id]
         enc = move_enc.encode_moves(all_moves, move_pre_diffs)
 
-        return {
+        batch_out = {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),
             "move_letters": torch.from_numpy(enc["letters"]),
@@ -342,3 +383,9 @@ class MsetDataset:
             "target_wld": torch.from_numpy(all_targets[:, :3].copy()),
             "target_score_diff": torch.from_numpy(all_targets[:, 3:5].copy()),
         }
+        if self.has_planes:
+            target_planes = np.concatenate(
+                [dequantize_planes(pos.planes, pos.plane_scales) for pos in batch]
+            )
+            batch_out["target_planes"] = torch.from_numpy(target_planes)
+        return batch_out

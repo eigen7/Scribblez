@@ -79,6 +79,17 @@ Grouping the queries by position keeps one K/V copy per board, so attention's
 `W_k`/`W_v` projections are amortized across candidates the same way the trunk
 is. The padded `(P, maxK, C)` query grid is the only place padding appears.
 
+### The placement-plane readout (roadmap item 1)
+
+The fused per-move vector (attended embedding + position summary, `4C`) is
+projected to one `C`-wide query per plane head and dotted against the 225
+board tokens: cell `(h, n)` of the `(M, 4, 225)` logit output is
+`query_h · board_token_n`. The contraction runs over the same padded
+`(P, maxK)` grid as the cross-attention, so the board tokens are read once
+per position. Head order is `training_targets.h`'s placement targets (the
+FFI-served `PLANE_NAMES`), matching the teacher masks quantized into the
+`.mset` records.
+
 ### The move encoder
 
 ![MoveEncoder: tile embeddings fused with the move's scalars into one query vector](images/arch_move_encoder.svg)
@@ -95,6 +106,12 @@ semantics. Layout owned by
 | `wld` | teacher probabilities (M, 3) | soft cross-entropy | 1 |
 | `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
+| `planes` | teacher masks, dequantized (M, 4, 225) | BCE-with-logits | `lambda_planes` = 1 |
+
+Plane targets exist only in stratified (training) records; the full-sweep
+evaluation slice is plane-less, so its metrics stay value-based and the
+plane-readout quality (`plane_bce`) is read on the stratified fallback
+holdout.
 
 Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to
 student softmax and teacher probabilities.
@@ -109,6 +126,6 @@ student softmax and teacher probabilities.
 | Unit of output | one board | one candidate move |
 | Board encodes per output | 1 | 1 / candidate-set |
 | Move-conditioning | none (board is post-move) | tile embeddings + cross-attention |
-| Heads | wld, score_diff, 4 placement masks | wld, score_diff |
+| Heads | wld, score_diff, 4 placement masks | wld, score_diff, 4 placement planes |
 | Supervision | game outcomes / observed spread | teacher readouts (`.mset` sidecar) |
-| ONNX outputs | `wld`, `score_diff`, 4 mask names | `wld`, `score_diff` |
+| ONNX outputs | `wld`, `score_diff`, 4 mask names | `wld`, `score_diff` (planes deferred to the evidence path) |

@@ -16,7 +16,12 @@ carry a `pos_id` into [0, P). Each move:
     map flattened to 225 tokens, plus a learned square positional embedding);
   * is fused with its position's global summary and projected to the five
     per-move targets: a WLD distribution (3 logits) and the score-diff
-    (mean, std), matching the teacher readouts stored in the .mset sidecar.
+    (mean, std), matching the teacher readouts stored in the .mset sidecar;
+  * additionally decodes the teacher's four placement planes for its own
+    post-move state (roadmap item 1): the fused per-move vector is projected
+    to one query per plane head and scored against the 225 board tokens, so a
+    single per-move vector yields four (15, 15) maps without any per-move
+    spatial decoding.
 
 The heads predict what the teacher position evaluation model would output for
 the candidate's post-move state, from the mover's POV -- this model is a
@@ -35,6 +40,7 @@ import torch.nn.functional as F
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 from .moves import move_encoding_dims
+from .targets import PLANE_NAMES
 
 
 class MoveEncoder(nn.Module):
@@ -133,6 +139,11 @@ class MoveSetEvalModel(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, 5),  # [wld(3), sd_mean, sd_std]
         )
+        # Placement-plane readout (PLANE_NAMES order): one C-wide query per
+        # plane head from the same fused per-move vector, scored against the
+        # board tokens -- cell (h, n) is query_h . board_token_n.
+        self.num_planes = len(PLANE_NAMES)
+        self.plane_proj = nn.Linear(head_in, self.num_planes * trunk_channels)
 
     def forward(
         self,
@@ -147,7 +158,8 @@ class MoveSetEvalModel(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Encode P board positions and score the M flattened candidate moves.
 
-        Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0]}.
+        Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
+        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order}.
         """
         x, s = self.trunk(input_spatial, input_scalar)  # (P,C,15,15), (P,C)
         board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (P, 225, C)
@@ -185,7 +197,23 @@ class MoveSetEvalModel(nn.Module):
         out = self.head(head_in)  # (M, 5)
         sd_mean = out[:, 3:4]
         sd_std = F.softplus(out[:, 4:5]) + 1e-3
-        return {"wld": out[:, :3], "score_diff": torch.cat([sd_mean, sd_std], dim=1)}
+
+        # Plane readout through the same padded grid as the cross-attention,
+        # so the (P, 225, C) board tokens are contracted once per position
+        # rather than gathered per move.
+        c = board.shape[2]
+        plane_q = board.new_zeros(board.shape[0], max_k, self.num_planes * c)
+        plane_q[move_pos_id, rank] = self.plane_proj(head_in)
+        plane_logits = torch.einsum(
+            "pkhc,pnc->pkhn", plane_q.view(board.shape[0], max_k, self.num_planes, c), board
+        )
+        planes = plane_logits[move_pos_id, rank]  # (M, num_planes, 225)
+
+        return {
+            "wld": out[:, :3],
+            "score_diff": torch.cat([sd_mean, sd_std], dim=1),
+            "planes": planes,
+        }
 
 
 def win_equity(probs: torch.Tensor) -> torch.Tensor:
@@ -203,16 +231,23 @@ def compute_loss(
     lambda_sd: float = 0.004,
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
+    lambda_planes: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """Distillation loss over the flattened candidate set (mean over all moves).
 
     Args:
-        outputs: forward() result. "wld" (M,3 logits), "score_diff" (M,2).
+        outputs: forward() result. "wld" (M,3 logits), "score_diff" (M,2),
+                 "planes" (M, num_planes, 225) logits.
         targets: "target_wld" (M,3) teacher probabilities, "target_score_diff"
-                 (M,2) teacher [mean, std] in score points.
+                 (M,2) teacher [mean, std] in score points, and -- on a
+                 plane-carrying corpus -- "target_planes" (M, num_planes, 225)
+                 teacher probabilities.
 
     WLD is soft cross-entropy against the teacher distribution (distillation),
-    the score-diff mean/std are Huber regressions in score points.
+    the score-diff mean/std are Huber regressions in score points, and the
+    planes are per-cell BCE against the teacher's (soft) probabilities. A
+    batch without plane targets contributes a zero plane term (the plane head
+    simply gets no gradient from it).
     """
     # Soft cross-entropy: -sum(teacher_prob * log_softmax(pred)).
     log_pred = F.log_softmax(outputs["wld"], dim=1)
@@ -226,11 +261,19 @@ def compute_loss(
     loss_sd_std = F.huber_loss(sd_std, t_std, delta=huber_delta_std)
     loss_sd = loss_sd_mean + loss_sd_std
 
-    total = loss_wld + lambda_sd * loss_sd
+    if "target_planes" in targets:
+        loss_planes = F.binary_cross_entropy_with_logits(
+            outputs["planes"], targets["target_planes"]
+        )
+    else:
+        loss_planes = outputs["wld"].new_zeros(())
+
+    total = loss_wld + lambda_sd * loss_sd + lambda_planes * loss_planes
     return {
         "total": total,
         "wld": loss_wld,
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,
+        "planes": loss_planes,
     }
