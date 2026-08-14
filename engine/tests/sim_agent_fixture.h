@@ -60,7 +60,10 @@ inline std::vector<int> model_rank(const std::vector<nn::Eval>& scripted, EvalOb
 }
 
 inline nn::Eval wp(float win_prob) {
+  // p_win carries the value across the head-row transport (write_eval_heads);
+  // win_prob is recomputed as p_win + 0.5 * p_draw on the far side.
   nn::Eval e;
+  e.p_win = win_prob;
   e.win_prob = win_prob;
   return e;
 }

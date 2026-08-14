@@ -81,6 +81,8 @@ class CandidateEvaluator {
 
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<float> input_buf_;
+  std::vector<float> wld_buf_;         // one chunk's decoded WLD rows
+  std::vector<float> score_diff_buf_;  // one chunk's decoded score-diff rows
   std::vector<nn::Eval> eval_buf_;
 };
 

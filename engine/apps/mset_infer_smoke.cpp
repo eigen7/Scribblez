@@ -87,8 +87,13 @@ int main(int argc, char** argv) {
     const std::vector<float> board(row_floats, 0.0f);
 
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
+    std::vector<float> wld(static_cast<size_t>(num_moves) * scribblez::nn::WldOutput::kRowElems);
+    std::vector<float> sd(static_cast<size_t>(num_moves) *
+                          scribblez::nn::ScoreDiffOutput::kRowElems);
+    float* const head_out[] = {wld.data(), sd.data()};
+    service.evaluate({board.data(), &moves}, head_out);
     std::vector<scribblez::nn::Eval> evals(num_moves);
-    service.evaluate({board.data(), &moves}, evals.data());
+    scribblez::nn::make_evals(wld.data(), sd.data(), num_moves, evals.data());
 
     for (int m = 0; m < num_moves; ++m) {
       const scribblez::nn::Eval& e = evals[m];

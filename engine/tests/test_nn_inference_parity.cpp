@@ -102,7 +102,12 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
   scribblez::nn::TrtEvalService<Spec> service(params);
   service.load();
 
-  std::vector<Eval> evals = service.evaluate({inputs.data(), n});
+  std::vector<float> wld(static_cast<size_t>(n) * scribblez::nn::WldOutput::kRowElems);
+  std::vector<float> sd(static_cast<size_t>(n) * scribblez::nn::ScoreDiffOutput::kRowElems);
+  float* const head_out[] = {wld.data(), sd.data()};
+  service.evaluate({inputs.data(), n}, head_out);
+  std::vector<Eval> evals(n);
+  scribblez::nn::make_evals(wld.data(), sd.data(), n, evals.data());
 
   float max_prob_err = 0.0f;
   float max_sd_err = 0.0f;

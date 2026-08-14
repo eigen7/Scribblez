@@ -120,6 +120,8 @@ class MsetSimAgent : public Agent {
   // Scratch reused across turns to avoid per-move allocation.
   std::vector<float> board_row_;
   move_set::MoveFeatureArrays move_features_;
+  std::vector<float> wld_buf_;         // decoded WLD rows, one per candidate
+  std::vector<float> score_diff_buf_;  // decoded score-diff rows, one per candidate
   std::vector<nn::Eval> evals_;
   std::vector<int> rank_;
   std::vector<Move> sim_moves_;

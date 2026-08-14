@@ -163,6 +163,9 @@ static const int kRowFloats = kInputFloats + kLabelFloats;
 static nn::Eval eval_with(float score_diff_mean, float win_prob) {
   nn::Eval e;
   e.score_diff_mean = score_diff_mean;
+  // The service interface transports head rows, so win_prob is recomputed
+  // from p_win/p_draw on the far side (see write_eval_heads).
+  e.p_win = win_prob;
   e.win_prob = win_prob;
   return e;
 }

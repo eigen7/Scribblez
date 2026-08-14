@@ -47,7 +47,12 @@ int main(int argc, char** argv) {
       static_cast<size_t>(service.spatial_planes()) * scribblez::kBoardCells +
       service.scalar_floats();
     std::vector<float> inputs(static_cast<size_t>(rows) * row_floats, 0.0f);
-    std::vector<scribblez::nn::Eval> evals = service.evaluate({inputs.data(), rows});
+    std::vector<float> wld(static_cast<size_t>(rows) * scribblez::nn::WldOutput::kRowElems);
+    std::vector<float> sd(static_cast<size_t>(rows) * scribblez::nn::ScoreDiffOutput::kRowElems);
+    float* const head_out[] = {wld.data(), sd.data()};
+    service.evaluate({inputs.data(), rows}, head_out);
+    std::vector<scribblez::nn::Eval> evals(rows);
+    scribblez::nn::make_evals(wld.data(), sd.data(), rows, evals.data());
 
     for (int r = 0; r < rows; ++r) {
       const scribblez::nn::Eval& e = evals[r];

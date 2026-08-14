@@ -8,10 +8,26 @@
 #include "nn/eval_service.h"
 
 #include <algorithm>
+#include <span>
 #include <vector>
 
 namespace scribblez {
 namespace testing {
+
+// The inverse of nn::make_evals, so a test scripts whole Evals while the
+// service interface transports decoded head rows. win_prob does not survive
+// the trip on its own -- consumers recompute it as p_win + 0.5 * p_draw -- so
+// scripted evals must carry their ranking signal in p_win (the helpers in the
+// test files do).
+inline void write_eval_heads(const nn::Eval& e, int row, std::span<float* const> head_out) {
+  float* wld = head_out[0] + static_cast<size_t>(row) * nn::WldOutput::kRowElems;
+  wld[0] = e.p_win;
+  wld[1] = e.p_draw;
+  wld[2] = e.p_loss;
+  float* sd = head_out[1] + static_cast<size_t>(row) * nn::ScoreDiffOutput::kRowElems;
+  sd[0] = e.score_diff_mean;
+  sd[1] = e.score_diff_std;
+}
 
 // Returns pre-set evals, one per candidate in *per-call* order. Suits tests
 // that re-script and call make_move repeatedly on the same agent (the scripted
@@ -23,9 +39,10 @@ class StubEvalService : public nn::PositionEvalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  void evaluate(const SpecBatch& batch, nn::Eval* out) override {
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
-      out[i] = (i < static_cast<int>(scripted.size())) ? scripted[i] : nn::Eval{};
+      write_eval_heads((i < static_cast<int>(scripted.size())) ? scripted[i] : nn::Eval{}, i,
+                       head_out);
     }
   }
 };
@@ -45,12 +62,13 @@ class CountingStubEvalService : public nn::PositionEvalService {
   int max_chunk = 0;
   int calls = 0;
 
-  void evaluate(const SpecBatch& batch, nn::Eval* out) override {
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     ++calls;
     max_chunk = std::max(max_chunk, batch.count);
     for (int i = 0; i < batch.count; ++i) {
       const int g = total_rows + i;
-      out[i] = (g < static_cast<int>(scripted.size())) ? scripted[g] : nn::Eval{};
+      write_eval_heads((g < static_cast<int>(scripted.size())) ? scripted[g] : nn::Eval{}, i,
+                       head_out);
     }
     total_rows += batch.count;
   }

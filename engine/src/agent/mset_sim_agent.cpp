@@ -89,8 +89,12 @@ void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Mov
   // the two representations were designed to share (input_encoder.h).
   const int me = encoder_.active_player();
   move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
+  wld_buf_.resize(static_cast<size_t>(n) * nn::WldOutput::kRowElems);
+  score_diff_buf_.resize(static_cast<size_t>(n) * nn::ScoreDiffOutput::kRowElems);
+  float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
+  service_->evaluate({board_row_.data(), &move_features_}, head_out);
   evals_.resize(static_cast<size_t>(n));
-  service_->evaluate({board_row_.data(), &move_features_}, evals_.data());
+  nn::make_evals(wld_buf_.data(), score_diff_buf_.data(), n, evals_.data());
 
   rank_.resize(static_cast<size_t>(n));
   std::iota(rank_.begin(), rank_.end(), 0);

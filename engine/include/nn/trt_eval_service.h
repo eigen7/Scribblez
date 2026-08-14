@@ -4,7 +4,7 @@
 #include "nn/neural_net.h"
 
 #include <memory>
-#include <vector>
+#include <span>
 
 // The TensorRT-backed EvalService<Spec>: the production implementation of the
 // interface, kept out of eval_service.h so an agent or a stub-driven test
@@ -24,7 +24,6 @@ template <typename Spec>
 class TrtEvalService : public EvalService<Spec> {
  public:
   using SpecBatch = Spec::Batch;
-  using Output = Spec::Output;
   using Outputs = Spec::Outputs;
   using AuxOutputs = Spec::AuxOutputs;
 
@@ -42,21 +41,19 @@ class TrtEvalService : public EvalService<Spec> {
   // Blocks until inference completes. A batch larger than the engine's
   // max_rows is split into chunks, which changes no result: rows are scored
   // independently given their staged context.
-  void evaluate(const SpecBatch& batch, Output* out) override;
-
-  std::vector<Output> evaluate(const SpecBatch& batch);
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override;
 
   // Additionally receives each row's aux outputs, batch_rows x AuxOutputs
-  // floats in head order, each head decoded per its declared AuxDecode.
+  // floats in head order, each head decoded per its declared RowDecode.
   // Requires the service was constructed with params.copy_aux; aux_out may be
   // null.
-  void evaluate(const SpecBatch& batch, Output* out, float* aux_out)
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out, float* aux_out)
     requires(AuxOutputs::size > 0);
 
  private:
   // The shared driver: per-call staging, then chunked stage/predict/decode;
   // aux_out may be null.
-  void evaluate_batch(const SpecBatch& batch, Output* out, float* aux_out);
+  void evaluate_batch(const SpecBatch& batch, std::span<float* const> head_out, float* aux_out);
 
   NeuralNet<Spec> net_;
 };

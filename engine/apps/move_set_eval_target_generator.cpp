@@ -285,6 +285,8 @@ class InferenceLoop {
 
   // Staging buffers, sized once for a full batch and reused across flushes.
   std::vector<float> inputs_;
+  std::vector<float> wld_buf_;
+  std::vector<float> score_diff_buf_;
   std::vector<nn::Eval> evals_;
   std::vector<float> masks_;
 
@@ -301,6 +303,8 @@ InferenceLoop::InferenceLoop(TeacherService* service, int row_floats, int batch_
       label_planes_(label_planes),
       meter_(meter),
       inputs_(static_cast<size_t>(batch_size) * row_floats),
+      wld_buf_(static_cast<size_t>(batch_size) * nn::WldOutput::kRowElems),
+      score_diff_buf_(static_cast<size_t>(batch_size) * nn::ScoreDiffOutput::kRowElems),
       evals_(batch_size),
       masks_(label_planes ? batch_size * kPlaneFloats : 0) {}
 
@@ -325,8 +329,9 @@ void InferenceLoop::flush() {
     std::memcpy(inputs_.data() + rows * row_floats_, p.rows.data(), p.rows.size() * sizeof(float));
     rows += static_cast<int>(p.candidates.size());
   }
-  service_->evaluate({inputs_.data(), rows}, evals_.data(),
-                     label_planes_ ? masks_.data() : nullptr);
+  float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
+  service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
+  nn::make_evals(wld_buf_.data(), score_diff_buf_.data(), rows, evals_.data());
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
     const int count = static_cast<int>(p.candidates.size());

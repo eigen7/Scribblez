@@ -229,8 +229,13 @@ std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Pre
                              static_cast<size_t>(service.scalar_floats()))
     << "the fixture's board row is not the width the loaded model consumes";
 
+  std::vector<float> wld(static_cast<size_t>(moves_.count) * scribblez::nn::WldOutput::kRowElems);
+  std::vector<float> sd(static_cast<size_t>(moves_.count) *
+                        scribblez::nn::ScoreDiffOutput::kRowElems);
+  float* const head_out[] = {wld.data(), sd.data()};
+  service.evaluate({board_.data(), &moves_}, head_out);
   std::vector<Eval> evals(moves_.count);
-  service.evaluate({board_.data(), &moves_}, evals.data());
+  scribblez::nn::make_evals(wld.data(), sd.data(), moves_.count, evals.data());
   return evals;
 }
 

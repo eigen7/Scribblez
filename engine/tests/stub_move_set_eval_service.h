@@ -8,8 +8,10 @@
 
 #include "encoding/input_encoder.h"
 #include "nn/eval_service.h"
+#include "stub_eval_service.h"
 #include "training/move_set_encoder.h"
 
+#include <span>
 #include <vector>
 
 namespace scribblez {
@@ -33,7 +35,7 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
 
-  void evaluate(const SpecBatch& batch, nn::Eval* out) override {
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     const move_set::MoveFeatureArrays& moves = *batch.moves;
     ++calls;
     total_moves += moves.count;
@@ -41,8 +43,9 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
                           batch.board_row + input_floats(InputEncodingSpec{nullptr, true}));
     last_moves = moves;
     for (int i = 0; i < moves.count; ++i) {
-      out[i] =
-        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : nn::Eval{};
+      write_eval_heads(
+        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : nn::Eval{}, i,
+        head_out);
     }
   }
 };

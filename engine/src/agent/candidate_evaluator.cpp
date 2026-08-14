@@ -41,6 +41,8 @@ CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
       encoder_(spec_) {
   if (max_batch_ < 1) throw std::runtime_error("candidate evaluator: max batch must be >= 1");
   input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
+  wld_buf_.resize(static_cast<size_t>(max_batch_) * nn::WldOutput::kRowElems);
+  score_diff_buf_.resize(static_cast<size_t>(max_batch_) * nn::ScoreDiffOutput::kRowElems);
 }
 
 void CandidateEvaluator::begin_game(const BeginGameRequest& req) {
@@ -74,7 +76,9 @@ void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move
       encode_candidate(mv, req.my_rack, my_seat, req.opp_rack,
                        input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
     }
-    service_->evaluate({input_buf_.data(), chunk}, eval_buf_.data() + done);
+    float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
+    service_->evaluate({input_buf_.data(), chunk}, head_out);
+    nn::make_evals(wld_buf_.data(), score_diff_buf_.data(), chunk, eval_buf_.data() + done);
     done += chunk;
   }
 }
