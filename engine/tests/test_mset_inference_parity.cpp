@@ -16,8 +16,13 @@
 // generator cannot run (no torch/onnx). Pass a fixture directory as the first
 // non-gtest argument to reuse one instead:
 //   test_mset_inference_parity <fixture_dir>
-// The engine-plan cache always goes to a fresh scratch root, so a run builds
-// its own plans and the cache case counts only the plans it built itself.
+// ReusesAPlanPerCheckpointAndNeverMixesThem, the test that examines cache
+// contents, gets its own fresh scratch root each run so it counts only the
+// plans it built itself. The other cases share one persistent plan cache
+// across runs of this binary (MsetInferenceParityCachedTest, below) -- safe
+// because the cache is keyed on the model's exact content and the fixture
+// generator's fixed seed makes model_a/model_b byte-identical every run, so
+// a build from an earlier run is a valid hit rather than stale reuse.
 
 #include "nn/eval_service.h"
 #include "nn/move_set_net.h"
@@ -135,10 +140,18 @@ class MsetInferenceParityTest : public ::testing::Test {
  protected:
   void SetUp() override;
   void TearDown() override {
-    for (const std::filesystem::path& dir : {generated_, cache_root_}) {
-      if (!dir.empty()) std::filesystem::remove_all(dir);
-    }
+    if (!generated_.empty()) std::filesystem::remove_all(generated_);
+    if (!cache_root_.empty() && owns_cache_root()) std::filesystem::remove_all(cache_root_);
   }
+
+  // A fresh, private plan cache by default, so a test sees only the plans it
+  // built itself. Overridden by MsetInferenceParityCachedTest for the tests
+  // that don't examine cache contents and would otherwise pay a full
+  // TensorRT build every run for no reason.
+  virtual std::filesystem::path make_cache_root() const {
+    return make_scratch_dir("scribblez_msetcache_");
+  }
+  virtual bool owns_cache_root() const { return true; }
 
   std::string model(const char* name) const { return dir_ + "/" + name; }
 
@@ -168,7 +181,8 @@ class MsetInferenceParityTest : public ::testing::Test {
 };
 
 void MsetInferenceParityTest::SetUp() {
-  cache_root_ = make_scratch_dir("scribblez_msetcache_");
+  cache_root_ = make_cache_root();
+  std::filesystem::create_directories(cache_root_);
   if (!g_fixture_dir.empty()) {
     dir_ = g_fixture_dir;
   } else {
@@ -261,7 +275,21 @@ void MsetInferenceParityTest::expect_matches(const std::vector<Eval>& got,
   EXPECT_LE(worst.score_diff, tol.score_diff) << label;
 }
 
-TEST_F(MsetInferenceParityTest, MatchesPyTorchReferenceAtBothPrecisions) {
+// A plan cache keyed on model content (see load()'s cache_path, above), and
+// the fixture generator's fixed --seed, which makes model_a byte-identical
+// every run: a plan built here survives to speed up every later run of this
+// binary, this process or the next. ReusesAPlanPerCheckpointAndNeverMixesThem
+// needs to see an empty cache to prove cold-build-vs-reuse, so it keeps its
+// own scratch cache instead of this one.
+class MsetInferenceParityCachedTest : public MsetInferenceParityTest {
+ protected:
+  std::filesystem::path make_cache_root() const override {
+    return std::filesystem::temp_directory_path() / "scribblez_msetparity_shared_cache";
+  }
+  bool owns_cache_root() const override { return false; }
+};
+
+TEST_F(MsetInferenceParityCachedTest, MatchesPyTorchReferenceAtBothPrecisions) {
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_, "FP32",
                  kFp32Tol);
   expect_matches(run(model("model_a.onnx"), Precision::kFP16, moves_.count), expected_a_, "FP16",
@@ -271,7 +299,7 @@ TEST_F(MsetInferenceParityTest, MatchesPyTorchReferenceAtBothPrecisions) {
 // A real move set runs to thousands of candidates, so the service splitting one
 // into engine-sized chunks is the normal path, not an edge case: the last chunk
 // is short, and every chunk re-sends the same board.
-TEST_F(MsetInferenceParityTest, ChunksACandidateSetLargerThanTheEngine) {
+TEST_F(MsetInferenceParityCachedTest, ChunksACandidateSetLargerThanTheEngine) {
   const int chunk = 8;
   ASSERT_GT(moves_.count, chunk) << "the fixture must exceed the chunk size to test chunking";
   ASSERT_NE(moves_.count % chunk, 0) << "the fixture must leave a short final chunk";
