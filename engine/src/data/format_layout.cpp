@@ -2,6 +2,7 @@
 
 #include "data/binary_log.h"
 #include "data/sim_observation_log.h"
+#include "encoding/input_encoder.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -158,6 +159,9 @@ json::object build_constants() {
                  {"planes", move_set_eval::kTargetPlanes},
                  {"plane_cells", move_set_eval::kPlaneCells}};
   }
+  // The board-row encoding semantics version the exporters stamp into ONNX
+  // metadata (input_encoder.h).
+  c["input_encoding_version"] = kInputEncodingVersion;
   c["move_type"] = {{"play", static_cast<int>(MoveType::PLAY)},
                     {"exchange", static_cast<int>(MoveType::EXCHANGE)},
                     {"pass", static_cast<int>(MoveType::PASS)}};

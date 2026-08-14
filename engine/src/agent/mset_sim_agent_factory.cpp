@@ -10,7 +10,7 @@
 #include "endgame/endgame_solver.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/trt_move_set_eval_service.h"
+#include "nn/trt_eval_service.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
@@ -46,9 +46,9 @@ struct MsetSimOptions {
 po::options_description make_options_description(MsetSimOptions& o) {
   po::options_description desc("Move-set-evaluation agent (--type=mset-sim) options");
   // One GPU call scores a whole turn's candidate set, so the shared per-call
-  // ceiling is sized as the move set runtime sizes it (MoveSetNetParams
-  // documents why generously): a set past the ceiling costs another board pass.
-  o.service.batch_size = nn::MoveSetNetParams{}.max_moves;
+  // ceiling is sized as the move set spec sizes it (model_specs.h documents
+  // why generously): a set past the ceiling costs another board pass.
+  o.service.batch_size = nn::MoveSetEvaluationSpec::kDefaultMaxRows;
   o.service.add_options(desc);
   desc.add_options()  //
     ("shortlist", po::value<int>(&o.shortlist)->default_value(o.shortlist),
@@ -74,8 +74,9 @@ po::options_description make_options_description(MsetSimOptions& o) {
 
 }  // namespace
 
-MsetSimAgent::MsetSimAgent(const Params& params, const nn::MoveSetNetParams& net_params)
-    : MsetSimAgent(params, nn::make_loaded_move_set_service(net_params)) {}
+MsetSimAgent::MsetSimAgent(const Params& params,
+                           const nn::NeuralNetParams<nn::MoveSetEvaluationSpec>& net_params)
+    : MsetSimAgent(params, nn::make_loaded_service(net_params)) {}
 
 std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::string>& tokens,
                                                       int thread_id, const std::string& name) {
@@ -106,7 +107,7 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   params.sim.threads = opts.sim_threads;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
-  // Fail on a bad scalar option now, before move_set_net_params() and the
+  // Fail on a bad scalar option now, before net_params() and the
   // constructor spend seconds loading the model and building the TensorRT
   // engine.
   validate(params);
@@ -114,7 +115,8 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   // Raising the per-pass ceiling to the shortlist just lets the whole shortlist
   // be scored in one pass; the service chunks to the ceiling either way.
   // shortlist == 0 (all moves) is chunked to batch_size.
-  return std::make_unique<MsetSimAgent>(params, opts.service.move_set_net_params(opts.shortlist));
+  return std::make_unique<MsetSimAgent>(
+    params, opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist));
 }
 
 std::string MsetSimAgent::options_help() {

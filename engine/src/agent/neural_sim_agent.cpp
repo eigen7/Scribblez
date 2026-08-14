@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
-// nn::NNEvaluationService (and thus pulls in CUDA / TensorRT) -- lives in
+// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
 // neural_sim_agent_factory.cpp, so this translation unit, and the agent's unit
 // tests that compile it, carry no GPU dependency.
 
@@ -30,7 +30,8 @@ const Dictionary& require_dict(const Dictionary* dict) {
 
 }  // namespace
 
-NeuralSimAgent::NeuralSimAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
+NeuralSimAgent::NeuralSimAgent(const Params& params,
+                               std::unique_ptr<nn::PositionEvalService> service,
                                int max_batch)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),

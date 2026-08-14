@@ -90,7 +90,7 @@ void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Mov
   const int me = encoder_.active_player();
   move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
   evals_.resize(static_cast<size_t>(n));
-  service_->evaluate(board_row_.data(), move_features_, evals_.data());
+  service_->evaluate({board_row_.data(), &move_features_}, evals_.data());
 
   rank_.resize(static_cast<size_t>(n));
   std::iota(rank_.begin(), rank_.end(), 0);

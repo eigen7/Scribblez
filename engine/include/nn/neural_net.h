@@ -1,36 +1,45 @@
 #pragma once
 
+#include "nn/model_specs.h"
 #include "nn/trt_util.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace boost::program_options {
 class options_description;
 }
 
-// A thin, synchronous wrapper around a TensorRT engine specialized to the
-// Scribblez position evaluation model: two inputs ("input_spatial",
-// "input_scalar", at widths the model itself declares) and six outputs ("wld",
-// "score_diff" = [mean, std], and four (N,15,15) auxiliary placement masks).
-// input_encoder.h is the single source of truth for the encoding layout.
+// A thin, synchronous wrapper around a TensorRT engine, specialized to a model
+// family by its spec (model_specs.h): NeuralNet<PositionEvaluationSpec> serves
+// board-row batches, NeuralNet<MoveSetEvaluationSpec> one position's candidate
+// set. All machinery -- engine build, the architecture-keyed refitted plan
+// cache, metadata gates, layout validation, buffer management -- lives in the
+// non-template NeuralNetBase, compiled once and driven by the spec's data; the
+// template adds only typed access. input_encoder.h is the single source of
+// truth for the board-row layout, move_set_encoder.h for the move features.
 //
-// One NeuralNet drives one engine from one thread: predict() blocks until the
+// One net drives one engine from one thread: predict() blocks until the
 // outputs are back, with no cross-thread batching and no async pipeline.
 
 namespace scribblez {
 namespace nn {
 
-// The model's four placement-mask outputs, in export order (onnx_export.py's
-// MASK_HEAD_NAMES): opp_next, self_next, opp_win, self_win -- also the
-// SimObservation plane order and the .mset plane order.
-inline constexpr int kNumMaskHeads = 4;
-
-struct NeuralNetParams {
+struct NeuralNetParamsBase {
   std::string onnx_path;  // exported ONNX model load() builds from
   int cuda_device_id = 0;
-  int max_batch_size = 256;
+
+  // Upper bound on the rows one predict() call takes, and the optimization
+  // profile's maximum, so it keys the engine-plan cache. What a row is -- one
+  // position of a batch, or one candidate of a move set -- is the spec's; see
+  // Spec::kDefaultMaxRows for each family's sizing rationale.
+  // NeuralNetParams<Spec> sets the family default.
+  int max_rows = 0;
+
   Precision precision = Precision::kFP16;
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
@@ -41,62 +50,131 @@ struct NeuralNetParams {
   // not production agents. Cached separately from full-optimization plans.
   bool fast_build = false;
 
-  // Copy the four placement-mask outputs back to host on every predict(),
-  // making mask_host() valid. Off by default: agent inference discards the
-  // masks, so it should not pay their per-batch device-to-host copy. The
-  // target generator is the consumer that turns this on.
-  bool copy_masks = false;
+  // Copy the spec's aux outputs (the position model's placement masks) back to
+  // host on every predict(), making their host buffers valid. Off by default:
+  // agent inference discards them, so it should not pay their per-batch
+  // device-to-host copy. The target generator is the consumer that turns this
+  // on. No-op for a spec with no aux outputs.
+  bool copy_aux = false;
 
   // Register the command-line-facing subset, bound to this struct's fields.
   // Call before parsing argv.
   void add_options(boost::program_options::options_description& desc);
 };
 
-class NeuralNet {
- public:
-  explicit NeuralNet(const NeuralNetParams& params);
-  ~NeuralNet();
+// The params for one model family: the base fields at the family's row-bound
+// default.
+template <typename Spec>
+struct NeuralNetParams : NeuralNetParamsBase {
+  NeuralNetParams() { max_rows = Spec::kDefaultMaxRows; }
+};
 
-  NeuralNet(const NeuralNet&) = delete;
-  NeuralNet& operator=(const NeuralNet&) = delete;
+// One engine I/O tensor as the runtime must see it -- a spec descriptor
+// (model_specs.h) flattened to runtime data. The loader checks every field
+// against the model's own declarations, pre-build on the parsed graph and
+// post-deserialize on the engine.
+struct TensorSpec {
+  const char* name;
+  std::size_t elem_size;
+  int elems_per_row;  // 0 where the model's own declaration decides
+  bool dynamic;       // rides the spec's dynamic row axis
+  bool aux;           // host copy only under params.copy_aux
+};
+
+// Everything NeuralNetBase needs to serve one model family, as plain data.
+// The spans point at NeuralNet<Spec>'s static tables.
+struct RuntimeSpec {
+  const char* graph;
+  std::span<const VersionRequirement> versions;
+  const char* axis_tag;
+  int opt_rows;
+  std::span<const TensorSpec> tensors;
+};
+
+class NeuralNetBase {
+ public:
+  ~NeuralNetBase();
+
+  NeuralNetBase(const NeuralNetBase&) = delete;
+  NeuralNetBase& operator=(const NeuralNetBase&) = delete;
 
   // Build the engine from params.onnx_path, or deserialize a cached plan and
   // refit it with this model's weights -- every checkpoint of one architecture
-  // shares a plan, keyed by architecture signature, precision, batch size, GPU
-  // compute capability, and TRT version. Exactly once, before predict().
+  // shares a plan, keyed by architecture signature, precision, the spec's row
+  // axis and bound, GPU compute capability, and TRT version. Throws unless the
+  // model declares the spec's graph and every encoding version the spec
+  // requires (see model_specs.h). Exactly once, before predict().
   void load();
 
-  int max_batch_size() const;
+  int max_rows() const;
 
-  // Valid after load().
+  // Valid after load(): the board-row widths the served model consumes.
   int spatial_planes() const;
   int scalar_floats() const;
 
-  // The model's input-encoding arm, from the entry the exporter stamps into the
-  // ONNX metadata_props (see onnx_export.py). Valid after load(); consumers
-  // cross-check it against the input widths through input_encoder.h's registry.
+  // The model's input-encoding arm, from the ONNX metadata_props the exporter
+  // stamps. Valid after load(); consumers cross-check it against the input
+  // widths through input_encoder.h's registry.
   bool contingent_features() const;
   bool opp_leave_input() const;
 
-  // Row-major staging buffers sized for max_batch_size rows. The caller writes
-  // the first num_rows rows before calling predict(num_rows).
-  float* input_spatial_host();  // num_rows x (spatial_planes() * 225)
-  float* input_scalar_host();   // num_rows x scalar_floats()
-
-  // Blocks until the outputs are back. Requires 1 <= num_rows <= max.
+  // Blocks until the outputs are back. Requires 1 <= num_rows <= max_rows().
+  // Static tensors stage one row whatever num_rows is.
   void predict(int num_rows);
 
-  // Valid after predict(), for its first num_rows rows. wld is raw logits.
-  const float* wld_host() const;         // num_rows x kWldFloats
-  const float* score_diff_host() const;  // num_rows x [mean, std], std positive
-  // The placement-mask output for one of the kNumMaskHeads heads, num_rows x
-  // 225 raw logits. Requires params.copy_masks; without it the masks stay on
-  // the device (agents never read them).
-  const float* mask_host(int head) const;
+  // The host staging/readout buffer bound to `name`, which the engine is
+  // guaranteed to expose -- NeuralNet<Spec>::host() is the typed way in. Null
+  // for an aux output without params.copy_aux.
+  void* host_ptr(const char* name) const;
+
+ protected:
+  NeuralNetBase(const NeuralNetParamsBase& params, const RuntimeSpec& spec);
 
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
+};
+
+namespace detail {
+
+// The spec's tensor descriptor lists flattened into NeuralNetBase's runtime
+// table, in list order: inputs, outputs, then aux outputs.
+template <typename... In, typename... Out, typename... Aux>
+constexpr std::array<TensorSpec, sizeof...(In) + sizeof...(Out) + sizeof...(Aux)> tensor_specs(
+  TensorList<In...>, TensorList<Out...>, TensorList<Aux...>) {
+  return {{TensorSpec{In::kName, sizeof(typename In::Elem), In::kRowElems, In::kDynamic, false}...,
+           TensorSpec{Out::kName, sizeof(typename Out::Elem), Out::kRowElems, Out::kDynamic,
+                      false}...,
+           TensorSpec{Aux::kName, sizeof(typename Aux::Elem), Aux::kRowElems, Aux::kDynamic,
+                      true}...}};
+}
+
+template <typename Spec>
+inline constexpr auto kTensorSpecs =
+  tensor_specs(typename Spec::Inputs{}, typename Spec::Outputs{}, typename Spec::AuxOutputs{});
+
+}  // namespace detail
+
+template <typename Spec>
+class NeuralNet : public NeuralNetBase {
+ public:
+  explicit NeuralNet(const NeuralNetParams<Spec>& params) : NeuralNetBase(params, kRuntimeSpec) {}
+
+  // The host buffer for one of the spec's tensors, e.g. host<SpatialInput>():
+  // staging for inputs (write, then predict()), readout for outputs (valid
+  // after predict(), raw logits). Aux-output buffers require params.copy_aux.
+  template <typename Tensor>
+  typename Tensor::Elem* host() {
+    return static_cast<typename Tensor::Elem*>(host_ptr(Tensor::kName));
+  }
+  template <typename Tensor>
+  const typename Tensor::Elem* host() const {
+    return static_cast<const typename Tensor::Elem*>(host_ptr(Tensor::kName));
+  }
+
+ private:
+  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph, Spec::kVersions, Spec::kAxisTag,
+                                               Spec::kOptRows, detail::kTensorSpecs<Spec>};
 };
 
 }  // namespace nn

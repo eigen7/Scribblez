@@ -9,13 +9,13 @@
 #include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
-// nn::NNEvaluationService (and thus pulls in CUDA / TensorRT) -- lives in
+// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
 // neural_agent_factory.cpp, so this translation unit, and the agent's unit
 // tests that compile it, carry no GPU dependency.
 
 namespace scribblez {
 
-NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::EvalService> service,
+NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
                          int max_batch)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),

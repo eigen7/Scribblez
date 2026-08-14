@@ -15,7 +15,7 @@
 // tool is about the engine path.
 
 #include "encoding/input_encoder.h"
-#include "nn/trt_move_set_eval_service.h"
+#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "training/move_set_encoder.h"
 
@@ -71,11 +71,11 @@ int main(int argc, char** argv) {
   const std::string precision = argc > 3 ? argv[3] : "FP16";
 
   try {
-    scribblez::nn::MoveSetNetParams params;
+    scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> params;
     params.onnx_path = model;
     params.precision = scribblez::nn::parse_precision(precision);
 
-    scribblez::nn::TrtMoveSetEvalService service(params);
+    scribblez::nn::TrtEvalService<scribblez::nn::MoveSetEvaluationSpec> service(params);
     service.load();
 
     // An all-zero board row at the model's own width: the candidates are what
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
     std::vector<scribblez::nn::Eval> evals(num_moves);
-    service.evaluate(board.data(), moves, evals.data());
+    service.evaluate({board.data(), &moves}, evals.data());
 
     for (int m = 0; m < num_moves; ++m) {
       const scribblez::nn::Eval& e = evals[m];

@@ -46,7 +46,7 @@ class CandidateEvaluator {
  public:
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::EvalService> service,
+  CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::PositionEvalService> service,
                      int max_batch);
 
   // The owning agent forwards its own begin_game() / observe_move() here, so
@@ -75,7 +75,7 @@ class CandidateEvaluator {
 
  private:
   int max_batch_;
-  std::unique_ptr<nn::EvalService> service_;
+  std::unique_ptr<nn::PositionEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
 

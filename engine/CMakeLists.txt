@@ -124,8 +124,8 @@ if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_NVINFER OR NOT TENSORRT_NVONNXPARSER
     "This project builds inside the NVIDIA TensorRT container.")
 endif()
 
-# A self-contained TensorRT inference layer: the NeuralNet engine wrapper and
-# the synchronous NNEvaluationService. Kept out of scribblez_core so the core
+# A self-contained TensorRT inference layer: the NeuralNet<Spec> engine
+# wrapper and the synchronous TrtEvalService<Spec>. Kept out of scribblez_core so the core
 # game library carries no CUDA/TensorRT dependency. The NvInfer headers are
 # confined to this library's .cpp files (the public headers are pimpl/free of
 # them), so consumers link it without needing the TensorRT include path.
@@ -135,9 +135,7 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/eval_decode.cpp
   src/nn/neural_net.cpp
-  src/nn/nn_evaluation_service.cpp
-  src/nn/move_set_net.cpp
-  src/nn/trt_move_set_eval_service.cpp)
+  src/nn/trt_eval_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -157,7 +155,7 @@ target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobu
 # shared evaluation core -- the only agent sources not in scribblez_core, kept out so
 # the core game library carries no CUDA/TensorRT dependency. Every consumer
 # that builds --player specs (play_game, scribblez_ffi, test_game_runner)
-# links this; scribblez_nn supplies the NNEvaluationService the agents drive.
+# links this; scribblez_nn supplies the TrtEvalService the agents drive.
 # Every other agent (HastyBot, human, greedy) and the runner come from
 # scribblez_core. The GPU-free unit-test binaries instead compile the
 # selection TUs directly, factories excluded (see their comments below).
@@ -296,7 +294,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
   # parity. Compiles the selection TUs (not the factory) directly. The factory
   # TU holds the production constructor, whose nn::make_loaded_service() call
-  # (defined in scribblez_nn's nn_evaluation_service.cpp) is where the concrete
+  # (defined in scribblez_nn's trt_eval_service.cpp) is where the concrete
   # service gets built -- by not compiling the factory, this binary links
   # neither scribblez_nn nor CUDA/TensorRT: the tests use the injecting
   # constructor and never touch the GPU.
@@ -386,7 +384,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
   gtest_discover_tests(test_nn_inference_parity)
 
-  # MoveSetNet against the PyTorch move set evaluation model, including the
+  # the move-set runtime against the PyTorch move set evaluation model, including the
   # plan-cache refit and the service's chunking. Same shape as the parity test
   # above: self-generates its fixture through SCRIBBLEZ_PY_DIR (skipping cleanly
   # if torch/onnx is absent), needs a GPU at run time, and takes an optional
@@ -416,7 +414,7 @@ add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
 
 # The same for the move set evaluation model: load an ONNX model, score a
-# synthetic candidate set, print the decoded Evals. Exercises the MoveSetNet
+# synthetic candidate set, print the decoded Evals. Exercises the move-set
 # path on a real checkpoint without any game logic.
 add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
 target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)

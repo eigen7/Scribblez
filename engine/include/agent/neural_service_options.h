@@ -7,7 +7,6 @@
 // or a candidate of one position's move set -- but not in how a model is
 // named, placed on a device, or sized per GPU call.
 
-#include "nn/move_set_net.h"
 #include "nn/neural_net.h"
 
 #include <boost/program_options.hpp>
@@ -28,14 +27,12 @@ struct NeuralServiceOptions {
   // then what the help renders as the default.
   void add_options(boost::program_options::options_description& desc);
 
-  // The validated NeuralNetParams these options describe. `min_batch` lets an
-  // agent raise the engine batch to its own per-turn candidate cap, so one
-  // chunk can carry the whole set. Throws std::runtime_error on bad input.
-  nn::NeuralNetParams net_params(int min_batch) const;
-
-  // The same for a move set evaluation model, where the per-call ceiling is
-  // the candidates of one turn. Throws std::runtime_error on bad input.
-  nn::MoveSetNetParams move_set_net_params(int min_moves) const;
+  // The validated params these options describe, for either model family.
+  // `min_rows` lets an agent raise the engine's per-call ceiling to its own
+  // per-turn candidate cap, so one chunk can carry the whole set. Throws
+  // std::runtime_error on bad input.
+  template <typename Spec>
+  nn::NeuralNetParams<Spec> net_params(int min_rows) const;
 };
 
 }  // namespace scribblez

@@ -24,8 +24,8 @@
 #include "agent/endgame_turn_policy.h"
 #include "encoding/game_state_encoder.h"
 #include "endgame/endgame_solver.h"
-#include "nn/move_set_eval_service.h"
-#include "nn/move_set_net.h"
+#include "nn/eval_service.h"
+#include "nn/neural_net.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_encoder.h"
 
@@ -62,7 +62,8 @@ class MsetSimAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  MsetSimAgent(const Params& params, const nn::MoveSetNetParams& net_params);
+  MsetSimAgent(const Params& params,
+               const nn::NeuralNetParams<nn::MoveSetEvaluationSpec>& net_params);
 
   // Takes an already-loaded service (real or a scripted stub), loading no model
   // and touching no GPU.

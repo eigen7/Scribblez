@@ -7,6 +7,12 @@
 namespace scribblez {
 namespace nn {
 
+int OnnxMetadata::int_entry(const std::string& key, int absent_value) const {
+  auto it = entries.find(key);
+  if (it == entries.end()) return absent_value;
+  return std::stoi(it->second);
+}
+
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
   if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
@@ -23,8 +29,8 @@ OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
       meta.architecture_signature = kv.value();
     } else if (kv.key() == "graph") {
       meta.graph = kv.value();
-    } else if (kv.key() == "move_encoding_version") {
-      meta.move_encoding_version = std::stoi(kv.value());
+    } else {
+      meta.entries[kv.key()] = kv.value();
     }
   }
   if (meta.architecture_signature.empty()) {

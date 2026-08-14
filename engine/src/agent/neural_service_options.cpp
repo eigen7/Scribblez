@@ -31,22 +31,19 @@ const std::string& require_model(const std::string& model) {
 
 }  // namespace
 
-nn::NeuralNetParams NeuralServiceOptions::net_params(int min_batch) const {
-  nn::NeuralNetParams params;
+template <typename Spec>
+nn::NeuralNetParams<Spec> NeuralServiceOptions::net_params(int min_rows) const {
+  nn::NeuralNetParams<Spec> params;
   params.onnx_path = require_model(model);
   params.cuda_device_id = cuda_device;
-  params.max_batch_size = std::max({batch_size, min_batch, 1});
+  params.max_rows = std::max({batch_size, min_rows, 1});
   params.precision = nn::parse_precision(precision);
   return params;
 }
 
-nn::MoveSetNetParams NeuralServiceOptions::move_set_net_params(int min_moves) const {
-  nn::MoveSetNetParams params;
-  params.onnx_path = require_model(model);
-  params.cuda_device_id = cuda_device;
-  params.max_moves = std::max({batch_size, min_moves, 1});
-  params.precision = nn::parse_precision(precision);
-  return params;
-}
+template nn::NeuralNetParams<nn::PositionEvaluationSpec>
+NeuralServiceOptions::net_params<nn::PositionEvaluationSpec>(int min_rows) const;
+template nn::NeuralNetParams<nn::MoveSetEvaluationSpec>
+NeuralServiceOptions::net_params<nn::MoveSetEvaluationSpec>(int min_rows) const;
 
 }  // namespace scribblez

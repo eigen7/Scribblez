@@ -30,19 +30,16 @@ std::string content_hash(const std::vector<char>& bytes);
 // `fast_build` plans live in a separate subtree so one can never satisfy a
 // full-optimization load.
 //
-// `model_key` decides which models may share a plan, and the two runtimes
-// answer that differently. NeuralNet passes the architecture signature the
-// exporter stamps, so every checkpoint of one architecture shares a plan that
-// the loader refits with the checkpoint's own weights. MoveSetNet passes
-// content_hash() instead -- a plan per checkpoint, never refitted -- because
-// TensorRT gives it no way to tell a complete refit of its graph from one that
-// silently left a weight behind (MoveSetNet::load).
+// `model_key` decides which models may share a plan. NeuralNetBase passes the
+// architecture signature the exporter stamps, so every checkpoint of one
+// architecture shares a plan that the loader refits with the checkpoint's own
+// weights (NeuralNetBase::load on how a refit is verified).
 //
 // `profile_tag` names the optimization profile the plan was built for, and is a
 // caller's string rather than a number because the two model families size
 // different axes: the position net bounds a row batch ("batch_256"), the move
-// set net a candidate count ("moves_4096"). A plan is only valid within the
-// bounds it was built with, so the tag has to separate them.
+// set net a candidate count ("moves_4096"; Spec::kAxisTag). A plan is only
+// valid within the bounds it was built with, so the tag has to separate them.
 std::string engine_plan_cache_path(const std::string& model_key, Precision precision,
                                    const std::string& profile_tag, bool fast_build,
                                    const std::string& mount_root);

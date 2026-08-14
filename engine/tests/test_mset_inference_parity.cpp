@@ -1,4 +1,5 @@
-// MoveSetNet's TensorRT path against the PyTorch model it serves (docs/roadmap.md, A4).
+// The move-set arm of NeuralNet<Spec>'s TensorRT path against the PyTorch
+// model it serves (docs/roadmap.md, A4).
 //
 // The move set evaluation model is fed seven input tensors across three dtypes
 // and scores a whole candidate set in one pass, so more can go silently wrong
@@ -16,18 +17,16 @@
 // generator cannot run (no torch/onnx). Pass a fixture directory as the first
 // non-gtest argument to reuse one instead:
 //   test_mset_inference_parity <fixture_dir>
-// ReusesAPlanPerCheckpointAndNeverMixesThem, the test that examines cache
+// SharesOnePlanAcrossCheckpointsAndRefits, the test that examines cache
 // contents, gets its own fresh scratch root each run so it counts only the
 // plans it built itself. The other cases share one persistent plan cache
 // across runs of this binary (MsetInferenceParityCachedTest, below) -- safe
-// because the cache is keyed on the model's exact content and the fixture
-// generator's fixed seed makes model_a/model_b byte-identical every run, so
-// a build from an earlier run is a valid hit rather than stale reuse.
+// because a hit is refitted with the loaded checkpoint's own weights, and the
+// fixture generator's fixed seed makes the models byte-identical every run.
 
 #include "nn/eval_service.h"
-#include "nn/move_set_net.h"
 #include "nn/neural_net.h"
-#include "nn/trt_move_set_eval_service.h"
+#include "nn/trt_eval_service.h"
 #include "training/move_set_encoder.h"
 
 #include <gtest/gtest.h>
@@ -122,12 +121,13 @@ bool generate_fixture(const std::string& out_dir) {
 #endif
 }
 
-// The message of the std::runtime_error loading `params` through `Net` must
-// throw. Records a failure and returns "" if the load instead succeeds.
-template <typename Net, typename Params>
-std::string load_failure_message(const Params& params) {
+// The message of the std::runtime_error loading `params` through its spec's
+// runtime must throw. Records a failure and returns "" if the load instead
+// succeeds.
+template <typename Spec>
+std::string load_failure_message(const scribblez::nn::NeuralNetParams<Spec>& params) {
   try {
-    Net(params).load();
+    scribblez::nn::NeuralNet<Spec>(params).load();
   } catch (const std::runtime_error& e) {
     return e.what();
   }
@@ -210,15 +210,15 @@ void MsetInferenceParityTest::SetUp() {
 
 std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Precision precision,
                                                int max_moves) {
-  scribblez::nn::MoveSetNetParams params;
+  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> params;
   params.onnx_path = onnx_path;
   params.precision = precision;
-  params.max_moves = max_moves;
+  params.max_rows = max_moves;
   params.mount_root = cache_root_.string();
   // The parity check validates the inference stack, not kernel-tactic quality,
   // so build at optimization level 0 to keep a cold build to a few seconds.
   params.fast_build = true;
-  scribblez::nn::TrtMoveSetEvalService service(params);
+  scribblez::nn::TrtEvalService<scribblez::nn::MoveSetEvaluationSpec> service(params);
   service.load();
 
   EXPECT_EQ(board_.size(), static_cast<size_t>(service.spatial_planes()) * 225 +
@@ -226,7 +226,7 @@ std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Pre
     << "the fixture's board row is not the width the loaded model consumes";
 
   std::vector<Eval> evals(moves_.count);
-  service.evaluate(board_.data(), moves_, evals.data());
+  service.evaluate({board_.data(), &moves_}, evals.data());
   return evals;
 }
 
@@ -275,21 +275,21 @@ void MsetInferenceParityTest::expect_matches(const std::vector<Eval>& got,
   EXPECT_LE(worst.score_diff, tol.score_diff) << label;
 }
 
-// A plan cache keyed on model content (see load()'s cache_path, above), and
-// the fixture generator's fixed --seed, which makes model_a byte-identical
-// every run: a plan built here survives to speed up every later run against
-// this mount, this container or the next. So this fixture just leaves
-// mount_root at MoveSetNetParams' own default (/workspace/mount) instead of
-// pointing it at a scratch directory -- the same persistent cache production
-// loads use, with fast_build plans kept in their own subtree
+// An architecture-keyed plan cache refits every hit with the loaded model's
+// own weights, and the fixture generator's fixed --seed makes its models
+// byte-identical every run: a plan built here survives to speed up every
+// later run against this mount, this container or the next. So this fixture
+// just leaves mount_root at the params' own default (/workspace/mount)
+// instead of pointing it at a scratch directory -- the same persistent cache
+// production loads use, with fast_build plans kept in their own subtree
 // (engine_plan_cache_path) so a test build can never satisfy a
-// full-optimization load. ReusesAPlanPerCheckpointAndNeverMixesThem needs to
+// full-optimization load. SharesOnePlanAcrossCheckpointsAndRefits needs to
 // see an empty cache to prove cold-build-vs-reuse, so it keeps its own
 // scratch cache instead of this one.
 class MsetInferenceParityCachedTest : public MsetInferenceParityTest {
  protected:
   std::filesystem::path make_cache_root() const override {
-    return scribblez::nn::MoveSetNetParams{}.mount_root;
+    return scribblez::nn::NeuralNetParamsBase{}.mount_root;
   }
   bool owns_cache_root() const override { return false; }
 };
@@ -313,12 +313,13 @@ TEST_F(MsetInferenceParityCachedTest, ChunksACandidateSetLargerThanTheEngine) {
                  kFp32Tol);
 }
 
-// The plan cache must reuse a plan for the model that built it and never hand
-// one checkpoint another's weights. Both halves are checked by the numbers,
-// because two same-architecture checkpoints differ in nothing a shape or a
-// metadata entry would catch: model A twice must build one plan and serve A's
-// reference, and model B after it must serve B's own -- not A's.
-TEST_F(MsetInferenceParityTest, ReusesAPlanPerCheckpointAndNeverMixesThem) {
+// One plan per architecture, every checkpoint refitted onto it -- and the
+// refit verified by the numbers, because TensorRT 10.11 reports a refit that
+// mapped every weight and one that left a weight behind identically
+// (NeuralNetBase::load): model A twice must build one plan and serve A's
+// reference, and same-architecture model B must hit that very plan and serve
+// B's own reference -- not A's.
+TEST_F(MsetInferenceParityTest, SharesOnePlanAcrossCheckpointsAndRefits) {
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_, "A cold",
                  kFp32Tol);
   const std::vector<std::filesystem::path> after_cold = cached_plans();
@@ -327,20 +328,23 @@ TEST_F(MsetInferenceParityTest, ReusesAPlanPerCheckpointAndNeverMixesThem) {
 
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_,
                  "A cached", kFp32Tol);
-  // A rebuild would land at the same content-keyed path and overwrite it, so
-  // the file count cannot tell reuse from a silent rebuild -- the write time
-  // can.
+  // A rebuild would land at the same architecture-keyed path and overwrite it,
+  // so the file count cannot tell reuse from a silent rebuild -- the write
+  // time can.
   EXPECT_EQ(std::filesystem::last_write_time(after_cold[0]), built_at)
     << "the same model must reuse its plan, not rebuild it";
 
   const std::vector<Eval> from_b = run(model("model_b.onnx"), Precision::kFP32, moves_.count);
-  expect_matches(from_b, expected_b_, "B", kFp32Tol);
-  EXPECT_EQ(cached_plans().size(), 2u) << "a different checkpoint must get its own plan";
+  expect_matches(from_b, expected_b_, "B refitted", kFp32Tol);
+  EXPECT_EQ(cached_plans().size(), 1u)
+    << "a same-architecture checkpoint must refit the shared plan, not build its own";
+  EXPECT_EQ(std::filesystem::last_write_time(after_cold[0]), built_at)
+    << "a refit must reuse the cached plan, not rebuild it";
 
   // Guard the guard: if the two random-init models happened to agree, the
   // comparison above would pass even on A's weights.
   EXPECT_GT(worst_deviation(from_b, expected_a_).prob, 100 * kFp32Tol.prob)
-    << "the two fixture models are too alike to detect a mixed-up plan";
+    << "the two fixture models are too alike to detect an unrefitted plan";
 }
 
 // The ways a model can be one this engine must not feed, none of which anything
@@ -354,32 +358,33 @@ TEST_F(MsetInferenceParityTest, RejectsModelsThisEncoderMustNotFeed) {
   // Each rejection is matched against what it should have objected to, so a
   // load that failed for some unrelated reason -- a fixture file that stopped
   // being written, say -- cannot pass for the guard doing its job.
-  scribblez::nn::MoveSetNetParams stale;
+  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> stale;
   stale.onnx_path = model("model_stale.onnx");
   stale.mount_root = cache_root_.string();
   stale.fast_build = true;
-  const std::string stale_error = load_failure_message<scribblez::nn::MoveSetNet>(stale);
-  EXPECT_NE(stale_error.find("encoding version mismatch"), std::string::npos) << stale_error;
+  const std::string stale_error = load_failure_message(stale);
+  EXPECT_NE(stale_error.find("Encoding version mismatch"), std::string::npos) << stale_error;
+  EXPECT_NE(stale_error.find("move_encoding_version"), std::string::npos) << stale_error;
 
-  scribblez::nn::NeuralNetParams position;
+  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> position;
   position.onnx_path = model("model_a.onnx");
   position.mount_root = cache_root_.string();
   position.fast_build = true;
-  const std::string graph_error = load_failure_message<scribblez::nn::NeuralNet>(position);
+  const std::string graph_error = load_failure_message(position);
   EXPECT_NE(graph_error.find("declares graph 'move_set_eval'"), std::string::npos) << graph_error;
 
-  scribblez::nn::MoveSetNetParams narrow;
+  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> narrow;
   narrow.onnx_path = model("model_narrow.onnx");
   narrow.mount_root = cache_root_.string();
   narrow.fast_build = true;
-  narrow.max_moves = moves_.count;
-  const std::string width_error = load_failure_message<scribblez::nn::MoveSetNet>(narrow);
-  EXPECT_NE(width_error.find("Move-feature width mismatch"), std::string::npos) << width_error;
+  narrow.max_rows = moves_.count;
+  const std::string width_error = load_failure_message(narrow);
+  EXPECT_NE(width_error.find("Tensor width mismatch"), std::string::npos) << width_error;
 
-  scribblez::nn::MoveSetNetParams small_elements = narrow;
+  scribblez::nn::NeuralNetParams<scribblez::nn::MoveSetEvaluationSpec> small_elements = narrow;
   small_elements.onnx_path = model("model_uint8_letters.onnx");
-  const std::string dtype_error = load_failure_message<scribblez::nn::MoveSetNet>(small_elements);
-  EXPECT_NE(dtype_error.find("Move-feature dtype mismatch"), std::string::npos) << dtype_error;
+  const std::string dtype_error = load_failure_message(small_elements);
+  EXPECT_NE(dtype_error.find("Tensor dtype mismatch"), std::string::npos) << dtype_error;
 }
 
 }  // namespace

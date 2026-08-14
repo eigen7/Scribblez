@@ -34,7 +34,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/nn_evaluation_service.h"
+#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
@@ -262,7 +262,8 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
 // completed slices are read from done() after it joins.
 class InferenceLoop {
  public:
-  InferenceLoop(nn::NNEvaluationService* service, int row_floats, int batch_size, bool label_planes,
+  InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats, int batch_size,
+                bool label_planes,
                 util::ProgressMeter* meter);
 
   void run(SliceQueue* queue);
@@ -273,7 +274,7 @@ class InferenceLoop {
  private:
   void flush();
 
-  nn::NNEvaluationService* service_;
+  nn::TrtEvalService<nn::PositionEvaluationSpec>* service_;
   int row_floats_;
   int batch_size_;
   bool label_planes_;
@@ -289,7 +290,7 @@ class InferenceLoop {
   std::vector<CandidateSlice> done_;
 };
 
-InferenceLoop::InferenceLoop(nn::NNEvaluationService* service, int row_floats, int batch_size,
+InferenceLoop::InferenceLoop(nn::TrtEvalService<nn::PositionEvaluationSpec>* service, int row_floats, int batch_size,
                              bool label_planes, util::ProgressMeter* meter)
     : service_(service),
       row_floats_(row_floats),
@@ -321,7 +322,8 @@ void InferenceLoop::flush() {
     std::memcpy(inputs_.data() + rows * row_floats_, p.rows.data(), p.rows.size() * sizeof(float));
     rows += static_cast<int>(p.candidates.size());
   }
-  service_->evaluate(inputs_.data(), rows, evals_.data(), label_planes_ ? masks_.data() : nullptr);
+  service_->evaluate({inputs_.data(), rows}, evals_.data(),
+                     label_planes_ ? masks_.data() : nullptr);
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
     const int count = static_cast<int>(p.candidates.size());
@@ -379,7 +381,8 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
 
 // Generate the .mset sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& mset_path, const Dictionary& dict,
-                  const InputEncodingSpec& spec, nn::NNEvaluationService* service, int batch_size,
+                  const InputEncodingSpec& spec, nn::TrtEvalService<nn::PositionEvaluationSpec>* service,
+                  int batch_size,
                   const std::string& model_hash, const Options& opt, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
@@ -448,7 +451,7 @@ int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
     Options opt;
-    nn::NeuralNetParams params;
+    nn::NeuralNetParams<nn::PositionEvaluationSpec> params;
     po::options_description desc("move_set_eval_target_generator options");
     desc.add_options()("help,h", "show this help and exit")(
       "slog-dir", po::value<std::string>(&opt.slog_dir),
@@ -491,12 +494,12 @@ int main(int argc, char** argv) {
 
     // A stratified run labels placement planes, so the teacher's masks must
     // come back from the device (a sweep labels values alone).
-    params.copy_masks = !opt.full_sweep;
-    nn::NNEvaluationService service(params);
+    params.copy_aux = !opt.full_sweep;
+    nn::TrtEvalService<nn::PositionEvaluationSpec> service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
-    opt.slice_candidates = std::min(kSliceCandidates, params.max_batch_size);
+    opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 
     std::vector<fs::path> slogs;
     if (!opt.slog_files.empty()) {
@@ -567,7 +570,7 @@ int main(int argc, char** argv) {
     for (const auto& [slog, buf] : pending) {
       fs::path mset = slog;
       mset.replace_extension(".mset");
-      process_file(buf, mset, dict, spec, &service, params.max_batch_size, model_hash, opt, &meter);
+      process_file(buf, mset, dict, spec, &service, params.max_rows, model_hash, opt, &meter);
     }
     meter.finish("move set eval targets");
     return 0;

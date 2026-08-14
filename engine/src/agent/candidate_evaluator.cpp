@@ -33,7 +33,8 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
 }
 
 CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
-                                       std::unique_ptr<nn::EvalService> service, int max_batch)
+                                       std::unique_ptr<nn::PositionEvalService> service,
+                                       int max_batch)
     : max_batch_(max_batch),
       service_(std::move(service)),
       spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
@@ -73,7 +74,7 @@ void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move
       encode_candidate(mv, req.my_rack, my_seat, req.opp_rack,
                        input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
     }
-    service_->evaluate(input_buf_.data(), chunk, eval_buf_.data() + done);
+    service_->evaluate({input_buf_.data(), chunk}, eval_buf_.data() + done);
     done += chunk;
   }
 }

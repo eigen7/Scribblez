@@ -5,7 +5,7 @@
 // float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
 // score_diff_mean, score_diff_std, the PyTorch decode), produced by
 // py/scripts/position_eval/gen_parity_fixture.py. This test loads the model through
-// NNEvaluationService and evaluates the rows at FP16 -- the precision production
+// TrtEvalService and evaluates the rows at FP16 -- the precision production
 // inference runs -- holding every field to a tight tolerance against the PyTorch
 // FP32 reference. FP16 is the coarser precision, so its deviation bounds FP32's;
 // passing it validates the engine build, host/device copies, output binding
@@ -21,7 +21,7 @@
 //   test_nn_inference_parity <fixture_dir>
 
 #include "encoding/input_encoder.h"
-#include "nn/nn_evaluation_service.h"
+#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 
 #include <gtest/gtest.h>
@@ -90,18 +90,18 @@ static void pack(const Eval& e, float* dst) {
 static void check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
                             const char* label, const std::vector<float>& inputs,
                             const std::vector<float>& expected, int n) {
-  scribblez::nn::NeuralNetParams params;
+  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
   params.onnx_path = onnx_path;
-  params.max_batch_size = n;
+  params.max_rows = n;
   params.precision = precision;
   // The parity check validates the inference stack (engine bindings, host/device
   // copies, the C++ decode), not kernel-tactic quality, so build the engine at
   // optimization level 0 to keep the cold engine build to a few seconds.
   params.fast_build = true;
-  scribblez::nn::NNEvaluationService service(params);
+  scribblez::nn::TrtEvalService<scribblez::nn::PositionEvaluationSpec> service(params);
   service.load();
 
-  std::vector<Eval> evals = service.evaluate(inputs.data(), n);
+  std::vector<Eval> evals = service.evaluate({inputs.data(), n});
 
   float max_prob_err = 0.0f;
   float max_sd_err = 0.0f;
