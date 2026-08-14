@@ -93,6 +93,9 @@ class NeuralAgent : public Agent {
   // Index, into the first `k` evaluated candidates, of the one to play.
   int select_index(int k);
 
+  // The configured objective read off evaluated candidate `i`'s head rows.
+  float objective(int i) const;
+
   int top_k_;
   EvalObjective objective_;
   double temperature_;

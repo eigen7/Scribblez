@@ -51,14 +51,13 @@ int main(int argc, char** argv) {
     std::vector<float> sd(static_cast<size_t>(rows) * scribblez::nn::ScoreDiffOutput::kRowElems);
     float* const head_out[] = {wld.data(), sd.data()};
     service.evaluate({inputs.data(), rows}, head_out);
-    std::vector<scribblez::nn::Eval> evals(rows);
-    scribblez::nn::make_evals(wld.data(), sd.data(), rows, evals.data());
 
     for (int r = 0; r < rows; ++r) {
-      const scribblez::nn::Eval& e = evals[r];
-      std::cout << "row " << r << ": P(win)=" << e.p_win << " P(draw)=" << e.p_draw
-                << " P(loss)=" << e.p_loss << " win_prob=" << e.win_prob
-                << " score_diff_mean=" << e.score_diff_mean << "\n";
+      const float* w = wld.data() + static_cast<size_t>(r) * scribblez::nn::WldOutput::kRowElems;
+      const float* s =
+        sd.data() + static_cast<size_t>(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      std::cout << "row " << r << ": P(win)=" << w[0] << " P(draw)=" << w[1] << " P(loss)=" << w[2]
+                << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }
     return 0;
   } catch (const std::exception& ex) {

@@ -8,25 +8,27 @@
 #include "nn/eval_service.h"
 
 #include <algorithm>
+#include <array>
 #include <span>
 #include <vector>
 
 namespace scribblez {
 namespace testing {
 
-// The inverse of nn::make_evals, so a test scripts whole Evals while the
-// service interface transports decoded head rows. win_prob does not survive
-// the trip on its own -- consumers recompute it as p_win + 0.5 * p_draw -- so
-// scripted evals must carry their ranking signal in p_win (the helpers in the
-// test files do).
-inline void write_eval_heads(const nn::Eval& e, int row, std::span<float* const> head_out) {
+// One scripted row of the two scoring heads, exactly as the service interface
+// transports them: [P(win), P(draw), P(loss)] and [mean, std]. A test-side
+// convenience -- production consumers read decoded head rows directly. The
+// win-prob ranking objective reads wld[0] + 0.5 * wld[1].
+struct ScriptedEval {
+  std::array<float, 3> wld{};
+  std::array<float, 2> score_diff{};
+};
+
+inline void write_scripted(const ScriptedEval& e, int row, std::span<float* const> head_out) {
   float* wld = head_out[0] + static_cast<size_t>(row) * nn::WldOutput::kRowElems;
-  wld[0] = e.p_win;
-  wld[1] = e.p_draw;
-  wld[2] = e.p_loss;
+  std::copy(e.wld.begin(), e.wld.end(), wld);
   float* sd = head_out[1] + static_cast<size_t>(row) * nn::ScoreDiffOutput::kRowElems;
-  sd[0] = e.score_diff_mean;
-  sd[1] = e.score_diff_std;
+  std::copy(e.score_diff.begin(), e.score_diff.end(), sd);
 }
 
 // Returns pre-set evals, one per candidate in *per-call* order. Suits tests
@@ -34,15 +36,15 @@ inline void write_eval_heads(const nn::Eval& e, int row, std::span<float* const>
 // index resets every call).
 class StubEvalService : public nn::PositionEvalService {
  public:
-  std::vector<nn::Eval> scripted;
+  std::vector<ScriptedEval> scripted;
   bool contingent_features() const override { return true; }
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
-      write_eval_heads((i < static_cast<int>(scripted.size())) ? scripted[i] : nn::Eval{}, i,
-                       head_out);
+      write_scripted((i < static_cast<int>(scripted.size())) ? scripted[i] : ScriptedEval{}, i,
+                     head_out);
     }
   }
 };
@@ -53,7 +55,7 @@ class StubEvalService : public nn::PositionEvalService {
 // chunking tests (one make_move per agent).
 class CountingStubEvalService : public nn::PositionEvalService {
  public:
-  std::vector<nn::Eval> scripted;
+  std::vector<ScriptedEval> scripted;
   bool contingent_features() const override { return true; }
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
@@ -67,8 +69,8 @@ class CountingStubEvalService : public nn::PositionEvalService {
     max_chunk = std::max(max_chunk, batch.count);
     for (int i = 0; i < batch.count; ++i) {
       const int g = total_rows + i;
-      write_eval_heads((g < static_cast<int>(scripted.size())) ? scripted[g] : nn::Eval{}, i,
-                       head_out);
+      write_scripted((g < static_cast<int>(scripted.size())) ? scripted[g] : ScriptedEval{}, i,
+                     head_out);
     }
     total_rows += batch.count;
   }

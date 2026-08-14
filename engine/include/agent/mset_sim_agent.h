@@ -105,6 +105,9 @@ class MsetSimAgent : public Agent {
   // agent's tie-break, so one seed gives one decision.
   void rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
 
+  // The rank objective read off scored candidate `i`'s head rows.
+  float objective(int i) const;
+
   int shortlist_;
   int sim_top_k_;
   EvalObjective rank_objective_;
@@ -122,7 +125,6 @@ class MsetSimAgent : public Agent {
   move_set::MoveFeatureArrays move_features_;
   std::vector<float> wld_buf_;         // decoded WLD rows, one per candidate
   std::vector<float> score_diff_buf_;  // decoded score-diff rows, one per candidate
-  std::vector<nn::Eval> evals_;
   std::vector<int> rank_;
   std::vector<Move> sim_moves_;
 };

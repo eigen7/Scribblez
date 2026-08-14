@@ -102,6 +102,9 @@ class NeuralSimAgent : public Agent {
   // order (ties keeping equity order), evaluating every candidate.
   void rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
 
+  // The rank objective read off evaluated candidate `i`'s head rows.
+  float objective(int i) const;
+
   int shortlist_;
   int sim_top_k_;
   EvalObjective rank_objective_;

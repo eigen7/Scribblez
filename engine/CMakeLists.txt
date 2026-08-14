@@ -133,7 +133,6 @@ add_library(scribblez_nn STATIC
   src/nn/cuda_util.cpp
   src/nn/trt_util.cpp
   src/nn/onnx_metadata.cpp
-  src/nn/eval_decode.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -302,7 +301,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_neural_agent.cpp
     src/agent/candidate_evaluator.cpp
     src/agent/neural_agent.cpp
-    src/nn/eval_decode.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
   target_link_libraries(test_neural_agent PRIVATE
@@ -336,8 +334,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(test_neural_sim_agent
     tests/test_neural_sim_agent.cpp
     src/agent/candidate_evaluator.cpp
-    src/agent/neural_sim_agent.cpp
-    src/nn/eval_decode.cpp)
+    src/agent/neural_sim_agent.cpp)
   target_link_libraries(test_neural_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_sim_agent)
@@ -352,8 +349,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(test_mset_sim_agent
     tests/test_mset_sim_agent.cpp
     src/agent/candidate_evaluator.cpp
-    src/agent/mset_sim_agent.cpp
-    src/nn/eval_decode.cpp)
+    src/agent/mset_sim_agent.cpp)
   target_link_libraries(test_mset_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_mset_sim_agent)

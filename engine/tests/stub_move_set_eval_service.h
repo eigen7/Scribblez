@@ -19,9 +19,9 @@ namespace testing {
 
 class StubMoveSetEvalService : public nn::MoveSetEvalService {
  public:
-  // One Eval per candidate, in candidate order; candidates past its end score
-  // a default Eval.
-  std::vector<nn::Eval> scripted;
+  // One scripted row per candidate, in candidate order; candidates past its
+  // end score a default (all-zero) row.
+  std::vector<ScriptedEval> scripted;
 
   // What the last evaluate() saw, and how many times it was called. One call
   // per turn is the architecture's whole claim, so a test asserts on it.
@@ -43,9 +43,9 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
                           batch.board_row + input_floats(InputEncodingSpec{nullptr, true}));
     last_moves = moves;
     for (int i = 0; i < moves.count; ++i) {
-      write_eval_heads(
-        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : nn::Eval{}, i,
-        head_out);
+      write_scripted(
+        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : ScriptedEval{},
+        i, head_out);
     }
   }
 };

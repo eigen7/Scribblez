@@ -92,14 +92,13 @@ int main(int argc, char** argv) {
                           scribblez::nn::ScoreDiffOutput::kRowElems);
     float* const head_out[] = {wld.data(), sd.data()};
     service.evaluate({board.data(), &moves}, head_out);
-    std::vector<scribblez::nn::Eval> evals(num_moves);
-    scribblez::nn::make_evals(wld.data(), sd.data(), num_moves, evals.data());
 
     for (int m = 0; m < num_moves; ++m) {
-      const scribblez::nn::Eval& e = evals[m];
-      std::cout << "move " << m << ": P(win)=" << e.p_win << " P(draw)=" << e.p_draw
-                << " P(loss)=" << e.p_loss << " win_prob=" << e.win_prob
-                << " score_diff_mean=" << e.score_diff_mean << "\n";
+      const float* w = wld.data() + static_cast<size_t>(m) * scribblez::nn::WldOutput::kRowElems;
+      const float* s =
+        sd.data() + static_cast<size_t>(m) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      std::cout << "move " << m << ": P(win)=" << w[0] << " P(draw)=" << w[1] << " P(loss)=" << w[2]
+                << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }
     return 0;
   } catch (const std::exception& ex) {

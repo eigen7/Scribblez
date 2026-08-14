@@ -15,6 +15,7 @@
 #include "lexicon/dictionary.h"
 #include "nn/eval_service.h"
 #include "sim/sim_runner.h"
+#include "stub_eval_service.h"
 
 #include <algorithm>
 #include <limits>
@@ -49,30 +50,26 @@ inline std::vector<Move> shortlist_candidates(const MoveRequest& req, int shortl
 
 // The agents' own model ranking: candidate indices in descending scripted-value
 // order, ties keeping equity order (their stable_sort).
-inline std::vector<int> model_rank(const std::vector<nn::Eval>& scripted, EvalObjective objective) {
+inline std::vector<int> model_rank(const std::vector<ScriptedEval>& scripted,
+                                   EvalObjective objective) {
   std::vector<int> idx(scripted.size());
   std::iota(idx.begin(), idx.end(), 0);
   std::stable_sort(idx.begin(), idx.end(), [&](int a, int b) {
-    return objective_value(scripted[static_cast<size_t>(a)], objective) >
-           objective_value(scripted[static_cast<size_t>(b)], objective);
+    const ScriptedEval& ea = scripted[static_cast<size_t>(a)];
+    const ScriptedEval& eb = scripted[static_cast<size_t>(b)];
+    return objective_value(ea.wld.data(), ea.score_diff.data(), objective) >
+           objective_value(eb.wld.data(), eb.score_diff.data(), objective);
   });
   return idx;
 }
 
-inline nn::Eval wp(float win_prob) {
-  // p_win carries the value across the head-row transport (write_eval_heads);
-  // win_prob is recomputed as p_win + 0.5 * p_draw on the far side.
-  nn::Eval e;
-  e.p_win = win_prob;
-  e.win_prob = win_prob;
-  return e;
-}
+inline ScriptedEval wp(float win_prob) { return {{win_prob, 0.0f, 0.0f}, {}}; }
 
-// Scripted evals for a candidate set of `n`: `favoured` (indices into the
+// Scripted rows for a candidate set of `n`: `favoured` (indices into the
 // equity ranking) get descending high win probabilities, the rest a low one --
 // so the model's preference is separated from static equity's by construction.
-inline std::vector<nn::Eval> script_favouring(size_t n, const std::vector<int>& favoured) {
-  std::vector<nn::Eval> scripted(n, wp(0.1f));
+inline std::vector<ScriptedEval> script_favouring(size_t n, const std::vector<int>& favoured) {
+  std::vector<ScriptedEval> scripted(n, wp(0.1f));
   float v = 0.9f;
   for (int idx : favoured) {
     scripted[static_cast<size_t>(idx)] = wp(v);

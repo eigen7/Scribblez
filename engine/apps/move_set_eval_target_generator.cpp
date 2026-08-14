@@ -287,7 +287,6 @@ class InferenceLoop {
   std::vector<float> inputs_;
   std::vector<float> wld_buf_;
   std::vector<float> score_diff_buf_;
-  std::vector<nn::Eval> evals_;
   std::vector<float> masks_;
 
   std::vector<CandidateSlice> pending_;
@@ -305,7 +304,6 @@ InferenceLoop::InferenceLoop(TeacherService* service, int row_floats, int batch_
       inputs_(static_cast<size_t>(batch_size) * row_floats),
       wld_buf_(static_cast<size_t>(batch_size) * nn::WldOutput::kRowElems),
       score_diff_buf_(static_cast<size_t>(batch_size) * nn::ScoreDiffOutput::kRowElems),
-      evals_(batch_size),
       masks_(label_planes ? batch_size * kPlaneFloats : 0) {}
 
 void InferenceLoop::run(SliceQueue* queue) {
@@ -331,7 +329,6 @@ void InferenceLoop::flush() {
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
-  nn::make_evals(wld_buf_.data(), score_diff_buf_.data(), rows, evals_.data());
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
     const int count = static_cast<int>(p.candidates.size());
@@ -341,13 +338,16 @@ void InferenceLoop::flush() {
                       masks_.data() + (cursor + count) * kPlaneFloats);
     }
     for (int c = 0; c < count; ++c) {
-      const nn::Eval& e = evals_[cursor++];
+      const float* wld = wld_buf_.data() + static_cast<size_t>(cursor) * nn::WldOutput::kRowElems;
+      const float* sd =
+        score_diff_buf_.data() + static_cast<size_t>(cursor) * nn::ScoreDiffOutput::kRowElems;
+      ++cursor;
       float* t = p.targets.data() + c * move_set_eval::kTargetFloatsV1;
-      t[0] = e.p_win;
-      t[1] = e.p_draw;
-      t[2] = e.p_loss;
-      t[3] = e.score_diff_mean;
-      t[4] = move_set_eval::clamped_sd_std(e.score_diff_std);
+      t[0] = wld[0];
+      t[1] = wld[1];
+      t[2] = wld[2];
+      t[3] = sd[0];
+      t[4] = move_set_eval::clamped_sd_std(sd[1]);
     }
     // Free the encoded rows now that they are consumed; done_ accumulates a
     // whole file's slices and must not hold every encoding.

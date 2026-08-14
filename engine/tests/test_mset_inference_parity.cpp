@@ -44,7 +44,6 @@
 #include <vector>
 
 using scribblez::move_set::MoveFeatureArrays;
-using scribblez::nn::Eval;
 using scribblez::nn::MoveSetEvaluationSpec;
 using scribblez::nn::PositionEvaluationSpec;
 using scribblez::nn::Precision;
@@ -161,17 +160,19 @@ class MsetInferenceParityTest : public ::testing::Test {
 
   // Every candidate in the fixture, scored by the model at `onnx_path`, with
   // the engine bounded at `max_moves` (below the candidate count to exercise
-  // the service's chunking).
-  std::vector<Eval> run(const std::string& onnx_path, Precision precision, int max_moves);
+  // the service's chunking). Rows of kFieldsPerRow in expected.bin's layout:
+  // win_prob, the three probabilities, then the score-diff pair.
+  std::vector<float> run(const std::string& onnx_path, Precision precision, int max_moves);
 
   // Engine plans sitting in this test's scratch cache, in no particular order.
   std::vector<std::filesystem::path> cached_plans() const;
 
   // Worst deviation of `got` from a reference decode, per field group.
-  Tolerance worst_deviation(const std::vector<Eval>& got, const std::vector<float>& expected) const;
+  Tolerance worst_deviation(const std::vector<float>& got,
+                            const std::vector<float>& expected) const;
 
   // ...held to `tol`, printing the actual deviations under `label`.
-  void expect_matches(const std::vector<Eval>& got, const std::vector<float>& expected,
+  void expect_matches(const std::vector<float>& got, const std::vector<float>& expected,
                       const char* label, Tolerance tol) const;
 
   std::string dir_;
@@ -212,8 +213,8 @@ void MsetInferenceParityTest::SetUp() {
   ASSERT_EQ(expected_b_.size(), expected_a_.size());
 }
 
-std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Precision precision,
-                                               int max_moves) {
+std::vector<float> MsetInferenceParityTest::run(const std::string& onnx_path, Precision precision,
+                                                int max_moves) {
   MsetParams params;
   params.onnx_path = onnx_path;
   params.precision = precision;
@@ -234,9 +235,20 @@ std::vector<Eval> MsetInferenceParityTest::run(const std::string& onnx_path, Pre
                         scribblez::nn::ScoreDiffOutput::kRowElems);
   float* const head_out[] = {wld.data(), sd.data()};
   service.evaluate({board_.data(), &moves_}, head_out);
-  std::vector<Eval> evals(moves_.count);
-  scribblez::nn::make_evals(wld.data(), sd.data(), moves_.count, evals.data());
-  return evals;
+
+  std::vector<float> got(static_cast<size_t>(moves_.count) * kFieldsPerRow);
+  for (int r = 0; r < moves_.count; ++r) {
+    const float* w = wld.data() + static_cast<size_t>(r) * scribblez::nn::WldOutput::kRowElems;
+    const float* s = sd.data() + static_cast<size_t>(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
+    float* dst = got.data() + static_cast<size_t>(r) * kFieldsPerRow;
+    dst[0] = w[0] + 0.5f * w[1];
+    dst[1] = w[0];
+    dst[2] = w[1];
+    dst[3] = w[2];
+    dst[4] = s[0];
+    dst[5] = s[1];
+  }
+  return got;
 }
 
 std::vector<std::filesystem::path> MsetInferenceParityTest::cached_plans() const {
@@ -247,33 +259,29 @@ std::vector<std::filesystem::path> MsetInferenceParityTest::cached_plans() const
   return plans;
 }
 
-Tolerance MsetInferenceParityTest::worst_deviation(const std::vector<Eval>& got,
+Tolerance MsetInferenceParityTest::worst_deviation(const std::vector<float>& got,
                                                    const std::vector<float>& expected) const {
   Tolerance worst{0.0f, 0.0f};
   for (size_t i = 0; i < got.size(); ++i) {
-    const float* want = expected.data() + i * kFieldsPerRow;
-    const float fields[kFieldsPerRow] = {got[i].win_prob,        got[i].p_win,
-                                         got[i].p_draw,          got[i].p_loss,
-                                         got[i].score_diff_mean, got[i].score_diff_std};
-    for (int k = 0; k < kFieldsPerRow; ++k) {
-      // A NaN would otherwise vanish here: std::max returns its first argument
-      // whenever the comparison is false, and every comparison against NaN is,
-      // so a run whose rows all came back NaN -- what reading an unbound or
-      // uninitialized device buffer can look like, one of the hazards this
-      // suite exists to catch -- would report a perfect match.
-      const float deviation = std::abs(fields[k] - want[k]);
-      if (!std::isfinite(deviation)) {
-        ADD_FAILURE() << "non-finite output: move " << i << " field " << k << " = " << fields[k];
-        continue;
-      }
-      float& tracked = k < 4 ? worst.prob : worst.score_diff;
-      tracked = std::max(tracked, deviation);
+    const int k = static_cast<int>(i % kFieldsPerRow);
+    // A NaN would otherwise vanish here: std::max returns its first argument
+    // whenever the comparison is false, and every comparison against NaN is,
+    // so a run whose rows all came back NaN -- what reading an unbound or
+    // uninitialized device buffer can look like, one of the hazards this
+    // suite exists to catch -- would report a perfect match.
+    const float deviation = std::abs(got[i] - expected[i]);
+    if (!std::isfinite(deviation)) {
+      ADD_FAILURE() << "non-finite output: move " << i / kFieldsPerRow << " field " << k << " = "
+                    << got[i];
+      continue;
     }
+    float& tracked = k < 4 ? worst.prob : worst.score_diff;
+    tracked = std::max(tracked, deviation);
   }
   return worst;
 }
 
-void MsetInferenceParityTest::expect_matches(const std::vector<Eval>& got,
+void MsetInferenceParityTest::expect_matches(const std::vector<float>& got,
                                              const std::vector<float>& expected, const char* label,
                                              Tolerance tol) const {
   const Tolerance worst = worst_deviation(got, expected);
@@ -343,7 +351,7 @@ TEST_F(MsetInferenceParityTest, SharesOnePlanAcrossCheckpointsAndRefits) {
   EXPECT_EQ(std::filesystem::last_write_time(after_cold[0]), built_at)
     << "the same model must reuse its plan, not rebuild it";
 
-  const std::vector<Eval> from_b = run(model("model_b.onnx"), Precision::kFP32, moves_.count);
+  const std::vector<float> from_b = run(model("model_b.onnx"), Precision::kFP32, moves_.count);
   expect_matches(from_b, expected_b_, "B refitted", kFp32Tol);
   EXPECT_EQ(cached_plans().size(), 1u)
     << "a same-architecture checkpoint must refit the shared plan, not build its own";

@@ -154,23 +154,18 @@ class NeuralAgentEquityTest : public ::testing::Test {
 // CountingStubEvalService) live in stub_eval_service.h, shared with the other
 // model-driven agents' tests.
 using scribblez::testing::CountingStubEvalService;
+using scribblez::testing::ScriptedEval;
 using scribblez::testing::StubEvalService;
 
 // Layout shorthands for the full input layout these tests encode.
 static const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
 static const int kRowFloats = kInputFloats + kLabelFloats;
 
-static nn::Eval eval_with(float score_diff_mean, float win_prob) {
-  nn::Eval e;
-  e.score_diff_mean = score_diff_mean;
-  // The service interface transports head rows, so win_prob is recomputed
-  // from p_win/p_draw on the far side (see write_eval_heads).
-  e.p_win = win_prob;
-  e.win_prob = win_prob;
-  return e;
+static ScriptedEval eval_with(float score_diff_mean, float win_prob) {
+  return {{win_prob, 0.0f, 0.0f}, {score_diff_mean, 0.0f}};
 }
 
-static nn::Eval sd(float score_diff_mean) { return eval_with(score_diff_mean, 0.0f); }
+static ScriptedEval sd(float score_diff_mean) { return eval_with(score_diff_mean, 0.0f); }
 
 TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
   // Real opening plays for CARETS, ranked by HastyBot equity exactly as the

@@ -83,10 +83,12 @@ void NeuralSimAgent::rank_candidates(const MoveRequest& req, const std::vector<M
   rank_.resize(static_cast<size_t>(n));
   std::iota(rank_.begin(), rank_.end(), 0);
   evaluator_.evaluate(req, candidates, rank_, n);
-  const std::vector<nn::Eval>& evals = evaluator_.evals();
-  std::stable_sort(rank_.begin(), rank_.end(), [&](int a, int b) {
-    return objective_value(evals[a], rank_objective_) > objective_value(evals[b], rank_objective_);
-  });
+  std::stable_sort(rank_.begin(), rank_.end(),
+                   [&](int a, int b) { return objective(a) > objective(b); });
+}
+
+float NeuralSimAgent::objective(int i) const {
+  return objective_value(evaluator_.wld_row(i), evaluator_.score_diff_row(i), rank_objective_);
 }
 
 MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
