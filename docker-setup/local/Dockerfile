@@ -31,7 +31,7 @@ ENV LC_ALL=en_US.UTF-8
 # 2) Core toolchain + Boost (for the C++ engine). libonnx-dev/libprotobuf-dev
 #    supply the generated ONNX message headers and libprotobuf.so that
 #    scribblez_nn uses to read the input-encoding arm out of an exported
-#    model's metadata_props from C++. cmake is installed separately in 2c,
+#    model's metadata_props from C++. cmake is installed separately in 2d,
 #    from a repo new enough to know the C++26 flags for gcc-16.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sudo gosu curl wget rsync git vim tmux ack gdb lsof ca-certificates \
@@ -77,7 +77,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends gnupg && \
       --slave /usr/bin/g++ g++ /usr/bin/g++-16 && \
     update-alternatives --set gcc /usr/bin/gcc-16
 
-# 2c) Upgrade cmake past what Ubuntu 24.04 ships (3.28.3), from Kitware's own
+# 2c) Upgrade clangd to 21 (apt.llvm.org; noble's archive tops out at 19), so
+#     the IDE can cope with the gcc-16 / C++26 setup from 2b. clangd-19's
+#     __has_builtin misreports __reference_{constructs,converts}_from_temporary
+#     (llvm/llvm-project#111477), so gcc-16's libstdc++ disables
+#     std::reference_constructs_from_temporary_v -- which its C++26
+#     optional<T&> code then uses unconditionally, breaking every TU that
+#     includes <optional>. clangd-21 parses those headers cleanly. Note no
+#     upstream clangd understands -freflection or P2996 syntax (gcc-16-only
+#     so far); .clangd strips the flag, and the few TUs using ^^ / std::meta
+#     stay unparseable in the IDE. clang/clang-format/clang-tidy stay at 19:
+#     a clang-format bump could reflow the whole codebase.
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+      | gpg --dearmor -o /etc/apt/keyrings/llvm.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" \
+      > /etc/apt/sources.list.d/llvm-21.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends clangd-21 && \
+    rm -rf /var/lib/apt/lists/* && \
+    update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-21 210
+
+# 2d) Upgrade cmake past what Ubuntu 24.04 ships (3.28.3), from Kitware's own
 #     apt repo: CMake only maps CXX_STANDARD 26 to -std=c++26 for GCC >= 14
 #     as of CMake 3.30, well past what noble carries. This also deletes the
 #     cmake/cpack/ctest binaries the TensorRT base image bakes into
