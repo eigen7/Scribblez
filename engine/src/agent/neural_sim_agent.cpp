@@ -1,12 +1,12 @@
 #include "agent/neural_sim_agent.h"
 
+#include "util/exception.h"
 #include "util/math.h"
 
 #include <algorithm>
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
 // nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
@@ -24,7 +24,7 @@ constexpr uint64_t kDropStreamSalt = 0x9e3779b97f4a7c15ULL;
 // The dictionary reference the CandidateEvaluator member needs before any
 // constructor body could check it.
 const Dictionary& require_dict(const Dictionary* dict) {
-  if (dict == nullptr) throw std::runtime_error("neural-sim agent: a dictionary is required");
+  if (dict == nullptr) throw util::Exception("neural-sim agent: a dictionary is required");
   return *dict;
 }
 
@@ -47,10 +47,11 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
 
 void NeuralSimAgent::validate(const Params& params) {
   if (params.shortlist < 0)
-    throw std::runtime_error("neural-sim agent: --shortlist must be >= 0 (0 = all moves)");
-  if (params.sim_top_k < 1) throw std::runtime_error("neural-sim agent: --sim-top-k must be >= 1");
+    throw util::CleanException("neural-sim agent: --shortlist must be >= 0 (0 = all moves)");
+  if (params.sim_top_k < 1)
+    throw util::CleanException("neural-sim agent: --sim-top-k must be >= 1");
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
-    throw std::runtime_error("neural-sim agent: --drop-best-prob must be in [0, 1]");
+    throw util::CleanException("neural-sim agent: --drop-best-prob must be in [0, 1]");
   SimRunner::validate(params.sim);
 }
 

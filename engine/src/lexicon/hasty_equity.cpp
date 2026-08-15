@@ -1,6 +1,7 @@
 #include "lexicon/hasty_equity.h"
 
 #include "game/glyph.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 
@@ -10,7 +11,6 @@
 #include <bitset>
 #include <fstream>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -117,7 +117,7 @@ std::string HastyEquity::default_peg_path() {
 
 double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
                            const Rack& my_rack) const {
-  if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
+  if (!ready_) throw util::Exception("HastyEquity::init() was not called");
 
   // Derive the leave directly from the rack and the move's played tiles; the
   // single-move path is not perf-critical, so it skips the per-turn table.
@@ -188,7 +188,7 @@ double HastyEquity::peg_for_tiles(int tiles_played, int bag_size) const {
 std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
                                           int bag_size, const Rack& opp_rack,
                                           const Rack& my_rack) const {
-  if (!ready_) throw std::runtime_error("HastyEquity::init() was not called");
+  if (!ready_) throw util::Exception("HastyEquity::init() was not called");
 
   std::vector<double> out(moves.size(), 0.0);
   if (moves.empty()) return out;

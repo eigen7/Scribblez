@@ -81,6 +81,13 @@ target_include_directories(scribblez_core PUBLIC
 # every consumer of the core library (FFI, web server, tests).
 target_link_libraries(scribblez_core PUBLIC Boost::json)
 target_link_libraries(scribblez_core PUBLIC Eigen3::Eigen)
+# misc.cpp/lexicon.cpp/the agent factories parse options with
+# Boost.ProgramOptions, and web_server.cpp drives npm through Boost.Process
+# (-> Boost.Filesystem/System). Declared here, where the code lives: consumers
+# that only linked these transitively-by-luck survived Release LTO stripping,
+# but -O0 test links surfaced the missing deps.
+target_link_libraries(scribblez_core PUBLIC Boost::program_options Boost::filesystem
+                                            Boost::system)
 
 # Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
 # so the resulting libscribblez_ffi.so is a single self-contained artifact
@@ -410,7 +417,7 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 # zero inputs, print WLD + ScoreDiff outputs. Exercises the engine path without
 # any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
-target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
+target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # The same for the move set evaluation model: load an ONNX model, score a
 # synthetic candidate set, print the decoded Evals. Exercises the move-set

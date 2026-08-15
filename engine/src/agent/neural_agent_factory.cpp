@@ -15,6 +15,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/trt_eval_service.h"
+#include "util/exception.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
@@ -22,7 +23,6 @@
 #include <cstdint>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 
 namespace scribblez {
@@ -80,10 +80,10 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=neural options: ") + e.what());
+    throw util::CleanException("bad --type=neural options: {}", e.what());
   }
 
-  if (opts.top_k < 0) throw std::runtime_error("--top-k must be >= 0 (0 = all legal plays)");
+  if (opts.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all legal plays)");
 
   // Sizing the engine batch to at least top_k just lets the whole top-K set be
   // scored in a single chunk; the agent chunks to the engine batch either way.

@@ -1,10 +1,11 @@
 #include "lexicon/dictionary.h"
 
+#include "util/exception.h"
+
 #include <cstdint>
 #include <fstream>
 #include <map>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 namespace scribblez {
@@ -101,21 +102,21 @@ bool Dictionary::contains(const std::string& word) const {
 
 Dictionary Dictionary::load_kwg(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
-  if (!in) throw std::runtime_error("Failed to open KWG file: " + path);
+  if (!in) throw util::Exception("Failed to open KWG file: {}", path);
   in.seekg(0, std::ios::end);
   std::streamsize size = in.tellg();
   in.seekg(0, std::ios::beg);
   if (size <= 0 || size % 4 != 0) {
-    throw std::runtime_error("Bad KWG file size for: " + path);
+    throw util::Exception("Bad KWG file size for: {}", path);
   }
   Dictionary d;
   d.nodes_.resize(static_cast<size_t>(size) / 4);
   in.read(reinterpret_cast<char*>(d.nodes_.data()), size);
-  if (!in) throw std::runtime_error("Failed to read KWG file: " + path);
+  if (!in) throw util::Exception("Failed to read KWG file: {}", path);
   // KWG is little-endian uint32. This loader assumes a little-endian host
   // (true on x86-64 / aarch64); add a byte-swap fallback if you target BE.
   if (d.nodes_.size() < 2) {
-    throw std::runtime_error("KWG file too small: " + path);
+    throw util::Exception("KWG file too small: {}", path);
   }
   d.root_ = d.nodes_[0] & ARC_MASK;         // DAWG root.
   d.gaddag_root_ = d.nodes_[1] & ARC_MASK;  // GADDAG root.

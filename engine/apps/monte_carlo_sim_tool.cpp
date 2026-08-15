@@ -83,8 +83,7 @@ int main(int argc, char** argv) {
     os << "\n";
     std::cerr << "Wrote " << out_path.string() << "\n";
     return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

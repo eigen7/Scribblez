@@ -23,7 +23,6 @@
 
 #include <boost/program_options.hpp>
 
-#include <exception>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -34,7 +33,7 @@ namespace {
 
 void run(const std::string& gcg_path, const EndgameSolver::Params& params) {
   std::ifstream in(gcg_path);
-  if (!in.good()) throw Exception("cannot read " + gcg_path);
+  if (!in.good()) throw util::CleanException("cannot read {}", gcg_path);
   std::stringstream buffer;
   buffer << in.rdbuf();
   const std::string gcg_text = buffer.str();
@@ -42,7 +41,7 @@ void run(const std::string& gcg_path, const EndgameSolver::Params& params) {
   ParsedGcgEndgame endgame;
   std::string error;
   if (!read_gcg_endgame(gcg_text, &endgame, &error))
-    throw Exception("GCG endgame lift failed: " + error);
+    throw util::CleanException("GCG endgame lift failed: {}", error);
   const int mover = endgame.mover;
 
   const Dictionary& dict = load_dictionary_or_throw();
@@ -109,12 +108,7 @@ int main(int argc, char** argv) {
     scribblez::util::parse_command_line(argc, argv, desc);
     scribblez::run(gcg_path, params);
     return 0;
-  } catch (const scribblez::CleanExit&) {
-    return 0;
-  } catch (const scribblez::Exception&) {
-    return 1;
-  } catch (const std::exception& e) {
-    std::cerr << "Unexpected error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

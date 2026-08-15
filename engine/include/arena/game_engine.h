@@ -40,8 +40,8 @@ class GameEngine {
   };
 
   // Builds `params.threads` agent pairs, downgrading to 1 (with a warning) if
-  // any agent does not support parallelism. Throws scribblez::Exception on bad
-  // params.
+  // any agent does not support parallelism. Throws util::CleanException on
+  // bad params.
   GameEngine(const Params& params, const PlayerFactory::Params& player_params);
 
   // Agent pairs actually built, which may be below params.threads; see the

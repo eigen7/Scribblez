@@ -2,12 +2,13 @@
 
 #include "game/tile.h"
 #include "serve/web_server.h"
+#include "util/assert.h"
 #include "util/exception.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cctype>
 #include <exception>
+#include <format>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -526,8 +527,8 @@ Rack retained_leave(const ParsedGcgGame& game, int player) {
     Rack leave = it->record.rack_before;
     const Move& m = it->record.move;
     for (int i = 0; i < m.num_glyphs(); ++i) {
-      [[maybe_unused]] const bool ok = leave.remove(m.glyph(i).rack_tile());
-      assert(ok);
+      const bool ok = leave.remove(m.glyph(i).rack_tile());
+      RELEASE_ASSERT(ok);
     }
     return leave;
   }
@@ -535,7 +536,7 @@ Rack retained_leave(const ParsedGcgGame& game, int player) {
 }
 
 std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
-  const std::string want = "#rack" + std::to_string(player + 1);
+  const std::string want = std::format("#rack{}", player + 1);
   std::istringstream lines(gcg_text);
   std::string line;
   while (std::getline(lines, line)) {
@@ -567,15 +568,14 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
 
   const std::optional<Rack> mover_rack = pragma_rack(gcg_text, mover);
   if (!mover_rack.has_value()) {
-    *error_message =
-      "the mover's rack is unknown: add a #Rack" + std::to_string(mover + 1) + " pragma";
+    *error_message = std::format("the mover's rack is unknown: add a #Rack{} pragma", mover + 1);
     return false;
   }
   std::optional<Rack> opp_rack = pragma_rack(gcg_text, 1 - mover);
   if (!opp_rack.has_value()) {
     try {
       opp_rack = snapshot.board.hidden_rack(*mover_rack);
-    } catch (const Exception& e) {
+    } catch (const util::Exception& e) {
       *error_message = e.what();
       return false;
     }

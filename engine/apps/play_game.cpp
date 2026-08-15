@@ -20,14 +20,11 @@
 #include "arena/game_runner.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "util/exception.h"
 #include "util/misc.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 
-#include <exception>
-#include <iostream>
 #include <string>
 
 int main(int argc, char** argv) {
@@ -68,12 +65,7 @@ int main(int argc, char** argv) {
     scribblez::GameRunner runner(runner_params, player_params);
     runner.run();
     return 0;
-  } catch (const scribblez::CleanExit&) {
-    return 0;
-  } catch (const scribblez::Exception&) {
-    return 1;
-  } catch (const std::exception& e) {  // unexpected
-    std::cerr << "Unexpected error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

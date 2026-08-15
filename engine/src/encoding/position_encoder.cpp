@@ -1,8 +1,8 @@
 #include "encoding/position_encoder.h"
 
 #include "encoding/input_encoder.h"
+#include "util/assert.h"
 
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 
@@ -15,8 +15,8 @@ namespace {
 void remove_played_or_exchanged(Rack& rack, const Move& m) {
   const int n = m.num_glyphs();
   for (int i = 0; i < n; ++i) {
-    [[maybe_unused]] bool ok = rack.remove(m.glyph(i).rack_tile());
-    assert(ok);
+    bool ok = rack.remove(m.glyph(i).rack_tile());
+    DEBUG_ASSERT(ok);
   }
 }
 
@@ -31,8 +31,8 @@ Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_r
   Rack leave = opp_rack_now;
   for (Tile t : g.records[sampled_turn - 1].drawn.tiles()) {
     if (t.is_empty()) break;
-    [[maybe_unused]] const bool ok = leave.remove(t);
-    assert(ok);
+    const bool ok = leave.remove(t);
+    RELEASE_ASSERT(ok);
   }
   return leave;
 }

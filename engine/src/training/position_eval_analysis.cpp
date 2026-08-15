@@ -8,12 +8,13 @@
 #include "game/rack.h"
 #include "game/tile.h"
 #include "serve/position_json.h"
+#include "util/assert.h"
 
 #include <boost/json.hpp>
 
 #include <algorithm>
 #include <array>
-#include <cassert>
+#include <format>
 #include <string>
 
 namespace scribblez {
@@ -61,7 +62,7 @@ bool replay_and_encode(const ParsedGcgGame& game, int start_player, const Rack& 
   (void)error;
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : game.turns) enc.apply_move(t.record.move);
-  assert(enc.active_player() == game.snapshots.back().turn_player);
+  RELEASE_ASSERT(enc.active_player() == game.snapshots.back().turn_player);
   if (spec.opp_leave_input) {
     // Open-leaves arm: the opponent's retained leave is reconstructable from
     // their last recorded move; an empty leave (e.g. the penultimate-bingo
@@ -81,7 +82,7 @@ bool parse_leave(const std::string& s, Rack* out, std::string* error) {
   for (char c : s) {
     if (c == ' ') continue;
     if (out->size() >= RACK_SIZE) {
-      if (error) *error = "a leave holds at most " + std::to_string(RACK_SIZE) + " tiles";
+      if (error) *error = std::format("a leave holds at most {} tiles", RACK_SIZE);
       return false;
     }
     if (c == '?') {
@@ -91,7 +92,7 @@ bool parse_leave(const std::string& s, Rack* out, std::string* error) {
     } else if (c >= 'a' && c <= 'z') {
       out->add(Tile::of(c - 'a'));
     } else {
-      if (error) *error = std::string("invalid tile '") + c + "' (use A-Z, or ? for a blank)";
+      if (error) *error = std::format("invalid tile '{}' (use A-Z, or ? for a blank)", c);
       return false;
     }
   }
@@ -123,8 +124,8 @@ bool leave_available(const Rack& leave, const Board& board, std::string* error) 
   for (int t = 0; t < 27; ++t) {
     if (want[t] > avail[t]) {
       if (error) {
-        *error = "only " + std::to_string(std::max(0, avail[t])) + " '" + tile_name(t) +
-                 "' available off the board";
+        *error =
+          std::format("only {} '{}' available off the board", std::max(0, avail[t]), tile_name(t));
       }
       return false;
     }
@@ -154,8 +155,8 @@ bool encode_position_eval_analysis_input_with_leave(const std::string& gcg_text,
   if (!parse_leave(leave_str, &leave, error)) return false;
   if (leave.size() != pos.leave.size()) {
     if (error) {
-      *error = "leave must have " + std::to_string(pos.leave.size()) +
-               " tile(s) to match the original leave";
+      *error =
+        std::format("leave must have {} tile(s) to match the original leave", pos.leave.size());
     }
     return false;
   }
@@ -171,8 +172,8 @@ std::string position_eval_analysis_board_json(const std::string& gcg_text, std::
 
   const ParsedGcgSnapshot& final_pos = game.snapshots.back();
   const int opp = 1 - pos.start_player;
-  const std::string my_name = "Player " + std::to_string(pos.start_player + 1);
-  const std::string opp_name = "Player " + std::to_string(opp + 1);
+  const std::string my_name = std::format("Player {}", pos.start_player + 1);
+  const std::string opp_name = std::format("Player {}", opp + 1);
   json::object o =
     position_state_object_pov(final_pos.board, pos.leave, final_pos.scores[pos.start_player],
                               final_pos.scores[opp], my_name, opp_name);

@@ -4,9 +4,6 @@
 
 #include <boost/program_options.hpp>
 
-#include <iostream>
-#include <stdexcept>
-
 namespace scribblez {
 
 Lexicon& Lexicon::instance() {
@@ -27,7 +24,7 @@ void Lexicon::add_options(boost::program_options::options_description& desc) {
 void Lexicon::set_params(const Params& params) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (dict_) {
-    throw std::runtime_error("Lexicon::set_params called after dict() was loaded");
+    throw util::Exception("Lexicon::set_params called after dict() was loaded");
   }
   params_ = params;
 }
@@ -44,11 +41,10 @@ const Dictionary& load_dictionary_or_throw() {
   try {
     return Lexicon::instance().dict();
   } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n"
-              << "Lexicon '" << Lexicon::instance().name() << "' is not installed at "
-              << Lexicon::instance().kwg_path() << ".\n"
-              << "Run setup_wizard.py outside the Docker container to install it.\n";
-    throw Exception(e.what());
+    throw util::CleanException(
+      "{}\nLexicon '{}' is not installed at {}.\n"
+      "Run setup_wizard.py outside the Docker container to install it.",
+      e.what(), Lexicon::instance().name(), Lexicon::instance().kwg_path());
   }
 }
 

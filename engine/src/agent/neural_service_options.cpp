@@ -1,9 +1,9 @@
 #include "agent/neural_service_options.h"
 
 #include "nn/trt_util.h"
+#include "util/exception.h"
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace scribblez {
 
@@ -25,7 +25,7 @@ namespace {
 
 // The model path is the one option with no usable default.
 const std::string& require_model(const std::string& model) {
-  if (model.empty()) throw std::runtime_error("this player type requires --model=<path.onnx>");
+  if (model.empty()) throw util::CleanException("this player type requires --model=<path.onnx>");
   return model;
 }
 

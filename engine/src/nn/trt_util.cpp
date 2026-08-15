@@ -1,15 +1,15 @@
 #include "nn/trt_util.h"
 
 #include "nn/cuda_util.h"
+#include "util/exception.h"
 
 #include <NvInferVersion.h>
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <random>
-#include <stdexcept>
 #include <unistd.h>
 
 namespace scribblez {
@@ -20,7 +20,7 @@ Precision parse_precision(const std::string& s) {
   std::transform(up.begin(), up.end(), up.begin(), [](unsigned char c) { return std::toupper(c); });
   if (up == "FP32") return Precision::kFP32;
   if (up == "FP16") return Precision::kFP16;
-  throw std::runtime_error("Invalid precision '" + s + "'. Valid values are: FP32, FP16");
+  throw util::CleanException("Invalid precision '{}'. Valid values are: FP32, FP16", s);
 }
 
 const char* precision_to_string(Precision precision) {
@@ -34,8 +34,7 @@ const char* precision_to_string(Precision precision) {
 }
 
 std::string trt_version_tag() {
-  return std::to_string(NV_TENSORRT_MAJOR) + "." + std::to_string(NV_TENSORRT_MINOR) + "." +
-         std::to_string(NV_TENSORRT_PATCH);
+  return std::format("{}.{}.{}", NV_TENSORRT_MAJOR, NV_TENSORRT_MINOR, NV_TENSORRT_PATCH);
 }
 
 std::string content_hash(const std::vector<char>& bytes) {
@@ -44,9 +43,7 @@ std::string content_hash(const std::vector<char>& bytes) {
     h ^= static_cast<uint8_t>(c);
     h *= 1099511628211ULL;  // FNV-1a 64-bit prime
   }
-  char buf[17];
-  std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-  return std::string(buf);
+  return std::format("{:016x}", h);
 }
 
 std::string engine_plan_cache_path(const std::string& model_key, Precision precision,
@@ -59,7 +56,7 @@ std::string engine_plan_cache_path(const std::string& model_key, Precision preci
 
 std::vector<char> read_file_bytes(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) throw std::runtime_error("Failed to open file: " + path);
+  if (!f) throw util::CleanException("Failed to open file: {}", path);
   std::streamsize size = f.tellg();
   f.seekg(0);
   std::vector<char> bytes(static_cast<size_t>(size));
@@ -70,11 +67,10 @@ std::vector<char> read_file_bytes(const std::string& path) {
 void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   std::filesystem::path p(path);
   std::filesystem::create_directories(p.parent_path());
-  std::string tmp =
-    path + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(std::random_device{}());
+  std::string tmp = std::format("{}.tmp.{}.{}", path, ::getpid(), std::random_device{}());
   {
     std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw std::runtime_error("Failed to open temp file: " + tmp);
+    if (!f) throw util::Exception("Failed to open temp file: {}", tmp);
     f.write(bytes, static_cast<std::streamsize>(size));
   }
   std::filesystem::rename(tmp, p);

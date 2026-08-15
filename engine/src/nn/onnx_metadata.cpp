@@ -1,8 +1,8 @@
 #include "nn/onnx_metadata.h"
 
-#include <onnx/onnx_pb.h>
+#include "util/exception.h"
 
-#include <stdexcept>
+#include <onnx/onnx_pb.h>
 
 namespace scribblez {
 namespace nn {
@@ -16,7 +16,7 @@ int OnnxMetadata::int_entry(const std::string& key, int absent_value) const {
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
   if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
-    throw std::runtime_error("Failed to parse ONNX model bytes");
+    throw util::CleanException("Failed to parse ONNX model bytes");
   }
   OnnxMetadata meta;
   for (int i = 0; i < model.metadata_props_size(); ++i) {
@@ -34,7 +34,8 @@ OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
     }
   }
   if (meta.architecture_signature.empty()) {
-    throw std::runtime_error("ONNX model missing the model-architecture-signature metadata entry");
+    throw util::CleanException(
+      "ONNX model missing the model-architecture-signature metadata entry");
   }
   return meta;
 }

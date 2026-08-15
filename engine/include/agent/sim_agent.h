@@ -58,7 +58,7 @@ class SimAgent : public Agent {
   bool supports_parallelism() const override { return true; }
 
   // Build from `--player "--type=sim [options]"` tokens, with --type and --name
-  // already stripped. Throws std::runtime_error on bad input.
+  // already stripped. Throws util::CleanException on bad input.
   static std::unique_ptr<SimAgent> from_spec(const std::vector<std::string>& tokens, int thread_id,
                                              const std::string& name);
 

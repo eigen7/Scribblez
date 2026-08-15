@@ -1,6 +1,7 @@
 #include "game/game.h"
 
-#include <cassert>
+#include "util/assert.h"
+
 #include <utility>
 
 namespace scribblez {
@@ -19,23 +20,23 @@ Game::Game(Agent& p0, Agent& p1, const Dictionary& dict, uint64_t seed)
 }
 
 void Game::set_respect_projections(bool on) {
-  assert(log_.turns.empty());  // must be set before play() begins
+  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
   respect_projections_ = on;
 }
 
 void Game::set_initial_scores(std::array<int, 2> initial_scores) {
-  assert(log_.turns.empty());  // must be set before play() begins
+  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
   scores_ = initial_scores;
   log_.initial_scores = initial_scores;
 }
 
 void Game::set_random_opening(int plies) {
-  assert(log_.turns.empty());  // must be set before play() begins
+  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
   random_opening_plies_ = plies;
 }
 
 void Game::set_face_up_leaves(bool on) {
-  assert(log_.turns.empty());  // must be set before play() begins
+  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
   face_up_leaves_ = on;
 }
 

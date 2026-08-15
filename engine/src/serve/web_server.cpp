@@ -4,6 +4,7 @@
 #include "game/tile.h"
 #include "serve/position_json.h"
 #include "serve/service_url.h"
+#include "util/exception.h"
 #include "util/io.h"
 #include "util/string.h"
 
@@ -21,9 +22,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <format>
 #include <iostream>
 #include <set>
-#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -73,7 +74,7 @@ std::set<int> pids_listening_on_port(int port) {
 
   bp::ipstream out;
   std::error_code ec;
-  bp::child c(lsof, "-nP", "-t", "-iTCP:" + std::to_string(port), "-sTCP:LISTEN", bp::std_out > out,
+  bp::child c(lsof, "-nP", "-t", std::format("-iTCP:{}", port), "-sTCP:LISTEN", bp::std_out > out,
               bp::std_err > bp::null, ec);
   if (ec) return pids;
   std::string line;
@@ -162,11 +163,10 @@ std::string move_to_notation(const Board& board, const Move& move) {
   auto [sr, sc] = move.word_origin(board);
   std::string pos;
   char col_letter = static_cast<char>('A' + sc);
-  std::string row_num = std::to_string(sr + 1);
   if (move.horizontal()) {
-    pos = row_num + col_letter;  // e.g. "8H"
+    pos = std::format("{}{}", sr + 1, col_letter);  // e.g. "8H"
   } else {
-    pos = col_letter + row_num;  // e.g. "H8"
+    pos = std::format("{}{}", col_letter, sr + 1);  // e.g. "H8"
   }
 
   // Render the main word, lowercasing blank tiles (new or already on board).
@@ -190,7 +190,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
     c += dc;
   }
 
-  return pos + " " + word + " " + std::to_string(move.score());
+  return std::format("{} {} {}", pos, word, move.score());
 }
 
 // --------------------------- state serialization -------------------------
@@ -305,7 +305,7 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
 
   boost::filesystem::path npm = bp::search_path("npm");
   if (npm.empty()) {
-    throw std::runtime_error(
+    throw util::CleanException(
       "npm not found on PATH (needed to launch the web UI); run py/build.py");
   }
 
@@ -359,7 +359,7 @@ WebSession::WebSession(int port) : port_(port) {
   // SOCK_CLOEXEC so the Vite dev server we later fork/exec does not inherit (and
   // keep alive) this listening socket.
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-  if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
+  if (listen_fd_ < 0) throw util::Exception("socket() failed");
   int yes = 1;
   ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
   sockaddr_in addr{};
@@ -368,12 +368,11 @@ WebSession::WebSession(int port) : port_(port) {
   addr.sin_port = htons(static_cast<uint16_t>(port_));
   if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
     ::close(listen_fd_);
-    throw std::runtime_error("bind() failed on port " + std::to_string(port_) +
-                             " (is another instance running?)");
+    throw util::CleanException("bind() failed on port {} (is another instance running?)", port_);
   }
   if (::listen(listen_fd_, 16) < 0) {
     ::close(listen_fd_);
-    throw std::runtime_error("listen() failed");
+    throw util::Exception("listen() failed");
   }
 }
 

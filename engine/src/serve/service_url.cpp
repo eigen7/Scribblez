@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <format>
 #include <string>
 
 namespace scribblez {
@@ -23,7 +24,7 @@ std::string env_var_name(const std::string& service) {
 std::string service_url(const std::string& service, int port, int default_port) {
   const char* url = std::getenv(env_var_name(service).c_str());
   if (url != nullptr && port == default_port) return url;
-  return "http://localhost:" + std::to_string(port);
+  return std::format("http://localhost:{}", port);
 }
 
 }  // namespace scribblez

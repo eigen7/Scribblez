@@ -1,7 +1,9 @@
 #include "nn/cuda_util.h"
 
+#include "util/exception.h"
+
 #include <cuda_runtime_api.h>
-#include <stdexcept>
+#include <format>
 #include <string>
 
 namespace scribblez {
@@ -10,11 +12,11 @@ namespace nn {
 namespace {
 
 // Throw on a non-success status, naming the CUDA op. These are genuinely
-// unexpected failures (a misconfigured GPU, OOM); std::runtime_error lets the
+// unexpected failures (a misconfigured GPU, OOM); util::Exception lets the
 // top-level handler surface the message rather than exiting silently.
 void check(cudaError_t err, const char* what) {
   if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("CUDA error in ") + what + ": " + cudaGetErrorString(err));
+    throw util::Exception("CUDA error in {}: {}", what, cudaGetErrorString(err));
   }
 }
 
@@ -24,7 +26,7 @@ std::string query_sm_tag() {
   check(cudaGetDevice(&device), "cudaGetDevice");
   cudaDeviceProp prop;
   check(cudaGetDeviceProperties(&prop, device), "cudaGetDeviceProperties");
-  return std::to_string(prop.major) + "." + std::to_string(prop.minor);
+  return std::format("{}.{}", prop.major, prop.minor);
 }
 
 }  // namespace

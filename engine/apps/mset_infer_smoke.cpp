@@ -18,10 +18,10 @@
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "training/move_set_encoder.h"
+#include "util/misc.h"
 
 #include <algorithm>
 #include <cstdlib>
-#include <exception>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -101,8 +101,7 @@ int main(int argc, char** argv) {
                 << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }
     return 0;
-  } catch (const std::exception& ex) {
-    std::cerr << "mset_infer_smoke error: " << ex.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

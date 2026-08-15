@@ -5,9 +5,9 @@
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
 #include "game/tile.h"
+#include "util/assert.h"
 #include "util/math.h"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,13 +26,13 @@ void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rac
       Glyph g = board.at(r, c);
       if (g.is_empty()) continue;
       Tile t = g.rack_tile();
-      assert(out[t] > 0);
+      DEBUG_ASSERT(out[t] > 0);
       --out[t];
     }
   }
   for (Tile t : my_rack.tiles()) {
     if (t.is_empty()) continue;
-    assert(out[t] > 0);
+    DEBUG_ASSERT(out[t] > 0);
     --out[t];
   }
 }
@@ -139,7 +139,7 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
     for (int j = 0; j < unseen[i]; ++j) out[offset + j] = 1.0f;
     offset += TILE_COUNTS[i];
   }
-  assert(offset == kUnseenPoolThermoFloats);
+  DEBUG_ASSERT(offset == kUnseenPoolThermoFloats);
   return kUnseenPoolThermoFloats;
 }
 
@@ -291,7 +291,7 @@ void GameStateEncoder::apply_move(const Move& move) {
 
 void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_flip,
                                     float* out) const {
-  assert(player == 0 || player == 1);
+  RELEASE_ASSERT(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp],
              scores_[player] - scores_[opp], /*opp_leave=*/nullptr, apply_flip, out);
@@ -299,7 +299,7 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, bool apply_
 
 void GameStateEncoder::encode_input(int player, const Rack& my_rack, const Rack& opp_leave,
                                     bool apply_flip, float* out) const {
-  assert(player == 0 || player == 1);
+  RELEASE_ASSERT(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp],
              scores_[player] - scores_[opp], &opp_leave, apply_flip, out);
@@ -307,7 +307,7 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, const Rack&
 
 void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
                                                     bool apply_flip, float* out) const {
-  assert(player == 0 || player == 1);
+  RELEASE_ASSERT(player == 0 || player == 1);
   const int opp = 1 - player;
   encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff,
              /*opp_leave=*/nullptr, apply_flip, out);

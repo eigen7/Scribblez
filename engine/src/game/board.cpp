@@ -330,12 +330,12 @@ Rack Board::hidden_rack(const Rack& known) const {
       const Glyph g = at(r, c);
       if (!g.has_letter()) continue;
       if (!remaining.remove(g.rack_tile()))
-        throw Exception("board holds more copies of a tile than the distribution allows");
+        throw util::Exception("board holds more copies of a tile than the distribution allows");
     }
   }
   for (int i = 0; i < known.size(); ++i) {
     if (!remaining.remove(known.tiles()[i]))
-      throw Exception("the known rack holds a tile the distribution has run out of");
+      throw util::Exception("the known rack holds a tile the distribution has run out of");
   }
 
   Rack hidden;
@@ -344,7 +344,8 @@ Rack Board::hidden_rack(const Rack& known) const {
     const Tile t = l == 26 ? BLANK : Tile::of(l);
     for (int i = 0; i < remaining.count(t); ++i) {
       if (++count > RACK_SIZE)
-        throw Exception("more than a rackful of tiles is unaccounted for: the bag is not empty");
+        throw util::Exception(
+          "more than a rackful of tiles is unaccounted for: the bag is not empty");
       hidden.add(t);
     }
   }

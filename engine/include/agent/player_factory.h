@@ -39,7 +39,7 @@ class PlayerFactory {
   using Players = std::array<std::unique_ptr<Agent>, 2>;
 
   // Validate and parse the raw `--player` specs and return both agents.
-  // Defaults to two greedy players. Throws std::runtime_error on bad input.
+  // Defaults to two greedy players. Throws util::CleanException on bad input.
   static Players make_players(const Params& params, int thread_id);
 
   static std::string all_player_types_help();

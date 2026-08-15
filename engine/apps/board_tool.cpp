@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "board", "board", 5175);
     if (!vite.wait_until_ready()) {
-      throw std::runtime_error("the Vite dev server did not start; see web/.vite-dev.log");
+      throw scribblez::util::Exception("the Vite dev server did not start; see web/.vite-dev.log");
     }
 
     std::cerr << "\nBoard tool ready at " << vite.url()
@@ -328,12 +328,7 @@ int main(int argc, char** argv) {
     }
 
     return 0;
-  } catch (const scribblez::CleanExit&) {
-    return 0;
-  } catch (const scribblez::Exception&) {
-    return 1;
-  } catch (const std::exception& e) {
-    std::cerr << "Unexpected error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

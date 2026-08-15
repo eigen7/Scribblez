@@ -5,12 +5,12 @@
 #include "game/game.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "util/assert.h"
+#include "util/exception.h"
 
 #include <algorithm>
-#include <cassert>
 #include <functional>
 #include <numeric>
-#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -37,16 +37,16 @@ AppliedCandidate apply_candidate(const SimPosition& pos, const Move& m) {
   Rack leave = pos.rack;
   if (m.type() == MoveType::PLAY) {
     for (int i = 0; i < m.num_glyphs(); ++i) {
-      [[maybe_unused]] const bool ok = leave.remove(m.glyph(i).rack_tile());
-      assert(ok);
+      const bool ok = leave.remove(m.glyph(i).rack_tile());
+      RELEASE_ASSERT(ok);
     }
     a.board.apply(m);
     a.scores[pos.mover] += m.score();
   } else if (m.type() == MoveType::EXCHANGE) {
     for (int i = 0; i < m.num_glyphs(); ++i) {
       const Tile t = m.glyph(i).rack_tile();
-      [[maybe_unused]] const bool ok = leave.remove(t);
-      assert(ok);
+      const bool ok = leave.remove(t);
+      RELEASE_ASSERT(ok);
       a.returned_to_bag.add(t);
     }
   }
@@ -176,16 +176,15 @@ int best_observation_index(const std::vector<SimObservation>& observations,
 SimObjective parse_sim_objective(const std::string& name, const std::string& flag) {
   if (name == "winrate") return SimObjective::kWinRate;
   if (name == "spread") return SimObjective::kSpread;
-  throw std::runtime_error(flag + " must be 'winrate' or 'spread', got '" + name + "'");
+  throw util::CleanException("{} must be 'winrate' or 'spread', got '{}'", flag, name);
 }
 
 std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
-  // Rejected rather than asserted, for the same reason SimRunner::validate
-  // throws: a Release build would otherwise take a bad cap silently. k == 0
-  // hands back an empty candidate set, which every caller reads as "nothing to
-  // choose from" rather than as a misconfiguration, and k < 0 walks
-  // partial_sort's middle iterator before the range's start.
-  if (k < 1) throw std::runtime_error("equity_top_k: k must be >= 1");
+  // Rejected as a hard error rather than tolerated: k == 0 would hand back an
+  // empty candidate set, which every caller reads as "nothing to choose from"
+  // rather than as a misconfiguration, and k < 0 walks partial_sort's middle
+  // iterator before the range's start.
+  if (k < 1) throw util::Exception("equity_top_k: k must be >= 1");
   std::vector<Move> candidates = generate_legal_plays(req);
   const std::vector<Move> exchanges = generate_legal_exchanges(req);
   candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
@@ -231,17 +230,15 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   return pool;
 }
 
-// Rejected here rather than asserted, so a Release build cannot run a SimRunner
-// that quietly does nothing: at 0 rollouts every observation's mean is 0/0, and
-// those NaNs compare false against everything, so best_observation_index hands
-// back the first candidate every time and the caller stops simulating without
-// ever being told.
+// Rejected as a user error rather than tolerated: at 0 rollouts every
+// observation's mean is 0/0, and those NaNs compare false against everything,
+// so best_observation_index hands back the first candidate every time and the
+// caller stops simulating without ever being told.
 void SimRunner::validate(const Params& params) {
   if (params.rollouts < 1 || params.rollouts > kMaxRollouts) {
-    throw std::runtime_error("sim runner: rollouts must be in [1, " + std::to_string(kMaxRollouts) +
-                             "]");
+    throw util::CleanException("sim runner: rollouts must be in [1, {}]", kMaxRollouts);
   }
-  if (params.threads < 1) throw std::runtime_error("sim runner: threads must be >= 1");
+  if (params.threads < 1) throw util::CleanException("sim runner: threads must be >= 1");
 }
 
 SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict), params_(params) {
@@ -256,7 +253,7 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   // point. The pool holds the bag plus the opponent's (up to RACK_SIZE)
   // tiles, known or not, so the bound is uniform across information
   // conditions.
-  assert(unseen_pool(pos.board, pos.rack, 0).size() > RACK_SIZE);
+  DEBUG_ASSERT(unseen_pool(pos.board, pos.rack, 0).size() > RACK_SIZE);
 
   std::vector<AppliedCandidate> applied;
   applied.reserve(candidates.size());

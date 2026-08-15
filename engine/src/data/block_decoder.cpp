@@ -6,6 +6,7 @@
 #include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
 
+#include <format>
 #include <iostream>
 
 namespace scribblez {
@@ -15,10 +16,7 @@ namespace {
 
 // Column-letter + 1-based-row coordinate, e.g. (r=7, c=7) -> "H8".
 std::string square_name(int r, int c) {
-  std::string s;
-  s.push_back(static_cast<char>('A' + c));
-  s += std::to_string(r + 1);
-  return s;
+  return std::format("{}{}", static_cast<char>('A' + c), r + 1);
 }
 
 // One line, from the move's own stored data alone. A PLAY lists only the tiles
@@ -124,13 +122,12 @@ std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool
   const int other = enc.score(opp);
 
   std::string s;
-  s += "game_idx=" + std::to_string(game_idx) + " kind=" + (post_move ? "post_move" : "pre_move") +
-       "\n";
-  s += "POV player=" + std::to_string(mover) + "  score: active=" + std::to_string(active) +
-       " opp=" + std::to_string(other) + " diff=" + std::to_string(active - other) + "\n";
-  s += "POV rack (leave): " + pos_.rack(mover).to_string() + "\n";
-  s += "last self move: " + describe_move(enc.last_move_by(mover)) + "\n";
-  s += "last opp move:  " + describe_move(enc.last_move_by(opp)) + "\n";
+  s += std::format("game_idx={} kind={}\n", game_idx, post_move ? "post_move" : "pre_move");
+  s += std::format("POV player={}  score: active={} opp={} diff={}\n", mover, active, other,
+                   active - other);
+  s += std::format("POV rack (leave): {}\n", pos_.rack(mover).to_string());
+  s += std::format("last self move: {}\n", describe_move(enc.last_move_by(mover)));
+  s += std::format("last opp move:  {}\n", describe_move(enc.last_move_by(opp)));
   s += enc.board().to_string();
   return s;
 }

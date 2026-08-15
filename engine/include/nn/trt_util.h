@@ -13,7 +13,7 @@ namespace nn {
 
 enum class Precision : uint8_t { kFP32, kFP16 };
 
-// Case-insensitive; throws std::runtime_error on anything else.
+// Case-insensitive; throws util::CleanException on anything else.
 Precision parse_precision(const std::string& s);
 const char* precision_to_string(Precision precision);
 

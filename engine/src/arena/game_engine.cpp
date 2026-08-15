@@ -42,10 +42,7 @@ int pick_random_opening_plies(uint64_t game_seed, double mean) {
 
 GameEngine::GameEngine(const Params& params, const PlayerFactory::Params& player_params)
     : params_(params) {
-  if (params_.threads < 1) {
-    std::cerr << "Error: threads must be >= 1\n";
-    throw Exception("threads must be >= 1");
-  }
+  if (params_.threads < 1) throw util::CleanException("threads must be >= 1");
   // Build the first pair to check parallelism support before creating the rest.
   agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/0));
   bool parallel_ok = agents_[0][0]->supports_parallelism() && agents_[0][1]->supports_parallelism();

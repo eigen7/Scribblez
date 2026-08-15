@@ -8,6 +8,7 @@
 #include <chrono>
 #include <iostream>
 #include <sched.h>
+#include <sstream>
 
 namespace scribblez::util {
 
@@ -19,13 +20,32 @@ void parse_command_line(int argc, char** argv, boost::program_options::options_d
     po::store(po::parse_command_line(argc, argv, desc), vm);
     po::notify(vm);
   } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n\n" << desc << "\n";
-    throw Exception(e.what());
+    // program_options only streams; there is no to-string API for desc.
+    std::ostringstream usage;
+    usage << desc;
+    throw CleanException("{}\n\n{}", e.what(), usage.str());
   }
   if (vm.count("help")) {
     std::cout << desc << "\n";
     if (!help_epilog.empty()) std::cout << help_epilog;
     throw CleanExit();
+  }
+}
+
+int main_exit_code() {
+  try {
+    throw;
+  } catch (const CleanExit&) {
+    return 0;
+  } catch (const CleanException& e) {
+    std::cerr << "Error: " << e.what() << "\n";
+    return 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Unexpected error: " << e.what() << "\n";
+    return 1;
+  } catch (...) {
+    std::cerr << "Unexpected error of unknown type\n";
+    return 1;
   }
 }
 

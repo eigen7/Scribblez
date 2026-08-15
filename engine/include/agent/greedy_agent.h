@@ -19,7 +19,7 @@ class GreedyAgent : public Agent {
   MoveDecision make_move(const MoveRequest& req) override;
 
   // Build from `--player "--type=greedy [options]"` tokens, with --type and
-  // --name already stripped. Throws std::runtime_error on bad input.
+  // --name already stripped. Throws util::CleanException on bad input.
   static std::unique_ptr<GreedyAgent> from_spec(const std::vector<std::string>& tokens,
                                                 int thread_id, const std::string& name);
 

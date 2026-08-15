@@ -2,15 +2,15 @@
 
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
+#include "util/assert.h"
+#include "util/exception.h"
 
 #include <algorithm>
-#include <cassert>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <numeric>
 #include <random>
-#include <stdexcept>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -291,7 +291,7 @@ std::vector<DataLoader::DataFile*> DataLoader::FileManager::snapshot_files() con
 void DataLoader::FileManager::add_to_unload_queue(DataFile* file) {
   std::unique_lock<std::mutex> lock(mutex_);
   unload_queue_.push_back(file);
-  assert(active_file_count_ > 0);
+  RELEASE_ASSERT(active_file_count_ > 0);
   active_file_count_--;
   lock.unlock();
   cv_.notify_all();
@@ -353,7 +353,7 @@ DataLoader::FileManager::Instruction DataLoader::FileManager::get_next_instructi
   if (load_queue_.empty()) return kWait;
 
   DataFile* file = load_queue_.front();
-  assert(!file->is_loaded());
+  RELEASE_ASSERT(!file->is_loaded());
 
   if (memory_usage_ + file->file_size() <= memory_budget_) return kLoad;
   if (!unload_queue_.empty()) return kUnload;
@@ -667,7 +667,7 @@ int DataLoader::epoch_start(const EpochConfig& config) {
 }
 
 int DataLoader::load_batch(float* output) {
-  if (!output) throw std::invalid_argument("DataLoader::load_batch: output is null");
+  if (!output) throw util::Exception("DataLoader::load_batch: output is null");
 
   std::lock_guard<std::mutex> lock(epoch_mu_);
   if (!epoch_active_) return 0;

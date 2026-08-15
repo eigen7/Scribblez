@@ -1,6 +1,6 @@
 #include "game/bag.h"
 
-#include <cassert>
+#include "util/assert.h"
 
 namespace scribblez {
 
@@ -30,7 +30,7 @@ void Bag::put_back(Tile t) {
 }
 
 void Bag::remove(Tile t) {
-  assert(counts_[t] > 0 && "Bag::remove: tile not present");
+  DEBUG_ASSERT(counts_[t] > 0, "Bag::remove: tile not present");
   --counts_[t];
   --remaining_;
 }

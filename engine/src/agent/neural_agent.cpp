@@ -1,12 +1,12 @@
 #include "agent/neural_agent.h"
 
 #include "lexicon/hasty_equity.h"
+#include "util/exception.h"
 #include "util/math.h"
 
 #include <algorithm>
 #include <numeric>
 #include <optional>
-#include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
 // nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
@@ -28,8 +28,8 @@ NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalS
 }
 
 void NeuralAgent::init() {
-  if (top_k_ < 0) throw std::runtime_error("neural agent: --top-k must be >= 0 (0 = all moves)");
-  if (temperature_ < 0.0) throw std::runtime_error("neural agent: --temperature must be >= 0");
+  if (top_k_ < 0) throw util::CleanException("neural agent: --top-k must be >= 0 (0 = all moves)");
+  if (temperature_ < 0.0) throw util::CleanException("neural agent: --temperature must be >= 0");
 }
 
 void NeuralAgent::begin_game(const BeginGameRequest& req) {

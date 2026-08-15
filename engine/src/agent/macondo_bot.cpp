@@ -6,6 +6,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "lexicon/word_map.h"
+#include "util/exception.h"
 #include "util/math.h"
 #include "util/seed_producer.h"
 
@@ -14,7 +15,6 @@
 #include <algorithm>
 #include <array>
 #include <numeric>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,8 +26,8 @@ HastyBotAgent::HastyBotAgent(const Params& params)
       top_k_(params.top_k),
       temperature_(params.temperature),
       rng_(params.seed) {
-  if (top_k_ < 1) throw std::runtime_error("hastybot: --top-k must be >= 1");
-  if (temperature_ < 0.0) throw std::runtime_error("hastybot: --temperature must be >= 0");
+  if (top_k_ < 1) throw util::CleanException("hastybot: --top-k must be >= 1");
+  if (temperature_ < 0.0) throw util::CleanException("hastybot: --temperature must be >= 0");
 }
 
 namespace {
@@ -414,7 +414,7 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=") + type_label + " options: " + e.what());
+    throw util::CleanException("bad --type={} options: {}", type_label, e.what());
   }
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());

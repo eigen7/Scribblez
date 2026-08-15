@@ -1,8 +1,9 @@
 #include "lexicon/leave_values.h"
 
+#include "util/exception.h"
+
 #include <cstdint>
 #include <fstream>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -20,7 +21,7 @@ constexpr uint32_t kTileShift = 24u;
 std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
   std::vector<uint32_t> data(count);
   in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);
-  if (!in) throw std::runtime_error("LeaveValues: truncated read");
+  if (!in) throw util::Exception("LeaveValues: truncated read");
   return data;
 }
 
@@ -28,14 +29,14 @@ std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
 std::vector<float> read_f32_array(std::ifstream& in, uint32_t count) {
   std::vector<float> data(count);
   in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);
-  if (!in) throw std::runtime_error("LeaveValues: truncated read");
+  if (!in) throw util::Exception("LeaveValues: truncated read");
   return data;
 }
 
 uint32_t read_u32(std::ifstream& in) {
   uint32_t v = 0;
   in.read(reinterpret_cast<char*>(&v), 4);
-  if (!in) throw std::runtime_error("LeaveValues: truncated header read");
+  if (!in) throw util::Exception("LeaveValues: truncated header read");
   return v;
 }
 
@@ -103,7 +104,7 @@ void compute_subtree_words(const std::vector<uint32_t>& nodes, uint32_t list,
 
 LeaveValues LeaveValues::load(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
-  if (!in) throw std::runtime_error("LeaveValues: cannot open " + path);
+  if (!in) throw util::Exception("LeaveValues: cannot open {}", path);
 
   // KLV2 binary layout (little-endian):
   //   uint32  kwg_node_count
