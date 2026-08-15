@@ -452,15 +452,6 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   writer.close();
 }
 
-std::vector<char> read_file_bytes(const fs::path& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  const std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
-  f.read(bytes.data(), size);
-  return bytes;
-}
-
 // The simmed candidates of a trajectory sidecar, keyed by decision point.
 ForcedCandidates load_forced_candidates(const fs::path& sobs_path) {
   SimObsReader reader(sobs_path.string());
@@ -532,59 +523,24 @@ int main(int argc, char** argv) {
     TeacherService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
-    const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
+    const std::string model_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
     opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 
-    std::vector<fs::path> slogs;
-    if (!opt.slog_files.empty()) {
-      for (const std::string& f : opt.slog_files) slogs.emplace_back(f);
-    } else if (!opt.slog_dir.empty()) {
-      for (const auto& entry : fs::directory_iterator(opt.slog_dir))
-        if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
-      std::sort(slogs.begin(), slogs.end());
-    } else {
-      throw util::CleanException("pass --slog-dir or --slog-file");
-    }
-    if (slogs.empty()) throw util::CleanException("no .slog files to process");
-
-    std::vector<std::pair<fs::path, std::vector<char>>> pending;
-    uint64_t total_positions = 0;
-    for (const fs::path& slog : slogs) {
-      fs::path mset = slog;
-      mset.replace_extension(".mset");
-      if (fs::exists(mset)) continue;
-      std::vector<char> buf = read_file_bytes(slog);
-      const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
-      if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
-          hdr->version != binlog::kVersion) {
-        std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
-        continue;
-      }
-      // Games played face up must be labeled by a teacher that sees the leaves.
-      // A blind teacher's readouts would describe a game nobody played, and the
-      // .mset -- stamped open-leaves after its source log -- would hand the
-      // student targets its own input arm cannot account for. The reverse
-      // pairing is deliberate and allowed: an open-leaves teacher over a
-      // standard corpus is the privileged-teacher instrument.
-      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !spec.opp_leave_input) {
-        throw util::Exception(
-          "{} was played with face-up leaves; labeling it needs a teacher "
-          "whose ONNX declares opp_leave_input",
-          slog.filename().string());
-      }
-      const GameMetadata* metas =
-        reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
-      uint32_t num_games = hdr->num_games;
-      if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-      for (uint32_t g = 0; g < num_games; ++g) {
-        const int eligible = metas[g].eligible_end - metas[g].eligible_begin;
-        const int per_game =
-          opt.positions_per_game <= 0 ? eligible : std::min(opt.positions_per_game, eligible);
-        total_positions += static_cast<uint64_t>(std::max(per_game, 0));
-      }
-      pending.emplace_back(slog, std::move(buf));
-    }
+    // Games played face up must be labeled by a teacher that sees the leaves.
+    // A blind teacher's readouts would describe a game nobody played, and the
+    // .mset -- stamped open-leaves after its source log -- would hand the
+    // student targets its own input arm cannot account for. The reverse
+    // pairing is deliberate and allowed: an open-leaves teacher over a
+    // standard corpus is the privileged-teacher instrument.
+    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
+      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".mset", spec.opp_leave_input,
+      "{} was played with face-up leaves; labeling it needs a teacher whose ONNX declares "
+      "opp_leave_input");
     if (pending.empty()) return 0;
+    uint64_t total_positions = 0;
+    for (const binlog::PendingSlog& p : pending)
+      total_positions +=
+        binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
     const std::string selection =
       opt.full_sweep ? std::format("full sweep (cap {})", opt.sweep_cap) : "stratified";
     std::cerr << "move set eval targets: " << pending.size() << " file(s), " << total_positions
@@ -602,20 +558,17 @@ int main(int argc, char** argv) {
     }
 
     util::ProgressMeter meter(total_positions, "positions");
-    for (const auto& [slog, buf] : pending) {
-      fs::path mset = slog;
-      mset.replace_extension(".mset");
+    for (const binlog::PendingSlog& p : pending) {
       ForcedCandidates forced;
       if (opt.use_sobs) {
-        fs::path sobs = slog;
-        sobs.replace_extension(".sobs");
+        const fs::path sobs = p.sidecar(".sobs");
         if (!fs::exists(sobs)) {
-          throw util::CleanException("--sobs: {} has no .sobs sidecar", slog.filename().string());
+          throw util::CleanException("--sobs: {} has no .sobs sidecar", p.path.filename().string());
         }
         forced = load_forced_candidates(sobs);
       }
-      process_file(buf, mset, dict, spec, &service, params.max_rows, model_hash, opt,
-                   opt.use_sobs ? &forced : nullptr, &meter);
+      process_file(p.bytes, p.sidecar(".mset"), dict, spec, &service, params.max_rows, model_hash,
+                   opt, opt.use_sobs ? &forced : nullptr, &meter);
     }
     meter.finish("move set eval targets");
     return 0;

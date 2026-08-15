@@ -35,8 +35,11 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
   }
   const int n = static_cast<int>(ranked.size());
 
-  // Top stratum: the head of the ranking, dense.
-  for (int i = 0; i < n && static_cast<int>(out.size()) < 1 + quotas.top; ++i) {
+  // Top stratum: the head of the ranking, dense. The bound is relative to
+  // what the played move and the forced set already occupy, so forced
+  // candidates add to the sample rather than stealing head slots from it.
+  const int head_target = static_cast<int>(out.size()) + quotas.top;
+  for (int i = 0; i < n && static_cast<int>(out.size()) < head_target; ++i) {
     if (std::find(out.begin(), out.end(), ranked[i]) == out.end()) out.push_back(ranked[i]);
   }
   // Contention zone, then the tail, uniform within each.

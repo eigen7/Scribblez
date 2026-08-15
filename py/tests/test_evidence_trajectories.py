@@ -242,6 +242,32 @@ def test_mset_labeling_covers_the_simmed_candidates(traj_corpus):
                 assert m.tobytes() in stored, f"simmed candidate missing at {key}"
 
 
+def test_sobs_positions_outside_the_sample_fail_loudly(traj_corpus, tmp_path):
+    """The subset guard: labeling a trajectory pair with a smaller
+    --positions-per-game than the trajectory run's leaves simmed positions
+    outside the labeled sample, which must fail rather than silently waste
+    the corpus's most expensive rows."""
+    src = sorted(traj_corpus.dir.glob("*.slog"))[0]
+    shutil.copy(src, tmp_path / src.name)
+    shutil.copy(src.with_suffix(".sobs"), (tmp_path / src.name).with_suffix(".sobs"))
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-file={tmp_path / src.name}",
+            f"--model={traj_corpus.dir / 'teacher.onnx'}",
+            "--fast-build",
+            "--sobs",
+            "--positions-per-game=1",  # the trajectory run sampled 2 per game
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "is not in this run's sample" in result.stderr
+
+
 def test_sobs_flag_requires_the_sidecar(traj_corpus, tmp_path):
     """--sobs without a .sobs beside the .slog must fail loudly, not label a
     trajectory pair without its forced candidates."""

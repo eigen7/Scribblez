@@ -368,9 +368,27 @@ def run_generate(ctx: WorkerContext) -> int:
     if not p.teacher_model or not Path(p.teacher_model).is_file():
         print(f"error: teacher_model {p.teacher_model!r} is not a readable file", file=sys.stderr)
         return 1
-    if p.traj_every > 0 and (not p.proposer_model or not Path(p.proposer_model).is_file()):
-        print(f"error: proposer_model {p.proposer_model!r} is not a readable file", file=sys.stderr)
-        return 1
+    if p.traj_every > 0:
+        if not p.proposer_model or not Path(p.proposer_model).is_file():
+            print(
+                f"error: proposer_model {p.proposer_model!r} is not a readable file",
+                file=sys.stderr,
+            )
+            return 1
+        # The .mset labeling can only cover the simmed positions when its
+        # per-game sample contains the trajectory tool's; catching the
+        # misconfiguration here costs nothing, while the generator's own check
+        # fires only after a full (expensive) trajectory sim phase.
+        bad_traj_positions = p.traj_positions_per_game < 1 or (
+            0 < p.positions_per_game < p.traj_positions_per_game
+        )
+        if bad_traj_positions:
+            print(
+                f"error: traj_positions_per_game={p.traj_positions_per_game} must be >= 1 and "
+                f"<= positions_per_game={p.positions_per_game} (when nonzero)",
+                file=sys.stderr,
+            )
+            return 1
     return pair_store.run_pair_generate(
         ctx,
         _cycle,

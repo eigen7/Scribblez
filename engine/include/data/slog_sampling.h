@@ -15,6 +15,8 @@
 
 #include <compare>
 #include <cstdint>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 namespace scribblez {
@@ -42,6 +44,42 @@ void sample_eligible_turns(const GameMetadata& gm, uint32_t game_idx, uint64_t r
 // The number of turns sample_eligible_turns would append -- for sizing a
 // progress bar before any work runs.
 int count_eligible_sample(const GameMetadata& gm, int positions_per_game);
+
+// count_eligible_sample summed over a loaded .slog buffer's games
+// (limit_games <= 0 = all).
+uint64_t count_sampled_positions(const std::vector<char>& buf, int positions_per_game,
+                                 int limit_games);
+
+// One input file a sidecar generator still owes a sidecar: its path and its
+// loaded bytes (the tools hold pending files resident so the progress bar's
+// total is known before the expensive work starts).
+struct PendingSlog {
+  std::filesystem::path path;
+  std::vector<char> bytes;
+
+  std::filesystem::path sidecar(const char* ext) const {
+    std::filesystem::path p = path;
+    return p.replace_extension(ext);
+  }
+};
+
+// Bytes of `path`; throws util::CleanException when the file cannot be
+// opened, so a mistyped path fails with its name rather than downstream.
+std::vector<char> read_file_bytes(const std::filesystem::path& path);
+
+// The sidecar generators' shared input convention: explicit --slog-file
+// arguments when given, else every .slog in --slog-dir (sorted); throws
+// util::CleanException when neither is given or nothing matches.
+std::vector<std::filesystem::path> resolve_slog_inputs(const std::string& slog_dir,
+                                                       const std::vector<std::string>& slog_files);
+
+// Load every input whose `sidecar_ext` sidecar does not yet exist, skipping
+// files with a bad header (with a stderr note). A face-up-leaves .slog when
+// !accept_face_up throws util::CleanException(face_up_error, filename) --
+// each tool words the remedy for its own flag.
+std::vector<PendingSlog> load_pending_slogs(const std::vector<std::filesystem::path>& slogs,
+                                            const char* sidecar_ext, bool accept_face_up,
+                                            const char* face_up_error);
 
 }  // namespace binlog
 }  // namespace scribblez

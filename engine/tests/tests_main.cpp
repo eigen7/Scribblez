@@ -8,6 +8,7 @@
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/sim_observation_log.h"
+#include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/board_planes.h"
 #include "encoding/contingent_map.h"
@@ -4420,12 +4421,50 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   const move_set_eval::Selection sel =
     move_set_eval::stratified_candidates(ranked, played, quotas, rng, forced);
   const std::vector<Move>& out = sel.candidates;
-  ASSERT_GE(out.size(), 3u);
+  // The budget is additive: played + 2 distinct forced + full quotas (4 top,
+  // 4 mid, 4 tail; ranked_plays has no exchanges). Forced candidates must
+  // never shrink a stratum.
+  ASSERT_EQ(out.size(), 15u);
   EXPECT_EQ(out[0], played);
   EXPECT_EQ(out[1], ranked[17]);
   EXPECT_EQ(out[2], ranked[35]);  // the duplicate of `played` was skipped
+  // The top stratum still delivers the dense head: quotas.top candidates
+  // beyond the played move.
+  for (int i = 1; i <= quotas.top; ++i) {
+    EXPECT_NE(std::find(out.begin(), out.end(), ranked[static_cast<size_t>(i)]), out.end());
+  }
   for (size_t i = 0; i < out.size(); ++i) {
     for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
+  }
+}
+
+// The sampling shuffle is a fixed permutation per (seed, game): a smaller
+// per-game sample is a prefix of a larger one. This is the subset guarantee
+// slog_sampling.h calls load-bearing -- it is what lets the target generator
+// find every trajectory-sidecar position inside its own sample with no
+// coordination beyond the seed -- so it is pinned directly here rather than
+// only through the GPU-gated end-to-end test.
+TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
+  binlog::GameMetadata gm{};
+  gm.eligible_begin = 3;
+  gm.eligible_end = 19;
+  for (uint64_t seed : {0ull, 7ull, 0xDEADBEEFull}) {
+    std::vector<binlog::GamePositionIndex> full;
+    binlog::sample_eligible_turns(gm, /*game_idx=*/5, seed, /*positions_per_game=*/16, &full);
+    ASSERT_EQ(full.size(), 16u);
+    for (int k = 1; k <= 16; ++k) {
+      std::vector<binlog::GamePositionIndex> sample;
+      binlog::sample_eligible_turns(gm, 5, seed, k, &sample);
+      ASSERT_EQ(sample.size(), static_cast<size_t>(k));
+      for (int i = 0; i < k; ++i) EXPECT_EQ(sample[i].turn_idx, full[i].turn_idx);
+    }
+    // <= 0 takes every eligible turn (in order), so it contains any sample.
+    std::vector<binlog::GamePositionIndex> all;
+    binlog::sample_eligible_turns(gm, 5, seed, 0, &all);
+    ASSERT_EQ(all.size(), 16u);
+    for (const binlog::GamePositionIndex& s : full) {
+      EXPECT_NE(std::find(all.begin(), all.end(), s), all.end());
+    }
   }
 }
 

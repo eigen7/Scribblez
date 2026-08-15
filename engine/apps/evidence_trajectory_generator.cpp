@@ -191,13 +191,59 @@ void StudentScorer::stop() {
 
 // The anchor: the highest-raw-score candidate, taken off the move list by a
 // rule no model can be wrong about. `ranked` is descending static equity, so
-// ties resolve to the equity-preferred instance deterministically.
+// ties resolve to the equity-preferred instance deterministically
+// (max_element keeps the first maximum).
 size_t anchor_index(const std::vector<Move>& ranked) {
-  size_t best = 0;
-  for (size_t i = 1; i < ranked.size(); ++i) {
-    if (ranked[i].score() > ranked[best].score()) best = i;
+  return static_cast<size_t>(std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin());
+}
+
+// Per-worker front end over the shared scorer: owns the staging buffers and
+// turns one replayed position's ranked candidate set into per-candidate win
+// equities -- the proposal scores select_trajectory samples from.
+class CandidateScorer {
+ public:
+  CandidateScorer(const InputEncodingSpec& spec, StudentScorer* scorer)
+      : spec_(spec), scorer_(scorer), board_row_(static_cast<size_t>(input_floats(spec))) {}
+
+  // `encoder` must be replayed to the position; `visible_opp` is the leave
+  // the information condition exposes (empty when hidden).
+  const std::vector<float>& win_equities(const binlog::PositionEncoder& encoder, int mover,
+                                         const Rack& visible_opp, const std::vector<Move>& ranked);
+
+ private:
+  InputEncodingSpec spec_;
+  StudentScorer* scorer_;
+  std::vector<float> board_row_;
+  move_set::MoveFeatureArrays move_features_;
+  std::vector<float> wld_buf_;
+  std::vector<float> sd_buf_;
+  std::vector<float> win_equity_;
+};
+
+const std::vector<float>& CandidateScorer::win_equities(const binlog::PositionEncoder& encoder,
+                                                        int mover, const Rack& visible_opp,
+                                                        const std::vector<Move>& ranked) {
+  const int n = static_cast<int>(ranked.size());
+  // The contingent input planes read the board's move-generation caches;
+  // building them here (a no-op once valid) keeps them lexicon-accurate.
+  encoder.enc().board().ensure_movegen_caches(*spec_.dict);
+  if (spec_.opp_leave_input) {
+    encoder.enc().encode_input(mover, encoder.rack(mover), visible_opp, /*apply_flip=*/false,
+                               board_row_.data());
+  } else {
+    encoder.enc().encode_input(mover, encoder.rack(mover), /*apply_flip=*/false, board_row_.data());
   }
-  return best;
+  const int score_diff = encoder.enc().score(mover) - encoder.enc().score(1 - mover);
+  move_features_.encode(ranked.data(), n, score_diff);
+  wld_buf_.resize(static_cast<size_t>(n) * nn::WldOutput::kRowElems);
+  sd_buf_.resize(static_cast<size_t>(n) * nn::ScoreDiffOutput::kRowElems);
+  scorer_->score(board_row_.data(), &move_features_, wld_buf_.data(), sd_buf_.data());
+  win_equity_.resize(static_cast<size_t>(n));
+  for (int c = 0; c < n; ++c) {
+    const float* wld = wld_buf_.data() + static_cast<size_t>(c) * nn::WldOutput::kRowElems;
+    win_equity_[static_cast<size_t>(c)] = wld[0] + 0.5f * wld[1];
+  }
+  return win_equity_;
 }
 
 // The trajectory's candidate indices into `ranked`, in sim order: anchor,
@@ -251,9 +297,10 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
   return chosen;
 }
 
-// Worker: claims positions off the shared index and fills results[i]. Each
-// worker owns its replay scratch, staging buffers, and a single-threaded
-// SimRunner; student evaluations round-trip through the shared scorer.
+// Worker: claims positions off the shared index and fills results[i] --
+// replay, rank, score, select, sim. Each worker owns its replay scratch, its
+// scoring buffers, and a single-threaded SimRunner; student evaluations
+// round-trip through the shared scorer.
 void position_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
                      const Options& opt, const std::vector<GamePositionIndex>& work,
                      std::atomic<size_t>* next, StudentScorer* scorer,
@@ -261,12 +308,7 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(spec);
   const SimRunner runner(dict, sim_params(opt));
-  const int row_floats = input_floats(spec);
-  std::vector<float> board_row(static_cast<size_t>(row_floats));
-  move_set::MoveFeatureArrays move_features;
-  std::vector<float> wld_buf;
-  std::vector<float> sd_buf;
-  std::vector<float> win_equity;
+  CandidateScorer candidate_scorer(spec, scorer);
   util::SoftmaxSampler sampler;
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
@@ -283,38 +325,22 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
       pos.opp_leave =
         binlog::opp_leave_from_replay(g, static_cast<int>(w.turn_idx), encoder.rack(1 - mover));
     }
-    const int bag_size = encoder.bag_size();
 
     // Hidden mode: the opponent's replayed rack is ground truth the mover
     // cannot see, so neither the ranking nor the student input may use it.
     const Rack hidden_opp;
     const Rack& visible_opp = opt.open_leaves ? pos.opp_leave : hidden_opp;
     MoveRequest ranking_req{
-      pos.board, dict, pos.rack, visible_opp, pos.scores[mover], pos.scores[1 - mover], bag_size};
+      pos.board,         dict, pos.rack, visible_opp, pos.scores[mover], pos.scores[1 - mover],
+      encoder.bag_size()};
     const std::vector<Move> ranked = equity_top_k(ranking_req, std::numeric_limits<int>::max());
-    const int n = static_cast<int>(ranked.size());
-
-    encoder.enc().board().ensure_movegen_caches(dict);
-    if (spec.opp_leave_input) {
-      encoder.enc().encode_input(mover, pos.rack, visible_opp, /*apply_flip=*/false,
-                                 board_row.data());
-    } else {
-      encoder.enc().encode_input(mover, pos.rack, /*apply_flip=*/false, board_row.data());
-    }
-    move_features.encode(ranked.data(), n, pos.scores[mover] - pos.scores[1 - mover]);
-    wld_buf.resize(static_cast<size_t>(n) * nn::WldOutput::kRowElems);
-    sd_buf.resize(static_cast<size_t>(n) * nn::ScoreDiffOutput::kRowElems);
-    scorer->score(board_row.data(), &move_features, wld_buf.data(), sd_buf.data());
-    win_equity.resize(static_cast<size_t>(n));
-    for (int c = 0; c < n; ++c) {
-      const float* wld = wld_buf.data() + static_cast<size_t>(c) * nn::WldOutput::kRowElems;
-      win_equity[static_cast<size_t>(c)] = wld[0] + 0.5f * wld[1];
-    }
+    const std::vector<float>& win_equity =
+      candidate_scorer.win_equities(encoder, mover, visible_opp, ranked);
 
     PositionResult& res = (*results)[i];
     res.pos = w;
     res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
-    res.num_legal_moves = static_cast<uint32_t>(n);
+    res.num_legal_moves = static_cast<uint32_t>(ranked.size());
     // The trajectory draws come from their own stream so adding a proposal
     // never perturbs the rollout seeds (base_seed feeds SimRunner directly).
     std::mt19937_64 rng(util::splitmix64(res.base_seed ^ 0x7A6A11EC70ull));
@@ -372,15 +398,6 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   writer.close();
 }
 
-std::vector<char> read_file_bytes(const fs::path& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  const std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
-  f.read(bytes.data(), size);
-  return bytes;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -433,60 +450,26 @@ int main(int argc, char** argv) {
         service.opp_leave_input(), opt.open_leaves);
     }
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
-    const std::string proposer_hash = nn::content_hash(read_file_bytes(params.onnx_path));
+    const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
-    std::vector<fs::path> slogs;
-    if (!opt.slog_files.empty()) {
-      for (const std::string& f : opt.slog_files) slogs.emplace_back(f);
-    } else if (!opt.slog_dir.empty()) {
-      for (const auto& entry : fs::directory_iterator(opt.slog_dir))
-        if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
-      std::sort(slogs.begin(), slogs.end());
-    } else {
-      throw util::CleanException("pass --slog-dir or --slog-file");
-    }
-    if (slogs.empty()) throw util::CleanException("no .slog files to process");
-
-    std::vector<std::pair<fs::path, std::vector<char>>> pending;
-    uint64_t total_positions = 0;
-    for (const fs::path& slog : slogs) {
-      fs::path sobs = slog;
-      sobs.replace_extension(".sobs");
-      if (fs::exists(sobs)) continue;
-      std::vector<char> buf = read_file_bytes(slog);
-      const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
-      if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
-          hdr->version != binlog::kVersion) {
-        std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
-        continue;
-      }
-      // Games played face up must be simmed face up (see sim_obs_tool for why
-      // the reverse pairing is allowed).
-      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !opt.open_leaves) {
-        throw util::CleanException(
-          "{} was played with face-up leaves; pass --open-leaves to sim it",
-          slog.filename().string());
-      }
-      const GameMetadata* metas =
-        reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
-      uint32_t num_games = hdr->num_games;
-      if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-      for (uint32_t g = 0; g < num_games; ++g)
-        total_positions +=
-          static_cast<uint64_t>(binlog::count_eligible_sample(metas[g], opt.positions_per_game));
-      pending.emplace_back(slog, std::move(buf));
-    }
+    // Games played face up must be simmed face up (see sim_obs_tool for why
+    // the reverse pairing is allowed).
+    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
+      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".sobs", opt.open_leaves,
+      "{} was played with face-up leaves; pass --open-leaves to sim it");
     if (pending.empty()) return 0;
+    uint64_t total_positions = 0;
+    for (const binlog::PendingSlog& p : pending)
+      total_positions +=
+        binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
     std::cerr << "evidence trajectories: " << pending.size() << " file(s), " << total_positions
               << " positions; anchor + " << opt.proposals_min << ".." << opt.proposals_max
               << " proposals + uniform tail x " << opt.rollouts << " rollouts, proposer "
               << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
 
     util::ProgressMeter meter(total_positions, "positions");
-    for (const auto& [slog, buf] : pending) {
-      fs::path sobs = slog;
-      sobs.replace_extension(".sobs");
-      process_file(buf, sobs, dict, spec, &service, proposer_hash, opt, &meter);
+    for (const binlog::PendingSlog& p : pending) {
+      process_file(p.bytes, p.sidecar(".sobs"), dict, spec, &service, proposer_hash, opt, &meter);
     }
     meter.finish("evidence trajectories");
     return 0;

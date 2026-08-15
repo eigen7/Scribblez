@@ -192,30 +192,6 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   writer.close();
 }
 
-// The number of positions the tool would sample from `buf` -- the same
-// per-game arithmetic sample_positions applies, for sizing the progress bar
-// before any sims run.
-uint64_t count_positions(const std::vector<char>& buf, const Options& opt) {
-  const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
-  const GameMetadata* metas =
-    reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
-  uint32_t num_games = hdr->num_games;
-  if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-  uint64_t total = 0;
-  for (uint32_t g = 0; g < num_games; ++g)
-    total += static_cast<uint64_t>(binlog::count_eligible_sample(metas[g], opt.positions_per_game));
-  return total;
-}
-
-std::vector<char> read_file_bytes(const fs::path& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  const std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
-  f.read(bytes.data(), size);
-  return bytes;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -250,58 +226,27 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    std::vector<fs::path> slogs;
-    if (!opt.slog_files.empty()) {
-      for (const std::string& f : opt.slog_files) slogs.emplace_back(f);
-    } else if (!opt.slog_dir.empty()) {
-      for (const auto& entry : fs::directory_iterator(opt.slog_dir))
-        if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
-      std::sort(slogs.begin(), slogs.end());
-    } else {
-      throw util::CleanException("pass --slog-dir or --slog-file");
-    }
-    if (slogs.empty()) throw util::CleanException("no .slog files to process");
-
-    // Load every pending file's bytes up front so the progress bar's total is
-    // known before the sims start. Pending batches are a handful of files, so
-    // holding them resident is cheap next to the sim work.
-    std::vector<std::pair<fs::path, std::vector<char>>> pending;
-    uint64_t total_positions = 0;
-    for (const fs::path& slog : slogs) {
-      fs::path sobs = slog;
-      sobs.replace_extension(".sobs");
-      if (fs::exists(sobs)) continue;
-      std::vector<char> buf = read_file_bytes(slog);
-      const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
-      if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
-          hdr->version != binlog::kVersion) {
-        std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
-        continue;
-      }
-      // Games played face up must be simmed face up. The reverse is fine and
-      // deliberate: open-leaves sims over a standard corpus are the
-      // information-condition instrument (docs/sim_residual_feedback.md), which
-      // hands the sims more than the players had. Sims that know LESS than the
-      // players did are the incoherent direction -- the evidence would describe
-      // a game nobody played.
-      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !opt.open_leaves) {
-        throw util::CleanException(
-          "{} was played with face-up leaves; pass --open-leaves to sim it",
-          slog.filename().string());
-      }
-      total_positions += count_positions(buf, opt);
-      pending.emplace_back(slog, std::move(buf));
-    }
+    // Games played face up must be simmed face up. The reverse is fine and
+    // deliberate: open-leaves sims over a standard corpus are the
+    // information-condition instrument (docs/sim_residual_feedback.md), which
+    // hands the sims more than the players had. Sims that know LESS than the
+    // players did are the incoherent direction -- the evidence would describe
+    // a game nobody played.
+    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
+      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".sobs", opt.open_leaves,
+      "{} was played with face-up leaves; pass --open-leaves to sim it");
     if (pending.empty()) return 0;
+    uint64_t total_positions = 0;
+    for (const binlog::PendingSlog& p : pending)
+      total_positions +=
+        binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
     std::cerr << "sim-obs: " << pending.size() << " file(s), " << total_positions << " positions; "
               << opt.top_k << " candidates x " << opt.rollouts << " rollouts, " << opt.threads
               << " threads\n";
 
     util::ProgressMeter meter(total_positions, "positions");
-    for (const auto& [slog, buf] : pending) {
-      fs::path sobs = slog;
-      sobs.replace_extension(".sobs");
-      process_file(buf, sobs, dict, opt, &meter);
+    for (const binlog::PendingSlog& p : pending) {
+      process_file(p.bytes, p.sidecar(".sobs"), dict, opt, &meter);
     }
     meter.finish("sim-obs");
     return 0;
