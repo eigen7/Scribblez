@@ -172,6 +172,12 @@ The fusion stage from
 [sim_residual_feedback.md](sim_residual_feedback.md), on the move set evaluation
 model.
 
+**Stage built, training pending** — the fusion stage, the staged
+(cache-splitting) forward, the `.sobs`-plus-first-pass input builder, and the
+exactness tests exist ([evidence_fusion.py](../py/scribblez/evidence_fusion.py),
+[model_architectures.md](model_architectures.md)); the trained conditioned
+model waits on evidence trajectories (item 4).
+
 - **Evidence tokens** — one per simmed candidate: its move encoding (the move
   encoder, reused) fused with its sim observations (maps, value, counts) **and
   the model's own predicted planes for that candidate**, the two plane stacks
