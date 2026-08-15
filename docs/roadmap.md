@@ -241,8 +241,19 @@ The data for items 2 and 3. A trajectory records the sequential loop that
 produced each evidence set, which supplies rows at **every prefix size**,
 including zero — the distribution the deployed agent actually walks.
 
-- Requires `.sobs` at scale. **None currently exists on disk**; the format and
-  writer do.
+**Machinery built, corpus pending** — the trajectory recipe (greedy anchor →
+temperature-softmax student proposals at randomized length → one
+uniform-random tail sim, per
+[sim_residual_feedback.md](sim_residual_feedback.md)) is implemented end to
+end:
+[evidence_trajectory_generator](../engine/apps/evidence_trajectory_generator.cpp)
+writes trajectory `.sobs` (v2: trajectory-ordered records, per-position
+legal-move counts and uniform-tail flag, proposer hash), the `.mset`
+labeling force-includes the simmed candidates (`--sobs`), and the
+`move_set_eval` workload runs the chain per `traj_every`-th pair. No corpus
+has been generated yet.
+
+- Requires `.sobs` at scale; the tooling above is how it gets made.
 - The proposer follows the current model, so a conditionally-strong but
   equity-buried candidate gains coverage as generations advance.
 - The value-labeled subset must always include the proposer's simmed

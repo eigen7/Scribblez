@@ -1,6 +1,7 @@
 #include "encoding/position_encoder.h"
 
 #include "encoding/input_encoder.h"
+#include "game/bag.h"
 #include "util/assert.h"
 
 #include <cstdint>
@@ -53,6 +54,15 @@ void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int
     encode_post_move_row(pre, mover, encoder.rack(mover), candidates[c], opp_leave,
                          out + c * row_floats);
   }
+}
+
+int PositionEncoder::bag_size() const {
+  const Board& board = enc_.board();
+  int on_board = 0;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c)
+      if (!board.at(r, c).is_empty()) ++on_board;
+  return Bag(0).size() - on_board - racks_[0].size() - racks_[1].size();
 }
 
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {

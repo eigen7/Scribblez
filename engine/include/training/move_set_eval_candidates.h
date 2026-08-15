@@ -24,6 +24,7 @@
 #include "game/move.h"
 
 #include <random>
+#include <span>
 #include <vector>
 
 namespace scribblez {
@@ -49,10 +50,14 @@ struct StratumQuotas {
 };
 
 // The stratified sample, storing the actually-played move first (so a reader
-// can recover the incumbent's own choice), then the ranking's head, then the
-// sampled strata.
+// can recover the incumbent's own choice), then any `forced` moves not already
+// present, then the ranking's head, then the sampled strata. `forced` carries
+// the position's simmed trajectory candidates (docs/roadmap.md item 4): the
+// value-labeled subset must always include them, or dense value labels stay at
+// the static strata's rate while the proposer explores elsewhere.
 Selection stratified_candidates(const std::vector<Move>& ranked, const Move& played,
-                                const StratumQuotas& quotas, std::mt19937_64& rng);
+                                const StratumQuotas& quotas, std::mt19937_64& rng,
+                                std::span<const Move> forced = {});
 
 // The capped full sweep: the top `cap` candidates by static equity, plus every
 // exchange candidate and the played move wherever they rank, in equity-rank

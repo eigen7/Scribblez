@@ -4408,6 +4408,27 @@ TEST(MoveSetEvalCandidates, FullSweepKeepsAnUnrankedPlayedMove) {
   EXPECT_EQ(sel.num_legal_moves, ranked.size() + 1);
 }
 
+// Forced (simmed trajectory) candidates enter the stratified sample right
+// after the played move, deduplicated against it -- and the strata that follow
+// dedupe against them in turn, so nothing is labeled twice.
+TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
+  const std::vector<Move> ranked = ranked_plays(40);
+  const Move played = ranked[0];
+  const std::vector<Move> forced = {ranked[17], played, ranked[35]};
+  std::mt19937_64 rng(7);
+  const move_set_eval::StratumQuotas quotas;
+  const move_set_eval::Selection sel =
+    move_set_eval::stratified_candidates(ranked, played, quotas, rng, forced);
+  const std::vector<Move>& out = sel.candidates;
+  ASSERT_GE(out.size(), 3u);
+  EXPECT_EQ(out[0], played);
+  EXPECT_EQ(out[1], ranked[17]);
+  EXPECT_EQ(out[2], ranked[35]);  // the duplicate of `played` was skipped
+  for (size_t i = 0; i < out.size(); ++i) {
+    for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
+  }
+}
+
 // The stored std must be finite even when FP16 teacher inference overflows the
 // readout to +inf (see kSdStdCap in the header); genuine readouts pass through.
 TEST(MoveSetEvalTargetLog, SdStdClamp) {
@@ -4604,20 +4625,25 @@ TEST(SimObservationLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
 
   {
-    SimObsWriter w(path);
-    w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999);
+    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234");
+    w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
+                   kSimObsPosFlagUniformTail);
     w.add_position(4, 0, {m2}, {o2}, 16, 1000);
     w.close();
   }
 
   SimObsReader r(path);
   ASSERT_EQ(r.num_positions(), 2);
+  ASSERT_EQ(r.flags(), kSimObsFlagTrajectory);
+  ASSERT_EQ(r.proposer_hash(), "cafe1234");
   const SimObsReader::Position p0 = r.position(0);
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);
   ASSERT_EQ(p0.header->num_candidates, 2);
   ASSERT_EQ(p0.header->rollouts, 16);
   ASSERT_EQ(p0.header->base_seed, 999);
+  ASSERT_EQ(p0.header->num_legal_moves, 321);
+  ASSERT_EQ(p0.header->flags, kSimObsPosFlagUniformTail);
   SimObsRecord rec;  // copy out of the packed file view before comparing
   std::memcpy(&rec, &p0.records[0], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m1, sizeof(Move)), 0);

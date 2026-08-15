@@ -386,21 +386,56 @@ positions, with exploration noise: the proposer samples from a
 temperature-softmax over its proposal scores rather than taking the argmax,
 and the trajectory length is randomized to spread coverage across prefix
 sizes and best-so-far levels. Uniform-random candidates are poor
-exploration — with thousands of legal moves nearly all terrible, a uniform
-sim spends its rollouts on evidence about moves no proposer will ever
-propose; the region needing coverage is the plausible-but-not-top tail that
-temperature sampling reaches. Generation 0, with no trained proposer, uses
-the hasty-equity top-`K`.
+exploration *as the primary mechanism* — with thousands of legal moves
+nearly all terrible, a uniform sim spends its rollouts on evidence about
+moves no proposer will ever propose; the region needing coverage is the
+plausible-but-not-top tail that temperature sampling reaches. Generation 0,
+with no trained proposer, uses the hasty-equity top-`K`
+([sim_obs_tool](../engine/apps/sim_obs_tool.cpp)); trajectory generations
+([evidence_trajectory_generator](../engine/apps/evidence_trajectory_generator.cpp))
+propose with the current student.
+
+**One uniform-random sim per position rides behind the proposals** — a
+bounded floor, not a primary mechanism, and the answer to the echo chamber
+the softmax alone would leave: a move (or systematic move class) the model
+rates near zero is otherwise never simmed, never labeled, and never
+corrected — a blind spot that persists precisely when the teacher shares
+it, which is the lexical case this whole loop exists for. The floor also
+pins the proves-best head down over the deep tail in *both* directions:
+most floor sims confirm "terrible, gain ≈ 0", a correct label in a region
+that otherwise has none, and what stops the head from hallucinating gain
+out there and spending deployment sims on it. Exploration here is cheap in
+exactly the way AlphaZero's is not: a junk sim's label is its true
+CRN-paired gain (correct data, not target pollution), so the only cost is
+its rollouts.
+
+**The uniform draw sits in the last trajectory slot.** Training rows pair
+an evidence *prefix* with a held-out simmed candidate, so a last-slot sim
+yields proves-best labels at every prefix size while never entering an
+evidence set — full label value at zero input-distribution cost, since the
+deployed loop's evidence contains only proposer picks. Placing it at a
+random slot instead would let the same position's later proposals react to
+a surprising draw; that buys nothing at generation time (the trajectory
+never affects the played game), and a surprise still enters the system
+through its labels, re-emerging next generation as a genuine,
+on-distribution proposal. The slot is a trivial generator parameter if this
+trade-off is ever revisited.
 
 This exploration is bias-free with respect to outcome targets: evidence
 labeling is a side-computation on positions from ordinary self-play, so the
 choice of which candidates to sim never alters the played move or the game
 outcome — unlike move-sampling diversification, which changes the
-trajectory itself. The only cost is sim compute spent on less informative
-evidence. Coverage matters most for the proves-best head, whose labels
-exist only for simmed candidates; temperature exploration is what puts
-labels on the "not the top pick, but proved best" rows that head exists to
-predict.
+trajectory itself. The self-play games themselves stay HastyBot's: playing
+the best simmed move instead would couple exploration randomness and sim
+noise into every outcome-derived target, and could only apply at the
+sparse labeled turns anyway; search-improved self-play is the generational
+pipeline's job — once the sequential agent exists, a later generation
+regenerates whole games with it as the playing policy. The only cost is
+sim compute spent on less informative evidence. Coverage matters most for
+the proves-best head, whose labels exist only for simmed candidates;
+temperature exploration is what puts labels on the "not the top pick, but
+proved best" rows that head exists to predict, and the uniform floor is
+what keeps a blind spot from ever being structurally unreachable.
 
 ### The cost elephant
 

@@ -25,6 +25,15 @@ SOBS_VERSION = _CONST["sobs"]["version"]
 # carrying it.
 SOBS_FLAG_RETIRED_OPEN_RACK = _CONST["sobs"]["flag_retired_open_rack"]
 SOBS_FLAG_OPEN_LEAVES = _CONST["sobs"]["flag_open_leaves"]
+# Record order is trajectory order: every prefix of a position's records is a
+# valid evidence set (docs/roadmap.md item 4).
+SOBS_FLAG_TRAJECTORY = _CONST["sobs"]["flag_trajectory"]
+
+# SobsPositionHeader.flags bits: the position's last record is the
+# uniform-exploration draw (absent when the trajectory exhausted the legal
+# set first). A tail record contributes proves-best labels at every prefix
+# size but never belongs to an evidence prefix itself.
+SOBS_POS_FLAG_UNIFORM_TAIL = _CONST["sobs"]["pos_flag_uniform_tail"]
 
 BOARD = _CONST["board_size"]
 CELLS = BOARD * BOARD
@@ -62,25 +71,51 @@ RECORD_DTYPE = struct_dtype("SobsRecord")
 @dataclass
 class SobsPosition:
     """One position's sim evidence: the simmed candidates and their raw
-    observations, as recorded by sim_obs_tool."""
+    observations. In a trajectory file (SOBS_FLAG_TRAJECTORY) the arrays are
+    in trajectory order and `flags` carries the SOBS_POS_FLAG_* bits."""
 
     game_index: int
     turn_index: int
     rollouts: int
     base_seed: int
+    num_legal_moves: int
+    flags: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     obs: np.ndarray  # (K,) observation records
+
+    @property
+    def has_uniform_tail(self) -> bool:
+        return bool(self.flags & SOBS_POS_FLAG_UNIFORM_TAIL)
+
+    def evidence_prefix_sizes(self) -> range:
+        """The valid evidence-prefix sizes of a trajectory position: 0 through
+        the last proposer pick -- the uniform tail, when present, is a labeled
+        candidate only, never evidence."""
+        k = len(self.moves)
+        return range((k - 1 if self.has_uniform_tail else k) + 1)
 
 
 def read_sobs_flags(path: str | Path) -> int:
     """The .sobs header's flags word (SOBS_FLAG_* bits) -- e.g. whether the
-    sims were generated under the open-leaves information condition. Reads only
-    the 16-byte header."""
+    sims were generated under the open-leaves information condition. Reads
+    only the header."""
     with open(path, "rb") as f:
         hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]
     if hdr["magic"] != SOBS_MAGIC:
         raise ValueError(f"bad .sobs magic in {path}")
     return int(hdr["flags"])
+
+
+def read_sobs_proposer_hash(path: str | Path) -> str:
+    """The hex content hash of the model that proposed the file's candidates,
+    "" for the equity-top-K proposer. Reads only the header. Trajectory
+    corpora are proposer-versioned the way .mset corpora are teacher-versioned:
+    a consumer should refuse to mix hashes."""
+    with open(path, "rb") as f:
+        hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]
+    if hdr["magic"] != SOBS_MAGIC:
+        raise ValueError(f"bad .sobs magic in {path}")
+    return bytes(hdr["proposer_hash"]).rstrip(b"\x00").decode()
 
 
 def read_sobs(path: str | Path) -> list[SobsPosition]:
@@ -109,6 +144,8 @@ def read_sobs(path: str | Path) -> list[SobsPosition]:
                 turn_index=int(ph["turn_index"]),
                 rollouts=int(ph["rollouts"]),
                 base_seed=int(ph["base_seed"]),
+                num_legal_moves=int(ph["num_legal_moves"]),
+                flags=int(ph["flags"]),
                 moves=records["move"],
                 obs=records["obs"],
             )

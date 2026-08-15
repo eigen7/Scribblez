@@ -147,7 +147,9 @@ json::object build_constants() {
   c["sobs"] = {{"magic", kSimObsMagic},
                {"version", kSimObsVersion},
                {"flag_retired_open_rack", 1},
-               {"flag_open_leaves", kSimObsFlagOpenLeaves}};
+               {"flag_open_leaves", kSimObsFlagOpenLeaves},
+               {"flag_trajectory", kSimObsFlagTrajectory},
+               {"pos_flag_uniform_tail", kSimObsPosFlagUniformTail}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

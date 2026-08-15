@@ -53,6 +53,7 @@ add_library(scribblez_core STATIC
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
+  src/data/slog_sampling.cpp
   src/data/format_layout.cpp
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
@@ -430,6 +431,19 @@ target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threa
 # over .slog positions (docs/roadmap.md track A).
 add_executable(move_set_eval_target_generator apps/move_set_eval_target_generator.cpp)
 target_link_libraries(move_set_eval_target_generator PRIVATE
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
+# Evidence-trajectory generator: the deployment schedule's candidate selection
+# (anchor, student-model proposals, uniform tail) simmed per sampled position
+# into trajectory .sobs sidecars (docs/roadmap.md item 4).
+add_executable(evidence_trajectory_generator apps/evidence_trajectory_generator.cpp)
+target_link_libraries(evidence_trajectory_generator PRIVATE
   scribblez_nn
   scribblez_core
   Boost::program_options
