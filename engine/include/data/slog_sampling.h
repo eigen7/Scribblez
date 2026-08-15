@@ -58,8 +58,7 @@ struct PendingSlog {
   std::vector<char> bytes;
 
   std::filesystem::path sidecar(const char* ext) const {
-    std::filesystem::path p = path;
-    return p.replace_extension(ext);
+    return std::filesystem::path(path).replace_extension(ext);
   }
 };
 
