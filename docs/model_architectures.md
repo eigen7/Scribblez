@@ -21,6 +21,8 @@ Symbols used throughout:
 | `B` | batch of board positions (`P` in move-set code) | — |
 | `M` | candidate moves in a batch, flattened across positions | — |
 | `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |
+| `E` | padded evidence tokens per position | — |
+| `d` | `d_spatial`, the per-token spatial feature width | 32 |
 | `‖` | concatenate along the channel/feature dim | — |
 
 ---
@@ -115,6 +117,37 @@ holdout.
 
 Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to
 student softmax and teacher probabilities.
+
+### The evidence fusion stage (roadmap item 2)
+
+An optional late-fusion stage ([evidence_fusion.py](../py/scribblez/evidence_fusion.py))
+conditioning the scoring on the sims run so far at a decision point. Each
+simmed candidate contributes one token: its move encoding (the MoveEncoder,
+reused, reading the plain board tokens), a conv encode of nine spatial
+channels — the four observed rollout-frequency planes and the model's own four
+evidence-free predicted planes concatenated channel-wise, plus the footprint —
+and eleven scalars pairing the sim's value estimate and rollout count with the
+model's evidence-free value prediction. Feeding the predictions in as inputs
+is what lets the encoder form the residual `k·(obs − prior)` rather than only
+an observation-marginal correction.
+
+![EvidenceFusion: per-candidate token encode, evidence self-attention, and cross-attention rewriting the board map](images/arch_evidence_fusion.svg)
+
+Tokens self-attend, then the 225 board tokens cross-attend into them; the
+value each square receives carries the token's own spatial feature at that
+square, so the *where* in the evidence maps survives fusion. The stage
+rewrites `board` and `g` between the trunk and the scoring machinery, which
+reads the conditioned pair exactly as it reads the plain one — late fusion,
+so at one decision point the trunk output, move encodings, and per-candidate
+tokens are computed once and only self-attention + fusion + re-scoring run
+per loop iteration.
+
+All three output projections are zero-initialized and an empty evidence set
+hard-gates the stage off, so a fresh model — and any evidence-free forward at
+any weights — computes exactly the plain one-pass model. Training data comes
+from evidence trajectories (`.sobs` observations paired with live-recomputed
+first-pass predictions, roadmap item 4); until that corpus exists the stage
+trains only through its zero-evidence degenerate case.
 
 ---
 

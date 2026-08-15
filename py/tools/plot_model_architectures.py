@@ -589,12 +589,149 @@ def move_set_eval() -> Diagram:
     return d
 
 
+def evidence_fusion() -> Diagram:
+    """Fig 6: EvidenceFusion -- an evidence set conditioning the board map."""
+    d = Diagram(980, 1150)
+    move_col, plane_col, sc_col, tok_col = 180, 490, 800, 490
+
+    moves_in = d.box(
+        move_col,
+        26,
+        [
+            title("evidence move inputs"),
+            sub("letters, blanks, squares,"),
+            sub("tile_mask, scalars"),
+            mono("(P, E, ...)"),
+        ],
+        "input",
+    )
+    planes_in = d.box(
+        plane_col,
+        26,
+        [
+            title("obs_planes"),
+            sub("4 observed ‖ 4 predicted ‖ footprint"),
+            mono("(P, E, 9, 15, 15)"),
+        ],
+        "input",
+    )
+    scalars_in = d.box(
+        sc_col,
+        26,
+        [
+            title("obs_scalars"),
+            sub("sim value + counts ‖"),
+            sub("predicted value"),
+            mono("(P, E, 11)"),
+        ],
+        "input",
+    )
+
+    encoder = d.box(
+        move_col,
+        170,
+        [title("MoveEncoder"), sub("fig. 4, reused -- reads the plain board"), mono("(P, E, C)")],
+        "op",
+    )
+    conv = d.box(
+        plane_col,
+        170,
+        [
+            title("plane_conv"),
+            sub("Conv 9 → d 1×1 → ReLU → Conv d → d 3×3"),
+            mono("feats   (P, E, d, 15, 15)"),
+        ],
+        "op",
+    )
+    mlp = d.box(
+        sc_col,
+        290,
+        [title("scalar_mlp"), sub("Linear 11 → C → ReLU"), sub("Linear C → C")],
+        "op",
+    )
+    for src, dst in ((moves_in, encoder), (planes_in, conv), (scalars_in, mlp)):
+        d.edge(src.bottom, dst.head)
+
+    pool = d.box(plane_col, 290, [title("mean_max_pool"), mono("(P, E, 2d)")], "op")
+    d.edge(conv.bottom, pool.head)
+
+    concat = d.merge(tok_col, 420, symbol="‖")
+    d.edge(encoder.bottom, (move_col, 420), (tok_col - 11, 420))
+    d.edge(pool.bottom, concat.head)
+    d.edge(mlp.bottom, (sc_col, 420), (tok_col + 11, 420))
+
+    fuse = d.box(
+        tok_col,
+        454,
+        [title("token_fuse"), sub("Linear 2C + 2d → C"), mono("tokens   (P, E, C)")],
+        "op",
+    )
+    d.edge(concat.bottom, fuse.head)
+    d.note(tok_col + 150, 470, "cacheable per candidate")
+
+    self_attn = d.box(
+        tok_col,
+        566,
+        [
+            title("evidence self-attention"),
+            sub("TransformerEncoderLayer, padding-masked"),
+            mono("t   (P, E, C)"),
+        ],
+        "head",
+    )
+    d.edge(fuse.bottom, self_attn.head)
+
+    board = d.box(160, 566, [title("board"), mono("(P, 225, C)"), sub("fig. 5")], "ghost")
+    cross = d.box(
+        420,
+        690,
+        [
+            title("cross-attention   Q = board   K = V = t"),
+            sub("weights also mix feats at each query square"),
+            sub("out_proj + spatial_out, both zero-init"),
+            mono("Δboard   (P, 225, C)"),
+        ],
+        "head",
+    )
+    d.edge(board.bottom, (160, 668), (330, 668), (330, cross.top))
+    d.edge(self_attn.bottom, (tok_col, 668), (510, 668), (510, cross.top))
+    d.edge(
+        conv.bottom, (plane_col + 130, 250), (940, 250), (940, 668), (560, 668), (560, cross.top)
+    )
+
+    pooled = d.box(
+        800,
+        690,
+        [title("masked mean over E"), mono("(P, C)"), sub("summary_out   zero-init")],
+        "op",
+    )
+    d.edge(self_attn.bottom, (tok_col, 668), (pooled.head[0], 668), pooled.head)
+
+    gate = d.box(
+        420,
+        850,
+        [title("× has_evidence"), sub("an empty set passes through bit-exactly")],
+        "op",
+    )
+    d.edge(cross.bottom, gate.head)
+
+    board_out = d.box(
+        300, 990, [title("board′"), mono("(P, 225, C)"), sub("board + Δboard")], "out"
+    )
+    g_out = d.box(680, 990, [title("g′"), mono("(P, 3C)"), sub("g + summary")], "out")
+    d.edge(gate.bottom, (420, 962), (300, 962), board_out.head)
+    d.edge(pooled.bottom, (800, 962), (680, 962), g_out.head)
+    d.caption("scoring (fig. 5) reads board′ and g′ exactly as it reads board and g")
+    return d
+
+
 FIGURES = {
     "arch_spatial_trunk": spatial_trunk,
     "arch_tower_blocks": tower_blocks,
     "arch_position_eval": position_eval,
     "arch_move_encoder": move_encoder,
     "arch_move_set_eval": move_set_eval,
+    "arch_evidence_fusion": evidence_fusion,
 }
 
 

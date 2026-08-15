@@ -27,6 +27,15 @@ The heads predict what the teacher position evaluation model would output for
 the candidate's post-move state, from the mover's POV -- this model is a
 distillation of the position evaluation model over the candidate set.
 
+The forward optionally conditions the scoring on a sim-evidence set (roadmap
+item 2): the EvidenceFusion stage rewrites the board token map and position
+summary between the trunk and the scoring machinery, which then reads the
+conditioned map exactly as it reads the plain one. The staged methods
+(encode_board / encode_moves / encode_evidence / score_moves) expose the
+deployment loop's caching split -- everything up to the fusion is computed
+once per decision point, and forward() composed of them is bit-identical to
+the staged path.
+
 docs/model_architectures.md diagrams this network; any change to the
 architecture belongs in the same commit as the corresponding change there.
 """
@@ -37,6 +46,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 from .moves import move_encoding_dims
@@ -145,6 +155,110 @@ class MoveSetEvalModel(nn.Module):
         self.num_planes = len(PLANE_NAMES)
         self.plane_proj = nn.Linear(head_in, self.num_planes * trunk_channels)
 
+        self.evidence_fusion = EvidenceFusion(trunk_channels, num_heads=num_heads)
+
+    def encode_board(
+        self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode P positions into board token maps (P, 225, C) and global
+        summaries (P, 3C)."""
+        x, s = self.trunk(input_spatial, input_scalar)  # (P,C,15,15), (P,C)
+        board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (P, 225, C)
+        g = torch.cat([mean_max_pool(x), s], dim=1)  # (P, 3C)
+        return board, g
+
+    def encode_moves(
+        self,
+        board: torch.Tensor,
+        letters: torch.Tensor,
+        blanks: torch.Tensor,
+        squares: torch.Tensor,
+        tile_mask: torch.Tensor,
+        scalars: torch.Tensor,
+        pos_id: torch.Tensor,
+    ) -> torch.Tensor:
+        """Embed M flattened moves against the (plain) board token map -> (M, C).
+
+        Gathers the board token at each placed tile's square from that move's
+        own position, so the move encoder reads the board's representation of
+        the squares it plays on (pad squares gather token 0, masked out).
+        Exchange tiles carry letters but no squares (move_set_encoder.h):
+        gating by is_play zeroes the square-(0,0) tokens their zero squares
+        would otherwise gather, so a surrendered tile contributes its letter
+        and blank embeddings alone.
+        """
+        t = squares.shape[1]
+        tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
+        tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)
+        return self.move_encoder(letters, blanks, tile_mask, scalars, tile_board)
+
+    def encode_evidence(
+        self, board: torch.Tensor, evidence: EvidenceInputs
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-candidate evidence tokens over the plain board map (the move
+        encodings and token features must cache across loop iterations, so
+        they read the map the trunk produced, never a conditioned one).
+        Returns EvidenceFusion.encode_tokens' (tokens, spatial features)."""
+        p, k = evidence.mask.shape
+        pos_id = torch.arange(p, device=board.device).repeat_interleave(k)
+        move_enc = self.encode_moves(
+            board,
+            evidence.letters.flatten(0, 1),
+            evidence.blanks.flatten(0, 1),
+            evidence.squares.flatten(0, 1),
+            evidence.tile_mask.flatten(0, 1),
+            evidence.scalars.flatten(0, 1),
+            pos_id,
+        ).view(p, k, -1)
+        return self.evidence_fusion.encode_tokens(
+            move_enc, evidence.obs_planes, evidence.obs_scalars
+        )
+
+    def score_moves(
+        self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor, pos_id: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Score M encoded moves (M, C) against the board map and summary --
+        plain or evidence-conditioned, the machinery is identical.
+
+        Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
+        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order}.
+        """
+        # Each move attends into its own position's board tokens. Grouping the
+        # queries by position keeps the key/value set at one copy per position,
+        # so the attention's W_k/W_v projections -- a function of the board
+        # alone, and ~C times the arithmetic of the attention math they feed --
+        # are amortized across candidates the same way the trunk is.
+        rank, max_k = _rank_within_position(pos_id, board.shape[0])
+        queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
+        queries[pos_id, rank] = e
+        # The per-square attention weights are not a model output, and asking
+        # for them would both materialize a (P, maxK, 225) tensor -- the padded
+        # grid's largest by far -- and hold the call off the fused kernels.
+        attended, _ = self.cross_attn(queries, board, board, need_weights=False)
+        attended = attended[pos_id, rank]  # (P, maxK, C) -> (M, C)
+
+        head_in = torch.cat([attended, g[pos_id]], dim=1)  # (M, 4C)
+        out = self.head(head_in)  # (M, 5)
+        sd_mean = out[:, 3:4]
+        sd_std = F.softplus(out[:, 4:5]) + 1e-3
+
+        # Plane readout through the same padded grid as the cross-attention,
+        # so the (P, 225, C) board tokens are contracted once per position
+        # rather than gathered per move.
+        c = board.shape[2]
+        plane_q = board.new_zeros(board.shape[0], max_k, self.num_planes * c)
+        plane_q[pos_id, rank] = self.plane_proj(head_in)
+        plane_logits = torch.einsum(
+            "pkhc,pnc->pkhn", plane_q.view(board.shape[0], max_k, self.num_planes, c), board
+        )
+        planes = plane_logits[pos_id, rank]  # (M, num_planes, 225)
+
+        return {
+            "wld": out[:, :3],
+            "score_diff": torch.cat([sd_mean, sd_std], dim=1),
+            "planes": planes,
+        }
+
     def forward(
         self,
         input_spatial: torch.Tensor,
@@ -155,65 +269,27 @@ class MoveSetEvalModel(nn.Module):
         move_tile_mask: torch.Tensor,
         move_scalars: torch.Tensor,
         move_pos_id: torch.Tensor,
+        evidence: EvidenceInputs | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Encode P board positions and score the M flattened candidate moves.
-
-        Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
-        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order}.
+        """Encode P board positions and score the M flattened candidate moves,
+        optionally conditioned on a per-position evidence set (score_moves'
+        return contract). With `evidence` None -- or with a position's mask
+        row empty -- the plain one-pass model, bit-exactly.
         """
-        x, s = self.trunk(input_spatial, input_scalar)  # (P,C,15,15), (P,C)
-        board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (P, 225, C)
-        g = torch.cat([mean_max_pool(x), s], dim=1)  # (P, 3C)
-
-        # Gather the board token at each placed tile's square from that move's
-        # own position, so the move encoder reads the board's representation of
-        # the squares it plays on (pad squares gather token 0, masked out).
-        # Exchange tiles carry letters but no squares (move_set_encoder.h):
-        # gating by is_play zeroes the square-(0,0) tokens their zero squares
-        # would otherwise gather, so a surrendered tile contributes its letter
-        # and blank embeddings alone.
-        t = move_squares.shape[1]
-        tile_board = board[move_pos_id.unsqueeze(1).expand(-1, t), move_squares]  # (M, T, C)
-        tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
-        e = self.move_encoder(
-            move_letters, move_blanks, move_tile_mask, move_scalars, tile_board
-        )  # (M, C)
-
-        # Each move attends into its own position's board tokens. Grouping the
-        # queries by position keeps the key/value set at one copy per position,
-        # so the attention's W_k/W_v projections -- a function of the board
-        # alone, and ~C times the arithmetic of the attention math they feed --
-        # are amortized across candidates the same way the trunk is.
-        rank, max_k = _rank_within_position(move_pos_id, board.shape[0])
-        queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
-        queries[move_pos_id, rank] = e
-        # The per-square attention weights are not a model output, and asking
-        # for them would both materialize a (P, maxK, 225) tensor -- the padded
-        # grid's largest by far -- and hold the call off the fused kernels.
-        attended, _ = self.cross_attn(queries, board, board, need_weights=False)
-        attended = attended[move_pos_id, rank]  # (P, maxK, C) -> (M, C)
-
-        head_in = torch.cat([attended, g[move_pos_id]], dim=1)  # (M, 4C)
-        out = self.head(head_in)  # (M, 5)
-        sd_mean = out[:, 3:4]
-        sd_std = F.softplus(out[:, 4:5]) + 1e-3
-
-        # Plane readout through the same padded grid as the cross-attention,
-        # so the (P, 225, C) board tokens are contracted once per position
-        # rather than gathered per move.
-        c = board.shape[2]
-        plane_q = board.new_zeros(board.shape[0], max_k, self.num_planes * c)
-        plane_q[move_pos_id, rank] = self.plane_proj(head_in)
-        plane_logits = torch.einsum(
-            "pkhc,pnc->pkhn", plane_q.view(board.shape[0], max_k, self.num_planes, c), board
+        board, g = self.encode_board(input_spatial, input_scalar)
+        e = self.encode_moves(
+            board,
+            move_letters,
+            move_blanks,
+            move_squares,
+            move_tile_mask,
+            move_scalars,
+            move_pos_id,
         )
-        planes = plane_logits[move_pos_id, rank]  # (M, num_planes, 225)
-
-        return {
-            "wld": out[:, :3],
-            "score_diff": torch.cat([sd_mean, sd_std], dim=1),
-            "planes": planes,
-        }
+        if evidence is not None:
+            tokens, spatial_feats = self.encode_evidence(board, evidence)
+            board, g = self.evidence_fusion(board, g, tokens, spatial_feats, evidence.mask)
+        return self.score_moves(board, g, e, move_pos_id)
 
 
 def win_equity(probs: torch.Tensor) -> torch.Tensor:
