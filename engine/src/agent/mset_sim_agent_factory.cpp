@@ -11,6 +11,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/trt_eval_service.h"
+#include "util/exception.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
@@ -18,7 +19,6 @@
 #include <cstdint>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 
 namespace scribblez {
@@ -89,7 +89,7 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=mset-sim options: ") + e.what());
+    throw util::CleanException("bad --type=mset-sim options: {}", e.what());
   }
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());

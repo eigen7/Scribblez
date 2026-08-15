@@ -126,5 +126,5 @@ TEST_F(GameRunnerTest, PairedGamesShareSeedsAndMirrorSeats) {
 // An odd --games cannot form pairs; construction must reject it rather than
 // leave the last seed half-mirrored.
 TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
-  EXPECT_THROW(GameRunner(paired_params(/*games=*/3), hasty_players()), Exception);
+  EXPECT_THROW(GameRunner(paired_params(/*games=*/3), hasty_players()), util::CleanException);
 }

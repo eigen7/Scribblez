@@ -29,13 +29,11 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <random>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -80,7 +78,7 @@ std::string harvested_gcg(GameLogStorage log, int bingo_idx, uint64_t seed,
   const GameLogStorage truncated = truncate_to_post_bingo(std::move(log), bingo_idx);
   GcgWriteOptions options;
   options.lexicon_name = lexicon;
-  options.notes = {"Harvested penultimate-bingo position (game seed " + std::to_string(seed) + ")"};
+  options.notes = {std::format("Harvested penultimate-bingo position (game seed {})", seed)};
   return game_log_to_gcg(truncated.view(), options);
 }
 
@@ -98,11 +96,7 @@ std::string harvest_from_game(HastyBotAgent& a0, HastyBotAgent& a1, const Dictio
   return harvested_gcg(std::move(log), pick, seed, lexicon);
 }
 
-std::string part_filename(int part) {
-  std::ostringstream name;
-  name << "part-" << std::setw(3) << std::setfill('0') << part << ".gcgs";
-  return name.str();
-}
+std::string part_filename(int part) { return std::format("part-{:03}.gcgs", part); }
 
 // Write the collected GCG blocks into per_file-sized bundle files.
 void write_bundles(const fs::path& dir, const std::vector<std::string>& gcgs, int per_file) {
@@ -164,8 +158,7 @@ int main(int argc, char** argv) {
     std::cerr << "Harvested " << gcgs.size() << " positions from " << scanned << " games into "
               << dir.string() << " (" << ((count + per_file - 1) / per_file) << " bundle files)\n";
     return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

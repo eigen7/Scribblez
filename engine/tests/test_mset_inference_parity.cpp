@@ -124,7 +124,7 @@ bool generate_fixture(const std::string& out_dir) {
 #endif
 }
 
-// The message of the std::runtime_error loading `params` through its spec's
+// The message of the util::Exception loading `params` through its spec's
 // runtime must throw. Records a failure and returns "" if the load instead
 // succeeds.
 template <typename Spec>

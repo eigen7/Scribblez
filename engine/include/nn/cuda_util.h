@@ -3,7 +3,7 @@
 #include <cstddef>
 
 // Thin wrappers around the CUDA runtime calls the TensorRT inference path
-// needs, each throwing scribblez::Exception on failure so callers never inspect
+// needs, each throwing util::Exception on failure so callers never inspect
 // status codes. The CUDA headers stay confined to cuda_util.cpp; consumers see
 // only opaque void* device pointers and the stream typedef below.
 

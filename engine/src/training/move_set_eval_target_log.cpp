@@ -1,15 +1,16 @@
 #include "training/move_set_eval_target_log.h"
 
 #include "data/binary_log.h"
+#include "util/assert.h"
+#include "util/exception.h"
 
 #include <Eigen/Core>
 
 #include <array>
-#include <cassert>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
-#include <stdexcept>
 #include <unistd.h>
 
 namespace scribblez {
@@ -63,9 +64,9 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
                                 const std::vector<float>& targets, const std::vector<float>& planes,
                                 uint32_t num_legal_moves) {
-  assert(!closed_);
-  assert(targets.size() == candidates.size() * record_floats_);
-  assert(planes.size() == candidates.size() * record_planes_ * kPlaneCells);
+  RELEASE_ASSERT(!closed_);
+  RELEASE_ASSERT(targets.size() == candidates.size() * record_floats_);
+  RELEASE_ASSERT(planes.size() == candidates.size() * record_planes_ * kPlaneCells);
   TargetPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
@@ -92,17 +93,17 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
 }
 
 void TargetWriter::close() {
-  assert(!closed_);
+  RELEASE_ASSERT(!closed_);
   closed_ = true;
   TargetFileHeader* hdr = reinterpret_cast<TargetFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
   // Temp-file + rename so the .mset appears atomically: an interrupted run
   // never leaves a truncated file that a resume (which skips existing
   // sidecars) would silently keep.
-  const std::string tmp = path_ + ".tmp." + std::to_string(::getpid());
+  const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
   {
     std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw std::runtime_error("TargetWriter: cannot open " + tmp);
+    if (!f) throw util::Exception("TargetWriter: cannot open {}", tmp);
     f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   }
   std::filesystem::rename(tmp, path_);
@@ -110,37 +111,36 @@ void TargetWriter::close() {
 
 TargetReader::TargetReader(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) throw std::runtime_error("TargetReader: cannot open " + path);
+  if (!f) throw util::Exception("TargetReader: cannot open {}", path);
   const std::streamsize size = f.tellg();
   f.seekg(0);
   buffer_.resize(static_cast<size_t>(size));
   f.read(buffer_.data(), size);
 
   if (buffer_.size() < sizeof(TargetFileHeader)) {
-    throw std::runtime_error("TargetReader: truncated header in " + path);
+    throw util::Exception("TargetReader: truncated header in {}", path);
   }
   std::memcpy(&header_, buffer_.data(), sizeof(header_));
   if (header_.magic != kTargetMagic) {
-    throw std::runtime_error("TargetReader: bad magic in " + path);
+    throw util::Exception("TargetReader: bad magic in {}", path);
   }
   if (header_.version != kTargetVersion) {
-    throw std::runtime_error("TargetReader: version mismatch in " + path +
-                             " (file=" + std::to_string(header_.version) +
-                             " code=" + std::to_string(kTargetVersion) + ")");
+    throw util::Exception("TargetReader: version mismatch in {} (file={} code={})", path,
+                          header_.version, kTargetVersion);
   }
 
   size_t off = sizeof(TargetFileHeader);
   positions_.reserve(header_.num_positions);
   for (uint32_t p = 0; p < header_.num_positions; ++p) {
     if (off + sizeof(TargetPositionHeader) > buffer_.size()) {
-      throw std::runtime_error("TargetReader: truncated position header in " + path);
+      throw util::Exception("TargetReader: truncated position header in {}", path);
     }
     const TargetPositionHeader* ph =
       reinterpret_cast<const TargetPositionHeader*>(buffer_.data() + off);
     off += sizeof(TargetPositionHeader);
     const size_t bytes = static_cast<size_t>(ph->num_candidates) * record_bytes();
     if (off + bytes > buffer_.size()) {
-      throw std::runtime_error("TargetReader: truncated records in " + path);
+      throw util::Exception("TargetReader: truncated records in {}", path);
     }
     positions_.push_back({ph, buffer_.data() + off});
     off += bytes;

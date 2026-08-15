@@ -4,13 +4,13 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "util/exception.h"
 #include "util/math.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 
 #include <optional>
-#include <stdexcept>
 
 namespace scribblez {
 
@@ -51,7 +51,7 @@ po::options_description make_options_description(SimOptions& o) {
 // Checked in the initializer list, where the SimRunner member dereferences it
 // before any constructor body could look.
 const Dictionary& require_dict(const Dictionary* dict) {
-  if (dict == nullptr) throw std::runtime_error("sim agent: a dictionary is required");
+  if (dict == nullptr) throw util::Exception("sim agent: a dictionary is required");
   return *dict;
 }
 
@@ -64,7 +64,7 @@ SimAgent::SimAgent(const Params& params)
       seed_(params.seed),
       runner_(require_dict(params.dict), params.sim),
       endgame_(params.thread_id, params.endgame) {
-  if (top_k_ < 1) throw std::runtime_error("sim agent: --top-k must be >= 1");
+  if (top_k_ < 1) throw util::CleanException("sim agent: --top-k must be >= 1");
 }
 
 uint64_t SimAgent::sim_seed(int ply) const {
@@ -109,7 +109,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=sim options: ") + e.what());
+    throw util::CleanException("bad --type=sim options: {}", e.what());
   }
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());

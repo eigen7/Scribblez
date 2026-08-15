@@ -10,11 +10,11 @@
 // what separates them obvious in a failing test.
 
 #include "lexicon/hasty_equity.h"
+#include "util/exception.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
 
 namespace scribblez::testing {
 
@@ -34,7 +34,7 @@ inline void install_synthetic_hasty_equity(const std::filesystem::path& dir) {
   write_f32(12.0f);
   write_f32(1.5f);
   write_f32(-2.5f);
-  if (!f.good()) throw std::runtime_error("failed writing synthetic leave file");
+  if (!f.good()) throw util::Exception("failed writing synthetic leave file");
   f.close();  // flush to disk before HastyEquity::init reopens the file to read
 
   const std::filesystem::path peg = dir / "peg.json";

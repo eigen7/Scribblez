@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <format>
 #include <optional>
 #include <sstream>
 
@@ -134,8 +135,8 @@ std::string lane_analysis_json(const Board& board, const Rack& rack, int on_move
   const LaneTargets targets = compute_lane_targets(board, rack, dict);
   const LaneBestMovesSet best = compute_lane_best_moves(board, rack, dict);
 
-  const std::string my_name = "Player " + std::to_string(on_move + 1);
-  const std::string opp_name = "Player " + std::to_string(2 - on_move);
+  const std::string my_name = std::format("Player {}", on_move + 1);
+  const std::string opp_name = std::format("Player {}", 2 - on_move);
   json::object o =
     position_state_object_pov(board, rack, /*my_score=*/0, /*opp_score=*/0, my_name, opp_name);
   o["on_move"] = on_move;

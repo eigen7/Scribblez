@@ -1,13 +1,13 @@
 #include "agent/mset_sim_agent.h"
 
 #include "encoding/input_encoder.h"
+#include "util/exception.h"
 #include "util/math.h"
 
 #include <algorithm>
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <stdexcept>
 
 // The production constructor -- the only member that references the concrete
 // TensorRT-backed service (and thus pulls in CUDA / TensorRT) -- lives in
@@ -21,7 +21,7 @@ namespace {
 // The dictionary reference the members that need it read before any
 // constructor body could check it.
 const Dictionary& require_dict(const Dictionary* dict) {
-  if (dict == nullptr) throw std::runtime_error("mset-sim agent: a dictionary is required");
+  if (dict == nullptr) throw util::Exception("mset-sim agent: a dictionary is required");
   return *dict;
 }
 
@@ -45,8 +45,8 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
 
 void MsetSimAgent::validate(const Params& params) {
   if (params.shortlist < 0)
-    throw std::runtime_error("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
-  if (params.sim_top_k < 1) throw std::runtime_error("mset-sim agent: --sim-top-k must be >= 1");
+    throw util::CleanException("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
+  if (params.sim_top_k < 1) throw util::CleanException("mset-sim agent: --sim-top-k must be >= 1");
   SimRunner::validate(params.sim);
 }
 

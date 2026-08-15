@@ -1,10 +1,12 @@
 #include "data/sim_observation_log.h"
 
-#include <cassert>
+#include "util/assert.h"
+#include "util/exception.h"
+
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
-#include <stdexcept>
 #include <unistd.h>
 
 namespace scribblez {
@@ -35,8 +37,8 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
                                 const std::vector<SimObservation>& observations, uint32_t rollouts,
                                 uint64_t base_seed) {
-  assert(!closed_);
-  assert(candidates.size() == observations.size());
+  RELEASE_ASSERT(!closed_);
+  RELEASE_ASSERT(candidates.size() == observations.size());
   SimObsPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
@@ -54,17 +56,17 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
 }
 
 void SimObsWriter::close() {
-  assert(!closed_);
+  RELEASE_ASSERT(!closed_);
   closed_ = true;
   SimObsFileHeader* hdr = reinterpret_cast<SimObsFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
   // Temp-file + rename so the .sobs appears atomically: an interrupted run
   // never leaves a truncated file that a resume (which skips existing
   // sidecars) would silently keep.
-  const std::string tmp = path_ + ".tmp." + std::to_string(::getpid());
+  const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
   {
     std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw std::runtime_error("SimObsWriter: cannot open " + tmp);
+    if (!f) throw util::Exception("SimObsWriter: cannot open {}", tmp);
     f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   }
   std::filesystem::rename(tmp, path_);
@@ -72,35 +74,34 @@ void SimObsWriter::close() {
 
 SimObsReader::SimObsReader(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) throw std::runtime_error("SimObsReader: cannot open " + path);
+  if (!f) throw util::Exception("SimObsReader: cannot open {}", path);
   const std::streamsize size = f.tellg();
   f.seekg(0);
   buffer_.resize(static_cast<size_t>(size));
   f.read(buffer_.data(), size);
 
   if (buffer_.size() < sizeof(SimObsFileHeader)) {
-    throw std::runtime_error("SimObsReader: truncated header in " + path);
+    throw util::Exception("SimObsReader: truncated header in {}", path);
   }
   const SimObsFileHeader* hdr = reinterpret_cast<const SimObsFileHeader*>(buffer_.data());
-  if (hdr->magic != kSimObsMagic) throw std::runtime_error("SimObsReader: bad magic in " + path);
+  if (hdr->magic != kSimObsMagic) throw util::Exception("SimObsReader: bad magic in {}", path);
   if (hdr->version != kSimObsVersion) {
-    throw std::runtime_error("SimObsReader: version mismatch in " + path +
-                             " (file=" + std::to_string(hdr->version) +
-                             " code=" + std::to_string(kSimObsVersion) + ")");
+    throw util::Exception("SimObsReader: version mismatch in {} (file={} code={})", path,
+                          hdr->version, kSimObsVersion);
   }
 
   size_t off = sizeof(SimObsFileHeader);
   positions_.reserve(hdr->num_positions);
   for (uint32_t p = 0; p < hdr->num_positions; ++p) {
     if (off + sizeof(SimObsPositionHeader) > buffer_.size()) {
-      throw std::runtime_error("SimObsReader: truncated position header in " + path);
+      throw util::Exception("SimObsReader: truncated position header in {}", path);
     }
     const SimObsPositionHeader* ph =
       reinterpret_cast<const SimObsPositionHeader*>(buffer_.data() + off);
     off += sizeof(SimObsPositionHeader);
     const size_t records_bytes = static_cast<size_t>(ph->num_candidates) * sizeof(SimObsRecord);
     if (off + records_bytes > buffer_.size()) {
-      throw std::runtime_error("SimObsReader: truncated records in " + path);
+      throw util::Exception("SimObsReader: truncated records in {}", path);
     }
     positions_.push_back({ph, reinterpret_cast<const SimObsRecord*>(buffer_.data() + off)});
     off += records_bytes;

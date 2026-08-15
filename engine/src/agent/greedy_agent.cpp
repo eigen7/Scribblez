@@ -1,12 +1,12 @@
 #include "agent/greedy_agent.h"
 
 #include "agent/agent_options.h"
+#include "util/exception.h"
 #include "util/seed_producer.h"
 
 #include <boost/program_options.hpp>
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace scribblez {
 
@@ -63,7 +63,7 @@ std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::strin
     po::notify(vm);
     have_seed = vm.count("seed") > 0;
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=greedy options: ") + e.what());
+    throw util::CleanException("bad --type=greedy options: {}", e.what());
   }
 
   if (have_seed) return std::make_unique<GreedyAgent>(thread_id, name, seed);

@@ -26,6 +26,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/sim_runner.h"
+#include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -40,7 +41,6 @@
 #include <iostream>
 #include <numeric>
 #include <random>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -86,8 +86,8 @@ SimRunner::Params sim_params(const Options& opt) {
 // until someone noticed the corpus was hollow.
 void validate(const Options& opt) {
   SimRunner::validate(sim_params(opt));
-  if (opt.top_k < 1) throw std::runtime_error("--top-k must be >= 1");
-  if (opt.positions_per_game < 1) throw std::runtime_error("--positions-per-game must be >= 1");
+  if (opt.top_k < 1) throw util::CleanException("--top-k must be >= 1");
+  if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
 }
 
 // One sampled decision point of the file being processed.
@@ -288,9 +288,9 @@ int main(int argc, char** argv) {
         if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
       std::sort(slogs.begin(), slogs.end());
     } else {
-      throw std::runtime_error("pass --slog-dir or --slog-file");
+      throw util::CleanException("pass --slog-dir or --slog-file");
     }
-    if (slogs.empty()) throw std::runtime_error("no .slog files to process");
+    if (slogs.empty()) throw util::CleanException("no .slog files to process");
 
     // Load every pending file's bytes up front so the progress bar's total is
     // known before the sims start. Pending batches are a handful of files, so
@@ -315,8 +315,9 @@ int main(int argc, char** argv) {
       // players did are the incoherent direction -- the evidence would describe
       // a game nobody played.
       if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !opt.open_leaves) {
-        throw std::runtime_error(slog.filename().string() +
-                                 " was played with face-up leaves; pass --open-leaves to sim it");
+        throw util::CleanException(
+          "{} was played with face-up leaves; pass --open-leaves to sim it",
+          slog.filename().string());
       }
       total_positions += count_positions(buf, opt);
       pending.emplace_back(slog, std::move(buf));
@@ -334,8 +335,7 @@ int main(int argc, char** argv) {
     }
     meter.finish("sim-obs");
     return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return util::main_exit_code();
   }
 }

@@ -36,7 +36,7 @@ class Dictionary {
     bool accepts = false;  // true iff this transition completes a word
   };
 
-  // Throws std::runtime_error on I/O failure.
+  // Throws util::Exception on I/O failure.
   static Dictionary load_kwg(const std::string& path);
 
   // Lays out a (non-minimized) trie in the KWG node layout, so the same

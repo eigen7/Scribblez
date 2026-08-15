@@ -60,7 +60,8 @@ class ViteDevServer {
 // local human-vs-AI play: one browser tab, one game, no concurrency.
 class WebSession {
  public:
-  // Throws std::runtime_error if it cannot bind and listen.
+  // Throws util::CleanException if the port cannot be bound (another instance
+  // holds it), util::Exception on other socket failures.
   explicit WebSession(int port);
   ~WebSession();
 

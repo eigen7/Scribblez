@@ -2,9 +2,9 @@
 
 #include "agent/agent.h"
 #include "encoding/input_encoder.h"
+#include "util/exception.h"
 
 #include <algorithm>
-#include <stdexcept>
 #include <string>
 
 namespace scribblez {
@@ -17,7 +17,7 @@ float objective_value(const float* wld_row, const float* score_diff_row, EvalObj
 EvalObjective parse_eval_objective(const std::string& name, const std::string& flag) {
   if (name == "scorediff") return EvalObjective::kScoreDiff;
   if (name == "winprob") return EvalObjective::kWinProb;
-  throw std::runtime_error(flag + " must be 'scorediff' or 'winprob' (got '" + name + "')");
+  throw util::CleanException("{} must be 'scorediff' or 'winprob' (got '{}')", flag, name);
 }
 
 InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedModelInputs& model,
@@ -25,10 +25,10 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
   const InputEncodingSpec spec{&dict, model.contingent_features(), model.opp_leave_input()};
   if (model.spatial_planes() != spatial_planes(spec) ||
       model.scalar_floats() != scalar_floats(spec)) {
-    throw std::runtime_error(who + ": the model declares an input arm (contingent=" +
-                             std::to_string(model.contingent_features()) +
-                             ", opp_leave=" + std::to_string(model.opp_leave_input()) +
-                             ") whose layout does not match the input widths it accepts");
+    throw util::Exception(
+      "{}: the model declares an input arm (contingent={}, opp_leave={}) whose layout does not "
+      "match the input widths it accepts",
+      who, model.contingent_features(), model.opp_leave_input());
   }
   return spec;
 }
@@ -40,7 +40,7 @@ CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
       service_(std::move(service)),
       spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
       encoder_(spec_) {
-  if (max_batch_ < 1) throw std::runtime_error("candidate evaluator: max batch must be >= 1");
+  if (max_batch_ < 1) throw util::Exception("candidate evaluator: max batch must be >= 1");
   input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
 }
 

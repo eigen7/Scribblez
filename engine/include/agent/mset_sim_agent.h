@@ -77,7 +77,7 @@ class MsetSimAgent : public Agent {
 
   // Build from `--player "--type=mset-sim [options]"` tokens, with --type and
   // --name already stripped. Requires --model=<path.onnx>. Throws
-  // std::runtime_error on bad input.
+  // util::CleanException on bad input.
   static std::unique_ptr<MsetSimAgent> from_spec(const std::vector<std::string>& tokens,
                                                  int thread_id, const std::string& name);
 

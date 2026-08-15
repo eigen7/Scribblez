@@ -33,7 +33,7 @@ enum class EvalObjective { kScoreDiff, kWinProb };
 // (draws counting half).
 float objective_value(const float* wld_row, const float* score_diff_row, EvalObjective objective);
 
-// "scorediff" or "winprob"; anything else throws std::runtime_error naming
+// "scorediff" or "winprob"; anything else throws util::CleanException naming
 // `flag` as the offending option.
 EvalObjective parse_eval_objective(const std::string& name, const std::string& flag);
 

@@ -62,8 +62,7 @@ class GameRunner : public GameSink {
   // Validates the params, builds one agent pair per thread, and loads the
   // lexicon. Takes its starting seed from SeedProducer::instance(), which the
   // caller must already have reseeded if reproducibility is wanted. Throws
-  // scribblez::Exception on a user-visible error, having explained it to
-  // stderr.
+  // util::CleanException on a user-visible error.
   GameRunner(const Params& runner_params, const PlayerFactory::Params& player_params);
   ~GameRunner();
 

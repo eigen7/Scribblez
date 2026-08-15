@@ -51,7 +51,6 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "util/exception.h"
 #include "util/misc.h"
 #include "util/string.h"
 
@@ -63,7 +62,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <exception>
+#include <format>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -175,8 +174,8 @@ int bucket_of(int abs_spread, const std::vector<int>& thresholds) {
 
 std::string bucket_label(int k, const std::vector<int>& thresholds) {
   const int lo = k == 0 ? 0 : thresholds[k - 1];
-  if (k == static_cast<int>(thresholds.size())) return std::to_string(lo) + "+";
-  return std::to_string(lo) + "-" + std::to_string(thresholds[k] - 1);
+  if (k == static_cast<int>(thresholds.size())) return std::format("{}+", lo);
+  return std::format("{}-{}", lo, thresholds[k] - 1);
 }
 
 // Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return the
@@ -750,12 +749,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     return 0;
-  } catch (const scribblez::CleanExit&) {
-    return 0;
-  } catch (const scribblez::Exception&) {
-    return 1;
-  } catch (const std::exception& e) {
-    std::cerr << "Unexpected error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

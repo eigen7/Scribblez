@@ -410,7 +410,7 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 # zero inputs, print WLD + ScoreDiff outputs. Exercises the engine path without
 # any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
-target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn Threads::Threads)
+target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # The same for the move set evaluation model: load an ONNX model, score a
 # synthetic candidate set, print the decoded Evals. Exercises the move-set

@@ -1,9 +1,9 @@
 #include "belief/leave_prior.h"
 
 #include "game/tile.h"
+#include "util/assert.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -76,7 +76,7 @@ double log_hypergeometric_prior(const Rack& leave, const TileCounts& pool) {
 }
 
 Rack draw_leave(const TileCounts& pool, int k, std::mt19937_64& rng) {
-  assert(pool.size() >= k);
+  DEBUG_ASSERT(pool.size() >= k);
   Rack leave;
   TileCounts left = pool;
   for (int drawn = 0; drawn < k; ++drawn) {

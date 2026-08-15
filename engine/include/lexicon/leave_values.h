@@ -20,7 +20,7 @@ namespace scribblez {
 // in a single DFS rather than one hash per subrack.
 class LeaveValues {
  public:
-  // Throws std::runtime_error on I/O failure.
+  // Throws util::Exception on I/O failure.
   static LeaveValues load(const std::string& path);
 
   // 0.0 for an empty leave or one absent from the table.

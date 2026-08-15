@@ -14,9 +14,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
 
-#include <iostream>
 #include <sstream>
-#include <stdexcept>
 
 namespace scribblez {
 
@@ -72,16 +70,17 @@ PlayerSpec parse_player_spec(const std::string& spec) {
     po::notify(vm);
     out.remaining_tokens = po::collect_unrecognized(parsed.options, po::include_positional);
   } catch (const std::exception& e) {
-    throw std::runtime_error("bad --player spec \"" + spec + "\": " + e.what());
+    throw util::CleanException("bad --player spec \"{}\": {}", spec, e.what());
   }
 
   out.type = boost::to_lower_copy(type_str);
   if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
       out.type != "hastybot-endgame" && out.type != "mset-sim" && out.type != "neural" &&
       out.type != "neural-sim" && out.type != "sim") {
-    throw std::runtime_error("bad --player spec \"" + spec + "\": unknown type '" + type_str +
-                             "' (expected greedy, human, hastybot, hastybot-endgame, mset-sim, "
-                             "neural, neural-sim, or sim)");
+    throw util::CleanException(
+      "bad --player spec \"{}\": unknown type '{}' (expected greedy, human, hastybot, "
+      "hastybot-endgame, mset-sim, neural, neural-sim, or sim)",
+      spec, type_str);
   }
   return out;
 }
@@ -114,7 +113,7 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
   if (spec.type == "human") {
     return HumanWebAgent::from_spec(spec.remaining_tokens, thread_id, name, opp_name);
   }
-  throw std::runtime_error("unhandled player type: " + spec.type);
+  throw util::Exception("unhandled player type: {}", spec.type);
 }
 
 }  // namespace
@@ -142,29 +141,21 @@ void PlayerFactory::Params::add_options(boost::program_options::options_descript
 }
 
 PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thread_id) {
-  try {
-    std::vector<std::string> raw = params.specs;
-    if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
-    if (raw.size() != 2) {
-      throw std::runtime_error("expected exactly two --player specs (got " +
-                               std::to_string(raw.size()) + ")");
-    }
-
-    std::array<PlayerSpec, 2> specs;
-    for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
-
-    // Build both agents. A Human agent's ctor blocks on its Vite dev server
-    // coming up, so this is the point at which the browser UI appears.
-    Players out;
-    out[0] = make_one(specs[0], thread_id, specs[1].display_name());
-    out[1] = make_one(specs[1], thread_id, specs[0].display_name());
-    return out;
-  } catch (const Exception&) {
-    throw;  // already-printed user-facing error from a nested make_one()
-  } catch (const std::exception& e) {
-    std::cerr << "Error: " << e.what() << "\n";
-    throw Exception(e.what());
+  std::vector<std::string> raw = params.specs;
+  if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
+  if (raw.size() != 2) {
+    throw util::CleanException("expected exactly two --player specs (got {})", raw.size());
   }
+
+  std::array<PlayerSpec, 2> specs;
+  for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
+
+  // Build both agents. A Human agent's ctor blocks on its Vite dev server
+  // coming up, so this is the point at which the browser UI appears.
+  Players out;
+  out[0] = make_one(specs[0], thread_id, specs[1].display_name());
+  out[1] = make_one(specs[1], thread_id, specs[0].display_name());
+  return out;
 }
 
 std::string PlayerFactory::all_player_types_help() {

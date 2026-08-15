@@ -1,10 +1,10 @@
 #include "belief/rack_inference.h"
 
 #include "belief/leave_prior.h"
+#include "util/assert.h"
 #include "util/math.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -79,7 +79,7 @@ RackPosterior::RackPosterior(std::vector<Entry> entries, bool exhaustive)
     : entries_(std::move(entries)), exhaustive_(exhaustive) {}
 
 const Rack& RackPosterior::sample(double u) const {
-  assert(!entries_.empty());
+  RELEASE_ASSERT(!entries_.empty());
   double cumulative = 0.0;
   for (const Entry& e : entries_) {
     cumulative += e.weight;
@@ -106,8 +106,8 @@ RackPosterior RackInferrer::infer(const OppMoveObservation& obs, uint64_t seed) 
 
   TileCounts pool = obs.pool;
   for (int i = 0; i < likelihood.revealed().size(); ++i) {
-    [[maybe_unused]] const bool drawable = pool.remove(likelihood.revealed().tiles()[i]);
-    assert(drawable);  // else the observation contradicts the pool
+    const bool drawable = pool.remove(likelihood.revealed().tiles()[i]);
+    RELEASE_ASSERT(drawable, "the observation contradicts the pool");
   }
   if (pool.size() < hidden) return {};
 

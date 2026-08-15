@@ -9,6 +9,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "serve/web_server.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -16,7 +17,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -96,9 +96,10 @@ HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::str
     std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port, "", "web", 5173);
   std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
   if (!vite_->wait_until_ready()) {
-    throw std::runtime_error("the Vite dev server did not start. See " + params.web_dir +
-                             "/.vite-dev.log for details. Did you run py/build.py to install "
-                             "the web dependencies?");
+    throw util::CleanException(
+      "the Vite dev server did not start. See {}/.vite-dev.log for details. Did you run "
+      "py/build.py to install the web dependencies?",
+      params.web_dir);
   }
   std::cerr << "\n  Human-vs-AI game ready.\n"
             << "  Open  " << vite_->url() << "  in your browser to play.\n\n";
@@ -228,7 +229,7 @@ std::unique_ptr<HumanWebAgent> HumanWebAgent::from_spec(const std::vector<std::s
     po::store(po::command_line_parser(tokens).options(desc).run(), vm);
     po::notify(vm);
   } catch (const std::exception& e) {
-    throw std::runtime_error(std::string("bad --type=human options: ") + e.what());
+    throw util::CleanException("bad --type=human options: {}", e.what());
   }
 
   // Lazily load the default equity tables so the cheat-mode equity column is

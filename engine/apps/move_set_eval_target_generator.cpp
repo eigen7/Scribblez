@@ -39,6 +39,8 @@
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
+#include "util/assert.h"
+#include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -52,6 +54,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -380,7 +383,7 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
       targets.insert(targets.end(), s.targets.begin(), s.targets.end());
       planes.insert(planes.end(), s.planes.begin(), s.planes.end());
     }
-    assert(candidates.size() == head.position_candidates);
+    RELEASE_ASSERT(candidates.size() == head.position_candidates);
     writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets, planes,
                          head.num_legal_moves);
     i = j;
@@ -516,9 +519,9 @@ int main(int argc, char** argv) {
         if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
       std::sort(slogs.begin(), slogs.end());
     } else {
-      throw std::runtime_error("pass --slog-dir or --slog-file");
+      throw util::CleanException("pass --slog-dir or --slog-file");
     }
-    if (slogs.empty()) throw std::runtime_error("no .slog files to process");
+    if (slogs.empty()) throw util::CleanException("no .slog files to process");
 
     std::vector<std::pair<fs::path, std::vector<char>>> pending;
     uint64_t total_positions = 0;
@@ -540,9 +543,10 @@ int main(int argc, char** argv) {
       // pairing is deliberate and allowed: an open-leaves teacher over a
       // standard corpus is the privileged-teacher instrument.
       if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !spec.opp_leave_input) {
-        throw std::runtime_error(slog.filename().string() +
-                                 " was played with face-up leaves; labeling it needs a teacher "
-                                 "whose ONNX declares opp_leave_input");
+        throw util::Exception(
+          "{} was played with face-up leaves; labeling it needs a teacher "
+          "whose ONNX declares opp_leave_input",
+          slog.filename().string());
       }
       const GameMetadata* metas =
         reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
@@ -558,7 +562,7 @@ int main(int argc, char** argv) {
     }
     if (pending.empty()) return 0;
     const std::string selection =
-      opt.full_sweep ? "full sweep (cap " + std::to_string(opt.sweep_cap) + ")" : "stratified";
+      opt.full_sweep ? std::format("full sweep (cap {})", opt.sweep_cap) : "stratified";
     std::cerr << "move set eval targets: " << pending.size() << " file(s), " << total_positions
               << " positions, " << selection << "; teacher " << model_hash.substr(0, 12) << ", "
               << opt.threads << " encoder threads\n";
@@ -581,8 +585,7 @@ int main(int argc, char** argv) {
     }
     meter.finish("move set eval targets");
     return 0;
-  } catch (const std::exception& e) {
-    std::cerr << "error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return util::main_exit_code();
   }
 }

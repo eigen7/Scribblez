@@ -18,6 +18,7 @@
 #include <cctype>
 #include <chrono>
 #include <ctime>
+#include <format>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -646,8 +647,7 @@ class ManualGame {
     }
     view_ply_ = ply;
     if (is_backtracking()) {
-      status_ = "Viewing turn " + std::to_string(view_ply_) + " / " +
-                std::to_string(static_cast<int>(turns_.size()));
+      status_ = std::format("Viewing turn {} / {}", view_ply_, turns_.size());
     } else {
       status_.clear();
     }
@@ -667,7 +667,7 @@ class ManualGame {
     for (int p = 0; p < 2; ++p) racks_[p] = slots_from_display(fork_racks[p]);
     snapshots_.back().racks = racks_;
     view_ply_ = static_cast<int>(turns_.size());
-    status_ = "Forked game at turn " + std::to_string(view_ply_);
+    status_ = std::format("Forked game at turn {}", view_ply_);
   }
 
   // Play a full game between two in-process HastyBot agents and load the result
@@ -687,8 +687,8 @@ class ManualGame {
 
     load_gcg_text(game_log_to_gcg(game.log()), "random hasty-vs-hasty game");
     if (!turns_.empty()) {
-      status_ = "Created random game: " + names_[0] + " " + std::to_string(scores_[0]) + " - " +
-                std::to_string(scores_[1]) + " " + names_[1];
+      status_ = std::format("Created random game: {} {} - {} {}", names_[0], scores_[0], scores_[1],
+                            names_[1]);
     }
   }
 
@@ -1110,7 +1110,7 @@ int main(int argc, char** argv) {
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual", "manual", 5174);
     if (!vite.wait_until_ready()) {
-      throw std::runtime_error("the Vite dev server did not start; see web/.vite-dev.log");
+      throw scribblez::util::Exception("the Vite dev server did not start; see web/.vite-dev.log");
     }
 
     std::cerr << "\nManual GCG tool ready at " << vite.url()
@@ -1142,12 +1142,7 @@ int main(int argc, char** argv) {
     }
 
     return 0;
-  } catch (const scribblez::CleanExit&) {
-    return 0;
-  } catch (const scribblez::Exception&) {
-    return 1;
-  } catch (const std::exception& e) {
-    std::cerr << "Unexpected error: " << e.what() << "\n";
-    return 1;
+  } catch (...) {
+    return scribblez::util::main_exit_code();
   }
 }

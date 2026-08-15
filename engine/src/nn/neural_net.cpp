@@ -2,6 +2,7 @@
 
 #include "nn/cuda_util.h"
 #include "nn/onnx_metadata.h"
+#include "util/exception.h"
 
 #include <boost/program_options.hpp>
 
@@ -10,8 +11,8 @@
 #include <NvOnnxParser.h>
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <iostream>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,7 +42,7 @@ size_t element_size(nvinfer1::DataType dtype) {
     case nvinfer1::DataType::kBOOL:
       return 1;
     default:
-      throw std::runtime_error("NeuralNet: unsupported engine I/O data type");
+      throw util::Exception("NeuralNet: unsupported engine I/O data type");
   }
 }
 
@@ -85,20 +86,19 @@ void check_required_layout(const std::string& onnx_path, const Lookup& lookup,
   for (const TensorSpec& want : tensors) {
     const ObservedTensor got = lookup(want.name);
     if (got.elem_size != want.elem_size) {
-      throw std::runtime_error("Tensor dtype mismatch: " + onnx_path + " declares " + want.name +
-                               " at " + std::to_string(got.elem_size) +
-                               " bytes per element, this engine reads it at " +
-                               std::to_string(want.elem_size));
+      throw util::CleanException(
+        "Tensor dtype mismatch: {} declares {} at {} bytes per element, this engine reads it at {}",
+        onnx_path, want.name, got.elem_size, want.elem_size);
     }
     if (want.elems_per_row != 0 && got.elems_per_row != want.elems_per_row) {
-      throw std::runtime_error("Tensor width mismatch: " + onnx_path + " declares " + want.name +
-                               " " + std::to_string(got.elems_per_row) + " wide, this engine " +
-                               "encodes " + std::to_string(want.elems_per_row));
+      throw util::CleanException(
+        "Tensor width mismatch: {} declares {} {} wide, this engine encodes {}", onnx_path,
+        want.name, got.elems_per_row, want.elems_per_row);
     }
     if (got.dynamic != want.dynamic) {
-      throw std::runtime_error("Tensor axis mismatch: " + onnx_path + " declares " + want.name +
-                               (got.dynamic ? " dynamic" : " static") + ", this engine stages it " +
-                               (want.dynamic ? "dynamic" : "static"));
+      throw util::CleanException(
+        "Tensor axis mismatch: {} declares {} {}, this engine stages it {}", onnx_path, want.name,
+        got.dynamic ? "dynamic" : "static", want.dynamic ? "dynamic" : "static");
     }
   }
 }
@@ -116,7 +116,7 @@ class NetworkTensorLookup {
     for (int i = 0; i < network_->getNbOutputs(); ++i) {
       if (ObservedTensor got; observe(network_->getOutput(i), name, &got)) return got;
     }
-    throw std::runtime_error("NeuralNet: model has no tensor named '" + std::string(name) + "'");
+    throw util::CleanException("NeuralNet: model has no tensor named '{}'", name);
   }
 
  private:
@@ -237,12 +237,12 @@ const Binding& NeuralNetBase::Impl::binding(const char* name) const {
   for (const Binding& b : bindings) {
     if (b.name == name) return b;
   }
-  throw std::runtime_error("NeuralNet: model has no tensor named '" + std::string(name) + "'");
+  throw util::CleanException("NeuralNet: model has no tensor named '{}'", name);
 }
 
 void NeuralNetBase::Impl::deserialize_engine(const std::vector<char>& plan) {
   engine.reset(runtime->deserializeCudaEngine(plan.data(), plan.size()));
-  if (!engine) throw std::runtime_error("Failed to deserialize TensorRT engine");
+  if (!engine) throw util::Exception("Failed to deserialize TensorRT engine");
 }
 
 std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_bytes) {
@@ -256,9 +256,10 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
   // lexicon blob beside the .onnx) resolve against the model's own directory;
   // without it TensorRT resolves them against the process CWD.
   if (!parser->parse(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str())) {
-    std::string msg = "Failed to parse ONNX model";
-    if (parser->getNbErrors() > 0) msg += std::string(": ") + parser->getError(0)->desc();
-    throw std::runtime_error(msg);
+    if (parser->getNbErrors() > 0) {
+      throw util::CleanException("Failed to parse ONNX model: {}", parser->getError(0)->desc());
+    }
+    throw util::CleanException("Failed to parse ONNX model");
   }
 
   // Reject a model with the wrong tensor layout off the parsed graph, before
@@ -299,7 +300,7 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
   config->addOptimizationProfile(profile);
 
   std::unique_ptr<nvinfer1::IHostMemory> plan(builder->buildSerializedNetwork(*network, *config));
-  if (!plan) throw std::runtime_error("TensorRT engine build failed");
+  if (!plan) throw util::Exception("TensorRT engine build failed");
   const char* data = static_cast<const char*>(plan->data());
   return std::vector<char>(data, data + plan->size());
 }
@@ -321,17 +322,18 @@ void NeuralNetBase::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   // checkpoint's own reference: the verification the API cannot provide
   // (py/scripts/move_set_eval/trt_refit_probe.py reached the same verdict).
   if (!clean && refitter->getMissingWeights(0, nullptr) != 0) {
-    std::string msg = "Failed to read refit weights from ONNX model";
-    if (parser_refitter->getNbErrors() > 0)
-      msg += std::string(": ") + parser_refitter->getError(0)->desc();
-    throw std::runtime_error(msg);
+    if (parser_refitter->getNbErrors() > 0) {
+      throw util::Exception("Failed to read refit weights from ONNX model: {}",
+                            parser_refitter->getError(0)->desc());
+    }
+    throw util::Exception("Failed to read refit weights from ONNX model");
   }
-  if (!refitter->refitCudaEngine()) throw std::runtime_error("Failed to refit TensorRT engine");
+  if (!refitter->refitCudaEngine()) throw util::Exception("Failed to refit TensorRT engine");
 }
 
 void NeuralNetBase::Impl::allocate_buffers() {
   context.reset(engine->createExecutionContext());
-  if (!context) throw std::runtime_error("Failed to create TensorRT execution context");
+  if (!context) throw util::Exception("Failed to create TensorRT execution context");
   stream = create_stream();
 
   // Enumerate the engine's own I/O tensors: their names, modes, dtypes, and
@@ -378,8 +380,8 @@ namespace {
 void check_graph(const RuntimeSpec& spec, const OnnxMetadata& meta, const std::string& onnx_path) {
   if (meta.graph.empty() && spec.accept_untagged_graph) return;
   if (meta.graph != spec.graph) {
-    throw std::runtime_error("NeuralNet serves the " + std::string(spec.graph) + " graph, but " +
-                             onnx_path + " declares graph '" + meta.graph + "'");
+    throw util::CleanException("NeuralNet serves the {} graph, but {} declares graph '{}'",
+                               spec.graph, onnx_path, meta.graph);
   }
 }
 
@@ -390,10 +392,10 @@ void check_versions(const RuntimeSpec& spec, const OnnxMetadata& meta,
   for (const VersionRequirement& v : spec.versions) {
     const int declared = meta.int_entry(v.key, v.absent_value);
     if (declared != v.required) {
-      throw std::runtime_error("Encoding version mismatch: " + onnx_path + " declares " + v.key +
-                               " v" + std::to_string(declared) + ", this engine encodes v" +
-                               std::to_string(v.required) +
-                               " (retrain, or check out the matching model)");
+      throw util::CleanException(
+        "Encoding version mismatch: {} declares {} v{}, this engine "
+        "encodes v{} (retrain, or check out the matching model)",
+        onnx_path, v.key, declared, v.required);
     }
   }
 }
@@ -409,7 +411,7 @@ NeuralNetBase::~NeuralNetBase() = default;
 
 void NeuralNetBase::load() {
   Impl& m = *impl_;
-  if (m.params.max_rows < 1) throw std::runtime_error("NeuralNet: max_rows must be >= 1");
+  if (m.params.max_rows < 1) throw util::CleanException("NeuralNet: max_rows must be >= 1");
   set_device(m.params.cuda_device_id);
 
   std::vector<char> onnx_bytes = read_file_bytes(m.params.onnx_path);
@@ -421,7 +423,7 @@ void NeuralNetBase::load() {
 
   std::string cache_path =
     engine_plan_cache_path(meta.architecture_signature, m.params.precision,
-                           std::string(m.spec.axis_tag) + "_" + std::to_string(m.params.max_rows),
+                           std::format("{}_{}", m.spec.axis_tag, m.params.max_rows),
                            m.params.fast_build, m.params.mount_root);
 
   // The cache is keyed on the model's architecture signature, so a hit yields
@@ -454,7 +456,7 @@ void* NeuralNetBase::host_ptr(const char* name) const { return impl_->binding(na
 void NeuralNetBase::predict(int num_rows) {
   Impl& m = *impl_;
   if (num_rows < 1 || num_rows > m.params.max_rows) {
-    throw std::runtime_error("NeuralNet::predict: num_rows out of range");
+    throw util::Exception("NeuralNet::predict: num_rows out of range");
   }
 
   if (num_rows != m.last_rows) {
@@ -470,7 +472,7 @@ void NeuralNetBase::predict(int num_rows) {
     if (b.input) host_to_device_async(m.stream, b.device, b.host, b.bytes(num_rows));
   }
 
-  if (!m.context->enqueueV3(m.stream)) throw std::runtime_error("TensorRT inference failed");
+  if (!m.context->enqueueV3(m.stream)) throw util::Exception("TensorRT inference failed");
 
   for (const Binding& b : m.bindings) {
     if (b.input || !b.host) continue;

@@ -191,13 +191,9 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
                                  params.random_opening_mean, params.respect_projections,
                                  params.face_up_leaves},
               player_params) {
-  if (params_.games < 1) {
-    std::cerr << "Error: --games must be >= 1\n";
-    throw Exception("--games must be >= 1");
-  }
+  if (params_.games < 1) throw util::CleanException("--games must be >= 1");
   if (params_.paired && params_.games % 2 != 0) {
-    std::cerr << "Error: --paired requires an even --games\n";
-    throw Exception("--paired requires an even --games");
+    throw util::CleanException("--paired requires an even --games");
   }
   // Force the lexicon load now so any I/O error surfaces at construction
   // time (rather than mid-game), and so the verbose summary below has the
@@ -206,16 +202,14 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
   if (!params_.log_dir.empty()) {
     std::error_code ec;
     if (!std::filesystem::is_directory(params_.log_dir, ec)) {
-      std::cerr << "Error: --log-dir '" << params_.log_dir << "' is not a directory\n";
-      throw Exception("--log-dir is not a directory: " + params_.log_dir);
+      throw util::CleanException("--log-dir '{}' is not a directory", params_.log_dir);
     }
   }
   if (!params_.binary_log_dir.empty()) {
     std::error_code ec;
     if (!std::filesystem::is_directory(params_.binary_log_dir, ec)) {
-      std::cerr << "Error: --binary-log-dir '" << params_.binary_log_dir
-                << "' is not a directory\n";
-      throw Exception("--binary-log-dir is not a directory: " + params_.binary_log_dir);
+      throw util::CleanException("--binary-log-dir '{}' is not a directory",
+                                 params_.binary_log_dir);
     }
     binary_writer_ = std::make_unique<binlog::BinaryLogWriter>(
       params_.binary_log_dir, kGamesPerFile,
@@ -225,8 +219,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
   if (!params_.results_file.empty()) {
     results_out.open(params_.results_file, std::ios::trunc);
     if (!results_out) {
-      std::cerr << "Error: cannot open --results-file '" << params_.results_file << "'\n";
-      throw Exception("cannot open --results-file: " + params_.results_file);
+      throw util::CleanException("cannot open --results-file '{}'", params_.results_file);
     }
   }
   if (params_.verbose) {
