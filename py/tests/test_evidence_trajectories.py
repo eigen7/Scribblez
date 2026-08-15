@@ -268,7 +268,13 @@ def test_sobs_flag_rejects_full_sweep():
     if not TARGET_GENERATOR.exists():
         pytest.skip("engine binaries not built")
     result = subprocess.run(
-        [str(TARGET_GENERATOR), "--slog-dir=/nonexistent", "--sobs", "--full-sweep"],
+        [
+            str(TARGET_GENERATOR),
+            "--slog-dir=/nonexistent",
+            "--model=/nonexistent/model.onnx",  # parse-time requirement; never loaded
+            "--sobs",
+            "--full-sweep",
+        ],
         capture_output=True,
         text=True,
         env={**os.environ},
