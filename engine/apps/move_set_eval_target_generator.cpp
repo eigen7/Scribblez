@@ -30,6 +30,8 @@
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
+#include "data/sim_observation_log.h"
+#include "data/slog_sampling.h"
 #include "encoding/position_encoder.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
@@ -49,7 +51,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <compare>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -58,8 +59,10 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -81,6 +84,7 @@ struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
   move_set_eval::StratumQuotas quotas;
+  bool use_sobs = false;
   bool full_sweep = false;
   int sweep_cap = 1500;
   int positions_per_game = 0;  // 0 = every training-eligible turn
@@ -92,14 +96,12 @@ struct Options {
   int slice_candidates = kSliceCandidates;
 };
 
-// Identifies one decision point: (game, turn) within the file being
-// processed. Ordering is the file's canonical position order.
-struct GamePositionIndex {
-  uint32_t game_idx;
-  uint32_t turn_idx;
+using binlog::GamePositionIndex;
 
-  auto operator<=>(const GamePositionIndex&) const = default;
-};
+// The simmed trajectory candidates of a companion .sobs, keyed by decision
+// point -- the moves the stratified selection must force-include (roadmap
+// item 4: the value-labeled subset always contains the proposer's sims).
+using ForcedCandidates = std::map<GamePositionIndex, std::vector<Move>>;
 
 // Placement-plane floats per candidate: the teacher's four masks, which the
 // writer quantizes into the record's plane block.
@@ -192,10 +194,12 @@ void SliceQueue::producer_done() {
 
 // The run's selection over `ranked` -- every legal play and exchange,
 // best-equity first -- for the position whose game actually played `played`.
+// `forced` carries the position's simmed trajectory candidates, if any.
 move_set_eval::Selection select_candidates(const std::vector<Move>& ranked, const Move& played,
-                                           const Options& opt, std::mt19937_64& rng) {
+                                           const Options& opt, std::mt19937_64& rng,
+                                           std::span<const Move> forced) {
   if (opt.full_sweep) return move_set_eval::full_sweep_candidates(ranked, played, opt.sweep_cap);
-  return move_set_eval::stratified_candidates(ranked, played, opt.quotas, rng);
+  return move_set_eval::stratified_candidates(ranked, played, opt.quotas, rng, forced);
 }
 
 // Encode `sel`'s candidates for the position `encoder` is replayed to, handing
@@ -225,11 +229,10 @@ void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
 // post-move-model training row.
 void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
                    const Options& opt, const std::vector<GamePositionIndex>& work,
-                   std::atomic<size_t>* next, SliceQueue* queue) {
+                   const ForcedCandidates* forced, std::atomic<size_t>* next, SliceQueue* queue) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(spec);
   const int row_floats = input_floats(spec);
-  const int total_tiles = Bag(0).size();
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
@@ -238,12 +241,7 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
                                                 /*post_move=*/false);
     const Rack& rack = encoder.rack(mover);
     const Board& board = encoder.enc().board();
-
-    int on_board = 0;
-    for (int r = 0; r < BOARD_SIZE; ++r)
-      for (int c = 0; c < BOARD_SIZE; ++c)
-        if (!board.at(r, c).is_empty()) ++on_board;
-    const int bag_size = total_tiles - on_board - encoder.rack(0).size() - encoder.rack(1).size();
+    const int bag_size = encoder.bag_size();
 
     // Rank every candidate by HastyBot equity (the opponent's replayed rack is
     // hidden information the ranking must not use), then select from it.
@@ -252,10 +250,14 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
       board,   dict, rack, hidden_opp, encoder.enc().score(mover), encoder.enc().score(1 - mover),
       bag_size};
     const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
-    std::mt19937_64 rng(util::splitmix64(
-      opt.seed ^ util::splitmix64((static_cast<uint64_t>(w.game_idx) << 20) | w.turn_idx)));
+    std::mt19937_64 rng(binlog::position_seed(opt.seed, w.game_idx, w.turn_idx));
+    std::span<const Move> forced_here;
+    if (forced) {
+      const auto it = forced->find(w);
+      if (it != forced->end()) forced_here = it->second;
+    }
     const move_set_eval::Selection sel =
-      select_candidates(ranked, g.records[w.turn_idx].move, opt, rng);
+      select_candidates(ranked, g.records[w.turn_idx].move, opt, rng, forced_here);
     encode_slices(encoder, g, w, mover, sel, opt.slice_candidates, row_floats, queue);
   }
   queue->producer_done();
@@ -393,7 +395,8 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
 // Generate the .mset sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& mset_path, const Dictionary& dict,
                   const InputEncodingSpec& spec, TeacherService* service, int batch_size,
-                  const std::string& model_hash, const Options& opt, util::ProgressMeter* meter) {
+                  const std::string& model_hash, const Options& opt, const ForcedCandidates* forced,
+                  util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
     reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
@@ -402,21 +405,24 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
   std::vector<GamePositionIndex> work;
   for (uint32_t g = 0; g < num_games; ++g) {
-    const int begin = metas[g].eligible_begin;
-    const int end = metas[g].eligible_end;
-    if (begin >= end) continue;
-    if (opt.positions_per_game <= 0) {
-      for (int t = begin; t < end; ++t) work.push_back({g, static_cast<uint32_t>(t)});
-    } else {
-      std::vector<uint32_t> turns(static_cast<size_t>(end - begin));
-      std::iota(turns.begin(), turns.end(), static_cast<uint32_t>(begin));
-      std::mt19937_64 rng(util::splitmix64(opt.seed ^ util::splitmix64(0xC0FFEEull + g)));
-      std::shuffle(turns.begin(), turns.end(), rng);
-      const int take = std::min<int>(opt.positions_per_game, static_cast<int>(turns.size()));
-      for (int i = 0; i < take; ++i) work.push_back({g, turns[i]});
-    }
+    binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
   }
   std::sort(work.begin(), work.end());
+
+  // Every trajectory position must be one this run labels, or its sims never
+  // receive value labels -- the misconfiguration (mismatched --seed, or a
+  // smaller --positions-per-game than the trajectory run's) would otherwise
+  // waste the corpus's most expensive rows silently.
+  if (forced) {
+    for (const auto& [pos, moves] : *forced) {
+      if (!std::binary_search(work.begin(), work.end(), pos)) {
+        throw util::CleanException(
+          "{}: trajectory position (game {}, turn {}) is not in this run's sample; the "
+          "generator's --seed and --positions-per-game must contain the trajectory run's",
+          mset_path.filename().string(), pos.game_idx, pos.turn_idx);
+      }
+    }
+  }
 
   // A few batches in flight keeps the GPU fed without letting encoded rows
   // (~80 KB each) accumulate.
@@ -427,7 +433,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   std::vector<std::thread> workers;
   for (int t = 0; t < encoders; ++t)
     workers.emplace_back(encode_worker, buf.data(), std::cref(dict), std::cref(spec),
-                         std::cref(opt), std::cref(work), &next, &queue);
+                         std::cref(opt), std::cref(work), forced, &next, &queue);
   const int row_floats = input_floats(spec);
   InferenceLoop inference(service, row_floats, batch_size, /*label_planes=*/!opt.full_sweep, meter);
   std::thread gpu(&InferenceLoop::run, &inference, &queue);
@@ -446,13 +452,16 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   writer.close();
 }
 
-std::vector<char> read_file_bytes(const fs::path& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  const std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
-  f.read(bytes.data(), size);
-  return bytes;
+// The simmed candidates of a trajectory sidecar, keyed by decision point.
+ForcedCandidates load_forced_candidates(const fs::path& sobs_path) {
+  SimObsReader reader(sobs_path.string());
+  ForcedCandidates out;
+  for (int i = 0; i < reader.num_positions(); ++i) {
+    const SimObsReader::Position p = reader.position(i);
+    std::vector<Move>& moves = out[{p.header->game_index, p.header->turn_index}];
+    for (uint32_t c = 0; c < p.header->num_candidates; ++c) moves.push_back(p.records[c].move);
+  }
+  return out;
 }
 
 }  // namespace
@@ -468,6 +477,9 @@ int main(int argc, char** argv) {
       "directory of .slog files; each without a .mset sidecar gets one")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
+      "sobs", po::bool_switch(&opt.use_sobs),
+      "stratified only: force-include each position's simmed candidates from the same-stem "
+      ".sobs trajectory sidecar, which must exist (run evidence_trajectory_generator first)")(
       "full-sweep", po::bool_switch(&opt.full_sweep),
       "label every legal candidate (capped by --sweep-cap) instead of the stratified sample; "
       "the .mset is stamped full-sweep, which makes it evaluation-only")(
@@ -498,6 +510,9 @@ int main(int argc, char** argv) {
     params.add_options(desc);
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
+    if (opt.use_sobs && opt.full_sweep) {
+      throw util::CleanException("--sobs applies to the stratified selection, not --full-sweep");
+    }
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
@@ -508,59 +523,24 @@ int main(int argc, char** argv) {
     TeacherService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
-    const std::string model_hash = nn::content_hash(read_file_bytes(params.onnx_path));
+    const std::string model_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
     opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 
-    std::vector<fs::path> slogs;
-    if (!opt.slog_files.empty()) {
-      for (const std::string& f : opt.slog_files) slogs.emplace_back(f);
-    } else if (!opt.slog_dir.empty()) {
-      for (const auto& entry : fs::directory_iterator(opt.slog_dir))
-        if (entry.path().extension() == ".slog") slogs.push_back(entry.path());
-      std::sort(slogs.begin(), slogs.end());
-    } else {
-      throw util::CleanException("pass --slog-dir or --slog-file");
-    }
-    if (slogs.empty()) throw util::CleanException("no .slog files to process");
-
-    std::vector<std::pair<fs::path, std::vector<char>>> pending;
-    uint64_t total_positions = 0;
-    for (const fs::path& slog : slogs) {
-      fs::path mset = slog;
-      mset.replace_extension(".mset");
-      if (fs::exists(mset)) continue;
-      std::vector<char> buf = read_file_bytes(slog);
-      const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
-      if (buf.size() < sizeof(FileHeader) || hdr->magic != binlog::kMagic ||
-          hdr->version != binlog::kVersion) {
-        std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
-        continue;
-      }
-      // Games played face up must be labeled by a teacher that sees the leaves.
-      // A blind teacher's readouts would describe a game nobody played, and the
-      // .mset -- stamped open-leaves after its source log -- would hand the
-      // student targets its own input arm cannot account for. The reverse
-      // pairing is deliberate and allowed: an open-leaves teacher over a
-      // standard corpus is the privileged-teacher instrument.
-      if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0 && !spec.opp_leave_input) {
-        throw util::Exception(
-          "{} was played with face-up leaves; labeling it needs a teacher "
-          "whose ONNX declares opp_leave_input",
-          slog.filename().string());
-      }
-      const GameMetadata* metas =
-        reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
-      uint32_t num_games = hdr->num_games;
-      if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-      for (uint32_t g = 0; g < num_games; ++g) {
-        const int eligible = metas[g].eligible_end - metas[g].eligible_begin;
-        const int per_game =
-          opt.positions_per_game <= 0 ? eligible : std::min(opt.positions_per_game, eligible);
-        total_positions += static_cast<uint64_t>(std::max(per_game, 0));
-      }
-      pending.emplace_back(slog, std::move(buf));
-    }
+    // Games played face up must be labeled by a teacher that sees the leaves.
+    // A blind teacher's readouts would describe a game nobody played, and the
+    // .mset -- stamped open-leaves after its source log -- would hand the
+    // student targets its own input arm cannot account for. The reverse
+    // pairing is deliberate and allowed: an open-leaves teacher over a
+    // standard corpus is the privileged-teacher instrument.
+    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
+      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".mset", spec.opp_leave_input,
+      "{} was played with face-up leaves; labeling it needs a teacher whose ONNX declares "
+      "opp_leave_input");
     if (pending.empty()) return 0;
+    uint64_t total_positions = 0;
+    for (const binlog::PendingSlog& p : pending)
+      total_positions +=
+        binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
     const std::string selection =
       opt.full_sweep ? std::format("full sweep (cap {})", opt.sweep_cap) : "stratified";
     std::cerr << "move set eval targets: " << pending.size() << " file(s), " << total_positions
@@ -578,10 +558,17 @@ int main(int argc, char** argv) {
     }
 
     util::ProgressMeter meter(total_positions, "positions");
-    for (const auto& [slog, buf] : pending) {
-      fs::path mset = slog;
-      mset.replace_extension(".mset");
-      process_file(buf, mset, dict, spec, &service, params.max_rows, model_hash, opt, &meter);
+    for (const binlog::PendingSlog& p : pending) {
+      ForcedCandidates forced;
+      if (opt.use_sobs) {
+        const fs::path sobs = p.sidecar(".sobs");
+        if (!fs::exists(sobs)) {
+          throw util::CleanException("--sobs: {} has no .sobs sidecar", p.path.filename().string());
+        }
+        forced = load_forced_candidates(sobs);
+      }
+      process_file(p.bytes, p.sidecar(".mset"), dict, spec, &service, params.max_rows, model_hash,
+                   opt, opt.use_sobs ? &forced : nullptr, &meter);
     }
     meter.finish("move set eval targets");
     return 0;

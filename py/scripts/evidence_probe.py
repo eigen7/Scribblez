@@ -221,6 +221,8 @@ def main():
             turn_index=0,
             rollouts=args.rollouts,
             base_seed=args.seed,
+            num_legal_moves=0,
+            flags=0,
             moves=records["move"],
             obs=records["obs"],
         )

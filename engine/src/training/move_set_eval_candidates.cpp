@@ -24,14 +24,22 @@ void sample_range(const std::vector<Move>& ranked, int lo, int hi, int count, st
 }  // namespace
 
 Selection stratified_candidates(const std::vector<Move>& ranked, const Move& played,
-                                const StratumQuotas& quotas, std::mt19937_64& rng) {
+                                const StratumQuotas& quotas, std::mt19937_64& rng,
+                                std::span<const Move> forced) {
   std::vector<Move> out;
-  out.reserve(static_cast<size_t>(1 + quotas.top + quotas.mid + quotas.tail + quotas.exchange));
+  out.reserve(static_cast<size_t>(1 + forced.size() + quotas.top + quotas.mid + quotas.tail +
+                                  quotas.exchange));
   out.push_back(played);
+  for (const Move& m : forced) {
+    if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
+  }
   const int n = static_cast<int>(ranked.size());
 
-  // Top stratum: the head of the ranking, dense.
-  for (int i = 0; i < n && static_cast<int>(out.size()) < 1 + quotas.top; ++i) {
+  // Top stratum: the head of the ranking, dense. The bound is relative to
+  // what the played move and the forced set already occupy, so forced
+  // candidates add to the sample rather than stealing head slots from it.
+  const int head_target = static_cast<int>(out.size()) + quotas.top;
+  for (int i = 0; i < n && static_cast<int>(out.size()) < head_target; ++i) {
     if (std::find(out.begin(), out.end(), ranked[i]) == out.end()) out.push_back(ranked[i]);
   }
   // Contention zone, then the tail, uniform within each.

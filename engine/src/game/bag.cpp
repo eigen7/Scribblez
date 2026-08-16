@@ -7,6 +7,7 @@ namespace scribblez {
 Bag::Bag(uint64_t seed) : rng_(seed) {
   counts_ = TILE_COUNTS;
   for (int c : counts_) remaining_ += c;
+  DEBUG_ASSERT(remaining_ == kTotalTiles);
 }
 
 std::optional<Tile> Bag::draw() {

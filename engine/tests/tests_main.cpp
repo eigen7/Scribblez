@@ -8,6 +8,7 @@
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/sim_observation_log.h"
+#include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/board_planes.h"
 #include "encoding/contingent_map.h"
@@ -412,6 +413,33 @@ static void cache_consistency_stress(const Dictionary& d, const char* label, uns
 TEST(Board, CachesIncrementalMatchesFull) {
   Dictionary d = medium_dict();
   cache_consistency_stress(d, "medium_dict", 99887766u, /*games=*/30, /*steps_per_game=*/10);
+}
+
+// num_tiles() is maintained by every square-write path -- set() in both
+// directions and unapply()'s restore -- so consumers (bag-size arithmetic)
+// never rescan the grid.
+TEST(Board, NumTilesTracksEveryWritePath) {
+  Board b;
+  ASSERT_EQ(b.num_tiles(), 0);
+  ASSERT_TRUE(b.empty_board());
+
+  b.set(7, 7, Glyph::of(Tile::from_char('A')));
+  b.set(7, 8, Glyph::of(Tile::from_char('B')));
+  ASSERT_EQ(b.num_tiles(), 2);
+  b.set(7, 8, Glyph::of(Tile::from_char('C')));  // overwrite: no change
+  ASSERT_EQ(b.num_tiles(), 2);
+  b.set(7, 7, Glyph::empty());  // clear: decrement
+  ASSERT_EQ(b.num_tiles(), 1);
+  b.set(7, 7, Glyph::of(Tile::from_char('A')));
+
+  const Move m = make_play_full(7, 9, /*horizontal=*/true, 0b11, 10,
+                                {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('E'))});
+  BoardUndo undo;
+  b.apply(m, &undo);
+  ASSERT_EQ(b.num_tiles(), 4);
+  b.unapply(undo);
+  ASSERT_EQ(b.num_tiles(), 2);
+  ASSERT_FALSE(b.empty_board());
 }
 
 // If the real lexicon is present locally, cross-validate against it too and
@@ -1764,12 +1792,16 @@ TEST(Rack, Invariants) {
 // ===========================================================================
 
 TEST(Bag, Basics) {
-  // Initial composition matches TILE_COUNTS and totals to 100 tiles.
+  // Initial composition matches TILE_COUNTS and totals to 100 tiles -- and
+  // kTotalTiles, the constant bag-size arithmetic uses in place of a scan,
+  // agrees (release builds skip the constructor's DEBUG_ASSERT, so this test
+  // is what pins the constant to the distribution there).
   Bag b(/*seed=*/42);
   int total = 0;
   for (int c : TILE_COUNTS) total += c;
   ASSERT_EQ(b.size(), total);
   ASSERT_EQ(b.size(), 100);
+  ASSERT_EQ(b.size(), Bag::kTotalTiles);
   for (int i = 0; i < 27; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
 
   // Same seed -> identical draw sequence (reproducibility).
@@ -4408,6 +4440,65 @@ TEST(MoveSetEvalCandidates, FullSweepKeepsAnUnrankedPlayedMove) {
   EXPECT_EQ(sel.num_legal_moves, ranked.size() + 1);
 }
 
+// Forced (simmed trajectory) candidates enter the stratified sample right
+// after the played move, deduplicated against it -- and the strata that follow
+// dedupe against them in turn, so nothing is labeled twice.
+TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
+  const std::vector<Move> ranked = ranked_plays(40);
+  const Move played = ranked[0];
+  const std::vector<Move> forced = {ranked[17], played, ranked[35]};
+  std::mt19937_64 rng(7);
+  const move_set_eval::StratumQuotas quotas;
+  const move_set_eval::Selection sel =
+    move_set_eval::stratified_candidates(ranked, played, quotas, rng, forced);
+  const std::vector<Move>& out = sel.candidates;
+  // The budget is additive: played + 2 distinct forced + full quotas (4 top,
+  // 4 mid, 4 tail; ranked_plays has no exchanges). Forced candidates must
+  // never shrink a stratum.
+  ASSERT_EQ(out.size(), 15u);
+  EXPECT_EQ(out[0], played);
+  EXPECT_EQ(out[1], ranked[17]);
+  EXPECT_EQ(out[2], ranked[35]);  // the duplicate of `played` was skipped
+  // The top stratum still delivers the dense head: quotas.top candidates
+  // beyond the played move.
+  for (int i = 1; i <= quotas.top; ++i) {
+    EXPECT_NE(std::find(out.begin(), out.end(), ranked[static_cast<size_t>(i)]), out.end());
+  }
+  for (size_t i = 0; i < out.size(); ++i) {
+    for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
+  }
+}
+
+// The sampling shuffle is a fixed permutation per (seed, game): a smaller
+// per-game sample is a prefix of a larger one. This is the subset guarantee
+// slog_sampling.h calls load-bearing -- it is what lets the target generator
+// find every trajectory-sidecar position inside its own sample with no
+// coordination beyond the seed -- so it is pinned directly here rather than
+// only through the GPU-gated end-to-end test.
+TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
+  binlog::GameMetadata gm{};
+  gm.eligible_begin = 3;
+  gm.eligible_end = 19;
+  for (uint64_t seed : {0ull, 7ull, 0xDEADBEEFull}) {
+    std::vector<binlog::GamePositionIndex> full;
+    binlog::sample_eligible_turns(gm, /*game_idx=*/5, seed, /*positions_per_game=*/16, &full);
+    ASSERT_EQ(full.size(), 16u);
+    for (int k = 1; k <= 16; ++k) {
+      std::vector<binlog::GamePositionIndex> sample;
+      binlog::sample_eligible_turns(gm, 5, seed, k, &sample);
+      ASSERT_EQ(sample.size(), static_cast<size_t>(k));
+      for (int i = 0; i < k; ++i) EXPECT_EQ(sample[i].turn_idx, full[i].turn_idx);
+    }
+    // <= 0 takes every eligible turn (in order), so it contains any sample.
+    std::vector<binlog::GamePositionIndex> all;
+    binlog::sample_eligible_turns(gm, 5, seed, 0, &all);
+    ASSERT_EQ(all.size(), 16u);
+    for (const binlog::GamePositionIndex& s : full) {
+      EXPECT_NE(std::find(all.begin(), all.end(), s), all.end());
+    }
+  }
+}
+
 // The stored std must be finite even when FP16 teacher inference overflows the
 // readout to +inf (see kSdStdCap in the header); genuine readouts pass through.
 TEST(MoveSetEvalTargetLog, SdStdClamp) {
@@ -4604,20 +4695,25 @@ TEST(SimObservationLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
 
   {
-    SimObsWriter w(path);
-    w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999);
+    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234");
+    w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
+                   kSimObsPosFlagUniformTail);
     w.add_position(4, 0, {m2}, {o2}, 16, 1000);
     w.close();
   }
 
   SimObsReader r(path);
   ASSERT_EQ(r.num_positions(), 2);
+  ASSERT_EQ(r.flags(), kSimObsFlagTrajectory);
+  ASSERT_EQ(r.proposer_hash(), "cafe1234");
   const SimObsReader::Position p0 = r.position(0);
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);
   ASSERT_EQ(p0.header->num_candidates, 2);
   ASSERT_EQ(p0.header->rollouts, 16);
   ASSERT_EQ(p0.header->base_seed, 999);
+  ASSERT_EQ(p0.header->num_legal_moves, 321);
+  ASSERT_EQ(p0.header->flags, kSimObsPosFlagUniformTail);
   SimObsRecord rec;  // copy out of the packed file view before comparing
   std::memcpy(&rec, &p0.records[0], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m1, sizeof(Move)), 0);

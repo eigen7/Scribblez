@@ -99,7 +99,9 @@ class Board {
   Glyph at(int r, int c) const { return squares_[r * BOARD_SIZE + c]; }
   void set(int r, int c, Glyph g);
   bool in_bounds(int r, int c) const;
-  bool empty_board() const;
+  bool empty_board() const { return num_tiles_ == 0; }
+  // Placed tiles currently on the board; every square write maintains it.
+  int num_tiles() const { return num_tiles_; }
 
   Premium premium_at(int r, int c) const { return PREMIUM[r * BOARD_SIZE + c]; }
 
@@ -165,6 +167,7 @@ class Board {
   void set_anchor_(int transposed, int idx, bool value) const;
 
   std::array<Glyph, BOARD_SIZE * BOARD_SIZE> squares_{};
+  int num_tiles_ = 0;
 
   // Mutable so const accessors can lazily build the caches; `dict_` is
   // non-owning and outlives the board.

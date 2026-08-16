@@ -61,12 +61,6 @@ Board::Board() {
   for (auto& s : squares_) s = Glyph::empty();
 }
 
-bool Board::empty_board() const {
-  for (auto& s : squares_)
-    if (!s.is_empty()) return false;
-  return true;
-}
-
 void Board::apply(const Move& move) { apply(move, nullptr); }
 
 void Board::apply(const Move& move, BoardUndo* undo) {
@@ -113,8 +107,11 @@ void Board::unapply(const BoardUndo& undo) {
     cross_[it->transposed][it->idx] = it->old;
   for (auto it = undo.anchors.rbegin(); it != undo.anchors.rend(); ++it)
     ganchor_[it->transposed][it->idx] = it->old;
-  for (auto it = undo.squares.rbegin(); it != undo.squares.rend(); ++it)
-    squares_[it->idx] = it->old;
+  for (auto it = undo.squares.rbegin(); it != undo.squares.rend(); ++it) {
+    Glyph& sq = squares_[it->idx];
+    num_tiles_ += static_cast<int>(!it->old.is_empty()) - static_cast<int>(!sq.is_empty());
+    sq = it->old;
+  }
   caches_valid_ = undo.prev_caches_valid;
 }
 

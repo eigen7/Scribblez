@@ -27,6 +27,15 @@ sample being blind to the tail moves the filter exists to catch. Which pairs
 those are is a hash of the .slog stem (sweep_pair), so an interrupted cycle
 resumes on the same decision, and the .mset header flag carries it downstream.
 
+With `traj_every` > 0, every Nth non-sweep pair additionally gets an
+evidence-trajectory .sobs sidecar (docs/roadmap.md item 4): before the .mset
+labeling, evidence_trajectory_generator sims each sampled position's
+trajectory (greedy anchor, the student's temperature-softmax proposals, a
+uniform tail draw), and the labeling then runs with --sobs so the simmed
+candidates always receive value labels. Both tools sample positions from the
+same seed stream, which is what guarantees the labeling covers the simmed
+positions.
+
 The singleton train role (scribblez/move_set_eval/trainer.py) distills the
 student over the tag's pair store: repeated passes over a deterministic
 file-level split, per-pass recall/rank metrics against the held-out pairs on
@@ -53,6 +62,7 @@ from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 
 TARGET_GENERATOR = str(ENGINE_DIR / "move_set_eval_target_generator")
+TRAJECTORY_GENERATOR = str(ENGINE_DIR / "evidence_trajectory_generator")
 
 # The tag's pair store, under the tag's data/ dir (locally and in the bucket).
 SLOGS_DIR = "slogs"
@@ -102,6 +112,33 @@ class MoveSetEvalParams:
         "plays labeled per swept position, by static-equity rank (exchanges and the played "
         "move are kept beyond it); bounds the 20k-move two-blank racks, whose surplus is "
         "redundant blank designations, and leaves normal positions complete",
+    )
+    # Evidence trajectories (docs/roadmap.md item 4): every `traj_every`-th
+    # non-sweep pair additionally gets a .sobs sidecar of simmed trajectories
+    # (anchor + proposer picks + uniform tail per sampled position), and its
+    # .mset labeling force-includes the simmed candidates.
+    traj_every: int = param(
+        0,
+        "give every Nth non-sweep pair an evidence-trajectory .sobs sidecar (0 = none). "
+        "Stem-hashed like sweep_every, so interrupted cycles resume on the same decision",
+    )
+    proposer_model: str = param(
+        "",
+        "absolute path to the move-set-eval student ONNX that proposes trajectory "
+        "candidates; required when traj_every > 0, frozen like teacher_model",
+    )
+    traj_rollouts: int = param(200, "Monte-Carlo rollouts per trajectory candidate")
+    traj_positions_per_game: int = param(
+        1,
+        "eligible turns per game given a trajectory in a trajectory pair; must not exceed "
+        "positions_per_game (0 = all), or the .mset labeling cannot cover the simmed "
+        "positions and the generator refuses the file",
+    )
+    traj_proposals_min: int = param(2, "least model proposals per trajectory")
+    traj_proposals_max: int = param(8, "most model proposals per trajectory")
+    traj_temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
+    traj_proposal_pool: int = param(
+        64, "proposals are drawn from the model's top-N unsimmed candidates"
     )
     # Self-play condition (mirrors position_eval's generation params).
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
@@ -169,6 +206,7 @@ class MoveSetEvalParams:
 class CycleResult:
     returncode: int
     gen_seconds: float  # self-play batch wall time
+    traj_seconds: float  # trajectory-generator wall time
     mset_seconds: float  # target-generator wall time
 
 
@@ -185,12 +223,30 @@ def sweep_pair(stem: str, sweep_every: int) -> bool:
     return zlib.crc32(stem.encode()) % sweep_every == 0
 
 
+def traj_pair(stem: str, params: MoveSetEvalParams) -> bool:
+    """Whether the pair with this stem gets an evidence-trajectory .sobs.
+
+    Stem-hashed for the same resumability as sweep_pair, salted so the
+    decision is independent of the sweep one, and never a sweep pair: swept
+    pairs are evaluation-only, while trajectories exist to be trained on.
+    """
+    if params.traj_every <= 0 or sweep_pair(stem, params.sweep_every):
+        return False
+    return zlib.crc32(f"traj:{stem}".encode()) % params.traj_every == 0
+
+
 def run_target_generator(
-    pending: list[Path], params: MoveSetEvalParams, threads: int, full_sweep: bool = False
+    pending: list[Path],
+    params: MoveSetEvalParams,
+    threads: int,
+    full_sweep: bool = False,
+    with_sobs: bool = False,
 ) -> int:
     """Label `pending` .slog files with the tag's teacher, in one of the
     generator's two candidate-selection modes. The modes take disjoint
-    parameters, so a run is one or the other."""
+    parameters, so a run is one or the other. `with_sobs` (stratified only)
+    force-includes each position's simmed trajectory candidates from the
+    same-stem .sobs sidecar."""
     if full_sweep:
         selection = [
             "--full-sweep",
@@ -205,6 +261,7 @@ def run_target_generator(
             f"--quota-exchange={params.quota_exchange}",
             f"--mid-rank-limit={params.mid_rank_limit}",
             f"--positions-per-game={params.positions_per_game}",
+            *(["--sobs"] if with_sobs else []),
         ]
     cmd = [
         TARGET_GENERATOR,
@@ -212,6 +269,26 @@ def run_target_generator(
         f"--model={params.teacher_model}",
         *selection,
         f"--threads={threads}",
+    ]
+    return subprocess.run(cmd, capture_output=False).returncode
+
+
+def run_trajectory_generator(pending: list[Path], params: MoveSetEvalParams, threads: int) -> int:
+    """Give `pending` .slog files evidence-trajectory .sobs sidecars, proposed
+    by the tag's frozen student model. Runs before the .mset labeling so the
+    labeling can force-include the simmed candidates."""
+    cmd = [
+        TRAJECTORY_GENERATOR,
+        *[f"--slog-file={p}" for p in pending],
+        f"--model={params.proposer_model}",
+        f"--rollouts={params.traj_rollouts}",
+        f"--positions-per-game={params.traj_positions_per_game}",
+        f"--proposals-min={params.traj_proposals_min}",
+        f"--proposals-max={params.traj_proposals_max}",
+        f"--temperature={params.traj_temperature}",
+        f"--proposal-pool={params.traj_proposal_pool}",
+        f"--threads={threads}",
+        *(["--open-leaves"] if params.face_up_leaves else []),
     ]
     return subprocess.run(cmd, capture_output=False).returncode
 
@@ -230,40 +307,95 @@ def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> Cyc
     gen_seconds = time.monotonic() - t0
     if rc != 0:
         print(f"play_game exited with code {rc}", file=sys.stderr)
-        return CycleResult(rc, gen_seconds, 0.0)
+        return CycleResult(rc, gen_seconds, 0.0, 0.0)
 
     pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(".mset").exists())
     if not pending:
-        return CycleResult(0, gen_seconds, 0.0)
+        return CycleResult(0, gen_seconds, 0.0, 0.0)
+
+    # Trajectories first: their .sobs must exist before the .mset labeling can
+    # force-include the simmed candidates. The tool itself skips files whose
+    # .sobs already exists, so a resumed cycle does no sim twice.
+    traj_group = [s for s in pending if traj_pair(s.stem, params)]
     t1 = time.monotonic()
+    if traj_group:
+        rc = run_trajectory_generator(traj_group, params, threads)
+        if rc != 0:
+            print(f"evidence_trajectory_generator exited with code {rc}", file=sys.stderr)
+            return CycleResult(rc, gen_seconds, time.monotonic() - t1, 0.0)
+    traj_seconds = time.monotonic() - t1
+
+    t2 = time.monotonic()
     rc = 0
-    # One generator run per selection mode over the files that mode claims.
-    for full_sweep in (False, True):
-        group = [s for s in pending if sweep_pair(s.stem, params.sweep_every) == full_sweep]
+    # One generator run per selection mode over the files that mode claims;
+    # trajectory pairs are a stratified sub-mode (their forced candidates).
+    groups = (
+        (
+            dict(full_sweep=False),
+            [
+                s
+                for s in pending
+                if not sweep_pair(s.stem, params.sweep_every) and not traj_pair(s.stem, params)
+            ],
+        ),
+        (dict(full_sweep=False, with_sobs=True), traj_group),
+        (dict(full_sweep=True), [s for s in pending if sweep_pair(s.stem, params.sweep_every)]),
+    )
+    for kwargs, group in groups:
         if not group:
             continue
-        rc = run_target_generator(group, params, threads, full_sweep=full_sweep)
+        rc = run_target_generator(group, params, threads, **kwargs)
         if rc != 0:
             print(f"move_set_eval_target_generator exited with code {rc}", file=sys.stderr)
             break
-    return CycleResult(rc, gen_seconds, time.monotonic() - t1)
+    return CycleResult(rc, gen_seconds, traj_seconds, time.monotonic() - t2)
 
 
 def _cycle(work_dir: Path, params: MoveSetEvalParams, threads: int) -> tuple[int, dict]:
     """One cycle in the shared generate loop's (returncode, phases) shape."""
     r = run_one_cycle(work_dir, params, threads)
-    return r.returncode, {"gen_s": r.gen_seconds, "mset_s": r.mset_seconds}
+    return r.returncode, {
+        "gen_s": r.gen_seconds,
+        "traj_s": r.traj_seconds,
+        "mset_s": r.mset_seconds,
+    }
 
 
 def run_generate(ctx: WorkerContext) -> int:
     """The generate-role runner (the shared pair-store loop over run_one_cycle),
-    after failing fast on a teacher the whole run would trip over."""
+    after failing fast on a model path the whole run would trip over."""
     p = ctx.params
     if not p.teacher_model or not Path(p.teacher_model).is_file():
         print(f"error: teacher_model {p.teacher_model!r} is not a readable file", file=sys.stderr)
         return 1
+    if p.traj_every > 0:
+        if not p.proposer_model or not Path(p.proposer_model).is_file():
+            print(
+                f"error: proposer_model {p.proposer_model!r} is not a readable file",
+                file=sys.stderr,
+            )
+            return 1
+        # The .mset labeling can only cover the simmed positions when its
+        # per-game sample contains the trajectory tool's; catching the
+        # misconfiguration here costs nothing, while the generator's own check
+        # fires only after a full (expensive) trajectory sim phase.
+        bad_traj_positions = p.traj_positions_per_game < 1 or (
+            0 < p.positions_per_game < p.traj_positions_per_game
+        )
+        if bad_traj_positions:
+            print(
+                f"error: traj_positions_per_game={p.traj_positions_per_game} must be >= 1 and "
+                f"<= positions_per_game={p.positions_per_game} (when nonzero)",
+                file=sys.stderr,
+            )
+            return 1
     return pair_store.run_pair_generate(
-        ctx, _cycle, ".mset", SLOGS_DIR, target_pairs=ctx.params.target_pairs
+        ctx,
+        _cycle,
+        ".mset",
+        SLOGS_DIR,
+        target_pairs=ctx.params.target_pairs,
+        extra_sidecar_exts=(".sobs",),
     )
 
 
@@ -331,7 +463,12 @@ SPEC = WorkloadSpec(
             interruptible=True,
             stats=StatsSpec(
                 unit="pairs",
-                phases={"gen_s": "self-play", "mset_s": "targets", "upload_s": "deliver"},
+                phases={
+                    "gen_s": "self-play",
+                    "traj_s": "trajectories",
+                    "mset_s": "targets",
+                    "upload_s": "deliver",
+                },
             ),
         ),
         RoleSpec(

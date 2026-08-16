@@ -3,6 +3,7 @@
 #include "util/assert.h"
 #include "util/exception.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -20,12 +21,16 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
 
 }  // namespace
 
-SimObsWriter::SimObsWriter(const std::string& path, uint32_t flags) : path_(path) {
+SimObsWriter::SimObsWriter(const std::string& path, uint32_t flags,
+                           const std::string& proposer_hash)
+    : path_(path) {
   SimObsFileHeader hdr{};
   hdr.magic = kSimObsMagic;
   hdr.version = kSimObsVersion;
   hdr.num_positions = 0;  // patched in close()
   hdr.flags = flags;
+  std::memcpy(hdr.proposer_hash, proposer_hash.data(),
+              std::min(proposer_hash.size(), sizeof(hdr.proposer_hash)));
   append_bytes(&buffer_, &hdr, sizeof(hdr));
 }
 
@@ -36,7 +41,8 @@ SimObsWriter::~SimObsWriter() {
 void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
                                 const std::vector<SimObservation>& observations, uint32_t rollouts,
-                                uint64_t base_seed) {
+                                uint64_t base_seed, uint32_t num_legal_moves,
+                                uint32_t position_flags) {
   RELEASE_ASSERT(!closed_);
   RELEASE_ASSERT(candidates.size() == observations.size());
   SimObsPositionHeader ph{};
@@ -45,6 +51,8 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
   ph.num_candidates = static_cast<uint32_t>(candidates.size());
   ph.rollouts = rollouts;
   ph.base_seed = base_seed;
+  ph.num_legal_moves = num_legal_moves;
+  ph.flags = position_flags;
   append_bytes(&buffer_, &ph, sizeof(ph));
   for (size_t c = 0; c < candidates.size(); ++c) {
     SimObsRecord rec{};
@@ -70,6 +78,11 @@ void SimObsWriter::close() {
     f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   }
   std::filesystem::rename(tmp, path_);
+}
+
+std::string SimObsReader::proposer_hash() const {
+  const char* h = header().proposer_hash;
+  return std::string(h, strnlen(h, sizeof(header().proposer_hash)));
 }
 
 SimObsReader::SimObsReader(const std::string& path) {

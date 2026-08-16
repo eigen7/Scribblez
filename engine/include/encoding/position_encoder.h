@@ -57,6 +57,9 @@ class PositionEncoder {
   const GameStateEncoder& enc() const { return enc_; }
   const Rack& rack(int p) const { return racks_[p]; }
 
+  // Tiles remaining in the bag at the replayed decision point.
+  int bag_size() const;
+
  private:
   // The replayed state plus the game-outcome fields and the lexicon; a task
   // reads only what it needs. `post_move` must match the replay's snapshot

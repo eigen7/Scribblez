@@ -10,14 +10,21 @@
 //
 // File layout
 // -----------
-//   [SimObsFileHeader                        16 B]
+//   [SimObsFileHeader                        80 B]
 //   For each position p in [0, num_positions):
-//     [SimObsPositionHeader                  24 B]
+//     [SimObsPositionHeader                  32 B]
 //     [SimObsRecord   num_candidates(p)    1848 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file. Records store the exact Move alongside its observation, the
 // evidence encoding pairing each observation with the move behind it.
+//
+// In a trajectory file (kSimObsFlagTrajectory) a position's records are in
+// the order the sequential loop simmed them -- the greedy anchor first, then
+// the proposer's picks -- so every prefix of the record array is a valid
+// evidence set. A trailing uniform-exploration draw, when present, is marked
+// by kSimObsPosFlagUniformTail (it can be absent: a small legal set may be
+// exhausted before the uniform slot).
 
 #include "game/move.h"
 #include "sim/sim_runner.h"
@@ -30,12 +37,20 @@ namespace scribblez {
 
 // "SOBS" in little-endian (bytes 'S','O','B','S' on disk).
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
-inline constexpr uint16_t kSimObsVersion = 1;
+inline constexpr uint16_t kSimObsVersion = 2;
 
 // SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
 // the opponent's entire true rack, an information condition no consumer
 // supports); readers must reject files carrying it.
 inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
+inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajectory order
+
+// SimObsPositionHeader::flags bits.
+inline constexpr uint32_t kSimObsPosFlagUniformTail = 1u;  // last record is the uniform draw
+
+// Hex content hash of the proposer model, in SimObsFileHeader. All-zero bytes
+// mean no model drove the candidate selection (the equity-top-K proposer).
+inline constexpr size_t kSimObsProposerHashSize = 64;
 
 #pragma pack(push, 1)
 
@@ -45,17 +60,20 @@ struct SimObsFileHeader {
   uint16_t reserved;
   uint32_t num_positions;
   uint32_t flags;  // kSimObsFlag* bits; consumers must match on them
+  char proposer_hash[kSimObsProposerHashSize];
 };
-static_assert(sizeof(SimObsFileHeader) == 16, "SimObsFileHeader must be 16 bytes");
+static_assert(sizeof(SimObsFileHeader) == 80, "SimObsFileHeader must be 80 bytes");
 
 struct SimObsPositionHeader {
-  uint32_t game_index;      // game within the companion .slog file
-  uint32_t turn_index;      // pre-move turn the candidates were generated at
-  uint32_t num_candidates;  // SimObsRecord count that follows
-  uint32_t rollouts;        // rollouts per candidate (== every record's obs.n)
-  uint64_t base_seed;       // SimRunner::run seed, for reproducing the sims
+  uint32_t game_index;       // game within the companion .slog file
+  uint32_t turn_index;       // pre-move turn the candidates were generated at
+  uint32_t num_candidates;   // SimObsRecord count that follows
+  uint32_t rollouts;         // rollouts per candidate (== every record's obs.n)
+  uint64_t base_seed;        // SimRunner::run seed, for reproducing the sims
+  uint32_t num_legal_moves;  // legal moves at the position (the uniform draw's domain)
+  uint32_t flags;            // kSimObsPosFlag* bits
 };
-static_assert(sizeof(SimObsPositionHeader) == 24, "SimObsPositionHeader must be 24 bytes");
+static_assert(sizeof(SimObsPositionHeader) == 32, "SimObsPositionHeader must be 32 bytes");
 
 struct SimObsRecord {
   Move move;  // 16 B; the simmed candidate
@@ -70,7 +88,11 @@ static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
 // on close, so nothing exists on disk until then.
 class SimObsWriter {
  public:
-  explicit SimObsWriter(const std::string& path, uint32_t flags = 0);
+  // `proposer_hash` is the hex content hash of the model that drove candidate
+  // selection; empty for the equity-top-K proposer. Longer hashes truncate to
+  // the header field, matching move_set_eval::TargetWriter.
+  explicit SimObsWriter(const std::string& path, uint32_t flags = 0,
+                        const std::string& proposer_hash = {});
   ~SimObsWriter();  // closes if close() was not called
 
   SimObsWriter(const SimObsWriter&) = delete;
@@ -80,7 +102,7 @@ class SimObsWriter {
   // SimRunner::run seed used.
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
                     const std::vector<SimObservation>& observations, uint32_t rollouts,
-                    uint64_t base_seed);
+                    uint64_t base_seed, uint32_t num_legal_moves = 0, uint32_t position_flags = 0);
 
   void close();
 
@@ -107,7 +129,15 @@ class SimObsReader {
   int num_positions() const { return static_cast<int>(positions_.size()); }
   Position position(int i) const { return positions_[i]; }
 
+  uint32_t flags() const { return header().flags; }
+  // Empty for the equity-top-K proposer.
+  std::string proposer_hash() const;
+
  private:
+  const SimObsFileHeader& header() const {
+    return *reinterpret_cast<const SimObsFileHeader*>(buffer_.data());
+  }
+
   std::vector<char> buffer_;
   std::vector<Position> positions_;
 };

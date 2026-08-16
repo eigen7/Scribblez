@@ -17,22 +17,36 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 
 def deliver_pairs(
-    sink, out_dir: Path, worker_id: str, sidecar_ext: str, dest_dir: str
+    sink,
+    out_dir: Path,
+    worker_id: str,
+    sidecar_ext: str,
+    dest_dir: str,
+    extra_sidecar_exts: tuple[str, ...] = (),
 ) -> tuple[int, int, float]:
     """Deliver every complete .slog/sidecar pair in `out_dir` (not just the
     current cycle's -- a restarted worker flushes leftovers too) to the tag's
-    `dest_dir` store. Returns (pairs, bytes, seconds)."""
+    `dest_dir` store. A pair is complete when its `sidecar_ext` member exists;
+    `extra_sidecar_exts` members ride along when present (delivered first, so
+    they are never the missing member of an already-complete-looking pair).
+    Returns (pairs, bytes, seconds)."""
     moved, nbytes, t0 = 0, 0, time.monotonic()
     for sidecar in sorted(out_dir.glob(f"*{sidecar_ext}")):
         slog = sidecar.with_suffix(".slog")
-        for f in (sidecar, slog):
+        extras = [p for ext in extra_sidecar_exts if (p := sidecar.with_suffix(ext)).exists()]
+        for f in (*extras, sidecar, slog):
             nbytes += sink.deliver(f, f"{dest_dir}/{f.stem}-{worker_id}{f.suffix}")
         moved += 1
     return moved, nbytes, time.monotonic() - t0
 
 
 def run_pair_generate(
-    ctx, run_cycle, sidecar_ext: str, dest_dir: str, target_pairs: int = 0
+    ctx,
+    run_cycle,
+    sidecar_ext: str,
+    dest_dir: str,
+    target_pairs: int = 0,
+    extra_sidecar_exts: tuple[str, ...] = (),
 ) -> int:
     """The generate-role loop shared by the pair-producing workloads: flush any
     completed pairs a previous run left undelivered, then alternate
@@ -57,7 +71,7 @@ def run_pair_generate(
 
     cycle = 0
     try:
-        deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir)
+        deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts)
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
             if target_pairs and count_pairs(store, sidecar_ext) >= target_pairs:
                 print(f"target of {target_pairs} pair(s) reached; exiting")
@@ -67,14 +81,16 @@ def run_pair_generate(
             if returncode != 0:
                 return returncode
             moved, nbytes, secs = deliver_pairs(
-                ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir
+                ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
             )
             stats.cycle_done({**phases, "upload_s": secs}, units=moved, nbytes=nbytes)
             toward = f"/{target_pairs}" if target_pairs else ""
             held = f", {count_pairs(store, sidecar_ext)}{toward} in store" if target_pairs else ""
             print(f"cycle {cycle}: {moved} pair(s) delivered{held}")
     except WorkerStopped:
-        moved, _, _ = deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir)
+        moved, _, _ = deliver_pairs(
+            ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
+        )
         print(f"SIGTERM: flushed {moved} completed pair(s); exiting")
     return 0
 

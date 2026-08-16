@@ -10,6 +10,10 @@ namespace scribblez {
 
 class Bag {
  public:
+  // The full bag's tile count (the standard English distribution); the
+  // constructor asserts the distribution table still sums to it.
+  static constexpr int kTotalTiles = 100;
+
   // Initialize from the standard English tile distribution.
   explicit Bag(uint64_t seed);
 
