@@ -139,8 +139,7 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   // Replay the same decision independently: the model's top-2 by scripted
   // value, simmed from the same position with the agent's own seed.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
-  const std::vector<Move> simmed = {candidates[static_cast<size_t>(rank[0])],
-                                    candidates[static_cast<size_t>(rank[1])]};
+  const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   SimPosition pos;
   pos.board = board_;
   pos.mover = 0;
@@ -150,7 +149,7 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const std::vector<SimObservation> obs =
     SimRunner(dict_, p.sim).run(pos, simmed, agent.sim_seed(0));
 
-  EXPECT_TRUE(played == simmed[static_cast<size_t>(best_observation_index(obs, p.sim_objective))]);
+  EXPECT_TRUE(played == simmed[size_t(best_observation_index(obs, p.sim_objective))]);
 }
 
 TEST_F(MsetSimAgentTest, ShortlistCapsWhatTheModelScores) {
@@ -182,7 +181,7 @@ TEST_F(MsetSimAgentTest, TheModelCanPromoteAnExchange) {
   int exchange_idx = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i].type() == MoveType::EXCHANGE) {
-      exchange_idx = static_cast<int>(i);
+      exchange_idx = i;
       break;
     }
   }
@@ -192,7 +191,7 @@ TEST_F(MsetSimAgentTest, TheModelCanPromoteAnExchange) {
   stub->scripted = script_favouring(candidates.size(), {exchange_idx});
   MsetSimAgent agent(p, std::move(stub));
   agent.begin_game({});
-  EXPECT_TRUE(agent.make_move(request()).move == candidates[static_cast<size_t>(exchange_idx)]);
+  EXPECT_TRUE(agent.make_move(request()).move == candidates[size_t(exchange_idx)]);
 }
 
 TEST_F(MsetSimAgentTest, OneSeedGivesOneDecision) {
@@ -301,13 +300,12 @@ TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   // follow the former; the latter must be a different decision, or this test
   // could not tell them apart.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
-  const std::vector<Move> simmed = {candidates[static_cast<size_t>(rank[0])],
-                                    candidates[static_cast<size_t>(rank[1])]};
+  const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   const SimRunner runner(dict_, p.sim);
   const SimPosition pos = sim_position_from(req);
-  const Move at_ply_2 = simmed[static_cast<size_t>(
+  const Move at_ply_2 = simmed[size_t(
     best_observation_index(runner.run(pos, simmed, agent.sim_seed(2)), p.sim_objective))];
-  const Move at_ply_0 = simmed[static_cast<size_t>(
+  const Move at_ply_0 = simmed[size_t(
     best_observation_index(runner.run(pos, simmed, agent.sim_seed(0)), p.sim_objective))];
 
   ASSERT_FALSE(at_ply_2 == at_ply_0) << "the two plies agree here; the test proves nothing";
@@ -346,11 +344,11 @@ TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
 
   // Amortizing one board encode over the whole set is why this model exists.
   ASSERT_EQ(sp->calls, 1);
-  ASSERT_EQ(sp->last_moves.count, static_cast<int>(candidates.size()));
+  ASSERT_EQ(sp->last_moves.count, int(candidates.size()));
 
   // And that one board row is the position's own pre-move row (which the
   // decoder cross-check separately proves is the training row).
-  std::vector<float> expected_row(static_cast<size_t>(kInputFloats), 0.0f);
+  std::vector<float> expected_row(size_t(kInputFloats), 0.0f);
   agent.encode_board_row(req, expected_row.data());
   EXPECT_EQ(sp->last_board_row, expected_row);
 
@@ -422,7 +420,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   Dictionary dict = opening_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict, true});
   const uint8_t flips[1] = {0};
-  std::vector<float> dec_row(static_cast<size_t>(kInputFloats + kLabelFloats), 0.0f);
+  std::vector<float> dec_row(size_t(kInputFloats + kLabelFloats), 0.0f);
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/false,
              /*output_row_start=*/0, dec_row.data());
 
@@ -444,14 +442,13 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   const Board board;
   const MoveRequest req{board,          dict, my_rack, no_leave, /*my_score=*/10, /*opp_score=*/5,
                         /*bag_size=*/50};
-  std::vector<float> agent_row(static_cast<size_t>(kInputFloats), 0.0f);
+  std::vector<float> agent_row(size_t(kInputFloats), 0.0f);
   agent.encode_board_row(req, agent_row.data());
 
   bool any_nonzero = false;
   for (int i = 0; i < kInputFloats; ++i) {
-    ASSERT_EQ(agent_row[static_cast<size_t>(i)], dec_row[static_cast<size_t>(i)])
-      << "input float " << i;
-    any_nonzero = any_nonzero || agent_row[static_cast<size_t>(i)] != 0.0f;
+    ASSERT_EQ(agent_row[size_t(i)], dec_row[size_t(i)]) << "input float " << i;
+    any_nonzero = any_nonzero || agent_row[size_t(i)] != 0.0f;
   }
   ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
 }

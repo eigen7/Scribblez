@@ -168,13 +168,13 @@ std::vector<int> parse_thresholds(const std::string& csv) {
 // bucket k holds [t_{k-1}, t_k), with a final unbounded bucket.
 int bucket_of(int abs_spread, const std::vector<int>& thresholds) {
   int k = 0;
-  while (k < static_cast<int>(thresholds.size()) && abs_spread >= thresholds[k]) ++k;
+  while (k < int(thresholds.size()) && abs_spread >= thresholds[k]) ++k;
   return k;
 }
 
 std::string bucket_label(int k, const std::vector<int>& thresholds) {
   const int lo = k == 0 ? 0 : thresholds[k - 1];
-  if (k == static_cast<int>(thresholds.size())) return std::format("{}+", lo);
+  if (k == int(thresholds.size())) return std::format("{}+", lo);
   return std::format("{}-{}", lo, thresholds[k] - 1);
 }
 
@@ -190,7 +190,7 @@ std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t b
     bool got = false;
     FirstEndgameCapturer a0(worker, "A", caps[i], got);
     FirstEndgameCapturer a1(worker, "B", caps[i], got);
-    Game g(a0, a1, dict, base_seed + static_cast<uint64_t>(i));
+    Game g(a0, a1, dict, base_seed + uint64_t(i));
     g.play();
     captured[i] = got ? 1 : 0;
   });
@@ -225,7 +225,7 @@ double hasty_game_ms(const Dictionary& dict, uint64_t base_seed, int games) {
   HastyBotAgent a1(HastyBotAgent::Params{.thread_id = 0, .name = "B"});
   const auto t0 = Clock::now();
   for (int i = 0; i < games; ++i) {
-    Game g(a0, a1, dict, base_seed + static_cast<uint64_t>(i));
+    Game g(a0, a1, dict, base_seed + uint64_t(i));
     g.set_respect_projections(true);
     g.play();
   }
@@ -370,9 +370,9 @@ std::string join_budgets(const std::vector<uint64_t>& budgets) {
 void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
                         const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
                         int timed_games, double baseline_ms) {
-  const int ms = static_cast<int>(margins.size());
-  const int bs = static_cast<int>(budgets.size());
-  const int games = static_cast<int>(d0.size());
+  const int ms = margins.size();
+  const int bs = budgets.size();
+  const int games = d0.size();
 
   std::printf(
     "\nskill: solver win%% minus hasty win%% (first actor's seat), by margin x budget:\n");
@@ -387,7 +387,7 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
     for (int bi = 0; bi < bs; ++bi) {
       double skill = 0;
       for (int g = 0; g < games; ++g) {
-        const SolverOutcome& o = grid[(static_cast<size_t>(g) * ms + mi) * bs + bi];
+        const SolverOutcome& o = grid[(size_t(g) * ms + mi) * bs + bi];
         skill += win_fraction(o.spread) - win_fraction(margins[mi] + d0[g]);
       }
       std::printf(" %+10.1f", 100.0 * skill / games);
@@ -405,7 +405,7 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
     for (int bi = 0; bi < bs; ++bi) {
       double ns = 0;
       for (int g = 0; g < timed_games; ++g) {
-        ns += static_cast<double>(grid[(static_cast<size_t>(g) * ms + mi) * bs + bi].solve_ns);
+        ns += grid[(size_t(g) * ms + mi) * bs + bi].solve_ns;
       }
       std::printf(" %10.3f", 1.0 + ns / timed_games / 1e6 / baseline_ms);
     }
@@ -424,10 +424,10 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
                        bool incremental, bool projections, int margin_min, int margin_max,
                        int margin_step, int time_games) {
   const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games, threads);
-  const int g_count = static_cast<int>(caps.size());
+  const int g_count = caps.size();
   const std::vector<int> margins = margin_axis(margin_min, margin_max, margin_step);
-  const int ms = static_cast<int>(margins.size());
-  const int bs = static_cast<int>(budgets.size());
+  const int ms = margins.size();
+  const int bs = budgets.size();
   const int timed = std::min(time_games, g_count);
 
   std::printf(
@@ -451,11 +451,11 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
   parallel_for(g_count, threads,
                [&](int worker, int g) { d0[g] = baseline_delta(dict, caps[g], worker); });
 
-  std::vector<SolverOutcome> grid(static_cast<size_t>(g_count) * ms * bs);
+  std::vector<SolverOutcome> grid(size_t(g_count) * ms * bs);
   std::atomic<uint64_t> skipped{0};
   const auto sweep = [&](int worker, int g, int mi) {
     sweep_column(dict, caps[g], margins[mi], desc_budgets, params, incremental, projections, worker,
-                 (static_cast<size_t>(g) * ms + mi) * bs, grid, skipped);
+                 (size_t(g) * ms + mi) * bs, grid, skipped);
   };
 
   // The baseline shares the timed phase's conditions: one thread, nothing else
@@ -475,7 +475,7 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
     std::printf("hasty-vs-hasty baseline: %.3f ms/game over %d games, single-threaded\n",
                 baseline_ms, timed);
 
-  const uint64_t total_cells = static_cast<uint64_t>(g_count) * ms * bs;
+  const uint64_t total_cells = uint64_t(g_count) * ms * bs;
   std::printf("budget-nesting skip: %llu of %llu solver playouts avoided\n",
               static_cast<unsigned long long>(skipped.load()),
               static_cast<unsigned long long>(total_cells));
@@ -504,7 +504,7 @@ double run_config(const Dictionary& dict, uint64_t base_seed, int games, int thr
       std::unique_ptr<Agent> p0 = make0(t);
       std::unique_ptr<Agent> p1 = make1(t);
       for (int i = lo; i < hi; ++i) {
-        Game g(*p0, *p1, dict, base_seed + static_cast<uint64_t>(i));
+        Game g(*p0, *p1, dict, base_seed + uint64_t(i));
         g.set_respect_projections(true);
         g.play();
       }
@@ -572,9 +572,9 @@ std::vector<H2H> endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, in
   const AgentFactory hb = hasty_factory();
   std::vector<H2H> buckets(thresholds.size() + 2);
   for (int i = 0; i < (games + 1) / 2; ++i) {
-    const uint64_t seed = base_seed + static_cast<uint64_t>(i);
+    const uint64_t seed = base_seed + uint64_t(i);
     const int be = baseline_bag_empty_spread(dict, seed);
-    H2H& h = buckets[be < 0 ? buckets.size() - 1 : static_cast<size_t>(bucket_of(be, thresholds))];
+    H2H& h = buckets[be < 0 ? buckets.size() - 1 : size_t(bucket_of(be, thresholds))];
     for (int eg_seat = 0; eg_seat < 2; ++eg_seat) {
       std::unique_ptr<Agent> p0 = eg_seat == 0 ? eg(0) : hb(0);
       std::unique_ptr<Agent> p1 = eg_seat == 0 ? hb(0) : eg(0);
@@ -649,8 +649,7 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
       total.draws += h.draws;
       total.losses += h.losses;
       if (h.games == 0) continue;
-      const std::string label =
-        k + 1 == buckets.size() ? "none" : bucket_label(static_cast<int>(k), thresholds);
+      const std::string label = k + 1 == buckets.size() ? "none" : bucket_label(int(k), thresholds);
       print_h2h_row(b, label, h);
     }
     print_h2h_row(b, "all", total);

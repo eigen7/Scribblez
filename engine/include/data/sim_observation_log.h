@@ -126,7 +126,7 @@ class SimObsReader {
 
   explicit SimObsReader(const std::string& path);
 
-  int num_positions() const { return static_cast<int>(positions_.size()); }
+  int num_positions() const { return positions_.size(); }
   Position position(int i) const { return positions_[i]; }
 
   uint32_t flags() const { return header().flags; }

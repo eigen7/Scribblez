@@ -19,7 +19,7 @@ namespace scribblez {
 namespace {
 
 char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return static_cast<char>(c - 'a' + 'A');
+  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
   return c;
 }
 
@@ -45,9 +45,9 @@ std::optional<int> parse_signed_int(const std::string& tok) {
 
 bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int* col) {
   if (pos.size() < 2) return false;
-  if (std::isdigit(static_cast<unsigned char>(pos[0])) != 0) {
+  if (std::isdigit(uint8_t(pos[0])) != 0) {
     std::size_t i = 0;
-    while (i < pos.size() && std::isdigit(static_cast<unsigned char>(pos[i])) != 0) ++i;
+    while (i < pos.size() && std::isdigit(uint8_t(pos[i])) != 0) ++i;
     if (i == 0 || i >= pos.size()) return false;
     const char c = upper_ch(pos[i]);
     if (c < 'A' || c > 'O') return false;
@@ -64,7 +64,7 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
   const std::string digits = pos.substr(1);
   if (digits.empty()) return false;
   for (char ch : digits) {
-    if (std::isdigit(static_cast<unsigned char>(ch)) == 0) return false;
+    if (std::isdigit(uint8_t(ch)) == 0) return false;
   }
   const int r = std::stoi(digits) - 1;
   if (r < 0 || r >= BOARD_SIZE) return false;
@@ -366,10 +366,10 @@ class GcgReader {
           malformed = true;
           break;
         }
-        const bool is_blank = std::islower(static_cast<unsigned char>(ch)) != 0;
+        const bool is_blank = std::islower(uint8_t(ch)) != 0;
         glyphs[num_glyphs++] = Glyph::played(Tile::from_char(up), is_blank);
         const int lane = horizontal ? c : r;
-        mask |= static_cast<uint16_t>(1) << lane;
+        mask |= uint16_t(1) << lane;
       }
       if (horizontal) {
         ++c;
@@ -381,7 +381,7 @@ class GcgReader {
 
     const int start = horizontal ? row : col;
     const Move move =
-      Move::play(horizontal, start, mask, static_cast<uint16_t>(*score), glyphs.data(), num_glyphs);
+      Move::play(horizontal, start, mask, uint16_t(*score), glyphs.data(), num_glyphs);
 
     const Board before = board_;
     const int bag_size_before = BagSizeEstimate();
@@ -542,7 +542,7 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
   while (std::getline(lines, line)) {
     if (line.size() < want.size() + 1) continue;
     std::string head = line.substr(0, want.size());
-    for (char& c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : head) c = char(std::tolower(uint8_t(c)));
     if (head != want || line[want.size()] != ' ') continue;
     Rack rack;
     for (size_t i = want.size() + 1; i < line.size(); ++i) {
@@ -587,7 +587,7 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
   out->scores = snapshot.scores;
   out->mover = mover;
   out->player_names = game.player_names;
-  out->turns = static_cast<int>(game.turns.size());
+  out->turns = game.turns.size();
   return true;
 }
 

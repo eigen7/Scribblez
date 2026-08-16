@@ -119,7 +119,7 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
       is_blank = placed_blank[c];
       newly_placed = true;
       played[n_placed++] = Glyph::played(L, is_blank);  // in word order
-      square_mask |= static_cast<uint16_t>(1u << c);    // absolute lane index
+      square_mask |= uint16_t(1u << c);                 // absolute lane index
     }
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
@@ -140,8 +140,7 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
 
   int score = main_letter_sum * word_mult + cross_total;
   if (n_placed == RACK_SIZE) score += 50;  // bingo
-  return Move::play(!view.transposed, row, square_mask, static_cast<uint16_t>(score), played.data(),
-                    n_placed);
+  return Move::play(!view.transposed, row, square_mask, uint16_t(score), played.data(), n_placed);
 }
 
 struct GenState {
@@ -549,7 +548,7 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
     if (!g.is_empty()) {
       lane.filled[c] = true;
       lane.tval[c] = g.is_blank() ? 0 : TILE_VALUES[g.letter()];
-      lane.letter_idx[c] = static_cast<int8_t>(g.letter().index());
+      lane.letter_idx[c] = int8_t(g.letter().index());
       continue;
     }
     const Premium p = view.premium_at(row, c);
@@ -592,7 +591,7 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
                          const std::vector<int>& rack_vals_desc,
                          std::array<int, kMaxPlayTiles + 1>& out) {
   out.fill(-1);
-  const int rack_size = static_cast<int>(rack_vals_desc.size());
+  const int rack_size = rack_vals_desc.size();
   if (rack_size == 0) return;
   const int a_min = std::max(0, last_anchor_col + 1);
   const int e_cap = std::min(rack_size, kMaxPlayTiles);
@@ -633,9 +632,9 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
       for (int j = 0; j < c2 && taken < e; ++j) greedy += rack_vals_desc[taken++] * 2;
       while (taken < e) greedy += rack_vals_desc[taken++];
       const int placed = std::min(greedy, psm);
-      const long main_word = static_cast<long>(placed + existing) * wprod;
+      const long main_word = long(placed + existing) * wprod;
       const long sc = main_word + cross_sum + (e == RACK_SIZE ? 50 : 0);
-      if (sc > out[e]) out[e] = static_cast<int>(sc);
+      if (sc > out[e]) out[e] = int(sc);
     }
   }
 }
@@ -904,8 +903,7 @@ void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubrack
   // every play that subrack could make.
   const std::vector<BitRack>& subs = subracks[e.placed];
   for (size_t j = 0; j < subs.size(); ++j) {
-    if (sub_terms != nullptr && static_cast<double>(e.score_bound) + sub_terms[j] < best_equity)
-      continue;
+    if (sub_terms != nullptr && double(e.score_bound) + sub_terms[j] < best_equity) continue;
     const WordMap::WordList words = wm.lookup(e.length, e.pt + subs[j]);
     for (int wi = 0; wi < words.count; ++wi) {
       const Tile* word = words.begin + wi * e.length;
@@ -973,7 +971,7 @@ namespace {
 
 // MAGPIE's word-aligned rack size (the unrestricted-multiplier arrays are sized
 // to it) and the (playthrough_blocks, tiles_played) anchor-table dimensions.
-constexpr int kRackAlign = static_cast<int>(util::align_up(RACK_SIZE, 8));
+constexpr int kRackAlign = util::align_up(RACK_SIZE, 8);
 constexpr int kMaxPlaythroughBlocks = (BOARD_SIZE / 2) + 1;
 constexpr int kMaxShadowAnchors = (RACK_SIZE + 1) * kMaxPlaythroughBlocks;
 constexpr uint32_t kTrivialCrossSet = kAllLettersMask;
@@ -1002,7 +1000,7 @@ ShadowLane build_shadow_lane(const View& view, const CrossChecks& cross, const A
     lane.empty[c] = g.is_empty();
     lane.anchor[c] = anchors[idx(row, c)];
     if (!lane.empty[c]) {
-      lane.letter[c] = static_cast<int8_t>(g.letter().index());
+      lane.letter[c] = int8_t(g.letter().index());
       lane.cross_set[c] = 0;  // a filled square admits no fresh tile
       continue;
     }
@@ -1544,8 +1542,8 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(
             e.placed = s.tiles_to_play;
             e.pt = set_playthrough_bitrack(lane, s.rightmost, s.playthrough_blocks);
             e.score_bound = s.score;
-            e.leftmost_start_col = static_cast<int8_t>(s.leftmost);
-            e.rightmost_start_col = static_cast<int8_t>(s.rightmost);
+            e.leftmost_start_col = s.leftmost;
+            e.rightmost_start_col = s.rightmost;
             out.push_back(e);
           }
         }

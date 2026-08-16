@@ -19,14 +19,14 @@ void sample_eligible_turns(const GameMetadata& gm, uint32_t game_idx, uint64_t r
   const int end = gm.eligible_end;
   if (begin >= end) return;
   if (positions_per_game <= 0) {
-    for (int t = begin; t < end; ++t) out->push_back({game_idx, static_cast<uint32_t>(t)});
+    for (int t = begin; t < end; ++t) out->push_back({game_idx, uint32_t(t)});
     return;
   }
-  std::vector<uint32_t> turns(static_cast<size_t>(end - begin));
-  std::iota(turns.begin(), turns.end(), static_cast<uint32_t>(begin));
+  std::vector<uint32_t> turns(size_t(end - begin));
+  std::iota(turns.begin(), turns.end(), uint32_t(begin));
   std::mt19937_64 rng(util::splitmix64(run_seed ^ util::splitmix64(0xC0FFEEull + game_idx)));
   std::shuffle(turns.begin(), turns.end(), rng);
-  const int take = std::min<int>(positions_per_game, static_cast<int>(turns.size()));
+  const int take = std::min<int>(positions_per_game, int(turns.size()));
   for (int i = 0; i < take; ++i) out->push_back({game_idx, turns[i]});
 }
 
@@ -44,7 +44,7 @@ uint64_t count_sampled_positions(const std::vector<char>& buf, int positions_per
   if (limit_games > 0) num_games = std::min<uint32_t>(num_games, limit_games);
   uint64_t total = 0;
   for (uint32_t g = 0; g < num_games; ++g)
-    total += static_cast<uint64_t>(count_eligible_sample(metas[g], positions_per_game));
+    total += count_eligible_sample(metas[g], positions_per_game);
   return total;
 }
 
@@ -53,7 +53,7 @@ std::vector<char> read_file_bytes(const std::filesystem::path& path) {
   if (!f) throw util::CleanException("cannot open {}", path.string());
   const std::streamsize size = f.tellg();
   f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
+  std::vector<char> bytes(size);
   f.read(bytes.data(), size);
   return bytes;
 }

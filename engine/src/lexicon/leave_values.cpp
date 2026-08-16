@@ -20,7 +20,7 @@ constexpr uint32_t kTileShift = 24u;
 // Read a little-endian uint32 array of `count` elements from `in`.
 std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
   std::vector<uint32_t> data(count);
-  in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);
+  in.read(reinterpret_cast<char*>(data.data()), std::streamsize(count) * 4);
   if (!in) throw util::Exception("LeaveValues: truncated read");
   return data;
 }
@@ -28,7 +28,7 @@ std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
 // Read a little-endian float32 array of `count` elements from `in`.
 std::vector<float> read_f32_array(std::ifstream& in, uint32_t count) {
   std::vector<float> data(count);
-  in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count) * 4);
+  in.read(reinterpret_cast<char*>(data.data()), std::streamsize(count) * 4);
   if (!in) throw util::Exception("LeaveValues: truncated read");
   return data;
 }
@@ -45,9 +45,7 @@ uint32_t read_u32(std::ifstream& in) {
 // distinct from the word KWG's 1-indexed A..Z with no blank. Mapping the blank
 // to BLANK is what lets blank-bearing leaves (e.g. the lone "?") be keyed and
 // looked up correctly.
-Tile tile_from_klv_code(uint8_t code) {
-  return code == 0u ? BLANK : Tile::of(static_cast<int>(code) - 1);
-}
+Tile tile_from_klv_code(uint8_t code) { return code == 0u ? BLANK : Tile::of(int(code) - 1); }
 
 // Enumerate every leave reachable from `node`'s arc list in word-index order,
 // inserting leave -> value into `out`. `acc` carries the prefix tiles and
@@ -61,7 +59,7 @@ void enumerate_leaves(const std::vector<uint32_t>& nodes, const std::vector<floa
                       std::unordered_map<Rack, float>& out) {
   while (node != 0) {
     const uint32_t entry = nodes[node];
-    const Tile tile = tile_from_klv_code(static_cast<uint8_t>(entry >> kTileShift));
+    const Tile tile = tile_from_klv_code(uint8_t(entry >> kTileShift));
     acc.add(tile);
     if (entry & kAcceptsBit) {
       if (counter < values.size()) out.emplace(acc, values[counter]);

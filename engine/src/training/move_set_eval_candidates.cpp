@@ -12,12 +12,12 @@ namespace {
 void sample_range(const std::vector<Move>& ranked, int lo, int hi, int count, std::mt19937_64& rng,
                   std::vector<Move>* out) {
   std::vector<int> pool;
-  for (int i = lo; i < hi && i < static_cast<int>(ranked.size()); ++i) {
+  for (int i = lo; i < hi && i < int(ranked.size()); ++i) {
     if (std::find(out->begin(), out->end(), ranked[i]) == out->end()) pool.push_back(i);
   }
   std::shuffle(pool.begin(), pool.end(), rng);
-  for (int j = 0; j < count && j < static_cast<int>(pool.size()); ++j) {
-    out->push_back(ranked[static_cast<size_t>(pool[j])]);
+  for (int j = 0; j < count && j < int(pool.size()); ++j) {
+    out->push_back(ranked[size_t(pool[j])]);
   }
 }
 
@@ -27,19 +27,18 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
                                 const StratumQuotas& quotas, std::mt19937_64& rng,
                                 std::span<const Move> forced) {
   std::vector<Move> out;
-  out.reserve(static_cast<size_t>(1 + forced.size() + quotas.top + quotas.mid + quotas.tail +
-                                  quotas.exchange));
+  out.reserve(size_t(1 + forced.size() + quotas.top + quotas.mid + quotas.tail + quotas.exchange));
   out.push_back(played);
   for (const Move& m : forced) {
     if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
   }
-  const int n = static_cast<int>(ranked.size());
+  const int n = ranked.size();
 
   // Top stratum: the head of the ranking, dense. The bound is relative to
   // what the played move and the forced set already occupy, so forced
   // candidates add to the sample rather than stealing head slots from it.
-  const int head_target = static_cast<int>(out.size()) + quotas.top;
-  for (int i = 0; i < n && static_cast<int>(out.size()) < head_target; ++i) {
+  const int head_target = int(out.size()) + quotas.top;
+  for (int i = 0; i < n && int(out.size()) < head_target; ++i) {
     if (std::find(out.begin(), out.end(), ranked[i]) == out.end()) out.push_back(ranked[i]);
   }
   // Contention zone, then the tail, uniform within each.
@@ -66,8 +65,8 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
 Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& played, int cap) {
   std::vector<Move> out;
   bool played_kept = false;
-  for (int i = 0; i < static_cast<int>(ranked.size()); ++i) {
-    const Move& m = ranked[static_cast<size_t>(i)];
+  for (int i = 0; i < int(ranked.size()); ++i) {
+    const Move& m = ranked[size_t(i)];
     const bool keep = i < cap || m.type() != MoveType::PLAY || m == played;
     if (!keep) continue;
     played_kept = played_kept || m == played;
@@ -77,7 +76,7 @@ Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& pla
   // moves were legal -- has no equity rank, so it can only go last; every other
   // candidate keeps its rank order. It counts toward the legal total all the
   // same: it was legal, and the sweep did reach it.
-  uint32_t legal = static_cast<uint32_t>(ranked.size());
+  uint32_t legal = ranked.size();
   if (!played_kept) {
     out.push_back(played);
     ++legal;

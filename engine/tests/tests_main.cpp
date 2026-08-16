@@ -128,7 +128,7 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
   const int start = horizontal ? row : col;
   const int lane0 = horizontal ? col : row;
   uint16_t mask = 0;
-  for (int i = 0; i < n; ++i) mask |= static_cast<uint16_t>(1u << (lane0 + i));
+  for (int i = 0; i < n; ++i) mask |= uint16_t(1u << (lane0 + i));
   return Move::play(horizontal, start, mask, /*score=*/0, played.data(), n);
 }
 
@@ -146,7 +146,7 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   }
   const int start = horizontal ? row : col;
   const int lane0 = horizontal ? col : row;
-  uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
+  uint16_t mask = rel_mask << lane0;
   return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
@@ -561,12 +561,12 @@ TEST(Encoder, BasicLayout) {
   // Last-2-move metadata at kMoveMetaOffset: self move (p0's C play) then
   // opponent move (p1's blank-D play); both are 1-glyph PLAYs.
   const float* meta = scalars + kMoveMetaOffset;
-  ASSERT_EQ(meta[static_cast<int>(MoveType::PLAY)], 1.0f);
-  ASSERT_EQ(meta[static_cast<int>(MoveType::EXCHANGE)], 0.0f);
-  ASSERT_EQ(meta[static_cast<int>(MoveType::PASS)], 0.0f);
+  ASSERT_EQ(meta[int(MoveType::PLAY)], 1.0f);
+  ASSERT_EQ(meta[int(MoveType::EXCHANGE)], 0.0f);
+  ASSERT_EQ(meta[int(MoveType::PASS)], 0.0f);
   ASSERT_EQ(meta[kMoveMetaTypeFloats], 1.0f);  // self num_glyphs
   const float* opp_meta = meta + kMoveMetaFloatsPerMove;
-  ASSERT_EQ(opp_meta[static_cast<int>(MoveType::PLAY)], 1.0f);
+  ASSERT_EQ(opp_meta[int(MoveType::PLAY)], 1.0f);
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);  // opp num_glyphs
 }
 
@@ -665,7 +665,7 @@ TEST(Movegen, SingleTileVerticalHooks) {
   ASSERT_EQ(qis, 1);       // QIS: S at (7,9), horizontal pass
   ASSERT_EQ(is_below, 1);  // IS: S at (8,8), vertical-only hook
   ASSERT_EQ(si_above, 1);  // SI: S at (6,8), vertical-only hook
-  ASSERT_EQ(static_cast<int>(plays.size()), 3);
+  ASSERT_EQ(int(plays.size()), 3);
   const std::vector<Move> dawg = gen.generate(r, GenAlgo::DAWG);
   ASSERT_EQ(dawg.size(), plays.size());
 }
@@ -703,7 +703,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
 
   const auto assert_horizontal_set = [&](int r, int c, const std::initializer_list<char>& letters) {
     for (int l = 0; l < 26; ++l) {
-      const char ch = static_cast<char>('A' + l);
+      const char ch = 'A' + l;
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
       ASSERT_EQ(h_cross_check(Tile::of(l), r, c), expected);
     }
@@ -711,7 +711,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
 
   const auto assert_vertical_set = [&](int r, int c, const std::initializer_list<char>& letters) {
     for (int l = 0; l < 26; ++l) {
-      const char ch = static_cast<char>('A' + l);
+      const char ch = 'A' + l;
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
       ASSERT_EQ(v_cross_check(Tile::of(l), r, c), expected);
     }
@@ -840,14 +840,14 @@ TEST(Encoder, NonplayLastMoveMetadata) {
   const float* self_meta = scalars + kMoveMetaOffset;
   const float* opp_meta = self_meta + kMoveMetaFloatsPerMove;
 
-  ASSERT_EQ(self_meta[static_cast<int>(MoveType::PLAY)], 0.0f);
-  ASSERT_EQ(self_meta[static_cast<int>(MoveType::EXCHANGE)], 0.0f);
-  ASSERT_EQ(self_meta[static_cast<int>(MoveType::PASS)], 1.0f);
+  ASSERT_EQ(self_meta[int(MoveType::PLAY)], 0.0f);
+  ASSERT_EQ(self_meta[int(MoveType::EXCHANGE)], 0.0f);
+  ASSERT_EQ(self_meta[int(MoveType::PASS)], 1.0f);
   ASSERT_EQ(self_meta[kMoveMetaTypeFloats], 0.0f);
 
-  ASSERT_EQ(opp_meta[static_cast<int>(MoveType::PLAY)], 0.0f);
-  ASSERT_EQ(opp_meta[static_cast<int>(MoveType::EXCHANGE)], 1.0f);
-  ASSERT_EQ(opp_meta[static_cast<int>(MoveType::PASS)], 0.0f);
+  ASSERT_EQ(opp_meta[int(MoveType::PLAY)], 0.0f);
+  ASSERT_EQ(opp_meta[int(MoveType::EXCHANGE)], 1.0f);
+  ASSERT_EQ(opp_meta[int(MoveType::PASS)], 0.0f);
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);
 
   // Both last-placement planes must be all zero because neither last move is PLAY.
@@ -935,7 +935,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
     pre.last_opp_move = last_by[opp];
     pre.score_active = prev_active;
     pre.score_opp = prev_opp;
-    pre.turn_index = static_cast<int>(i);
+    pre.turn_index = i;
     pre.active_player = active;
     pre.kind = PositionKind::kPreMove;
     out.push_back(pre);
@@ -1110,11 +1110,11 @@ TEST(ContingentMap, MatchesPerTileGeneration) {
           const LaneAssignments la = compute_lane_assignments(board, m, placed, p);
           for (int i = 0; i < la.count; ++i) {
             const int lane = (la.items[i].horizontal ? 0 : kLanesPerAxis) + la.items[i].lane_index;
-            ref[lane] = std::max(ref[lane], static_cast<int>(m.score()));
+            ref[lane] = std::max(ref[lane], int(m.score()));
           }
         }
         for (int lane = 0; lane < kNumLanes; ++lane) {
-          ASSERT_EQ(static_cast<int>(cm.best(L, lane).score), ref[lane]);
+          ASSERT_EQ(int(cm.best(L, lane).score), ref[lane]);
         }
         ++columns;
       }
@@ -1150,12 +1150,11 @@ TEST(InputLayout, BaseIsFullMinusContingentTails) {
 
   // Shared spatial prefix, then shared scalar prefix (the full row's scalar
   // block starts after its extra contingent planes).
-  ASSERT_EQ(std::memcmp(base_row.data(), full_row.data(),
-                        sizeof(float) * static_cast<size_t>(spatial_floats(base))),
-            0);
+  ASSERT_EQ(
+    std::memcmp(base_row.data(), full_row.data(), sizeof(float) * size_t(spatial_floats(base))), 0);
   ASSERT_EQ(
     std::memcmp(base_row.data() + spatial_floats(base), full_row.data() + spatial_floats(full),
-                sizeof(float) * static_cast<size_t>(scalar_floats(base))),
+                sizeof(float) * size_t(scalar_floats(base))),
     0);
 
   // The splice is not vacuous: the full row's contingent tails carry content.
@@ -1194,9 +1193,8 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   open_enc.encode_input(open_enc.active_player(), rack, opp, /*apply_flip=*/false, open_row.data());
 
   // Identical prefix; the tail is the opponent rack's counts.
-  ASSERT_EQ(std::memcmp(base_row.data(), open_row.data(),
-                        sizeof(float) * static_cast<size_t>(input_floats(base))),
-            0);
+  ASSERT_EQ(
+    std::memcmp(base_row.data(), open_row.data(), sizeof(float) * size_t(input_floats(base))), 0);
   const float* tail = open_row.data() + input_floats(base);
   ASSERT_EQ(tail[Tile::from_char('Q').index()], 1.0f);
   ASSERT_EQ(tail[Tile::from_char('I').index()], 1.0f);
@@ -1383,7 +1381,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
 
   // Verify the on-disk header is self-consistent.
   const fs::path& slog = slogs.front();
-  const int64_t fsize = static_cast<int64_t>(fs::file_size(slog));
+  const int64_t fsize = fs::file_size(slog);
   std::vector<char> raw(fsize);
   {
     std::ifstream f(slog, std::ios::binary);
@@ -1393,7 +1391,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   const auto* hdr = reinterpret_cast<const scribblez::binlog::FileHeader*>(raw.data());
   ASSERT_EQ(hdr->magic, scribblez::binlog::kMagic);
   ASSERT_EQ(hdr->version, scribblez::binlog::kVersion);
-  ASSERT_EQ(hdr->num_games, static_cast<uint32_t>(kGames));
+  ASSERT_EQ(hdr->num_games, uint32_t(kGames));
   // Training expands each game into one row per eligible (pre-endgame) turn, so
   // the loader's position count is the sum of those across all games.
   int64_t total_positions = 0;
@@ -1401,7 +1399,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     for (const auto& turn : log.turns)
       if (turn.bag_size_before > 0) ++total_positions;
   ASSERT_GT(total_positions, 0);
-  ASSERT_EQ(static_cast<int64_t>(hdr->num_sample_positions), total_positions);
+  ASSERT_EQ(int64_t(hdr->num_sample_positions), total_positions);
 
   // Register with DataLoader and drain rows via epoch_start/load_batch
   // for both pre-move and post-move phases.
@@ -1418,14 +1416,14 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   // Helper: drain one full epoch into a vector.
   auto drain_epoch = [&](bool post_move) {
     scribblez::binlog::DataLoader::EpochConfig cfg;
-    cfg.batch_size = static_cast<int>(total_positions);
+    cfg.batch_size = total_positions;
     cfg.post_move = post_move;
     cfg.apply_symmetry = false;
     cfg.seed = 1;
     loader.epoch_start(cfg);
     std::vector<float> out(total_positions * row_size);
     int n = loader.load_batch(out.data());
-    EXPECT_EQ(n, static_cast<int>(total_positions));
+    EXPECT_EQ(n, int(total_positions));
     EXPECT_EQ(loader.load_batch(out.data()), 0);  // epoch exhausted
     return out;
   };
@@ -1434,7 +1432,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   std::vector<float> post_rows = drain_epoch(/*post_move=*/true);
 
   // Combine for validation.
-  const int n_samples = static_cast<int>(total_positions) * 2;
+  const int n_samples = int(total_positions) * 2;
   std::vector<float> rows;
   rows.insert(rows.end(), pre_rows.begin(), pre_rows.end());
   rows.insert(rows.end(), post_rows.begin(), post_rows.end());
@@ -1459,12 +1457,12 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   // Every decoded row's label tail must match a valid (game, POV).
   const int label_off = kInputFloats;
   for (int i = 0; i < n_samples; ++i) {
-    const float* row = rows.data() + static_cast<int64_t>(i) * row_size;
-    const int w = static_cast<int>(row[label_off + 0]);
-    const int dd = static_cast<int>(row[label_off + 1]);
-    const int l = static_cast<int>(row[label_off + 2]);
+    const float* row = rows.data() + int64_t(i) * row_size;
+    const int w = row[label_off + 0];
+    const int dd = row[label_off + 1];
+    const int l = row[label_off + 2];
     // Score-diff target is a single scalar: the clipped final differential.
-    const int sd = static_cast<int>(row[label_off + scribblez::kWldFloats]);
+    const int sd = row[label_off + scribblez::kWldFloats];
     ASSERT_EQ(w + dd + l, 1);  // exactly one of W/D/L
     ASSERT_EQ(valid_labels.count({w, dd, l, sd}), 1);
   }
@@ -1558,8 +1556,7 @@ TEST(Game, RandomOpening) {
   for (int plies : {0, 1, 3, 6}) {
     scribblez::GameLogStorage log = play_random_opening_test_game(dict, /*seed=*/321, plies);
     ASSERT_FALSE(log.turns.empty());
-    ASSERT_EQ(log.num_random_opening_plies,
-              std::min<int>(plies, static_cast<int>(log.turns.size())));
+    ASSERT_EQ(log.num_random_opening_plies, std::min<int>(plies, int(log.turns.size())));
 
     // Same seed + same opening length -> the identical move sequence.
     scribblez::GameLogStorage again = play_random_opening_test_game(dict, /*seed=*/321, plies);
@@ -1644,7 +1641,7 @@ TEST(BinaryLog, RandomOpeningRegion) {
     if (ent.path().extension() == ".slog") slogs.push_back(ent.path());
   }
   ASSERT_EQ(slogs.size(), 1);
-  const int64_t fsize = static_cast<int64_t>(fs::file_size(slogs.front()));
+  const int64_t fsize = fs::file_size(slogs.front());
   std::vector<char> raw(fsize);
   {
     std::ifstream f(slogs.front(), std::ios::binary);
@@ -1654,7 +1651,7 @@ TEST(BinaryLog, RandomOpeningRegion) {
   const auto* hdr = reinterpret_cast<const scribblez::binlog::FileHeader*>(raw.data());
   const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
     raw.data() + sizeof(scribblez::binlog::FileHeader));
-  ASSERT_EQ(hdr->num_games, static_cast<uint32_t>(kGames));
+  ASSERT_EQ(hdr->num_games, uint32_t(kGames));
 
   int64_t expected_rows = 0;
   for (int i = 0; i < kGames; ++i) {
@@ -1668,7 +1665,7 @@ TEST(BinaryLog, RandomOpeningRegion) {
     ASSERT_EQ(metas[i].eligible_end, prefix);
     expected_rows += prefix - (kPlies - 1);
   }
-  ASSERT_EQ(static_cast<int64_t>(hdr->num_sample_positions), expected_rows);
+  ASSERT_EQ(int64_t(hdr->num_sample_positions), expected_rows);
 
   scribblez::binlog::DataLoader::Params dl_params;
   dl_params.spec = {&dict, true};
@@ -1693,7 +1690,7 @@ TEST(Tile, GlyphBasics) {
     ASSERT_FALSE(t.is_empty());
     ASSERT_EQ(t.to_char(), c);
     // Lowercase is normalized to uppercase.
-    ASSERT_EQ(Tile::from_char(static_cast<char>(c - 'A' + 'a')), t);
+    ASSERT_EQ(Tile::from_char(char(c - 'A' + 'a')), t);
     ASSERT_EQ(t.value(), TILE_VALUES[t]);
   }
   ASSERT_TRUE(Tile::from_char('?').is_blank());
@@ -2071,8 +2068,8 @@ TEST(FaceUpLeaves, TheLogRecordsWhichVariantWasPlayed) {
 
   for (bool face_up : {false, true}) {
     fs::path dir =
-      fs::temp_directory_path() / ("scribblez_faceup_flag_" + std::to_string(::getpid()) + "_" +
-                                   std::to_string(static_cast<int>(face_up)));
+      fs::temp_directory_path() /
+      ("scribblez_faceup_flag_" + std::to_string(::getpid()) + "_" + std::to_string(int(face_up)));
     fs::create_directories(dir);
     struct DirCleanup {
       fs::path p;
@@ -2344,7 +2341,7 @@ TEST(TrainingTargets, EncodeLabels) {
   auto check_score_diff = [&](int diff_signed) {
     // Score-diff target is a single scalar at offset kWldFloats: the final
     // differential, stored as-is.
-    ASSERT_EQ(flat[kWldFloats], static_cast<float>(diff_signed));
+    ASSERT_EQ(flat[kWldFloats], float(diff_signed));
   };
 
   // Win.
@@ -2576,7 +2573,7 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
     f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
     EXPECT_TRUE(f.good());
   }
-  int64_t fsize = static_cast<int64_t>(std::filesystem::file_size(path));
+  int64_t fsize = std::filesystem::file_size(path);
 
   // Canonical state for turn 0 post-move: POV is p0 (the mover), whose leave is
   // the 6 As; applying q_play places the Q and gives p0 a score of 42.
@@ -2672,7 +2669,7 @@ TEST(DataLoader, PerRowSymmetry) {
       cfg.batch_size = 1;
       cfg.post_move = true;
       cfg.apply_symmetry = true;
-      cfg.seed = static_cast<uint64_t>(i + 100);
+      cfg.seed = i + 100;
       loader.epoch_start(cfg);
       ASSERT_EQ(loader.load_batch(row.data()), 1);
       const bool is_normal =
@@ -2762,7 +2759,7 @@ TEST(DataLoader, EligibleBeginOffset) {
     f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
     ASSERT_TRUE(f);
   }
-  const int64_t fsize = static_cast<int64_t>(fs::file_size(path));
+  const int64_t fsize = fs::file_size(path);
 
   Dictionary dict = medium_dict();
 
@@ -2835,7 +2832,7 @@ static SlogFixture write_multi_file_slog(int games_per_file, int num_files) {
     if (ent.path().extension() == ".slog") fix.slog_paths.push_back(ent.path());
   }
   std::sort(fix.slog_paths.begin(), fix.slog_paths.end());
-  EXPECT_EQ(static_cast<int>(fix.slog_paths.size()), num_files);
+  EXPECT_EQ(int(fix.slog_paths.size()), num_files);
   return fix;
 }
 
@@ -2876,8 +2873,7 @@ TEST(DataLoader, EpochDeterminism) {
     while (true) {
       int n = loader.load_batch(batch.data());
       if (n == 0) break;
-      all_data.insert(all_data.end(), batch.begin(),
-                      batch.begin() + static_cast<size_t>(n) * kRowFloats);
+      all_data.insert(all_data.end(), batch.begin(), batch.begin() + size_t(n) * kRowFloats);
     }
     return all_data;
   };
@@ -2888,7 +2884,7 @@ TEST(DataLoader, EpochDeterminism) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader1.add_file(p.string(), hdr.num_games, fsize);
   }
   auto data1 = run_epoch(loader1);
@@ -2899,7 +2895,7 @@ TEST(DataLoader, EpochDeterminism) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader2.add_file(p.string(), hdr.num_games, fsize);
   }
   auto data2 = run_epoch(loader2);
@@ -2926,7 +2922,7 @@ TEST(DataLoader, EpochDeterminism) {
     while (true) {
       int n = loader1.load_batch(batch.data());
       if (n == 0) break;
-      data4.insert(data4.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
+      data4.insert(data4.end(), batch.begin(), batch.begin() + size_t(n) * kRowFloats);
     }
     ASSERT_EQ(data4.size(), data1.size());
     ASSERT_NE(std::memcmp(data1.data(), data4.data(), data1.size() * sizeof(float)), 0);
@@ -2962,7 +2958,7 @@ TEST(DataLoader, EpochCoverage) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader.add_file(p.string(), hdr.num_games, fsize);
   }
   // Each game expands to one row per eligible turn; the loader knows the total.
@@ -2984,7 +2980,7 @@ TEST(DataLoader, EpochCoverage) {
     while (true) {
       int n = loader.load_batch(batch.data());
       if (n == 0) break;
-      data.insert(data.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * row_sz);
+      data.insert(data.end(), batch.begin(), batch.begin() + size_t(n) * row_sz);
     }
     return data;
   };
@@ -2993,8 +2989,8 @@ TEST(DataLoader, EpochCoverage) {
   std::vector<float> epoch2 = drain_epoch(8888);
 
   // Both epochs must contain exactly total_positions rows.
-  ASSERT_EQ(static_cast<int64_t>(epoch1.size()), total_positions * row_sz);
-  ASSERT_EQ(static_cast<int64_t>(epoch2.size()), total_positions * row_sz);
+  ASSERT_EQ(int64_t(epoch1.size()), total_positions * row_sz);
+  ASSERT_EQ(int64_t(epoch2.size()), total_positions * row_sz);
 
   // The two epochs have different seeds, so should be in different order.
   ASSERT_NE(std::memcmp(epoch1.data(), epoch2.data(), epoch1.size() * sizeof(float)), 0);
@@ -3043,7 +3039,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     file_info.emplace_back(hdr.num_games, fsize);
     if (fsize > max_fsize) max_fsize = fsize;
   }
@@ -3057,7 +3053,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
 
-  for (int i = 0; i < static_cast<int>(fix.slog_paths.size()); ++i) {
+  for (int i = 0; i < int(fix.slog_paths.size()); ++i) {
     loader.add_file(fix.slog_paths[i].string(), file_info[i].first, file_info[i].second);
   }
   const int64_t total_positions = loader.num_positions();
@@ -3088,7 +3084,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
   while (true) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
-    run1.insert(run1.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
+    run1.insert(run1.end(), batch.begin(), batch.begin() + size_t(n) * kRowFloats);
   }
 
   loader.epoch_start(cfg);
@@ -3096,7 +3092,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
   while (true) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
-    run2.insert(run2.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
+    run2.insert(run2.end(), batch.begin(), batch.begin() + size_t(n) * kRowFloats);
   }
   ASSERT_EQ(run1.size(), run2.size());
   ASSERT_EQ(std::memcmp(run1.data(), run2.data(), run1.size() * sizeof(float)), 0);
@@ -3131,7 +3127,7 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = static_cast<int64_t>(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader.add_file(p.string(), hdr.num_games, fsize);
   }
 
@@ -3147,7 +3143,7 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
     while (true) {
       int n = loader.load_batch(batch.data());
       if (n == 0) break;
-      data.insert(data.end(), batch.begin(), batch.begin() + static_cast<size_t>(n) * kRowFloats);
+      data.insert(data.end(), batch.begin(), batch.begin() + size_t(n) * kRowFloats);
     }
     return data;
   };
@@ -3435,7 +3431,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
     }
     ASSERT_FALSE(slog.empty());
 
-    const int64_t fsize = static_cast<int64_t>(fs::file_size(slog));
+    const int64_t fsize = fs::file_size(slog);
     std::vector<char> raw(fsize);
     {
       std::ifstream f(slog, std::ios::binary);
@@ -3443,7 +3439,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
       ASSERT_TRUE(f);
     }
     const auto* metas = reinterpret_cast<const GameMetadata*>(raw.data() + sizeof(FileHeader));
-    const int sampled = static_cast<int>(metas[0].sampled_turn);
+    const int sampled = metas[0].sampled_turn;
 
     for (bool post_move : {false, true}) {
       const uint8_t flip = 0;
@@ -3485,7 +3481,7 @@ TEST(StreamingRowBuffer, Concurrency) {
   // work counter, so consuming that many slots drains every produced row. (With
   // unbounded production the first N slots of one lane can race ahead of the
   // other, so "first M consumed slots" would not be generations 0..M-1.)
-  const uint64_t total_rows = static_cast<uint64_t>(slots_to_consume) * rows_per_slot;
+  const uint64_t total_rows = uint64_t(slots_to_consume) * rows_per_slot;
   std::atomic<uint64_t> work{0};
   const int K = 8;  // many producers + tiny slots -> frequent slot-boundary crossings
   std::vector<std::thread> producers;
@@ -3494,7 +3490,7 @@ TEST(StreamingRowBuffer, Concurrency) {
       while (work.fetch_add(1, std::memory_order_relaxed) < total_rows) {
         uint64_t r = ring.claim_row();
         if (r == StreamingRowBuffer::kNoRow) break;
-        ring.row_dest(r)[0] = static_cast<float>(r);
+        ring.row_dest(r)[0] = float(r);
         ring.commit_row(r);
       }
     });
@@ -3506,7 +3502,7 @@ TEST(StreamingRowBuffer, Concurrency) {
     int slot = ring.wait_full_slot();
     ASSERT_GE(slot, 0);
     for (int k = 0; k < rows_per_slot; ++k) {
-      uint64_t v = static_cast<uint64_t>(slots[slot][k]);
+      uint64_t v = slots[slot][k];
       if (!seen.insert(v).second) dup = true;
     }
     ring.release_slot(slot);
@@ -3514,7 +3510,7 @@ TEST(StreamingRowBuffer, Concurrency) {
   for (auto& p : producers) p.join();
 
   ASSERT_FALSE(dup);  // each global row written and read exactly once
-  ASSERT_EQ(static_cast<int>(seen.size()), slots_to_consume * rows_per_slot);
+  ASSERT_EQ(int(seen.size()), slots_to_consume * rows_per_slot);
   for (uint64_t v = 0; v < total_rows; ++v) ASSERT_EQ(seen.count(v), 1);  // exactly [0, total)
   std::cout << "  StreamingRowBuffer concurrency OK (" << seen.size() << " rows, K=" << K << ")\n";
 }
@@ -3537,7 +3533,7 @@ TEST(StreamingRowBuffer, Shutdown) {
       while (true) {
         uint64_t r = ring.claim_row();
         if (r == StreamingRowBuffer::kNoRow) break;
-        ring.row_dest(r)[0] = static_cast<float>(r);
+        ring.row_dest(r)[0] = float(r);
         ring.commit_row(r);
       }
       exited.fetch_add(1, std::memory_order_relaxed);
@@ -3626,7 +3622,7 @@ TEST(Movegen, ShadowMatchesFull) {
         smg.generate_anchor(a, rack, am);
         for (const Move& m : am) {
           // The per-tile-count bound never underestimates a real play's score.
-          ASSERT_LE(static_cast<int>(m.score()), a.score_bound_by_size[m.num_glyphs()]);
+          ASSERT_LE(int(m.score()), a.score_bound_by_size[m.num_glyphs()]);
         }
         for (Move& m : am) shadow.push_back(std::move(m));
       }
@@ -3634,7 +3630,7 @@ TEST(Movegen, ShadowMatchesFull) {
       ASSERT_EQ(key_set(board, full), key_set(board, shadow));
 
       ++positions;
-      total_moves += static_cast<long>(full.size());
+      total_moves += full.size();
       board.apply(t.move);
     }
   }
@@ -3727,7 +3723,7 @@ TEST(WordMap, GenerateMatchesFull) {
           std::vector<Move> em;
           wmp_generate_extent(board, wm, subracks, e, em);
           for (const Move& m : em) {
-            ASSERT_LE(static_cast<int>(m.score()), e.score_bound);
+            ASSERT_LE(int(m.score()), e.score_bound);
             extent_union.push_back(m);
           }
         }
@@ -3819,7 +3815,7 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
     const std::vector<Move> full = gen.generate(p.rack);
     const std::vector<Move> wmp = wmp_generate(p.board, dict, wm, p.rack);
     ASSERT_EQ(key_set(p.board, full), key_set(p.board, wmp));
-    total_moves += static_cast<long>(full.size());
+    total_moves += full.size();
 
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     ASSERT_EQ(move_key(p.board, bot.make_move(req).move),
@@ -3910,12 +3906,12 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   // HastyBot's selection: first move with strictly-greatest per-move equity.
   int hasty_pick = 0;
   for (size_t i = 1; i < per_move.size(); ++i) {
-    if (per_move[i] > per_move[hasty_pick]) hasty_pick = static_cast<int>(i);
+    if (per_move[i] > per_move[hasty_pick]) hasty_pick = int(i);
   }
   // NeuralAgent k=1 selection: top-1 of the batch ranking (same rule).
   int topk1_pick = 0;
   for (size_t i = 1; i < batch.size(); ++i) {
-    if (batch[i] > batch[topk1_pick]) topk1_pick = static_cast<int>(i);
+    if (batch[i] > batch[topk1_pick]) topk1_pick = int(i);
   }
   ASSERT_EQ(hasty_pick, topk1_pick);
 
@@ -4008,10 +4004,10 @@ TEST(SimRunner, Basic) {
   ASSERT_EQ(obs.size(), candidates.size());
 
   for (const SimObservation& o : obs) {
-    ASSERT_EQ(static_cast<int>(o.n), params.rollouts);
+    ASSERT_EQ(int(o.n), params.rollouts);
     ASSERT_EQ(o.wins + o.draws + o.losses, o.n);
     // Cauchy-Schwarz on the delta moments: (sum d)^2 <= n * sum d^2.
-    ASSERT_LE(o.delta_sum * o.delta_sum, static_cast<int64_t>(o.n) * o.delta_sq_sum);
+    ASSERT_LE(o.delta_sum * o.delta_sum, int64_t(o.n) * o.delta_sq_sum);
     for (int i = 0; i < SimObservation::kCells; ++i) {
       ASSERT_LE(o.opp_win_count[i], o.opp_next_count[i]);
       ASSERT_LE(o.self_win_count[i], o.self_next_count[i]);
@@ -4083,7 +4079,7 @@ TEST(SimRunner, KnownOppRack) {
   const std::vector<SimObservation> obs = runner.run(pos, candidates, /*base_seed=*/9);
   bool any_reply = false;
   for (const SimObservation& o : obs) {
-    ASSERT_EQ(static_cast<int>(o.n), params.rollouts);
+    ASSERT_EQ(int(o.n), params.rollouts);
     for (int i = 0; i < SimObservation::kCells; ++i) {
       ASSERT_TRUE(o.opp_next_count[i] == 0 || o.opp_next_count[i] == o.n);
       if (o.opp_next_count[i] == o.n) any_reply = true;
@@ -4133,7 +4129,7 @@ TEST(SimRunner, PartialLeave) {
   params.threads = 2;
   const std::vector<SimObservation> obs =
     SimRunner(d, params).run(pos, {plays.front()}, /*base_seed=*/4);
-  ASSERT_EQ(static_cast<int>(obs[0].n), params.rollouts);
+  ASSERT_EQ(int(obs[0].n), params.rollouts);
   ASSERT_EQ(obs[0].wins + obs[0].draws + obs[0].losses, obs[0].n);
   for (int i = 0; i < SimObservation::kCells; ++i) {
     ASSERT_LE(obs[0].opp_win_count[i], obs[0].opp_next_count[i]);
@@ -4280,7 +4276,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
       if (c == 1 && h == kPlanes - 1) continue;
       float* plane = planes.data() + (c * kPlanes + h) * kCells;
       for (uint32_t i = 0; i < kCells; ++i) {
-        plane[i] = (0.9f - 0.2f * h) * static_cast<float>(i) / (kCells - 1);
+        plane[i] = (0.9f - 0.2f * h) * float(i) / (kCells - 1);
       }
     }
   }
@@ -4308,7 +4304,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   ASSERT_EQ(r.move_at(p0, 0), m1);
   ASSERT_EQ(r.move_at(p0, 1), m2);
   for (int c = 0; c < 2; ++c) {
-    for (int j = 0; j < static_cast<int>(kFloats); ++j) {
+    for (int j = 0; j < int(kFloats); ++j) {
       ASSERT_EQ(r.targets_at(p0, c)[j], targets[c * kFloats + j]);
     }
   }
@@ -4370,7 +4366,7 @@ TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
   ASSERT_EQ(r.num_positions(), 1);
   const move_set_eval::TargetReader::Position p0 = r.position(0);
   ASSERT_EQ(r.move_at(p0, 0), m1);
-  for (int j = 0; j < static_cast<int>(move_set_eval::kTargetFloatsV1); ++j) {
+  for (int j = 0; j < int(move_set_eval::kTargetFloatsV1); ++j) {
     ASSERT_EQ(r.targets_at(p0, 0)[j], targets[j]);
   }
 
@@ -4381,8 +4377,7 @@ TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
 static std::vector<Move> ranked_plays(int count) {
   std::vector<Move> out;
   for (int i = 0; i < count; ++i) {
-    out.push_back(make_play_full(i % 15, 0, /*horizontal=*/true, 0b1,
-                                 static_cast<uint16_t>(1000 - i),
+    out.push_back(make_play_full(i % 15, 0, /*horizontal=*/true, 0b1, uint16_t(1000 - i),
                                  {Glyph::of(Tile::from_char('A'))}));
   }
   return out;
@@ -4411,7 +4406,7 @@ TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
   // Everything kept, in `ranked`'s order: the head under the cap, then the two
   // exchanges and the played move from beyond it.
   ASSERT_EQ(swept.size(), 7u);
-  for (int i = 0; i < 4; ++i) EXPECT_EQ(swept[static_cast<size_t>(i)], ranked[i]);
+  for (int i = 0; i < 4; ++i) EXPECT_EQ(swept[size_t(i)], ranked[i]);
   EXPECT_EQ(swept[4], ranked[6]);  // the in-cap exchange, past the cap by rank
   EXPECT_EQ(swept[5], buried_play);
   EXPECT_EQ(swept[6], buried_exchange);
@@ -4462,7 +4457,7 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   // The top stratum still delivers the dense head: quotas.top candidates
   // beyond the played move.
   for (int i = 1; i <= quotas.top; ++i) {
-    EXPECT_NE(std::find(out.begin(), out.end(), ranked[static_cast<size_t>(i)]), out.end());
+    EXPECT_NE(std::find(out.begin(), out.end(), ranked[size_t(i)]), out.end());
   }
   for (size_t i = 0; i < out.size(); ++i) {
     for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
@@ -4486,7 +4481,7 @@ TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
     for (int k = 1; k <= 16; ++k) {
       std::vector<binlog::GamePositionIndex> sample;
       binlog::sample_eligible_turns(gm, 5, seed, k, &sample);
-      ASSERT_EQ(sample.size(), static_cast<size_t>(k));
+      ASSERT_EQ(sample.size(), size_t(k));
       for (int i = 0; i < k; ++i) EXPECT_EQ(sample[i].turn_idx, full[i].turn_idx);
     }
     // <= 0 takes every eligible turn (in order), so it contains any sample.
@@ -4517,8 +4512,8 @@ TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
 
   for (bool face_up : {false, true}) {
     fs::path dir =
-      fs::temp_directory_path() / ("scribblez_mset_flag_" + std::to_string(::getpid()) + "_" +
-                                   std::to_string(static_cast<int>(face_up)));
+      fs::temp_directory_path() /
+      ("scribblez_mset_flag_" + std::to_string(::getpid()) + "_" + std::to_string(int(face_up)));
     fs::create_directories(dir);
     struct DirCleanup {
       fs::path p;
@@ -4589,8 +4584,7 @@ TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
   for (size_t c = 0; c < candidates.size(); ++c) {
     const float* base_row = base_rows.data() + c * input_floats(base);
     const float* open_row = open_rows.data() + c * input_floats(open);
-    ASSERT_EQ(
-      std::memcmp(base_row, open_row, sizeof(float) * static_cast<size_t>(input_floats(base))), 0)
+    ASSERT_EQ(std::memcmp(base_row, open_row, sizeof(float) * size_t(input_floats(base))), 0)
       << "candidate " << c;
     const float* tail = open_row + input_floats(base);
     for (int i = 0; i < kOppLeaveCountFloats; ++i) {
@@ -4756,7 +4750,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
   gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
-  gm.initial_score_p0 = static_cast<int16_t>(initial_score_p0);
+  gm.initial_score_p0 = initial_score_p0;
 
   InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
   TurnBlob t0{};
@@ -4784,7 +4778,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
 
   // The score-diff scalar recovers the differential when rescaled.
   const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
-  return static_cast<int>(std::lround(sd[0] * kScoreDiffInputScale));
+  return std::lround(sd[0] * kScoreDiffInputScale);
 }
 
 // A head-start handicap stored in GameMetadata must reach the replayed
@@ -4892,8 +4886,7 @@ TEST(Lane, Targets) {
     ASSERT_EQ(lane_occ[CENTER * kLaneTileKinds + sk], 0.0f);  // CAT tiles are not "placed"
 
     ASSERT_EQ(mask[row_id], 1.0f);
-    ASSERT_EQ(score[row_id],
-              static_cast<float>(std::min(t.rows[CENTER].max_score, kLaneScoreBins - 1)));
+    ASSERT_EQ(score[row_id], float(std::min(t.rows[CENTER].max_score, kLaneScoreBins - 1)));
 
     // An empty lane (row 0) is all zeros: mask off, score 0, no occupancy.
     ASSERT_EQ(mask[0], 0.0f);
@@ -4968,9 +4961,9 @@ TEST(Lane, BestMoves) {
 
   // Every kept move scores exactly its lane's max (no sub-maximal plays retained).
   for (const auto& lane : bm.rows)
-    for (const Move& m : lane.moves) ASSERT_EQ(static_cast<int>(m.score()), lane.max_score);
+    for (const Move& m : lane.moves) ASSERT_EQ(int(m.score()), lane.max_score);
   for (const auto& lane : bm.cols)
-    for (const Move& m : lane.moves) ASSERT_EQ(static_cast<int>(m.score()), lane.max_score);
+    for (const Move& m : lane.moves) ASSERT_EQ(int(m.score()), lane.max_score);
 
   // CENTER's row holds the maximal play CATS; its word and origin recover from the
   // pre-move board.
@@ -5024,7 +5017,7 @@ TEST(Lane, Analysis) {
   ASSERT_EQ(o.at("on_move").as_int64(), 0);
   const boost::json::object& la = o.at("lane_analysis").as_object();
   const boost::json::array& rows = la.at("rows").as_array();
-  ASSERT_EQ(rows.size(), static_cast<size_t>(kLanesPerAxis));
+  ASSERT_EQ(rows.size(), size_t(kLanesPerAxis));
   const boost::json::object& center_row = rows[CENTER].as_object();
   ASSERT_TRUE(center_row.at("has_move").as_bool());
   bool json_has_cats = false;
@@ -5130,8 +5123,8 @@ TEST(MaxMovePerLane, TaskRow) {
     std::vector<float> ref_lab(kLaneLabelFloats);
     encode_lane_targets(compute_lane_targets(gse.board(), rack, d), flip, ref_lab.data());
 
-    ASSERT_EQ(MaxMovePerLaneTask::kInputFloats, static_cast<int>(ref_in.size()));
-    ASSERT_EQ(MaxMovePerLaneTask::kLabelFloats, static_cast<int>(ref_lab.size()));
+    ASSERT_EQ(MaxMovePerLaneTask::kInputFloats, int(ref_in.size()));
+    ASSERT_EQ(MaxMovePerLaneTask::kLabelFloats, int(ref_lab.size()));
     for (int i = 0; i < MaxMovePerLaneTask::kInputFloats; ++i) ASSERT_EQ(row[i], ref_in[i]);
     for (int i = 0; i < MaxMovePerLaneTask::kLabelFloats; ++i)
       ASSERT_EQ(row[MaxMovePerLaneTask::kInputFloats + i], ref_lab[i]);

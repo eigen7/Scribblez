@@ -82,7 +82,7 @@ void Board::apply(const Move& move, BoardUndo* undo) {
     const int c = horizontal ? along : start;
     if (!in_bounds(r, c)) break;
     const int idx = r * BOARD_SIZE + c;
-    if (undo) undo->squares.push_back({static_cast<uint16_t>(idx), squares_[idx]});
+    if (undo) undo->squares.push_back({uint16_t(idx), squares_[idx]});
     set(r, c, move.glyph(np));  // clears caches_valid_
     placed[np++] = {r, c};
   }
@@ -109,7 +109,7 @@ void Board::unapply(const BoardUndo& undo) {
     ganchor_[it->transposed][it->idx] = it->old;
   for (auto it = undo.squares.rbegin(); it != undo.squares.rend(); ++it) {
     Glyph& sq = squares_[it->idx];
-    num_tiles_ += static_cast<int>(!it->old.is_empty()) - static_cast<int>(!sq.is_empty());
+    num_tiles_ += int(!it->old.is_empty()) - int(!sq.is_empty());
     sq = it->old;
   }
   caches_valid_ = undo.prev_caches_valid;
@@ -117,15 +117,13 @@ void Board::unapply(const BoardUndo& undo) {
 
 void Board::set_cross_(int transposed, int idx, const CrossCheck& cc) const {
   if (recorder_)
-    recorder_->crosses.push_back(
-      {static_cast<uint8_t>(transposed), static_cast<uint16_t>(idx), cross_[transposed][idx]});
+    recorder_->crosses.push_back({uint8_t(transposed), uint16_t(idx), cross_[transposed][idx]});
   cross_[transposed][idx] = cc;
 }
 
 void Board::set_anchor_(int transposed, int idx, bool value) const {
   if (recorder_)
-    recorder_->anchors.push_back(
-      {static_cast<uint8_t>(transposed), static_cast<uint16_t>(idx), ganchor_[transposed][idx]});
+    recorder_->anchors.push_back({uint8_t(transposed), uint16_t(idx), ganchor_[transposed][idx]});
   ganchor_[transposed][idx] = value;
 }
 
@@ -134,7 +132,7 @@ std::string Board::to_string() const {
   s.reserve((BOARD_SIZE + 1) * (BOARD_SIZE + 4));
   s += "   ";
   for (int c = 0; c < BOARD_SIZE; ++c) {
-    s.push_back(static_cast<char>('A' + c));
+    s.push_back(char('A' + c));
     s.push_back(' ');
   }
   s.push_back('\n');
@@ -148,8 +146,7 @@ std::string Board::to_string() const {
         s.push_back(premium_at(r, c).display_char());
         s.push_back(' ');
       } else {
-        s.push_back(sq.is_blank() ? static_cast<char>('a' + sq.letter())
-                                  : static_cast<char>('A' + sq.letter()));
+        s.push_back(sq.is_blank() ? char('a' + sq.letter()) : char('A' + sq.letter()));
         s.push_back(' ');
       }
     }

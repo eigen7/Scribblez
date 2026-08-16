@@ -41,7 +41,7 @@ CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
       spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
       encoder_(spec_) {
   if (max_batch_ < 1) throw util::Exception("candidate evaluator: max batch must be >= 1");
-  input_buf_.resize(static_cast<size_t>(max_batch_) * input_floats(spec_));
+  input_buf_.resize(size_t(max_batch_) * input_floats(spec_));
 }
 
 void CandidateEvaluator::begin_game(const BeginGameRequest& req) {
@@ -61,8 +61,8 @@ void CandidateEvaluator::encode_candidate(const Move& mv, const Rack& my_rack, i
 
 void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move>& candidates,
                                   const std::vector<int>& idx, int k) {
-  wld_buf_.resize(static_cast<size_t>(k) * nn::WldOutput::kRowElems);
-  score_diff_buf_.resize(static_cast<size_t>(k) * nn::ScoreDiffOutput::kRowElems);
+  wld_buf_.resize(size_t(k) * nn::WldOutput::kRowElems);
+  score_diff_buf_.resize(size_t(k) * nn::ScoreDiffOutput::kRowElems);
 
   // The encoder's active player is the owning agent's seat (it has observed
   // every prior move). Each candidate is scored from a post-move copy of the
@@ -72,13 +72,13 @@ void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move
   while (done < k) {
     const int chunk = std::min(max_batch_, k - done);
     for (int j = 0; j < chunk; ++j) {
-      const Move& mv = candidates[static_cast<size_t>(idx[done + j])];
+      const Move& mv = candidates[size_t(idx[done + j])];
       encode_candidate(mv, req.my_rack, my_seat, req.opp_rack,
-                       input_buf_.data() + static_cast<size_t>(j) * input_floats(spec_));
+                       input_buf_.data() + size_t(j) * input_floats(spec_));
     }
     float* const head_out[] = {
-      wld_buf_.data() + static_cast<size_t>(done) * nn::WldOutput::kRowElems,
-      score_diff_buf_.data() + static_cast<size_t>(done) * nn::ScoreDiffOutput::kRowElems};
+      wld_buf_.data() + size_t(done) * nn::WldOutput::kRowElems,
+      score_diff_buf_.data() + size_t(done) * nn::ScoreDiffOutput::kRowElems};
     service_->evaluate({input_buf_.data(), chunk}, head_out);
     done += chunk;
   }

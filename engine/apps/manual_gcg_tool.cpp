@@ -91,7 +91,7 @@ struct ManualSnapshot {
 };
 
 char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return static_cast<char>(c - 'a' + 'A');
+  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
   return c;
 }
 
@@ -132,7 +132,7 @@ boost::json::array board_grid(const Board& board) {
         row.emplace_back(nullptr);
       } else {
         char ch = g.letter().to_char();
-        if (g.is_blank()) ch = static_cast<char>(ch - 'A' + 'a');
+        if (g.is_blank()) ch = char(ch - 'A' + 'a');
         row.emplace_back(std::string(1, ch));
       }
     }
@@ -165,7 +165,7 @@ boost::json::object tile_score_map() {
 int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
   auto it = o.find(key);
   if (it == o.end() || !it->value().is_int64()) return fallback;
-  return static_cast<int>(it->value().as_int64());
+  return it->value().as_int64();
 }
 
 std::string str_field(const boost::json::object& o, const char* key) {
@@ -310,7 +310,7 @@ class ManualGame {
     o["gcg_text"] = build_gcg();
     o["tile_scores"] = tile_score_map();
     o["view_ply"] = view_ply_;
-    o["tail_ply"] = static_cast<int>(turns_.size());
+    o["tail_ply"] = int(turns_.size());
     o["backtracking"] = is_backtracking();
     o["game_over"] = !end_adjustments_.empty();
     o["racks"] = racks_json(display_racks);
@@ -326,7 +326,7 @@ class ManualGame {
   // currently viewed position, as [row, col] pairs. Empty at the start position
   // and for pass/exchange turns (which place no tiles).
   boost::json::array last_move_squares() const {
-    if (view_ply_ <= 0 || view_ply_ > static_cast<int>(turns_.size())) return {};
+    if (view_ply_ <= 0 || view_ply_ > int(turns_.size())) return {};
     return move_squares(turns_[view_ply_ - 1].record.move);
   }
 
@@ -436,7 +436,7 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = static_cast<int>(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void exchange_turn(int player, const std::vector<int>& slots) {
@@ -500,7 +500,7 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = static_cast<int>(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void play_turn(int player, int row, int col, const std::string& dir, const std::string& word,
@@ -637,11 +637,11 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = static_cast<int>(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void jump_to_ply(int ply) {
-    if (ply < 0 || ply > static_cast<int>(turns_.size())) {
+    if (ply < 0 || ply > int(turns_.size())) {
       status_ = "Invalid history position";
       return;
     }
@@ -662,11 +662,11 @@ class ManualGame {
       display_racks_for_view(view_ply_, snapshots_[view_ply_].racks);
     end_adjustments_.clear();
     turns_.resize(view_ply_);
-    snapshots_.resize(static_cast<std::size_t>(view_ply_ + 1));
+    snapshots_.resize(std::size_t(view_ply_ + 1));
     restore_live_from_snapshot(snapshots_.back());
     for (int p = 0; p < 2; ++p) racks_[p] = slots_from_display(fork_racks[p]);
     snapshots_.back().racks = racks_;
-    view_ply_ = static_cast<int>(turns_.size());
+    view_ply_ = turns_.size();
     status_ = std::format("Forked game at turn {}", view_ply_);
   }
 
@@ -681,7 +681,7 @@ class ManualGame {
     HastyBotAgent player1(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty 2"});
 
     std::random_device rd;
-    const uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+    const uint64_t seed = (uint64_t(rd()) << 32) ^ rd();
     Game game(player0, player1, dict_, seed);
     game.play();
 
@@ -705,7 +705,7 @@ class ManualGame {
     names_ = parsed.player_names;
     turns_.clear();
     turns_.reserve(parsed.turns.size());
-    for (int i = 0; i < static_cast<int>(parsed.turns.size()); ++i) {
+    for (int i = 0; i < int(parsed.turns.size()); ++i) {
       const ParsedGcgTurn& parsed_turn = parsed.turns[i];
       ManualTurn turn;
       turn.record = parsed.game_log.turns[i];
@@ -732,7 +732,7 @@ class ManualGame {
     end_adjustments_ = parsed.end_adjustments;
 
     restore_live_from_snapshot(snapshots_.back());
-    view_ply_ = static_cast<int>(turns_.size());
+    view_ply_ = turns_.size();
     status_ = "Loaded " + source_name;
   }
 
@@ -853,7 +853,7 @@ class ManualGame {
   // turn with a known rack (an unspecified rack, shown as a full hidden "?"
   // rack instead).
   std::optional<RackSlots> next_known_rack_before(int player, int from_ply) const {
-    for (int i = from_ply; i < static_cast<int>(turns_.size()); ++i) {
+    for (int i = from_ply; i < int(turns_.size()); ++i) {
       const ManualTurn& t = turns_[i];
       if (t.record.player != player) continue;
       if (has_known_tiles(t.rack_before_slots)) return t.rack_before_slots;
@@ -927,7 +927,7 @@ class ManualGame {
     // play), so empty slots are not inferred from the bag being empty.
     std::array<RackDisplay, 2> out = {display_from_slots(fallback[0], RackSlotState::UNKNOWN),
                                       display_from_slots(fallback[1], RackSlotState::UNKNOWN)};
-    if (view_ply <= 0 || view_ply > static_cast<int>(turns_.size())) return out;
+    if (view_ply <= 0 || view_ply > int(turns_.size())) return out;
 
     const ManualTurn& viewed = turns_[view_ply - 1];
     const int mover = viewed.record.player;
@@ -947,7 +947,7 @@ class ManualGame {
     // leftover tiles. These survive only in the end-of-game adjustment (the
     // per-turn racks are cleared after each move), so reveal them here. The
     // adjustment lists their whole rack, so any other slot is genuinely empty.
-    if (view_ply == static_cast<int>(turns_.size())) {
+    if (view_ply == int(turns_.size())) {
       if (const auto tiles = end_rack_tiles_for(waiting)) {
         out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
       }
@@ -973,7 +973,7 @@ class ManualGame {
     turn_player_ = s.turn_player;
   }
 
-  bool is_backtracking() const { return view_ply_ != static_cast<int>(turns_.size()); }
+  bool is_backtracking() const { return view_ply_ != int(turns_.size()); }
 
   bool require_live_mode(const std::string& action) {
     if (!is_backtracking()) return true;
@@ -983,7 +983,7 @@ class ManualGame {
 
   bool matches_play(const Move& m, const std::vector<ManualTilePlacement>& spec) const {
     if (m.type() != MoveType::PLAY) return false;
-    if (m.num_glyphs() != static_cast<int>(spec.size())) return false;
+    if (m.num_glyphs() != int(spec.size())) return false;
 
     std::map<std::pair<int, int>, const ManualTilePlacement*> placed;
     for (const ManualTilePlacement& p : spec) {
@@ -996,7 +996,7 @@ class ManualGame {
 
     const uint16_t mask = m.square_mask();
     for (int lane = 0; lane < BOARD_SIZE; ++lane) {
-      if ((mask & (static_cast<uint16_t>(1) << lane)) == 0) continue;
+      if ((mask & (uint16_t(1) << lane)) == 0) continue;
       const int r = m.horizontal() ? m.start() : lane;
       const int c = m.horizontal() ? lane : m.start();
       auto it = placed.find({r, c});
@@ -1050,7 +1050,7 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
     auto it = obj.find("slots");
     if (it != obj.end() && it->value().is_array()) {
       for (const boost::json::value& v : it->value().as_array()) {
-        if (v.is_int64()) slots.push_back(static_cast<int>(v.as_int64()));
+        if (v.is_int64()) slots.push_back(int(v.as_int64()));
       }
     }
     game.exchange_turn(int_field(obj, "player"), slots);

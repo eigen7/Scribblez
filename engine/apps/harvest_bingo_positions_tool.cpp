@@ -47,7 +47,7 @@ namespace fs = std::filesystem;
 // draws from a full bag, immediately followed by a tile placement -- so the
 // recorded final move (turn i+1) is a PLAY, as parse_monte_carlo_position needs.
 bool is_qualifying_bingo(const GameLogStorage& log, int i) {
-  if (i + 1 >= static_cast<int>(log.turns.size())) return false;
+  if (i + 1 >= int(log.turns.size())) return false;
   const TurnRecord& bingo = log.turns[i];
   const bool bingo_ok = bingo.move.type() == MoveType::PLAY &&
                         bingo.move.num_glyphs() == RACK_SIZE && bingo.bag_size_before >= RACK_SIZE;
@@ -57,7 +57,7 @@ bool is_qualifying_bingo(const GameLogStorage& log, int i) {
 // The qualifying-bingo turn indices in a played-out game.
 std::vector<int> qualifying_bingos(const GameLogStorage& log) {
   std::vector<int> out;
-  for (int i = 0; i < static_cast<int>(log.turns.size()); ++i)
+  for (int i = 0; i < int(log.turns.size()); ++i)
     if (is_qualifying_bingo(log, i)) out.push_back(i);
   return out;
 }
@@ -100,10 +100,10 @@ std::string part_filename(int part) { return std::format("part-{:03}.gcgs", part
 
 // Write the collected GCG blocks into per_file-sized bundle files.
 void write_bundles(const fs::path& dir, const std::vector<std::string>& gcgs, int per_file) {
-  const int num_parts = (static_cast<int>(gcgs.size()) + per_file - 1) / per_file;
+  const int num_parts = (int(gcgs.size()) + per_file - 1) / per_file;
   for (int part = 0; part < num_parts; ++part) {
     std::ofstream os(dir / part_filename(part));
-    const int end = std::min(static_cast<int>(gcgs.size()), (part + 1) * per_file);
+    const int end = std::min(int(gcgs.size()), (part + 1) * per_file);
     for (int k = part * per_file; k < end; ++k) os << gcgs[k];
   }
 }
@@ -146,9 +146,8 @@ int main(int argc, char** argv) {
     std::vector<std::string> gcgs;
     long seed = base_seed;
     long scanned = 0;
-    while (static_cast<int>(gcgs.size()) < count) {
-      std::string gcg =
-        scribblez::harvest_from_game(a0, a1, dict, static_cast<uint64_t>(seed), lexicon);
+    while (int(gcgs.size()) < count) {
+      std::string gcg = scribblez::harvest_from_game(a0, a1, dict, uint64_t(seed), lexicon);
       if (!gcg.empty()) gcgs.push_back(std::move(gcg));
       ++seed;
       ++scanned;

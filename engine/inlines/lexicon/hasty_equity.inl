@@ -10,10 +10,10 @@ inline TurnLeaves::TurnLeaves(const Rack& rack, const LeaveValues& lv)
   int b = 0;
   for (Tile L = Tile::of(0); L <= BLANK; ++L) {
     int c = counts.count(L);
-    indices_[L] = static_cast<uint8_t>(((1u << c) - 1u) << b);
+    indices_[L] = uint8_t(((1u << c) - 1u) << b);
     b += c;
   }
-  full_ = static_cast<uint8_t>((1u << size_) - 1);
+  full_ = (1u << size_) - 1;
 }
 
 inline uint8_t TurnLeaves::mask_for(const Move& move) const {
@@ -22,15 +22,15 @@ inline uint8_t TurnLeaves::mask_for(const Move& move) const {
   for (int i = 0; i < move.num_glyphs(); ++i) {
     uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
     int bit = std::countr_zero(idx);
-    mask &= static_cast<uint8_t>(~(1u << bit));
-    idx &= static_cast<uint8_t>(idx - 1);
+    mask &= ~(1u << bit);
+    idx &= idx - 1;
   }
   return mask;
 }
 
 inline double TurnLeaves::value(uint8_t mask) {
   ensure(mask);
-  return static_cast<double>(value_[mask]);
+  return value_[mask];
 }
 
 inline int TurnLeaves::point_value(uint8_t mask) {
@@ -44,7 +44,7 @@ inline void TurnLeaves::ensure(uint8_t mask) {
   for (int i = 0; i < size_; ++i)
     if (mask & (1u << i)) leave.add(tile_of_bit_[i]);
   value_[mask] = lv_.lookup(leave);
-  pv_[mask] = static_cast<int16_t>(leave.point_value());
+  pv_[mask] = int16_t(leave.point_value());
   computed_[mask] = true;
 }
 

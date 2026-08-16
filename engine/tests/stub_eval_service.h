@@ -25,9 +25,9 @@ struct ScriptedEval {
 };
 
 inline void write_scripted(const ScriptedEval& e, int row, std::span<float* const> head_out) {
-  float* wld = head_out[0] + static_cast<size_t>(row) * nn::WldOutput::kRowElems;
+  float* wld = head_out[0] + size_t(row) * nn::WldOutput::kRowElems;
   std::copy(e.wld.begin(), e.wld.end(), wld);
-  float* sd = head_out[1] + static_cast<size_t>(row) * nn::ScoreDiffOutput::kRowElems;
+  float* sd = head_out[1] + size_t(row) * nn::ScoreDiffOutput::kRowElems;
   std::copy(e.score_diff.begin(), e.score_diff.end(), sd);
 }
 
@@ -43,8 +43,7 @@ class StubEvalService : public nn::PositionEvalService {
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
   void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
-      write_scripted((i < static_cast<int>(scripted.size())) ? scripted[i] : ScriptedEval{}, i,
-                     head_out);
+      write_scripted((i < int(scripted.size())) ? scripted[i] : ScriptedEval{}, i, head_out);
     }
   }
 };
@@ -69,8 +68,7 @@ class CountingStubEvalService : public nn::PositionEvalService {
     max_chunk = std::max(max_chunk, batch.count);
     for (int i = 0; i < batch.count; ++i) {
       const int g = total_rows + i;
-      write_scripted((g < static_cast<int>(scripted.size())) ? scripted[g] : ScriptedEval{}, i,
-                     head_out);
+      write_scripted((g < int(scripted.size())) ? scripted[g] : ScriptedEval{}, i, head_out);
     }
     total_rows += batch.count;
   }

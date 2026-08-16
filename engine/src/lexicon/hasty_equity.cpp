@@ -54,8 +54,8 @@ double opening_adjustment(const Move& move, const Board& board) {
 double peg_adjustment(const Move& move, int bag_size, const std::vector<double>& peg_table) {
   if (bag_size <= 0 || peg_table.empty()) return 0.0;
   int bag_after = bag_size - move.num_glyphs() + 7;
-  if (bag_after < 0 || static_cast<size_t>(bag_after) >= peg_table.size()) return 0.0;
-  return peg_table[static_cast<size_t>(bag_after)];
+  if (bag_after < 0 || size_t(bag_after) >= peg_table.size()) return 0.0;
+  return peg_table[size_t(bag_after)];
 }
 
 // ---- endgame adjustment -------------------------------------------------
@@ -124,9 +124,9 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
   Rack leave = my_rack;
   for (int i = 0; i < move.num_glyphs(); ++i) leave.remove(move.glyph(i).rack_tile());
 
-  double lv = (bag_size > 0) ? static_cast<double>(leave_values_.lookup(leave)) : 0.0;
+  double lv = (bag_size > 0) ? double(leave_values_.lookup(leave)) : 0.0;
   double eg = endgame_adjustment(leave.point_value(), leave.empty(), opp_rack, bag_size);
-  return static_cast<double>(move.score()) + lv + opening_adjustment(move, board) +
+  return double(move.score()) + lv + opening_adjustment(move, board) +
          peg_adjustment(move, bag_size, peg_table_) + eg;
 }
 
@@ -139,7 +139,7 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
   const uint8_t mask = leaves.mask_for(move);
   const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
   const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
-  return static_cast<double>(move.score()) + lv + opening_adjustment(move, board) +
+  return double(move.score()) + lv + opening_adjustment(move, board) +
          peg_adjustment(move, bag_size, peg_table_) + eg;
 }
 
@@ -150,7 +150,7 @@ namespace {
 void enum_sub_leaves(const std::vector<std::pair<Tile, int>>& types, size_t i, Rack& leave,
                      int kept, const LeaveValues& lv, std::array<double, RACK_SIZE + 1>& best) {
   if (i == types.size()) {
-    best[kept] = std::max(best[kept], static_cast<double>(lv.lookup(leave)));
+    best[kept] = std::max(best[kept], double(lv.lookup(leave)));
     return;
   }
   const Tile t = types[i].first;
@@ -181,8 +181,8 @@ void HastyEquity::best_leaves_by_size(const Rack& my_rack,
 double HastyEquity::peg_for_tiles(int tiles_played, int bag_size) const {
   if (bag_size <= 0) return 0.0;
   const int bag_after = bag_size - tiles_played + 7;
-  if (bag_after < 0 || static_cast<size_t>(bag_after) >= peg_table_.size()) return 0.0;
-  return peg_table_[static_cast<size_t>(bag_after)];
+  if (bag_after < 0 || size_t(bag_after) >= peg_table_.size()) return 0.0;
+  return peg_table_[size_t(bag_after)];
 }
 
 std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const Board& board,
@@ -194,7 +194,7 @@ std::vector<double> HastyEquity::equities(const std::vector<Move>& moves, const 
   if (moves.empty()) return out;
 
   TurnLeaves leaves = turn_leaves(my_rack);
-  for (int i = 0; i < static_cast<int>(moves.size()); ++i) {
+  for (int i = 0; i < int(moves.size()); ++i) {
     out[i] = equity(moves[i], board, bag_size, opp_rack, leaves);
   }
   return out;

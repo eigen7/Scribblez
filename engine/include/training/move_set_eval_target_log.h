@@ -187,7 +187,7 @@ class TargetReader {
   uint32_t record_planes() const { return header_.record_planes; }
   uint32_t flags() const { return header_.flags; }
   std::string model_hash() const;
-  int num_positions() const { return static_cast<int>(positions_.size()); }
+  int num_positions() const { return positions_.size(); }
   Position position(int i) const { return positions_[i]; }
 
   Move move_at(const Position& p, int candidate) const;

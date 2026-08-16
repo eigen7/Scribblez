@@ -35,7 +35,7 @@ constexpr const char* Premium::code() const {
 
 inline void Board::set(int r, int c, Glyph g) {
   Glyph& sq = squares_[r * BOARD_SIZE + c];
-  num_tiles_ += static_cast<int>(!g.is_empty()) - static_cast<int>(!sq.is_empty());
+  num_tiles_ += int(!g.is_empty()) - int(!sq.is_empty());
   sq = g;
   caches_valid_ = false;
 }

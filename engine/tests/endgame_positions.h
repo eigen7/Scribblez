@@ -59,7 +59,7 @@ inline EndgamePos random_endgame(std::mt19937& rng, const Dictionary& d, int rac
     if (plays.empty()) break;
     p.board.apply(plays[std::uniform_int_distribution<size_t>(0, plays.size() - 1)(rng)]);
   }
-  std::uniform_int_distribution<int> letter(0, static_cast<int>(sizeof(kLetters) - 2));
+  std::uniform_int_distribution<int> letter(0, int(sizeof(kLetters) - 2));
   for (int i = 0; i < rack_tiles; ++i) {
     p.my_rack.add(Tile::from_char(kLetters[letter(rng)]));
     p.opp_rack.add(Tile::from_char(kLetters[letter(rng)]));

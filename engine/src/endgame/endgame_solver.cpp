@@ -84,8 +84,7 @@ void EndgameSolver::Params::add_options(boost::program_options::options_descript
 }
 
 EndgameSolver::EndgameSolver(int tt_log2_entries)
-    : tt_(static_cast<size_t>(1) << tt_log2_entries),
-      tt_mask_((static_cast<uint64_t>(1) << tt_log2_entries) - 1) {
+    : tt_(size_t(1) << tt_log2_entries), tt_mask_((uint64_t(1) << tt_log2_entries) - 1) {
   static_assert(sizeof(TTEntry) == 32, "transposition-table entry should pack into 32 bytes");
 }
 
@@ -208,7 +207,7 @@ int32_t EndgameSolver::order_estimate(const Move& move, const Move& tt_move,
     // Out-play: score plus the endgame bonus, floated to the top.
     est = move.score() + 2 * racks_[1 - mover].point_value() + (1 << 27);
   } else if (move.type() == MoveType::PLAY) {
-    est = static_cast<int32_t>(move.score()) - placed_face_value(move);
+    est = int32_t(move.score()) - placed_face_value(move);
   } else {
     est = 0;  // PASS
   }
@@ -238,7 +237,7 @@ double EndgameSolver::playout_adjusted(const Move& move) const {
   const bool empties = move.num_glyphs() == racks_[mover].size();
   const int rack_pv = racks_[mover].point_value();
   const int term = empties ? 2 * racks_[1 - mover].point_value() : -2 * (rack_pv - placed) - 10;
-  return static_cast<double>(move.score()) + term;
+  return double(move.score()) + term;
 }
 
 const Move& EndgameSolver::greedy_pick(const std::vector<Move>& plays) const {
@@ -267,7 +266,7 @@ void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t bound, bo
   e.best = best;
   e.score_rel = score_rel;
   e.flag = tt_pack(bound, proven);
-  e.depth = static_cast<uint8_t>(depth);
+  e.depth = depth;
   e.gen = tt_gen_;
 }
 
@@ -833,7 +832,7 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
 
   // Sized for the deepest search stack plus a certificate walk that runs its
   // re-searches (and their playouts) on top of the walked plies.
-  const size_t needed = static_cast<size_t>(max_plies) + 3 * kMaxPlayout + 2;
+  const size_t needed = size_t(max_plies) + 3 * kMaxPlayout + 2;
   if (frames_.size() < needed) frames_.resize(needed);
 
   // Owned copy: `plays` is handed by const reference to run_iterative and on to
@@ -862,13 +861,13 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   // opponent's rack. The same generation seeds PathMoveLists' root lists, from
   // which every deeper node's move list is derived. Seeded only once the solve
   // is sure to run, so a declined position pays nothing.
-  outplay_sets_.reset(static_cast<int>(needed));
+  outplay_sets_.reset(int(needed));
   if (outplay_futility_ || incremental_movegen_) {
     const std::vector<Move>& opp_plays = generate_moves_scratch(state.opp_rack);
     if (outplay_futility_)
       outplay_sets_.collect_root_replier(board_, opp_plays, state.opp_rack.size());
     if (incremental_movegen_) {
-      path_lists_.reset(&board_, dict_, static_cast<int>(needed));
+      path_lists_.reset(&board_, dict_, int(needed));
       path_lists_.set_root_list(0, plays);
       path_lists_.set_root_list(1, opp_plays);
     }

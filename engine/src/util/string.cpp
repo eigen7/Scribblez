@@ -29,18 +29,17 @@ uint32_t rotl(uint32_t v, int b) { return (v << b) | (v >> (32 - b)); }
 // Append the SHA-1 padding: a 0x80 byte, zeroes up to a 56-mod-64 boundary,
 // then the message length in bits as a big-endian 64-bit integer.
 void sha1_pad(std::string& data, uint64_t bit_len) {
-  data.push_back(static_cast<char>(0x80));
+  data.push_back(char(0x80));
   while (data.size() % 64 != 56) data.push_back(0);
-  for (int i = 7; i >= 0; --i) data.push_back(static_cast<char>((bit_len >> (i * 8)) & 0xff));
+  for (int i = 7; i >= 0; --i) data.push_back(char((bit_len >> (i * 8)) & 0xff));
 }
 
 // Mix one 64-byte block into the running hash state `h`.
 void sha1_process_chunk(std::array<uint32_t, 5>& h, const char* chunk) {
   uint32_t w[80];
   for (int i = 0; i < 16; ++i) {
-    w[i] = (static_cast<uint8_t>(chunk[i * 4]) << 24) |
-           (static_cast<uint8_t>(chunk[i * 4 + 1]) << 16) |
-           (static_cast<uint8_t>(chunk[i * 4 + 2]) << 8) | (static_cast<uint8_t>(chunk[i * 4 + 3]));
+    w[i] = (uint8_t(chunk[i * 4]) << 24) | (uint8_t(chunk[i * 4 + 1]) << 16) |
+           (uint8_t(chunk[i * 4 + 2]) << 8) | (uint8_t(chunk[i * 4 + 3]));
   }
   for (int i = 16; i < 80; ++i) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
 
@@ -89,7 +88,7 @@ void sha1_finalize(const std::array<uint32_t, 5>& h, uint8_t out[20]) {
 void sha1(const std::string& msg, uint8_t out[20]) {
   std::array<uint32_t, 5> h = kSha1Init;
   std::string data = msg;
-  sha1_pad(data, static_cast<uint64_t>(msg.size()) * 8);
+  sha1_pad(data, uint64_t(msg.size()) * 8);
   for (size_t chunk = 0; chunk < data.size(); chunk += 64) {
     sha1_process_chunk(h, data.data() + chunk);
   }

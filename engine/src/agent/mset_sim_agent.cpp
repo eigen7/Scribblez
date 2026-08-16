@@ -40,7 +40,7 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
       runner_(*params.dict, params.sim),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
-  board_row_.resize(static_cast<size_t>(input_floats(spec_)));
+  board_row_.resize(size_t(input_floats(spec_)));
 }
 
 void MsetSimAgent::validate(const Params& params) {
@@ -51,7 +51,7 @@ void MsetSimAgent::validate(const Params& params) {
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {
-  return util::splitmix64(seed_ ^ util::splitmix64(static_cast<uint64_t>(ply)));
+  return util::splitmix64(seed_ ^ util::splitmix64(uint64_t(ply)));
 }
 
 void MsetSimAgent::begin_game(const BeginGameRequest& req) {
@@ -81,7 +81,7 @@ void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
 }
 
 void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {
-  const int n = static_cast<int>(candidates.size());
+  const int n = candidates.size();
   encode_board_row(req, board_row_.data());
   // The differential the moves resolve is read off the same mirrored encoder
   // that wrote the board row's score-diff feature, so a candidate's resultant
@@ -89,22 +89,21 @@ void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Mov
   // the two representations were designed to share (input_encoder.h).
   const int me = encoder_.active_player();
   move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
-  wld_buf_.resize(static_cast<size_t>(n) * nn::WldOutput::kRowElems);
-  score_diff_buf_.resize(static_cast<size_t>(n) * nn::ScoreDiffOutput::kRowElems);
+  wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
+  score_diff_buf_.resize(size_t(n) * nn::ScoreDiffOutput::kRowElems);
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({board_row_.data(), &move_features_}, head_out);
 
-  rank_.resize(static_cast<size_t>(n));
+  rank_.resize(size_t(n));
   std::iota(rank_.begin(), rank_.end(), 0);
   std::stable_sort(rank_.begin(), rank_.end(),
                    [&](int a, int b) { return objective(a) > objective(b); });
 }
 
 float MsetSimAgent::objective(int i) const {
-  return objective_value(
-    wld_buf_.data() + static_cast<size_t>(i) * nn::WldOutput::kRowElems,
-    score_diff_buf_.data() + static_cast<size_t>(i) * nn::ScoreDiffOutput::kRowElems,
-    rank_objective_);
+  return objective_value(wld_buf_.data() + size_t(i) * nn::WldOutput::kRowElems,
+                         score_diff_buf_.data() + size_t(i) * nn::ScoreDiffOutput::kRowElems,
+                         rank_objective_);
 }
 
 MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
@@ -121,9 +120,9 @@ MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
 
   rank_candidates(req, candidates);
 
-  const int k = std::min(sim_top_k_, static_cast<int>(candidates.size()));
+  const int k = std::min(sim_top_k_, int(candidates.size()));
   sim_moves_.clear();
-  for (int j = 0; j < k; ++j) sim_moves_.push_back(candidates[static_cast<size_t>(rank_[j])]);
+  for (int j = 0; j < k; ++j) sim_moves_.push_back(candidates[size_t(rank_[j])]);
   if (k == 1) return sim_moves_.front();
 
   const SimPosition pos = sim_position_from(req);
@@ -131,7 +130,7 @@ MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
   // Ties in the observations go to the earlier candidate -- the better model
   // rank, this agent's own ordering.
-  return sim_moves_[static_cast<size_t>(best_observation_index(observations, sim_objective_))];
+  return sim_moves_[size_t(best_observation_index(observations, sim_objective_))];
 }
 
 }  // namespace scribblez

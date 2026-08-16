@@ -26,7 +26,7 @@ std::string nickify(const std::string& name) {
 // recovered from the board as it stood before the move.
 std::string position(const Board& board_before, const Move& m) {
   auto [r, c] = m.word_origin(board_before);
-  const char col = static_cast<char>('A' + c);
+  const char col = 'A' + c;
   return m.horizontal() ? std::format("{}{}", r + 1, col) : std::format("{}{}", col, r + 1);
 }
 
@@ -44,7 +44,7 @@ std::string played_word(const Board& board_before, const Move& m) {
     } else if (gi < n) {
       Glyph g = m.glyph(gi++);
       char ch = g.letter().to_char();
-      out.push_back(g.is_blank() ? static_cast<char>(ch - 'A' + 'a') : ch);
+      out.push_back(g.is_blank() ? char(ch - 'A' + 'a') : ch);
     } else {
       break;
     }
@@ -119,7 +119,7 @@ void write_gcg_header(std::string& out, const GameLog& log, const std::array<std
 void write_gcg_turns(std::string& out, const GameLog& log, const std::array<std::string, 2>& nick,
                      const GcgWriteOptions& options, std::array<int, 2>& last_cumulative) {
   Board board;
-  for (size_t turn_idx = 0; turn_idx < static_cast<size_t>(log.num_records); ++turn_idx) {
+  for (size_t turn_idx = 0; turn_idx < size_t(log.num_records); ++turn_idx) {
     const TurnRecord& t = log.records[turn_idx];
     const Move& m = t.move;
     const int cumulative = t.cumulative_scores[t.player];

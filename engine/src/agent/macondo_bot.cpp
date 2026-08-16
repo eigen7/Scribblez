@@ -86,7 +86,7 @@ BoundInputs make_bound_inputs(const MoveRequest& req, const HastyEquity& eq) {
   BoundInputs in;
   in.rack_size = req.my_rack.size();
   in.endgame = req.bag_size <= 0;
-  in.endgame_term = in.endgame ? 2.0 * static_cast<double>(req.opp_rack.point_value()) : 0.0;
+  in.endgame_term = in.endgame ? 2.0 * double(req.opp_rack.point_value()) : 0.0;
   in.bag_size = req.bag_size;
   eq.best_leaves_by_size(req.my_rack, in.leave_by_size);
   return in;
@@ -99,7 +99,7 @@ double equity_bound(const HastyEquity& eq, const BoundInputs& in, int placed, in
   const double leave_term =
     in.endgame ? in.endgame_term
                : in.leave_by_size[in.rack_size - placed] + eq.peg_for_tiles(placed, in.bag_size);
-  return static_cast<double>(score_bound) + leave_term;
+  return double(score_bound) + leave_term;
 }
 
 // Best move found so far, with hasty tie-break.
@@ -127,7 +127,7 @@ void consider_moves(const HastyEquity& eq, const MoveRequest& req, TurnLeaves& l
 std::vector<std::pair<double, int>> rank_by_bound(const std::vector<double>& bounds) {
   std::vector<std::pair<double, int>> order;
   order.reserve(bounds.size());
-  for (int i = 0; i < static_cast<int>(bounds.size()); ++i) order.emplace_back(bounds[i], i);
+  for (int i = 0; i < int(bounds.size()); ++i) order.emplace_back(bounds[i], i);
   std::sort(order.begin(), order.end(),
             [](const auto& x, const auto& y) { return x.first > y.first; });
   return order;
@@ -272,12 +272,12 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   BoundInputs in;
   in.rack_size = rack_tiles;
   in.endgame = req.bag_size <= 0;
-  in.endgame_term = in.endgame ? 2.0 * static_cast<double>(req.opp_rack.point_value()) : 0.0;
+  in.endgame_term = in.endgame ? 2.0 * double(req.opp_rack.point_value()) : 0.0;
   in.bag_size = req.bag_size;
   in.leave_by_size.fill(-1e18);
   for (int placed = 1; placed <= rack_tiles && placed <= kMaxPlayTiles; ++placed) {
     double best = -1e18;
-    for (float v : sub_leaves[placed]) best = std::max(best, static_cast<double>(v));
+    for (float v : sub_leaves[placed]) best = std::max(best, double(v));
     in.leave_by_size[rack_tiles - placed] = best;
   }
 
@@ -326,7 +326,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
       leave_term =
         in.leave_by_size[in.rack_size - e.placed] + eq.peg_for_tiles(e.placed, in.bag_size);
     }
-    bounds[i] = static_cast<double>(e.score_bound) + leave_term;
+    bounds[i] = double(e.score_bound) + leave_term;
   }
 
   BestMove bm;
@@ -372,21 +372,21 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   // softmax-sample among them to inject exploration into self-play data
   // generation that pure argmax play lacks.
   const std::vector<Move> plays = generate_legal_plays(req);
-  const int n = static_cast<int>(plays.size());
+  const int n = plays.size();
   if (n == 0) return Move::pass();
   const HastyEquity& eq = HastyEquity::instance();
   const std::vector<double> vals =
     eq.equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
 
   const int k = std::min(top_k_, n);
-  std::vector<int> idx(static_cast<size_t>(n));
+  std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
   std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
                     [&](int a, int b) { return vals[a] > vals[b]; });
-  std::vector<double> top_vals(static_cast<size_t>(k));
+  std::vector<double> top_vals(k);
   for (int j = 0; j < k; ++j) top_vals[j] = vals[idx[j]];
   const int chosen = sampler_.sample(top_vals, k, temperature_, rng_);
-  return plays[static_cast<size_t>(idx[chosen])];
+  return plays[size_t(idx[chosen])];
 }
 
 Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }

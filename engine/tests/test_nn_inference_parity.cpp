@@ -66,7 +66,7 @@ static std::vector<float> read_floats(const std::string& path) {
   }
   const std::streamsize bytes = f.tellg();
   f.seekg(0);
-  std::vector<float> out(static_cast<size_t>(bytes) / sizeof(float));
+  std::vector<float> out(size_t(bytes) / sizeof(float));
   f.read(reinterpret_cast<char*>(out.data()), bytes);
   return out;
 }
@@ -102,8 +102,8 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
   scribblez::nn::TrtEvalService<Spec> service(params);
   service.load();
 
-  std::vector<float> wld(static_cast<size_t>(n) * scribblez::nn::WldOutput::kRowElems);
-  std::vector<float> sd(static_cast<size_t>(n) * scribblez::nn::ScoreDiffOutput::kRowElems);
+  std::vector<float> wld(size_t(n) * scribblez::nn::WldOutput::kRowElems);
+  std::vector<float> sd(size_t(n) * scribblez::nn::ScoreDiffOutput::kRowElems);
   float* const head_out[] = {wld.data(), sd.data()};
   service.evaluate({inputs.data(), n}, head_out);
 
@@ -111,9 +111,9 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
   float max_sd_err = 0.0f;
   for (int i = 0; i < n; ++i) {
     float got[kFieldsPerRow];
-    pack(wld.data() + static_cast<size_t>(i) * scribblez::nn::WldOutput::kRowElems,
-         sd.data() + static_cast<size_t>(i) * scribblez::nn::ScoreDiffOutput::kRowElems, got);
-    const float* exp = expected.data() + static_cast<size_t>(i) * kFieldsPerRow;
+    pack(wld.data() + size_t(i) * scribblez::nn::WldOutput::kRowElems,
+         sd.data() + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems, got);
+    const float* exp = expected.data() + size_t(i) * kFieldsPerRow;
     for (int k = 0; k < 4; ++k) max_prob_err = std::max(max_prob_err, std::abs(got[k] - exp[k]));
     max_sd_err = std::max(max_sd_err, std::abs(got[4] - exp[4]));  // mean
     max_sd_err = std::max(max_sd_err, std::abs(got[5] - exp[5]));  // std
@@ -130,7 +130,7 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
 static std::filesystem::path make_scratch_dir() {
   std::filesystem::path base = std::filesystem::temp_directory_path() /
                                ("scribblez_nnparity_" + std::to_string(::time(nullptr)) + "_" +
-                                std::to_string(static_cast<unsigned long>(std::random_device{}())));
+                                std::to_string(std::random_device{}()));
   std::filesystem::create_directories(base);
   return base;
 }
@@ -185,9 +185,9 @@ TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
   ASSERT_EQ(inputs.size() % kFixtureInputFloats, 0u)
     << "inputs.bin size " << inputs.size() << " not a multiple of the full input width "
     << kFixtureInputFloats;
-  const int n = static_cast<int>(inputs.size() / kFixtureInputFloats);
+  const int n = inputs.size() / kFixtureInputFloats;
   ASSERT_GT(n, 0);
-  ASSERT_EQ(expected.size(), static_cast<size_t>(n) * kFieldsPerRow) << "(N=" << n << ")";
+  ASSERT_EQ(expected.size(), size_t(n) * kFieldsPerRow) << "(N=" << n << ")";
 
   std::cout << "  " << n << " rows from " << dir_ << "\n";
   check_precision(onnx_path, scribblez::nn::Precision::kFP16, "FP16", inputs, expected, n);

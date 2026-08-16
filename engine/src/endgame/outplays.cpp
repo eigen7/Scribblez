@@ -12,9 +12,9 @@ namespace {
 // Add cell (r, c) to the halo, ignoring out-of-bounds cells.
 void halo_add(OutplayHalo& h, int r, int c) {
   if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
-  h.rows |= static_cast<uint16_t>(1u << r);
-  h.cols |= static_cast<uint16_t>(1u << c);
-  h.cells[r] |= static_cast<uint16_t>(1u << c);
+  h.rows |= 1u << r;
+  h.cols |= 1u << c;
+  h.cells[r] |= uint16_t(1u << c);
 }
 
 // (row, col) of lane position `p` on the line `line`, in the play's orientation.
@@ -116,7 +116,7 @@ uint8_t canonical_used_mask(const Rack& rack, const TileCounts& used) {
   const std::array<Tile, RACK_SIZE>& tiles = rack.tiles();
   for (int i = 0; i < rack.size(); ++i) {
     const Tile t = tiles[i];
-    if (remaining.remove(t)) mask |= static_cast<uint8_t>(1u << i);
+    if (remaining.remove(t)) mask |= uint8_t(1u << i);
   }
   return mask;
 }
@@ -174,7 +174,7 @@ void LeaveOutplays::collect_after(const Move& m, OutplaySet& out) {
 
   // Out-plays of the leave that survive m (m does not touch their halo). m's own
   // placement always touches its own halo, so it drops out here naturally.
-  for (int j = 0; j < static_cast<int>(plays_.size()); ++j) {
+  for (int j = 0; j < int(plays_.size()); ++j) {
     if (play_mask_[j] != key) continue;
     if (move_touches_halo(halos_[j], m)) continue;
     out.push_back({plays_[j], halos_[j]});
@@ -183,7 +183,7 @@ void LeaveOutplays::collect_after(const Move& m, OutplaySet& out) {
 }
 
 void OutplaySetStack::reset(int max_ply) {
-  if (static_cast<int>(slots_.size()) < max_ply) slots_.resize(max_ply);
+  if (int(slots_.size()) < max_ply) slots_.resize(max_ply);
   root_[0].clear();
   root_[1].clear();
   cur_[0] = &root_[0];

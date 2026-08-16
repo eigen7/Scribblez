@@ -88,7 +88,7 @@ struct Options {
   bool full_sweep = false;
   int sweep_cap = 1500;
   int positions_per_game = 0;  // 0 = every training-eligible turn
-  int threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+  int threads = std::max(1u, std::thread::hardware_concurrency());
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
   // Derived in main() from the inference batch size, not a CLI flag: a slice
@@ -208,17 +208,17 @@ void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
                    const GamePositionIndex& w, int mover, const move_set_eval::Selection& sel,
                    int slice_candidates, int row_floats, SliceQueue* queue) {
   const size_t total = sel.candidates.size();
-  for (size_t first = 0; first < total; first += static_cast<size_t>(slice_candidates)) {
-    const size_t count = std::min(static_cast<size_t>(slice_candidates), total - first);
+  for (size_t first = 0; first < total; first += size_t(slice_candidates)) {
+    const size_t count = std::min(size_t(slice_candidates), total - first);
     CandidateSlice slice;
     slice.pos = w;
-    slice.first = static_cast<uint32_t>(first);
-    slice.position_candidates = static_cast<uint32_t>(total);
+    slice.first = first;
+    slice.position_candidates = total;
     slice.num_legal_moves = sel.num_legal_moves;
-    slice.candidates.assign(sel.candidates.begin() + static_cast<ptrdiff_t>(first),
-                            sel.candidates.begin() + static_cast<ptrdiff_t>(first + count));
-    slice.rows.resize(count * static_cast<size_t>(row_floats));
-    binlog::encode_candidate_rows(encoder, g, static_cast<int>(w.turn_idx), mover, slice.candidates,
+    slice.candidates.assign(sel.candidates.begin() + ptrdiff_t(first),
+                            sel.candidates.begin() + ptrdiff_t(first + count));
+    slice.rows.resize(count * size_t(row_floats));
+    binlog::encode_candidate_rows(encoder, g, int(w.turn_idx), mover, slice.candidates,
                                   slice.rows.data());
     queue->push(std::move(slice));
   }
@@ -237,7 +237,7 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
     const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
-    const int mover = encoder.replay_to_sampled(g, static_cast<int>(w.turn_idx),
+    const int mover = encoder.replay_to_sampled(g, int(w.turn_idx),
                                                 /*post_move=*/false);
     const Rack& rack = encoder.rack(mover);
     const Board& board = encoder.enc().board();
@@ -306,15 +306,15 @@ InferenceLoop::InferenceLoop(TeacherService* service, int row_floats, int batch_
       batch_size_(batch_size),
       label_planes_(label_planes),
       meter_(meter),
-      inputs_(static_cast<size_t>(batch_size) * row_floats),
-      wld_buf_(static_cast<size_t>(batch_size) * nn::WldOutput::kRowElems),
-      score_diff_buf_(static_cast<size_t>(batch_size) * nn::ScoreDiffOutput::kRowElems),
+      inputs_(size_t(batch_size) * row_floats),
+      wld_buf_(size_t(batch_size) * nn::WldOutput::kRowElems),
+      score_diff_buf_(size_t(batch_size) * nn::ScoreDiffOutput::kRowElems),
       masks_(label_planes ? batch_size * kPlaneFloats : 0) {}
 
 void InferenceLoop::run(SliceQueue* queue) {
   CandidateSlice item;
   while (queue->pop(&item)) {
-    const int count = static_cast<int>(item.candidates.size());
+    const int count = item.candidates.size();
     if (pending_rows_ + count > batch_size_) {
       flush();
       pending_rows_ = 0;
@@ -330,22 +330,21 @@ void InferenceLoop::flush() {
   int rows = 0;
   for (const CandidateSlice& p : pending_) {
     std::memcpy(inputs_.data() + rows * row_floats_, p.rows.data(), p.rows.size() * sizeof(float));
-    rows += static_cast<int>(p.candidates.size());
+    rows += p.candidates.size();
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
-    const int count = static_cast<int>(p.candidates.size());
+    const int count = p.candidates.size();
     p.targets.resize(count * move_set_eval::kTargetFloatsV1);
     if (label_planes_) {
       p.planes.assign(masks_.data() + cursor * kPlaneFloats,
                       masks_.data() + (cursor + count) * kPlaneFloats);
     }
     for (int c = 0; c < count; ++c) {
-      const float* wld = wld_buf_.data() + static_cast<size_t>(cursor) * nn::WldOutput::kRowElems;
-      const float* sd =
-        score_diff_buf_.data() + static_cast<size_t>(cursor) * nn::ScoreDiffOutput::kRowElems;
+      const float* wld = wld_buf_.data() + size_t(cursor) * nn::WldOutput::kRowElems;
+      const float* sd = score_diff_buf_.data() + size_t(cursor) * nn::ScoreDiffOutput::kRowElems;
       ++cursor;
       float* t = p.targets.data() + c * move_set_eval::kTargetFloatsV1;
       t[0] = wld[0];
@@ -377,7 +376,7 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
     std::vector<float> targets;
     std::vector<float> planes;
     candidates.reserve(head.position_candidates);
-    targets.reserve(static_cast<size_t>(head.position_candidates) * move_set_eval::kTargetFloatsV1);
+    targets.reserve(size_t(head.position_candidates) * move_set_eval::kTargetFloatsV1);
     size_t j = i;
     for (; j < slices.size() && slices[j].pos == head.pos; ++j) {
       const CandidateSlice& s = slices[j];
@@ -426,7 +425,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
 
   // A few batches in flight keeps the GPU fed without letting encoded rows
   // (~80 KB each) accumulate.
-  SliceQueue queue(/*row_budget=*/static_cast<size_t>(4 * batch_size));
+  SliceQueue queue(/*row_budget=*/size_t(4 * batch_size));
   std::atomic<size_t> next{0};
   const int encoders = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
   for (int t = 0; t < encoders; ++t) queue.add_producer();

@@ -104,7 +104,7 @@ bool http_responding_on_port(int port) {
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = htons(static_cast<uint16_t>(port));
+  addr.sin_port = htons(uint16_t(port));
 
   if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
     ::close(fd);
@@ -162,7 +162,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
 
   auto [sr, sc] = move.word_origin(board);
   std::string pos;
-  char col_letter = static_cast<char>('A' + sc);
+  char col_letter = 'A' + sc;
   if (move.horizontal()) {
     pos = std::format("{}{}", sr + 1, col_letter);  // e.g. "8H"
   } else {
@@ -185,7 +185,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
       break;
     }
     char ch = g.letter().to_char();
-    word.push_back(g.is_blank() ? static_cast<char>(ch - 'A' + 'a') : ch);
+    word.push_back(g.is_blank() ? char(ch - 'A' + 'a') : ch);
     r += dr;
     c += dc;
   }
@@ -242,9 +242,8 @@ std::string game_state_json(const StateView& v) {
     json::array moves;
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
-      json::object mo{{"index", static_cast<int>(i)},
-                      {"text", move_to_notation(v.board, m)},
-                      {"score", m.score()}};
+      json::object mo{
+        {"index", int(i)}, {"text", move_to_notation(v.board, m)}, {"score", m.score()}};
       // equity: null when we have no Macondo evaluation (or no value for
       // this particular play). The front-end renders the null cells blank.
       if (v.legal_play_equities && i < v.legal_play_equities->size() &&
@@ -329,8 +328,7 @@ bool ViteDevServer::wait_until_ready(int timeout_ms) {
   using tcp = asio::ip::tcp;
 
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"),
-                         static_cast<unsigned short>(dev_port_));
+  tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"), uint16_t(dev_port_));
   while (std::chrono::steady_clock::now() < deadline) {
     // Fail fast if the dev server already exited (e.g. deps not installed).
     if (child_ && !child_->running()) return false;
@@ -365,7 +363,7 @@ WebSession::WebSession(int port) : port_(port) {
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = htons(static_cast<uint16_t>(port_));
+  addr.sin_port = htons(uint16_t(port_));
   if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
     ::close(listen_fd_);
     throw util::CleanException("bind() failed on port {} (is another instance running?)", port_);
@@ -416,7 +414,7 @@ bool WebSession::wait_for_client() {
     while (req.find("\r\n\r\n") == std::string::npos) {
       ssize_t r = ::recv(conn, buf, sizeof(buf), 0);
       if (r <= 0) break;
-      req.append(buf, static_cast<size_t>(r));
+      req.append(buf, size_t(r));
       if (req.size() > 64 * 1024) break;
     }
     if (req.empty()) {
@@ -443,18 +441,17 @@ bool WebSession::wait_for_client() {
 void WebSession::send_text(const std::string& msg) {
   if (ws_fd_ < 0) return;
   std::string frame;
-  frame.push_back(static_cast<char>(0x81));  // FIN + text
+  frame.push_back(char(0x81));  // FIN + text
   size_t n = msg.size();
   if (n < 126) {
-    frame.push_back(static_cast<char>(n));
+    frame.push_back(char(n));
   } else if (n < 65536) {
-    frame.push_back(static_cast<char>(126));
-    frame.push_back(static_cast<char>((n >> 8) & 0xff));
-    frame.push_back(static_cast<char>(n & 0xff));
+    frame.push_back(char(126));
+    frame.push_back(char((n >> 8) & 0xff));
+    frame.push_back(char(n & 0xff));
   } else {
-    frame.push_back(static_cast<char>(127));
-    for (int i = 7; i >= 0; --i)
-      frame.push_back(static_cast<char>((static_cast<uint64_t>(n) >> (i * 8)) & 0xff));
+    frame.push_back(char(127));
+    for (int i = 7; i >= 0; --i) frame.push_back(char((uint64_t(n) >> (i * 8)) & 0xff));
   }
   frame += msg;
   if (!write_all(ws_fd_, frame.data(), frame.size())) disconnect();
@@ -483,7 +480,7 @@ std::optional<std::string> WebSession::recv_text() {
         disconnect();
         return std::nullopt;
       }
-      len = (static_cast<uint64_t>(ext[0]) << 8) | ext[1];
+      len = (uint64_t(ext[0]) << 8) | ext[1];
     } else if (len == 127) {
       uint8_t ext[8];
       if (!read_n(ws_fd_, ext, 8)) {
@@ -518,8 +515,8 @@ std::optional<std::string> WebSession::recv_text() {
         return std::nullopt;
       case 0x9: {  // ping -> pong
         std::string frame;
-        frame.push_back(static_cast<char>(0x8a));
-        frame.push_back(static_cast<char>(payload.size() & 0x7f));
+        frame.push_back(char(0x8a));
+        frame.push_back(char(payload.size() & 0x7f));
         frame += payload;
         if (!write_all(ws_fd_, frame.data(), frame.size())) {
           disconnect();

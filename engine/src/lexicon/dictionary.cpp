@@ -35,7 +35,7 @@ void insert(TrieNode* root, const std::vector<uint8_t>& tiles) {
 // returning the arc-list index of `tn`'s children (0 if it has none).
 uint32_t layout(std::vector<uint32_t>& nodes, const TrieNode* tn) {
   if (tn->children.empty()) return 0;
-  uint32_t first = static_cast<uint32_t>(nodes.size());
+  uint32_t first = nodes.size();
   std::vector<uint8_t> tiles;
   tiles.reserve(tn->children.size());
   for (const auto& kv : tn->children) tiles.push_back(kv.first);
@@ -46,7 +46,7 @@ uint32_t layout(std::vector<uint32_t>& nodes, const TrieNode* tn) {
     uint32_t v = child_arc & Dictionary::ARC_MASK;
     if (child->terminal) v |= Dictionary::ACCEPTS_BIT;
     if (i + 1 == tiles.size()) v |= Dictionary::IS_END_BIT;
-    v |= (static_cast<uint32_t>(tiles[i])) << 24;
+    v |= (uint32_t(tiles[i])) << 24;
     nodes[first + i] = v;
   }
   return first;
@@ -58,9 +58,9 @@ bool word_to_tiles(const std::string& w, std::vector<uint8_t>& out) {
   if (w.size() < 2) return false;
   out.clear();
   for (char c : w) {
-    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
     if (c < 'A' || c > 'Z') return false;
-    out.push_back(static_cast<uint8_t>(c - 'A' + 1));  // 1-indexed
+    out.push_back(uint8_t(c - 'A' + 1));  // 1-indexed
   }
   return true;
 }
@@ -79,7 +79,7 @@ Dictionary::Step Dictionary::step_tile(uint32_t node, uint8_t tile_value) const 
 }
 
 Dictionary::Step Dictionary::step(uint32_t node, Tile letter) const {
-  return step_tile(node, static_cast<uint8_t>(letter + 1));  // KWG is 1-indexed
+  return step_tile(node, uint8_t(letter + 1));  // KWG is 1-indexed
 }
 
 bool Dictionary::contains(const std::string& word) const {
@@ -88,7 +88,7 @@ bool Dictionary::contains(const std::string& word) const {
   bool acc = false;
   for (size_t k = 0; k < word.size(); ++k) {
     char c = word[k];
-    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
     if (c < 'A' || c > 'Z') return false;
     Tile L = Tile::of(c - 'A');
     Step s = step(node, L);
@@ -110,7 +110,7 @@ Dictionary Dictionary::load_kwg(const std::string& path) {
     throw util::Exception("Bad KWG file size for: {}", path);
   }
   Dictionary d;
-  d.nodes_.resize(static_cast<size_t>(size) / 4);
+  d.nodes_.resize(size_t(size) / 4);
   in.read(reinterpret_cast<char*>(d.nodes_.data()), size);
   if (!in) throw util::Exception("Failed to read KWG file: {}", path);
   // KWG is little-endian uint32. This loader assumes a little-endian host
@@ -136,7 +136,7 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
     // GADDAG: rev(c1..ci) + SEP + c(i+1..n) for i = 1..n-1, and the fully
     // reversed word (no separator) for i = n. This matches the wolges/Macondo
     // encoding (verified against real .kwg files).
-    const int n = static_cast<int>(tiles.size());
+    const int n = tiles.size();
     std::vector<uint8_t> path;
     path.reserve(n + 1);
     for (int i = 1; i <= n; ++i) {

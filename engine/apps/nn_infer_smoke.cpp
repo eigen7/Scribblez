@@ -44,18 +44,16 @@ int main(int argc, char** argv) {
     // own row width; we only care that the model produces finite, well-formed
     // outputs.
     const size_t row_floats =
-      static_cast<size_t>(service.spatial_planes()) * scribblez::kBoardCells +
-      service.scalar_floats();
-    std::vector<float> inputs(static_cast<size_t>(rows) * row_floats, 0.0f);
-    std::vector<float> wld(static_cast<size_t>(rows) * scribblez::nn::WldOutput::kRowElems);
-    std::vector<float> sd(static_cast<size_t>(rows) * scribblez::nn::ScoreDiffOutput::kRowElems);
+      size_t(service.spatial_planes()) * scribblez::kBoardCells + service.scalar_floats();
+    std::vector<float> inputs(size_t(rows) * row_floats, 0.0f);
+    std::vector<float> wld(size_t(rows) * scribblez::nn::WldOutput::kRowElems);
+    std::vector<float> sd(size_t(rows) * scribblez::nn::ScoreDiffOutput::kRowElems);
     float* const head_out[] = {wld.data(), sd.data()};
     service.evaluate({inputs.data(), rows}, head_out);
 
     for (int r = 0; r < rows; ++r) {
-      const float* w = wld.data() + static_cast<size_t>(r) * scribblez::nn::WldOutput::kRowElems;
-      const float* s =
-        sd.data() + static_cast<size_t>(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      const float* w = wld.data() + size_t(r) * scribblez::nn::WldOutput::kRowElems;
+      const float* s = sd.data() + size_t(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
       std::cout << "row " << r << ": P(win)=" << w[0] << " P(draw)=" << w[1] << " P(loss)=" << w[2]
                 << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }

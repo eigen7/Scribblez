@@ -59,12 +59,12 @@ std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
 
 int NeuralAgent::greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const {
   const std::vector<double> equities = candidate_equities(req, plays);
-  return static_cast<int>(std::max_element(equities.begin(), equities.end()) - equities.begin());
+  return std::max_element(equities.begin(), equities.end()) - equities.begin();
 }
 
 int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Move>& plays) {
-  const int n = static_cast<int>(plays.size());
-  cand_idx_.resize(static_cast<size_t>(n));
+  const int n = plays.size();
+  cand_idx_.resize(size_t(n));
   std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
 
   // All-moves mode (top_k_ == 0) or fewer plays than the cap: evaluate every
@@ -75,7 +75,7 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
   const std::vector<double> equities = candidate_equities(req, plays);
   std::partial_sort(cand_idx_.begin(), cand_idx_.begin() + top_k_, cand_idx_.end(),
                     [&](int a, int b) { return equities[a] > equities[b]; });
-  cand_idx_.resize(static_cast<size_t>(top_k_));
+  cand_idx_.resize(size_t(top_k_));
   return top_k_;
 }
 
@@ -93,7 +93,7 @@ int NeuralAgent::select_index(int k) {
     return best;
   }
 
-  if (static_cast<int>(obj_values_.size()) < k) obj_values_.resize(static_cast<size_t>(k));
+  if (int(obj_values_.size()) < k) obj_values_.resize(size_t(k));
   for (int j = 0; j < k; ++j) obj_values_[j] = objective(j);
   return sampler_.sample(obj_values_, k, temperature_, rng_);
 }
@@ -115,12 +115,12 @@ MoveDecision NeuralAgent::make_move(const MoveRequest& req) {
   // training regime and ranks these worse than static equity, so play the
   // greedy HastyBot equity move instead of consulting the model.
   if (req.bag_size == 0) {
-    return plays[static_cast<size_t>(greedy_equity_index(req, plays))];
+    return plays[size_t(greedy_equity_index(req, plays))];
   }
 
   const int k = select_candidates(req, plays);
   evaluator_.evaluate(req, plays, cand_idx_, k);
-  return plays[static_cast<size_t>(cand_idx_[select_index(k)])];
+  return plays[size_t(cand_idx_[select_index(k)])];
 }
 
 }  // namespace scribblez

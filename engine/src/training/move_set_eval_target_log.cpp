@@ -70,7 +70,7 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
   TargetPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
-  ph.num_candidates = static_cast<uint32_t>(candidates.size());
+  ph.num_candidates = candidates.size();
   ph.num_legal_moves = num_legal_moves;
   append_bytes(&buffer_, &ph, sizeof(ph));
   std::array<uint8_t, kPlaneCells> quantized;
@@ -104,7 +104,7 @@ void TargetWriter::close() {
   {
     std::ofstream f(tmp, std::ios::binary);
     if (!f) throw util::Exception("TargetWriter: cannot open {}", tmp);
-    f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+    f.write(buffer_.data(), std::streamsize(buffer_.size()));
   }
   std::filesystem::rename(tmp, path_);
 }
@@ -114,7 +114,7 @@ TargetReader::TargetReader(const std::string& path) {
   if (!f) throw util::Exception("TargetReader: cannot open {}", path);
   const std::streamsize size = f.tellg();
   f.seekg(0);
-  buffer_.resize(static_cast<size_t>(size));
+  buffer_.resize(size_t(size));
   f.read(buffer_.data(), size);
 
   if (buffer_.size() < sizeof(TargetFileHeader)) {
@@ -138,7 +138,7 @@ TargetReader::TargetReader(const std::string& path) {
     const TargetPositionHeader* ph =
       reinterpret_cast<const TargetPositionHeader*>(buffer_.data() + off);
     off += sizeof(TargetPositionHeader);
-    const size_t bytes = static_cast<size_t>(ph->num_candidates) * record_bytes();
+    const size_t bytes = size_t(ph->num_candidates) * record_bytes();
     if (off + bytes > buffer_.size()) {
       throw util::Exception("TargetReader: truncated records in {}", path);
     }

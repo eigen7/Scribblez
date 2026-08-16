@@ -25,7 +25,7 @@ namespace json = boost::json;
 constexpr int kMaxBestMovesPerLane = 16;
 
 // The display character for a lane-union tile kind (a letter, or '?' for a blank).
-char kind_char(int kind) { return kind == kLaneBlankKind ? '?' : static_cast<char>('A' + kind); }
+char kind_char(int kind) { return kind == kLaneBlankKind ? '?' : char('A' + kind); }
 
 // One lane's placed-tile union as a 15-cell array; cell `i` lists the letter(s) /
 // blank that a maximal play newly places there (empty where nothing is placed).
@@ -45,7 +45,7 @@ json::array lane_placed(const LaneBest& lane) {
 // the pre-move board.
 json::array lane_best_moves(const Board& board, const LaneBestMoves& lane) {
   json::array out;
-  const int n = std::min(static_cast<int>(lane.moves.size()), kMaxBestMovesPerLane);
+  const int n = std::min(int(lane.moves.size()), kMaxBestMovesPerLane);
   for (int i = 0; i < n; ++i) {
     const Move& m = lane.moves[i];
     const auto [row, col] = m.word_origin(board);
@@ -54,7 +54,7 @@ json::array lane_best_moves(const Board& board, const LaneBestMoves& lane) {
       {"row", row},
       {"col", col},
       {"horizontal", m.horizontal()},
-      {"score", static_cast<int>(m.score())},
+      {"score", int(m.score())},
     });
   }
   return out;
@@ -62,11 +62,9 @@ json::array lane_best_moves(const Board& board, const LaneBestMoves& lane) {
 
 json::object lane_object(const Board& board, const LaneBest& tgt, const LaneBestMoves& bm) {
   return json::object{
-    {"has_move", tgt.has_move},
-    {"max_score", tgt.has_move ? tgt.max_score : 0},
-    {"placed", lane_placed(tgt)},
-    {"best_moves", lane_best_moves(board, bm)},
-    {"num_best", static_cast<int>(bm.moves.size())},
+    {"has_move", tgt.has_move},         {"max_score", tgt.has_move ? tgt.max_score : 0},
+    {"placed", lane_placed(tgt)},       {"best_moves", lane_best_moves(board, bm)},
+    {"num_best", int(bm.moves.size())},
   };
 }
 
@@ -101,7 +99,7 @@ Rack rack_from_header_token(const std::string& tok) {
       rack.add(BLANK);
       continue;
     }
-    const char up = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    const char up = std::toupper(uint8_t(ch));
     if (up >= 'A' && up <= 'Z') rack.add(Tile::from_char(up));
   }
   return rack;

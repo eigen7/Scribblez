@@ -133,9 +133,7 @@ struct TargetShapeTable<scribblez::TargetList<Ts...>> {
     std::array<ScribblezShape, kCount + 1> a{};
     std::size_t i = 0;
     (void)std::initializer_list<int>{
-      (a[i] = ScribblezShape{Ts::kName, Ts::kDims, static_cast<int>(std::size(Ts::kDims)),
-                             static_cast<int>(i)},
-       ++i, 0)...};
+      (a[i] = ScribblezShape{Ts::kName, Ts::kDims, int(std::size(Ts::kDims)), int(i)}, ++i, 0)...};
     a[kCount] = ScribblezShape{nullptr, nullptr, 0, 0};
     return a;
   }();
@@ -209,7 +207,7 @@ int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32
   if (buf.size() < sizeof(FileHeader)) return -1;
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   if (hdr->magic != kMagic || hdr->version != kVersion) return -1;
-  if (game_idx >= static_cast<int64_t>(hdr->num_games)) return -1;
+  if (game_idx >= int64_t(hdr->num_games)) return -1;
   if (num_games) *num_games = hdr->num_games;
   return 0;
 }
@@ -223,17 +221,17 @@ int ScribblezSession::encode_score_diff_sweep(const char* path, int64_t game_idx
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
 
-  const int64_t sweep = static_cast<int64_t>(diff_hi - diff_lo + 1) * input_floats();
+  const int64_t sweep = int64_t(diff_hi - diff_lo + 1) * input_floats();
   scribblez::binlog::BlockDecoder decoder(spec);
   if (game_idx >= 0) {
     // A single position.
-    decoder.encode_score_diff_sweep(buf.data(), static_cast<uint32_t>(game_idx), post_move, diff_lo,
-                                    diff_hi, out_inputs);
+    decoder.encode_score_diff_sweep(buf.data(), uint32_t(game_idx), post_move, diff_lo, diff_hi,
+                                    out_inputs);
   } else {
     // Every position in the file, position-major (game g at row g * R).
     for (uint32_t g = 0; g < num_games; ++g) {
       decoder.encode_score_diff_sweep(buf.data(), g, post_move, diff_lo, diff_hi,
-                                      out_inputs + static_cast<int64_t>(g) * sweep);
+                                      out_inputs + int64_t(g) * sweep);
     }
   }
   return 0;
@@ -249,10 +247,10 @@ namespace {
 // Copy `s` into the caller's NUL-terminated buffer (truncating to out_cap) and
 // return the full length, which may exceed out_cap - 1 (caller should retry).
 int emit_string(const std::string& s, char* out, int out_cap) {
-  const int len = static_cast<int>(s.size());
+  const int len = s.size();
   if (out && out_cap > 0) {
     const int n = len < out_cap - 1 ? len : out_cap - 1;
-    std::memcpy(out, s.data(), static_cast<size_t>(n));
+    std::memcpy(out, s.data(), size_t(n));
     out[n] = '\0';
   }
   return len;
@@ -309,12 +307,12 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 
   *played_rank = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
-    if (candidates[i] == final_turn.move) *played_rank = static_cast<int>(i);
+    if (candidates[i] == final_turn.move) *played_rank = int(i);
     char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
     std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
     std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));
   }
-  return static_cast<int>(candidates.size());
+  return candidates.size();
 }
 
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
@@ -333,8 +331,8 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
   scribblez::binlog::BlockDecoder decoder(spec);
   const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
   for (int64_t j = 0; j < n; ++j) {
-    decoder.decode_one(buf.data(), path, static_cast<uint32_t>(game_idx[j]),
-                       static_cast<uint32_t>(turn_idx[j]), /*flip=*/false, post_move,
+    decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+                       /*flip=*/false, post_move,
                        /*output_row=*/0, out + j * row_floats);
   }
   return 0;
@@ -385,8 +383,8 @@ int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool pos
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
-  return emit_string(decoder.dump_position(buf.data(), static_cast<uint32_t>(game_idx), post_move),
-                     out, out_cap);
+  return emit_string(decoder.dump_position(buf.data(), uint32_t(game_idx), post_move), out,
+                     out_cap);
 }
 
 int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
@@ -399,9 +397,8 @@ int ScribblezSession::dump_position_json(const char* path, int64_t game_idx, boo
   std::vector<char> buf;
   if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
-  return emit_string(
-    decoder.dump_position_json(buf.data(), static_cast<uint32_t>(game_idx), post_move), out,
-    out_cap);
+  return emit_string(decoder.dump_position_json(buf.data(), uint32_t(game_idx), post_move), out,
+                     out_cap);
 }
 
 int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
@@ -489,7 +486,7 @@ int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
                           const int64_t* game_indices, int num_picks) {
   if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;
   std::vector<scribblez::binlog::SlogPick> picks;
-  picks.reserve(static_cast<size_t>(num_picks));
+  picks.reserve(size_t(num_picks));
   for (int i = 0; i < num_picks; ++i) {
     if (!src_paths[i]) return -1;
     picks.push_back({src_paths[i], game_indices[i]});
@@ -513,8 +510,8 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
   std::error_code ec;
   const auto fsz = std::filesystem::file_size(path, ec);
   if (ec) return -1;
-  *out_num_positions = static_cast<int64_t>(hdr.num_games);
-  *out_file_size = static_cast<int64_t>(fsz);
+  *out_num_positions = hdr.num_games;
+  *out_file_size = fsz;
   return 0;
 }
 

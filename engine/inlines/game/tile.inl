@@ -10,12 +10,12 @@ constexpr Tile& Tile::operator++() {
 constexpr char Tile::to_char() const {
   if (code_ == kBlank) return '?';
   if (code_ == kEmpty) return '.';
-  return static_cast<char>('A' + code_);
+  return 'A' + code_;
 }
 
 constexpr Tile Tile::from_char(char c) {
   if (c == '?' || c == '_') return blank();
-  if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+  if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
   return of(c - 'A');
 }
 

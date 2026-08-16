@@ -100,7 +100,7 @@ bool parse_leave(const std::string& s, Rack* out, std::string* error) {
 }
 
 std::string tile_name(int idx) {
-  return idx == BLANK.index() ? "?" : std::string(1, static_cast<char>('A' + idx));
+  return idx == BLANK.index() ? "?" : std::string(1, char('A' + idx));
 }
 
 // Per-tile counts available off the board: the full distribution minus the played

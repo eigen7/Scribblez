@@ -6,7 +6,7 @@ namespace scribblez {
 
 SeedProducer::SeedProducer() {
   std::random_device rd;
-  rng_.seed((static_cast<uint64_t>(rd()) << 32) ^ static_cast<uint64_t>(rd()));
+  rng_.seed((uint64_t(rd()) << 32) ^ uint64_t(rd()));
 }
 
 SeedProducer& SeedProducer::instance() {
@@ -24,7 +24,7 @@ uint64_t SeedProducer::seed(const Params& params) {
   uint64_t s = params.seed;
   if (s == 0) {
     std::random_device rd;
-    s = (static_cast<uint64_t>(rd()) << 32) ^ static_cast<uint64_t>(rd());
+    s = (uint64_t(rd()) << 32) ^ uint64_t(rd());
   }
   rng_.seed(s);
   return s;

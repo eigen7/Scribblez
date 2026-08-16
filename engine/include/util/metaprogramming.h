@@ -52,7 +52,7 @@ consteval std::size_t std_array_extent(std::meta::info type) {
 consteval std::string dec_string(std::size_t v) {
   std::string s;
   do {
-    s.insert(s.begin(), static_cast<char>('0' + v % 10));
+    s.insert(s.begin(), char('0' + v % 10));
     v /= 10;
   } while (v != 0);
   return s;

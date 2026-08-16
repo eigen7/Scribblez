@@ -275,10 +275,10 @@ Move lane_play(bool horizontal, int line, const std::vector<int>& along, uint16_
   uint16_t mask = 0;
   std::vector<Glyph> glyphs;
   for (int p : along) {
-    mask |= static_cast<uint16_t>(1u << p);
+    mask |= 1u << p;
     glyphs.push_back(Glyph::of(Tile::of(0)));  // an 'A'; value is unused here
   }
-  return Move::play(horizontal, line, mask, score, glyphs.data(), static_cast<int>(glyphs.size()));
+  return Move::play(horizontal, line, mask, score, glyphs.data(), int(glyphs.size()));
 }
 Move horiz_play(int row, const std::vector<int>& cols, uint16_t score = 0) {
   return lane_play(true, row, cols, score);
@@ -350,10 +350,10 @@ PruningNodes check_pruning_ab(const Dictionary& d, unsigned seed, int count) {
 // The batch's search-cost win, in the test output where a regression that
 // silently defeats the pruning is visible as the cut shrinking towards zero.
 void report_pruning_cut(const char* label, const PruningNodes& nodes) {
-  std::printf(
-    "  outplay-futility nodes (%s): %llu pruned vs %llu unpruned (%.1f%% cut)\n", label,
-    static_cast<unsigned long long>(nodes.pruned), static_cast<unsigned long long>(nodes.unpruned),
-    100.0 * (1.0 - static_cast<double>(nodes.pruned) / static_cast<double>(nodes.unpruned)));
+  std::printf("  outplay-futility nodes (%s): %llu pruned vs %llu unpruned (%.1f%% cut)\n", label,
+              static_cast<unsigned long long>(nodes.pruned),
+              static_cast<unsigned long long>(nodes.unpruned),
+              100.0 * (1.0 - double(nodes.pruned) / double(nodes.unpruned)));
 }
 
 }  // namespace
@@ -1385,7 +1385,7 @@ namespace {
 
 uint16_t lane_mask(const std::vector<int>& lanes) {
   uint16_t m = 0;
-  for (int lane : lanes) m |= static_cast<uint16_t>(1u << lane);
+  for (int lane : lanes) m |= uint16_t(1u << lane);
   return m;
 }
 

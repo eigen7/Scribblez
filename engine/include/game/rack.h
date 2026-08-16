@@ -56,7 +56,5 @@ template <>
 struct std::hash<scribblez::Rack> {
   // std::hash<uint64_t> is the identity on the standard libraries, so bits()
   // is equivalent and avoids the wrapper.
-  size_t operator()(const scribblez::Rack& r) const noexcept {
-    return static_cast<size_t>(r.bits());
-  }
+  size_t operator()(const scribblez::Rack& r) const noexcept { return r.bits(); }
 };

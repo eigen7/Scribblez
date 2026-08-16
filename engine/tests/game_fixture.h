@@ -30,7 +30,7 @@ inline Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   }
   const int lane0 = horizontal ? col : row;
   const int start = horizontal ? row : col;
-  const uint16_t mask = static_cast<uint16_t>(rel_mask << lane0);
+  const uint16_t mask = rel_mask << lane0;
   return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
@@ -57,10 +57,10 @@ inline std::vector<char> build_slog(const binlog::InitialRacks& ir,
 
   binlog::GameMetadata gm{};
   gm.start_offset = sizeof(binlog::FileHeader) + sizeof(binlog::GameMetadata);
-  gm.num_turns = static_cast<uint32_t>(turns.size());
+  gm.num_turns = turns.size();
   gm.sampled_turn = sampled_turn;
-  gm.initial_score_p0 = static_cast<int16_t>(initial_scores[0]);
-  gm.initial_score_p1 = static_cast<int16_t>(initial_scores[1]);
+  gm.initial_score_p0 = initial_scores[0];
+  gm.initial_score_p1 = initial_scores[1];
 
   std::vector<char> buf;
   append_pod(buf, hdr);

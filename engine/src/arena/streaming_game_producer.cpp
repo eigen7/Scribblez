@@ -66,7 +66,7 @@ void StreamingGameProducer::start() {
   if (started_) return;
   started_ = true;
   const int n = engine_.num_threads();
-  workers_.reserve(static_cast<size_t>(n));
+  workers_.reserve(size_t(n));
   for (int t = 0; t < n; ++t) {
     workers_.emplace_back([this, t]() { worker_loop(t); });
   }
@@ -90,11 +90,11 @@ ProducerStats StreamingGameProducer::stats() const {
 
 void StreamingGameProducer::worker_loop(int thread_idx) {
   RingBufferGameSink sink(ring_, params_.make_encoder(), params_.apply_symmetry,
-                          engine_.seed() + 0x9E3779B9ULL * static_cast<uint64_t>(thread_idx + 1),
-                          &games_played_, &games_dropped_);
+                          engine_.seed() + 0x9E3779B9ULL * uint64_t(thread_idx + 1), &games_played_,
+                          &games_dropped_);
   while (!stopping_.load(std::memory_order_relaxed)) {
     const uint64_t game_idx = next_game_.fetch_add(1, std::memory_order_relaxed);
-    const int seat0_player = static_cast<int>((engine_.seed() + game_idx) & 1ULL);
+    const int seat0_player = (engine_.seed() + game_idx) & 1ULL;
     const std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
     engine_.play(thread_idx, seats, game_idx, sink);
   }

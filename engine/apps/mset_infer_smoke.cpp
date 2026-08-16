@@ -35,24 +35,24 @@ scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
   using namespace scribblez::move_set;
   MoveFeatureArrays moves;
   moves.count = num_moves;
-  moves.letters.assign(static_cast<size_t>(num_moves) * kMoveMaxPlaced, 0);
-  moves.blanks.assign(static_cast<size_t>(num_moves) * kMoveMaxPlaced, 0);
-  moves.squares.assign(static_cast<size_t>(num_moves) * kMoveMaxPlaced, 0);
-  moves.tile_mask.assign(static_cast<size_t>(num_moves) * kMoveMaxPlaced, 0);
-  moves.scalars.assign(static_cast<size_t>(num_moves) * kMoveScalars, 0.0f);
+  moves.letters.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
+  moves.blanks.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
+  moves.squares.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
+  moves.tile_mask.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
+  moves.scalars.assign(size_t(num_moves) * kMoveScalars, 0.0f);
 
   for (int m = 0; m < num_moves; ++m) {
     const bool is_play = m % 5 != 0;
     const int tiles = m % kMoveMaxPlaced + 1;
     for (int t = 0; t < tiles; ++t) {
-      const size_t slot = static_cast<size_t>(m) * kMoveMaxPlaced + t;
+      const size_t slot = size_t(m) * kMoveMaxPlaced + t;
       moves.letters[slot] = (m + t) % 26 + 1;
       moves.tile_mask[slot] = 1;
       if (is_play) moves.squares[slot] = (m * kMoveMaxPlaced + t) % kMoveCells;
     }
-    float* scalars = moves.scalars.data() + static_cast<size_t>(m) * kMoveScalars;
-    scalars[0] = static_cast<float>(m - num_moves / 2) / 100.0f;
-    scalars[1] = static_cast<float>(tiles) / kMoveMaxPlaced;
+    float* scalars = moves.scalars.data() + size_t(m) * kMoveScalars;
+    scalars[0] = float(m - num_moves / 2) / 100.0f;
+    scalars[1] = float(tiles) / kMoveMaxPlaced;
     scalars[2] = is_play ? 1.0f : 0.0f;
   }
   return moves;
@@ -82,21 +82,18 @@ int main(int argc, char** argv) {
     // An all-zero board row at the model's own width: the candidates are what
     // this tool varies.
     const size_t row_floats =
-      static_cast<size_t>(service.spatial_planes()) * scribblez::kBoardCells +
-      service.scalar_floats();
+      size_t(service.spatial_planes()) * scribblez::kBoardCells + service.scalar_floats();
     const std::vector<float> board(row_floats, 0.0f);
 
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
-    std::vector<float> wld(static_cast<size_t>(num_moves) * scribblez::nn::WldOutput::kRowElems);
-    std::vector<float> sd(static_cast<size_t>(num_moves) *
-                          scribblez::nn::ScoreDiffOutput::kRowElems);
+    std::vector<float> wld(size_t(num_moves) * scribblez::nn::WldOutput::kRowElems);
+    std::vector<float> sd(size_t(num_moves) * scribblez::nn::ScoreDiffOutput::kRowElems);
     float* const head_out[] = {wld.data(), sd.data()};
     service.evaluate({board.data(), &moves}, head_out);
 
     for (int m = 0; m < num_moves; ++m) {
-      const float* w = wld.data() + static_cast<size_t>(m) * scribblez::nn::WldOutput::kRowElems;
-      const float* s =
-        sd.data() + static_cast<size_t>(m) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      const float* w = wld.data() + size_t(m) * scribblez::nn::WldOutput::kRowElems;
+      const float* s = sd.data() + size_t(m) * scribblez::nn::ScoreDiffOutput::kRowElems;
       std::cout << "move " << m << ": P(win)=" << w[0] << " P(draw)=" << w[1] << " P(loss)=" << w[2]
                 << " win_prob=" << w[0] + 0.5f * w[1] << " score_diff_mean=" << s[0] << "\n";
     }

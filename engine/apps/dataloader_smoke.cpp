@@ -27,7 +27,7 @@ bool read_header(const std::string& path, scribblez::binlog::FileHeader& out) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return false;
   f.read(reinterpret_cast<char*>(&out), sizeof(out));
-  return static_cast<bool>(f);
+  return bool(f);
 }
 
 }  // namespace
@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
     else if (a == "--prefetch")
       params.num_prefetch_threads = std::stoi(next());
     else if (a == "--budget-bytes")
-      params.memory_budget = static_cast<int64_t>(std::stoll(next()));
+      params.memory_budget = std::stoll(next());
     else if (a == "--budget")
-      params.memory_budget = static_cast<int64_t>(std::stoll(next())) * 1024 * 1024;
+      params.memory_budget = int64_t(std::stoll(next())) * 1024 * 1024;
     else if (a == "--phase") {
       const std::string v = next();
       if (v == "pre")
@@ -109,13 +109,13 @@ int main(int argc, char** argv) {
 
   const int64_t total = loader.num_positions();
   const int64_t n_load = std::min<int64_t>(n_samples, total);
-  std::vector<float> out(static_cast<size_t>(n_load) * loader.row_size_floats());
+  std::vector<float> out(size_t(n_load) * loader.row_size_floats());
 
   auto t0 = std::chrono::steady_clock::now();
 
   // Drain one epoch using the streaming API.
   DataLoader::EpochConfig cfg;
-  cfg.batch_size = static_cast<int>(n_load);
+  cfg.batch_size = n_load;
   cfg.post_move = post_move;
   cfg.apply_symmetry = false;
   cfg.seed = 1;

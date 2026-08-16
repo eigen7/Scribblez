@@ -55,8 +55,8 @@ inline std::vector<int> model_rank(const std::vector<ScriptedEval>& scripted,
   std::vector<int> idx(scripted.size());
   std::iota(idx.begin(), idx.end(), 0);
   std::stable_sort(idx.begin(), idx.end(), [&](int a, int b) {
-    const ScriptedEval& ea = scripted[static_cast<size_t>(a)];
-    const ScriptedEval& eb = scripted[static_cast<size_t>(b)];
+    const ScriptedEval& ea = scripted[size_t(a)];
+    const ScriptedEval& eb = scripted[size_t(b)];
     return objective_value(ea.wld.data(), ea.score_diff.data(), objective) >
            objective_value(eb.wld.data(), eb.score_diff.data(), objective);
   });
@@ -72,7 +72,7 @@ inline std::vector<ScriptedEval> script_favouring(size_t n, const std::vector<in
   std::vector<ScriptedEval> scripted(n, wp(0.1f));
   float v = 0.9f;
   for (int idx : favoured) {
-    scripted[static_cast<size_t>(idx)] = wp(v);
+    scripted[size_t(idx)] = wp(v);
     v -= 0.05f;
   }
   return scripted;

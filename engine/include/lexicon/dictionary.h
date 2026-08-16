@@ -70,7 +70,7 @@ class Dictionary {
   // runs through the arc carrying IS_END_BIT -- cheaper than 26 step() scans
   // when every available transition is wanted.
   uint32_t arc(uint32_t i) const { return nodes_[i]; }
-  static uint8_t arc_tile(uint32_t a) { return static_cast<uint8_t>(a >> 24); }
+  static uint8_t arc_tile(uint32_t a) { return a >> 24; }
 
   // Built on first call and cached for the dictionary's lifetime. Thread-safe:
   // concurrent first calls build exactly once, and the result may be shared.
@@ -89,7 +89,7 @@ class Dictionary {
   uint32_t gaddag_root_ = 0;
   mutable std::unique_ptr<WordMapCache> word_map_cache_ = std::make_unique<WordMapCache>();
 
-  static uint8_t tile_of(uint32_t n) { return static_cast<uint8_t>(n >> 24); }
+  static uint8_t tile_of(uint32_t n) { return n >> 24; }
 };
 
 }  // namespace scribblez

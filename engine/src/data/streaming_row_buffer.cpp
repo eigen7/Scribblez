@@ -20,12 +20,12 @@ StreamingRowBuffer::StreamingRowBuffer(float* const* slots, int num_slots, int r
       num_slots_(num_slots),
       rows_per_slot_(rows_per_slot),
       row_floats_(row_floats),
-      slot_base_(static_cast<size_t>(num_slots)),
-      filled_count_(static_cast<size_t>(num_slots), 0) {
+      slot_base_(size_t(num_slots)),
+      filled_count_(size_t(num_slots), 0) {
   // Slot s initially serves the fill whose base is s * rows_per_slot, so the
   // first N fills (rows [0, N*rows_per_slot)) proceed without backpressure.
   for (int s = 0; s < num_slots_; ++s) {
-    slot_base_[s] = static_cast<uint64_t>(s) * rows_per_slot_;
+    slot_base_[s] = uint64_t(s) * rows_per_slot_;
   }
 }
 
@@ -67,7 +67,7 @@ int StreamingRowBuffer::wait_full_slot() {
 void StreamingRowBuffer::release_slot(int slot) {
   std::lock_guard<std::mutex> lock(m_);
   filled_count_[slot] = 0;
-  slot_base_[slot] += static_cast<uint64_t>(rows_per_slot_) * num_slots_;
+  slot_base_[slot] += uint64_t(rows_per_slot_) * num_slots_;
   cv_producer_.notify_all();
 }
 

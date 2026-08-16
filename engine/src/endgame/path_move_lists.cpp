@@ -36,8 +36,8 @@ PackedCounts pack_move_used(const Move& m) {
 LaneTouch move_lane_influence(const Board& board, const Move& m) {
   LaneTouch t;
   visit_placed_squares(m, [&](int r, int c) {
-    t.rows |= static_cast<uint16_t>(1u << r);
-    t.cols |= static_cast<uint16_t>(1u << c);
+    t.rows |= 1u << r;
+    t.cols |= 1u << c;
     for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
       int rr = r + dr, cc = c + dc;
       while (rr >= 0 && rr < BOARD_SIZE && cc >= 0 && cc < BOARD_SIZE &&
@@ -46,8 +46,8 @@ LaneTouch move_lane_influence(const Board& board, const Move& m) {
         cc += dc;
       }
       if (rr < 0 || rr >= BOARD_SIZE || cc < 0 || cc >= BOARD_SIZE) continue;
-      t.rows |= static_cast<uint16_t>(1u << rr);
-      t.cols |= static_cast<uint16_t>(1u << cc);
+      t.rows |= 1u << rr;
+      t.cols |= 1u << cc;
     }
   });
   return t;
@@ -56,7 +56,7 @@ LaneTouch move_lane_influence(const Board& board, const Move& m) {
 void PathMoveLists::reset(const Board* board, const Dictionary* dict, int max_ply) {
   board_ = board;
   dict_ = dict;
-  if (static_cast<int>(slots_.size()) < max_ply) {
+  if (int(slots_.size()) < max_ply) {
     slots_.resize(max_ply);
     masks_.resize(max_ply);
     played_.resize(max_ply);
@@ -77,7 +77,7 @@ void PathMoveLists::fill_slot(Slot& s, const std::vector<Move>& plays) {
   for (uint32_t i = 0; i < plays.size(); ++i) {
     while (lane < lane_of(plays[i])) s.lane_begin[++lane] = i;
   }
-  while (lane < 2 * BOARD_SIZE) s.lane_begin[++lane] = static_cast<uint32_t>(plays.size());
+  while (lane < 2 * BOARD_SIZE) s.lane_begin[++lane] = uint32_t(plays.size());
 }
 
 void PathMoveLists::on_make(int ply, const Move& m) {
@@ -109,7 +109,7 @@ void PathMoveLists::rebuild(Slot& out, const Slot& parent, const LaneTouch& touc
   const PackedCounts avail = pack_rack(rack);
   MoveGenerator gen(*board_, *dict_);
   for (int lane = 0; lane < 2 * BOARD_SIZE; ++lane) {
-    out.lane_begin[lane] = static_cast<uint32_t>(out.moves.size());
+    out.lane_begin[lane] = uint32_t(out.moves.size());
     const bool vertical = lane >= BOARD_SIZE;
     const int row = vertical ? lane - BOARD_SIZE : lane;
     const bool hit = ((vertical ? touched.cols : touched.rows) >> row) & 1;
@@ -132,7 +132,7 @@ void PathMoveLists::rebuild(Slot& out, const Slot& parent, const LaneTouch& touc
                       ub + parent.lane_begin[lane + 1]);
     }
   }
-  out.lane_begin[2 * BOARD_SIZE] = static_cast<uint32_t>(out.moves.size());
+  out.lane_begin[2 * BOARD_SIZE] = uint32_t(out.moves.size());
 }
 
 }  // namespace scribblez

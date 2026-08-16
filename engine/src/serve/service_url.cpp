@@ -14,7 +14,7 @@ namespace {
 std::string env_var_name(const std::string& service) {
   std::string name = "DEVENV_SERVICE_URL_";
   for (char c : service) {
-    name.push_back(c == '-' ? '_' : static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+    name.push_back(c == '-' ? '_' : char(std::toupper(uint8_t(c))));
   }
   return name;
 }

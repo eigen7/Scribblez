@@ -94,7 +94,7 @@ void monte_carlo_worker(const MonteCarloPosition& pos, const Dictionary& dict, i
   p1.hasty.name = "H1";
   EndgameHastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int g = t + 1; g <= n; g += threads)
-    accumulate_rollout(rollout(pos, dict, a0, a1, static_cast<uint64_t>(g)), out);
+    accumulate_rollout(rollout(pos, dict, a0, a1, uint64_t(g)), out);
 }
 
 // A flat row-major 15x15 count plane as a nested [row][col] JSON array (board

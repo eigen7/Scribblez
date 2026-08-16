@@ -165,9 +165,9 @@ MoveDecision HumanWebAgent::make_move(const MoveRequest& req) {
       if (type == "move") {
         auto it = obj.find("index");
         if (it != obj.end() && it->value().is_int64()) {
-          long idx = static_cast<long>(it->value().as_int64());
-          if (idx >= 0 && static_cast<size_t>(idx) < plays.size()) {
-            return plays[static_cast<size_t>(idx)];
+          long idx = it->value().as_int64();
+          if (idx >= 0 && size_t(idx) < plays.size()) {
+            return plays[size_t(idx)];
           }
         }
       } else if (type == "pass") {
