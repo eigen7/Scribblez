@@ -275,7 +275,7 @@ Move lane_play(bool horizontal, int line, const std::vector<int>& along, uint16_
   uint16_t mask = 0;
   std::vector<Glyph> glyphs;
   for (int p : along) {
-    mask |= uint16_t(1u << p);
+    mask |= 1u << p;
     glyphs.push_back(Glyph::of(Tile::of(0)));  // an 'A'; value is unused here
   }
   return Move::play(horizontal, line, mask, score, glyphs.data(), int(glyphs.size()));

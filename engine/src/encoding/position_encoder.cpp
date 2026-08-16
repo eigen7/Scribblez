@@ -49,7 +49,7 @@ void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int
   // them on the replayed board (a no-op once valid) lets each candidate's copy
   // update them incrementally instead of rebuilding them.
   pre.board().ensure_movegen_caches(*spec.dict);
-  const size_t row_floats = size_t(input_floats(spec));
+  const size_t row_floats = input_floats(spec);
   for (size_t c = 0; c < candidates.size(); ++c) {
     encode_post_move_row(pre, mover, encoder.rack(mover), candidates[c], opp_leave,
                          out + c * row_floats);

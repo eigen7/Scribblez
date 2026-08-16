@@ -204,7 +204,7 @@ void MsetInferenceParityTest::SetUp() {
   moves_.squares = read_binary<int32_t>(dir_ + "/move_squares.bin");
   moves_.tile_mask = read_binary<uint8_t>(dir_ + "/move_tile_mask.bin");
   moves_.scalars = read_binary<float>(dir_ + "/move_scalars.bin");
-  moves_.count = int(moves_.scalars.size() / scribblez::move_set::kMoveScalars);
+  moves_.count = moves_.scalars.size() / scribblez::move_set::kMoveScalars;
   expected_a_ = read_binary<float>(dir_ + "/expected_a.bin");
   expected_b_ = read_binary<float>(dir_ + "/expected_b.bin");
 
@@ -261,7 +261,7 @@ Tolerance MsetInferenceParityTest::worst_deviation(const std::vector<float>& got
                                                    const std::vector<float>& expected) const {
   Tolerance worst{0.0f, 0.0f};
   for (size_t i = 0; i < got.size(); ++i) {
-    const int k = int(i % kFieldsPerRow);
+    const int k = i % kFieldsPerRow;
     // A NaN would otherwise vanish here: std::max returns its first argument
     // whenever the comparison is false, and every comparison against NaN is,
     // so a run whose rows all came back NaN -- what reading an unbound or

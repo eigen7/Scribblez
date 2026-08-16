@@ -102,7 +102,7 @@ static bool same_move(const Move& a, const Move& b) {
 // Replicating the agent's own partial_sort makes the expected order match the
 // agent's regardless of equity ties.
 static std::vector<int> expected_candidate_order(const std::vector<double>& equities, int top_k) {
-  const int n = int(equities.size());
+  const int n = equities.size();
   std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
   if (top_k == 0 || n <= top_k) return idx;
@@ -256,7 +256,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
   // generation order. The stub prefers the LOWEST-equity play -- a move a
   // small-top-K agent would never even see -- so the agent plays it.
   OpeningPosition pos("CARETS");
-  const int n = int(pos.plays.size());
+  const int n = pos.plays.size();
   ASSERT_GE(n, 3);
 
   int lo = 0, hi = 0;
@@ -289,7 +289,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   // multiple evaluate() calls, yet still picks the single globally best-rated
   // candidate.
   OpeningPosition pos("CARETS");
-  const int n = int(pos.plays.size());
+  const int n = pos.plays.size();
   ASSERT_GE(n, 3);           // needs at least two chunks at max_batch = 2
   const int target = n - 1;  // a candidate in the final chunk
   const MoveRequest req = pos.request();

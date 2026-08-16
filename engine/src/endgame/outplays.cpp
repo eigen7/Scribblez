@@ -12,8 +12,8 @@ namespace {
 // Add cell (r, c) to the halo, ignoring out-of-bounds cells.
 void halo_add(OutplayHalo& h, int r, int c) {
   if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
-  h.rows |= uint16_t(1u << r);
-  h.cols |= uint16_t(1u << c);
+  h.rows |= 1u << r;
+  h.cols |= 1u << c;
   h.cells[r] |= uint16_t(1u << c);
 }
 

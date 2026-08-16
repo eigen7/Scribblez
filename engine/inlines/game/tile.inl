@@ -10,7 +10,7 @@ constexpr Tile& Tile::operator++() {
 constexpr char Tile::to_char() const {
   if (code_ == kBlank) return '?';
   if (code_ == kEmpty) return '.';
-  return char('A' + code_);
+  return 'A' + code_;
 }
 
 constexpr Tile Tile::from_char(char c) {

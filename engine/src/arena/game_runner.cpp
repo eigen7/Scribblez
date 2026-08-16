@@ -49,7 +49,7 @@ class GameRunner::Results {
       winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
 
     std::lock_guard<std::mutex> lock(mutex_);
-    total_turns_ += long(log.num_records);
+    total_turns_ += log.num_records;
     ++games_played_;
     if (winning_seat < 0) {
       ++draws_;
@@ -278,7 +278,7 @@ void GameRunner::run() {
     // Each game's seat assignment alternates with game_idx so overall balance
     // is preserved across any interleaving of threads.
     std::atomic<uint64_t> next_game{0};
-    const uint64_t total = uint64_t(params_.games);
+    const uint64_t total = params_.games;
 
     // Optional monitor thread: prints a games-done/rate/ETA line every
     // progress_secs seconds. Useful for long self-play batches (e.g. the
@@ -297,7 +297,7 @@ void GameRunner::run() {
         while (true) {
           uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
           if (idx >= total) break;
-          int seat0_player = int((seed_ + idx) & 1ULL);
+          int seat0_player = (seed_ + idx) & 1ULL;
           std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
           engine_.play(t, seats, seed_index(idx), *this);
         }

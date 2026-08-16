@@ -35,7 +35,7 @@ void insert(TrieNode* root, const std::vector<uint8_t>& tiles) {
 // returning the arc-list index of `tn`'s children (0 if it has none).
 uint32_t layout(std::vector<uint32_t>& nodes, const TrieNode* tn) {
   if (tn->children.empty()) return 0;
-  uint32_t first = uint32_t(nodes.size());
+  uint32_t first = nodes.size();
   std::vector<uint8_t> tiles;
   tiles.reserve(tn->children.size());
   for (const auto& kv : tn->children) tiles.push_back(kv.first);
@@ -136,7 +136,7 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
     // GADDAG: rev(c1..ci) + SEP + c(i+1..n) for i = 1..n-1, and the fully
     // reversed word (no separator) for i = n. This matches the wolges/Macondo
     // encoding (verified against real .kwg files).
-    const int n = int(tiles.size());
+    const int n = tiles.size();
     std::vector<uint8_t> path;
     path.reserve(n + 1);
     for (int i = 1; i <= n; ++i) {

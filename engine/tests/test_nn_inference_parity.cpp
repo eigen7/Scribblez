@@ -185,7 +185,7 @@ TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
   ASSERT_EQ(inputs.size() % kFixtureInputFloats, 0u)
     << "inputs.bin size " << inputs.size() << " not a multiple of the full input width "
     << kFixtureInputFloats;
-  const int n = int(inputs.size() / kFixtureInputFloats);
+  const int n = inputs.size() / kFixtureInputFloats;
   ASSERT_GT(n, 0);
   ASSERT_EQ(expected.size(), size_t(n) * kFieldsPerRow) << "(N=" << n << ")";
 

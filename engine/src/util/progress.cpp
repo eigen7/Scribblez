@@ -21,7 +21,7 @@ void ProgressMeter::render() const {
   if (!::isatty(2) || total_ == 0) return;
   const uint64_t d = done();
   constexpr int kWidth = 40;
-  const int filled = int(kWidth * d / total_);
+  const int filled = kWidth * d / total_;
   std::string bar(size_t(filled), '#');
   bar.resize(kWidth, '.');
   const double rate = d / std::max(elapsed_s(), 1e-9);

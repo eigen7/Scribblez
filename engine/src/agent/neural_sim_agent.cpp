@@ -79,7 +79,7 @@ void NeuralSimAgent::observe_move(const Move& move) {
 }
 
 void NeuralSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {
-  const int n = int(candidates.size());
+  const int n = candidates.size();
   rank_.resize(size_t(n));
   std::iota(rank_.begin(), rank_.end(), 0);
   evaluator_.evaluate(req, candidates, rank_, n);
@@ -107,7 +107,7 @@ MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
 
   // The sim set: the model's top K, minus its #1 on a drop turn (the injected
   // recall miss), which shifts the window down one so K candidates still sim.
-  const int n = int(candidates.size());
+  const int n = candidates.size();
   const int first = drop_best(ply_) ? 1 : 0;
   const int k = std::min(sim_top_k_, n - first);
   sim_moves_.clear();

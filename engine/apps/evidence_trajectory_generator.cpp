@@ -194,7 +194,7 @@ void StudentScorer::stop() {
 // ties resolve to the equity-preferred instance deterministically
 // (max_element keeps the first maximum).
 size_t anchor_index(const std::vector<Move>& ranked) {
-  return size_t(std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin());
+  return std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin();
 }
 
 // Per-worker front end over the shared scorer: owns the staging buffers and
@@ -223,7 +223,7 @@ class CandidateScorer {
 const std::vector<float>& CandidateScorer::win_equities(const binlog::PositionEncoder& encoder,
                                                         int mover, const Rack& visible_opp,
                                                         const std::vector<Move>& ranked) {
-  const int n = int(ranked.size());
+  const int n = ranked.size();
   // The contingent input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate.
   encoder.enc().board().ensure_movegen_caches(*spec_.dict);
@@ -338,7 +338,7 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
     PositionResult& res = (*results)[i];
     res.pos = w;
     res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
-    res.num_legal_moves = uint32_t(ranked.size());
+    res.num_legal_moves = ranked.size();
     // The trajectory draws come from their own stream so adding a proposal
     // never perturbs the rollout seeds (base_seed feeds SimRunner directly).
     std::mt19937_64 rng(util::splitmix64(res.base_seed ^ 0x7A6A11EC70ull));

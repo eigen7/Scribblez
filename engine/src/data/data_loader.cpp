@@ -65,7 +65,7 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
-    num_games = int64_t(hdr.num_games);
+    num_games = hdr.num_games;
     std::vector<GameMetadata> metas(num_games);
     if (num_games == 0 || f.read(reinterpret_cast<char*>(metas.data()),
                                  std::streamsize(num_games) * sizeof(GameMetadata))) {
@@ -274,7 +274,7 @@ int64_t DataLoader::FileManager::num_positions() const {
 
 int DataLoader::FileManager::num_files() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return int(all_files_.size());
+  return all_files_.size();
 }
 
 int64_t DataLoader::FileManager::memory_usage() const {
@@ -514,7 +514,7 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
   std::mt19937_64 rng(config.seed);
   std::shuffle(order_.begin(), order_.end(), rng);
 
-  total_positions_ = int64_t(order_.size());
+  total_positions_ = order_.size();
   build_flips(config);
 }
 
@@ -556,7 +556,7 @@ void DataLoader::SamplingManager::append_game_turns(int file_idx, int64_t game, 
   // A fixed per-game ordering of the game's eligible turns, independent of the
   // epoch, so that epoch e drawing the window [e*k, e*k + k) of it covers turns
   // disjoint from neighboring epochs until the ordering wraps after n turns.
-  std::vector<int64_t> turn_order(size_t(n));
+  std::vector<int64_t> turn_order(n);
   std::iota(turn_order.begin(), turn_order.end(), int64_t{0});
   std::mt19937_64 turn_rng(file_key ^ (uint64_t(game) * 0x9E3779B97F4A7C15ULL));
   std::shuffle(turn_order.begin(), turn_order.end(), turn_rng);
@@ -588,7 +588,7 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
 
   const int64_t batch_start = cursor_;
   const int64_t batch_end = std::min(batch_start + batch_size_, int64_t(order_.size()));
-  const int n_rows = int(batch_end - batch_start);
+  const int n_rows = batch_end - batch_start;
   cursor_ = batch_end;
 
   // Group rows by file for locality.
@@ -660,7 +660,7 @@ int DataLoader::epoch_start(const EpochConfig& config) {
   epoch_active_ = true;
 
   int64_t total = sampling_manager_.total_positions();
-  return int(total / config.batch_size);
+  return total / config.batch_size;
 }
 
 int DataLoader::load_batch(float* output) {

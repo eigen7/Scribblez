@@ -370,9 +370,9 @@ std::string join_budgets(const std::vector<uint64_t>& budgets) {
 void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
                         const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
                         int timed_games, double baseline_ms) {
-  const int ms = int(margins.size());
-  const int bs = int(budgets.size());
-  const int games = int(d0.size());
+  const int ms = margins.size();
+  const int bs = budgets.size();
+  const int games = d0.size();
 
   std::printf(
     "\nskill: solver win%% minus hasty win%% (first actor's seat), by margin x budget:\n");
@@ -405,7 +405,7 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
     for (int bi = 0; bi < bs; ++bi) {
       double ns = 0;
       for (int g = 0; g < timed_games; ++g) {
-        ns += double(grid[(size_t(g) * ms + mi) * bs + bi].solve_ns);
+        ns += grid[(size_t(g) * ms + mi) * bs + bi].solve_ns;
       }
       std::printf(" %10.3f", 1.0 + ns / timed_games / 1e6 / baseline_ms);
     }
@@ -424,10 +424,10 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
                        bool incremental, bool projections, int margin_min, int margin_max,
                        int margin_step, int time_games) {
   const std::vector<CapturedEndgame> caps = capture_endgames(dict, base_seed, games, threads);
-  const int g_count = int(caps.size());
+  const int g_count = caps.size();
   const std::vector<int> margins = margin_axis(margin_min, margin_max, margin_step);
-  const int ms = int(margins.size());
-  const int bs = int(budgets.size());
+  const int ms = margins.size();
+  const int bs = budgets.size();
   const int timed = std::min(time_games, g_count);
 
   std::printf(

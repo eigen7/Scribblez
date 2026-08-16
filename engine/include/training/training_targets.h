@@ -112,7 +112,7 @@ using AllTargets =
 
 // Constants derived from AllTargets, so code that just wants a size need not
 // mention the template or the target struct.
-inline constexpr int kNumLabelHeads = int(AllTargets::size);
+inline constexpr int kNumLabelHeads = AllTargets::size;
 inline constexpr int kLabelFloats = AllTargets::total_floats;
 
 inline constexpr int kWldFloats = detail::target_floats<WldTarget>();

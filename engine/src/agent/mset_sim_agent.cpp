@@ -81,7 +81,7 @@ void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
 }
 
 void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {
-  const int n = int(candidates.size());
+  const int n = candidates.size();
   encode_board_row(req, board_row_.data());
   // The differential the moves resolve is read off the same mirrored encoder
   // that wrote the board row's score-diff feature, so a candidate's resultant

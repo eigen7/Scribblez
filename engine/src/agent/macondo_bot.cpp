@@ -372,7 +372,7 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   // softmax-sample among them to inject exploration into self-play data
   // generation that pure argmax play lacks.
   const std::vector<Move> plays = generate_legal_plays(req);
-  const int n = int(plays.size());
+  const int n = plays.size();
   if (n == 0) return Move::pass();
   const HastyEquity& eq = HastyEquity::instance();
   const std::vector<double> vals =

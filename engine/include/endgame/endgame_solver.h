@@ -150,7 +150,7 @@ class EndgameSolver {
   static constexpr uint8_t tt_bound(uint8_t flag) { return flag & kBoundMask; }
   static constexpr bool tt_is_proven(uint8_t flag) { return (flag & kProvenBit) != 0; }
   static constexpr uint8_t tt_pack(uint8_t bound, bool proven) {
-    return uint8_t(bound | (proven ? kProvenBit : 0));
+    return bound | (proven ? kProvenBit : 0);
   }
 
   // A transposition-table entry, packed into 32 bytes. `score_rel` is relative

@@ -44,7 +44,7 @@ uint64_t count_sampled_positions(const std::vector<char>& buf, int positions_per
   if (limit_games > 0) num_games = std::min<uint32_t>(num_games, limit_games);
   uint64_t total = 0;
   for (uint32_t g = 0; g < num_games; ++g)
-    total += uint64_t(count_eligible_sample(metas[g], positions_per_game));
+    total += count_eligible_sample(metas[g], positions_per_game);
   return total;
 }
 

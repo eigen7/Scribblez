@@ -591,7 +591,7 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
                          const std::vector<int>& rack_vals_desc,
                          std::array<int, kMaxPlayTiles + 1>& out) {
   out.fill(-1);
-  const int rack_size = int(rack_vals_desc.size());
+  const int rack_size = rack_vals_desc.size();
   if (rack_size == 0) return;
   const int a_min = std::max(0, last_anchor_col + 1);
   const int e_cap = std::min(rack_size, kMaxPlayTiles);
@@ -971,7 +971,7 @@ namespace {
 
 // MAGPIE's word-aligned rack size (the unrestricted-multiplier arrays are sized
 // to it) and the (playthrough_blocks, tiles_played) anchor-table dimensions.
-constexpr int kRackAlign = int(util::align_up(RACK_SIZE, 8));
+constexpr int kRackAlign = util::align_up(RACK_SIZE, 8);
 constexpr int kMaxPlaythroughBlocks = (BOARD_SIZE / 2) + 1;
 constexpr int kMaxShadowAnchors = (RACK_SIZE + 1) * kMaxPlaythroughBlocks;
 constexpr uint32_t kTrivialCrossSet = kAllLettersMask;
@@ -1542,8 +1542,8 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(
             e.placed = s.tiles_to_play;
             e.pt = set_playthrough_bitrack(lane, s.rightmost, s.playthrough_blocks);
             e.score_bound = s.score;
-            e.leftmost_start_col = int8_t(s.leftmost);
-            e.rightmost_start_col = int8_t(s.rightmost);
+            e.leftmost_start_col = s.leftmost;
+            e.rightmost_start_col = s.rightmost;
             out.push_back(e);
           }
         }

@@ -99,7 +99,7 @@ Rack rack_from_header_token(const std::string& tok) {
       rack.add(BLANK);
       continue;
     }
-    const char up = char(std::toupper(uint8_t(ch)));
+    const char up = std::toupper(uint8_t(ch));
     if (up >= 'A' && up <= 'Z') rack.add(Tile::from_char(up));
   }
   return rack;

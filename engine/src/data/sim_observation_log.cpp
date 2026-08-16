@@ -48,7 +48,7 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
   SimObsPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
-  ph.num_candidates = uint32_t(candidates.size());
+  ph.num_candidates = candidates.size();
   ph.rollouts = rollouts;
   ph.base_seed = base_seed;
   ph.num_legal_moves = num_legal_moves;

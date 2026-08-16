@@ -70,7 +70,7 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
   }
 
   for (int64_t i = 0; i < n_rows; ++i) {
-    const uint32_t game_idx = uint32_t(local_start + i);
+    const uint32_t game_idx = local_start + i;
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
     pos_.encode_row<PositionEvalTask>(g, int(sampled), post_move, flips[i] != 0,

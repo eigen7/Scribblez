@@ -26,7 +26,7 @@ std::string nickify(const std::string& name) {
 // recovered from the board as it stood before the move.
 std::string position(const Board& board_before, const Move& m) {
   auto [r, c] = m.word_origin(board_before);
-  const char col = char('A' + c);
+  const char col = 'A' + c;
   return m.horizontal() ? std::format("{}{}", r + 1, col) : std::format("{}{}", col, r + 1);
 }
 

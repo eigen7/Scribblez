@@ -58,7 +58,7 @@ inline std::string& to_lower(std::string& s) {
 
 // Compact human-readable duration: "6h32m", "45m12s", or "30s".
 inline std::string fmt_dur(double secs) {
-  long s = long(secs + 0.5);
+  long s = secs + 0.5;
   const long h = s / 3600;
   s %= 3600;
   const long m = s / 60;

@@ -19,7 +19,7 @@ namespace {
 std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
   if (max <= 0) return {0, 0};
   std::mt19937_64 rng(game_seed);
-  const int player = int(rng() & 1ULL);
+  const int player = rng() & 1ULL;
   const int points = std::uniform_int_distribution<int>(0, max)(rng);
   std::array<int, 2> scores = {0, 0};
   scores[player] = points;
@@ -35,7 +35,7 @@ int pick_random_opening_plies(uint64_t game_seed, double mean) {
   if (mean <= 0) return 0;
   std::mt19937_64 rng(game_seed ^ 0x6C62272E07BB0142ULL);
   const double x = std::exponential_distribution<double>(1.0 / mean)(rng);
-  return int(std::lround(x));
+  return std::lround(x);
 }
 
 }  // namespace

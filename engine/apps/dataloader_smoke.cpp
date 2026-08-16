@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     else if (a == "--prefetch")
       params.num_prefetch_threads = std::stoi(next());
     else if (a == "--budget-bytes")
-      params.memory_budget = int64_t(std::stoll(next()));
+      params.memory_budget = std::stoll(next());
     else if (a == "--budget")
       params.memory_budget = int64_t(std::stoll(next())) * 1024 * 1024;
     else if (a == "--phase") {
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 
   // Drain one epoch using the streaming API.
   DataLoader::EpochConfig cfg;
-  cfg.batch_size = int(n_load);
+  cfg.batch_size = n_load;
   cfg.post_move = post_move;
   cfg.apply_symmetry = false;
   cfg.seed = 1;

@@ -59,11 +59,11 @@ std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
 
 int NeuralAgent::greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const {
   const std::vector<double> equities = candidate_equities(req, plays);
-  return int(std::max_element(equities.begin(), equities.end()) - equities.begin());
+  return std::max_element(equities.begin(), equities.end()) - equities.begin();
 }
 
 int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Move>& plays) {
-  const int n = int(plays.size());
+  const int n = plays.size();
   cand_idx_.resize(size_t(n));
   std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
 

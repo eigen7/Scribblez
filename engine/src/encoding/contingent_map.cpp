@@ -19,7 +19,7 @@ int lane_id(const LaneAssignment& a) { return (a.horizontal ? 0 : kLanesPerAxis)
 uint16_t lane_placed_mask(const LaneAssignment& a, const PlacedTile* placed, int num_placed) {
   uint16_t mask = 0;
   for (int k = 0; k < num_placed; ++k) {
-    mask |= uint16_t(1u << (a.horizontal ? placed[k].c : placed[k].r));
+    mask |= 1u << (a.horizontal ? placed[k].c : placed[k].r);
   }
   return mask;
 }
@@ -27,7 +27,7 @@ uint16_t lane_placed_mask(const LaneAssignment& a, const PlacedTile* placed, int
 // Strict-max reducer for one entry slot.
 void fold_entry(ContingentMap::Entry& e, int score, uint16_t mask) {
   if (score <= e.score) return;
-  e.score = int16_t(score);
+  e.score = score;
   e.placed_mask = mask;
 }
 

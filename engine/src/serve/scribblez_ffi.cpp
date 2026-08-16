@@ -247,7 +247,7 @@ namespace {
 // Copy `s` into the caller's NUL-terminated buffer (truncating to out_cap) and
 // return the full length, which may exceed out_cap - 1 (caller should retry).
 int emit_string(const std::string& s, char* out, int out_cap) {
-  const int len = int(s.size());
+  const int len = s.size();
   if (out && out_cap > 0) {
     const int n = len < out_cap - 1 ? len : out_cap - 1;
     std::memcpy(out, s.data(), size_t(n));
@@ -312,7 +312,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
     std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
     std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));
   }
-  return int(candidates.size());
+  return candidates.size();
 }
 
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
@@ -510,8 +510,8 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
   std::error_code ec;
   const auto fsz = std::filesystem::file_size(path, ec);
   if (ec) return -1;
-  *out_num_positions = int64_t(hdr.num_games);
-  *out_file_size = int64_t(fsz);
+  *out_num_positions = hdr.num_games;
+  *out_file_size = fsz;
   return 0;
 }
 

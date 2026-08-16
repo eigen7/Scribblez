@@ -38,7 +38,7 @@ class LeaveValues {
   uint32_t klv_root() const { return root_arc_list_; }
 
   // A..Z -> 1..26; the blank is code 0.
-  static uint8_t klv_code(Tile letter) { return uint8_t(letter.index() + 1); }
+  static uint8_t klv_code(Tile letter) { return letter.index() + 1; }
 
   // Returns the matched arc, or 0 if the tile is absent -- siblings are sorted,
   // so a larger tile means absent.

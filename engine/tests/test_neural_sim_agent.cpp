@@ -144,7 +144,7 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   int exchange_idx = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i].type() == MoveType::EXCHANGE) {
-      exchange_idx = int(i);
+      exchange_idx = i;
       break;
     }
   }

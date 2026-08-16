@@ -146,7 +146,7 @@ static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   }
   const int start = horizontal ? row : col;
   const int lane0 = horizontal ? col : row;
-  uint16_t mask = uint16_t(rel_mask << lane0);
+  uint16_t mask = rel_mask << lane0;
   return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
@@ -703,7 +703,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
 
   const auto assert_horizontal_set = [&](int r, int c, const std::initializer_list<char>& letters) {
     for (int l = 0; l < 26; ++l) {
-      const char ch = char('A' + l);
+      const char ch = 'A' + l;
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
       ASSERT_EQ(h_cross_check(Tile::of(l), r, c), expected);
     }
@@ -711,7 +711,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
 
   const auto assert_vertical_set = [&](int r, int c, const std::initializer_list<char>& letters) {
     for (int l = 0; l < 26; ++l) {
-      const char ch = char('A' + l);
+      const char ch = 'A' + l;
       const float expected = has(letters, ch) ? 1.0f : 0.0f;
       ASSERT_EQ(v_cross_check(Tile::of(l), r, c), expected);
     }
@@ -935,7 +935,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
     pre.last_opp_move = last_by[opp];
     pre.score_active = prev_active;
     pre.score_opp = prev_opp;
-    pre.turn_index = int(i);
+    pre.turn_index = i;
     pre.active_player = active;
     pre.kind = PositionKind::kPreMove;
     out.push_back(pre);
@@ -1381,7 +1381,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
 
   // Verify the on-disk header is self-consistent.
   const fs::path& slog = slogs.front();
-  const int64_t fsize = int64_t(fs::file_size(slog));
+  const int64_t fsize = fs::file_size(slog);
   std::vector<char> raw(fsize);
   {
     std::ifstream f(slog, std::ios::binary);
@@ -1416,7 +1416,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   // Helper: drain one full epoch into a vector.
   auto drain_epoch = [&](bool post_move) {
     scribblez::binlog::DataLoader::EpochConfig cfg;
-    cfg.batch_size = int(total_positions);
+    cfg.batch_size = total_positions;
     cfg.post_move = post_move;
     cfg.apply_symmetry = false;
     cfg.seed = 1;
@@ -1458,11 +1458,11 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   const int label_off = kInputFloats;
   for (int i = 0; i < n_samples; ++i) {
     const float* row = rows.data() + int64_t(i) * row_size;
-    const int w = int(row[label_off + 0]);
-    const int dd = int(row[label_off + 1]);
-    const int l = int(row[label_off + 2]);
+    const int w = row[label_off + 0];
+    const int dd = row[label_off + 1];
+    const int l = row[label_off + 2];
     // Score-diff target is a single scalar: the clipped final differential.
-    const int sd = int(row[label_off + scribblez::kWldFloats]);
+    const int sd = row[label_off + scribblez::kWldFloats];
     ASSERT_EQ(w + dd + l, 1);  // exactly one of W/D/L
     ASSERT_EQ(valid_labels.count({w, dd, l, sd}), 1);
   }
@@ -1641,7 +1641,7 @@ TEST(BinaryLog, RandomOpeningRegion) {
     if (ent.path().extension() == ".slog") slogs.push_back(ent.path());
   }
   ASSERT_EQ(slogs.size(), 1);
-  const int64_t fsize = int64_t(fs::file_size(slogs.front()));
+  const int64_t fsize = fs::file_size(slogs.front());
   std::vector<char> raw(fsize);
   {
     std::ifstream f(slogs.front(), std::ios::binary);
@@ -2573,7 +2573,7 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
     f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
     EXPECT_TRUE(f.good());
   }
-  int64_t fsize = int64_t(std::filesystem::file_size(path));
+  int64_t fsize = std::filesystem::file_size(path);
 
   // Canonical state for turn 0 post-move: POV is p0 (the mover), whose leave is
   // the 6 As; applying q_play places the Q and gives p0 a score of 42.
@@ -2669,7 +2669,7 @@ TEST(DataLoader, PerRowSymmetry) {
       cfg.batch_size = 1;
       cfg.post_move = true;
       cfg.apply_symmetry = true;
-      cfg.seed = uint64_t(i + 100);
+      cfg.seed = i + 100;
       loader.epoch_start(cfg);
       ASSERT_EQ(loader.load_batch(row.data()), 1);
       const bool is_normal =
@@ -2759,7 +2759,7 @@ TEST(DataLoader, EligibleBeginOffset) {
     f.write(reinterpret_cast<const char*>(&t1), sizeof(t1));
     ASSERT_TRUE(f);
   }
-  const int64_t fsize = int64_t(fs::file_size(path));
+  const int64_t fsize = fs::file_size(path);
 
   Dictionary dict = medium_dict();
 
@@ -2884,7 +2884,7 @@ TEST(DataLoader, EpochDeterminism) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = int64_t(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader1.add_file(p.string(), hdr.num_games, fsize);
   }
   auto data1 = run_epoch(loader1);
@@ -2895,7 +2895,7 @@ TEST(DataLoader, EpochDeterminism) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = int64_t(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader2.add_file(p.string(), hdr.num_games, fsize);
   }
   auto data2 = run_epoch(loader2);
@@ -2958,7 +2958,7 @@ TEST(DataLoader, EpochCoverage) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = int64_t(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader.add_file(p.string(), hdr.num_games, fsize);
   }
   // Each game expands to one row per eligible turn; the loader knows the total.
@@ -3039,7 +3039,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = int64_t(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     file_info.emplace_back(hdr.num_games, fsize);
     if (fsize > max_fsize) max_fsize = fsize;
   }
@@ -3127,7 +3127,7 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
     std::ifstream f(p, std::ios::binary);
     FileHeader hdr{};
     f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
-    int64_t fsize = int64_t(fs::file_size(p));
+    int64_t fsize = fs::file_size(p);
     loader.add_file(p.string(), hdr.num_games, fsize);
   }
 
@@ -3431,7 +3431,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
     }
     ASSERT_FALSE(slog.empty());
 
-    const int64_t fsize = int64_t(fs::file_size(slog));
+    const int64_t fsize = fs::file_size(slog);
     std::vector<char> raw(fsize);
     {
       std::ifstream f(slog, std::ios::binary);
@@ -3439,7 +3439,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
       ASSERT_TRUE(f);
     }
     const auto* metas = reinterpret_cast<const GameMetadata*>(raw.data() + sizeof(FileHeader));
-    const int sampled = int(metas[0].sampled_turn);
+    const int sampled = metas[0].sampled_turn;
 
     for (bool post_move : {false, true}) {
       const uint8_t flip = 0;
@@ -3502,7 +3502,7 @@ TEST(StreamingRowBuffer, Concurrency) {
     int slot = ring.wait_full_slot();
     ASSERT_GE(slot, 0);
     for (int k = 0; k < rows_per_slot; ++k) {
-      uint64_t v = uint64_t(slots[slot][k]);
+      uint64_t v = slots[slot][k];
       if (!seen.insert(v).second) dup = true;
     }
     ring.release_slot(slot);
@@ -3630,7 +3630,7 @@ TEST(Movegen, ShadowMatchesFull) {
       ASSERT_EQ(key_set(board, full), key_set(board, shadow));
 
       ++positions;
-      total_moves += long(full.size());
+      total_moves += full.size();
       board.apply(t.move);
     }
   }
@@ -3815,7 +3815,7 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
     const std::vector<Move> full = gen.generate(p.rack);
     const std::vector<Move> wmp = wmp_generate(p.board, dict, wm, p.rack);
     ASSERT_EQ(key_set(p.board, full), key_set(p.board, wmp));
-    total_moves += long(full.size());
+    total_moves += full.size();
 
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     ASSERT_EQ(move_key(p.board, bot.make_move(req).move),
@@ -4750,7 +4750,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
   gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
-  gm.initial_score_p0 = int16_t(initial_score_p0);
+  gm.initial_score_p0 = initial_score_p0;
 
   InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
   TurnBlob t0{};
@@ -4778,7 +4778,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
 
   // The score-diff scalar recovers the differential when rescaled.
   const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
-  return int(std::lround(sd[0] * kScoreDiffInputScale));
+  return std::lround(sd[0] * kScoreDiffInputScale);
 }
 
 // A head-start handicap stored in GameMetadata must reach the replayed

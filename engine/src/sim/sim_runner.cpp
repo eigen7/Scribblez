@@ -167,7 +167,7 @@ int best_observation_index(const std::vector<SimObservation>& observations,
   for (size_t i = 1; i < observations.size(); ++i) {
     if (sim_objective_value(observations[i], objective) >
         sim_objective_value(observations[best], objective)) {
-      best = int(i);
+      best = i;
     }
   }
   return best;
@@ -192,7 +192,7 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
 
   const std::vector<double> vals = HastyEquity::instance().equities(
     candidates, req.board, req.bag_size, req.opp_rack, req.my_rack);
-  const int n = int(candidates.size());
+  const int n = candidates.size();
   const int keep = std::min(k, n);
   std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);

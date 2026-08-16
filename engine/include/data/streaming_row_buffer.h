@@ -83,8 +83,8 @@ class StreamingRowBuffer {
   int num_slots() const { return num_slots_; }
 
  private:
-  int slot_of(uint64_t r) const { return int((r / rows_per_slot_) % num_slots_); }
-  int row_in(uint64_t r) const { return int(r % rows_per_slot_); }
+  int slot_of(uint64_t r) const { return (r / rows_per_slot_) % num_slots_; }
+  int row_in(uint64_t r) const { return r % rows_per_slot_; }
 
   std::vector<float*> slots_;
   int num_slots_;

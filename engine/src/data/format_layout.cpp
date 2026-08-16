@@ -97,7 +97,7 @@ consteval auto reflect_fields() {
   for (std::size_t i = 0; i < members.size(); ++i) {
     const auto m = members[i];
     out[i].name = util::member_name(m);
-    out[i].offset = std::size_t(std::meta::offset_of(m).bytes);
+    out[i].offset = std::meta::offset_of(m).bytes;
     describe_type(&out[i], std::meta::type_of(m), std::meta::size_of(m));
   }
   return out;

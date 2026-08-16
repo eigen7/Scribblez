@@ -66,7 +66,7 @@ WordMap WordMap::build(const Dictionary& dict) {
     pl.mask = table_size - 1;
 
     for (const auto& [key, words] : keys) {
-      const uint32_t start = uint32_t(pl.words.size() / len);
+      const uint32_t start = pl.words.size() / len;
       for (const auto& w : words) {
         for (const Tile t : w) pl.words.push_back(t);
       }

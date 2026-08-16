@@ -149,7 +149,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     res.pos = w;
     res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
     std::vector<Move> ranked = equity_top_k(ranking_req, std::numeric_limits<int>::max());
-    res.num_legal_moves = uint32_t(ranked.size());
+    res.num_legal_moves = ranked.size();
     if (int(ranked.size()) > opt.top_k) ranked.resize(size_t(opt.top_k));
     res.candidates = std::move(ranked);
     res.observations = runner.run(pos, res.candidates, res.base_seed);

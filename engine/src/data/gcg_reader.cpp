@@ -587,7 +587,7 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
   out->scores = snapshot.scores;
   out->mover = mover;
   out->player_names = game.player_names;
-  out->turns = int(game.turns.size());
+  out->turns = game.turns.size();
   return true;
 }
 

@@ -29,7 +29,7 @@ char upper_ch(char c) {
 int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
   auto it = o.find(key);
   if (it == o.end() || !it->value().is_int64()) return fallback;
-  return int(it->value().as_int64());
+  return it->value().as_int64();
 }
 
 std::string str_field(const boost::json::object& o, const char* key) {

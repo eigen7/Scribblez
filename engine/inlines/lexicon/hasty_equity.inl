@@ -13,7 +13,7 @@ inline TurnLeaves::TurnLeaves(const Rack& rack, const LeaveValues& lv)
     indices_[L] = uint8_t(((1u << c) - 1u) << b);
     b += c;
   }
-  full_ = uint8_t((1u << size_) - 1);
+  full_ = (1u << size_) - 1;
 }
 
 inline uint8_t TurnLeaves::mask_for(const Move& move) const {
@@ -22,15 +22,15 @@ inline uint8_t TurnLeaves::mask_for(const Move& move) const {
   for (int i = 0; i < move.num_glyphs(); ++i) {
     uint8_t& idx = indices[move.glyph(i).rack_tile().index()];
     int bit = std::countr_zero(idx);
-    mask &= uint8_t(~(1u << bit));
-    idx &= uint8_t(idx - 1);
+    mask &= ~(1u << bit);
+    idx &= idx - 1;
   }
   return mask;
 }
 
 inline double TurnLeaves::value(uint8_t mask) {
   ensure(mask);
-  return double(value_[mask]);
+  return value_[mask];
 }
 
 inline int TurnLeaves::point_value(uint8_t mask) {

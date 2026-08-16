@@ -29,7 +29,7 @@ struct BitRack {
   bool operator==(const BitRack& o) const { return lo == o.lo && hi == o.hi; }
   BitRack operator+(const BitRack& o) const { return BitRack{lo + o.lo, hi + o.hi}; }
   bool empty() const { return lo == 0 && hi == 0; }
-  int get(int letter) const { return int((half(letter) >> shift(letter)) & 0xF); }
+  int get(int letter) const { return (half(letter) >> shift(letter)) & 0xF; }
 
   void add_letter(int letter, int n = 1);
   // Multiplicative (Fibonacci) hash mixing both halves.

@@ -266,7 +266,7 @@ void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t bound, bo
   e.best = best;
   e.score_rel = score_rel;
   e.flag = tt_pack(bound, proven);
-  e.depth = uint8_t(depth);
+  e.depth = depth;
   e.gen = tt_gen_;
 }
 

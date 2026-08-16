@@ -36,8 +36,8 @@ PackedCounts pack_move_used(const Move& m) {
 LaneTouch move_lane_influence(const Board& board, const Move& m) {
   LaneTouch t;
   visit_placed_squares(m, [&](int r, int c) {
-    t.rows |= uint16_t(1u << r);
-    t.cols |= uint16_t(1u << c);
+    t.rows |= 1u << r;
+    t.cols |= 1u << c;
     for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
       int rr = r + dr, cc = c + dc;
       while (rr >= 0 && rr < BOARD_SIZE && cc >= 0 && cc < BOARD_SIZE &&
@@ -46,8 +46,8 @@ LaneTouch move_lane_influence(const Board& board, const Move& m) {
         cc += dc;
       }
       if (rr < 0 || rr >= BOARD_SIZE || cc < 0 || cc >= BOARD_SIZE) continue;
-      t.rows |= uint16_t(1u << rr);
-      t.cols |= uint16_t(1u << cc);
+      t.rows |= 1u << rr;
+      t.cols |= 1u << cc;
     }
   });
   return t;

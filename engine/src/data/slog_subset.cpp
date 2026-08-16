@@ -28,7 +28,7 @@ int64_t blob_size(const GameMetadata& gm) {
 }  // namespace
 
 bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>& picks) {
-  const uint32_t n = uint32_t(picks.size());
+  const uint32_t n = picks.size();
 
   // Cache source file contents so a file referenced by many picks is read once.
   std::unordered_map<std::string, std::vector<char>> cache;

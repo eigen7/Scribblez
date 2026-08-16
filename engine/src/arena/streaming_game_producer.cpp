@@ -94,7 +94,7 @@ void StreamingGameProducer::worker_loop(int thread_idx) {
                           &games_dropped_);
   while (!stopping_.load(std::memory_order_relaxed)) {
     const uint64_t game_idx = next_game_.fetch_add(1, std::memory_order_relaxed);
-    const int seat0_player = int((engine_.seed() + game_idx) & 1ULL);
+    const int seat0_player = (engine_.seed() + game_idx) & 1ULL;
     const std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
     engine_.play(thread_idx, seats, game_idx, sink);
   }

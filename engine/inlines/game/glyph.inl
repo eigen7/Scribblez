@@ -32,7 +32,7 @@ constexpr bool Glyph::is_vowel() const {
 constexpr char Glyph::to_char() const {
   if (is_empty()) return '.';
   if (code_ == 53) return '?';
-  return char('A' + (code_ <= 26 ? code_ - 1 : code_ - 27));
+  return 'A' + (code_ <= 26 ? code_ - 1 : code_ - 27);
 }
 
 }  // namespace scribblez

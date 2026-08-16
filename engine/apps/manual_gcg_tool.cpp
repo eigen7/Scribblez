@@ -165,7 +165,7 @@ boost::json::object tile_score_map() {
 int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
   auto it = o.find(key);
   if (it == o.end() || !it->value().is_int64()) return fallback;
-  return int(it->value().as_int64());
+  return it->value().as_int64();
 }
 
 std::string str_field(const boost::json::object& o, const char* key) {
@@ -436,7 +436,7 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = int(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void exchange_turn(int player, const std::vector<int>& slots) {
@@ -500,7 +500,7 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = int(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void play_turn(int player, int row, int col, const std::string& dir, const std::string& word,
@@ -637,7 +637,7 @@ class ManualGame {
     turn_player_ = 1 - turn_player_;
     status_ = "";
     snapshots_.push_back(snapshot_from_live());
-    view_ply_ = int(turns_.size());
+    view_ply_ = turns_.size();
   }
 
   void jump_to_ply(int ply) {
@@ -666,7 +666,7 @@ class ManualGame {
     restore_live_from_snapshot(snapshots_.back());
     for (int p = 0; p < 2; ++p) racks_[p] = slots_from_display(fork_racks[p]);
     snapshots_.back().racks = racks_;
-    view_ply_ = int(turns_.size());
+    view_ply_ = turns_.size();
     status_ = std::format("Forked game at turn {}", view_ply_);
   }
 
@@ -732,7 +732,7 @@ class ManualGame {
     end_adjustments_ = parsed.end_adjustments;
 
     restore_live_from_snapshot(snapshots_.back());
-    view_ply_ = int(turns_.size());
+    view_ply_ = turns_.size();
     status_ = "Loaded " + source_name;
   }
 

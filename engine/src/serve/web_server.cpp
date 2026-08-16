@@ -162,7 +162,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
 
   auto [sr, sc] = move.word_origin(board);
   std::string pos;
-  char col_letter = char('A' + sc);
+  char col_letter = 'A' + sc;
   if (move.horizontal()) {
     pos = std::format("{}{}", sr + 1, col_letter);  // e.g. "8H"
   } else {
