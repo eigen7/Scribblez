@@ -97,7 +97,7 @@ consteval auto reflect_fields() {
   for (std::size_t i = 0; i < members.size(); ++i) {
     const auto m = members[i];
     out[i].name = util::member_name(m);
-    out[i].offset = static_cast<std::size_t>(std::meta::offset_of(m).bytes);
+    out[i].offset = std::size_t(std::meta::offset_of(m).bytes);
     describe_type(&out[i], std::meta::type_of(m), std::meta::size_of(m));
   }
   return out;
@@ -164,9 +164,9 @@ json::object build_constants() {
   // The board-row encoding semantics version the exporters stamp into ONNX
   // metadata (input_encoder.h).
   c["input_encoding_version"] = kInputEncodingVersion;
-  c["move_type"] = {{"play", static_cast<int>(MoveType::PLAY)},
-                    {"exchange", static_cast<int>(MoveType::EXCHANGE)},
-                    {"pass", static_cast<int>(MoveType::PASS)}};
+  c["move_type"] = {{"play", int(MoveType::PLAY)},
+                    {"exchange", int(MoveType::EXCHANGE)},
+                    {"pass", int(MoveType::PASS)}};
   // The four placement heads in declaration order (training_targets.h) --
   // also the .mset plane order and the SimObservation count-plane order.
   c["placement_head_names"] = {OppNextPlacementTarget::kName, SelfNextPlacementTarget::kName,

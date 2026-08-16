@@ -49,7 +49,7 @@ void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int
   // them on the replayed board (a no-op once valid) lets each candidate's copy
   // update them incrementally instead of rebuilding them.
   pre.board().ensure_movegen_caches(*spec.dict);
-  const size_t row_floats = static_cast<size_t>(input_floats(spec));
+  const size_t row_floats = size_t(input_floats(spec));
   for (size_t c = 0; c < candidates.size(); ++c) {
     encode_post_move_row(pre, mover, encoder.rack(mover), candidates[c], opp_leave,
                          out + c * row_floats);
@@ -135,8 +135,8 @@ void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn
   enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, /*apply_flip=*/false, out);
   for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
     float* row = out + i * row_floats;
-    std::memcpy(row, out, sizeof(float) * static_cast<size_t>(row_floats));
-    enc_.overwrite_score_diff(diff_lo + static_cast<int>(i), row);
+    std::memcpy(row, out, sizeof(float) * size_t(row_floats));
+    enc_.overwrite_score_diff(diff_lo + int(i), row);
   }
 }
 

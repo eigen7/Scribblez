@@ -159,7 +159,7 @@ class DataLoader {
     int64_t num_games() const { return num_games_; }
     // Flat rows the game expands into.
     int turns_in_game(int64_t game) const {
-      return static_cast<int>(cumulative_turns_[game + 1] - cumulative_turns_[game]);
+      return int(cumulative_turns_[game + 1] - cumulative_turns_[game]);
     }
     int64_t game_base(int64_t game) const { return cumulative_turns_[game]; }
 

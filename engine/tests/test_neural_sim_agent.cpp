@@ -103,8 +103,7 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   // Replay the same decision independently: the model's top-2 by scripted
   // value, simmed from the same position with the agent's own seed.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
-  const std::vector<Move> simmed = {candidates[static_cast<size_t>(rank[0])],
-                                    candidates[static_cast<size_t>(rank[1])]};
+  const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   SimPosition pos;
   pos.board = board_;
   pos.mover = 0;
@@ -114,7 +113,7 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const std::vector<SimObservation> obs =
     SimRunner(dict_, p.sim).run(pos, simmed, agent.sim_seed(0));
 
-  EXPECT_TRUE(played == simmed[static_cast<size_t>(best_observation_index(obs, p.sim_objective))]);
+  EXPECT_TRUE(played == simmed[size_t(best_observation_index(obs, p.sim_objective))]);
 }
 
 TEST_F(NeuralSimAgentTest, ShortlistCapsWhatTheModelEvaluates) {
@@ -145,7 +144,7 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   int exchange_idx = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i].type() == MoveType::EXCHANGE) {
-      exchange_idx = static_cast<int>(i);
+      exchange_idx = int(i);
       break;
     }
   }
@@ -155,7 +154,7 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   stub->scripted = script_favouring(candidates.size(), {exchange_idx});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
   agent.begin_game({});
-  EXPECT_TRUE(agent.make_move(request()).move == candidates[static_cast<size_t>(exchange_idx)]);
+  EXPECT_TRUE(agent.make_move(request()).move == candidates[size_t(exchange_idx)]);
 }
 
 TEST_F(NeuralSimAgentTest, DropBestProbExcludesTheModelsFavourite) {

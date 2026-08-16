@@ -105,7 +105,7 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
 }
 
 MoveDecision Game::choose_move(int player, const MoveRequest& req) {
-  if (static_cast<int>(log_.turns.size()) < random_opening_plies_) {
+  if (int(log_.turns.size()) < random_opening_plies_) {
     ++log_.num_random_opening_plies;
     return pick_uniform_random_play(req, opening_rng_);
   }

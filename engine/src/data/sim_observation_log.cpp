@@ -48,7 +48,7 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
   SimObsPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
-  ph.num_candidates = static_cast<uint32_t>(candidates.size());
+  ph.num_candidates = uint32_t(candidates.size());
   ph.rollouts = rollouts;
   ph.base_seed = base_seed;
   ph.num_legal_moves = num_legal_moves;
@@ -75,7 +75,7 @@ void SimObsWriter::close() {
   {
     std::ofstream f(tmp, std::ios::binary);
     if (!f) throw util::Exception("SimObsWriter: cannot open {}", tmp);
-    f.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+    f.write(buffer_.data(), std::streamsize(buffer_.size()));
   }
   std::filesystem::rename(tmp, path_);
 }
@@ -90,7 +90,7 @@ SimObsReader::SimObsReader(const std::string& path) {
   if (!f) throw util::Exception("SimObsReader: cannot open {}", path);
   const std::streamsize size = f.tellg();
   f.seekg(0);
-  buffer_.resize(static_cast<size_t>(size));
+  buffer_.resize(size_t(size));
   f.read(buffer_.data(), size);
 
   if (buffer_.size() < sizeof(SimObsFileHeader)) {
@@ -112,7 +112,7 @@ SimObsReader::SimObsReader(const std::string& path) {
     const SimObsPositionHeader* ph =
       reinterpret_cast<const SimObsPositionHeader*>(buffer_.data() + off);
     off += sizeof(SimObsPositionHeader);
-    const size_t records_bytes = static_cast<size_t>(ph->num_candidates) * sizeof(SimObsRecord);
+    const size_t records_bytes = size_t(ph->num_candidates) * sizeof(SimObsRecord);
     if (off + records_bytes > buffer_.size()) {
       throw util::Exception("SimObsReader: truncated records in {}", path);
     }

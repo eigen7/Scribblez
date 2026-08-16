@@ -99,7 +99,7 @@ void accumulate(const RolloutOutcome& o, SimObservation* obs) {
   else
     ++obs->draws;
   obs->delta_sum += o.delta;
-  obs->delta_sq_sum += static_cast<int64_t>(o.delta) * o.delta;
+  obs->delta_sq_sum += int64_t(o.delta) * o.delta;
 
   const bool opp_won = o.delta < 0;
   const bool self_won = o.delta > 0;
@@ -129,7 +129,7 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
   p1.name = "H1";
   HastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int i = t; i < rollouts; i += threads) {
-    const uint64_t seed = base_seed + static_cast<uint64_t>(i);
+    const uint64_t seed = base_seed + uint64_t(i);
     for (size_t c = 0; c < applied.size(); ++c) {
       const RolloutOutcome o = run_rollout(pos, applied[c], dict, a0, a1, seed);
       accumulate(o, &(*partial)[c]);
@@ -158,7 +158,7 @@ double sim_objective_value(const SimObservation& o, SimObjective objective) {
   if (o.n == 0) return 0.0;
   const double n = o.n;
   if (objective == SimObjective::kWinRate) return (o.wins + 0.5 * o.draws) / n;
-  return static_cast<double>(o.delta_sum) / n;
+  return double(o.delta_sum) / n;
 }
 
 int best_observation_index(const std::vector<SimObservation>& observations,
@@ -167,7 +167,7 @@ int best_observation_index(const std::vector<SimObservation>& observations,
   for (size_t i = 1; i < observations.size(); ++i) {
     if (sim_objective_value(observations[i], objective) >
         sim_objective_value(observations[best], objective)) {
-      best = static_cast<int>(i);
+      best = int(i);
     }
   }
   return best;
@@ -192,15 +192,15 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
 
   const std::vector<double> vals = HastyEquity::instance().equities(
     candidates, req.board, req.bag_size, req.opp_rack, req.my_rack);
-  const int n = static_cast<int>(candidates.size());
+  const int n = int(candidates.size());
   const int keep = std::min(k, n);
-  std::vector<int> idx(static_cast<size_t>(n));
+  std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
   std::partial_sort(idx.begin(), idx.begin() + keep, idx.end(),
                     [&](int a, int b) { return vals[a] > vals[b]; });
   std::vector<Move> top;
-  top.reserve(static_cast<size_t>(keep));
-  for (int j = 0; j < keep; ++j) top.push_back(candidates[static_cast<size_t>(idx[j])]);
+  top.reserve(size_t(keep));
+  for (int j = 0; j < keep; ++j) top.push_back(candidates[size_t(idx[j])]);
   return top;
 }
 

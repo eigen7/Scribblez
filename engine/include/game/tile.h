@@ -15,7 +15,7 @@ class Tile {
  public:
   constexpr Tile() = default;  // empty square
 
-  static constexpr Tile of(int letter_index) { return Tile(static_cast<uint8_t>(letter_index)); }
+  static constexpr Tile of(int letter_index) { return Tile(uint8_t(letter_index)); }
   static constexpr Tile blank() { return Tile(kBlank); }
   static constexpr Tile empty() { return Tile(kEmpty); }
   static constexpr Tile from_char(char c);

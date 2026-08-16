@@ -36,7 +36,7 @@ MoveDecision GreedyAgent::make_move(const MoveRequest& req) {
   const std::vector<Move> plays = generate_legal_plays(req);
   if (!plays.empty()) {
     int best = plays.front().score();
-    for (const auto& m : plays) best = std::max(best, static_cast<int>(m.score()));
+    for (const auto& m : plays) best = std::max(best, int(m.score()));
     std::vector<const Move*> top;
     for (const auto& m : plays)
       if (m.score() == best) top.push_back(&m);

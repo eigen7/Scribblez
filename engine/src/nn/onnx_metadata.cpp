@@ -15,7 +15,7 @@ int OnnxMetadata::int_entry(const std::string& key, int absent_value) const {
 
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   onnx::ModelProto model;
-  if (!model.ParseFromArray(onnx_bytes.data(), static_cast<int>(onnx_bytes.size()))) {
+  if (!model.ParseFromArray(onnx_bytes.data(), int(onnx_bytes.size()))) {
     throw util::CleanException("Failed to parse ONNX model bytes");
   }
   OnnxMetadata meta;

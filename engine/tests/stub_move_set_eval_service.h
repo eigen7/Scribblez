@@ -43,9 +43,8 @@ class StubMoveSetEvalService : public nn::MoveSetEvalService {
                           batch.board_row + input_floats(InputEncodingSpec{nullptr, true}));
     last_moves = moves;
     for (int i = 0; i < moves.count; ++i) {
-      write_scripted(
-        (i < static_cast<int>(scripted.size())) ? scripted[static_cast<size_t>(i)] : ScriptedEval{},
-        i, head_out);
+      write_scripted((i < int(scripted.size())) ? scripted[size_t(i)] : ScriptedEval{}, i,
+                     head_out);
     }
   }
 };

@@ -94,15 +94,15 @@ std::vector<T> read_binary(const std::string& path) {
   }
   const std::streamsize bytes = f.tellg();
   f.seekg(0);
-  std::vector<T> out(static_cast<size_t>(bytes) / sizeof(T));
+  std::vector<T> out(size_t(bytes) / sizeof(T));
   f.read(reinterpret_cast<char*>(out.data()), bytes);
   return out;
 }
 
 std::filesystem::path make_scratch_dir(const char* prefix) {
-  std::filesystem::path base = std::filesystem::temp_directory_path() /
-                               (prefix + std::to_string(::time(nullptr)) + "_" +
-                                std::to_string(static_cast<unsigned long>(std::random_device{}())));
+  std::filesystem::path base =
+    std::filesystem::temp_directory_path() /
+    (prefix + std::to_string(::time(nullptr)) + "_" + std::to_string(std::random_device{}()));
   std::filesystem::create_directories(base);
   return base;
 }
@@ -204,12 +204,12 @@ void MsetInferenceParityTest::SetUp() {
   moves_.squares = read_binary<int32_t>(dir_ + "/move_squares.bin");
   moves_.tile_mask = read_binary<uint8_t>(dir_ + "/move_tile_mask.bin");
   moves_.scalars = read_binary<float>(dir_ + "/move_scalars.bin");
-  moves_.count = static_cast<int>(moves_.scalars.size() / scribblez::move_set::kMoveScalars);
+  moves_.count = int(moves_.scalars.size() / scribblez::move_set::kMoveScalars);
   expected_a_ = read_binary<float>(dir_ + "/expected_a.bin");
   expected_b_ = read_binary<float>(dir_ + "/expected_b.bin");
 
   ASSERT_GT(moves_.count, 0);
-  ASSERT_EQ(expected_a_.size(), static_cast<size_t>(moves_.count) * kFieldsPerRow);
+  ASSERT_EQ(expected_a_.size(), size_t(moves_.count) * kFieldsPerRow);
   ASSERT_EQ(expected_b_.size(), expected_a_.size());
 }
 
@@ -226,21 +226,19 @@ std::vector<float> MsetInferenceParityTest::run(const std::string& onnx_path, Pr
   scribblez::nn::TrtEvalService<MoveSetEvaluationSpec> service(params);
   service.load();
 
-  EXPECT_EQ(board_.size(), static_cast<size_t>(service.spatial_planes()) * 225 +
-                             static_cast<size_t>(service.scalar_floats()))
+  EXPECT_EQ(board_.size(), size_t(service.spatial_planes()) * 225 + size_t(service.scalar_floats()))
     << "the fixture's board row is not the width the loaded model consumes";
 
-  std::vector<float> wld(static_cast<size_t>(moves_.count) * scribblez::nn::WldOutput::kRowElems);
-  std::vector<float> sd(static_cast<size_t>(moves_.count) *
-                        scribblez::nn::ScoreDiffOutput::kRowElems);
+  std::vector<float> wld(size_t(moves_.count) * scribblez::nn::WldOutput::kRowElems);
+  std::vector<float> sd(size_t(moves_.count) * scribblez::nn::ScoreDiffOutput::kRowElems);
   float* const head_out[] = {wld.data(), sd.data()};
   service.evaluate({board_.data(), &moves_}, head_out);
 
-  std::vector<float> got(static_cast<size_t>(moves_.count) * kFieldsPerRow);
+  std::vector<float> got(size_t(moves_.count) * kFieldsPerRow);
   for (int r = 0; r < moves_.count; ++r) {
-    const float* w = wld.data() + static_cast<size_t>(r) * scribblez::nn::WldOutput::kRowElems;
-    const float* s = sd.data() + static_cast<size_t>(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
-    float* dst = got.data() + static_cast<size_t>(r) * kFieldsPerRow;
+    const float* w = wld.data() + size_t(r) * scribblez::nn::WldOutput::kRowElems;
+    const float* s = sd.data() + size_t(r) * scribblez::nn::ScoreDiffOutput::kRowElems;
+    float* dst = got.data() + size_t(r) * kFieldsPerRow;
     dst[0] = w[0] + 0.5f * w[1];
     dst[1] = w[0];
     dst[2] = w[1];
@@ -263,7 +261,7 @@ Tolerance MsetInferenceParityTest::worst_deviation(const std::vector<float>& got
                                                    const std::vector<float>& expected) const {
   Tolerance worst{0.0f, 0.0f};
   for (size_t i = 0; i < got.size(); ++i) {
-    const int k = static_cast<int>(i % kFieldsPerRow);
+    const int k = int(i % kFieldsPerRow);
     // A NaN would otherwise vanish here: std::max returns its first argument
     // whenever the comparison is false, and every comparison against NaN is,
     // so a run whose rows all came back NaN -- what reading an unbound or

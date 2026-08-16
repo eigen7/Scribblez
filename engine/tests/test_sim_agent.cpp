@@ -90,13 +90,12 @@ class SimAgentTest : public ::testing::Test {
 int best_of(const std::vector<SimObservation>& obs, SimObjective objective) {
   auto value = [&](const SimObservation& o) {
     if (o.n == 0) return 0.0;
-    return objective == SimObjective::kWinRate
-             ? (o.wins + 0.5 * o.draws) / static_cast<double>(o.n)
-             : static_cast<double>(o.delta_sum) / static_cast<double>(o.n);
+    return objective == SimObjective::kWinRate ? (o.wins + 0.5 * o.draws) / double(o.n)
+                                               : double(o.delta_sum) / double(o.n);
   };
   int best = 0;
   for (size_t i = 1; i < obs.size(); ++i)
-    if (value(obs[i]) > value(obs[best])) best = static_cast<int>(i);
+    if (value(obs[i]) > value(obs[best])) best = int(i);
   return best;
 }
 
@@ -124,8 +123,8 @@ TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
     const std::vector<SimObservation> obs =
       SimRunner(dict_, p.sim).run(pos, candidates, agent.sim_seed(0));
 
-    EXPECT_TRUE(played == candidates[static_cast<size_t>(best_of(obs, objective))])
-      << "objective=" << static_cast<int>(objective);
+    EXPECT_TRUE(played == candidates[size_t(best_of(obs, objective))])
+      << "objective=" << int(objective);
   }
 }
 
@@ -163,7 +162,7 @@ TEST_F(SimAgentTest, SimulatesAgainstTheOpponentsPublicLeave) {
     discriminated = true;
     SimAgent agent(p);
     agent.begin_game({});
-    EXPECT_TRUE(agent.make_move(req).move == candidates[static_cast<size_t>(with)])
+    EXPECT_TRUE(agent.make_move(req).move == candidates[size_t(with)])
       << "leave=" << text << ": the agent simmed as though the leave were hidden";
     break;
   }

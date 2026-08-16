@@ -6,7 +6,7 @@ namespace scribblez::util {
 
 int SoftmaxSampler::sample(const std::vector<double>& values, int k, double temperature,
                            std::mt19937_64& rng) {
-  if (static_cast<int>(weights_.size()) < k) weights_.resize(static_cast<size_t>(k));
+  if (int(weights_.size()) < k) weights_.resize(size_t(k));
 
   // Numerically stable softmax weights: subtract the max before exponentiating.
   // Both arrays are mapped zero-copy; `weights_` holds the result for the

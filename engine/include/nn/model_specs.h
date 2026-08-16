@@ -299,7 +299,7 @@ class MoveSetEvaluationSpec {
 
 // The position model's aux-output count, for consumers sizing mask planes
 // without naming the list.
-inline constexpr int kNumMaskHeads = static_cast<int>(PositionEvaluationSpec::AuxOutputs::size);
+inline constexpr int kNumMaskHeads = int(PositionEvaluationSpec::AuxOutputs::size);
 
 }  // namespace nn
 }  // namespace scribblez

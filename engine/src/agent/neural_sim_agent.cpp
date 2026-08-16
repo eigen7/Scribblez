@@ -56,15 +56,14 @@ void NeuralSimAgent::validate(const Params& params) {
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {
-  return util::splitmix64(seed_ ^ util::splitmix64(static_cast<uint64_t>(ply)));
+  return util::splitmix64(seed_ ^ util::splitmix64(uint64_t(ply)));
 }
 
 bool NeuralSimAgent::drop_best(int ply) const {
   if (drop_best_prob_ <= 0.0) return false;
-  const uint64_t draw =
-    util::splitmix64(seed_ ^ kDropStreamSalt ^ util::splitmix64(static_cast<uint64_t>(ply)));
+  const uint64_t draw = util::splitmix64(seed_ ^ kDropStreamSalt ^ util::splitmix64(uint64_t(ply)));
   // The top 53 bits as a uniform double in [0, 1).
-  return static_cast<double>(draw >> 11) * 0x1.0p-53 < drop_best_prob_;
+  return double(draw >> 11) * 0x1.0p-53 < drop_best_prob_;
 }
 
 void NeuralSimAgent::begin_game(const BeginGameRequest& req) {
@@ -80,8 +79,8 @@ void NeuralSimAgent::observe_move(const Move& move) {
 }
 
 void NeuralSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {
-  const int n = static_cast<int>(candidates.size());
-  rank_.resize(static_cast<size_t>(n));
+  const int n = int(candidates.size());
+  rank_.resize(size_t(n));
   std::iota(rank_.begin(), rank_.end(), 0);
   evaluator_.evaluate(req, candidates, rank_, n);
   std::stable_sort(rank_.begin(), rank_.end(),
@@ -108,12 +107,11 @@ MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
 
   // The sim set: the model's top K, minus its #1 on a drop turn (the injected
   // recall miss), which shifts the window down one so K candidates still sim.
-  const int n = static_cast<int>(candidates.size());
+  const int n = int(candidates.size());
   const int first = drop_best(ply_) ? 1 : 0;
   const int k = std::min(sim_top_k_, n - first);
   sim_moves_.clear();
-  for (int j = 0; j < k; ++j)
-    sim_moves_.push_back(candidates[static_cast<size_t>(rank_[first + j])]);
+  for (int j = 0; j < k; ++j) sim_moves_.push_back(candidates[size_t(rank_[first + j])]);
   if (k == 1) return sim_moves_.front();
 
   const SimPosition pos = sim_position_from(req);
@@ -121,7 +119,7 @@ MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
   // Ties in the observations go to the earlier candidate -- the better model
   // rank, this agent's own ordering.
-  return sim_moves_[static_cast<size_t>(best_observation_index(observations, sim_objective_))];
+  return sim_moves_[size_t(best_observation_index(observations, sim_objective_))];
 }
 
 }  // namespace scribblez

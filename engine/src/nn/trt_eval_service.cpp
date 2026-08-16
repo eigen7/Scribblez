@@ -24,7 +24,7 @@ int batch_rows(const MoveSetEvaluationSpec::Batch& batch) { return batch.moves->
 // separate, densely packed board buffers, at the model's own widths.
 template <typename Spec>
 void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row) {
-  const size_t spatial_floats = static_cast<size_t>(net.spatial_planes()) * kBoardCells;
+  const size_t spatial_floats = size_t(net.spatial_planes()) * kBoardCells;
   const size_t scalar_floats = net.scalar_floats();
   std::memcpy(net.template host<SpatialInput>() + dst_row * spatial_floats, row,
               sizeof(float) * spatial_floats);
@@ -47,7 +47,7 @@ void stage_move_rows(NeuralNet<MoveSetEvaluationSpec>& net,
                      const move_set::MoveFeatureArrays& moves, int start, int rows) {
   using Elem = typename Tensor::Elem;
   const std::vector<Elem>& src = moves.*Tensor::kBatchSource;
-  std::memcpy(net.host<Tensor>(), src.data() + static_cast<size_t>(start) * Tensor::kRowElems,
+  std::memcpy(net.host<Tensor>(), src.data() + size_t(start) * Tensor::kRowElems,
               sizeof(Elem) * rows * Tensor::kRowElems);
 }
 
@@ -62,10 +62,9 @@ void stage_move_tensors(NeuralNet<MoveSetEvaluationSpec>& net,
 // spec's per-move tensor list for the move set model.
 void stage_chunk(NeuralNet<PositionEvaluationSpec>& net, const PositionEvaluationSpec::Batch& batch,
                  int start, int chunk) {
-  const size_t row_floats =
-    static_cast<size_t>(net.spatial_planes()) * kBoardCells + net.scalar_floats();
+  const size_t row_floats = size_t(net.spatial_planes()) * kBoardCells + net.scalar_floats();
   for (int r = 0; r < chunk; ++r) {
-    stage_board_row(net, batch.rows + (static_cast<size_t>(start) + r) * row_floats, r);
+    stage_board_row(net, batch.rows + (size_t(start) + r) * row_floats, r);
   }
 }
 void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationSpec::Batch& batch,
@@ -79,8 +78,8 @@ void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationS
 void decode_head_rows(RowDecode decode, const float* raw, int rows, int width, float* dst,
                       int dst_stride) {
   for (int r = 0; r < rows; ++r) {
-    Eigen::Map<const Eigen::ArrayXf> in(raw + static_cast<size_t>(r) * width, width);
-    Eigen::Map<Eigen::ArrayXf> out(dst + static_cast<size_t>(r) * dst_stride, width);
+    Eigen::Map<const Eigen::ArrayXf> in(raw + size_t(r) * width, width);
+    Eigen::Map<Eigen::ArrayXf> out(dst + size_t(r) * dst_stride, width);
     switch (decode) {
       case RowDecode::kIdentity:
         out = in;
@@ -104,7 +103,7 @@ void decode_outputs(const NeuralNet<Spec>& net, int start, int chunk,
                     std::span<float* const> head_out, TensorList<Ts...>) {
   int i = 0;
   ((decode_head_rows(Ts::kDecode, net.template host<Ts>(), chunk, Ts::kRowElems,
-                     head_out[i] + static_cast<size_t>(start) * Ts::kRowElems, Ts::kRowElems),
+                     head_out[i] + size_t(start) * Ts::kRowElems, Ts::kRowElems),
     ++i),
    ...);
 }
@@ -139,8 +138,7 @@ void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, std::span<floa
     if constexpr (AuxOutputs::size > 0) {
       constexpr int aux_row_floats = AuxOutputs::total_row_elems;
       if (aux_out) {
-        copy_aux_outputs(net_, chunk, aux_out + static_cast<size_t>(start) * aux_row_floats,
-                         AuxOutputs{});
+        copy_aux_outputs(net_, chunk, aux_out + size_t(start) * aux_row_floats, AuxOutputs{});
       }
     }
   }

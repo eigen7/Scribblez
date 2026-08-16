@@ -20,7 +20,7 @@ namespace scribblez {
 // unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack).
 // This depends only on data the active player observes.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
-  for (int i = 0; i < 27; ++i) out[i] = static_cast<uint8_t>(TILE_COUNTS[i]);
+  for (int i = 0; i < 27; ++i) out[i] = uint8_t(TILE_COUNTS[i]);
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       Glyph g = board.at(r, c);
@@ -162,7 +162,7 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
 // one representation. The principled answer for the decisive endgame is the
 // negamax solver (docs/roadmap.md, D3), not finer value-net input resolution.
 int encode_score_diff_scalar(int score_diff, float* out) {
-  out[0] = static_cast<float>(score_diff) / kScoreDiffInputScale;
+  out[0] = float(score_diff) / kScoreDiffInputScale;
   return kScoreDiffInputFloats;
 }
 
@@ -170,11 +170,11 @@ int encode_score_diff_scalar(int score_diff, float* out) {
 // the opponent's most recent move, a move-type one-hot (indexed by MoveType)
 // followed by num_glyphs.
 int encode_move_meta(const Move& self_move, const Move& opp_move, float* out) {
-  out[static_cast<int>(self_move.type())] = 1.0f;
-  out[kMoveMetaTypeFloats] = static_cast<float>(self_move.num_glyphs());
+  out[int(self_move.type())] = 1.0f;
+  out[kMoveMetaTypeFloats] = float(self_move.num_glyphs());
   float* opp = out + kMoveMetaFloatsPerMove;
-  opp[static_cast<int>(opp_move.type())] = 1.0f;
-  opp[kMoveMetaTypeFloats] = static_cast<float>(opp_move.num_glyphs());
+  opp[int(opp_move.type())] = 1.0f;
+  opp[kMoveMetaTypeFloats] = float(opp_move.num_glyphs());
   return kMoveMetaFloats;
 }
 
@@ -238,7 +238,7 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
                 bool apply_flip, float* out) {
   check_layout(!spec.opp_leave_input || opp_leave != nullptr,
                "an open-leaves spec encoded without the opponent leave");
-  std::memset(out, 0, sizeof(float) * static_cast<size_t>(input_floats(spec)));
+  std::memset(out, 0, sizeof(float) * size_t(input_floats(spec)));
   // The cross-check and contingent blocks read the board's move-generation
   // caches; build them up front (a no-op when already valid) so they are
   // lexicon-accurate regardless of the board's prior cache state.

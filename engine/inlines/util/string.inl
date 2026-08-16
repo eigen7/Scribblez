@@ -23,16 +23,15 @@ inline std::vector<std::string> split(const std::string& s, char delim) {
 inline bool natural_less(const std::string& a, const std::string& b) {
   size_t i = 0, j = 0;
   while (i < a.size() && j < b.size()) {
-    if (std::isdigit(static_cast<unsigned char>(a[i])) &&
-        std::isdigit(static_cast<unsigned char>(b[j]))) {
+    if (std::isdigit(uint8_t(a[i])) && std::isdigit(uint8_t(b[j]))) {
       // Compare the two maximal digit runs by numeric value. Skip leading zeros,
       // then a longer remaining run of significant digits is the larger number; on
       // equal length, fall back to a digit-by-digit compare.
       while (i < a.size() && a[i] == '0') ++i;
       while (j < b.size() && b[j] == '0') ++j;
       size_t ia = i, jb = j;
-      while (ia < a.size() && std::isdigit(static_cast<unsigned char>(a[ia]))) ++ia;
-      while (jb < b.size() && std::isdigit(static_cast<unsigned char>(b[jb]))) ++jb;
+      while (ia < a.size() && std::isdigit(uint8_t(a[ia]))) ++ia;
+      while (jb < b.size() && std::isdigit(uint8_t(b[jb]))) ++jb;
       const size_t la = ia - i, lb = jb - j;
       if (la != lb) return la < lb;
       const int cmp = a.compare(i, la, b, j, lb);
@@ -40,7 +39,7 @@ inline bool natural_less(const std::string& a, const std::string& b) {
       i = ia;
       j = jb;
     } else if (a[i] != b[j]) {
-      return static_cast<unsigned char>(a[i]) < static_cast<unsigned char>(b[j]);
+      return uint8_t(a[i]) < uint8_t(b[j]);
     } else {
       ++i;
       ++j;
@@ -59,7 +58,7 @@ inline std::string& to_lower(std::string& s) {
 
 // Compact human-readable duration: "6h32m", "45m12s", or "30s".
 inline std::string fmt_dur(double secs) {
-  long s = static_cast<long>(secs + 0.5);
+  long s = long(secs + 0.5);
   const long h = s / 3600;
   s %= 3600;
   const long m = s / 60;

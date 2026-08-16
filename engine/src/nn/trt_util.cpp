@@ -40,7 +40,7 @@ std::string trt_version_tag() {
 std::string content_hash(const std::vector<char>& bytes) {
   uint64_t h = 1469598103934665603ULL;  // FNV-1a 64-bit offset basis
   for (char c : bytes) {
-    h ^= static_cast<uint8_t>(c);
+    h ^= uint8_t(c);
     h *= 1099511628211ULL;  // FNV-1a 64-bit prime
   }
   return std::format("{:016x}", h);
@@ -59,7 +59,7 @@ std::vector<char> read_file_bytes(const std::string& path) {
   if (!f) throw util::CleanException("Failed to open file: {}", path);
   std::streamsize size = f.tellg();
   f.seekg(0);
-  std::vector<char> bytes(static_cast<size_t>(size));
+  std::vector<char> bytes(size);
   f.read(bytes.data(), size);
   return bytes;
 }
@@ -71,7 +71,7 @@ void write_file_bytes(const std::string& path, const char* bytes, size_t size) {
   {
     std::ofstream f(tmp, std::ios::binary);
     if (!f) throw util::Exception("Failed to open temp file: {}", tmp);
-    f.write(bytes, static_cast<std::streamsize>(size));
+    f.write(bytes, std::streamsize(size));
   }
   std::filesystem::rename(tmp, p);
 }

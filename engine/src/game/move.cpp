@@ -64,8 +64,8 @@ Move Move::play(bool horizontal, int start, uint16_t square_mask, uint16_t score
   Move m;
   m.type_ = MoveType::PLAY;
   m.horizontal_ = horizontal;
-  m.start_ = static_cast<int8_t>(start);
-  m.num_played_ = static_cast<uint8_t>(num_played);
+  m.start_ = int8_t(start);
+  m.num_played_ = uint8_t(num_played);
   m.square_mask_ = square_mask;
   m.score_ = score;
   for (int i = 0; i < num_played; ++i) m.glyphs_[i] = played[i];
@@ -75,7 +75,7 @@ Move Move::play(bool horizontal, int start, uint16_t square_mask, uint16_t score
 Move Move::exchange(const TileCounts& tiles) {
   Move m;
   m.type_ = MoveType::EXCHANGE;
-  m.num_played_ = static_cast<uint8_t>(append_sorted(m.glyphs_, 0, tiles));
+  m.num_played_ = uint8_t(append_sorted(m.glyphs_, 0, tiles));
   return m;
 }
 

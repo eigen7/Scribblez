@@ -102,13 +102,13 @@ static bool same_move(const Move& a, const Move& b) {
 // Replicating the agent's own partial_sort makes the expected order match the
 // agent's regardless of equity ties.
 static std::vector<int> expected_candidate_order(const std::vector<double>& equities, int top_k) {
-  const int n = static_cast<int>(equities.size());
-  std::vector<int> idx(static_cast<size_t>(n));
+  const int n = int(equities.size());
+  std::vector<int> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
   if (top_k == 0 || n <= top_k) return idx;
   std::partial_sort(idx.begin(), idx.begin() + top_k, idx.end(),
                     [&](int a, int b) { return equities[a] > equities[b]; });
-  idx.resize(static_cast<size_t>(top_k));
+  idx.resize(size_t(top_k));
   return idx;
 }
 
@@ -175,7 +175,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
   ASSERT_GE(pos.plays.size(), 3u);  // > top_k, so the equity filter actually drops plays
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
-  ASSERT_EQ(static_cast<int>(order.size()), top_k);
+  ASSERT_EQ(int(order.size()), top_k);
   const MoveRequest req = pos.request();
 
   // Value head prefers the SECOND-ranked equity candidate -> the agent overrides
@@ -256,7 +256,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
   // generation order. The stub prefers the LOWEST-equity play -- a move a
   // small-top-K agent would never even see -- so the agent plays it.
   OpeningPosition pos("CARETS");
-  const int n = static_cast<int>(pos.plays.size());
+  const int n = int(pos.plays.size());
   ASSERT_GE(n, 3);
 
   int lo = 0, hi = 0;
@@ -269,8 +269,8 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
 
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
-  sp->scripted[static_cast<size_t>(lo)] = sd(9.0f);  // generation index == processing index
+  sp->scripted.assign(size_t(n), sd(0.0f));
+  sp->scripted[size_t(lo)] = sd(9.0f);  // generation index == processing index
   NeuralAgent agent({.thread_id = 0,
                      .name = "full",
                      .dict = &pos.dict,
@@ -289,15 +289,15 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   // multiple evaluate() calls, yet still picks the single globally best-rated
   // candidate.
   OpeningPosition pos("CARETS");
-  const int n = static_cast<int>(pos.plays.size());
+  const int n = int(pos.plays.size());
   ASSERT_GE(n, 3);           // needs at least two chunks at max_batch = 2
   const int target = n - 1;  // a candidate in the final chunk
   const MoveRequest req = pos.request();
 
   auto stub = std::make_unique<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  sp->scripted.assign(static_cast<size_t>(n), sd(0.0f));
-  sp->scripted[static_cast<size_t>(target)] = sd(9.0f);
+  sp->scripted.assign(size_t(n), sd(0.0f));
+  sp->scripted[size_t(target)] = sd(9.0f);
   NeuralAgent agent({.thread_id = 0,
                      .name = "chunk",
                      .dict = &pos.dict,
@@ -377,7 +377,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
   Move move2 = make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
                               {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
   const uint32_t sampled_turn = 2;
-  const int mover = static_cast<int>(sampled_turn % 2);  // turn k is played by k % 2
+  const int mover = int(sampled_turn % 2);  // turn k is played by k % 2
 
   // Initial racks and post-turn draws chosen so the decoder reconstructs
   // player 0's pre-move rack at turn 2 as DONERST: starting CATERST, play CAT
@@ -515,7 +515,7 @@ static EndgameSolver::Params solver_params(uint64_t budget) {
 static Move greedy_equity_move(const MoveRequest& req, const std::vector<Move>& plays) {
   const std::vector<double> eq =
     HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
-  return plays[static_cast<size_t>(std::max_element(eq.begin(), eq.end()) - eq.begin())];
+  return plays[size_t(std::max_element(eq.begin(), eq.end()) - eq.begin())];
 }
 
 TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {

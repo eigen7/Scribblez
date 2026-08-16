@@ -61,18 +61,18 @@ WordMap WordMap::build(const Dictionary& dict) {
     if (keys.empty()) continue;
 
     // ~50% load factor keeps open-addressing probe chains short.
-    const uint64_t table_size = util::round_up_pow2(static_cast<uint64_t>(keys.size()) * 2);
+    const uint64_t table_size = util::round_up_pow2(uint64_t(keys.size()) * 2);
     pl.slots.assign(table_size, Slot{});
     pl.mask = table_size - 1;
 
     for (const auto& [key, words] : keys) {
-      const uint32_t start = static_cast<uint32_t>(pl.words.size() / len);
+      const uint32_t start = uint32_t(pl.words.size() / len);
       for (const auto& w : words) {
         for (const Tile t : w) pl.words.push_back(t);
       }
       uint64_t i = key.hash() & pl.mask;
       while (pl.slots[i].count != 0) i = (i + 1) & pl.mask;
-      pl.slots[i] = Slot{key, start, static_cast<uint32_t>(words.size())};
+      pl.slots[i] = Slot{key, start, uint32_t(words.size())};
     }
   }
   return wm;

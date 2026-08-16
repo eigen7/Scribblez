@@ -61,7 +61,7 @@ class StreamingRowBuffer {
   uint64_t claim_row();
 
   float* row_dest(uint64_t r) const {
-    return slots_[slot_of(r)] + static_cast<int64_t>(row_in(r)) * row_floats_;
+    return slots_[slot_of(r)] + int64_t(row_in(r)) * row_floats_;
   }
 
   // Publishes the slot to the consumer once its last row is committed.
@@ -83,8 +83,8 @@ class StreamingRowBuffer {
   int num_slots() const { return num_slots_; }
 
  private:
-  int slot_of(uint64_t r) const { return static_cast<int>((r / rows_per_slot_) % num_slots_); }
-  int row_in(uint64_t r) const { return static_cast<int>(r % rows_per_slot_); }
+  int slot_of(uint64_t r) const { return int((r / rows_per_slot_) % num_slots_); }
+  int row_in(uint64_t r) const { return int(r % rows_per_slot_); }
 
   std::vector<float*> slots_;
   int num_slots_;

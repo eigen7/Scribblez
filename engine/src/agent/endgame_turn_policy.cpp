@@ -40,7 +40,7 @@ std::optional<MoveDecision> EndgameTurnPolicy::try_solve(const MoveRequest& req)
                                          params_);
   // Every solve run contributes to the totals, whether or not its move ends up
   // used.
-  solve_totals_.solve_ns += static_cast<uint64_t>(
+  solve_totals_.solve_ns += uint64_t(
     std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0)
       .count());
   ++solve_totals_.solves;

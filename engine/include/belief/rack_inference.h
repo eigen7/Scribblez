@@ -53,7 +53,7 @@ class RackPosterior {
   RackPosterior(std::vector<Entry> entries, bool exhaustive);
 
   bool empty() const { return entries_.empty(); }
-  int size() const { return static_cast<int>(entries_.size()); }
+  int size() const { return int(entries_.size()); }
   const Entry& entry(int i) const { return entries_[i]; }
 
   // The leave that `u`, a uniform variate in [0, 1), selects. Taking the

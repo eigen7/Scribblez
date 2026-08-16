@@ -9,7 +9,7 @@ namespace scribblez {
 
 void MaxMovePerLaneInputEncoder::encode(const Board& board, const Rack& rack, bool flip,
                                         float* out) {
-  std::memset(out, 0, sizeof(float) * static_cast<size_t>(kInputFloats));
+  std::memset(out, 0, sizeof(float) * size_t(kInputFloats));
 
   BoardPlanes::encode(board, flip, out);
 

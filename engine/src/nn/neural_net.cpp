@@ -50,7 +50,7 @@ size_t element_size(nvinfer1::DataType dtype) {
 // the leading one.
 int row_elements(const nvinfer1::Dims& dims) {
   int n = 1;
-  for (int i = 1; i < dims.nbDims; ++i) n *= static_cast<int>(dims.d[i]);
+  for (int i = 1; i < dims.nbDims; ++i) n *= int(dims.d[i]);
   return n;
 }
 
@@ -145,7 +145,7 @@ struct Binding {
   void* host = nullptr;
 
   size_t bytes(int num_rows) const {
-    return elem_size * static_cast<size_t>(elems_per_row) * (dynamic ? num_rows : 1);
+    return elem_size * size_t(elems_per_row) * (dynamic ? num_rows : 1);
   }
 };
 

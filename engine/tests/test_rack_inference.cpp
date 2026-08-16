@@ -94,7 +94,7 @@ class RackInferenceTest : public ::testing::Test {
     EXPECT_FALSE(moves.empty());
     const std::vector<double> eq =
       HastyEquity::instance().equities(moves, board_, bag_size(), no_opp, rack);
-    return moves[static_cast<size_t>(std::max_element(eq.begin(), eq.end()) - eq.begin())];
+    return moves[size_t(std::max_element(eq.begin(), eq.end()) - eq.begin())];
   }
 
   OppMoveObservation observation_of(const Move& move) const {
@@ -122,8 +122,7 @@ double weight_of(const RackPosterior& p, const Rack& leave) {
 TEST(LeavePrior, EnumerationAgreesWithTheCount) {
   const TileCounts pool = pool_from("AABBCDE");
   for (int k = 1; k <= 4; ++k)
-    EXPECT_EQ(static_cast<int64_t>(enumerate_leaves(pool, k).size()),
-              count_multisets(pool, k, 1'000'000))
+    EXPECT_EQ(int64_t(enumerate_leaves(pool, k).size()), count_multisets(pool, k, 1'000'000))
       << "k=" << k;
 }
 
@@ -142,7 +141,7 @@ TEST(LeavePrior, SingleTilePriorIsTheTileFraction) {
   ASSERT_EQ(hyps.size(), 5u);  // A, B, C, D, E
   for (const ScoredLeave& h : hyps) {
     const Tile t = h.leave.tiles()[0];
-    EXPECT_NEAR(std::exp(h.log_weight), static_cast<double>(pool.count(t)) / pool.size(), 1e-12);
+    EXPECT_NEAR(std::exp(h.log_weight), double(pool.count(t)) / pool.size(), 1e-12);
   }
 }
 
@@ -170,7 +169,7 @@ TEST(LeavePrior, DrawingReproducesThePrior) {
       if (hyps[j].leave == drawn) ++hits[j];
   }
   for (size_t j = 0; j < hyps.size(); ++j)
-    EXPECT_NEAR(static_cast<double>(hits[j]) / kDraws, std::exp(hyps[j].log_weight), 0.01)
+    EXPECT_NEAR(double(hits[j]) / kDraws, std::exp(hyps[j].log_weight), 0.01)
       << "leave=" << hyps[j].leave.to_string();
 }
 

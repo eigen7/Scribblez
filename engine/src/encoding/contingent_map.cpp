@@ -19,7 +19,7 @@ int lane_id(const LaneAssignment& a) { return (a.horizontal ? 0 : kLanesPerAxis)
 uint16_t lane_placed_mask(const LaneAssignment& a, const PlacedTile* placed, int num_placed) {
   uint16_t mask = 0;
   for (int k = 0; k < num_placed; ++k) {
-    mask |= static_cast<uint16_t>(1u << (a.horizontal ? placed[k].c : placed[k].r));
+    mask |= uint16_t(1u << (a.horizontal ? placed[k].c : placed[k].r));
   }
   return mask;
 }
@@ -27,7 +27,7 @@ uint16_t lane_placed_mask(const LaneAssignment& a, const PlacedTile* placed, int
 // Strict-max reducer for one entry slot.
 void fold_entry(ContingentMap::Entry& e, int score, uint16_t mask) {
   if (score <= e.score) return;
-  e.score = static_cast<int16_t>(score);
+  e.score = int16_t(score);
   e.placed_mask = mask;
 }
 
@@ -60,7 +60,7 @@ int real_tile_delta(const Board& board, const Move& m, const PlacedTile& q, int 
 }
 
 // `x` clipped to `scale` and normalized by it, giving a value in [0, 1].
-float scaled_unit(float x, int scale) { return std::min(1.0f, x / static_cast<float>(scale)); }
+float scaled_unit(float x, int scale) { return std::min(1.0f, x / float(scale)); }
 
 // Per-cell max-paint of `value` onto the entry's placed cells within `lane`.
 void paint_entry(const ContingentMap::Entry& e, int lane, float value, bool flip, float* plane) {
@@ -150,8 +150,7 @@ void ContingentMap::encode_planes(bool flip, float* planes_out) const {
   float* weighted_plane = planes_out + BOARD_SIZE * BOARD_SIZE;
   float* rack_plane = planes_out + 2 * BOARD_SIZE * BOARD_SIZE;
   for (int kind = 0; kind < kLaneTileKinds; ++kind) {
-    const float p_draw =
-      unseen_total_ > 0 ? static_cast<float>(unseen_[kind]) / unseen_total_ : 0.0f;
+    const float p_draw = unseen_total_ > 0 ? float(unseen_[kind]) / unseen_total_ : 0.0f;
     for (int lane = 0; lane < kNumLanes; ++lane) {
       const Entry& e = best_[kind][lane];
       if (e.score < 0) continue;
@@ -173,8 +172,7 @@ void ContingentMap::encode_scalars(float* out) const {
     int best = -1;
     for (int lane = 0; lane < kNumLanes; ++lane)
       best = std::max(best, int{best_[kind][lane].score});
-    const float p_draw =
-      unseen_total_ > 0 ? static_cast<float>(unseen_[kind]) / unseen_total_ : 0.0f;
+    const float p_draw = unseen_total_ > 0 ? float(unseen_[kind]) / unseen_total_ : 0.0f;
     out[kind] = best >= 0 ? scaled_unit(best, kContingentScoreClip) : 0.0f;
     out[kLaneTileKinds + kind] =
       best >= 0 ? scaled_unit(p_draw * best, kContingentWeightedScale) : 0.0f;

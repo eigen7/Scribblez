@@ -21,14 +21,13 @@ void ProgressMeter::render() const {
   if (!::isatty(2) || total_ == 0) return;
   const uint64_t d = done();
   constexpr int kWidth = 40;
-  const int filled = static_cast<int>(kWidth * d / total_);
-  std::string bar(static_cast<size_t>(filled), '#');
+  const int filled = int(kWidth * d / total_);
+  std::string bar(size_t(filled), '#');
   bar.resize(kWidth, '.');
   const double rate = d / std::max(elapsed_s(), 1e-9);
-  const double eta = rate > 0 ? static_cast<double>(total_ - d) / rate : 0.0;
+  const double eta = rate > 0 ? double(total_ - d) / rate : 0.0;
   std::cerr << "\r  [" << bar << "] " << d << "/" << total_ << " " << noun_ << " ("
-            << static_cast<int>(100 * d / total_) << "%, eta " << static_cast<int>(eta) << "s)  "
-            << std::flush;
+            << int(100 * d / total_) << "%, eta " << int(eta) << "s)  " << std::flush;
 }
 
 void ProgressMeter::monitor_loop() {
@@ -48,7 +47,7 @@ void ProgressMeter::finish(const std::string& prefix) {
   stop_monitor();
   if (::isatty(2)) std::cerr << "\r\033[K";  // clear the bar line
   const double s = elapsed_s();
-  std::cerr << prefix << ": " << done() << " " << noun_ << " in " << static_cast<int>(s) << "s ("
+  std::cerr << prefix << ": " << done() << " " << noun_ << " in " << int(s) << "s ("
             << (done() / std::max(s, 1e-9)) << " " << noun_ << "/s)\n";
 }
 

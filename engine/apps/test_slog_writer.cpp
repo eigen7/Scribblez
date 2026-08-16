@@ -75,7 +75,7 @@ int main(int argc, char* argv[]) {
                                  face_up ? binlog::kFlagFaceUpLeaves : uint16_t{0});
 
   for (int i = 0; i < num_games; ++i) {
-    uint64_t seed = static_cast<uint64_t>(3000 + i);
+    uint64_t seed = uint64_t(3000 + i);
     HastyAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
     HastyAgent a1(1, "A1", seed ^ 0x2222222222222222ULL);
     Game g(a0, a1, dict, seed);

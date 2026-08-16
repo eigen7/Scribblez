@@ -22,14 +22,14 @@ namespace scribblez {
 namespace {
 
 char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return static_cast<char>(c - 'a' + 'A');
+  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
   return c;
 }
 
 int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
   auto it = o.find(key);
   if (it == o.end() || !it->value().is_int64()) return fallback;
-  return static_cast<int>(it->value().as_int64());
+  return int(it->value().as_int64());
 }
 
 std::string str_field(const boost::json::object& o, const char* key) {
@@ -73,7 +73,7 @@ boost::json::array board_grid(const Board& board) {
         row.emplace_back(nullptr);
       } else {
         char ch = g.letter().to_char();
-        if (g.is_blank()) ch = static_cast<char>(ch - 'A' + 'a');
+        if (g.is_blank()) ch = char(ch - 'A' + 'a');
         row.emplace_back(std::string(1, ch));
       }
     }
@@ -226,7 +226,7 @@ class BoardEditor {
         word.push_back(oriented_at(vertical, line, i).letter().to_char());
         ++i;
       }
-      if (static_cast<int>(word.size()) >= 2 && !dict_.contains(word)) {
+      if (int(word.size()) >= 2 && !dict_.contains(word)) {
         out->push_back(make_invalid(vertical, line, start, word));
       }
     }
@@ -235,7 +235,7 @@ class BoardEditor {
   static InvalidWord make_invalid(bool vertical, int line, int start, const std::string& word) {
     const int row = vertical ? start : line;
     const int col = vertical ? line : start;
-    const std::string col_letter(1, static_cast<char>('A' + col));
+    const std::string col_letter(1, char('A' + col));
     const std::string row_num = std::to_string(row + 1);
     return InvalidWord{word, vertical ? col_letter + row_num : row_num + col_letter,
                        vertical ? "down" : "across"};

@@ -194,7 +194,7 @@ void StudentScorer::stop() {
 // ties resolve to the equity-preferred instance deterministically
 // (max_element keeps the first maximum).
 size_t anchor_index(const std::vector<Move>& ranked) {
-  return static_cast<size_t>(std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin());
+  return size_t(std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin());
 }
 
 // Per-worker front end over the shared scorer: owns the staging buffers and
@@ -203,7 +203,7 @@ size_t anchor_index(const std::vector<Move>& ranked) {
 class CandidateScorer {
  public:
   CandidateScorer(const InputEncodingSpec& spec, StudentScorer* scorer)
-      : spec_(spec), scorer_(scorer), board_row_(static_cast<size_t>(input_floats(spec))) {}
+      : spec_(spec), scorer_(scorer), board_row_(size_t(input_floats(spec))) {}
 
   // `encoder` must be replayed to the position; `visible_opp` is the leave
   // the information condition exposes (empty when hidden).
@@ -223,7 +223,7 @@ class CandidateScorer {
 const std::vector<float>& CandidateScorer::win_equities(const binlog::PositionEncoder& encoder,
                                                         int mover, const Rack& visible_opp,
                                                         const std::vector<Move>& ranked) {
-  const int n = static_cast<int>(ranked.size());
+  const int n = int(ranked.size());
   // The contingent input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate.
   encoder.enc().board().ensure_movegen_caches(*spec_.dict);
@@ -235,13 +235,13 @@ const std::vector<float>& CandidateScorer::win_equities(const binlog::PositionEn
   }
   const int score_diff = encoder.enc().score(mover) - encoder.enc().score(1 - mover);
   move_features_.encode(ranked.data(), n, score_diff);
-  wld_buf_.resize(static_cast<size_t>(n) * nn::WldOutput::kRowElems);
-  sd_buf_.resize(static_cast<size_t>(n) * nn::ScoreDiffOutput::kRowElems);
+  wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
+  sd_buf_.resize(size_t(n) * nn::ScoreDiffOutput::kRowElems);
   scorer_->score(board_row_.data(), &move_features_, wld_buf_.data(), sd_buf_.data());
-  win_equity_.resize(static_cast<size_t>(n));
+  win_equity_.resize(size_t(n));
   for (int c = 0; c < n; ++c) {
-    const float* wld = wld_buf_.data() + static_cast<size_t>(c) * nn::WldOutput::kRowElems;
-    win_equity_[static_cast<size_t>(c)] = wld[0] + 0.5f * wld[1];
+    const float* wld = wld_buf_.data() + size_t(c) * nn::WldOutput::kRowElems;
+    win_equity_[size_t(c)] = wld[0] + 0.5f * wld[1];
   }
   return win_equity_;
 }
@@ -276,13 +276,12 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
       if (taken[i]) continue;
       pool_scores.push_back(win_equity[i]);
       pool_index.push_back(i);
-      if (static_cast<int>(pool_index.size()) >= opt.proposal_pool) break;
+      if (int(pool_index.size()) >= opt.proposal_pool) break;
     }
     if (pool_index.empty()) break;
-    const int j =
-      sampler.sample(pool_scores, static_cast<int>(pool_scores.size()), opt.temperature, rng);
-    chosen.push_back(pool_index[static_cast<size_t>(j)]);
-    taken[pool_index[static_cast<size_t>(j)]] = 1;
+    const int j = sampler.sample(pool_scores, int(pool_scores.size()), opt.temperature, rng);
+    chosen.push_back(pool_index[size_t(j)]);
+    taken[pool_index[size_t(j)]] = 1;
   }
 
   std::vector<size_t> unsimmed;
@@ -314,7 +313,7 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
     const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
-    const int mover = encoder.replay_to_sampled(g, static_cast<int>(w.turn_idx),
+    const int mover = encoder.replay_to_sampled(g, int(w.turn_idx),
                                                 /*post_move=*/false);
     SimPosition pos;
     pos.board = encoder.enc().board();
@@ -322,8 +321,7 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
     pos.mover = mover;
     pos.rack = encoder.rack(mover);
     if (opt.open_leaves) {
-      pos.opp_leave =
-        binlog::opp_leave_from_replay(g, static_cast<int>(w.turn_idx), encoder.rack(1 - mover));
+      pos.opp_leave = binlog::opp_leave_from_replay(g, int(w.turn_idx), encoder.rack(1 - mover));
     }
 
     // Hidden mode: the opponent's replayed rack is ground truth the mover
@@ -340,7 +338,7 @@ void position_worker(const char* buf, const Dictionary& dict, const InputEncodin
     PositionResult& res = (*results)[i];
     res.pos = w;
     res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
-    res.num_legal_moves = static_cast<uint32_t>(ranked.size());
+    res.num_legal_moves = uint32_t(ranked.size());
     // The trajectory draws come from their own stream so adding a proposal
     // never perturbs the rollout seeds (base_seed feeds SimRunner directly).
     std::mt19937_64 rng(util::splitmix64(res.base_seed ^ 0x7A6A11EC70ull));
@@ -392,8 +390,7 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   SimObsWriter writer(sobs_path.string(), flags, proposer_hash);
   for (const PositionResult& r : results) {
     writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates, r.observations,
-                        static_cast<uint32_t>(opt.rollouts), r.base_seed, r.num_legal_moves,
-                        r.flags);
+                        uint32_t(opt.rollouts), r.base_seed, r.num_legal_moves, r.flags);
   }
   writer.close();
 }

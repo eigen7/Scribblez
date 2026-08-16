@@ -46,7 +46,7 @@ class GameEngine {
 
   // Agent pairs actually built, which may be below params.threads; see the
   // constructor.
-  int num_threads() const { return static_cast<int>(agents_.size()); }
+  int num_threads() const { return int(agents_.size()); }
 
   // Game g is played with seed() + g.
   uint64_t seed() const { return params_.seed; }

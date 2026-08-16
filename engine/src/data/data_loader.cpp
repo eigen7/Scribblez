@@ -65,18 +65,18 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
-    num_games = static_cast<int64_t>(hdr.num_games);
-    std::vector<GameMetadata> metas(static_cast<size_t>(num_games));
+    num_games = int64_t(hdr.num_games);
+    std::vector<GameMetadata> metas(num_games);
     if (num_games == 0 || f.read(reinterpret_cast<char*>(metas.data()),
-                                 static_cast<std::streamsize>(num_games) * sizeof(GameMetadata))) {
+                                 std::streamsize(num_games) * sizeof(GameMetadata))) {
       TurnIndex idx;
-      idx.cum.resize(static_cast<size_t>(num_games) + 1);
-      idx.first_turn.resize(static_cast<size_t>(num_games));
+      idx.cum.resize(size_t(num_games) + 1);
+      idx.first_turn.resize(size_t(num_games));
       idx.cum[0] = 0;
       for (int64_t g = 0; g < num_games; ++g) {
         const uint32_t turns =
           all_turns ? metas[g].num_turns : metas[g].eligible_end - metas[g].eligible_begin;
-        idx.cum[g + 1] = idx.cum[g] + static_cast<int64_t>(turns);
+        idx.cum[g + 1] = idx.cum[g] + int64_t(turns);
         idx.first_turn[g] = all_turns ? 0 : metas[g].eligible_begin;
       }
       return idx;
@@ -87,9 +87,9 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
     num_games = num_games_fallback;
   }
   TurnIndex idx;
-  idx.cum.resize(static_cast<size_t>(num_games) + 1);
+  idx.cum.resize(size_t(num_games) + 1);
   std::iota(idx.cum.begin(), idx.cum.end(), int64_t{0});
-  idx.first_turn.assign(static_cast<size_t>(num_games), 0);
+  idx.first_turn.assign(size_t(num_games), 0);
   return idx;
 }
 
@@ -121,7 +121,7 @@ GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
   auto it = std::upper_bound(cumulative_turns_.begin(), cumulative_turns_.end(), sample_index);
   int64_t g = (it - cumulative_turns_.begin()) - 1;
   int64_t turn = first_turns_[g] + (sample_index - cumulative_turns_[g]);
-  return GameTurn{static_cast<uint32_t>(g), static_cast<uint16_t>(turn)};
+  return GameTurn{uint32_t(g), uint16_t(turn)};
 }
 
 bool DataLoader::DataFile::is_loaded() const {
@@ -182,8 +182,7 @@ int DataLoader::ThreadTable::allocate_thread() {
 
 void DataLoader::ThreadTable::wait_until_all_available() {
   std::unique_lock<std::mutex> lock(mutex_);
-  cv_.wait(lock,
-           [this] { return quitting_ || static_cast<int>(available_ids_.size()) == n_threads_; });
+  cv_.wait(lock, [this] { return quitting_ || int(available_ids_.size()) == n_threads_; });
 }
 
 void DataLoader::ThreadTable::quit() {
@@ -275,7 +274,7 @@ int64_t DataLoader::FileManager::num_positions() const {
 
 int DataLoader::FileManager::num_files() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return static_cast<int>(all_files_.size());
+  return int(all_files_.size());
 }
 
 int64_t DataLoader::FileManager::memory_usage() const {
@@ -515,18 +514,18 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
   std::mt19937_64 rng(config.seed);
   std::shuffle(order_.begin(), order_.end(), rng);
 
-  total_positions_ = static_cast<int64_t>(order_.size());
+  total_positions_ = int64_t(order_.size());
   build_flips(config);
 }
 
 void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*>& files) {
   int64_t total = 0;
   for (auto* f : files) total += f->num_positions();
-  order_.reserve(static_cast<size_t>(total));
+  order_.reserve(size_t(total));
 
   // Every flat position of every file, in file-then-position order. build_epoch
   // shuffles order_ globally afterwards.
-  for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
+  for (int fi = 0; fi < int(files.size()); ++fi) {
     const int64_t n = files[fi]->num_positions();
     for (int64_t p = 0; p < n; ++p) {
       order_.push_back(EpochPosition{fi, p});
@@ -539,7 +538,7 @@ void DataLoader::SamplingManager::collect_sampled_order(const std::vector<DataFi
   // For each file, select config.turns_per_game turns from every game. The
   // resulting rows are left grouped by file; build_epoch shuffles order_
   // globally afterwards.
-  for (int fi = 0; fi < static_cast<int>(files.size()); ++fi) {
+  for (int fi = 0; fi < int(files.size()); ++fi) {
     DataFile* f = files[fi];
     const uint64_t file_key = std::hash<std::string>{}(f->path());
     for (int64_t g = 0; g < f->num_games(); ++g) {
@@ -557,21 +556,20 @@ void DataLoader::SamplingManager::append_game_turns(int file_idx, int64_t game, 
   // A fixed per-game ordering of the game's eligible turns, independent of the
   // epoch, so that epoch e drawing the window [e*k, e*k + k) of it covers turns
   // disjoint from neighboring epochs until the ordering wraps after n turns.
-  std::vector<int64_t> turn_order(static_cast<size_t>(n));
+  std::vector<int64_t> turn_order(size_t(n));
   std::iota(turn_order.begin(), turn_order.end(), int64_t{0});
-  std::mt19937_64 turn_rng(file_key ^ (static_cast<uint64_t>(game) * 0x9E3779B97F4A7C15ULL));
+  std::mt19937_64 turn_rng(file_key ^ (uint64_t(game) * 0x9E3779B97F4A7C15ULL));
   std::shuffle(turn_order.begin(), turn_order.end(), turn_rng);
 
   const int m = std::min(turns_per_game, n);
   for (int j = 0; j < m; ++j) {
-    const int64_t idx =
-      (static_cast<int64_t>(epoch_index) * turns_per_game + j) % static_cast<int64_t>(n);
-    order_.push_back(EpochPosition{file_idx, base + turn_order[static_cast<size_t>(idx)]});
+    const int64_t idx = (int64_t(epoch_index) * turns_per_game + j) % int64_t(n);
+    order_.push_back(EpochPosition{file_idx, base + turn_order[size_t(idx)]});
   }
 }
 
 void DataLoader::SamplingManager::build_flips(const EpochConfig& config) {
-  flips_.resize(static_cast<size_t>(total_positions_));
+  flips_.resize(size_t(total_positions_));
   if (config.apply_symmetry) {
     std::mt19937_64 flip_rng(config.seed ^ 0xDEADBEEFCAFEF00DULL);
     std::bernoulli_distribution coin(0.5);
@@ -586,16 +584,15 @@ void DataLoader::SamplingManager::build_flips(const EpochConfig& config) {
 int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
                                             const std::vector<DataFile*>& files) {
   work_units.clear();
-  if (cursor_ >= static_cast<int64_t>(order_.size())) return 0;
+  if (cursor_ >= int64_t(order_.size())) return 0;
 
   const int64_t batch_start = cursor_;
-  const int64_t batch_end =
-    std::min(batch_start + batch_size_, static_cast<int64_t>(order_.size()));
-  const int n_rows = static_cast<int>(batch_end - batch_start);
+  const int64_t batch_end = std::min(batch_start + batch_size_, int64_t(order_.size()));
+  const int n_rows = int(batch_end - batch_start);
   cursor_ = batch_end;
 
   // Group rows by file for locality.
-  std::vector<TaggedRow> rows(static_cast<size_t>(n_rows));
+  std::vector<TaggedRow> rows(n_rows);
   for (int i = 0; i < n_rows; ++i) {
     const auto& ep = order_[batch_start + i];
     rows[i] = {ep.file_idx, ep.local_pos, flips_[batch_start + i], i};
@@ -663,7 +660,7 @@ int DataLoader::epoch_start(const EpochConfig& config) {
   epoch_active_ = true;
 
   int64_t total = sampling_manager_.total_positions();
-  return static_cast<int>(total / config.batch_size);
+  return int(total / config.batch_size);
 }
 
 int DataLoader::load_batch(float* output) {

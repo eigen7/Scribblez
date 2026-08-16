@@ -68,7 +68,7 @@ SimAgent::SimAgent(const Params& params)
 }
 
 uint64_t SimAgent::sim_seed(int ply) const {
-  return util::splitmix64(seed_ ^ util::splitmix64(static_cast<uint64_t>(ply)));
+  return util::splitmix64(seed_ ^ util::splitmix64(uint64_t(ply)));
 }
 
 void SimAgent::begin_game(const BeginGameRequest& /*req*/) {
@@ -94,7 +94,7 @@ MoveDecision SimAgent::make_move(const MoveRequest& req) {
   const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, candidates, sim_seed(ply_));
-  return candidates[static_cast<size_t>(best_observation_index(observations, objective_))];
+  return candidates[size_t(best_observation_index(observations, objective_))];
 }
 
 std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& tokens, int thread_id,

@@ -118,7 +118,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
     const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
-    const int mover = encoder.replay_to_sampled(g, static_cast<int>(w.turn_idx),
+    const int mover = encoder.replay_to_sampled(g, int(w.turn_idx),
                                                 /*post_move=*/false);
     SimPosition pos;
     pos.board = encoder.enc().board();
@@ -130,8 +130,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     // Bayesian-inferable part -- is exact; their replenishments stay hidden
     // and are sampled per rollout.
     if (opt.open_leaves) {
-      pos.opp_leave =
-        binlog::opp_leave_from_replay(g, static_cast<int>(w.turn_idx), encoder.rack(1 - mover));
+      pos.opp_leave = binlog::opp_leave_from_replay(g, int(w.turn_idx), encoder.rack(1 - mover));
     }
 
     const int bag_size = encoder.bag_size();
@@ -150,8 +149,8 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
     res.pos = w;
     res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
     std::vector<Move> ranked = equity_top_k(ranking_req, std::numeric_limits<int>::max());
-    res.num_legal_moves = static_cast<uint32_t>(ranked.size());
-    if (static_cast<int>(ranked.size()) > opt.top_k) ranked.resize(static_cast<size_t>(opt.top_k));
+    res.num_legal_moves = uint32_t(ranked.size());
+    if (int(ranked.size()) > opt.top_k) ranked.resize(size_t(opt.top_k));
     res.candidates = std::move(ranked);
     res.observations = runner.run(pos, res.candidates, res.base_seed);
     meter->add_done();
@@ -187,7 +186,7 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   SimObsWriter writer(sobs_path.string(), opt.open_leaves ? kSimObsFlagOpenLeaves : 0);
   for (const PositionResult& r : results) {
     writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates, r.observations,
-                        static_cast<uint32_t>(opt.rollouts), r.base_seed, r.num_legal_moves);
+                        uint32_t(opt.rollouts), r.base_seed, r.num_legal_moves);
   }
   writer.close();
 }

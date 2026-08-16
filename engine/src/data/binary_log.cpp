@@ -58,7 +58,7 @@ GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecor
   g.initial_scores = {gm.initial_score_p0, gm.initial_score_p1};
   g.final_scores = {gm.final_score_p0, gm.final_score_p1};
   g.records = scratch.data();
-  g.num_records = static_cast<int>(gm.num_turns);
+  g.num_records = int(gm.num_turns);
   if (sampled_turn) *sampled_turn = gm.sampled_turn;
   return g;
 }
@@ -111,7 +111,7 @@ void BinaryLogWriter::append(GameLogStorage&& log) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     pending_.push_back(std::move(log));
-    if (static_cast<int>(pending_.size()) >= games_per_file_) {
+    if (int(pending_.size()) >= games_per_file_) {
       batch.swap(pending_);
     }
   }
@@ -161,7 +161,7 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
     const int sampled = pick_sampled_turn(g, rng);
     p.initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
-    turns.reserve(static_cast<size_t>(g.num_records));
+    turns.reserve(size_t(g.num_records));
     for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
     p.turns.push_back(std::move(turns));
     p.sampled_turn.push_back(sampled);
@@ -180,15 +180,15 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   for (size_t i = 0; i < p.games.size(); ++i) {
     GameMetadata gm{};
     gm.start_offset = cursor;
-    gm.num_turns = static_cast<uint32_t>(p.turns[i].size());
-    gm.sampled_turn = static_cast<uint32_t>(p.sampled_turn[i]);
-    gm.final_score_p0 = static_cast<int16_t>(p.games[i].final_scores[0]);
-    gm.final_score_p1 = static_cast<int16_t>(p.games[i].final_scores[1]);
-    gm.initial_score_p0 = static_cast<int16_t>(p.games[i].initial_scores[0]);
-    gm.initial_score_p1 = static_cast<int16_t>(p.games[i].initial_scores[1]);
-    gm.eligible_begin = static_cast<uint8_t>(p.eligible[i].begin);
-    gm.eligible_end = static_cast<uint8_t>(p.eligible[i].end);
-    cursor += sizeof(InitialRacks) + static_cast<uint64_t>(gm.num_turns) * sizeof(TurnBlob);
+    gm.num_turns = uint32_t(p.turns[i].size());
+    gm.sampled_turn = uint32_t(p.sampled_turn[i]);
+    gm.final_score_p0 = int16_t(p.games[i].final_scores[0]);
+    gm.final_score_p1 = int16_t(p.games[i].final_scores[1]);
+    gm.initial_score_p0 = int16_t(p.games[i].initial_scores[0]);
+    gm.initial_score_p1 = int16_t(p.games[i].initial_scores[1]);
+    gm.eligible_begin = uint8_t(p.eligible[i].begin);
+    gm.eligible_end = uint8_t(p.eligible[i].end);
+    cursor += sizeof(InitialRacks) + uint64_t(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }
   return meta;
@@ -206,20 +206,19 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.flags = flags;
-  hdr.num_games = static_cast<uint32_t>(p.games.size());
+  hdr.num_games = uint32_t(p.games.size());
   uint32_t num_sample_positions = 0;
-  for (const EligibleSpan& s : p.eligible)
-    num_sample_positions += static_cast<uint32_t>(s.end - s.begin);
+  for (const EligibleSpan& s : p.eligible) num_sample_positions += uint32_t(s.end - s.begin);
   hdr.num_sample_positions = num_sample_positions;
   f.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   f.write(reinterpret_cast<const char*>(meta.data()),
-          static_cast<std::streamsize>(meta.size() * sizeof(GameMetadata)));
+          std::streamsize(meta.size() * sizeof(GameMetadata)));
   for (size_t i = 0; i < p.games.size(); ++i) {
     f.write(reinterpret_cast<const char*>(&p.initial[i]), sizeof(InitialRacks));
     const auto& turns = p.turns[i];
     if (!turns.empty()) {
       f.write(reinterpret_cast<const char*>(turns.data()),
-              static_cast<std::streamsize>(turns.size() * sizeof(TurnBlob)));
+              std::streamsize(turns.size() * sizeof(TurnBlob)));
     }
   }
   if (!f) {

@@ -157,8 +157,8 @@ void encode_lane_targets(const LaneTargets& t, bool flip, float* out) {
     encode_lane_occupancy(h, occ + h_id * kLaneLen * kLaneTileKinds);
     encode_lane_occupancy(v, occ + v_id * kLaneLen * kLaneTileKinds);
 
-    score[h_id] = static_cast<float>(h.has_move ? std::min(h.max_score, kLaneScoreBins - 1) : 0);
-    score[v_id] = static_cast<float>(v.has_move ? std::min(v.max_score, kLaneScoreBins - 1) : 0);
+    score[h_id] = float(h.has_move ? std::min(h.max_score, kLaneScoreBins - 1) : 0);
+    score[v_id] = float(v.has_move ? std::min(v.max_score, kLaneScoreBins - 1) : 0);
     mask[h_id] = h.has_move ? 1.0f : 0.0f;
     mask[v_id] = v.has_move ? 1.0f : 0.0f;
   }

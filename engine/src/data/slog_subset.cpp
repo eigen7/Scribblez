@@ -22,22 +22,20 @@ bool read_file(const std::string& path, std::vector<char>& buf) {
 
 // Bytes occupied by one game's blob: its initial racks plus its turn array.
 int64_t blob_size(const GameMetadata& gm) {
-  return static_cast<int64_t>(sizeof(InitialRacks)) +
-         static_cast<int64_t>(gm.num_turns) * static_cast<int64_t>(sizeof(TurnBlob));
+  return int64_t(sizeof(InitialRacks)) + int64_t(gm.num_turns) * int64_t(sizeof(TurnBlob));
 }
 
 }  // namespace
 
 bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>& picks) {
-  const uint32_t n = static_cast<uint32_t>(picks.size());
+  const uint32_t n = uint32_t(picks.size());
 
   // Cache source file contents so a file referenced by many picks is read once.
   std::unordered_map<std::string, std::vector<char>> cache;
 
   std::vector<GameMetadata> out_meta(n);
   std::vector<char> out_blobs;
-  const int64_t blobs_start =
-    static_cast<int64_t>(sizeof(FileHeader)) + static_cast<int64_t>(n) * sizeof(GameMetadata);
+  const int64_t blobs_start = int64_t(sizeof(FileHeader)) + int64_t(n) * sizeof(GameMetadata);
 
   for (uint32_t k = 0; k < n; ++k) {
     const SlogPick& pick = picks[k];
@@ -51,17 +49,17 @@ bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>&
     }
     const std::vector<char>& src = it->second;
     const FileHeader* hdr = reinterpret_cast<const FileHeader*>(src.data());
-    if (pick.game_idx < 0 || pick.game_idx >= static_cast<int64_t>(hdr->num_games)) return false;
+    if (pick.game_idx < 0 || pick.game_idx >= int64_t(hdr->num_games)) return false;
 
     const GameMetadata* metas =
       reinterpret_cast<const GameMetadata*>(src.data() + sizeof(FileHeader));
     const GameMetadata& gm = metas[pick.game_idx];
     const int64_t bsize = blob_size(gm);
-    if (gm.start_offset + static_cast<uint64_t>(bsize) > src.size()) return false;
+    if (gm.start_offset + uint64_t(bsize) > src.size()) return false;
 
     // Copy the metadata, repointing start_offset into the destination layout.
     out_meta[k] = gm;
-    out_meta[k].start_offset = static_cast<uint64_t>(blobs_start) + out_blobs.size();
+    out_meta[k].start_offset = uint64_t(blobs_start) + out_blobs.size();
     out_blobs.insert(out_blobs.end(), src.data() + gm.start_offset,
                      src.data() + gm.start_offset + bsize);
   }
@@ -83,9 +81,9 @@ bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>&
   if (!out) return false;
   out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
   out.write(reinterpret_cast<const char*>(out_meta.data()),
-            static_cast<std::streamsize>(out_meta.size() * sizeof(GameMetadata)));
-  out.write(out_blobs.data(), static_cast<std::streamsize>(out_blobs.size()));
-  return static_cast<bool>(out);
+            std::streamsize(out_meta.size() * sizeof(GameMetadata)));
+  out.write(out_blobs.data(), std::streamsize(out_blobs.size()));
+  return bool(out);
 }
 
 }  // namespace binlog

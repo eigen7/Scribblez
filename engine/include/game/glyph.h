@@ -20,7 +20,7 @@ class Glyph {
   constexpr Glyph() = default;  // empty, so a zero-filled array is all-empty
 
   static constexpr Glyph empty() { return Glyph(0); }
-  static constexpr Glyph of(Tile letter) { return Glyph(static_cast<uint8_t>(letter.index() + 1)); }
+  static constexpr Glyph of(Tile letter) { return Glyph(uint8_t(letter.index() + 1)); }
   static constexpr Glyph of_blank(Tile letter);
   static constexpr Glyph blank() { return Glyph(53); }
 

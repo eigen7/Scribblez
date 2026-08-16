@@ -49,7 +49,7 @@ class GameRunner::Results {
       winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
 
     std::lock_guard<std::mutex> lock(mutex_);
-    total_turns_ += static_cast<long>(log.num_records);
+    total_turns_ += long(log.num_records);
     ++games_played_;
     if (winning_seat < 0) {
       ++draws_;
@@ -79,8 +79,8 @@ class GameRunner::Results {
       done = games_played_;
     }
     const double rate = elapsed_secs > 0 ? done / elapsed_secs : 0.0;
-    const double pct = total > 0 ? 100.0 * done / static_cast<double>(total) : 0.0;
-    const double eta = rate > 0 ? (static_cast<double>(total) - done) / rate : 0.0;
+    const double pct = total > 0 ? 100.0 * done / double(total) : 0.0;
+    const double eta = rate > 0 ? (double(total) - done) / rate : 0.0;
     os << "[progress] " << done << "/" << total << " games (" << std::fixed << std::setprecision(1)
        << pct << "%) | " << std::setprecision(2) << rate << " games/s | elapsed "
        << util::fmt_dur(elapsed_secs) << " | ETA " << util::fmt_dur(eta) << "\n";
@@ -262,8 +262,7 @@ void GameRunner::run() {
     // Serial mode: supports PLAY_AGAIN / QUIT signalling from agents.
     // Seats swap every game so the two players alternate who starts; who
     // starts game 1 is decided by the low bit of the seed.
-    std::array<int, 2> player_at_seat = {static_cast<int>(seed_ & 1ULL),
-                                         static_cast<int>(1 - (seed_ & 1ULL))};
+    std::array<int, 2> player_at_seat = {int(seed_ & 1ULL), int(1 - (seed_ & 1ULL))};
     uint64_t game_idx = 0;
     while (true) {
       auto [a0, a1] = engine_.play(0, player_at_seat, seed_index(game_idx), *this);
@@ -279,7 +278,7 @@ void GameRunner::run() {
     // Each game's seat assignment alternates with game_idx so overall balance
     // is preserved across any interleaving of threads.
     std::atomic<uint64_t> next_game{0};
-    const uint64_t total = static_cast<uint64_t>(params_.games);
+    const uint64_t total = uint64_t(params_.games);
 
     // Optional monitor thread: prints a games-done/rate/ETA line every
     // progress_secs seconds. Useful for long self-play batches (e.g. the
@@ -292,13 +291,13 @@ void GameRunner::run() {
     }
 
     std::vector<std::thread> workers;
-    workers.reserve(static_cast<size_t>(engine_.num_threads()));
+    workers.reserve(size_t(engine_.num_threads()));
     for (int t = 0; t < engine_.num_threads(); ++t) {
       workers.emplace_back([&, t]() {
         while (true) {
           uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
           if (idx >= total) break;
-          int seat0_player = static_cast<int>((seed_ + idx) & 1ULL);
+          int seat0_player = int((seed_ + idx) & 1ULL);
           std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
           engine_.play(t, seats, seed_index(idx), *this);
         }

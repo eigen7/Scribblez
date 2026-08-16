@@ -27,7 +27,7 @@
 #define DEBUG_ASSERT(COND, ...)                                                                   \
   do {                                                                                            \
     if constexpr (scribblez::util::kDebugBuild) {                                                 \
-      if (!static_cast<bool>(COND)) [[unlikely]] {                                                \
+      if (!(COND)) [[unlikely]] {                                                                 \
         scribblez::util::detail::assert_fail(                                                     \
           "DEBUG_ASSERT(" #COND ")", std::source_location::current() __VA_OPT__(, ) __VA_ARGS__); \
       }                                                                                           \
@@ -36,7 +36,7 @@
 
 #define RELEASE_ASSERT(COND, ...)                                                                 \
   do {                                                                                            \
-    if (!static_cast<bool>(COND)) [[unlikely]] {                                                  \
+    if (!(COND)) [[unlikely]] {                                                                   \
       scribblez::util::detail::assert_fail(                                                       \
         "RELEASE_ASSERT(" #COND ")", std::source_location::current() __VA_OPT__(, ) __VA_ARGS__); \
     }                                                                                             \
