@@ -1792,12 +1792,16 @@ TEST(Rack, Invariants) {
 // ===========================================================================
 
 TEST(Bag, Basics) {
-  // Initial composition matches TILE_COUNTS and totals to 100 tiles.
+  // Initial composition matches TILE_COUNTS and totals to 100 tiles -- and
+  // kTotalTiles, the constant bag-size arithmetic uses in place of a scan,
+  // agrees (release builds skip the constructor's DEBUG_ASSERT, so this test
+  // is what pins the constant to the distribution there).
   Bag b(/*seed=*/42);
   int total = 0;
   for (int c : TILE_COUNTS) total += c;
   ASSERT_EQ(b.size(), total);
   ASSERT_EQ(b.size(), 100);
+  ASSERT_EQ(b.size(), Bag::kTotalTiles);
   for (int i = 0; i < 27; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
 
   // Same seed -> identical draw sequence (reproducibility).
