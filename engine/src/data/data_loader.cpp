@@ -441,8 +441,14 @@ void DataLoader::WorkerThread::loop() {
     DataFile* file = unit_.file;
     lock.unlock();
 
-    table_->mark_as_available(id_);
+    // Release the file before the thread: WorkManager::process() returns once
+    // every thread is available, and the next batch's prepare_work_units()
+    // then resets the FileManager's per-batch state, so the file handback must
+    // already be visible by then. The reverse order let a straggling handback
+    // land after the reset (underflowing active_file_count_, and queueing a
+    // file the new batch may be reading for unload).
     file_manager_->add_to_unload_queue(file);
+    table_->mark_as_available(id_);
   }
 }
 
