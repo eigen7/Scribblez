@@ -415,6 +415,33 @@ TEST(Board, CachesIncrementalMatchesFull) {
   cache_consistency_stress(d, "medium_dict", 99887766u, /*games=*/30, /*steps_per_game=*/10);
 }
 
+// num_tiles() is maintained by every square-write path -- set() in both
+// directions and unapply()'s restore -- so consumers (bag-size arithmetic)
+// never rescan the grid.
+TEST(Board, NumTilesTracksEveryWritePath) {
+  Board b;
+  ASSERT_EQ(b.num_tiles(), 0);
+  ASSERT_TRUE(b.empty_board());
+
+  b.set(7, 7, Glyph::of(Tile::from_char('A')));
+  b.set(7, 8, Glyph::of(Tile::from_char('B')));
+  ASSERT_EQ(b.num_tiles(), 2);
+  b.set(7, 8, Glyph::of(Tile::from_char('C')));  // overwrite: no change
+  ASSERT_EQ(b.num_tiles(), 2);
+  b.set(7, 7, Glyph::empty());  // clear: decrement
+  ASSERT_EQ(b.num_tiles(), 1);
+  b.set(7, 7, Glyph::of(Tile::from_char('A')));
+
+  const Move m = make_play_full(7, 9, /*horizontal=*/true, 0b11, 10,
+                                {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('E'))});
+  BoardUndo undo;
+  b.apply(m, &undo);
+  ASSERT_EQ(b.num_tiles(), 4);
+  b.unapply(undo);
+  ASSERT_EQ(b.num_tiles(), 2);
+  ASSERT_FALSE(b.empty_board());
+}
+
 // If the real lexicon is present locally, cross-validate against it too and
 // sanity-check a few known NWL words. The path comes from a compile-time define
 // (SCRIBBLEZ_DEFAULT_KWG, set by CMake to data/lexica/NWL23.kwg). Skipped (not
