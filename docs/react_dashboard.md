@@ -97,6 +97,8 @@ and the trained model's response to it (roadmap items 2–4).
   every prefix — the rank of the sim-best candidate under conditioned vs
   plain value — so what it charts is what this tab shows.
 
+![The Trajectories tab on the egotize-lane exhibit: the anchor's opp-play-and-win residual lights the 13G–13N lane red (the model under-reads the opponent's EGOTIZE lane), the trajectory strip, and the conditioned re-ranking](images/trajectories_tab.png)
+
 ## The lane-analysis tab
 
 Visualizes how each generation solves the max-move-per-lane task over a GCG
