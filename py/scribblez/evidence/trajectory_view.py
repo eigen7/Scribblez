@@ -34,7 +34,7 @@ from scribblez.move_set_eval.evidence import build_evidence_inputs, observed_pla
 from scribblez.move_set_eval.model import win_equity
 from scribblez.move_set_eval.moves import encode_moves
 from scribblez.move_set_eval.targets import PLANE_NAMES
-from scribblez.sim_evidence.sobs import BOARD, SobsPosition
+from scribblez.sim_evidence.sobs import BOARD, MOVE_PLAY, SobsPosition, glyph_char
 
 
 def _sim_stats(obs: np.ndarray) -> dict:
@@ -55,6 +55,34 @@ def _sim_stats(obs: np.ndarray) -> dict:
         "delta_mean": mean,
         "delta_std": float(np.sqrt(var)),
     }
+
+
+def move_tiles(move: np.void) -> list[dict]:
+    """A MOVE_DTYPE play's placed tiles as the web Board's candidate tiles
+    ({row, col, letter, isBlank}), lane order; empty for an exchange or pass."""
+    if move["type"] != MOVE_PLAY:
+        return []
+    start, mask, horizontal = int(move["start"]), int(move["square_mask"]), bool(move["horizontal"])
+    tiles = []
+    along = 0
+    while mask:
+        if mask & 1:
+            code = int(move["glyphs"][len(tiles)])
+            r, c = (start, along) if horizontal else (along, start)
+            tiles.append(
+                {"row": r, "col": c, "letter": glyph_char(code).upper(), "isBlank": code > 26}
+            )
+        mask >>= 1
+        along += 1
+    return tiles
+
+
+def move_lane(move: np.void) -> dict | None:
+    """The row or column a play runs along ({horizontal, index}), None for an
+    exchange or pass."""
+    if move["type"] != MOVE_PLAY:
+        return None
+    return {"horizontal": bool(move["horizontal"]), "index": int(move["start"])}
 
 
 @dataclass
@@ -231,6 +259,8 @@ def payload(
             "index": int(i),
             "notation": notations[i],
             "score": int(sobs.moves[s]["score"]),
+            "tiles": move_tiles(sobs.moves[s]),
+            "lane": move_lane(sobs.moves[s]),
             "tail": tail and s == k - 1,
             "in_prefix": s < prefix,
             "sim": stats[s],

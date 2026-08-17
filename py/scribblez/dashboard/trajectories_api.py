@@ -41,13 +41,20 @@ from scribblez.dashboard import tasks
 from scribblez.evidence.checkpoints import EvidenceCheckpoint, load_evidence_checkpoint
 from scribblez.evidence.trajectory_view import DecisionAnalysis, payload
 from scribblez.ffi import gcg_position_board_json
-from scribblez.paths import EVIDENCE_TRAJECTORIES, REPO_ROOT, TagPaths
-from scribblez.sim_evidence.position_sets import TrajectoryRecipe, ensure_sobs, set_gcgs
+from scribblez.paths import EVIDENCE_TRAJECTORIES, TagPaths
+from scribblez.sim_evidence.position_sets import (
+    DEFAULT_SET,
+    POSITIONS_ROOT,
+    ensure_sobs,
+    set_gcgs,
+)
 from scribblez.sim_evidence.sobs import SobsPosition, read_sobs
-from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams, max_evidence
+from scribblez.workloads.evidence_trajectories import (
+    EvidenceTrajectoriesParams,
+    max_evidence,
+    recipe_of,
+)
 
-POSITIONS_ROOT = REPO_ROOT / "positions" / "NWL23"
-DEFAULT_SET = "face-up-trajectory-set"
 _CHECKPOINT_RE = re.compile(r"model_epoch_(\d{4})\.pt$")
 # Threads for on-demand sidecar generation (the sims are the long pole).
 _SIM_THREADS = max(4, (os.cpu_count() or 8) - 4)
@@ -85,17 +92,6 @@ def tag_params(tag: str) -> EvidenceTrajectoriesParams:
     if task is None:
         raise KeyError(f"tag {tag!r} has no task.json")
     return params_mod.validate(EvidenceTrajectoriesParams, task.params)
-
-
-def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
-    return TrajectoryRecipe(
-        rollouts=params.rollouts,
-        proposals_min=params.proposals_min,
-        proposals_max=params.proposals_max,
-        temperature=params.temperature,
-        proposal_pool=params.proposal_pool,
-        open_leaves=params.face_up_leaves,
-    )
 
 
 def generations(paths: TagPaths, params: EvidenceTrajectoriesParams) -> list[dict]:
