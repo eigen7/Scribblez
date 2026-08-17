@@ -1,5 +1,6 @@
 #include "data/gcg_reader.h"
 
+#include "game/bag.h"
 #include "game/tile.h"
 #include "serve/web_server.h"
 #include "util/assert.h"
@@ -555,26 +556,46 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
   return std::nullopt;
 }
 
-bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
-                      std::string* error_message) {
-  ParsedGcgGame game;
-  if (!read_gcg_text(gcg_text, &game, error_message)) return false;
-  if (game.snapshots.empty()) {
+namespace {
+
+// The final recorded state and the side to move's pragma rack -- what both
+// position readings below start from. False with an explanation when the
+// text does not parse, has no position, or lacks the mover's rack pragma.
+bool final_state(const std::string& gcg_text, ParsedGcgGame* game,
+                 const ParsedGcgSnapshot** snapshot, int* mover, Rack* mover_rack,
+                 std::string* error_message) {
+  if (!read_gcg_text(gcg_text, game, error_message)) return false;
+  if (game->snapshots.empty()) {
     *error_message = "GCG contains no positions";
     return false;
   }
-  const ParsedGcgSnapshot& snapshot = game.snapshots.back();
-  const int mover = snapshot.turn_player;
-
-  const std::optional<Rack> mover_rack = pragma_rack(gcg_text, mover);
-  if (!mover_rack.has_value()) {
-    *error_message = std::format("the mover's rack is unknown: add a #Rack{} pragma", mover + 1);
+  *snapshot = &game->snapshots.back();
+  *mover = (*snapshot)->turn_player;
+  const std::optional<Rack> rack = pragma_rack(gcg_text, *mover);
+  if (!rack.has_value()) {
+    *error_message = std::format("the mover's rack is unknown: add a #Rack{} pragma", *mover + 1);
     return false;
   }
+  *mover_rack = *rack;
+  return true;
+}
+
+}  // namespace
+
+bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
+                      std::string* error_message) {
+  ParsedGcgGame game;
+  const ParsedGcgSnapshot* snapshot_ptr;
+  int mover;
+  Rack mover_rack;
+  if (!final_state(gcg_text, &game, &snapshot_ptr, &mover, &mover_rack, error_message)) {
+    return false;
+  }
+  const ParsedGcgSnapshot& snapshot = *snapshot_ptr;
   std::optional<Rack> opp_rack = pragma_rack(gcg_text, 1 - mover);
   if (!opp_rack.has_value()) {
     try {
-      opp_rack = snapshot.board.hidden_rack(*mover_rack);
+      opp_rack = snapshot.board.hidden_rack(mover_rack);
     } catch (const util::Exception& e) {
       *error_message = e.what();
       return false;
@@ -582,12 +603,27 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
   }
 
   out->board = snapshot.board;
-  out->racks[mover] = *mover_rack;
+  out->racks[mover] = mover_rack;
   out->racks[1 - mover] = *opp_rack;
   out->scores = snapshot.scores;
   out->mover = mover;
   out->player_names = game.player_names;
   out->turns = game.turns.size();
+  return true;
+}
+
+bool read_gcg_position(const std::string& gcg_text, bool open_leaves, ParsedGcgPosition* out,
+                       std::string* error_message) {
+  const ParsedGcgSnapshot* snapshot;
+  if (!final_state(gcg_text, &out->game, &snapshot, &out->mover, &out->rack, error_message)) {
+    return false;
+  }
+  out->board = snapshot->board;
+  out->scores = snapshot->scores;
+  out->opp_leave = open_leaves ? retained_leave(out->game, 1 - out->mover) : Rack{};
+  out->turns = out->game.turns.size();
+  const int unseen = Bag::kTotalTiles - out->board.num_tiles() - out->rack.size();
+  out->bag_size = std::max(0, unseen - RACK_SIZE);
   return true;
 }
 

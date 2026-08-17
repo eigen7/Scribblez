@@ -257,7 +257,10 @@ with the student v2 export as proposer. The first corpus (tag
 `trajectories`: face-up leaves, 200 rollouts, one position per game) is
 being generated.
 
-- Requires `.sobs` at scale; the tooling above is how it gets made.
+- Requires `.sobs` at scale; the tooling above is how it gets made. The same
+  tool reads hand-maintained `.gcg` position sets (`--gcg`,
+  [positions/NWL23/face-up-trajectory-set](../positions/NWL23/face-up-trajectory-set/README.md))
+  for the exhibits and the position-set metric of items 2–3.
 - The proposer follows the current model, so a conditionally-strong but
   equity-buried candidate gains coverage as generations advance.
 - The value-labeled subset must always include the proposer's simmed
