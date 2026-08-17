@@ -5138,7 +5138,8 @@ TEST(MaxMovePerLane, TaskRow) {
 // rack and known leave its README states, the board row is the open-leaves
 // arm's, the score differential is the mover's, and every legal move --
 // among them the recorded HastyBot play, E11 GAVE (through the A of INCASED,
-// so "E11 G.VE") -- carries a notation in the bundle. Requires the NWL23 KWG + leaves; skipped if absent.
+// so "E11 G.VE") -- carries a notation in the bundle. Requires the NWL23 KWG +
+// leaves; skipped if absent.
 TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   namespace fs = std::filesystem;
   using namespace scribblez;
