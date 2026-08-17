@@ -28,6 +28,11 @@
   lifecycle (rows-clock, sliding window, reuse-driven epochs, live controls),
   plus the forward-looking game-pool producer, resource-contention manager, and
   distributed-worker design it grows into.
+- **[wsd_lr_schedule.md](wsd_lr_schedule.md)** — the trainers' cyclic
+  warmup-stable-decay learning-rate schedule: why cycles rather than a single
+  decay or a manual control, the exact piecewise shape, the controller's
+  bookkeeping, per-trainer sizing, known limitations, and the design-review
+  record.
 - **[endgame_bench_results.md](endgame_bench_results.md)** — the endgame
   solver's measured cost/strength curve vs its node budget (methodology, the
   seat-mirrored head-to-head protocol, the shipped default of 400).
