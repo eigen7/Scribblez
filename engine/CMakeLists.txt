@@ -47,7 +47,6 @@ add_library(scribblez_core STATIC
   src/agent/macondo_bot.cpp
   src/agent/endgame_turn_policy.cpp
   src/agent/endgame_hasty_bot.cpp
-  src/sim/gcg_decision.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/belief/leave_prior.cpp

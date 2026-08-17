@@ -12,7 +12,7 @@ same sidecars for its position-set metric.
 
 A file **is** the position to analyze: every move that led there is recorded
 and nothing after it, the side to move is whoever acts next, and that side's
-rack is given by a `#Rack1` / `#Rack2` pragma (engine: `sim/gcg_decision.h`;
+rack is given by a `#Rack1` / `#Rack2` pragma (engine: `read_gcg_position` in `data/gcg_reader.h`;
 `manual_gcg_tool` writes these). Under face-up leaves the opponent's public
 leave is derived from their last event line (rack minus tiles played), so a
 position with an interesting known leave needs the opponent's last move

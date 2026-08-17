@@ -11,7 +11,7 @@
 //   keys them (the two tools share the seed stream, see data/slog_sampling.h).
 // - .gcg position sets (--gcg / --gcg-dir, into --out-dir): each file's final
 //   recorded state, the side to move holding its #RackN pragma rack
-//   (sim/gcg_decision.h). One .sobs per .gcg, its single position keyed
+//   (read_gcg_position). One .sobs per .gcg, its single position keyed
 //   (0, decision turn). This is how the hand-maintained sets under positions/
 //   get their trajectory sidecars.
 //
@@ -21,6 +21,7 @@
 // through; the sims dominate wall-clock, so the serialization is free.
 
 #include "data/binary_log.h"
+#include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
 #include "encoding/input_encoder.h"
@@ -29,8 +30,8 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/trt_util.h"
-#include "sim/gcg_decision.h"
 #include "training/evidence_trajectory.h"
+#include "util/assert.h"
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -278,7 +279,7 @@ std::string read_text(const fs::path& path) {
 
 struct GcgWork {
   fs::path path;
-  GcgDecision decision;
+  ParsedGcgPosition position;
 };
 
 struct GcgResult {
@@ -306,11 +307,23 @@ struct GcgFront {
 };
 
 void GcgFront::Worker::run(size_t i, const GcgWork& w, TrajectoryRunner& runner) {
+  const ParsedGcgPosition& p = w.position;
+  // Replay the recorded moves into a fresh encoder. apply_move attributes
+  // each to the encoder's own turn order (seat 0 first), which the recorded
+  // seats must follow for scores and last moves to land on the right player.
   GameStateEncoder enc(front_.spec);
-  replay_to_decision(w.decision, &enc);
-  const DecisionPoint dp{w.decision.pos, &enc, w.decision.bag_size};
+  for (const ParsedGcgTurn& t : p.game.turns) enc.apply_move(t.record.move);
+  RELEASE_ASSERT(enc.active_player() == p.mover);
+  DecisionPoint dp;
+  dp.pos.board = p.board;
+  dp.pos.scores = p.scores;
+  dp.pos.mover = p.mover;
+  dp.pos.rack = p.rack;
+  dp.pos.opp_leave = p.opp_leave;
+  dp.enc = &enc;
+  dp.bag_size = p.bag_size;
   GcgResult& out = (*front_.results)[i];
-  out.base_seed = binlog::position_seed(front_.opt.seed, 0, uint32_t(w.decision.turn_index));
+  out.base_seed = binlog::position_seed(front_.opt.seed, 0, uint32_t(p.turns));
   out.traj = runner.run(dp, out.base_seed);
 }
 
@@ -323,10 +336,10 @@ std::vector<GcgWork> load_pending_gcgs(const Options& opt) {
     if (fs::exists(gcg_sobs_path(opt, gcg))) continue;
     GcgWork item{gcg, {}};
     std::string error;
-    if (!gcg_decision(read_text(gcg), opt.open_leaves, &item.decision, &error)) {
+    if (!read_gcg_position(read_text(gcg), opt.open_leaves, &item.position, &error)) {
       throw util::CleanException("{}: {}", gcg.string(), error);
     }
-    if (item.decision.bag_size <= 0) {
+    if (item.position.bag_size <= 0) {
       throw util::CleanException(
         "{}: the bag is empty at the decision point; the sims need a non-empty bag", gcg.string());
     }
@@ -356,8 +369,7 @@ void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const O
   for (size_t i = 0; i < front.work.size(); ++i) {
     const GcgWork& w = front.work[i];
     SimObsWriter writer(gcg_sobs_path(opt, w.path).string(), file_flags(opt), proposer_hash);
-    add_result(&writer, opt, 0, uint32_t(w.decision.turn_index), results[i].base_seed,
-               results[i].traj);
+    add_result(&writer, opt, 0, uint32_t(w.position.turns), results[i].base_seed, results[i].traj);
     writer.close();
   }
 }
