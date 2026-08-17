@@ -108,7 +108,9 @@ def complete_pairs(directory: str | Path) -> list[Path]:
     """The .mset paths in `directory` whose companion .slog is present, sorted.
     Every consumer needs both halves -- the targets, and the replay the inputs
     are recomputed from -- and a store can hold an orphaned sidecar
-    (scribblez.workloads.pair_store documents when)."""
+    (scribblez.workloads.pair_store documents when). The same two lines as
+    pair_store.complete_pairs, which this module cannot import: the workload
+    registry imports this module, and pair_store sits behind that package."""
     directory = Path(directory)
     return sorted(f for f in directory.glob("*.mset") if f.with_suffix(".slog").exists())
 

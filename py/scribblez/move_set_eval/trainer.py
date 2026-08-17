@@ -167,13 +167,9 @@ def _ingestible(files, seen: set, ds: MsetDataset) -> list:
     return usable
 
 
-def _count_complete_pairs(store) -> int:
-    return len(complete_pairs(store))
-
-
 def corpus_clock(store, params) -> pair_store.CorpusClock:
     """The tag's corpus clock over its .mset pair store."""
-    return pair_store.CorpusClock(store, params.target_pairs, ".mset", _count_complete_pairs)
+    return pair_store.CorpusClock(store, params.target_pairs, ".mset")
 
 
 def epochs_left(params, state: MsetTrainState) -> bool:

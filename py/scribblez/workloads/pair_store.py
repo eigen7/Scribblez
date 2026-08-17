@@ -12,7 +12,6 @@ leftovers.
 
 import time
 import zlib
-from collections.abc import Callable
 from pathlib import Path
 
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -97,6 +96,15 @@ def run_pair_generate(
     return 0
 
 
+def complete_pairs(store_dir: str | Path, sidecar_ext: str) -> list[Path]:
+    """The `sidecar_ext` files in a store whose companion .slog is present,
+    sorted. Every consumer needs both halves -- the sidecar, and the replay
+    the inputs are recomputed from -- and a store can hold an orphaned sidecar
+    (see the module docstring)."""
+    store_dir = Path(store_dir)
+    return sorted(f for f in store_dir.glob(f"*{sidecar_ext}") if f.with_suffix(".slog").exists())
+
+
 def count_pairs(store_dir: Path, sidecar_ext: str) -> int:
     """Pairs in a tag's store, by counting sidecars. A delivery interrupted
     between a pair's two members can leave an orphaned sidecar briefly counted
@@ -153,26 +161,19 @@ class CorpusClock:
     after a restart -- none of which have watched the generator from the
     beginning.
 
-    `count_complete` counts the store's complete pairs the way every other
-    reader of that store does (a sidecar whose .slog has not landed yet is
-    not one a trainer can use, and delivery writes the sidecar first).
+    Complete pairs are counted the way every other reader of the store counts
+    them (complete_pairs): a sidecar whose .slog has not landed yet is not one
+    a trainer can use, and delivery writes the sidecar first.
     """
 
-    def __init__(
-        self,
-        store: Path,
-        target_pairs: int,
-        sidecar_ext: str,
-        count_complete: Callable[[Path], int],
-    ):
+    def __init__(self, store: Path, target_pairs: int, sidecar_ext: str):
         self._store = Path(store)
         self._target = target_pairs
         self._sidecar_ext = sidecar_ext
-        self._count_complete = count_complete
 
     def is_final(self, absorbed: int) -> bool:
         if self._target:
-            held = self._count_complete(self._store) if self._store.is_dir() else 0
+            held = len(complete_pairs(self._store, self._sidecar_ext))
             return not absorbed and held >= self._target
         return time.time() - self._last_delivery() >= QUIET_SECONDS
 

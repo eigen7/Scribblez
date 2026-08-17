@@ -9,11 +9,8 @@ candidate): the prefix is what the model conditions on, and the held-out
 candidate's own sim outcome is the target -- its win value for the value
 heads, and its CRN-paired gain over the prefix's best-so-far for the
 proves-best head. No teacher label is read (the .mset sidecar, when present,
-is ignored): the plain teacher's readout is a function of the board alone,
-so as a target on evidence-bearing rows it would train the fusion stage to
-ignore evidence. The conditioned oracle the design names (an
-evidence-conditioned teacher trained on outcomes) is deferred; see
-docs/roadmap.md item 2.
+is ignored) -- docs/roadmap.md item 2 says why sim outcomes and not the
+teacher, and what is deferred.
 
 Per epoch each position contributes ONE prefix, drawn uniformly from its valid
 prefix sizes (0 .. last proposer pick; the tail is never evidence), so a pass
@@ -51,12 +48,13 @@ from scribblez.sim_evidence.sobs import (
     read_sobs_flags,
     read_sobs_proposer_hash,
 )
+from scribblez.workloads import pair_store
 
 
 def complete_pairs(store: str | Path) -> list[Path]:
-    """The .sobs files in `store` whose companion .slog exists, sorted."""
-    store = Path(store)
-    return sorted(s for s in store.glob("*.sobs") if s.with_suffix(".slog").exists())
+    """The .sobs files in `store` whose companion .slog exists, sorted
+    (pair_store.complete_pairs)."""
+    return pair_store.complete_pairs(store, ".sobs")
 
 
 def adopt_information_condition(sobs_files: Iterable[str | Path]):

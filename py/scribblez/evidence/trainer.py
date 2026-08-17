@@ -34,7 +34,7 @@ from scribblez.evidence.dataset import (
     complete_pairs,
 )
 from scribblez.evidence.train_loop import LossConfig, evaluate, run_epoch
-from scribblez.ffi import set_contingent_features
+from scribblez.ffi import move_encoding_version, set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
@@ -47,7 +47,7 @@ from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.evidence_trajectories import SLOGS_DIR
+from scribblez.workloads.evidence_trajectories import SLOGS_DIR, max_evidence
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -120,12 +120,21 @@ def absorb_new_pairs(store, params, train_ds, holdout_ds) -> int:
     return added
 
 
-def _count_complete_pairs(store) -> int:
-    return len(complete_pairs(store))
-
-
 def epochs_left(params, state: EvidenceTrainState) -> bool:
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
+
+
+# What the model needs from the student's config to be rebuilt without it.
+_STUDENT_CONFIG_KEYS = (
+    "spatial_planes",
+    "scalar_size",
+    "trunk_channels",
+    "num_blocks",
+    "num_heads",
+    "contingent_features",
+    "open_leaves",
+    "move_encoding_version",
+)
 
 
 def load_student(path: str, device) -> tuple[MoveSetEvalModel, dict]:
@@ -192,7 +201,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         batches,
         device,
         ctx["loss_cfg"],
-        params.max_evidence,
+        ctx["max_e"],
         lr_fn=ctx["lr_controller"].lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
@@ -203,7 +212,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     train_s = time.time() - t0
 
     t1 = time.time()
-    m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, params.max_evidence)
+    m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
     eval_s = time.time() - t1
     lr_now = ctx["lr_controller"].current
     budget = (
@@ -244,6 +253,16 @@ def run(ctx: WorkerContext) -> int:
         return 1
 
     model, student_cfg = load_student(params.student_checkpoint, device)
+    # The move rows this trainer encodes (candidates and evidence tokens) must
+    # be the rows the frozen student learned; a version bump in the engine
+    # would otherwise train the fusion against embeddings of the wrong layout.
+    if student_cfg["move_encoding_version"] != move_encoding_version():
+        print(
+            f"error: the student was trained under move encoding version "
+            f"{student_cfg['move_encoding_version']} but the engine encodes version "
+            f"{move_encoding_version()}"
+        )
+        return 1
     set_contingent_features(student_cfg["contingent_features"])
     store = paths.data_dir / SLOGS_DIR
     wait_for_store(store, params)
@@ -254,10 +273,12 @@ def run(ctx: WorkerContext) -> int:
             f"student was trained with open_leaves={student_cfg['open_leaves']}"
         )
         return 1
-    if train_ds.max_trajectory > params.max_evidence:
+    max_e = max_evidence(params)
+    if train_ds.max_trajectory > max_e:
         print(
-            f"error: a trajectory holds {train_ds.max_trajectory} candidates, more than "
-            f"max_evidence={params.max_evidence} rows"
+            f"error: a trajectory holds {train_ds.max_trajectory} candidates, more than the "
+            f"recipe's {max_e} (1 + proposals_max + 1): the corpus was not simmed with this "
+            "tag's recipe"
         )
         return 1
     print(
@@ -288,6 +309,7 @@ def run(ctx: WorkerContext) -> int:
         "train_ds": train_ds,
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
+        "max_e": max_e,
         "stats": WorkerStats(ctx),
     }
 
@@ -296,7 +318,7 @@ def run(ctx: WorkerContext) -> int:
         conn, WsdSchedule.from_params(params), state.rows_trained
     )
     try:
-        clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs", _count_complete_pairs)
+        clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs")
         while epochs_left(params, state):
             absorbed = absorb_new_pairs(store, params, train_ds, holdout_ds)
             settled = clock.is_final(absorbed)
@@ -308,16 +330,3 @@ def run(ctx: WorkerContext) -> int:
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     return 0
-
-
-# What the model needs from the student's config to be rebuilt without it.
-_STUDENT_CONFIG_KEYS = (
-    "spatial_planes",
-    "scalar_size",
-    "trunk_channels",
-    "num_blocks",
-    "num_heads",
-    "contingent_features",
-    "open_leaves",
-    "move_encoding_version",
-)

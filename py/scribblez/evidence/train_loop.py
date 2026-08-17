@@ -18,15 +18,19 @@ must agree there to floating-point noise.
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
-from scribblez.move_set_eval.evidence import build_evidence_inputs, collate_evidence
+from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, EvidenceInputs
+from scribblez.move_set_eval.evidence import observed_planes, observed_scalars
 from scribblez.move_set_eval.model import win_equity
+from scribblez.sim_evidence.sobs import BOARD
 
 LOSS_KEYS = ("total", "wld", "score_diff", "gain")
 
@@ -69,8 +73,67 @@ class EpochResult:
     rows_trained: int  # cumulative held-out rows across the run
 
 
-def _first_pass_rows(plain: dict[str, torch.Tensor], rows: torch.Tensor) -> dict:
-    return {k: plain[k][rows] for k in ("wld", "score_diff", "planes")}
+def _scatter_rows(rows: torch.Tensor, flat: torch.Tensor, shape: tuple[int, int]) -> torch.Tensor:
+    """Selected rows scattered to their padded (P, max_e, ...) slots (zeros elsewhere)."""
+    p, max_e = shape
+    out = rows.new_zeros((p * max_e, *rows.shape[1:]))
+    out[flat] = rows
+    return out.view(p, max_e, *rows.shape[1:])
+
+
+def batch_evidence_inputs(
+    batch: dict, move_args: tuple, plain: dict[str, torch.Tensor], max_e: int, device
+) -> EvidenceInputs:
+    """The batch's evidence sets as (P, max_e, ...) inputs in one shot -- the
+    batched sibling of move_set_eval.evidence.build_evidence_inputs (the
+    single-position deployment builder), equal to collating it per position.
+
+    The evidence rows are the batch's own candidate rows with slot < prefix:
+    their move half is those rows' move inputs (same moves, same pre-move
+    differential, so identical to a fresh encode), scattered to padded index
+    pos_id * max_e + slot; the predicted half is the plain pass over the same
+    rows, on device; the observed half is the .sobs records of the prefixes,
+    concatenated in batch order (position blocks, ascending slot -- the order
+    the selected rows have), one host-to-device copy per field.
+    """
+    letters, blanks, squares, tile_mask, scalars, pos_id = move_args
+    p = len(batch["positions"])
+    prefix = batch["prefix_sizes"].to(device)
+    slot = batch["slot"].to(device)
+    sel = slot < prefix[pos_id]
+    flat = (pos_id * max_e + slot)[sel]
+    dtype = scalars.dtype
+    scatter = functools.partial(_scatter_rows, flat=flat, shape=(p, max_e))
+
+    prefixes = zip(batch["positions"], batch["prefix_sizes"].tolist(), strict=True)
+    rows = [(pos.moves[:k], pos.obs[:k]) for pos, k in prefixes]
+    moves_np = np.concatenate([m for m, _ in rows])
+    obs_np = np.concatenate([o for _, o in rows])
+    observed_p = torch.from_numpy(observed_planes(moves_np, obs_np)).to(device=device, dtype=dtype)
+    observed_s = torch.from_numpy(observed_scalars(obs_np)).to(device=device, dtype=dtype)
+
+    planes = observed_p.new_zeros((int(sel.sum()), NUM_EVIDENCE_PLANES, BOARD, BOARD))
+    planes[:, :4] = observed_p[:, :4]
+    planes[:, 4:8] = torch.sigmoid(plain["planes"][sel]).view(-1, 4, BOARD, BOARD).to(dtype)
+    planes[:, 8] = observed_p[:, 4]
+    predicted_s = torch.cat(
+        [torch.softmax(plain["wld"][sel], dim=1), plain["score_diff"][sel] / 100.0], dim=1
+    ).to(dtype)
+    obs_scalars = torch.cat([observed_s, predicted_s], dim=1)
+    assert obs_scalars.shape[1] == NUM_EVIDENCE_SCALARS
+
+    mask = torch.zeros(p * max_e, dtype=torch.bool, device=device)
+    mask[flat] = True
+    return EvidenceInputs(
+        letters=scatter(letters[sel]),
+        blanks=scatter(blanks[sel]),
+        squares=scatter(squares[sel]),
+        tile_mask=scatter(tile_mask[sel]),
+        scalars=scatter(scalars[sel]),
+        obs_planes=scatter(planes),
+        obs_scalars=scatter(obs_scalars),
+        mask=mask.view(p, max_e),
+    )
 
 
 def conditioned_forward(
@@ -82,27 +145,12 @@ def conditioned_forward(
     conditioned pass reads each position's evidence prefix."""
     spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
-    pos_id, slot = move_args[-1], batch["slot"].to(device)
+    pos_id = move_args[-1]
     with torch.no_grad():
         board, g = model.encode_board(spatial, scalar)
         e = model.encode_moves(board, *move_args)
         plain = model.score_moves(board, g, e, pos_id)
-
-    items = []
-    for p, pos in enumerate(batch["positions"]):
-        k = int(batch["prefix_sizes"][p])
-        rows = (pos_id == p) & (slot < k)
-        items.append(
-            build_evidence_inputs(
-                pos.moves[:k],
-                pos.obs[:k],
-                int(batch["pre_move_diff"][p]),
-                _first_pass_rows(plain, rows),
-                max_e=max_e,
-                device=device,
-            )
-        )
-    evidence = collate_evidence(items)
+    evidence = batch_evidence_inputs(batch, move_args, plain, max_e, device)
     tokens, spatial_feats = model.encode_evidence(board, evidence)
     board_c, g_c = model.evidence_fusion(board, g, tokens, spatial_feats, evidence.mask)
     return plain, model.score_moves(board_c, g_c, e, pos_id)

@@ -149,6 +149,19 @@ TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elaps
 # move, then equity head) regret@1 as the flat reference line. The
 # recall/Spearman curves and their baselines ride the Loss tab's Accuracy
 # panel instead.
+# The evidence trainer's go/no-go read (docs/roadmap.md item 2): the
+# conditioned pass against the plain one on the same held-out rows, overall
+# and on the evidence-bearing (prefix > 0) rows, plus the proves-best head's
+# gain error. The gain hit rates ride the Loss tab's Accuracy panel.
+EVIDENCE_QUALITY = [
+    ("Held-out WLD soft-CE: conditioned vs plain", ["cond_wld_ce", "plain_wld_ce"]),
+    (
+        "Held-out WLD soft-CE, evidence-bearing rows",
+        ["cond_wld_ce_ev", "plain_wld_ce_ev"],
+    ),
+    ("Held-out value MAE: conditioned vs plain", ["cond_value_mae", "plain_value_mae"]),
+    ("Proves-best gain MAE", ["gain_mae", "gain_mae_ev"]),
+]
 MSET_QUALITY = [
     ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_baseline"]),
     # The exchange slice (the A4 dedicated-head readout): how well the student

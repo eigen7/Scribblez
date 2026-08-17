@@ -131,9 +131,6 @@ class EvidenceTrajectoriesParams:
         10, "hold out every Nth pair (file-level, by stem hash) for the metrics; 0 = on-train"
     )
     batch_positions: int = param(32, "positions per training batch")
-    max_evidence: int = param(
-        16, "padded evidence-set width; must cover the longest trajectory (1 + proposals_max + 1)"
-    )
     lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
     lr_warmup_rows: int = param(
         800_000,
@@ -151,6 +148,12 @@ class EvidenceTrajectoriesParams:
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head (points)")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
+
+
+def max_evidence(params: EvidenceTrajectoriesParams) -> int:
+    """The padded evidence-set width the trainer uses: the longest trajectory
+    the recipe can produce (anchor + proposals_max + the uniform tail)."""
+    return 1 + params.proposals_max + 1
 
 
 @dataclass(frozen=True)

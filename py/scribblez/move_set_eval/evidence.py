@@ -35,7 +35,7 @@ from .moves import encode_moves, move_encoding_dims
 _COUNT_PLANES = ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
 
 
-def _observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
+def observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
     """(K,) .sobs records -> (K, 5, 15, 15): the four count planes normalized
     by each candidate's rollout count, plus its footprint."""
     k = len(obs)
@@ -48,7 +48,7 @@ def _observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
     return planes
 
 
-def _observed_scalars(obs: np.ndarray) -> np.ndarray:
+def observed_scalars(obs: np.ndarray) -> np.ndarray:
     """(K,) .sobs records -> (K, 6) [win/draw/loss freq, delta mean/std (score
     points, ~unit-scaled), log1p rollouts]."""
     n = np.maximum(obs["n"].astype(np.float64), 1.0)
@@ -65,7 +65,7 @@ def _observed_scalars(obs: np.ndarray) -> np.ndarray:
     return np.stack(cols, axis=1).astype(np.float32)
 
 
-def _predicted_scalars(first_pass: dict[str, torch.Tensor]) -> np.ndarray:
+def predicted_scalars(first_pass: dict[str, torch.Tensor]) -> np.ndarray:
     """First-pass outputs for the K evidence candidates -> (K, 5)
     [p_win, p_draw, p_loss, sd mean, sd std], the sd pair unit-scaled the way
     the observed delta moments are."""
@@ -115,14 +115,14 @@ def build_evidence_inputs(
 
     enc = encode_moves(np.asarray(moves), np.full(k, pre_move_diff, dtype=np.int32))
 
-    observed = _observed_planes(moves, obs)
+    observed = observed_planes(moves, obs)
     predicted = torch.sigmoid(first_pass["planes"].detach()).cpu().float().numpy()
     planes = np.zeros((k, NUM_EVIDENCE_PLANES, BOARD, BOARD), dtype=np.float32)
     planes[:, :4] = observed[:, :4]
     planes[:, 4:8] = predicted.reshape(k, 4, BOARD, BOARD)
     planes[:, 8] = observed[:, 4]
 
-    scalars = np.concatenate([_observed_scalars(obs), _predicted_scalars(first_pass)], axis=1)
+    scalars = np.concatenate([observed_scalars(obs), predicted_scalars(first_pass)], axis=1)
     assert scalars.shape[1] == NUM_EVIDENCE_SCALARS
 
     mask = np.zeros(max_e, dtype=bool)
