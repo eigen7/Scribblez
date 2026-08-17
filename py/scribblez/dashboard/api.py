@@ -522,9 +522,10 @@ class MetaHandler(_Base):
 
 
 class ControlsHandler(_Base):
-    """Live operator controls (e.g. base_lr). GET returns the current values and
-    the rows-clock change events; POST {name, value} sets one, which the trainer
-    adopts at its next epoch. Values persist in the tag's dashboard.db."""
+    """Live operator controls (e.g. dataloader_workers). GET returns the current
+    values and the rows-clock change events (which also carry the LR schedule's
+    phase boundaries); POST {name, value} sets one, which the trainer adopts at
+    its next generation. Values persist in the tag's dashboard.db."""
 
     def get(self):
         conn = self._open_conn()

@@ -85,5 +85,49 @@ TEST(GcgReaderTest, NoRackPragmaLeavesFinalRackCleared) {
   EXPECT_EQ(rack_letters(game.snapshots.back().racks[0]), "");
 }
 
+// A position-set .gcg is read at its final recorded state, the side to move
+// holding the rack its #RackN pragma records (read_gcg_endgame's reading, with
+// a bag). Under open leaves the opponent's retained leave (their last rack
+// minus what they played) is exposed.
+TEST(GcgPositionTest, FinalStateWithThePragmaRack) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    "#Rack1 CCCDEEE\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n"
+    ">Bob: BBBBBBB 9D BBB +8 8\n";
+
+  ParsedGcgPosition p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position(gcg, /*open_leaves=*/true, &p, &error)) << error;
+  EXPECT_EQ(p.mover, 0);
+  EXPECT_EQ(p.rack.to_string(), "CCCDEEE");
+  EXPECT_EQ(p.scores[0], 6);
+  EXPECT_EQ(p.scores[1], 8);
+  EXPECT_EQ(p.turns, 2);
+  EXPECT_EQ(p.board.num_tiles(), 6);
+  // Bob kept BBBB after playing BBB.
+  EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
+  // AAA and BBB are on the board; the unseen pool is 100 - 6 - 7 = 87, minus
+  // the opponent's assumed-full rack.
+  EXPECT_EQ(p.bag_size, 87 - 7);
+
+  ParsedGcgPosition hidden;
+  ASSERT_TRUE(read_gcg_position(gcg, /*open_leaves=*/false, &hidden, &error)) << error;
+  EXPECT_TRUE(hidden.opp_leave.empty());
+}
+
+TEST(GcgPositionTest, RefusesAMissingRackPragma) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n"
+    ">Bob: BBBBBBB 9D BBB +8 8\n";
+  ParsedGcgPosition p;
+  std::string error;
+  EXPECT_FALSE(read_gcg_position(gcg, false, &p, &error));
+  EXPECT_NE(error.find("#Rack1"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace scribblez

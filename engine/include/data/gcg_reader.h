@@ -76,6 +76,32 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player);
 bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
                       std::string* error_message);
 
+// One mid-game position lifted from a GCG's final recorded state, the way
+// read_gcg_endgame lifts an endgame: `mover` is to act, holding the rack the
+// file's #RackN pragma records. With tiles in the bag the opponent's rack is
+// not concrete; under the open-leaves information condition its retained part
+// (retained_leave) is exposed as `opp_leave`, else that stays empty. This is
+// the reading of the hand-maintained position sets under positions/: a file
+// IS the position to analyze -- every move that led there recorded, nothing
+// after it.
+struct ParsedGcgPosition {
+  ParsedGcgGame game;  // for replaying the moves into an encoder
+  Board board;
+  std::array<int, 2> scores = {0, 0};
+  int mover = 0;
+  Rack rack;       // the mover's full rack
+  Rack opp_leave;  // the known part of the opponent's rack (open leaves), else empty
+  int turns = 0;   // recorded moves before the position
+  // The bag from the mover's POV: the unseen pool minus the opponent's
+  // (assumed full) rack; 0 in the endgame.
+  int bag_size = 0;
+};
+
+// False with an explanation when the text does not parse or the mover's rack
+// pragma is missing.
+bool read_gcg_position(const std::string& gcg_text, bool open_leaves, ParsedGcgPosition* out,
+                       std::string* error_message);
+
 // The leave `player` retained at their most recent recorded turn: their
 // rack_before minus what that move played or exchanged, a PASS retaining
 // everything. Empty when they have no recorded turn. This is the known part of

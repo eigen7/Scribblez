@@ -3,8 +3,9 @@ import { getJSON, postJSON } from '../lib/api';
 
 // The Controls tab: live operator knobs read from and written to the per-tag
 // dashboard.db via /api/controls. The generational trainer adopts changes at its
-// next epoch (base LR) or generation (thread pools) and records a rows-clock
-// change event for each. Setting a value here persists across trainer restarts.
+// next generation and records a rows-clock change event for each; the history
+// table below also shows the LR schedule's phase-boundary events. Setting a value
+// here persists across trainer restarts.
 
 type ControlEvent = { positions: number; name: string; value: number; t: number };
 type ControlsData = { controls: Record<string, number>; events: ControlEvent[] };
@@ -20,13 +21,10 @@ const LABEL: React.CSSProperties = {
 const EMPTY: React.CSSProperties = { color: '#556070', fontStyle: 'italic', padding: 20 };
 
 const int = (v: number) => String(Math.round(v));
+// 'lr' events are the schedule's phase boundaries; 'base_lr' is the retired manual
+// control, still present in older tags' history.
+const isLrEvent = (name: string) => name === 'lr' || name === 'base_lr';
 const CONTROLS: Spec[] = [
-  {
-    name: 'base_lr',
-    label: 'Base learning rate',
-    hint: 'Adopted at the next epoch; annotated on the loss plot where it changes.',
-    fmt: (v) => v.toExponential(3),
-  },
   { name: 'dataloader_workers', label: 'DataLoader workers', hint: 'C++ decode/shuffle workers, applied at the next generation.', fmt: int },
   { name: 'torch_threads', label: 'PyTorch intra-op threads', hint: 'Applied at the next generation.', fmt: int },
 ];
@@ -171,7 +169,7 @@ export default function ControlsTab({ task, tag }: { task: string; tag: string |
                   </td>
                   <td style={{ padding: '4px 24px 4px 0', fontFamily: 'monospace' }}>{e.name}</td>
                   <td style={{ padding: '4px 0', fontFamily: 'monospace' }}>
-                    {e.name === 'base_lr' ? e.value.toExponential(3) : int(e.value)}
+                    {isLrEvent(e.name) ? e.value.toExponential(3) : int(e.value)}
                   </td>
                 </tr>
               ))}

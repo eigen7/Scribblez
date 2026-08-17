@@ -15,8 +15,8 @@ carry its reasoning.
 Each pass records losses and the held-out top-K recall / Spearman metrics to
 the tag's dashboard DB (the Loss tab's curves), publishes a stats sample (the
 Stats tab), and saves the rolling checkpoint -- pausing and restarting the
-worker resumes at the next pass. The base learning rate is a live control
-(Controls tab), adopted at the next pass. The generational consume->train
+worker resumes at the next pass. The learning rate follows the shared
+rows-clock WSD schedule (generational/controls.py). The generational consume->train
 lifecycle (docs/generational_teacher.md) replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched
@@ -36,8 +36,8 @@ from scribblez.ffi import set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
-    CONTROL_BASE_LR,
-    LrController,
+    WsdLrController,
+    WsdSchedule,
     init_controls,
     progress_line,
 )
@@ -197,7 +197,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         batches,
         device,
         ctx["loss_cfg"],
-        lr_fn=ctx["lr_controller"].epoch_lr_fn(state.rows_trained),
+        lr_fn=ctx["lr_controller"].lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
     )
@@ -211,7 +211,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     eval_s = time.time() - t1
 
     avg = result.losses
-    lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
+    lr_now = ctx["lr_controller"].current
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
     # Whether the pass counted, so the log says which of the two phases the run
     # is in without the reader having to infer it from the corpus size.
@@ -327,7 +327,7 @@ def run(ctx: WorkerContext) -> int:
         conn,
         {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_planes": params.lambda_planes},
     )
-    init_controls(conn, params.lr)
+    init_controls(conn)
 
     # Beyond the frozen task params, the checkpoint config records what the
     # model was actually built against -- the adopted information-condition
@@ -345,11 +345,13 @@ def run(ctx: WorkerContext) -> int:
         "train_ds": train_ds,
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
-        "lr_controller": LrController(conn, params.lr),
         "stats": WorkerStats(ctx),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
+    run_ctx["lr_controller"] = WsdLrController(
+        conn, WsdSchedule.from_params(params), state.rows_trained
+    )
     try:
         clock = corpus_clock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):

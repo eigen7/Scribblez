@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS match_arm (
   elapsed_s REAL
 );
 CREATE TABLE IF NOT EXISTS control (
-  name       TEXT PRIMARY KEY,  -- live operator knob (e.g. 'base_lr')
+  name       TEXT PRIMARY KEY,  -- live operator knob (e.g. 'dataloader_workers')
   value      REAL,              -- its current value
   updated_at REAL               -- wall-clock of the last write
 );
