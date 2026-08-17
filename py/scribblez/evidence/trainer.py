@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass
 import torch
 
 from scribblez.dashboard import db
+from scribblez.evidence.checkpoints import STUDENT_CONFIG_KEYS, load_student
 from scribblez.evidence.dataset import (
     TrajectoryDataset,
     adopt_information_condition,
@@ -43,7 +44,6 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
@@ -122,37 +122,6 @@ def absorb_new_pairs(store, params, train_ds, holdout_ds) -> int:
 
 def epochs_left(params, state: EvidenceTrainState) -> bool:
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
-
-
-# What the model needs from the student's config to be rebuilt without it.
-_STUDENT_CONFIG_KEYS = (
-    "spatial_planes",
-    "scalar_size",
-    "trunk_channels",
-    "num_blocks",
-    "num_heads",
-    "contingent_features",
-    "open_leaves",
-    "move_encoding_version",
-)
-
-
-def load_student(path: str, device) -> tuple[MoveSetEvalModel, dict]:
-    """The frozen-backbone model initialized from a move_set_eval rolling
-    checkpoint, and that checkpoint's config (the arch and encoding arm the
-    student was built against, which this model inherits)."""
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = ckpt["config"]
-    model = MoveSetEvalModel(
-        spatial_planes=cfg["spatial_planes"],
-        scalar_size=cfg["scalar_size"],
-        trunk_channels=cfg["trunk_channels"],
-        num_blocks=cfg["num_blocks"],
-        num_heads=cfg["num_heads"],
-    )
-    model.load_student(ckpt["model_state_dict"])
-    model.freeze_backbone()
-    return model.to(device), cfg
 
 
 def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
@@ -302,7 +271,7 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "config": {
             **asdict(params),
-            "student": {k: student_cfg[k] for k in _STUDENT_CONFIG_KEYS},
+            "student": {k: student_cfg[k] for k in STUDENT_CONFIG_KEYS},
             "open_leaves": train_ds.open_leaves,
             "proposer_hash": train_ds.proposer_hash,
         },
