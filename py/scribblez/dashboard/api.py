@@ -95,6 +95,13 @@ def _mset_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
+def _evidence_metrics(conn, params, mount_root):
+    """evidence_trajectories' Training tab: the generic training curves plus
+    the conditioned-vs-plain quality figures."""
+    groups = plots.TRAINING + plots.EVIDENCE_QUALITY
+    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
+
+
 def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
@@ -112,6 +119,7 @@ FIGURES = {
     "eval_quality": _eval_quality,
     "training_metrics": _training_metrics,
     "mset_metrics": _mset_metrics,
+    "evidence_metrics": _evidence_metrics,
     "match_eval": _match_eval,
     "match_arms": _match_arms,
 }

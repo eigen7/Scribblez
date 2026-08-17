@@ -16,6 +16,7 @@ evidence tokens describe their moves exactly the way candidate rows do.
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import numpy as np
 import torch
@@ -27,14 +28,14 @@ from scribblez.evidence_fusion import (
 )
 from scribblez.sim_evidence.sobs import BOARD, move_footprint
 
-from .moves import encode_moves
+from .moves import encode_moves, move_encoding_dims
 
 # SimObservation's count-plane fields, in the placement-head order the
 # observed half of EVIDENCE_PLANE_NAMES mirrors.
 _COUNT_PLANES = ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
 
 
-def _observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
+def observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
     """(K,) .sobs records -> (K, 5, 15, 15): the four count planes normalized
     by each candidate's rollout count, plus its footprint."""
     k = len(obs)
@@ -47,7 +48,7 @@ def _observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
     return planes
 
 
-def _observed_scalars(obs: np.ndarray) -> np.ndarray:
+def observed_scalars(obs: np.ndarray) -> np.ndarray:
     """(K,) .sobs records -> (K, 6) [win/draw/loss freq, delta mean/std (score
     points, ~unit-scaled), log1p rollouts]."""
     n = np.maximum(obs["n"].astype(np.float64), 1.0)
@@ -64,7 +65,7 @@ def _observed_scalars(obs: np.ndarray) -> np.ndarray:
     return np.stack(cols, axis=1).astype(np.float32)
 
 
-def _predicted_scalars(first_pass: dict[str, torch.Tensor]) -> np.ndarray:
+def predicted_scalars(first_pass: dict[str, torch.Tensor]) -> np.ndarray:
     """First-pass outputs for the K evidence candidates -> (K, 5)
     [p_win, p_draw, p_loss, sd mean, sd std], the sd pair unit-scaled the way
     the observed delta moments are."""
@@ -105,21 +106,23 @@ def build_evidence_inputs(
     sliced to the same K candidates in the same order.
     """
     k = len(moves)
-    if not 0 < k <= max_e:
+    if k > max_e:
         raise ValueError(f"evidence set of {k} candidates does not fit max_e={max_e}")
     if first_pass["planes"].shape[0] != k:
         raise ValueError("first-pass rows do not match the evidence candidates")
+    if k == 0:
+        return empty_evidence_inputs(max_e, dtype=dtype, device=device)
 
     enc = encode_moves(np.asarray(moves), np.full(k, pre_move_diff, dtype=np.int32))
 
-    observed = _observed_planes(moves, obs)
+    observed = observed_planes(moves, obs)
     predicted = torch.sigmoid(first_pass["planes"].detach()).cpu().float().numpy()
     planes = np.zeros((k, NUM_EVIDENCE_PLANES, BOARD, BOARD), dtype=np.float32)
     planes[:, :4] = observed[:, :4]
     planes[:, 4:8] = predicted.reshape(k, 4, BOARD, BOARD)
     planes[:, 8] = observed[:, 4]
 
-    scalars = np.concatenate([_observed_scalars(obs), _predicted_scalars(first_pass)], axis=1)
+    scalars = np.concatenate([observed_scalars(obs), predicted_scalars(first_pass)], axis=1)
     assert scalars.shape[1] == NUM_EVIDENCE_SCALARS
 
     mask = np.zeros(max_e, dtype=bool)
@@ -135,6 +138,32 @@ def build_evidence_inputs(
         obs_scalars=_row_tensor(scalars, max_e, dtype, device),
         mask=torch.from_numpy(mask).to(device=device).unsqueeze(0),
     )
+
+
+def empty_evidence_inputs(
+    max_e: int, *, dtype: torch.dtype = torch.float32, device: torch.device | str = "cpu"
+) -> EvidenceInputs:
+    """The empty evidence set as (1, max_e, ...) inputs -- every row masked
+    out, so the model degrades to its plain pass (the prefix-0 training rows,
+    and the first pass of every deployed turn). Row widths follow the move
+    encoding the way build_evidence_inputs' do."""
+    max_tiles, num_scalars, _, _ = move_encoding_dims()
+    zeros = functools.partial(_zero_rows, max_e, dtype=dtype, device=device)
+    return EvidenceInputs(
+        letters=zeros(max_tiles, dtype=torch.int64),
+        blanks=zeros(max_tiles, dtype=torch.int64),
+        squares=zeros(max_tiles, dtype=torch.int64),
+        tile_mask=zeros(max_tiles),
+        scalars=zeros(num_scalars),
+        obs_planes=zeros(NUM_EVIDENCE_PLANES, BOARD, BOARD),
+        obs_scalars=zeros(NUM_EVIDENCE_SCALARS),
+        mask=zeros(dtype=torch.bool),
+    )
+
+
+def _zero_rows(max_e: int, *shape: int, dtype: torch.dtype, device) -> torch.Tensor:
+    """A (1, max_e, *shape) zero tensor."""
+    return torch.zeros(1, max_e, *shape, dtype=dtype, device=device)
 
 
 def collate_evidence(items: list[EvidenceInputs]) -> EvidenceInputs:

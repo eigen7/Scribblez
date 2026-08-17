@@ -172,11 +172,27 @@ The fusion stage from
 [sim_residual_feedback.md](sim_residual_feedback.md), on the move set evaluation
 model.
 
-**Stage built, training pending** — the fusion stage, the staged
+**Stage and trainer built, training pending** — the fusion stage, the staged
 (cache-splitting) forward, the `.sobs`-plus-first-pass input builder, and the
 exactness tests exist ([evidence_fusion.py](../py/scribblez/evidence_fusion.py),
-[model_architectures.md](model_architectures.md)); the trained conditioned
-model waits on evidence trajectories (item 4).
+[model_architectures.md](model_architectures.md)); the trainer is the
+`evidence_trajectories` workload's train role
+([evidence/trainer.py](../py/scribblez/evidence/trainer.py)), waiting on the
+trajectory corpus (item 4).
+
+How gen-1 trains, and why: **the backbone is frozen** at the student v2
+checkpoint and only the fusion stage (plus the proves-best head of item 3)
+learns; and **the targets are sim outcomes, not the plain teacher.** A row is
+(position, evidence prefix, held-out simmed candidate), the target that
+candidate's own CRN sim value. The plain teacher's readout is a function of
+the board alone, so as a target on evidence-bearing rows it would train the
+fusion stage to ignore evidence (and fight leave-one-out transfer on unsimmed
+candidates); the conditioned oracle the design names — an evidence-conditioned
+teacher trained on real outcomes, [sim_residual_feedback.md](sim_residual_feedback.md)
+§"The position evaluation model with evidence" — is deferred until the frozen
+version has shown conditioning learns anything. Freezing also makes
+empty-evidence exactness structural, so no empty-prefix distillation rows are
+needed and the student's `.mset` labels are not a training input.
 
 - **Evidence tokens** — one per simmed candidate: its move encoding (the move
   encoder, reused) fused with its sim observations (maps, value, counts) **and
@@ -203,6 +219,13 @@ model waits on evidence trajectories (item 4).
   than by that pass.
 
 ### 3. The proves-best head
+
+**Head and trainer built, training pending** — the head is on the model
+([model.py](../py/scribblez/move_set_eval/model.py), `proves_best`), trained
+by the item-2 trainer on the CRN-paired gain labels described below, with the
+acquisition hit rate (does argmax gain over a position's held-out candidates
+pick the one that simmed best, against the plain value's argmax) on the tag's
+Loss tab.
 
 A per-move head on the evidence-conditioned model predicting the **expected
 improvement** a candidate's sim would contribute over the best simmed so far —

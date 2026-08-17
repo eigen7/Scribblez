@@ -274,8 +274,10 @@ def test_builder_rejects_sets_that_do_not_fit():
     moves, obs = _synthetic_sobs(3)
     with pytest.raises(ValueError, match="does not fit"):
         build_evidence_inputs(moves, obs, 0, _first_pass(3), max_e=2)
-    with pytest.raises(ValueError, match="does not fit"):
-        build_evidence_inputs(moves[:0], obs[:0], 0, _first_pass(0), max_e=2)
+    # The empty set is a valid evidence set: every row masked out.
+    empty = build_evidence_inputs(moves[:0], obs[:0], 0, _first_pass(0), max_e=2)
+    assert empty.mask.shape == (1, 2) and not empty.mask.any()
+    assert empty.obs_planes.shape[1:3] == (2, NUM_EVIDENCE_PLANES)
 
 
 def test_collated_builder_output_drives_the_model():
