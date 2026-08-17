@@ -1,0 +1,246 @@
+"""The evidence-trajectory workload (docs/roadmap.md item 4): the data for the
+evidence-conditioned pass and the proves-best head (items 2 and 3).
+
+One cycle = one HastyBot self-play batch into a fresh .slog in the worker's
+private work dir, then evidence_trajectory_generator over every .slog still
+missing its .sobs sidecar, then move_set_eval_target_generator (--sobs) over
+every .slog still missing its .mset, then delivery of every complete
+.slog/.sobs/.mset triple to the tag's slogs/ store -- the move_set_eval cycle
+shape with the trajectory phase in front of the labeling.
+
+The trajectory generator sims, at each sampled position, the sequential loop
+the deployed agent will run: the greedy anchor, then temperature-softmax
+proposals from the tag's frozen `proposer_model` (a move-set-eval student
+export), then one uniform-random tail draw -- each candidate under common
+random numbers -- and records the ordered candidates with their sim outcomes
+(docs/sim_residual_feedback.md, "Evidence-trajectory generation"). The .sobs
+is both the evidence input (any prefix of the proposer picks) and the training
+target (each held-out simmed candidate's sim value and its CRN-paired gain over
+the prefix's best-so-far); the trainer reads no teacher labels.
+
+The .mset labeling still runs, with the simmed candidates force-included: it
+is cheap next to the sims, and both tools sample positions from the same seed
+stream, so its coverage of the simmed positions is a property of this cycle
+rather than something a later task could add. It gives the dashboard the
+teacher's value per simmed candidate and keeps the corpus usable for joint
+(backbone-unfrozen) training later.
+
+The proposer is frozen like the teacher: every .sobs stamps its content hash,
+and a corpus of mixed proposers is refused downstream. Point it at a write-once
+export (a move_set_eval tag's models/model_epoch_NNNN.onnx).
+
+The generate role is GPU and local-only: proposer and teacher both run under
+TensorRT (see move_set_eval).
+"""
+
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from scribblez.params import param
+from scribblez.paths import ENGINE_DIR
+from scribblez.selfplay import hasty_player_spec, run_games
+from scribblez.workloads import mset_targets, pair_store
+from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+
+TRAJECTORY_GENERATOR = str(ENGINE_DIR / "evidence_trajectory_generator")
+
+# The tag's pair store, under the tag's data/ dir (locally and in the bucket).
+SLOGS_DIR = "slogs"
+
+
+@dataclass(frozen=True)
+class EvidenceTrajectoriesParams:
+    """A tag's generation parameters, frozen at task creation so every worker
+    sims the same recipe with the same proposer and the corpus reads as one.
+    Worker-level knobs (thread count) live on the slots.
+    """
+
+    proposer_model: str = param(
+        "",
+        "absolute path to the move-set-eval student ONNX that proposes trajectory "
+        "candidates (a move_set_eval tag's models/model_epoch_NNNN.onnx); required, and "
+        "must never be overwritten in place",
+    )
+    teacher_model: str = param(
+        "",
+        "absolute path to the teacher position-eval ONNX that labels the .mset sidecars; "
+        "required, frozen like proposer_model",
+    )
+    games_per_batch: int = param(200, "self-play games per generation cycle")
+    positions_per_game: int = param(
+        1,
+        "eligible turns per game given a trajectory (and labeled); a trajectory costs "
+        "rollouts x candidates rollout-games, so this is small on purpose",
+    )
+    # The trajectory recipe.
+    rollouts: int = param(200, "Monte-Carlo rollouts per trajectory candidate")
+    proposals_min: int = param(2, "least model proposals per trajectory")
+    proposals_max: int = param(8, "most model proposals per trajectory")
+    temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
+    proposal_pool: int = param(64, "proposals are drawn from the model's top-N unsimmed candidates")
+    # The .mset labeling's stratified sample around the forced candidates
+    # (move_set_eval's quotas; not read by this workload's trainer).
+    quota_top: int = param(4, "labeled candidates from the head of the equity ranking")
+    quota_mid: int = param(4, "labeled candidates sampled from the contention zone")
+    quota_tail: int = param(4, "labeled candidates sampled uniformly from the remaining ranks")
+    quota_exchange: int = param(2, "labeled exchange candidates")
+    mid_rank_limit: int = param(32, "exclusive rank bound of the contention zone")
+    # Self-play condition (mirrors move_set_eval's generation params).
+    hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
+    hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
+    random_opening_mean: float = param(
+        2.0,
+        "open each game with K uniformly-random plies (K ~ round(Exp(mean))); positions "
+        "before the last random ply are ineligible, so targets stay agent-play only",
+    )
+    face_up_leaves: bool = param(
+        False,
+        "play the face-up-leaves variant (docs/roadmap.md) in self-play generation and sim "
+        "with the opponent's leave known; proposer and teacher must then be open-leaves "
+        "models (the tools refuse the mismatch)",
+    )
+    target_pairs: int = param(
+        0, "stop generating once the store holds this many pairs (0 = generate until paused)"
+    )
+
+
+@dataclass(frozen=True)
+class CycleResult:
+    returncode: int
+    gen_seconds: float  # self-play batch wall time
+    traj_seconds: float  # trajectory-generator wall time
+    mset_seconds: float  # target-generator wall time
+
+
+def run_trajectory_generator(
+    pending: list[Path], params: EvidenceTrajectoriesParams, threads: int
+) -> int:
+    """Give `pending` .slog files trajectory .sobs sidecars, proposed by the
+    tag's frozen proposer. The tool skips files whose .sobs already exists, so
+    a resumed cycle sims nothing twice."""
+    cmd = [
+        TRAJECTORY_GENERATOR,
+        *[f"--slog-file={p}" for p in pending],
+        f"--model={params.proposer_model}",
+        f"--rollouts={params.rollouts}",
+        f"--positions-per-game={params.positions_per_game}",
+        f"--proposals-min={params.proposals_min}",
+        f"--proposals-max={params.proposals_max}",
+        f"--temperature={params.temperature}",
+        f"--proposal-pool={params.proposal_pool}",
+        f"--threads={threads}",
+        *(["--open-leaves"] if params.face_up_leaves else []),
+    ]
+    rc = subprocess.run(cmd, capture_output=False).returncode
+    if rc != 0:
+        print(f"evidence_trajectory_generator exited with code {rc}", file=sys.stderr)
+    return rc
+
+
+def run_one_cycle(out_dir: Path, params: EvidenceTrajectoriesParams, threads: int) -> CycleResult:
+    """One generation cycle into `out_dir`, with per-phase wall times."""
+    t0 = time.monotonic()
+    rc = run_games(
+        out_dir,
+        num_games=params.games_per_batch,
+        threads=threads,
+        player_spec=hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True),
+        random_opening_mean=params.random_opening_mean,
+        face_up_leaves=params.face_up_leaves,
+    )
+    gen_seconds = time.monotonic() - t0
+    if rc != 0:
+        print(f"play_game exited with code {rc}", file=sys.stderr)
+        return CycleResult(rc, gen_seconds, 0.0, 0.0)
+
+    # Trajectories first: the labeling force-includes the simmed candidates
+    # from the same-stem .sobs, so it needs them on disk.
+    pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(".mset").exists())
+    t1 = time.monotonic()
+    unsimmed = [s for s in pending if not s.with_suffix(".sobs").exists()]
+    if unsimmed and (rc := run_trajectory_generator(unsimmed, params, threads)) != 0:
+        return CycleResult(rc, gen_seconds, time.monotonic() - t1, 0.0)
+    traj_seconds = time.monotonic() - t1
+
+    t2 = time.monotonic()
+    rc = 0
+    if pending:
+        rc = mset_targets.label_stratified(
+            pending,
+            params.teacher_model,
+            mset_targets.StratifiedQuotas.from_params(params),
+            params.positions_per_game,
+            threads,
+            with_sobs=True,
+        )
+    return CycleResult(rc, gen_seconds, traj_seconds, time.monotonic() - t2)
+
+
+def _cycle(work_dir: Path, params: EvidenceTrajectoriesParams, threads: int) -> tuple[int, dict]:
+    """One cycle in the shared generate loop's (returncode, phases) shape."""
+    r = run_one_cycle(work_dir, params, threads)
+    return r.returncode, {
+        "gen_s": r.gen_seconds,
+        "traj_s": r.traj_seconds,
+        "mset_s": r.mset_seconds,
+    }
+
+
+def run_generate(ctx: WorkerContext) -> int:
+    """The generate-role runner (the shared pair-store loop over run_one_cycle).
+    A pair is complete at its .mset, the last member produced; the .sobs rides
+    along."""
+    p = ctx.params
+    ok = mset_targets.require_model_file(p.proposer_model, "proposer_model")
+    ok = mset_targets.require_model_file(p.teacher_model, "teacher_model") and ok
+    if not ok:
+        return 1
+    return pair_store.run_pair_generate(
+        ctx,
+        _cycle,
+        ".mset",
+        SLOGS_DIR,
+        target_pairs=p.target_pairs,
+        extra_sidecar_exts=(".sobs",),
+    )
+
+
+def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
+    return [("pairs", pair_store.count_pairs(spec.paths(tag).data_dir / SLOGS_DIR, ".mset"))]
+
+
+def slog_dir(tag: str) -> Path:
+    """The tag's pair store (complete .slog/.sobs/.mset triples)."""
+    return SPEC.paths(tag).data_dir / SLOGS_DIR
+
+
+SPEC = WorkloadSpec(
+    name="evidence_trajectories",
+    title="Generate evidence trajectories",
+    params_cls=EvidenceTrajectoriesParams,
+    roles=(
+        RoleSpec(
+            name="generate",
+            title="Generator (GPU)",
+            runner="scribblez.workloads.evidence_trajectories:run_generate",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            kinds=("local",),
+            gpu=True,
+            interruptible=True,
+            stats=StatsSpec(
+                unit="pairs",
+                phases={
+                    "gen_s": "self-play",
+                    "traj_s": "trajectories",
+                    "mset_s": "targets",
+                    "upload_s": "deliver",
+                },
+            ),
+        ),
+    ),
+    progress="scribblez.workloads.evidence_trajectories:progress",
+    sync_data_dirs=(SLOGS_DIR,),
+)

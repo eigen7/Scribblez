@@ -7,6 +7,7 @@ runs.
 """
 
 from scribblez.workloads import (
+    evidence_trajectories,
     kill_test,
     match_arms,
     max_move_per_lane,
@@ -29,6 +30,7 @@ WORKLOADS = {
         position_eval.SPEC,
         max_move_per_lane.SPEC,
         move_set_eval.SPEC,
+        evidence_trajectories.SPEC,
         match_arms.SPEC,
     )
 }

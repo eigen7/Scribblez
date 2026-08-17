@@ -44,6 +44,7 @@ POSITION_EVAL = "position_eval"
 MAX_MOVE_PER_LANE = "max_move_per_lane"
 KILL_TEST = "kill_test"
 MOVE_SET_EVAL = "move_set_eval"
+EVIDENCE_TRAJECTORIES = "evidence_trajectories"
 MATCH_ARMS = "match_arms"
 
 

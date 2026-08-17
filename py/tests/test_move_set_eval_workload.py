@@ -6,7 +6,7 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.move_set_eval import targets as T
 from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, MSET_MAGIC, MSET_VERSION
-from scribblez.workloads import move_set_eval, pair_store
+from scribblez.workloads import move_set_eval, mset_targets, pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SPEC, MoveSetEvalParams
 
@@ -138,7 +138,7 @@ def test_target_generator_command(tmp_path, monkeypatch):
         captured["cmd"] = cmd
         return type("R", (), {"returncode": 0})()
 
-    monkeypatch.setattr(move_set_eval.subprocess, "run", fake_run)
+    monkeypatch.setattr(mset_targets.subprocess, "run", fake_run)
     # Distinct values per field, so a flag wired to the wrong param fails.
     p = MoveSetEvalParams(
         teacher_model="/models/teacher.onnx",
@@ -150,9 +150,11 @@ def test_target_generator_command(tmp_path, monkeypatch):
         positions_per_game=9,
     )
     slogs = [tmp_path / "a.slog", tmp_path / "b.slog"]
-    assert move_set_eval.run_target_generator(slogs, p, threads=8) == 0
+    quotas = mset_targets.StratifiedQuotas.from_params(p)
+    rc = mset_targets.label_stratified(slogs, p.teacher_model, quotas, p.positions_per_game, 8)
+    assert rc == 0
     cmd = captured["cmd"]
-    assert cmd[0] == move_set_eval.TARGET_GENERATOR
+    assert cmd[0] == mset_targets.TARGET_GENERATOR
     assert f"--slog-file={slogs[0]}" in cmd and f"--slog-file={slogs[1]}" in cmd
     expected = {
         "--model": "/models/teacher.onnx",
@@ -166,7 +168,10 @@ def test_target_generator_command(tmp_path, monkeypatch):
     }
     for flag, value in expected.items():
         assert f"{flag}={value}" in cmd
-    assert "--full-sweep" not in cmd
+    assert "--full-sweep" not in cmd and "--sobs" not in cmd
+
+    mset_targets.label_stratified(slogs, p.teacher_model, quotas, 9, 8, with_sobs=True)
+    assert "--sobs" in captured["cmd"]
 
 
 def test_target_generator_command_in_full_sweep_mode(tmp_path, monkeypatch):
@@ -176,20 +181,40 @@ def test_target_generator_command_in_full_sweep_mode(tmp_path, monkeypatch):
         captured["cmd"] = cmd
         return type("R", (), {"returncode": 0})()
 
-    monkeypatch.setattr(move_set_eval.subprocess, "run", fake_run)
-    p = MoveSetEvalParams(
-        teacher_model="/models/teacher.onnx",
-        positions_per_game=9,  # the stratified count, which must not leak into a sweep
-        sweep_positions_per_game=3,
-        sweep_candidate_cap=1200,
-    )
-    assert move_set_eval.run_target_generator([tmp_path / "a.slog"], p, 8, full_sweep=True) == 0
+    monkeypatch.setattr(mset_targets.subprocess, "run", fake_run)
+    rc = mset_targets.label_full_sweep([tmp_path / "a.slog"], "/models/teacher.onnx", 1200, 3, 8)
+    assert rc == 0
     cmd = captured["cmd"]
     assert "--full-sweep" in cmd
     assert "--sweep-cap=1200" in cmd
     assert "--positions-per-game=3" in cmd
     # The two selections take disjoint parameters; the quotas are meaningless here.
     assert not any(c.startswith("--quota") for c in cmd)
+
+
+class _LabelRecorder:
+    """Stands in for the two labeling modes: records (mode, stems) per run and
+    writes the .mset sidecars, or fails with `rc`."""
+
+    def __init__(self, monkeypatch, rc: int = 0):
+        self.runs: list[tuple[bool, set[str]]] = []
+        self.rc = rc
+        monkeypatch.setattr(mset_targets, "label_stratified", self._stratified)
+        monkeypatch.setattr(mset_targets, "label_full_sweep", self._sweep)
+
+    def _label(self, full_sweep, pending):
+        self.runs.append((full_sweep, {p.stem for p in pending}))
+        if self.rc == 0:
+            for p in pending:
+                p.with_suffix(".mset").touch()
+        return self.rc
+
+    def _stratified(self, pending, teacher, quotas, positions_per_game, threads, with_sobs=False):
+        assert not with_sobs  # move_set_eval never force-includes candidates
+        return self._label(False, pending)
+
+    def _sweep(self, pending, teacher, cap, positions_per_game, threads):
+        return self._label(True, pending)
 
 
 def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
@@ -207,19 +232,11 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
         (out_dir / "fresh.slog").touch()
         return 0
 
-    generated = []
-
-    def fake_generator(pending, params, threads, full_sweep=False):
-        generated.extend(p.name for p in pending)
-        for p in pending:
-            p.with_suffix(".mset").touch()
-        return 0
-
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", fake_generator)
+    rec = _LabelRecorder(monkeypatch)
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 0
-    assert sorted(generated) == ["fresh.slog", "old_pending.slog"]
+    assert sorted(s for _, stems in rec.runs for s in stems) == ["fresh", "old_pending"]
 
 
 def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypatch):
@@ -231,20 +248,12 @@ def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypat
     expected_swept = {s for s in stems if move_set_eval.sweep_pair(s, 20)}
     assert expected_swept, "the fixture needs at least one swept stem to be meaningful"
 
-    runs = []
-
-    def fake_generator(pending, params, threads, full_sweep=False):
-        runs.append((full_sweep, {p.stem for p in pending}))
-        for p in pending:
-            p.with_suffix(".mset").touch()
-        return 0
-
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", fake_generator)
+    rec = _LabelRecorder(monkeypatch)
     assert move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2).returncode == 0
 
-    by_mode = dict(runs)
-    assert len(runs) == 2
+    by_mode = dict(rec.runs)
+    assert len(rec.runs) == 2
     assert by_mode[True] == expected_swept
     assert by_mode[False] == set(stems) - expected_swept
 
@@ -260,34 +269,20 @@ def test_cycle_stops_at_the_first_failing_selection_group(tmp_path, monkeypatch)
     assert any(move_set_eval.sweep_pair(s, 20) for s in stems)
     assert not all(move_set_eval.sweep_pair(s, 20) for s in stems)
 
-    calls = []
-
-    def failing_generator(pending, params, threads, full_sweep=False):
-        calls.append(full_sweep)
-        return 9
-
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", failing_generator)
+    rec = _LabelRecorder(monkeypatch, rc=9)
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 9
-    assert calls == [False]  # the swept group never ran
+    assert [mode for mode, _ in rec.runs] == [False]  # the swept group never ran
 
 
 def test_cycle_labels_everything_stratified_when_sweeps_are_off(tmp_path, monkeypatch):
     for i in range(40):
         (tmp_path / f"{i:03d}.slog").touch()
-    modes = []
-
-    def fake_generator(pending, params, threads, full_sweep=False):
-        modes.append(full_sweep)
-        for p in pending:
-            p.with_suffix(".mset").touch()
-        return 0
-
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", fake_generator)
+    rec = _LabelRecorder(monkeypatch)
     move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(sweep_every=0), threads=2)
-    assert modes == [False]
+    assert [mode for mode, _ in rec.runs] == [False]
 
 
 def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
@@ -301,7 +296,7 @@ def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a, **k: 0)
+    _LabelRecorder(monkeypatch)
     for face_up in (False, True):
         move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(face_up_leaves=face_up), threads=2)
         assert seen["face_up_leaves"] is face_up
@@ -320,7 +315,7 @@ def test_cycle_propagates_generator_failure(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
-    monkeypatch.setattr(move_set_eval, "run_target_generator", lambda *a, **k: 9)
+    _LabelRecorder(monkeypatch, rc=9)
     result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
     assert result.returncode == 9
 
