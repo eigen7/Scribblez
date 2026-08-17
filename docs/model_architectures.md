@@ -146,8 +146,37 @@ All three output projections are zero-initialized and an empty evidence set
 hard-gates the stage off, so a fresh model — and any evidence-free forward at
 any weights — computes exactly the plain one-pass model. Training data comes
 from evidence trajectories (`.sobs` observations paired with live-recomputed
-first-pass predictions, roadmap item 4); until that corpus exists the stage
-trains only through its zero-evidence degenerate case.
+first-pass predictions, roadmap item 4).
+
+### The proves-best head (roadmap item 3)
+
+`proves_best`: `Linear(4C, C) → ReLU → Linear(C, 1) → softplus`, off the same
+fused per-move vector as `head` and `plane_proj`, output `gain` (M,) ≥ 0 —
+the expected improvement `E[max(0, v − best-so-far)]` a sim of that candidate
+would contribute over the best simmed so far. Meaningful only under evidence
+(at the empty set it collapses to the value itself); absent from the ONNX
+export until the evidence path lands (roadmap item 5).
+
+### Training the evidence path (`scribblez.evidence`)
+
+The fusion stage and the proves-best head train over a **frozen** student
+(`freeze_backbone`: everything outside `evidence_fusion` / `proves_best` is
+`requires_grad=False` and pinned to eval mode, so the trunk's BatchNorm keeps
+its student statistics). Rows are (position, evidence prefix, held-out simmed
+candidate) from trajectory `.sobs`; the targets are the held-out candidate's
+sim outcomes, not teacher readouts (docs/roadmap.md item 2 explains why):
+
+| Head | Target | Loss | Weight |
+|------|--------|------|--------|
+| `wld` (conditioned) | sim W/D/L frequencies | soft cross-entropy | 1 |
+| `score_diff` (conditioned) | sim delta mean / std | Huber (δ=10) | `lambda_sd` = 0.004 |
+| `gain` | `max(0, v_c − max prefix v)`, CRN-paired | Huber (δ=0.05) | `lambda_gain` = 1 |
+
+Held-out metrics compare the conditioned pass with the plain one on the same
+rows (soft-CE, value MAE), report the gain error and the acquisition hit rate
+(argmax gain over a position's held-out candidates vs. the one that simmed
+best; the plain value's argmax is the baseline), and read prefix-0 rows as the
+exactness check.
 
 ---
 
@@ -159,6 +188,6 @@ trains only through its zero-evidence degenerate case.
 | Unit of output | one board | one candidate move |
 | Board encodes per output | 1 | 1 / candidate-set |
 | Move-conditioning | none (board is post-move) | tile embeddings + cross-attention |
-| Heads | wld, score_diff, 4 placement masks | wld, score_diff, 4 placement planes |
+| Heads | wld, score_diff, 4 placement masks | wld, score_diff, 4 placement planes, proves-best gain |
 | Supervision | game outcomes / observed spread | teacher readouts (`.mset` sidecar) |
 | ONNX outputs | `wld`, `score_diff`, 4 mask names | `wld`, `score_diff` (planes deferred to the evidence path) |

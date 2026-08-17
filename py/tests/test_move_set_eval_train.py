@@ -588,7 +588,7 @@ def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
     store.mkdir()
     for i in range(2):
         _pair(store, f"s{i}")
-    clock = trainer.CorpusClock(store, _params(target_pairs=3))
+    clock = trainer.corpus_clock(store, _params(target_pairs=3))
 
     assert not clock.is_final(absorbed=0)  # short of the target
     _pair(store, "s2")
@@ -605,6 +605,7 @@ def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path
     import os
 
     from scribblez.move_set_eval import trainer
+    from scribblez.workloads import pair_store
 
     store = tmp_path / "slogs"
     store.mkdir()
@@ -612,16 +613,16 @@ def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path
     params = _params(target_pairs=0)
 
     # A store just delivered into, seen by a worker that has watched nothing.
-    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
+    assert not trainer.corpus_clock(store, params).is_final(absorbed=0)
 
-    stale = time.time() - trainer.QUIET_SECONDS - 1
+    stale = time.time() - pair_store.QUIET_SECONDS - 1
     for f in store.iterdir():
         os.utime(f, (stale, stale))
     # Same worker, same absence of history: now the store itself says it is done.
-    assert trainer.CorpusClock(store, params).is_final(absorbed=0)
+    assert trainer.corpus_clock(store, params).is_final(absorbed=0)
 
     _pair(store, "s1")  # the generator was not gone after all
-    assert not trainer.CorpusClock(store, params).is_final(absorbed=0)
+    assert not trainer.corpus_clock(store, params).is_final(absorbed=0)
 
 
 def test_absorb_adds_only_the_new_files(tmp_path):
@@ -696,7 +697,7 @@ def test_a_run_started_beside_its_generator_trains_on_the_whole_corpus(tmp_path)
     train_ds, holdout_ds = trainer.load_datasets(paths, params)
     started_with = train_ds.num_positions
     state = trainer.MsetTrainState()
-    clock = trainer.CorpusClock(store, params)
+    clock = trainer.corpus_clock(store, params)
 
     passes = 0
     while trainer.epochs_left(params, state):

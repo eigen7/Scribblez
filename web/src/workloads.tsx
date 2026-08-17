@@ -53,4 +53,9 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
+  evidence_trajectories: [
+    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
+    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
+    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
+  ],
 };

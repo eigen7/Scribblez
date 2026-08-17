@@ -125,6 +125,7 @@ class MoveSetEvalModel(nn.Module):
     ):
         super().__init__()
         self.board_size = board_size
+        self._backbone_frozen = False
         self.trunk = SpatialTrunk(
             spatial_planes, scalar_size, trunk_channels, num_blocks, lexicon_module=lexicon_module
         )
@@ -156,6 +157,56 @@ class MoveSetEvalModel(nn.Module):
         self.plane_proj = nn.Linear(head_in, self.num_planes * trunk_channels)
 
         self.evidence_fusion = EvidenceFusion(trunk_channels, num_heads=num_heads)
+        # The proves-best head: gain >= 0 through a softplus.
+        self.proves_best = nn.Sequential(
+            nn.Linear(head_in, trunk_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(trunk_channels, 1),
+        )
+
+    # The parameters the evidence trainer leaves trainable when the backbone is
+    # frozen: the fusion stage and the proves-best head. Everything else is the
+    # distilled student's, held at its checkpoint.
+    EVIDENCE_MODULES = ("evidence_fusion", "proves_best")
+
+    @classmethod
+    def _is_evidence_param(cls, name: str) -> bool:
+        return name.split(".", 1)[0] in cls.EVIDENCE_MODULES
+
+    def freeze_backbone(self):
+        """Freeze every parameter outside EVIDENCE_MODULES, and pin those
+        modules to eval mode (the trunk's BatchNorm would otherwise switch to
+        batch statistics and drift its running stats under train()). Empty-
+        evidence exactness is then structural (the fusion's zero-init + hard
+        gate), so the plain pass is the student's, bit for bit, whatever
+        training does."""
+        self._backbone_frozen = True
+        for name, param in self.named_parameters():
+            param.requires_grad = self._is_evidence_param(name)
+        self.train(self.training)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self._backbone_frozen:
+            for name, module in self.named_children():
+                if name not in self.EVIDENCE_MODULES:
+                    module.eval()
+        return self
+
+    def evidence_parameters(self) -> list[nn.Parameter]:
+        return [p for n, p in self.named_parameters() if self._is_evidence_param(n)]
+
+    def load_student(self, state_dict: dict):
+        """Initialize from a distilled student's state dict. The student may
+        predate the fusion stage and never has the proves-best head; those stay
+        at their fresh (zero-init / random) values. Anything else missing, or
+        anything unexpected, is a real mismatch and fails."""
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
+        stray = [k for k in missing if not self._is_evidence_param(k)]
+        if stray or unexpected:
+            raise ValueError(
+                f"student checkpoint mismatch: missing {stray}, unexpected {unexpected}"
+            )
 
     def encode_board(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
@@ -221,7 +272,8 @@ class MoveSetEvalModel(nn.Module):
         plain or evidence-conditioned, the machinery is identical.
 
         Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
-        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order}.
+        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order,
+        "gain": (M,) the proves-best expected gain, >= 0}.
         """
         # Each move attends into its own position's board tokens. Grouping the
         # queries by position keeps the key/value set at one copy per position,
@@ -257,6 +309,7 @@ class MoveSetEvalModel(nn.Module):
             "wld": out[:, :3],
             "score_diff": torch.cat([sd_mean, sd_std], dim=1),
             "planes": planes,
+            "gain": F.softplus(self.proves_best(head_in)).squeeze(1),
         }
 
     def forward(

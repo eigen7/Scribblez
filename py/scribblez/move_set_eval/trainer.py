@@ -9,7 +9,7 @@ anything on.
 The generate role writes that store while this runs, so the loop keeps pace
 with a corpus being written underneath it instead of snapshotting one -- which
 is what lets a tag with a worker of each type run to completion unattended.
-store_is_ready, absorb_new_pairs and CorpusClock below are that pacing, and
+store_is_ready, absorb_new_pairs and pair_store.CorpusClock are that pacing, and
 carry its reasoning.
 
 Each pass records losses and the held-out top-K recall / Spearman metrics to
@@ -49,6 +49,7 @@ from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
+from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -166,50 +167,13 @@ def _ingestible(files, seen: set, ds: MsetDataset) -> list:
     return usable
 
 
-# How long the store must sit untouched before a tag that declared no
-# generation size is taken to be done. A generation cycle is 200 self-play
-# games plus teacher labeling -- minutes -- and a training pass over an early,
-# small corpus is far quicker, so a single quiet pass says only that the pass
-# fell between two deliveries.
-QUIET_SECONDS = 900
+def _count_complete_pairs(store) -> int:
+    return len(complete_pairs(store))
 
 
-class CorpusClock:
-    """Decides when the tag's pair store has stopped growing -- the point from
-    which a pass is over the whole corpus and may spend the epoch budget.
-
-    A tag with a declared `target_pairs` is answered by the store reaching it,
-    and by nothing having arrived on the pass that saw it: a second generate
-    worker mid-cycle when the first crossed the target still has pairs to
-    deliver, and counting the budget from before they land would score the
-    run's epochs against two different holdouts.
-
-    With no declared size there is no end to read, so growth is judged from
-    when the store was last written: a corpus whose newest pair is older than
-    QUIET_SECONDS has no generator behind it, and one being delivered into
-    never is. That is a property of the store rather than of this worker's own
-    history, so it reads the same on a fresh start, mid-run, and after a
-    restart -- none of which have watched the generator from the beginning.
-    """
-
-    def __init__(self, store, params):
-        self._store = store
-        self._params = params
-
-    def is_final(self, absorbed: int) -> bool:
-        if self._params.target_pairs:
-            # Complete pairs, as every other reader of the store counts: a
-            # sidecar whose .slog has not landed yet is not one the trainer can
-            # use, and delivery writes the sidecar first.
-            held = len(complete_pairs(self._store)) if self._store.is_dir() else 0
-            return not absorbed and held >= self._params.target_pairs
-        return time.time() - self._last_delivery() >= QUIET_SECONDS
-
-    def _last_delivery(self) -> float:
-        """When the store was last written to, or 0.0 while it is empty."""
-        if not self._store.is_dir():
-            return 0.0
-        return max((f.stat().st_mtime for f in self._store.glob("*.mset")), default=0.0)
+def corpus_clock(store, params) -> pair_store.CorpusClock:
+    """The tag's corpus clock over its .mset pair store."""
+    return pair_store.CorpusClock(store, params.target_pairs, ".mset", _count_complete_pairs)
 
 
 def epochs_left(params, state: MsetTrainState) -> bool:
@@ -387,7 +351,7 @@ def run(ctx: WorkerContext) -> int:
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
     try:
-        clock = CorpusClock(paths.data_dir / SLOGS_DIR, params)
+        clock = corpus_clock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):
             # Take up whatever the generator delivered during the last pass
             # before deciding whether this one is over a finished corpus.

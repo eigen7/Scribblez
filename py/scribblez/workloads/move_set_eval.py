@@ -259,27 +259,6 @@ def slog_dir(tag: str) -> Path:
     return SPEC.paths(tag).data_dir / SLOGS_DIR
 
 
-def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], list[str]]:
-    """(train, holdout) stems: about one in `holdout_every` is held out.
-
-    File-level (whole pairs) because position-level splits leak through shared
-    game prefixes, and decided by a hash of the stem rather than by a position
-    in the list -- like sweep_pair, and for a sharper reason here. A trainer
-    re-takes this split as the store grows, so an assignment that depended on
-    where a stem sat in the sorted list would move pairs between the sides
-    whenever one arrived out of order (two generate workers interleave their
-    deliveries), and a pair that changed sides is a pair trained on and then
-    scored as held out.
-    """
-    ordered = sorted(stems)
-    if holdout_every <= 0:
-        return ordered, []
-    held = [zlib.crc32(s.encode()) % holdout_every == 0 for s in ordered]
-    train = [s for s, h in zip(ordered, held, strict=True) if not h]
-    holdout = [s for s, h in zip(ordered, held, strict=True) if h]
-    return train, holdout
-
-
 def split_pairs(store: Path, holdout_every: int) -> tuple[list[Path], list[Path]]:
     """(train, holdout) .mset paths of a tag's complete pairs.
 
@@ -294,7 +273,7 @@ def split_pairs(store: Path, holdout_every: int) -> tuple[list[Path], list[Path]
     stratified, swept = partition_full_sweep(complete_pairs(store))
     if swept:
         return sorted(stratified), sorted(swept)
-    train, holdout = split_pair_stems([f.stem for f in stratified], holdout_every)
+    train, holdout = pair_store.split_pair_stems([f.stem for f in stratified], holdout_every)
     return [store / f"{s}.mset" for s in train], [store / f"{s}.mset" for s in holdout]
 
 

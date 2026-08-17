@@ -61,16 +61,16 @@ def _stems(n, off=0, worker=0):
 
 def test_split_pair_stems_is_deterministic_and_file_level():
     stems = _stems(60)
-    train, holdout = move_set_eval.split_pair_stems(list(reversed(stems)), 20)
+    train, holdout = pair_store.split_pair_stems(list(reversed(stems)), 20)
     assert holdout  # a corpus this size gets a holdout
     assert sorted(train + holdout) == sorted(stems)  # a pair is in exactly one side
     assert not set(train) & set(holdout)
-    assert move_set_eval.split_pair_stems(stems, 20) == (train, holdout)  # order-free
+    assert pair_store.split_pair_stems(stems, 20) == (train, holdout)  # order-free
 
 
 def test_split_pair_stems_holds_out_about_one_in_n():
     stems = _stems(2000)
-    _, holdout = move_set_eval.split_pair_stems(stems, 20)
+    _, holdout = pair_store.split_pair_stems(stems, 20)
     assert 0.03 < len(holdout) / len(stems) < 0.07
 
 
@@ -80,11 +80,11 @@ def test_split_pair_stems_never_moves_a_pair_between_the_sides():
     so a new stem can sort BEFORE existing ones -- and a pair that changed
     sides would be one trained on and then scored as held out."""
     stems = _stems(60)
-    train, holdout = move_set_eval.split_pair_stems(stems, 20)
+    train, holdout = pair_store.split_pair_stems(stems, 20)
 
     # A second worker's late deliveries, timestamped among the existing ones.
     grown = stems + _stems(20, off=5, worker=1)
-    train2, holdout2 = move_set_eval.split_pair_stems(grown, 20)
+    train2, holdout2 = pair_store.split_pair_stems(grown, 20)
     assert set(holdout).issubset(holdout2)
     assert set(train).issubset(train2)
     assert not set(train) & set(holdout2)  # nothing trained on became held out
@@ -92,7 +92,7 @@ def test_split_pair_stems_never_moves_a_pair_between_the_sides():
 
 def test_split_pair_stems_zero_disables_holdout():
     stems = ["b", "a", "c"]
-    train, holdout = move_set_eval.split_pair_stems(stems, 0)
+    train, holdout = pair_store.split_pair_stems(stems, 0)
     assert train == ["a", "b", "c"] and holdout == []
 
 
@@ -116,7 +116,7 @@ def test_split_pairs_falls_back_to_holdout_every_without_sweeps(tmp_path):
     (tmp_path / "orphan.mset").write_bytes(b"")  # no .slog: not a pair
 
     train, holdout = move_set_eval.split_pairs(tmp_path, holdout_every=20)
-    expected_train, expected_holdout = move_set_eval.split_pair_stems(stems, 20)
+    expected_train, expected_holdout = pair_store.split_pair_stems(stems, 20)
     assert [p.stem for p in holdout] == expected_holdout
     assert [p.stem for p in train] == expected_train
     assert holdout and len(train) + len(holdout) == 60

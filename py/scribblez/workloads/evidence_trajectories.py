@@ -31,6 +31,12 @@ export (a move_set_eval tag's models/model_epoch_NNNN.onnx).
 
 The generate role is GPU and local-only: proposer and teacher both run under
 TensorRT (see move_set_eval).
+
+The singleton train role (scribblez/evidence/trainer.py) trains the fusion
+stage and the proves-best head over the tag's pair store, on top of the
+frozen student named by `student_checkpoint`, with the mset trainer's
+growing-corpus pacing: it absorbs each pass's new pairs and spends its epoch
+budget only once the store is final.
 """
 
 import subprocess
@@ -103,8 +109,38 @@ class EvidenceTrajectoriesParams:
         "models (the tools refuse the mismatch)",
     )
     target_pairs: int = param(
-        0, "stop generating once the store holds this many pairs (0 = generate until paused)"
+        0,
+        "stop generating once the store holds this many pairs (0 = generate until paused). "
+        "It is also what tells the trainer its corpus is final; with 0 the trainer reads "
+        "'finished' off the store going quiet",
     )
+    # Fusion + proves-best training (the train role; scribblez/evidence/trainer.py).
+    student_checkpoint: str = param(
+        "",
+        "absolute path to the move-set-eval student's rolling checkpoint (a move_set_eval "
+        "tag's checkpoints/model.pt) whose frozen backbone the fusion stage and proves-best "
+        "head train on top of; its arch and encoding arm are read from the checkpoint",
+    )
+    train_epochs: int = param(
+        20,
+        "epochs over the finished corpus before the trainer stops (0 = run until paused); "
+        "passes over a still-growing corpus do not spend the budget",
+    )
+    warmup_pairs: int = param(50, "pairs the store must hold before training starts")
+    holdout_every: int = param(
+        10, "hold out every Nth pair (file-level, by stem hash) for the metrics; 0 = on-train"
+    )
+    batch_positions: int = param(32, "positions per training batch")
+    max_evidence: int = param(
+        16, "padded evidence-set width; must cover the longest trajectory (1 + proposals_max + 1)"
+    )
+    lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
+    weight_decay: float = param(1e-4, "AdamW weight decay")
+    lambda_sd: float = param(0.004, "score-diff (sim delta moments) loss weight")
+    lambda_gain: float = param(1.0, "proves-best gain loss weight")
+    huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head (points)")
+    huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
+    huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
 
 
 @dataclass(frozen=True)
@@ -239,6 +275,15 @@ SPEC = WorkloadSpec(
                     "upload_s": "deliver",
                 },
             ),
+        ),
+        RoleSpec(
+            name="train",
+            title="Fusion + proves-best trainer (GPU)",
+            runner="scribblez.evidence.trainer:run",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),
     ),
     progress="scribblez.workloads.evidence_trajectories:progress",

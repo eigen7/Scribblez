@@ -11,6 +11,8 @@ leftovers.
 """
 
 import time
+import zlib
+from collections.abc import Callable
 from pathlib import Path
 
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -101,3 +103,82 @@ def count_pairs(store_dir: Path, sidecar_ext: str) -> int:
     here; it is inert to every consumer, so the count stays a progress reading
     rather than a completeness guarantee."""
     return sum(1 for _ in store_dir.glob(f"*{sidecar_ext}")) if store_dir.is_dir() else 0
+
+
+def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], list[str]]:
+    """(train, holdout) stems: about one in `holdout_every` is held out.
+
+    File-level (whole pairs) because position-level splits leak through shared
+    game prefixes, and decided by a hash of the stem rather than by a position
+    in the list -- like move_set_eval.sweep_pair, and for a sharper reason
+    here. A trainer re-takes this split as the store grows, so an assignment
+    that depended on where a stem sat in the sorted list would move pairs
+    between the sides whenever one arrived out of order (two generate workers
+    interleave their deliveries), and a pair that changed sides is a pair
+    trained on and then scored as held out.
+    """
+    ordered = sorted(stems)
+    if holdout_every <= 0:
+        return ordered, []
+    held = [zlib.crc32(s.encode()) % holdout_every == 0 for s in ordered]
+    train = [s for s, h in zip(ordered, held, strict=True) if not h]
+    holdout = [s for s, h in zip(ordered, held, strict=True) if h]
+    return train, holdout
+
+
+# How long the store must sit untouched before a tag that declared no
+# generation size is taken to be done. A generation cycle is 200 self-play
+# games plus labeling -- minutes -- and a training pass over an early, small
+# corpus is far quicker, so a single quiet pass says only that the pass fell
+# between two deliveries.
+QUIET_SECONDS = 900
+
+
+class CorpusClock:
+    """Decides when a tag's pair store has stopped growing -- the point from
+    which a training pass is over the whole corpus and may spend the epoch
+    budget.
+
+    A tag with a declared `target_pairs` is answered by the store reaching it,
+    and by nothing having arrived on the pass that saw it: a second generate
+    worker mid-cycle when the first crossed the target still has pairs to
+    deliver, and counting the budget from before they land would score the
+    run's epochs against two different holdouts.
+
+    With no declared size there is no end to read, so growth is judged from
+    when the store was last written: a corpus whose newest sidecar is older
+    than QUIET_SECONDS has no generator behind it, and one being delivered
+    into never is. That is a property of the store rather than of this
+    worker's own history, so it reads the same on a fresh start, mid-run, and
+    after a restart -- none of which have watched the generator from the
+    beginning.
+
+    `count_complete` counts the store's complete pairs the way every other
+    reader of that store does (a sidecar whose .slog has not landed yet is
+    not one a trainer can use, and delivery writes the sidecar first).
+    """
+
+    def __init__(
+        self,
+        store: Path,
+        target_pairs: int,
+        sidecar_ext: str,
+        count_complete: Callable[[Path], int],
+    ):
+        self._store = Path(store)
+        self._target = target_pairs
+        self._sidecar_ext = sidecar_ext
+        self._count_complete = count_complete
+
+    def is_final(self, absorbed: int) -> bool:
+        if self._target:
+            held = self._count_complete(self._store) if self._store.is_dir() else 0
+            return not absorbed and held >= self._target
+        return time.time() - self._last_delivery() >= QUIET_SECONDS
+
+    def _last_delivery(self) -> float:
+        """When the store was last written to, or 0.0 while it is empty."""
+        if not self._store.is_dir():
+            return 0.0
+        files = self._store.glob(f"*{self._sidecar_ext}")
+        return max((f.stat().st_mtime for f in files), default=0.0)
