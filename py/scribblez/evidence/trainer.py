@@ -38,8 +38,8 @@ from scribblez.ffi import set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
-    CONTROL_BASE_LR,
-    LrController,
+    WsdLrController,
+    WsdSchedule,
     init_controls,
     progress_line,
 )
@@ -193,7 +193,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         device,
         ctx["loss_cfg"],
         params.max_evidence,
-        lr_fn=ctx["lr_controller"].epoch_lr_fn(state.rows_trained),
+        lr_fn=ctx["lr_controller"].lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
     )
@@ -205,7 +205,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     t1 = time.time()
     m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, params.max_evidence)
     eval_s = time.time() - t1
-    lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
+    lr_now = ctx["lr_controller"].current
     budget = (
         f"{state.settled_epochs}/{params.train_epochs}"
         if settled
@@ -277,7 +277,7 @@ def run(ctx: WorkerContext) -> int:
         conn,
         {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_gain": params.lambda_gain},
     )
-    init_controls(conn, params.lr)
+    init_controls(conn)
     run_ctx = {
         "config": {
             **asdict(params),
@@ -288,11 +288,13 @@ def run(ctx: WorkerContext) -> int:
         "train_ds": train_ds,
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
-        "lr_controller": LrController(conn, params.lr),
         "stats": WorkerStats(ctx),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=EvidenceTrainState)
+    run_ctx["lr_controller"] = WsdLrController(
+        conn, WsdSchedule.from_params(params), state.rows_trained
+    )
     try:
         clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs", _count_complete_pairs)
         while epochs_left(params, state):

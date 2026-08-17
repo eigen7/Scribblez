@@ -134,7 +134,17 @@ class EvidenceTrajectoriesParams:
     max_evidence: int = param(
         16, "padded evidence-set width; must cover the longest trajectory (1 + proposals_max + 1)"
     )
-    lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
+    lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
+    lr_warmup_rows: int = param(
+        800_000,
+        "linear LR warmup length, in held-out candidate rows trained (this trainer's "
+        "rows-clock: ~4.5 per position per pass, so ~half a pass over a 350k-position corpus)",
+    )
+    lr_cycle_rows: int = param(
+        16_000_000,
+        "period of the stable->decay->restart LR cycle, in held-out candidate rows trained "
+        "(~10 passes over a 350k-position corpus; the last fifth of each cycle decays)",
+    )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     lambda_sd: float = param(0.004, "score-diff (sim delta moments) loss weight")
     lambda_gain: float = param(1.0, "proves-best gain loss weight")
