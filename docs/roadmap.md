@@ -241,8 +241,8 @@ The data for items 2 and 3. A trajectory records the sequential loop that
 produced each evidence set, which supplies rows at **every prefix size**,
 including zero — the distribution the deployed agent actually walks.
 
-**Machinery built, corpus pending** — the trajectory recipe (greedy anchor →
-temperature-softmax student proposals at randomized length → one
+**Machinery built, corpus generating** — the trajectory recipe (greedy anchor
+→ temperature-softmax student proposals at randomized length → one
 uniform-random tail sim, per
 [sim_residual_feedback.md](sim_residual_feedback.md)) is implemented end to
 end:
@@ -250,8 +250,12 @@ end:
 writes trajectory `.sobs` (v2: trajectory-ordered records, per-position
 legal-move counts and uniform-tail flag, proposer hash), the `.mset`
 labeling force-includes the simmed candidates (`--sobs`), and the
-`move_set_eval` workload runs the chain per `traj_every`-th pair. No corpus
-has been generated yet.
+`evidence_trajectories` dashboard workload
+([evidence_trajectories.py](../py/scribblez/workloads/evidence_trajectories.py))
+runs the chain — self-play → trajectories → labeling — as its generate role,
+with the student v2 export as proposer. The first corpus (tag
+`trajectories`: face-up leaves, 200 rollouts, one position per game) is
+being generated.
 
 - Requires `.sobs` at scale; the tooling above is how it gets made.
 - The proposer follows the current model, so a conditionally-strong but

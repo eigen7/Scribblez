@@ -1,7 +1,7 @@
 """Tests for evidence-trajectory generation (roadmap item 4): the trajectory
 .sobs contract end to end (anchor slot, uniform tail, v2 header fields,
 proposer hash), the .mset labeling's forced inclusion of simmed candidates,
-and the workload-side pair selection and delivery.
+and the evidence_trajectories workload's cycle and delivery.
 
 The e2e path runs the real binaries (GPU: both generators build TensorRT
 engines), over test_slog_writer games and tiny freshly-exported models --
@@ -17,6 +17,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from scribblez import params as params_mod
+from scribblez import workloads
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
     SOBS_FLAG_TRAJECTORY,
@@ -25,8 +27,9 @@ from scribblez.sim_evidence.sobs import (
     read_sobs_flags,
     read_sobs_proposer_hash,
 )
-from scribblez.workloads import pair_store
-from scribblez.workloads.move_set_eval import MoveSetEvalParams, sweep_pair, traj_pair
+from scribblez.workloads import evidence_trajectories as ET
+from scribblez.workloads import mset_targets, pair_store
+from scribblez.workloads.evidence_trajectories import SPEC, EvidenceTrajectoriesParams
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 TRAJECTORY_GENERATOR = _ENGINE_DIR / "evidence_trajectory_generator"
@@ -35,21 +38,81 @@ SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 
-def _params(**kw) -> MoveSetEvalParams:
-    return MoveSetEvalParams(**kw)
+def test_workload_is_registered_with_a_valid_schema():
+    spec = workloads.get("evidence_trajectories")
+    assert spec is SPEC
+    fields = {f.name: f for f in params_mod.schema(EvidenceTrajectoriesParams)}
+    assert fields["proposer_model"].kind == "str"
+    assert fields["teacher_model"].kind == "str"
+    params = EvidenceTrajectoriesParams(proposer_model="/x/student.onnx", teacher_model="/x/t.onnx")
+    env = spec.worker_env("t", params, "generate")
+    assert params_mod.from_env(EvidenceTrajectoriesParams, env) == params
+    role = spec.role("generate")
+    assert role.gpu and role.kinds == ("local",)
+    assert set(role.stats.phases) == {"gen_s", "traj_s", "mset_s", "upload_s"}
 
 
-def test_traj_pairs_are_stem_stable_and_never_sweep_pairs():
-    params = _params(traj_every=3, sweep_every=4)
-    stems = [f"batch-{i:04d}" for i in range(200)]
-    chosen = [s for s in stems if traj_pair(s, params)]
-    assert chosen  # the hash actually selects some
-    assert len(chosen) < len(stems)
-    for s in chosen:
-        assert not sweep_pair(s, params.sweep_every)
-        assert traj_pair(s, params)  # decision is a pure function of the stem
-    # Disabled entirely at traj_every=0.
-    assert not [s for s in stems if traj_pair(s, _params(traj_every=0))]
+class _CycleRecorder:
+    """Stands in for the three subprocess phases of a cycle: self-play writes
+    .slog files, the trajectory tool writes .sobs, the labeling writes .mset;
+    records what each was asked to process."""
+
+    def __init__(self, monkeypatch, new_slogs: tuple[str, ...], traj_rc: int = 0):
+        self.calls: list[tuple[str, list[str]]] = []
+        self.new_slogs, self.traj_rc = new_slogs, traj_rc
+        monkeypatch.setattr(ET, "run_games", self._run_games)
+        monkeypatch.setattr(ET, "run_trajectory_generator", self._trajectories)
+        monkeypatch.setattr(mset_targets, "label_stratified", self._label)
+
+    def _run_games(self, out_dir, **kw):
+        for stem in self.new_slogs:
+            (out_dir / f"{stem}.slog").touch()
+        return 0
+
+    def _trajectories(self, pending, params, threads):
+        self.calls.append(("traj", [p.stem for p in pending]))
+        if self.traj_rc == 0:
+            for p in pending:
+                p.with_suffix(".sobs").touch()
+        return self.traj_rc
+
+    def _label(self, pending, teacher, quotas, positions_per_game, threads, with_sobs=False):
+        assert with_sobs, "trajectory pairs must be labeled with their simmed candidates forced"
+        assert quotas == mset_targets.StratifiedQuotas(4, 4, 4, 2, 32)
+        self.calls.append(("mset", [p.stem for p in pending]))
+        for p in pending:
+            p.with_suffix(".mset").touch()
+        return 0
+
+
+def test_cycle_sims_only_unsimmed_slogs_and_labels_every_pending_one(tmp_path, monkeypatch):
+    """A resumed cycle: `a` was simmed but not labeled when the last run died,
+    `b` is fresh. Only `b` is simmed; both are labeled; the phases report."""
+    (tmp_path / "a.slog").touch()
+    (tmp_path / "a.sobs").touch()
+    rec = _CycleRecorder(monkeypatch, new_slogs=("b",))
+    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    assert r.returncode == 0
+    assert rec.calls == [("traj", ["b"]), ("mset", ["a", "b"])]
+    assert (tmp_path / "a.mset").exists() and (tmp_path / "b.mset").exists()
+
+
+def test_a_failed_trajectory_phase_skips_the_labeling(tmp_path, monkeypatch):
+    """The labeling force-includes candidates from the .sobs, so it must never
+    run over a file whose sims failed."""
+    rec = _CycleRecorder(monkeypatch, new_slogs=("b",), traj_rc=3)
+    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    assert r.returncode == 3
+    assert rec.calls == [("traj", ["b"])]
+    assert not (tmp_path / "b.mset").exists()
+
+
+def test_generate_refuses_a_missing_model(tmp_path, capsys):
+    params = EvidenceTrajectoriesParams(proposer_model=str(tmp_path / "no.onnx"), teacher_model="")
+    ctx = SimpleNamespace(params=params)
+    assert ET.run_generate(ctx) == 1
+    err = capsys.readouterr().err
+    assert "proposer_model" in err and "teacher_model" in err
 
 
 class _RecordingSink:
