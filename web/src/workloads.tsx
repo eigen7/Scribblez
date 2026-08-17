@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import ControlsTab from './components/ControlsTab';
+import EvidenceTrajectories from './components/EvidenceTrajectories';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
 import PositionEvalAnalysis from './components/PositionEvalAnalysis';
@@ -55,6 +56,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
   ],
   evidence_trajectories: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
+    { name: 'Trajectories', render: (w, t) => <EvidenceTrajectories task={w} tag={t} /> },
     trainingTab('evidence_metrics', 'metrics', 'No per-epoch training metrics yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },

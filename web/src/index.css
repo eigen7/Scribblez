@@ -1179,6 +1179,36 @@ h1 {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
+/* Trajectories tab (EvidenceTrajectories): the trajectory strip of simmed
+   candidates and the conditioned-value move table. */
+.traj-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.traj-card {
+  font: inherit; text-align: left; cursor: pointer;
+  width: 150px; padding: 6px 8px; font-size: 12px; line-height: 1.35;
+  background: #fff; border: 1px solid #d3d8e0; border-radius: 6px; color: #1a1f28;
+}
+.traj-card:hover { border-color: #8a93a0; }
+.traj-card.selected { border-color: #1b4f72; box-shadow: 0 0 0 2px rgba(27, 79, 114, 0.25); }
+.traj-card.beyond { opacity: 0.45; }
+.traj-card.beyond.selected { opacity: 0.8; }
+.traj-card-role { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #667; }
+.traj-card-move { font-weight: 600; font-family: monospace; font-size: 13px; margin: 2px 0; }
+.traj-card-line { white-space: nowrap; }
+.traj-moves { border-collapse: collapse; font-size: 13px; }
+.traj-moves th, .traj-moves td { padding: 3px 10px; text-align: right; border-bottom: 1px solid #eceff3; }
+.traj-moves th { font-weight: 600; color: #3a4250; }
+.traj-moves td.traj-notation, .traj-moves th:nth-child(2) { text-align: left; font-family: monospace; }
+.traj-moves tr.simmed { background: #fdf3f2; cursor: pointer; }
+.traj-moves tr.simmed:hover { background: #fbe6e3; }
+.traj-moves tr.selected td { font-weight: 600; }
+.traj-moves tr.next-sim { background: #eef7ee; }
+.traj-next-sim {
+  margin-left: 8px; padding: 0 5px; font-size: 10px; font-family: inherit; font-weight: 600;
+  text-transform: uppercase; color: #fff; background: #1e8449; border-radius: 3px; vertical-align: middle;
+}
+.traj-up { color: #1e8449; font-size: 11px; }
+.traj-down { color: #c0392b; font-size: 11px; }
+
 /* Generation slider + Latest checkbox (shared GenerationSlider component). */
 .gen-slider { display: inline-flex; align-items: center; gap: 12px; }
 .gen-slider input[type="range"] { width: 220px; }
