@@ -370,12 +370,14 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     tag = "zz-evidence-run"
     ckpt = tmp_path / "student.pt"
     _student_checkpoint(ckpt, train, open_leaves=False)
+    # holdout_every=0: the corpus is one or two files, so a hashed split could
+    # leave the training side empty; on-train metrics suffice for the runner.
     base = dict(
         proposer_model="/x",
         teacher_model="/x",
         student_checkpoint=str(ckpt),
         warmup_pairs=1,
-        holdout_every=2,
+        holdout_every=0,
         batch_positions=4,
         target_pairs=0,
     )
