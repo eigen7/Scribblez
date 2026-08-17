@@ -1,20 +1,23 @@
-"""Live operator controls shared by the generational trainers.
+"""Learning-rate schedule and live operator controls shared by the generational
+trainers.
 
-Every generational trainer (position evaluation, max-move-per-lane) exposes the
-same dashboard-tunable knobs -- a base learning rate and two CPU-thread pools
-(C++ DataLoader workers, torch intra-op threads) -- persisted in the per-tag
+Every generational trainer (position evaluation, move-set evaluation,
+max-move-per-lane) drives its learning rate from the same rows-clock schedule
+(WsdLrController) and exposes the same dashboard-tunable CPU knobs -- C++
+DataLoader workers and torch intra-op threads -- persisted in the per-tag
 dashboard DB's control table and restored on restart. Game-generation capacity
 is deliberately not a control here: generation belongs to the generator worker
 fleet, sized per worker slot from the master dashboard.
 
-The controllers read the controls at their natural cadence (the LR once per
-epoch, the CPU pools once per generation), apply them, and log each change as
-a rows-clock control event so the metric plots can annotate where a knob moved.
-The task-specific trainers own only their model, loss, and evaluation.
+The CPU controller reads its controls once per generation, applies them, and
+logs each change as a rows-clock control event so the metric plots can annotate
+where a knob moved; the LR schedule logs its phase boundaries the same way. The
+task-specific trainers own only their model, loss, and evaluation.
 """
 
 from __future__ import annotations
 
+import math
 import sys
 
 import torch
@@ -23,42 +26,122 @@ from ..dashboard import db
 from ..train_common import timed_print
 
 # Names of the live controls (dashboard Controls tab / DB).
-CONTROL_BASE_LR = "base_lr"
 CONTROL_DATALOADER_WORKERS = "dataloader_workers"
 CONTROL_TORCH_THREADS = "torch_threads"
+
+# Event name under which the LR schedule logs its phase boundaries. Not a
+# control (nothing reads it back): a derived value the plots annotate.
+LR_EVENT = "lr"
 
 # Starting points for the CPU-thread controls when a run first creates them.
 DEFAULT_DATALOADER_WORKERS = 4
 
+# Shape of the schedule's decay tail, shared by every trainer: the last
+# LR_DECAY_FRAC of each cycle decays (cosine) from the peak to peak *
+# LR_FLOOR_FRAC. The floor is well above zero because a restart follows
+# immediately -- decaying to ~0 right before jumping back up wastes the tail.
+LR_DECAY_FRAC = 0.2
+LR_FLOOR_FRAC = 0.1
 
-class LrController:
-    """Serves the learning rate from the live base rate in the control table.
+# Schedule phases, in cycle order. Warmup happens once; the other three repeat.
+PHASE_WARMUP = "warmup"
+PHASE_REWARMUP = "rewarmup"
+PHASE_STABLE = "stable"
+PHASE_DECAY = "decay"
 
-    There is no schedule: an open-ended, moving-target self-play run has no
-    known annealing horizon, so the rate is a manual operator control, stepped
-    down by hand off the loss plots (see docs/generational_training.md,
-    "Learning rate: a persisted manual control"). The base is read once per
-    generation (the rate only needs to change at that granularity); when the
-    operator has moved it, a rows-clock control event is recorded so the metric
-    plots can annotate where it changed."""
 
-    def __init__(self, conn, base_lr: float):
+class WsdSchedule:
+    """Warmup-stable-decay learning rate with periodic restarts, as a pure
+    function of the rows-clock.
+
+    An open-ended self-play run has no known horizon, so a single end-of-run
+    decay has no trigger point; instead the stable/decay pair repeats every
+    `cycle_rows`, giving a well-annealed checkpoint per cycle and then a warm
+    restart back to the peak (this project's own adaptation of WSD to the
+    continual setting, structurally like SGDR warm restarts with WSD's tail).
+
+    With W = warmup_rows, C = cycle_rows, R = W // 4 and t = (rows - W) mod C:
+      rows < W                 warmup    linear 0 -> lr
+      t < R (not first cycle)  rewarmup  linear lr*floor -> lr
+      R <= t < (1-D)*C         stable    lr
+      (1-D)*C <= t < C         decay     cosine lr -> lr*floor
+    The re-warmup sits inside the cycle (period stays C) and ramps from the
+    floor rather than 0: AdamW's second-moment estimate has adapted to the
+    low-LR regime by the end of a decay, so a bare jump to the peak risks an
+    oversized effective step for the first post-restart batches. Degenerate
+    settings (re-warmup swallowing the stable segment) are not rejected; every
+    row count still maps to a value.
+    """
+
+    def __init__(self, lr: float, warmup_rows: int, cycle_rows: int):
+        self.lr = lr
+        self.warmup_rows = warmup_rows
+        self.cycle_rows = cycle_rows
+        self.rewarmup_rows = warmup_rows // 4
+        self.decay_start = round((1.0 - LR_DECAY_FRAC) * cycle_rows)
+        self.floor = lr * LR_FLOOR_FRAC
+
+    @classmethod
+    def from_params(cls, params) -> WsdSchedule:
+        """From a trainer's params dataclass (`lr`, `lr_warmup_rows`, `lr_cycle_rows`)."""
+        return cls(params.lr, params.lr_warmup_rows, params.lr_cycle_rows)
+
+    def phase(self, rows: int) -> str:
+        """Which segment of the schedule `rows` falls in."""
+        if rows < self.warmup_rows:
+            return PHASE_WARMUP
+        since_warmup = rows - self.warmup_rows
+        t = since_warmup % self.cycle_rows
+        if t >= self.decay_start:
+            return PHASE_DECAY
+        if t < self.rewarmup_rows and since_warmup >= self.cycle_rows:
+            return PHASE_REWARMUP
+        return PHASE_STABLE
+
+    def value(self, rows: int) -> float:
+        """The learning rate at `rows`."""
+        phase = self.phase(rows)
+        if phase == PHASE_WARMUP:
+            return self.lr * rows / self.warmup_rows
+        t = (rows - self.warmup_rows) % self.cycle_rows
+        if phase == PHASE_REWARMUP:
+            return self.floor + (self.lr - self.floor) * t / self.rewarmup_rows
+        if phase == PHASE_DECAY:
+            frac = (t - self.decay_start) / (self.cycle_rows - self.decay_start)
+            return self.floor + (self.lr - self.floor) * 0.5 * (1.0 + math.cos(math.pi * frac))
+        return self.lr
+
+
+class WsdLrController:
+    """Serves the WsdSchedule as a trainer's per-batch lr_fn and records its
+    phase boundaries as rows-clock control events.
+
+    Nothing here is persisted: the schedule is a function of `rows_trained`,
+    which the generational checkpoint already carries, so a resume re-derives
+    everything from the cursor. `.current` is the rate applied to the most
+    recent batch, which is what the trainers' end-of-generation log line and
+    metrics row report. Phase crossings are detected per batch and logged at
+    the exact rows position; the phase is initialised from the resume cursor so
+    a restart mid-phase logs nothing spurious."""
+
+    def __init__(self, conn, schedule: WsdSchedule, rows_trained: int):
         self._conn = conn
-        self._default = base_lr
-        self.base = db.read_control(conn, CONTROL_BASE_LR, default=base_lr)
+        self.schedule = schedule
+        self._phase = schedule.phase(rows_trained)
+        self.current = schedule.value(rows_trained)
 
-    def epoch_lr_fn(self, rows_trained: int):
-        """The per-step lr_fn for the upcoming epoch, from the current base rate."""
-        base = db.read_control(self._conn, CONTROL_BASE_LR, default=self._default)
-        if base != self.base:
-            db.write_control_event(self._conn, rows_trained, CONTROL_BASE_LR, base)
-            timed_print(f"base LR {self.base:.2e} -> {base:.2e} at {rows_trained} rows")
-            self.base = base
-
-        def lr_fn(rows_trained: int) -> float:
-            return base
-
-        return lr_fn
+    def lr_fn(self, rows_trained: int) -> float:
+        """run_epoch's per-step lr_fn: the rate for the batch starting at
+        `rows_trained`."""
+        phase = self.schedule.phase(rows_trained)
+        self.current = self.schedule.value(rows_trained)
+        if phase != self._phase:
+            db.write_control_event(self._conn, rows_trained, LR_EVENT, self.current)
+            timed_print(
+                f"LR schedule {self._phase} -> {phase} ({self.current:.2e}) at {rows_trained} rows"
+            )
+            self._phase = phase
+        return self.current
 
 
 class CpuController:
@@ -97,14 +180,12 @@ class CpuController:
         return self._vals[CONTROL_DATALOADER_WORKERS]
 
 
-def init_controls(conn, base_lr: float):
+def init_controls(conn):
     """Seed the live controls with their starting values (kept across restarts;
-    retuned from the Controls tab). The task's lr param only sets the starting
-    point."""
+    retuned from the Controls tab)."""
     db.init_control(
         conn,
         {
-            CONTROL_BASE_LR: base_lr,
             CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
             CONTROL_TORCH_THREADS: torch.get_num_threads(),
         },

@@ -34,9 +34,9 @@ from scribblez.ffi import get_max_move_per_lane_input_shapes
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
-    CONTROL_BASE_LR,
     CpuController,
-    LrController,
+    WsdLrController,
+    WsdSchedule,
     init_controls,
     progress_line,
 )
@@ -54,7 +54,7 @@ def _rows_left(params, state: GenerationalState) -> bool:
 
 
 def _checkpoint_and_eval(
-    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, ctx
+    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, lr_now, ctx
 ):
     """Record the trained generation's metrics + lane accuracies (keyed on the
     generation index `gen`, with the rows-clock stored as `positions`), run the
@@ -62,7 +62,6 @@ def _checkpoint_and_eval(
     sys.stdout.write("\n")
     avg = result.losses
     ci = gen
-    lr_now = db.read_control(conn, CONTROL_BASE_LR, default=params.lr)
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
         f"move_acc={result.accs['move_acc']:.4f} "
@@ -120,7 +119,7 @@ def train_one_generation(
         batches,
         device,
         loss_cfg,
-        lr_fn=lr_controller.epoch_lr_fn(state.rows_trained),
+        lr_fn=lr_controller.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, gen),
     )
@@ -128,7 +127,18 @@ def train_one_generation(
     state.generation_index = gen + 1
     elapsed = time.time() - t0
     eval_seconds = _checkpoint_and_eval(
-        model, optimizer, conn, paths, device, params, state, gen, result, elapsed, ctx
+        model,
+        optimizer,
+        conn,
+        paths,
+        device,
+        params,
+        state,
+        gen,
+        result,
+        elapsed,
+        lr_controller.current,
+        ctx,
     )
     if ctx["stats"] is not None:
         ctx["stats"].cycle_done(
@@ -141,7 +151,7 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    lr_controller = LrController(conn, params.lr)
+    lr_controller = WsdLrController(conn, WsdSchedule.from_params(params), state.rows_trained)
     cpu = CpuController(conn)
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
@@ -232,7 +242,7 @@ def run(ctx: WorkerContext) -> int:
             "loss_has_move": params.lambda_has_move,
         },
     )
-    init_controls(conn, params.lr)
+    init_controls(conn)
 
     run_ctx = {
         "config": asdict(params),

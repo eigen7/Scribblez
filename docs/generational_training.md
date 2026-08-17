@@ -69,15 +69,27 @@ state — wait for a filling generation, or advance. Chunks are whole files
 assigned by a single writer, so
 counting committed games against targets is reliable.
 
-**Learning rate is a persisted manual control, not a schedule.** An annealing
-schedule assumes a known horizon, which an open-ended stop-and-resume run
-lacks; instead the base LR is a live dashboard control (following
-KataGo/LC0's operator-stepped fixed rate), every change logged as a
-rows-clock event that annotates the loss plots. Caveat: the manual step-down
-wisdom comes from SGD-with-momentum systems; AdamW absorbs much of what a
-drop provides, so expect smaller effects.
+**Learning rate is a rows-clock schedule with periodic restarts.** A
+single end-of-run decay assumes a known horizon, which an open-ended
+stop-and-resume run lacks; instead the trainers run warmup-stable-decay
+(WSD) *cyclically*: one linear warmup, then a repeating cycle of a flat
+"stable" phase, a cosine decay to a floor over the cycle's last fifth, and
+a short re-warmup back to the peak (`WsdSchedule` in
+`generational/controls.py`; per-trainer `lr`, `lr_warmup_rows`,
+`lr_cycle_rows`, sized in each trainer's own rows-clock units). Each cycle
+therefore leaves a well-annealed checkpoint behind without anyone deciding
+when to decay, and the sliding data window keeps getting fresh high-LR
+passes. The schedule is a pure function of `rows_trained`, so a resume
+picks up exactly where it left off with no extra persisted state; phase
+boundaries are logged as rows-clock events that annotate the loss plots.
+This is the project's own adaptation of WSD to the continual setting, not
+a recipe from a paper. Caveat: AdamW absorbs much of what an LR drop
+provides, so expect smaller effects than SGD-with-momentum systems show.
+An existing tag started under the older manual LR control is not
+migrated: resumed under the schedule, its cursor lands mid-cycle at whatever
+rate the clock says.
 
-**Live controls** (base LR, DataLoader workers, torch threads) share one
+**Live controls** (DataLoader workers, torch threads) share one
 mechanism: a per-tag control table the trainer polls at its natural cadence —
 no IPC into the hot loop — with values persisted and restored on restart.
 

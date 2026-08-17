@@ -462,11 +462,11 @@ def _loss_accuracy_grid(x, series, weights, normalized, conn):
 
 
 def add_control_markers(fig, conn):
-    """Overlay dashed vertical markers on a positions-axis figure at each base-LR
-    change (from the control_event table), labeled with the new value, so the loss
-    curve shows where the operator stepped the learning rate. A no-op when the run
-    recorded no control changes."""
-    for e in db.read_control_events(conn, "base_lr"):
+    """Overlay dashed vertical markers on a positions-axis figure at each LR-schedule
+    phase boundary (from the control_event table), labeled with the rate there, so
+    the loss curve shows where a decay started or a restart landed. A no-op when the
+    run recorded none."""
+    for e in db.read_control_events(conn, "lr"):
         fig.add_layout(
             Span(
                 location=e["positions"],
