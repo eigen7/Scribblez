@@ -47,6 +47,7 @@ add_library(scribblez_core STATIC
   src/agent/macondo_bot.cpp
   src/agent/endgame_turn_policy.cpp
   src/agent/endgame_hasty_bot.cpp
+  src/sim/gcg_decision.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/belief/leave_prior.cpp
@@ -439,13 +440,18 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
   Boost::system
   Threads::Threads)
 
-# Evidence-trajectory generator: the deployment schedule's candidate selection
-# (anchor, student-model proposals, uniform tail) simmed per sampled position
-# into trajectory .sobs sidecars (docs/roadmap.md item 4).
+# Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
+# candidate selection (anchor, student-model proposals, uniform tail) simmed
+# per decision point. The library is the position-level recipe over the
+# student model; the generator supplies decision points from .slog self-play
+# data or .gcg position sets and writes trajectory .sobs sidecars.
+add_library(scribblez_evidence STATIC src/training/evidence_trajectory.cpp)
+set_target_properties(scribblez_evidence PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(scribblez_evidence PUBLIC scribblez_core scribblez_nn)
+
 add_executable(evidence_trajectory_generator apps/evidence_trajectory_generator.cpp)
 target_link_libraries(evidence_trajectory_generator PRIVATE
-  scribblez_nn
-  scribblez_core
+  scribblez_evidence
   Boost::program_options
   Boost::json
   Boost::filesystem

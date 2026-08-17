@@ -1,36 +1,24 @@
 // Offline generator of evidence trajectories (.sobs sidecars stamped
-// kSimObsFlagTrajectory) for .slog self-play data -- the training data of
-// docs/sim_residual_feedback.md's evidence conditioning and proves-best head
-// (docs/roadmap.md, item 4).
+// kSimObsFlagTrajectory) -- the training data of docs/sim_residual_feedback.md's
+// evidence conditioning and proves-best head (docs/roadmap.md, item 4). The
+// per-position recipe (anchor, student-model proposals, uniform tail, all under
+// common random numbers) is training/evidence_trajectory.h; this tool supplies
+// the decision points from one of two front-ends:
 //
-// For a sampled subset of each game's training-eligible turns, the tool
-// replays to the pre-move decision point and runs the deployment schedule's
-// candidate selection: the greedy anchor (the highest-raw-score legal move,
-// model-independent by design), then a randomized-length sequence of
-// proposals drawn from a temperature-softmax over the move set evaluation
-// model's win-equity scores, then one uniform-random draw over the remaining
-// legal moves. The uniform tail is appended LAST deliberately: training rows
-// pair an evidence prefix with a held-out simmed candidate, so a last-slot
-// sim yields proves-best labels at every prefix size while never entering an
-// evidence set -- the deployed loop's evidence contains only proposer picks,
-// and the tail's job is calibrating the head over the move space's deep tail
-// (both directions: hidden gems and never-labeled junk), not shaping the
-// conditional.
-//
-// All of a position's candidates are simmed in one SimRunner call (common
-// random numbers), so the trajectory order is pure record bookkeeping: every
-// prefix of a position's record array is a valid evidence set. The proposer
-// cannot yet condition on evidence mid-trajectory -- the engine serves the
-// unconditioned student (roadmap item 5 lands the fusion runtime) -- so the
-// proposal distribution is computed once per position and sampled without
-// replacement, which is exactly the roadmap's bootstrap proposer.
+// - .slog self-play data (--slog-dir / --slog-file): a sampled subset of each
+//   game's training-eligible turns, replayed to the pre-move decision point.
+//   One .sobs per .slog, positions keyed (game, turn) as the .mset labeling
+//   keys them (the two tools share the seed stream, see data/slog_sampling.h).
+// - .gcg position sets (--gcg / --gcg-dir, into --out-dir): the state before
+//   each file's final recorded move (sim/gcg_decision.h). One .sobs per .gcg,
+//   its single position keyed (0, decision turn). This is how the
+//   hand-maintained sets under positions/ get their trajectory sidecars.
 //
 // The student model is required (--model): generation-0 equity-top-K evidence
 // is sim_obs_tool's job. Inference runs on a single dedicated thread
 // (NeuralNet's one-net-one-thread contract) that position workers round-trip
 // through; the sims dominate wall-clock, so the serialization is free.
 
-#include "agent/agent.h"
 #include "data/binary_log.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
@@ -39,12 +27,10 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
-#include "sim/sim_runner.h"
-#include "training/move_set_encoder.h"
+#include "sim/gcg_decision.h"
+#include "training/evidence_trajectory.h"
 #include "util/exception.h"
-#include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -52,15 +38,11 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
-#include <mutex>
-#include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -72,327 +54,311 @@ using namespace scribblez;
 using binlog::FileHeader;
 using binlog::GameMetadata;
 using binlog::GamePositionIndex;
-
-using StudentService = nn::TrtEvalService<nn::MoveSetEvaluationSpec>;
+using evidence::DecisionPoint;
+using evidence::StudentScorer;
+using evidence::StudentService;
+using evidence::TrajectoryResult;
+using evidence::TrajectoryRunner;
 
 struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
+  std::string gcg_dir;
+  std::vector<std::string> gcg_files;
+  std::string out_dir;  // gcg mode: where the .sobs go
   bool open_leaves = false;
-  int rollouts = 200;
-  int proposals_min = 2;
-  int proposals_max = 8;
-  double temperature = 0.05;
-  int proposal_pool = 64;
+  evidence::TrajectoryOptions traj;
   int positions_per_game = 1;
   int threads = util::default_thread_count();
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
+
+  bool gcg_mode() const { return !gcg_dir.empty() || !gcg_files.empty(); }
 };
 
-// Parallelism is across positions, so each worker's runner is single-threaded
-// (see sim_obs_tool for the determinism rationale).
-SimRunner::Params sim_params(const Options& opt) {
-  SimRunner::Params p;
-  p.rollouts = opt.rollouts;
-  p.threads = 1;
-  return p;
-}
-
-// Reject an unusable invocation before any .slog is read and before any
+// Reject an unusable invocation before any input is read and before any
 // worker thread exists (a runner-constructor throw inside a worker would
 // terminate the process). --positions-per-game is rejected at 0 for the same
 // reason as sim_obs_tool: an empty .sobs would stand in for real evidence.
 void validate(const Options& opt) {
-  SimRunner::validate(sim_params(opt));
+  evidence::validate(opt.traj);
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
-  if (opt.proposals_min < 0) throw util::CleanException("--proposals-min must be >= 0");
-  if (opt.proposals_max < opt.proposals_min) {
-    throw util::CleanException("--proposals-max must be >= --proposals-min");
+  const bool slog_mode = !opt.slog_dir.empty() || !opt.slog_files.empty();
+  if (slog_mode == opt.gcg_mode()) {
+    throw util::CleanException(
+      "give either .slog inputs (--slog-dir/--slog-file) or .gcg inputs (--gcg-dir/--gcg), not "
+      "both and not neither");
   }
-  if (opt.temperature <= 0.0) throw util::CleanException("--temperature must be > 0");
-  if (opt.proposal_pool < 1) throw util::CleanException("--proposal-pool must be >= 1");
+  if (opt.gcg_mode() && opt.out_dir.empty()) {
+    throw util::CleanException("--out-dir is required with .gcg inputs");
+  }
 }
 
-// A completed position: what SimObsWriter::add_position consumes.
-struct PositionResult {
-  GamePositionIndex pos;
-  uint64_t base_seed;
-  uint32_t num_legal_moves;
-  uint32_t flags;
-  std::vector<Move> candidates;  // trajectory order
-  std::vector<SimObservation> observations;
+uint32_t file_flags(const Options& opt) {
+  return kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
+}
+
+// What every worker shares: the lexicon and encoding, the options, and the
+// scorer over the loaded model.
+struct Shared {
+  const Dictionary& dict;
+  const InputEncodingSpec& spec;
+  const Options& opt;
+  StudentScorer* scorer;
 };
 
-// Serializes every student evaluation onto one dedicated thread -- the
-// NeuralNet contract is one net driven from one thread -- while position
-// workers block on their request's completion. The sims are the long pole by
-// orders of magnitude, so the round-trip costs nothing at the tool's scale.
-class StudentScorer {
- public:
-  explicit StudentScorer(StudentService* service) : service_(service) {}
-
-  // Blocks until `wld_out` / `sd_out` are filled for the batch. Called from
-  // position workers.
-  void score(const float* board_row, const move_set::MoveFeatureArrays* moves, float* wld_out,
-             float* sd_out);
-
-  // Thread body; returns once stop() was called and the queue is drained.
-  void run();
-  void stop();
-
- private:
-  struct Request {
-    const float* board_row;
-    const move_set::MoveFeatureArrays* moves;
-    float* wld_out;
-    float* sd_out;
-    bool done = false;
-  };
-
-  StudentService* service_;
-  std::mutex mutex_;
-  std::condition_variable queue_cv_;
-  std::condition_variable done_cv_;
-  std::deque<Request*> queue_;
-  bool stopping_ = false;
-};
-
-void StudentScorer::score(const float* board_row, const move_set::MoveFeatureArrays* moves,
-                          float* wld_out, float* sd_out) {
-  Request req{board_row, moves, wld_out, sd_out};
-  std::unique_lock<std::mutex> lock(mutex_);
-  queue_.push_back(&req);
-  queue_cv_.notify_one();
-  done_cv_.wait(lock, [&] { return req.done; });
+void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uint32_t turn_idx,
+                uint64_t base_seed, const TrajectoryResult& t) {
+  writer->add_position(game_idx, turn_idx, t.candidates, t.observations,
+                       uint32_t(opt.traj.rollouts), base_seed, t.num_legal_moves,
+                       t.uniform_tail ? kSimObsPosFlagUniformTail : 0u);
 }
 
-void StudentScorer::run() {
-  std::unique_lock<std::mutex> lock(mutex_);
-  while (true) {
-    queue_cv_.wait(lock, [&] { return !queue_.empty() || stopping_; });
-    if (queue_.empty()) return;
-    Request* req = queue_.front();
-    queue_.pop_front();
-    lock.unlock();
-    float* const head_out[] = {req->wld_out, req->sd_out};
-    service_->evaluate({req->board_row, req->moves}, head_out);
-    lock.lock();
-    req->done = true;
-    done_cv_.notify_all();
-  }
-}
-
-void StudentScorer::stop() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  stopping_ = true;
-  queue_cv_.notify_all();
-}
-
-// The anchor: the highest-raw-score candidate, taken off the move list by a
-// rule no model can be wrong about. `ranked` is descending static equity, so
-// ties resolve to the equity-preferred instance deterministically
-// (max_element keeps the first maximum).
-size_t anchor_index(const std::vector<Move>& ranked) {
-  return std::ranges::max_element(ranked, {}, &Move::score) - ranked.begin();
-}
-
-// Per-worker front end over the shared scorer: owns the staging buffers and
-// turns one replayed position's ranked candidate set into per-candidate win
-// equities -- the proposal scores select_trajectory samples from.
-class CandidateScorer {
- public:
-  CandidateScorer(const InputEncodingSpec& spec, StudentScorer* scorer)
-      : spec_(spec), scorer_(scorer), board_row_(size_t(input_floats(spec))) {}
-
-  // `encoder` must be replayed to the position; `visible_opp` is the leave
-  // the information condition exposes (empty when hidden).
-  const std::vector<float>& win_equities(const binlog::PositionEncoder& encoder, int mover,
-                                         const Rack& visible_opp, const std::vector<Move>& ranked);
-
- private:
-  InputEncodingSpec spec_;
-  StudentScorer* scorer_;
-  std::vector<float> board_row_;
-  move_set::MoveFeatureArrays move_features_;
-  std::vector<float> wld_buf_;
-  std::vector<float> sd_buf_;
-  std::vector<float> win_equity_;
-};
-
-const std::vector<float>& CandidateScorer::win_equities(const binlog::PositionEncoder& encoder,
-                                                        int mover, const Rack& visible_opp,
-                                                        const std::vector<Move>& ranked) {
-  const int n = ranked.size();
-  // The contingent input planes read the board's move-generation caches;
-  // building them here (a no-op once valid) keeps them lexicon-accurate.
-  encoder.enc().board().ensure_movegen_caches(*spec_.dict);
-  if (spec_.opp_leave_input) {
-    encoder.enc().encode_input(mover, encoder.rack(mover), visible_opp, /*apply_flip=*/false,
-                               board_row_.data());
-  } else {
-    encoder.enc().encode_input(mover, encoder.rack(mover), /*apply_flip=*/false, board_row_.data());
-  }
-  const int score_diff = encoder.enc().score(mover) - encoder.enc().score(1 - mover);
-  move_features_.encode(ranked.data(), n, score_diff);
-  wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
-  sd_buf_.resize(size_t(n) * nn::ScoreDiffOutput::kRowElems);
-  scorer_->score(board_row_.data(), &move_features_, wld_buf_.data(), sd_buf_.data());
-  win_equity_.resize(size_t(n));
-  for (int c = 0; c < n; ++c) {
-    const float* wld = wld_buf_.data() + size_t(c) * nn::WldOutput::kRowElems;
-    win_equity_[size_t(c)] = wld[0] + 0.5f * wld[1];
-  }
-  return win_equity_;
-}
-
-// The trajectory's candidate indices into `ranked`, in sim order: anchor,
-// then up to a sampled count of temperature-softmax proposals over the
-// student's win equities, then (when any move remains) one uniform draw.
-// Sets *uniform_tail accordingly.
-std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
-                                      const std::vector<float>& win_equity, const Options& opt,
-                                      std::mt19937_64& rng, util::SoftmaxSampler& sampler,
-                                      bool* uniform_tail) {
-  const size_t n = ranked.size();
-  std::vector<size_t> chosen{anchor_index(ranked)};
-  std::vector<char> taken(n, 0);
-  taken[chosen[0]] = 1;
-
-  // The student's ranking, best first: the proposal pool is its unsimmed head.
-  std::vector<size_t> order(n);
-  std::iota(order.begin(), order.end(), size_t{0});
-  std::stable_sort(order.begin(), order.end(),
-                   [&](size_t a, size_t b) { return win_equity[a] > win_equity[b]; });
-
-  std::uniform_int_distribution<int> length(opt.proposals_min, opt.proposals_max);
-  const int proposals = length(rng);
-  std::vector<double> pool_scores;
-  std::vector<size_t> pool_index;
-  for (int p = 0; p < proposals; ++p) {
-    pool_scores.clear();
-    pool_index.clear();
-    for (size_t i : order) {
-      if (taken[i]) continue;
-      pool_scores.push_back(win_equity[i]);
-      pool_index.push_back(i);
-      if (int(pool_index.size()) >= opt.proposal_pool) break;
-    }
-    if (pool_index.empty()) break;
-    const int j = sampler.sample(pool_scores, int(pool_scores.size()), opt.temperature, rng);
-    chosen.push_back(pool_index[size_t(j)]);
-    taken[pool_index[size_t(j)]] = 1;
-  }
-
-  std::vector<size_t> unsimmed;
-  for (size_t i = 0; i < n; ++i) {
-    if (!taken[i]) unsimmed.push_back(i);
-  }
-  *uniform_tail = !unsimmed.empty();
-  if (*uniform_tail) {
-    std::uniform_int_distribution<size_t> pick(0, unsimmed.size() - 1);
-    chosen.push_back(unsimmed[pick(rng)]);
-  }
-  return chosen;
-}
-
-// Worker: claims positions off the shared index and fills results[i] --
-// replay, rank, score, select, sim. Each worker owns its replay scratch, its
-// scoring buffers, and a single-threaded SimRunner; student evaluations
-// round-trip through the shared scorer.
-void position_worker(const char* buf, const Dictionary& dict, const InputEncodingSpec& spec,
-                     const Options& opt, const std::vector<GamePositionIndex>& work,
-                     std::atomic<size_t>* next, StudentScorer* scorer,
-                     std::vector<PositionResult>* results, util::ProgressMeter* meter) {
-  std::vector<TurnRecord> scratch;
-  binlog::PositionEncoder encoder(spec);
-  const SimRunner runner(dict, sim_params(opt));
-  CandidateScorer candidate_scorer(spec, scorer);
-  util::SoftmaxSampler sampler;
-
+// Runs a front-end's work items across opt.threads worker threads plus the
+// scorer's own thread. A front-end declares its `Item` type and a `Worker`
+// constructible from the front-end, with `run(index, item, runner)`; each
+// thread owns one Worker and one TrajectoryRunner and claims items off a
+// shared index. Results are written by index, so the output is canonically
+// ordered and byte-stable across thread counts.
+template <typename Front>
+void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
+                   util::ProgressMeter* meter) {
+  typename Front::Worker worker(front);
+  TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer);
+  const std::vector<typename Front::Item>& work = front.work;
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
-    const GamePositionIndex& w = work[i];
-    const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
-    const int mover = encoder.replay_to_sampled(g, int(w.turn_idx),
-                                                /*post_move=*/false);
-    SimPosition pos;
-    pos.board = encoder.enc().board();
-    pos.scores = {encoder.enc().score(0), encoder.enc().score(1)};
-    pos.mover = mover;
-    pos.rack = encoder.rack(mover);
-    if (opt.open_leaves) {
-      pos.opp_leave = binlog::opp_leave_from_replay(g, int(w.turn_idx), encoder.rack(1 - mover));
-    }
-
-    // Hidden mode: the opponent's replayed rack is ground truth the mover
-    // cannot see, so neither the ranking nor the student input may use it.
-    const Rack hidden_opp;
-    const Rack& visible_opp = opt.open_leaves ? pos.opp_leave : hidden_opp;
-    MoveRequest ranking_req{
-      pos.board,         dict, pos.rack, visible_opp, pos.scores[mover], pos.scores[1 - mover],
-      encoder.bag_size()};
-    const std::vector<Move> ranked = equity_top_k(ranking_req, std::numeric_limits<int>::max());
-    const std::vector<float>& win_equity =
-      candidate_scorer.win_equities(encoder, mover, visible_opp, ranked);
-
-    PositionResult& res = (*results)[i];
-    res.pos = w;
-    res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
-    res.num_legal_moves = ranked.size();
-    // The trajectory draws come from their own stream so adding a proposal
-    // never perturbs the rollout seeds (base_seed feeds SimRunner directly).
-    std::mt19937_64 rng(util::splitmix64(res.base_seed ^ 0x7A6A11EC70ull));
-    bool uniform_tail = false;
-    const std::vector<size_t> chosen =
-      select_trajectory(ranked, win_equity, opt, rng, sampler, &uniform_tail);
-    res.flags = uniform_tail ? kSimObsPosFlagUniformTail : 0u;
-    res.candidates.reserve(chosen.size());
-    for (size_t idx : chosen) res.candidates.push_back(ranked[idx]);
-    res.observations = runner.run(pos, res.candidates, res.base_seed);
+    worker.run(i, work[i], runner);
     meter->add_done();
   }
 }
 
+template <typename Front>
+void run_positions(const Shared& sh, const Front& front, util::ProgressMeter* meter) {
+  std::atomic<size_t> next{0};
+  std::thread gpu(&StudentScorer::run, sh.scorer);
+  std::vector<std::thread> workers;
+  const int threads = std::clamp<int>(sh.opt.threads, 1, std::max<size_t>(1, front.work.size()));
+  for (int t = 0; t < threads; ++t) {
+    workers.emplace_back(worker_thread<Front>, std::cref(sh), std::cref(front), &next, meter);
+  }
+  for (auto& w : workers) w.join();
+  sh.scorer->stop();
+  gpu.join();
+}
+
+// --- the .slog front-end ---
+
+// A completed position: what SimObsWriter::add_position consumes.
+struct SlogResult {
+  uint64_t base_seed;
+  TrajectoryResult traj;
+};
+
+struct SlogFront {
+  using Item = GamePositionIndex;
+
+  const char* buf;
+  const InputEncodingSpec& spec;
+  const Options& opt;
+  std::vector<Item> work;
+  std::vector<SlogResult>* results;
+
+  // Replay to the pre-move decision point, then the recipe. Owns its replay
+  // scratch and encoder.
+  class Worker {
+   public:
+    explicit Worker(const SlogFront& front) : front_(front), encoder_(front.spec) {}
+    void run(size_t i, const GamePositionIndex& w, TrajectoryRunner& runner);
+
+   private:
+    const SlogFront& front_;
+    std::vector<TurnRecord> scratch_;
+    binlog::PositionEncoder encoder_;
+  };
+};
+
+void SlogFront::Worker::run(size_t i, const GamePositionIndex& w, TrajectoryRunner& runner) {
+  const Options& opt = front_.opt;
+  const GameLog g = binlog::make_game_view(front_.buf, w.game_idx, scratch_, nullptr);
+  const int mover = encoder_.replay_to_sampled(g, int(w.turn_idx), /*post_move=*/false);
+  DecisionPoint dp;
+  dp.pos.board = encoder_.enc().board();
+  dp.pos.scores = {encoder_.enc().score(0), encoder_.enc().score(1)};
+  dp.pos.mover = mover;
+  dp.pos.rack = encoder_.rack(mover);
+  if (opt.open_leaves) {
+    dp.pos.opp_leave = binlog::opp_leave_from_replay(g, int(w.turn_idx), encoder_.rack(1 - mover));
+  }
+  dp.enc = &encoder_.enc();
+  dp.bag_size = encoder_.bag_size();
+  SlogResult& out = (*front_.results)[i];
+  out.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
+  out.traj = runner.run(dp, out.base_seed);
+}
+
 // Generate the trajectory .sobs sidecar for one loaded .slog file.
-void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
-                  const InputEncodingSpec& spec, StudentService* service,
-                  const std::string& proposer_hash, const Options& opt,
-                  util::ProgressMeter* meter) {
+void process_slog(const Shared& sh, const std::vector<char>& buf, const fs::path& sobs_path,
+                  const std::string& proposer_hash, util::ProgressMeter* meter) {
+  const Options& opt = sh.opt;
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
     reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
 
   uint32_t num_games = hdr->num_games;
   if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-  std::vector<GamePositionIndex> work;
+  std::vector<SlogResult> results;
+  SlogFront front{buf.data(), sh.spec, opt, {}, &results};
   for (uint32_t g = 0; g < num_games; ++g) {
-    binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
+    binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &front.work);
   }
-  std::sort(work.begin(), work.end());
+  std::sort(front.work.begin(), front.work.end());
+  results.resize(front.work.size());
+  run_positions(sh, front, meter);
 
-  std::vector<PositionResult> results(work.size());
-  std::atomic<size_t> next{0};
-  StudentScorer scorer(service);
-  std::thread gpu(&StudentScorer::run, &scorer);
-  std::vector<std::thread> workers;
-  const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
-  for (int t = 0; t < threads; ++t)
-    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(spec),
-                         std::cref(opt), std::cref(work), &next, &scorer, &results, meter);
-  for (auto& w : workers) w.join();
-  scorer.stop();
-  gpu.join();
-
-  // The work list is sorted by (game, turn) and results are indexed by work
-  // slot, so the output is canonically ordered and byte-stable across thread
-  // counts.
-  const uint32_t flags = kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
-  SimObsWriter writer(sobs_path.string(), flags, proposer_hash);
-  for (const PositionResult& r : results) {
-    writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates, r.observations,
-                        uint32_t(opt.rollouts), r.base_seed, r.num_legal_moves, r.flags);
+  SimObsWriter writer(sobs_path.string(), file_flags(opt), proposer_hash);
+  for (size_t i = 0; i < front.work.size(); ++i) {
+    add_result(&writer, opt, front.work[i].game_idx, front.work[i].turn_idx, results[i].base_seed,
+               results[i].traj);
   }
   writer.close();
+}
+
+void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
+                   StudentService* service, const std::string& proposer_hash) {
+  // Games played face up must be simmed face up (see sim_obs_tool for why
+  // the reverse pairing is allowed).
+  const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
+    binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".sobs", opt.open_leaves,
+    "{} was played with face-up leaves; pass --open-leaves to sim it");
+  if (pending.empty()) return;
+  uint64_t total_positions = 0;
+  for (const binlog::PendingSlog& p : pending)
+    total_positions +=
+      binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
+  std::cerr << "evidence trajectories: " << pending.size() << " file(s), " << total_positions
+            << " positions; anchor + " << opt.traj.proposals_min << ".." << opt.traj.proposals_max
+            << " proposals + uniform tail x " << opt.traj.rollouts << " rollouts, proposer "
+            << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
+
+  util::ProgressMeter meter(total_positions, "positions");
+  for (const binlog::PendingSlog& p : pending) {
+    StudentScorer scorer(service);
+    const Shared sh{dict, spec, opt, &scorer};
+    process_slog(sh, p.bytes, p.sidecar(".sobs"), proposer_hash, &meter);
+  }
+  meter.finish("evidence trajectories");
+}
+
+// --- the .gcg front-end ---
+
+std::vector<fs::path> resolve_gcg_inputs(const Options& opt) {
+  std::vector<fs::path> files;
+  for (const std::string& f : opt.gcg_files) files.emplace_back(f);
+  if (!opt.gcg_dir.empty()) {
+    for (const auto& e : fs::directory_iterator(opt.gcg_dir)) {
+      if (e.path().extension() == ".gcg") files.push_back(e.path());
+    }
+  }
+  std::sort(files.begin(), files.end());
+  return files;
+}
+
+fs::path gcg_sobs_path(const Options& opt, const fs::path& gcg) {
+  return fs::path(opt.out_dir) / gcg.filename().replace_extension(".sobs");
+}
+
+std::string read_text(const fs::path& path) {
+  std::ifstream in(path);
+  if (!in) throw util::CleanException("cannot read {}", path.string());
+  std::ostringstream ss;
+  ss << in.rdbuf();
+  return ss.str();
+}
+
+struct GcgWork {
+  fs::path path;
+  GcgDecision decision;
+};
+
+struct GcgResult {
+  uint64_t base_seed;
+  TrajectoryResult traj;
+};
+
+struct GcgFront {
+  using Item = GcgWork;
+
+  const InputEncodingSpec& spec;
+  const Options& opt;
+  std::vector<Item> work;
+  std::vector<GcgResult>* results;
+
+  // Replay the parsed game to its decision point, then the recipe.
+  class Worker {
+   public:
+    explicit Worker(const GcgFront& front) : front_(front) {}
+    void run(size_t i, const GcgWork& w, TrajectoryRunner& runner);
+
+   private:
+    const GcgFront& front_;
+  };
+};
+
+void GcgFront::Worker::run(size_t i, const GcgWork& w, TrajectoryRunner& runner) {
+  GameStateEncoder enc(front_.spec);
+  replay_to_decision(w.decision, &enc);
+  const DecisionPoint dp{w.decision.pos, &enc, w.decision.bag_size};
+  GcgResult& out = (*front_.results)[i];
+  out.base_seed = binlog::position_seed(front_.opt.seed, 0, uint32_t(w.decision.turn_index));
+  out.traj = runner.run(dp, out.base_seed);
+}
+
+// Parse every pending .gcg up front, so a malformed file fails the run before
+// any sim is spent, and an endgame position (which the sims cannot run) is
+// named rather than crashing a worker.
+std::vector<GcgWork> load_pending_gcgs(const Options& opt) {
+  std::vector<GcgWork> work;
+  for (const fs::path& gcg : resolve_gcg_inputs(opt)) {
+    if (fs::exists(gcg_sobs_path(opt, gcg))) continue;
+    GcgWork item{gcg, {}};
+    std::string error;
+    if (!gcg_decision(read_text(gcg), opt.open_leaves, &item.decision, &error)) {
+      throw util::CleanException("{}: {}", gcg.string(), error);
+    }
+    if (item.decision.bag_size <= 0) {
+      throw util::CleanException(
+        "{}: the bag is empty at the decision point; the sims need a non-empty bag", gcg.string());
+    }
+    work.push_back(std::move(item));
+  }
+  return work;
+}
+
+void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
+                  StudentService* service, const std::string& proposer_hash) {
+  std::vector<GcgResult> results;
+  GcgFront front{spec, opt, load_pending_gcgs(opt), &results};
+  if (front.work.empty()) return;
+  results.resize(front.work.size());
+  fs::create_directories(opt.out_dir);
+  std::cerr << "evidence trajectories: " << front.work.size() << " gcg position(s); anchor + "
+            << opt.traj.proposals_min << ".." << opt.traj.proposals_max
+            << " proposals + uniform tail x " << opt.traj.rollouts << " rollouts, proposer "
+            << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
+
+  util::ProgressMeter meter(front.work.size(), "positions");
+  StudentScorer scorer(service);
+  const Shared sh{dict, spec, opt, &scorer};
+  run_positions(sh, front, &meter);
+  meter.finish("evidence trajectories");
+
+  for (size_t i = 0; i < front.work.size(); ++i) {
+    const GcgWork& w = front.work[i];
+    SimObsWriter writer(gcg_sobs_path(opt, w.path).string(), file_flags(opt), proposer_hash);
+    add_result(&writer, opt, 0, uint32_t(w.decision.turn_index), results[i].base_seed,
+               results[i].traj);
+    writer.close();
+  }
 }
 
 }  // namespace
@@ -401,6 +367,7 @@ int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
     Options opt;
+    evidence::TrajectoryOptions& traj = opt.traj;
     nn::NeuralNetParams<nn::MoveSetEvaluationSpec> params;
     po::options_description desc("evidence_trajectory_generator options");
     desc.add_options()("help,h", "show this help and exit")(
@@ -408,28 +375,34 @@ int main(int argc, char** argv) {
       "directory of .slog files; each without a .sobs sidecar gets one")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
+      "gcg-dir", po::value<std::string>(&opt.gcg_dir),
+      "directory of .gcg position files; each without a .sobs in --out-dir gets one")(
+      "gcg", po::value<std::vector<std::string>>(&opt.gcg_files),
+      "explicit .gcg position file to process (repeatable; adds to --gcg-dir)")(
+      "out-dir", po::value<std::string>(&opt.out_dir),
+      "where .gcg inputs' .sobs go, named <gcg stem>.sobs (required with .gcg inputs)")(
       "open-leaves", po::bool_switch(&opt.open_leaves),
       "sim and score with the opponent's retained leave known -- required for face-up-leaves "
       "games, and must match the model's input arm")(
-      "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
+      "rollouts", po::value<int>(&traj.rollouts)->default_value(traj.rollouts),
       "Monte-Carlo rollouts per candidate")(
-      "proposals-min", po::value<int>(&opt.proposals_min)->default_value(opt.proposals_min),
+      "proposals-min", po::value<int>(&traj.proposals_min)->default_value(traj.proposals_min),
       "least model proposals per trajectory (the randomized length's lower bound)")(
-      "proposals-max", po::value<int>(&opt.proposals_max)->default_value(opt.proposals_max),
+      "proposals-max", po::value<int>(&traj.proposals_max)->default_value(traj.proposals_max),
       "most model proposals per trajectory")(
-      "temperature", po::value<double>(&opt.temperature)->default_value(opt.temperature),
+      "temperature", po::value<double>(&traj.temperature)->default_value(traj.temperature),
       "softmax temperature over the model's win-equity scores (win-equity units)")(
-      "proposal-pool", po::value<int>(&opt.proposal_pool)->default_value(opt.proposal_pool),
+      "proposal-pool", po::value<int>(&traj.proposal_pool)->default_value(traj.proposal_pool),
       "proposals are drawn from the model's top-N unsimmed candidates")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
-      "eligible turns sampled per game")(
+      "eligible turns sampled per game (.slog inputs)")(
       "threads", po::value<int>(&opt.threads)->default_value(opt.threads), "parallel workers")(
       "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
-      "run seed; MUST match the target generator's --seed for its sampled positions to "
-      "contain this tool's (the forced-candidate labeling relies on it)")(
+      "run seed; with .slog inputs it MUST match the target generator's --seed for its sampled "
+      "positions to contain this tool's (the forced-candidate labeling relies on it)")(
       "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
-      "process only the first N games of each file (0 = all); for smoke runs");
+      "process only the first N games of each .slog (0 = all); for smoke runs");
     params.add_options(desc);
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
@@ -449,26 +422,11 @@ int main(int argc, char** argv) {
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
-    // Games played face up must be simmed face up (see sim_obs_tool for why
-    // the reverse pairing is allowed).
-    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
-      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".sobs", opt.open_leaves,
-      "{} was played with face-up leaves; pass --open-leaves to sim it");
-    if (pending.empty()) return 0;
-    uint64_t total_positions = 0;
-    for (const binlog::PendingSlog& p : pending)
-      total_positions +=
-        binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
-    std::cerr << "evidence trajectories: " << pending.size() << " file(s), " << total_positions
-              << " positions; anchor + " << opt.proposals_min << ".." << opt.proposals_max
-              << " proposals + uniform tail x " << opt.rollouts << " rollouts, proposer "
-              << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
-
-    util::ProgressMeter meter(total_positions, "positions");
-    for (const binlog::PendingSlog& p : pending) {
-      process_file(p.bytes, p.sidecar(".sobs"), dict, spec, &service, proposer_hash, opt, &meter);
+    if (opt.gcg_mode()) {
+      run_gcg_mode(dict, spec, opt, &service, proposer_hash);
+    } else {
+      run_slog_mode(dict, spec, opt, &service, proposer_hash);
     }
-    meter.finish("evidence trajectories");
     return 0;
   } catch (...) {
     return util::main_exit_code();

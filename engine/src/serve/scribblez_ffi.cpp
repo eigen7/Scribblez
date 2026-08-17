@@ -17,6 +17,7 @@
 #include "encoding/row_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "sim/gcg_decision.h"
 #include "sim/sim_runner.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
@@ -262,33 +263,15 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
                                        uint64_t seed, bool open_leaves, char* out_records,
                                        int* played_rank) const {
   if (!gcg_text || !out_records || top_k < 1) return -1;
-  scribblez::ParsedGcgGame game;
+  scribblez::GcgDecision d;
   std::string error;
-  if (!scribblez::read_gcg_text(gcg_text, &game, &error)) return -1;
-  if (game.turns.empty() || game.snapshots.size() != game.turns.size() + 1) return -1;
-
-  // The decision point: the state before the final recorded move, with the
-  // mover's full reconstructed rack.
-  const size_t last = game.turns.size() - 1;
-  const scribblez::TurnRecord& final_turn = game.turns[last].record;
-  scribblez::SimPosition pos;
-  pos.board = game.snapshots[last].board;
-  pos.scores = game.snapshots[last].scores;
-  pos.mover = final_turn.player;
-  pos.rack = final_turn.rack_before;
-
-  // Open leaves: the opponent's retained leave is reconstructable from their
-  // last recorded move (their replenishments stay hidden and are sampled).
-  // An empty leave -- opponent bingoed or has not acted -- is legitimate.
-  if (open_leaves) pos.opp_leave = scribblez::retained_leave(game, 1 - pos.mover);
-
-  const int pool_size = scribblez::unseen_pool(pos.board, pos.rack, 0).size();
-  if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
+  if (!scribblez::gcg_decision(gcg_text, open_leaves, &d, &error)) return -1;
+  const scribblez::SimPosition& pos = d.pos;
+  if (d.bag_size <= 0) return -1;  // endgame: SimRunner's non-empty-bag rule
 
   scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  // Bag size from the mover's POV: the unseen pool minus the opponent's
-  // (assumed full) rack. Only equity's endgame adjustments read the opponent
-  // rack, for which open-leaves supplies the known part.
+  // Only equity's endgame adjustments read the opponent rack, for which
+  // open-leaves supplies the known part.
   const scribblez::Rack hidden_opp;
   scribblez::MoveRequest req{pos.board,
                              *spec.dict,
@@ -296,7 +279,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
                              open_leaves ? pos.opp_leave : hidden_opp,
                              pos.scores[pos.mover],
                              pos.scores[1 - pos.mover],
-                             std::max(0, pool_size - scribblez::RACK_SIZE)};
+                             d.bag_size};
   const std::vector<scribblez::Move> candidates = scribblez::equity_top_k(req, top_k);
 
   scribblez::SimRunner::Params params;
@@ -307,7 +290,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 
   *played_rank = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
-    if (candidates[i] == final_turn.move) *played_rank = int(i);
+    if (candidates[i] == d.played) *played_rank = int(i);
     char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
     std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
     std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));

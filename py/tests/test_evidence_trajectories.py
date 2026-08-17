@@ -307,3 +307,95 @@ def test_sobs_flag_rejects_full_sweep():
     )
     assert result.returncode != 0
     assert "--sobs applies to the stratified selection" in result.stderr
+
+
+# --- the .gcg front-end (position sets) ---
+
+POSITION_SET = (
+    Path(__file__).resolve().parents[2] / "positions" / "NWL23" / "position-eval-test-dataset"
+)
+
+
+def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
+    """A .gcg position set gets one trajectory .sobs per file into --out-dir:
+    the single position keyed (0, decision turn), the same trajectory contract
+    as the .slog path, and existing outputs skipped on a rerun."""
+    gcgs = [POSITION_SET / "pos-1.gcg", POSITION_SET / "pos-2.gcg"]
+    out = tmp_path / "sobs"
+    cmd = [
+        str(TRAJECTORY_GENERATOR),
+        *[f"--gcg={g}" for g in gcgs],
+        f"--out-dir={out}",
+        f"--model={traj_corpus.dir / 'student.onnx'}",
+        "--fast-build",
+        "--rollouts=8",
+        "--proposals-min=1",
+        "--proposals-max=3",
+        "--proposal-pool=8",
+        "--threads=2",
+        "--seed=7",
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 0, f"gcg mode failed: {r.stderr}"
+    for gcg in gcgs:
+        sobs = out / f"{gcg.stem}.sobs"
+        assert read_sobs_flags(sobs) & SOBS_FLAG_TRAJECTORY
+        positions = read_sobs(sobs)
+        assert len(positions) == 1
+        pos = positions[0]
+        n_turns = sum(1 for line in gcg.read_text().splitlines() if line.startswith(">"))
+        assert (pos.game_index, pos.turn_index) == (0, n_turns - 1)
+        assert 0 < len(pos.moves) <= 1 + 3 + 1
+        assert all(int(m["score"]) <= int(pos.moves[0]["score"]) for m in pos.moves[1:])
+        assert all(int(o["n"]) == pos.rollouts == 8 for o in pos.obs)
+    # A rerun sims nothing (the outputs exist), and a mixed invocation refuses.
+    before = {p: p.stat().st_mtime_ns for p in out.glob("*.sobs")}
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 0 and "0 gcg" not in r.stderr  # nothing pending: silent
+    assert {p: p.stat().st_mtime_ns for p in out.glob("*.sobs")} == before
+    r = subprocess.run(cmd + [f"--slog-dir={traj_corpus.dir}"], capture_output=True, text=True)
+    assert r.returncode != 0 and "not both" in r.stderr
+
+
+def test_position_set_cache_regenerates_only_stale_or_missing(tmp_path, monkeypatch):
+    """ensure_sobs keys the cache on (proposer bytes, recipe), asks the
+    generator only for positions whose sidecar is absent or whose .gcg changed,
+    and records what each sidecar was generated from."""
+    from scribblez.sim_evidence import position_sets as PS
+
+    set_dir = tmp_path / "myset"
+    set_dir.mkdir()
+    for name in ("a", "b"):
+        (set_dir / f"{name}.gcg").write_text(f"#character-encoding UTF-8\n>P1: {name}\n")
+    model = tmp_path / "student.onnx"
+    model.write_bytes(b"model-v1")
+    calls = []
+
+    def fake_run(cmd, check):
+        calls.append(cmd)
+        out = Path(next(c for c in cmd if c.startswith("--out-dir=")).split("=", 1)[1])
+        for c in cmd:
+            if c.startswith("--gcg="):
+                (out / (Path(c.split("=", 1)[1]).stem + ".sobs")).write_bytes(b"sobs")
+
+    monkeypatch.setattr(PS.subprocess, "run", fake_run)
+    recipe = PS.TrajectoryRecipe(rollouts=16, open_leaves=True)
+    got = PS.ensure_sobs(set_dir, model, recipe, threads=2, mount_root=tmp_path / "mount")
+    assert set(got) == {"a", "b"} and all(p.exists() for p in got.values())
+    assert len(calls) == 1
+    assert "--open-leaves" in calls[0] and "--rollouts=16" in calls[0]
+    assert sum(c.startswith("--gcg=") for c in calls[0]) == 2
+
+    # Nothing changed: no generator run.
+    PS.ensure_sobs(set_dir, model, recipe, threads=2, mount_root=tmp_path / "mount")
+    assert len(calls) == 1
+    # One .gcg edited: only it is regenerated.
+    (set_dir / "b.gcg").write_text("#character-encoding UTF-8\n>P1: b2\n")
+    PS.ensure_sobs(set_dir, model, recipe, threads=2, mount_root=tmp_path / "mount")
+    assert len(calls) == 2
+    assert [c for c in calls[1] if c.startswith("--gcg=")] == [f"--gcg={set_dir / 'b.gcg'}"]
+    # A different proposer or recipe is a different cache directory.
+    model.write_bytes(b"model-v2")
+    d1 = PS.cache_dir(set_dir, model, recipe, tmp_path / "mount")
+    d2 = PS.cache_dir(set_dir, model, PS.TrajectoryRecipe(rollouts=32), tmp_path / "mount")
+    assert d1 != d2 and d1 != got["a"].parent
