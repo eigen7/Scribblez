@@ -10,14 +10,13 @@ same sidecars for its position-set metric.
 
 ## Convention
 
-A file is read at **the state before its final recorded move** (engine:
-`sim/gcg_decision.h`): the seat that made that move is to move, holding the
-rack the event line records; the final move itself is the reference play
-(typically HastyBot's pick, or a human's) and is not applied. Under face-up
-leaves the opponent's public leave is derived from their last event line
-(rack minus tiles played), so a position with an interesting known leave
-needs the opponent's last move recorded with its rack. The bag must be
-non-empty (the sims need it).
+A file **is** the position to analyze: every move that led there is recorded
+and nothing after it, the side to move is whoever acts next, and that side's
+rack is given by a `#Rack1` / `#Rack2` pragma (engine: `sim/gcg_decision.h`;
+`manual_gcg_tool` writes these). Under face-up leaves the opponent's public
+leave is derived from their last event line (rack minus tiles played), so a
+position with an interesting known leave needs the opponent's last move
+recorded with its rack. The bag must be non-empty (the sims need it).
 
 Sidecars are not committed: they depend on the proposer and recipe and are
 generated on demand under `<mount>/cache/trajectory_sets/<set>/` by
@@ -28,9 +27,9 @@ generated on demand under `<mount>/cache/trajectory_sets/<set>/` by
 
 ## Positions
 
-- `egotize-lane.gcg` — Hasty_1 (AEEGSTV, 440–387, Hasty_2 just bingoed
-  INCASED) plays E11 GAVE, opening 13G to EGOTIZE, which Hasty_2 draws with
-  probability ~8%. The plain model under-reads the lane; one sim of GAVE
-  observes opp-play-and-win mass there. The exhibit: does the conditioned
-  re-scoring lift a lane-blocking alternative? (Same position as
-  `position-eval-test-dataset/pos-6.gcg`, read pre-move.)
+- `egotize-lane.gcg` — Hasty_1 to move with AEEGSTV, 440–387, Hasty_2 just
+  bingoed INCASED. HastyBot plays E11 GAVE, opening 13G to EGOTIZE, which
+  Hasty_2 draws with probability ~8%. The plain model under-reads the lane;
+  one sim of GAVE observes opp-play-and-win mass there. The exhibit: does the
+  conditioned re-scoring lift a lane-blocking alternative? (The position
+  before the last move of `position-eval-test-dataset/pos-6.gcg`.)

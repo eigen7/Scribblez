@@ -311,20 +311,38 @@ def test_sobs_flag_rejects_full_sweep():
 
 # --- the .gcg front-end (position sets) ---
 
-POSITION_SET = (
+POSITION_EVAL_SET = (
     Path(__file__).resolve().parents[2] / "positions" / "NWL23" / "position-eval-test-dataset"
 )
+
+
+def _as_position(src: Path, dst: Path) -> int:
+    """A position-set .gcg from a position-eval one: the last recorded move
+    is dropped and its rack becomes the mover's #RackN pragma, so the file's
+    final state is that decision. Returns the recorded move count."""
+    lines = src.read_text().splitlines()
+    events = [i for i, line in enumerate(lines) if line.startswith(">")]
+    last = lines[events[-1]]
+    name, rack = last[1:].split(":", 1)[0], last.split()[1]
+    seat = 1 if name.endswith("_1") else 2
+    lines = lines[: events[-1]]
+    lines.insert(events[0], f"#Rack{seat} {rack}")
+    dst.write_text("\n".join(lines) + "\n")
+    return len(events) - 1
 
 
 def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
     """A .gcg position set gets one trajectory .sobs per file into --out-dir:
     the single position keyed (0, decision turn), the same trajectory contract
     as the .slog path, and existing outputs skipped on a rerun."""
-    gcgs = [POSITION_SET / "pos-1.gcg", POSITION_SET / "pos-2.gcg"]
+    set_dir = tmp_path / "set"
+    set_dir.mkdir()
+    names = ("pos-1", "pos-2")
+    turns = {n: _as_position(POSITION_EVAL_SET / f"{n}.gcg", set_dir / f"{n}.gcg") for n in names}
     out = tmp_path / "sobs"
     cmd = [
         str(TRAJECTORY_GENERATOR),
-        *[f"--gcg={g}" for g in gcgs],
+        f"--gcg-dir={set_dir}",
         f"--out-dir={out}",
         f"--model={traj_corpus.dir / 'student.onnx'}",
         "--fast-build",
@@ -337,24 +355,27 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, f"gcg mode failed: {r.stderr}"
-    for gcg in gcgs:
-        sobs = out / f"{gcg.stem}.sobs"
+    for name, n_turns in turns.items():
+        sobs = out / f"{name}.sobs"
         assert read_sobs_flags(sobs) & SOBS_FLAG_TRAJECTORY
         positions = read_sobs(sobs)
         assert len(positions) == 1
         pos = positions[0]
-        n_turns = sum(1 for line in gcg.read_text().splitlines() if line.startswith(">"))
-        assert (pos.game_index, pos.turn_index) == (0, n_turns - 1)
+        assert (pos.game_index, pos.turn_index) == (0, n_turns)
         assert 0 < len(pos.moves) <= 1 + 3 + 1
         assert all(int(m["score"]) <= int(pos.moves[0]["score"]) for m in pos.moves[1:])
         assert all(int(o["n"]) == pos.rollouts == 8 for o in pos.obs)
     # A rerun sims nothing (the outputs exist), and a mixed invocation refuses.
     before = {p: p.stat().st_mtime_ns for p in out.glob("*.sobs")}
     r = subprocess.run(cmd, capture_output=True, text=True)
-    assert r.returncode == 0 and "0 gcg" not in r.stderr  # nothing pending: silent
+    assert r.returncode == 0
     assert {p: p.stat().st_mtime_ns for p in out.glob("*.sobs")} == before
     r = subprocess.run(cmd + [f"--slog-dir={traj_corpus.dir}"], capture_output=True, text=True)
     assert r.returncode != 0 and "not both" in r.stderr
+    # A file without the mover's rack pragma is refused by name, before any sim.
+    (set_dir / "norack.gcg").write_text((POSITION_EVAL_SET / "pos-3.gcg").read_text())
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode != 0 and "norack.gcg" in r.stderr and "#Rack" in r.stderr
 
 
 def test_position_set_cache_regenerates_only_stale_or_missing(tmp_path, monkeypatch):

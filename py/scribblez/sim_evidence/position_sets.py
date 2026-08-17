@@ -1,8 +1,8 @@
 """Trajectory sidecars for .gcg position sets, generated on demand and cached.
 
 A position set is a directory of hand-maintained .gcg files (positions/<lexicon>/
-<set>/), each read at the state before its final recorded move
-(engine: sim/gcg_decision.h). Its trajectory .sobs -- what the dashboard's
+<set>/), each read at its final recorded state with the side to move's rack
+from its #RackN pragma (engine: sim/gcg_decision.h). Its trajectory .sobs -- what the dashboard's
 trajectory pane shows and what the evidence trainer's position-set metric
 reads -- depend on the proposer and the recipe, so they are not committed:
 they live under <mount>/cache/trajectory_sets/<set>/<key>/, keyed by the

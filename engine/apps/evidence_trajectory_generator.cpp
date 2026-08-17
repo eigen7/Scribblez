@@ -9,10 +9,11 @@
 //   game's training-eligible turns, replayed to the pre-move decision point.
 //   One .sobs per .slog, positions keyed (game, turn) as the .mset labeling
 //   keys them (the two tools share the seed stream, see data/slog_sampling.h).
-// - .gcg position sets (--gcg / --gcg-dir, into --out-dir): the state before
-//   each file's final recorded move (sim/gcg_decision.h). One .sobs per .gcg,
-//   its single position keyed (0, decision turn). This is how the
-//   hand-maintained sets under positions/ get their trajectory sidecars.
+// - .gcg position sets (--gcg / --gcg-dir, into --out-dir): each file's final
+//   recorded state, the side to move holding its #RackN pragma rack
+//   (sim/gcg_decision.h). One .sobs per .gcg, its single position keyed
+//   (0, decision turn). This is how the hand-maintained sets under positions/
+//   get their trajectory sidecars.
 //
 // The student model is required (--model): generation-0 equity-top-K evidence
 // is sim_obs_tool's job. Inference runs on a single dedicated thread
