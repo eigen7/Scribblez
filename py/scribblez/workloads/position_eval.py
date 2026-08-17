@@ -11,9 +11,9 @@ chunks to generation directories and paces the generator fleet against the
 trainer's published cursor.
 
 Parameters here are the frozen task params: they define the corpus and the
-model, so every worker on a tag must share them. Live operator knobs (base
-learning rate, DataLoader workers, torch threads) are dashboard.db controls,
-and per-worker resources (threads/vcpus) live on the worker slots.
+model, so every worker on a tag must share them. Live operator knobs
+(DataLoader workers, torch threads) are dashboard.db controls, and per-worker
+resources (threads/vcpus) live on the worker slots.
 """
 
 from dataclasses import dataclass
@@ -70,7 +70,15 @@ class PositionEvalParams:
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")
-    lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
+    lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
+    lr_warmup_rows: int = param(
+        200_000, "linear LR warmup length, in positions trained (~2.5 default generations)"
+    )
+    lr_cycle_rows: int = param(
+        2_000_000,
+        "period of the stable->decay->restart LR cycle, in positions trained "
+        "(~25 default generations; the last fifth of each cycle decays)",
+    )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     # Model.
     num_blocks: int = param(10, "residual blocks")

@@ -149,7 +149,17 @@ class MoveSetEvalParams:
         "produces swept pairs, which are the holdout",
     )
     batch_positions: int = param(64, "positions per training batch")
-    lr: float = param(1e-3, "initial base learning rate (seeds the live base_lr control)")
+    lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
+    lr_warmup_rows: int = param(
+        15_000_000,
+        "linear LR warmup length, in candidate moves trained (this trainer's rows-clock; "
+        "~half a pass over the reference corpus of docs/move_set_eval_results.md)",
+    )
+    lr_cycle_rows: int = param(
+        300_000_000,
+        "period of the stable->decay->restart LR cycle, in candidate moves trained "
+        "(~10 reference passes; the last fifth of each cycle decays)",
+    )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     num_blocks: int = param(10, "board-trunk residual blocks")
     trunk_channels: int = param(192, "board-trunk width")
