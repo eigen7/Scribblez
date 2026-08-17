@@ -283,7 +283,10 @@ being generated.
 - Requires `.sobs` at scale; the tooling above is how it gets made. The same
   tool reads hand-maintained `.gcg` position sets (`--gcg`,
   [positions/NWL23/face-up-trajectory-set](../positions/NWL23/face-up-trajectory-set/README.md))
-  for the exhibits and the position-set metric of items 2–3.
+  for the exhibits and the position-set metric of items 2–3: the dashboard's
+  Trajectories tab ([react_dashboard.md](react_dashboard.md#the-evidence-trajectories-trajectories-tab))
+  replays a set position through any checkpoint at every evidence prefix,
+  and the trainer charts the set's sim-best rank (`posset_*`) per pass.
 - The proposer follows the current model, so a conditionally-strong but
   equity-buried candidate gains coverage as generations advance.
 - The value-labeled subset must always include the proposer's simmed
