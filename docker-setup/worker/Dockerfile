@@ -21,7 +21,8 @@ FROM ubuntu:24.04
 # Runtime deps:
 #   - boost/protobuf/numpy: shared libraries the engine binaries and the
 #     libscribblez_ffi ctypes wrapper link against (same Ubuntu 24.04 ABI as
-#     the dev image they were compiled in).
+#     the dev image they were compiled in -- except for libstdc++, which the
+#     dev image upgrades past the distribution's; see the last section).
 #   - g++: only for bootstrap.py's CPU-arch detection (`g++ -march=native
 #     -Q --help=target`), mirroring py/build.py's detect_host_arch().
 #   - git/curl/ca-certificates: runtime data fetches (Macondo strategy files,
@@ -60,3 +61,31 @@ ENV PYTHONUNBUFFERED=1
 
 COPY bootstrap.py /opt/scribblez/bootstrap.py
 ENTRYPOINT ["python3", "/opt/scribblez/bootstrap.py"]
+
+# Temporary home for install targets that belong above, kept last so adding one
+# rebuilds a single late layer instead of invalidating everything below it.
+# These items should occasionally be moved up.
+#
+# The C++ runtime the bundle was compiled against. The dev image builds with
+# gcc-16 from the ubuntu-toolchain-r PPA (C++26 reflection), whose libstdc++ is
+# newer than Ubuntu 24.04's: binaries built there need GLIBCXX_3.4.35 while the
+# distribution ships 3.4.33, so every bundle failed to load here with
+# "version `GLIBCXX_3.4.35' not found" the moment the dev image's toolchain
+# moved. Installing the runtime from the same PPA the dev image takes its
+# compiler from keeps apt in charge of the library (rather than copying files
+# out of the dev image, as the NVIDIA libraries above must be -- those have no
+# apt source here) and needs 3 MB, where the compiler that produced them is
+# 800. The version is deliberately unpinned: the two images are built together
+# (build_docker_image.py), and libstdc++ is backward compatible, so newest-from-
+# the-PPA is right by construction.
+#
+# The key is stored armored (.asc), which apt reads directly -- no gnupg in
+# this image just to dearmor it.
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC8EC952E2A0E1FBDC5090F6A2C277A0A352154E5" \
+      -o /etc/apt/keyrings/ubuntu-toolchain-r.asc && \
+    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain-r.asc] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu noble main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libstdc++6 libgcc-s1 && \
+    rm -rf /var/lib/apt/lists/*
