@@ -91,7 +91,7 @@ RUN pip3 install --no-cache-dir \
       torch torchvision torchaudio
 RUN pip3 install --no-cache-dir \
       numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime \
-      ruff pypdf
+      ruff pypdf schedulefree
 RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
 
 # 5) Playwright's Chromium for headless board-position rendering, at a
