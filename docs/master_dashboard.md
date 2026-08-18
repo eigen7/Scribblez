@@ -45,7 +45,10 @@ and workload-specific analysis — all from the browser.
   seconds. That pass is the only thing that talks to a machine or the cloud
   API, and it does so off the event loop; every status request is served from
   what it last observed, so no slow host can stall the dashboard. A slot the
-  pass has not reached yet reads `checking`.
+  pass has not reached yet reads `checking`. A container that is not running
+  carries its reason -- exit code and last log line -- into the workers table,
+  and one that keeps dying is retried with a growing delay rather than every
+  pass.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as

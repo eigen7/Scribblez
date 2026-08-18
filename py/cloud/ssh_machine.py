@@ -168,6 +168,22 @@ class SshMachine:
             stdin_text=env_file(env),
         )
 
+    def container_exit(self, name: str) -> str:
+        """Why container `name` is not running: its exit code and the last
+        thing it said, as one line. Empty when the container is gone or the
+        machine cannot be reached -- a slot's failure reason is a nicety, and
+        never worth failing a status pass over."""
+        res = self._run(
+            [
+                "sh",
+                "-c",
+                f"printf 'exit %s: ' \"$(docker inspect -f '{{{{.State.ExitCode}}}}' {name})\"; "
+                f"docker logs --tail 20 {name} 2>&1 | grep -v '^$' | tail -1",
+            ],
+            timeout=_PROBE_TIMEOUT,
+        )
+        return res.stdout.strip() if res.returncode == 0 else ""
+
     def start_container(self, name: str):
         self._mutate(["docker", "start", name])
 

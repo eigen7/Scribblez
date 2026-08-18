@@ -68,12 +68,16 @@ class _FakeSshMachine:
     """SshMachine stand-in whose container probe always returns `state`."""
 
     state = "unreachable"
+    exit_reason = "exit 1: something went wrong"
 
     def __init__(self, host):
         self.host = host
 
     def container_state(self, name: str) -> str:
         return self.state
+
+    def container_exit(self, name: str) -> str:
+        return self.exit_reason
 
 
 def test_unlaunched_ssh_slot_stays_manageable_when_unreachable(manager, spec, task, monkeypatch):
@@ -361,6 +365,77 @@ def test_observations_expire(manager, spec, task, monkeypatch):
     monkeypatch.setattr(workers_mod.time, "time", lambda: now)
     (info,) = manager.worker_status(spec, task, observe=True)
     assert info["ssh_probe"] == "stopped"
+
+
+def test_a_stopped_container_reports_why(manager, spec, task, monkeypatch):
+    """A worker that cannot start (a bundle its image cannot load, say) used
+    to read as a bare "exited" flickering back to "running" -- the reason was
+    only in `docker logs` on the machine."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 1: GLIBCXX_3.4.35 not found")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched = "running", True
+
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "exited"
+    assert info["exit_reason"] == "exit 1: GLIBCXX_3.4.35 not found"
+
+    # It comes up: the reason is stale and goes away.
+    monkeypatch.setattr(_FakeSshMachine, "state", "running")
+    manager._probes.clear()
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert "exit_reason" not in info
+
+
+def test_restarts_back_off_while_a_container_keeps_dying(manager, spec, task, monkeypatch):
+    """Restarting a container that dies instantly does not fix it; the pass
+    runs every few seconds and should not spend an ssh round trip each time."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(_RecordingSshMachine, "state", "stopped")
+    _RecordingSshMachine.ops = []
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched, w.bundle_id = "running", True, "b1"
+    task.bundle_id = "b1"
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+
+    for _ in range(3):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert len(_RecordingSshMachine.ops) == 1  # the later passes backed off
+
+    # Time enough for the second attempt, which is allowed.
+    key = workers_mod._key(spec, task.tag, w.worker_id)
+    attempts, next_at = manager._restarts[key]
+    monkeypatch.setattr(workers_mod.time, "time", lambda: next_at + 1)
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert len(_RecordingSshMachine.ops) == 2
+    assert manager._restarts[key][0] == attempts + 1
+
+
+def test_a_worker_that_comes_up_clears_its_backoff(manager, spec, task, monkeypatch):
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "running")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.launched = True
+    key = workers_mod._key(spec, task.tag, w.worker_id)
+    manager._restarts[key] = (5, time.time() + 300)
+    manager.worker_status(spec, task, observe=True)
+    assert key not in manager._restarts
+
+
+def test_resuming_a_parked_worker_is_not_a_restart(manager, spec, task, monkeypatch):
+    """Unpausing must not count toward the crash-loop backoff -- a gate parks
+    and releases a generator many times an hour."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched, w.bundle_id = "running", True, "b1"
+    task.bundle_id = "b1"
+    paused = {"observed_running": False, "ssh_probe": "paused"}
+    for _ in range(4):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, paused)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["unpause"] * 4
+    assert manager._restarts == {}
 
 
 def test_deploy_refuses_a_worker_image_that_cannot_load_this_tree(manager, spec, task, monkeypatch):
