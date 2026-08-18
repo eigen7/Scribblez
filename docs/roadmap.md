@@ -204,7 +204,7 @@ distillation rows are what anchors the plain pass — without them the trunk
 would drift toward the sim targets on the handful of simmed candidates and
 lose the teacher's ranking over the rest; they never supervise the
 conditioned pass, whose targets stay sim outcomes. The backbone runs at
-`backbone_lr_mult` (0.1) of the evidence path's rate. Because the plain
+`backbone_lr_mult` of the evidence path's rate. Because the plain
 student now moves, the run exports it per pass as ONNX (a later
 generation's proposer) and reports the frozen student's held-out sim soft-CE
 as a flat reference beside the moving plain and conditioned curves, with the

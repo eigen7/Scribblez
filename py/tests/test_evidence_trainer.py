@@ -93,7 +93,10 @@ def mset_datasets(traj_datasets):
     from scribblez.workloads import pair_store
 
     train, hold = traj_datasets
-    msets = lambda ds: [f.with_suffix(".mset") for f in ds.files]  # noqa: E731
+
+    def msets(ds):
+        return [f.with_suffix(".mset") for f in ds.files]
+
     assert all(f.exists() for f in msets(train) + msets(hold))
     assert pair_store.complete_pairs(train.files[0].parent, ".mset")
     select = trainer._simmed_positions
@@ -263,6 +266,43 @@ def test_lambda_sim_zero_reduces_the_joint_step_to_distillation(traj_datasets, m
     assert after["plain_wld_ce"] != pytest.approx(before["plain_wld_ce"], abs=1e-6)
     pairs = zip(head_before, model.proves_best.parameters(), strict=True)
     assert all(torch.equal(a, b.detach()) for a, b in pairs)
+
+
+def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_datasets):
+    """evaluate(loss_cfg=...) reports the same candidate-weighted mean the
+    training epoch would: recomputed here batch by batch via batch_loss."""
+    from scribblez.move_set_eval import eval as mset_eval
+
+    _, hold = mset_datasets
+    device = torch.device("cuda")
+    model = MoveSetEvalModel(hold.spatial_planes, hold.scalar_size, 8, 1, 2).to(device).eval()
+    cfg = mset_train_loop.LossConfig(0.004, 10.0, 10.0, 1.0)
+    got = mset_eval.evaluate(model, hold, device, positions_per_batch=3, loss_cfg=cfg)
+    total = wld = 0.0
+    n = 0
+    with torch.no_grad():
+        for batch in hold.iter_batches(
+            3, seed=0, max_candidates=mset_eval.MAX_CANDIDATES_PER_BATCH
+        ):
+            losses = mset_train_loop.batch_loss(model, batch, device, cfg)
+            m = batch["target_wld"].shape[0]
+            total += losses["total"].item() * m
+            wld += losses["wld"].item() * m
+            n += m
+    assert n > 3  # more than one batch, so the weighting is exercised
+    assert got["loss"] == pytest.approx(total / n, rel=1e-5)
+    assert got["loss_wld"] == pytest.approx(wld / n, rel=1e-5)
+
+
+def test_distill_datasets_refuse_an_empty_selection(traj_datasets, monkeypatch):
+    """A .sobs/.mset pairing whose selection matches nothing fails at load
+    (a starved joint step would otherwise hang on its first batch)."""
+    from scribblez.evidence import trainer
+
+    train, _ = traj_datasets
+    monkeypatch.setattr(trainer, "_simmed_positions", lambda path: set())
+    with pytest.raises(ValueError, match="no trajectory position"):
+        trainer._simmed_mset([f.with_suffix(".mset") for f in train.files])
 
 
 def test_frozen_optimizer_has_one_group_and_no_backbone(traj_datasets):
@@ -510,6 +550,7 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     invocation resumes and stops at once."""
     from scribblez.evidence import dataset as ED
     from scribblez.evidence import trainer
+    from scribblez.move_set_eval.moves import move_encoding_version
 
     train, _ = traj_datasets
     store_src = traj_corpus.dir
@@ -594,9 +635,19 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     for f in store_u.iterdir():
         os.utime(f, (stale, stale))
     assert trainer.run(scratch_u.ctx) == 0
+    import onnx
+
     for epoch in (0, 1):
         assert (scratch_u.paths.checkpoints_dir / f"model_epoch_{epoch:04d}.pt").exists()
-        assert (scratch_u.paths.onnx_dir / f"model_epoch_{epoch:04d}.onnx").exists()
+        # The export is stamped with the student's arm and version, not the
+        # session's or a default's.
+        meta = {
+            e.key: e.value for e in onnx.load(str(scratch_u.paths.onnx_path(epoch))).metadata_props
+        }
+        assert meta["graph"] == "move_set_eval", meta
+        assert meta["contingent_features"] == "true", meta
+        assert meta["opp_leave_input"] == "false", meta
+        assert meta["move_encoding_version"] == str(move_encoding_version()), meta
     conn = sqlite3.connect(scratch_u.paths.dashboard_db)
     rows = {}
     for epoch, name, value in conn.execute("select epoch, name, value from metrics"):

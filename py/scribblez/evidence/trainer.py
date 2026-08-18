@@ -45,7 +45,13 @@ from scribblez.evidence.dataset import (
     complete_pairs,
     trajectory_positions,
 )
-from scribblez.evidence.train_loop import Distillation, LossConfig, evaluate, run_epoch
+from scribblez.evidence.train_loop import (
+    DISTILL_LOSS_KEYS,
+    Distillation,
+    LossConfig,
+    evaluate,
+    run_epoch,
+)
 from scribblez.evidence.trajectory_view import DecisionAnalysis, position_set_metrics
 from scribblez.ffi import move_encoding_version, set_contingent_features
 from scribblez.generational import checkpoint
@@ -118,19 +124,33 @@ def wait_for_store(store, params):
         time.sleep(POLL_SECONDS)  # SIGTERM raises WorkerStopped through this
 
 
-def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
-    train_files, holdout_files = split_pairs(store, params.holdout_every)
+def _load_split(store, params, ext: str, build, hash_attr: str) -> tuple:
+    """(train, holdout) datasets over one sidecar side of the split -- `build`
+    makes a dataset from a file list; both sides must agree on `hash_attr`
+    (the proposer or teacher). With no held-out files the training set stands
+    in (metrics are then on-train)."""
+    train_files, holdout_files = split_pairs(store, params.holdout_every, ext)
     if not train_files:
-        raise FileNotFoundError(f"no complete .slog/.sobs training pairs in {store}")
-    adopt_information_condition(train_files)
-    train_ds = TrajectoryDataset(train_files)
+        raise FileNotFoundError(f"no complete .slog/{ext} training pairs in {store}")
+    train_ds = build(train_files)
     if not holdout_files:
-        timed_print("no held-out pairs; metrics are on-train")
         return train_ds, train_ds
-    holdout_ds = TrajectoryDataset(holdout_files)
-    assert holdout_ds.proposer_hash == train_ds.proposer_hash, (
-        "train/holdout pairs disagree on the proposer hash"
+    holdout_ds = build(holdout_files)
+    assert getattr(holdout_ds, hash_attr) == getattr(train_ds, hash_attr), (
+        f"train/holdout {ext} pairs disagree on {hash_attr}"
     )
+    return train_ds, holdout_ds
+
+
+def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
+    """The trajectory (.sobs) side; adopts the corpus's information-condition
+    arm first (it must precede the first dataset)."""
+    train_files, _ = split_pairs(store, params.holdout_every)
+    if train_files:
+        adopt_information_condition(train_files)
+    train_ds, holdout_ds = _load_split(store, params, ".sobs", TrajectoryDataset, "proposer_hash")
+    if holdout_ds is train_ds:
+        timed_print("no held-out pairs; metrics are on-train")
     return train_ds, holdout_ds
 
 
@@ -140,21 +160,21 @@ def _simmed_positions(mset_path) -> set[tuple[int, int]]:
     return trajectory_positions(mset_path.with_suffix(".sobs"))
 
 
+def _simmed_mset(files) -> MsetDataset:
+    """An .mset dataset restricted to the stems' trajectory positions; a
+    selection that matches nothing is a broken .sobs/.mset pairing and fails
+    here rather than starving the joint step (cycle_batches would spin)."""
+    ds = MsetDataset(mset_files=files, select=_simmed_positions)
+    if ds.num_positions == 0:
+        raise ValueError(f"no trajectory position found in the .mset labels of {files[0].parent}")
+    return ds
+
+
 def load_distill_datasets(store, params) -> tuple[MsetDataset, MsetDataset]:
     """The unfrozen mode's .mset side of the same split, restricted to the
     trajectory positions (the corpus's arm was adopted from the .sobs side;
     the .mset labels were made under it)."""
-    train_files, holdout_files = split_pairs(store, params.holdout_every, ".mset")
-    if not train_files:
-        raise FileNotFoundError(f"no complete .slog/.mset distillation pairs in {store}")
-    train_ds = MsetDataset(mset_files=train_files, select=_simmed_positions)
-    if not holdout_files:
-        return train_ds, train_ds
-    holdout_ds = MsetDataset(mset_files=holdout_files, select=_simmed_positions)
-    assert holdout_ds.model_hash == train_ds.model_hash, (
-        "train/holdout .mset pairs disagree on the teacher hash"
-    )
-    return train_ds, holdout_ds
+    return _load_split(store, params, ".mset", _simmed_mset, "model_hash")
 
 
 def absorb_new_pairs(store, params, train_ds, holdout_ds, ext: str = ".sobs") -> int:
@@ -338,7 +358,7 @@ def _metrics_record(
         "lr": lr,
         "skipped_batches": skipped,
     }
-    for k in ("sim", "distill", "distill_wld", "distill_score_diff", "distill_planes"):
+    for k in DISTILL_LOSS_KEYS:
         if k in losses:
             record[f"loss_{k}"] = losses[k]
     for k in ("cond_wld_ce", "plain_wld_ce", "cond_wld_ce_ev", "plain_wld_ce_ev"):

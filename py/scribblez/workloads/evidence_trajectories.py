@@ -90,7 +90,8 @@ class EvidenceTrajectoriesParams:
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
     proposal_pool: int = param(64, "proposals are drawn from the model's top-N unsimmed candidates")
     # The .mset labeling's stratified sample around the forced candidates
-    # (move_set_eval's quotas; the trainer reads them only in unfrozen mode).
+    # (move_set_eval's quotas; the resulting .mset labels are read by the trainer
+    # only in unfrozen mode).
     quota_top: int = param(4, "labeled candidates from the head of the equity ranking")
     quota_mid: int = param(4, "labeled candidates sampled from the contention zone")
     quota_tail: int = param(4, "labeled candidates sampled uniformly from the remaining ranks")
