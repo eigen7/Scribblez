@@ -16,7 +16,7 @@ type WorkerInfo = {
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
-  gate_reason?: string; bundle_id: string | null;
+  gate_reason?: string; bundle_id: string | null; exit_reason?: string;
 };
 
 // A slot still on the bundle the task has moved off: it gets replaced with one
@@ -562,6 +562,16 @@ function WorkersTable({ workers, taskBundle, onAction }: {
                 title={w.gate_reason ? `parked by the scheduler: ${w.gate_reason}` : undefined}
               >
                 {w.state}{w.state === 'waiting' && w.gate_reason ? ` (${w.gate_reason})` : ''}
+                {/* Why it is not running, from the container itself: a worker
+                    that cannot start says so here rather than only in its log. */}
+                {w.exit_reason && (
+                  <div
+                    style={{ fontWeight: 400, fontSize: 12, color: '#a05a00', maxWidth: 460 }}
+                    title={w.exit_reason}
+                  >
+                    {w.exit_reason}
+                  </div>
+                )}
               </td>
               <td style={{ padding: '6px 14px 6px 0' }}>
                 {w.cost_per_hr != null ? `$${w.cost_per_hr}` : '—'}
