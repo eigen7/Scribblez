@@ -190,3 +190,75 @@ def test_cloud_state_mapping():
     assert _cloud_state("paused", False, gated=False, desired_status=None) == "paused"
     assert _cloud_state("running", False, gated=False, desired_status=None) == "starting"
     assert _cloud_state("running", False, gated=True, desired_status=None) == "waiting"
+
+
+def test_first_remote_worker_deploys_and_pins_the_task(manager, spec, task, monkeypatch):
+    """Deployment is not an operator step: the task pins a bundle the first
+    time a bucket-delivering worker needs one, and every later worker joins
+    that same bundle rather than whatever the tree has become."""
+    deploys = []
+    monkeypatch.setattr(WorkerManager, "deploy", lambda self, spec, task: deploys.append(1) or "b1")
+    assert manager.task_bundle_id(spec, task) == "b1"
+    task.bundle_id = "b1"  # what deploy() itself records
+    assert manager.task_bundle_id(spec, task) == "b1"
+    assert len(deploys) == 1
+
+
+def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, monkeypatch):
+    monkeypatch.setattr(workers_mod, "source_hash", lambda cache=None: "now")
+    assert not manager.bundle_drift(task)  # nothing pinned yet
+
+    task.bundle_source_hash = "now"
+    assert not manager.bundle_drift(task)
+
+    task.bundle_source_hash = "then"
+    assert manager.bundle_drift(task)
+
+    # An unbuilt arch is not evidence of drift, only absence of evidence.
+    monkeypatch.setattr(workers_mod, "source_hash", lambda cache=None: None)
+    assert not manager.bundle_drift(task)
+
+
+class _RecordingSshMachine(_FakeSshMachine):
+    """Records the container operations reconcile performs."""
+
+    state = "stopped"
+    ops: list = []
+
+    def start_container(self, name):
+        self.ops.append(("start", name))
+
+    def remove_container(self, name):
+        self.ops.append(("remove", name))
+
+
+def _stopped_ssh_slot(manager, spec, task, monkeypatch, *, slot_bundle, task_bundle):
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched, w.bundle_id = "running", True, slot_bundle
+    task.bundle_id = task_bundle
+    return w
+
+
+def test_a_stopped_ssh_slot_on_the_task_bundle_is_restarted(manager, spec, task, monkeypatch):
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b1")
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    manager._reconcile_worker(spec, task, w, True, stopped)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["start"]
+
+
+def test_a_redeployed_task_replaces_its_ssh_container(manager, spec, task, monkeypatch):
+    """A container's bundle is fixed in the environment it was created with,
+    so joining a new one means replacement, not a restart."""
+    recreated = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_run_ssh_container",
+        lambda self, spec, task, w: recreated.append(w.worker_id),
+    )
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    manager._reconcile_worker(spec, task, w, True, stopped)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
+    assert recreated == [w.worker_id]

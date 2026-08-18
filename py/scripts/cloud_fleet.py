@@ -6,9 +6,12 @@
     down    terminate fleet pods
 
 Workers run the worker image (build_and_push_worker_image.py) and pull their
-code from the bundle named by --bundle (see cloud_push_binaries.py); "latest"
-resolves to a concrete bundle_id at launch so every pod in one `up` runs
-identical code even if newer bundles are pushed meanwhile. The workload, its
+code from the bundle named by --bundle. The default, "current", builds this
+tree and pushes it unless the bucket already has it, so a fleet runs the code
+you are looking at without a separate deploy step; "latest" takes whatever was
+pushed last. Either way the reference resolves to a concrete bundle_id at
+launch, so every pod in one `up` runs identical code even if newer bundles are
+pushed meanwhile. The workload, its
 role, and its parameter flags come from the workload registry
 (scribblez/workloads/); pods are rented interruptible when the role tolerates
 preemption.
@@ -29,7 +32,7 @@ import secrets
 import sys
 from dataclasses import dataclass
 
-from cloud.bundles import resolve_bundle_id
+from cloud.bundles import deploy_current_tree, resolve_bundle_id
 from cloud.credentials import CloudCredentials, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
@@ -144,10 +147,18 @@ def pod_create_spec(
     }
 
 
+def resolve_launch_bundle(creds: CloudCredentials, ref: str) -> str:
+    """The bundle a launch should run: "current" deploys this tree first,
+    anything else resolves an already-pushed bundle."""
+    if ref == "current":
+        return deploy_current_tree(creds.r2).bundle_id
+    return resolve_bundle_id(creds.r2, ref)
+
+
 def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
     spec = workloads.get(args.workload)
     params = params_mod.from_args(spec.params_cls, args)
-    bundle_id = resolve_bundle_id(creds.r2, args.bundle)
+    bundle_id = resolve_launch_bundle(creds, args.bundle)
     print(f"Launching {args.num_workers} worker(s) on bundle {bundle_id} ...")
     for _ in range(args.num_workers):
         name = new_pod_name(args.tag)
@@ -245,7 +256,12 @@ def main() -> int:
     up.add_argument("--vcpus", type=int, default=16, help="vCPUs per worker pod")
     up.add_argument("--flavor", default="cpu3c", help="Runpod CPU flavor id")
     up.add_argument("--container-disk-gb", type=int, default=20)
-    up.add_argument("--bundle", default="latest", help='bundle_id or "latest"')
+    up.add_argument(
+        "--bundle",
+        default="current",
+        help='"current" (build+push this tree), "latest" (whatever was pushed last), '
+        "or a concrete bundle_id",
+    )
     params_mod.add_arguments(up, spec.params_cls)
     up.set_defaults(func=cmd_up)
 

@@ -58,7 +58,14 @@ Principles:
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
   the engine builds once per supported CPU microarchitecture
   (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch
-  (binaries + the arch-independent `py/` tree). At pod start `bootstrap.py`
+  (binaries + the arch-independent `py/` tree). Deploying is automatic --
+  `deploy_current_tree` builds every arch and pushes unless the bucket's
+  LATEST already carries this tree, and both launchers call it, so no fleet
+  runs code you did not deploy because you forgot to. Its staleness test is
+  the manifest's `source_hash` (a digest of the files a bundle ships), since
+  the bundle_id is deliberately fresh on every push and a `-dirty` git sha
+  says a tree changed without saying into what. The explicit push CLI remains
+  for pushing a bundle without launching anything. At pod start `bootstrap.py`
   detects the pod's arch, downloads the matching tarball (generic `x86-64`
   fallback), unpacks it, and execs the bundle's worker entrypoint — so even
   the worker-loop logic is iterable without touching the image.
@@ -100,11 +107,8 @@ Principles:
 ## The daily loop
 
 ```
-# once per code change (seconds + a small per-arch upload):
-./py/build.py -b            # build all SUPPORTED_ARCHS
-./py/scripts/cloud_push_binaries.py
-
-# run an experiment:
+# run an experiment (up builds every arch and pushes if the bucket is behind;
+# a no-op build costs seconds):
 ./py/scripts/cloud_fleet.py up -n 8 --vcpus 16 -t hello
 ./py/scripts/cloud_fleet.py status -t hello
 ./py/scripts/cloud_sync.py -t hello --watch    # analysis runs locally meanwhile
