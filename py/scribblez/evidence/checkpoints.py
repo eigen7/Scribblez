@@ -1,11 +1,10 @@
-"""The evidence trainer's two checkpoint kinds, loaded into the frozen-backbone
-MoveSetEvalModel: the student's rolling checkpoint (a move_set_eval tag's
-checkpoints/model.pt -- generation 0, the plain student with the fusion stage
-at its zero-init and an untrained proves-best head) and the trainer's own
-per-pass checkpoints (checkpoints/model_epoch_NNNN.pt: the full model's
-weights, with the student's config under "student"). Both the trainer and the
-dashboard's trajectory pane load through here, so they agree on what a
-checkpoint's config means."""
+"""The evidence trainer's two checkpoint kinds, loaded into a MoveSetEvalModel:
+the student's rolling checkpoint (a move_set_eval tag's checkpoints/model.pt
+-- generation 0, the plain student with the fusion stage at its zero-init and
+an untrained proves-best head) and the trainer's own per-pass checkpoints
+(checkpoints/model_epoch_NNNN.pt: the full model's weights, with the student's
+config under "student"). Both the trainer and the dashboard's trajectory pane
+load through here, so they agree on what a checkpoint's config means."""
 
 from __future__ import annotations
 
@@ -38,15 +37,17 @@ def build_model(student_cfg: dict) -> MoveSetEvalModel:
     )
 
 
-def load_student(path: str, device) -> tuple[MoveSetEvalModel, dict]:
-    """The frozen-backbone model initialized from a move_set_eval rolling
-    checkpoint, and that checkpoint's config (the arch and encoding arm the
-    student was built against, which this model inherits)."""
+def load_student(path: str, device, freeze: bool = True) -> tuple[MoveSetEvalModel, dict]:
+    """The model initialized from a move_set_eval rolling checkpoint -- its
+    backbone frozen at the student's weights unless `freeze` is False (the
+    trainer's unfrozen mode) -- and that checkpoint's config (the arch and
+    encoding arm the student was built against, which this model inherits)."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt["config"]
     model = build_model(cfg)
     model.load_student(ckpt["model_state_dict"])
-    model.freeze_backbone()
+    if freeze:
+        model.freeze_backbone()
     return model.to(device), cfg
 
 

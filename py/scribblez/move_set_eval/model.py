@@ -164,9 +164,11 @@ class MoveSetEvalModel(nn.Module):
             nn.Linear(trunk_channels, 1),
         )
 
-    # The parameters the evidence trainer leaves trainable when the backbone is
-    # frozen: the fusion stage and the proves-best head. Everything else is the
-    # distilled student's, held at its checkpoint.
+    # The evidence path's own parameters -- the fusion stage and the proves-best
+    # head -- against the backbone, everything else: the distilled student's.
+    # The evidence trainer either freezes the backbone at the student's
+    # checkpoint (freeze_backbone) or trains it jointly under a distillation
+    # anchor at its own learning rate (backbone_parameters).
     EVIDENCE_MODULES = ("evidence_fusion", "proves_best")
 
     @classmethod
@@ -185,6 +187,10 @@ class MoveSetEvalModel(nn.Module):
             param.requires_grad = self._is_evidence_param(name)
         self.train(self.training)
 
+    @property
+    def backbone_frozen(self) -> bool:
+        return self._backbone_frozen
+
     def train(self, mode: bool = True):
         super().train(mode)
         if self._backbone_frozen:
@@ -195,6 +201,9 @@ class MoveSetEvalModel(nn.Module):
 
     def evidence_parameters(self) -> list[nn.Parameter]:
         return [p for n, p in self.named_parameters() if self._is_evidence_param(n)]
+
+    def backbone_parameters(self) -> list[nn.Parameter]:
+        return [p for n, p in self.named_parameters() if not self._is_evidence_param(n)]
 
     def load_student(self, state_dict: dict):
         """Initialize from a distilled student's state dict. The student may

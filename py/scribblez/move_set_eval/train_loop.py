@@ -28,7 +28,7 @@ _MOVE_KEYS = (
     "move_pos_id",
 )
 # target_planes is present only on a plane-carrying corpus (dataset.has_planes).
-_TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
+TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
 
 
 @dataclass
@@ -44,6 +44,17 @@ class LossConfig:
     def from_args(cls, args) -> LossConfig:
         return cls(args.lambda_sd, args.huber_delta_mean, args.huber_delta_std, args.lambda_planes)
 
+    def loss(self, outputs: dict, targets: dict) -> dict:
+        """compute_loss under this config."""
+        return compute_loss(
+            outputs,
+            targets,
+            lambda_sd=self.lambda_sd,
+            huber_delta_mean=self.huber_delta_mean,
+            huber_delta_std=self.huber_delta_std,
+            lambda_planes=self.lambda_planes,
+        )
+
 
 @dataclass
 class EpochResult:
@@ -58,8 +69,16 @@ class EpochResult:
 def _forward_args(batch: dict, device):
     inputs = tuple(batch[k].to(device) for k in _INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
-    targets = {k: batch[k].to(device) for k in _TARGET_KEYS if k in batch}
+    targets = {k: batch[k].to(device) for k in TARGET_KEYS if k in batch}
     return inputs, move_args, targets
+
+
+def batch_loss(model, batch: dict, device, loss_cfg: LossConfig) -> dict:
+    """The plain forward over one batch and its distillation loss (compute_loss'
+    dict): the step of this loop, and the distillation half of the evidence
+    trainer's joint (unfrozen-backbone) step."""
+    inputs, move_args, targets = _forward_args(batch, device)
+    return loss_cfg.loss(model(*inputs, *move_args), targets)
 
 
 def run_epoch(
@@ -90,26 +109,17 @@ def run_epoch(
     last_progress = 0.0
 
     for batch in batches:
-        inputs, move_args, targets = _forward_args(batch, device)
         if lr_fn is not None:
             lr = lr_fn(rows_trained)
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
-        outputs = model(*inputs, *move_args)
-        losses = compute_loss(
-            outputs,
-            targets,
-            lambda_sd=loss_cfg.lambda_sd,
-            huber_delta_mean=loss_cfg.huber_delta_mean,
-            huber_delta_std=loss_cfg.huber_delta_std,
-            lambda_planes=loss_cfg.lambda_planes,
-        )
+        losses = batch_loss(model, batch, device, loss_cfg)
         optimizer.zero_grad()
         losses["total"].backward()
         optimizer.step()
 
-        m = targets["target_wld"].shape[0]
+        m = batch["target_wld"].shape[0]
         n_batches += 1
         candidates += m
         weight_sum += m

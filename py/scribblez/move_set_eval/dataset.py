@@ -37,7 +37,7 @@ store is split at file level before construction
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import numpy as np
@@ -118,10 +118,14 @@ class MsetDataset:
         data_dir: str | Path | Iterable[str | Path] | None = None,
         *,
         mset_files: Iterable[str | Path] | None = None,
+        select: Callable[[Path], set[tuple[int, int]]] | None = None,
     ):
         """Exactly one source: `data_dir` (directories whose complete pairs are
         globbed) or `mset_files` (explicit .mset paths — the file-level-split
-        case, where train and held-out pairs share a directory)."""
+        case, where train and held-out pairs share a directory). `select`,
+        given an .mset path, names the (game_index, turn_index) positions to
+        keep from it; the rest of the file is not held (the evidence trainer
+        reads only the trajectory positions' labels this way)."""
         assert (data_dir is None) != (mset_files is None), (
             "pass exactly one of data_dir or mset_files"
         )
@@ -153,6 +157,7 @@ class MsetDataset:
         self.model_hash: str | None = None
         self._flags: int | None = None
         self._record_planes: int | None = None
+        self._select = select
         self.absorb(mset_files)
 
         input_shapes, _ = row_layout()
@@ -207,16 +212,19 @@ class MsetDataset:
             self._files.append(mset_path)
             file_id = len(self._slogs)
             self._slogs.append(mset_path.with_suffix(".slog"))
-            self._ingest_positions(parsed.positions, file_id)
+            selected = self._select(mset_path) if self._select is not None else None
+            self._ingest_positions(parsed.positions, file_id, selected)
         if self.dropped_candidates > dropped_before:
             n = self.dropped_candidates - dropped_before
             print(f"dropped {n} candidate(s) with non-finite teacher targets")
         return len(self._positions) - before
 
-    def _ingest_positions(self, positions, file_id: int):
-        """Append one file's positions, dropping candidates the teacher labeled
-        non-finitely."""
+    def _ingest_positions(self, positions, file_id: int, selected: set[tuple[int, int]] | None):
+        """Append one file's positions (those in `selected`, when given),
+        dropping candidates the teacher labeled non-finitely."""
         for pos in positions:
+            if selected is not None and (pos.game_index, pos.turn_index) not in selected:
+                continue
             moves, targets = pos.moves, pos.targets
             plane_scales, planes = pos.plane_scales, pos.planes
             # The generator stores the teacher's readouts verbatim, and the
