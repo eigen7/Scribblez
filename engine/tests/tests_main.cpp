@@ -3921,8 +3921,10 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   fs::remove_all(tmp);
 }
 
-// Regression: an all-consonant rack (no vowels) on an empty board has no legal
-// PLAY. HastyBot's move-selection paths used to fall straight through to
+// Regression: DDGPTWZ (the rack the bug was originally reported with) has no
+// legal PLAY against tiny_dict's small vocabulary (real dictionaries do have
+// vowel-less words -- NTH, RHYTHM, CWM -- tiny_dict just doesn't carry any).
+// HastyBot's move-selection paths used to fall straight through to
 // Move::pass() in that case without ever considering an exchange, even though
 // exchanging strictly dominates passing (both score 0, but exchanging gives a
 // shot at a better rack next turn). It must exchange whenever the bag can
@@ -4024,82 +4026,12 @@ TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 }
 
-// A KLV2 with exactly one nonzero leave: keeping "AW" is worth `value`, every
-// other leave (including the empty one) is 0. Same 3-field binary layout as
-// write_synthetic_klv above, but a 2-tile leave instead of a 1-tile one: the
-// 'A' node's arc points at a child sibling list holding just 'W', which is
-// where the accepting (leaf) bit and the value live.
-KlvFixture write_two_letter_leave_klv(const std::filesystem::path& dir, char lo, char hi,
-                                      float value) {
-  std::filesystem::path p = dir / "two_letter_leave.klv2";
-  std::ofstream f(p, std::ios::binary | std::ios::trunc);
-
-  auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-  auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-
-  const uint32_t lo_code = LeaveValues::klv_code(Tile::from_char(lo));
-  const uint32_t hi_code = LeaveValues::klv_code(Tile::from_char(hi));
-
-  // kwg_node_count = 3
-  write_u32(3);
-  // Node 0: root; arc_index=1, is_end=1, accepts=0, tile=0
-  write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);
-  // Node 1 (lo): arc_index=2 (child list is just `hi`), is_end=1 (only root
-  // sibling), accepts=0 (the 1-letter leave "lo" alone has no entry)
-  write_u32((lo_code << 24) | (1u << 22) | (0u << 23) | 2u);
-  // Node 2 (hi): arc_index=0 (no children), is_end=1 (only child of `lo`),
-  // accepts=1 -- this is the "lo+hi" leaf, priced by values[0]
-  write_u32((hi_code << 24) | (1u << 22) | (1u << 23) | 0u);
-  // num_leaves = 1
-  write_u32(1);
-  write_f32(value);
-  EXPECT_TRUE(f.good());
-  return KlvFixture{p};
-}
-
 // Regression: HastyBot must weigh EXCHANGE candidates against PLAY candidates
-// by equity, not just fall back to exchanging when no play exists (the two
-// tests above). Rack CATDFGW has two legal plays in tiny_dict (CAT, AT), but a
-// synthetic leave table gives the exchange that keeps "AW" an enormous value
-// -- far above either play's equity -- so the best move overall is that
-// exchange, even though generate_legal_plays(req) is non-empty.
-TEST(HastyBotAgent, ExchangesEvenThoughAPlayExists) {
-  namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_hasty_exchange_over_play_XXXXXX";
-  fs::create_directories(tmp);
-  KlvFixture fix = write_two_letter_leave_klv(tmp, 'A', 'W', /*value=*/1000.0f);
-  fs::path peg_path = tmp / "peg.json";
-  {
-    std::ofstream pf(peg_path);
-    pf << "[]";
-  }
-  HastyEquity::init(fix.path.string(), peg_path.string());
-
-  Dictionary dict = tiny_dict();  // only CAT and AT are playable from this rack
-  Board board;                    // empty board
-  Rack rack = rack_from("CATDFGW");
-  Rack opp;  // empty
-
-  MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
-  ASSERT_FALSE(generate_legal_plays(req).empty());  // CAT and AT are legal
-
-  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
-  const Move chosen = agent.make_move(req).move;
-  ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
-
-  // The kept tiles are exactly A and W -- the exchange the huge leave value
-  // targets, not some other one that happens to also beat CAT/AT.
-  Rack kept = rack;
-  for (int i = 0; i < chosen.num_glyphs(); ++i) kept.remove(chosen.glyph(i).rack_tile());
-  ASSERT_EQ(kept.to_string(), "AW");
-
-  fs::remove_all(tmp);
-}
-
-// Same claim as the synthetic test above, but with no hacked leave table: a
-// real NWL23 rack of six I's and an H has exactly one legal play (HI, worth a
-// few points) and a catastrophic leave (IIIII), so even with genuine leave
-// values HastyBot must prefer exchanging over playing the only word it has.
+// by equity, not just fall back to exchanging when no play exists (the test
+// above). A real NWL23 rack of six I's and an H has exactly one legal play
+// (HI, worth a few points) and a catastrophic leave (IIIII), so even with
+// genuine leave values -- no hacked table needed -- HastyBot must prefer
+// exchanging over playing the only word it has.
 TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");

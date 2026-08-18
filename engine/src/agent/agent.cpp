@@ -66,10 +66,6 @@ Move pick_uniform_random_play(const MoveRequest& req, std::mt19937_64& rng) {
   return candidates[d(rng)];
 }
 
-Move exchange_or_pass(const MoveRequest& req) {
-  return req.bag_size >= RACK_SIZE ? Move::exchange(req.my_rack.counts()) : Move::pass();
-}
-
 MoveDecision::MoveDecision(const Move& m, std::vector<Move> projected)
     : move(m), projected_remaining_moves(std::move(projected)) {}
 
