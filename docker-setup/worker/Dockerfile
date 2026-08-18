@@ -67,21 +67,25 @@ ENTRYPOINT ["python3", "/opt/scribblez/bootstrap.py"]
 # These items should occasionally be moved up.
 #
 # The C++ runtime the bundle was compiled against. The dev image builds with
-# gcc-16 from the ubuntu-toolchain-r PPA (C++26 reflection), whose libstdc++
-# is newer than Ubuntu 24.04's: binaries built there need GLIBCXX_3.4.35,
-# while the distribution ships 3.4.33, so every bundle failed to load here
-# with "version `GLIBCXX_3.4.35' not found" the moment the dev image's
-# toolchain moved. Taking the library from the dev image rather than pinning a
-# version keeps the two in step by construction, as the NVIDIA libraries above
-# already are. libstdc++ is backward compatible, so the distribution's own
-# packages (boost, protobuf, python3) keep working against the newer one.
-# Copied through a staging dir because the distribution's libstdc++.so.6 is a
-# symlink: writing the library under its own name and repointing the link keeps
-# the version-named file honest about what it holds.
-COPY --from=devlibs /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
-                    /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 \
-                    /opt/devlibs/
-RUN install -m 644 /opt/devlibs/libstdc++.so.6 /usr/lib/x86_64-linux-gnu/libstdc++.so.6-dev && \
-    ln -sf libstdc++.so.6-dev /usr/lib/x86_64-linux-gnu/libstdc++.so.6 && \
-    install -m 644 /opt/devlibs/libgcc_s.so.1 /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 && \
-    rm -rf /opt/devlibs && ldconfig
+# gcc-16 from the ubuntu-toolchain-r PPA (C++26 reflection), whose libstdc++ is
+# newer than Ubuntu 24.04's: binaries built there need GLIBCXX_3.4.35 while the
+# distribution ships 3.4.33, so every bundle failed to load here with
+# "version `GLIBCXX_3.4.35' not found" the moment the dev image's toolchain
+# moved. Installing the runtime from the same PPA the dev image takes its
+# compiler from keeps apt in charge of the library (rather than copying files
+# out of the dev image, as the NVIDIA libraries above must be -- those have no
+# apt source here) and needs 3 MB, where the compiler that produced them is
+# 800. The version is deliberately unpinned: the two images are built together
+# (build_docker_image.py), and libstdc++ is backward compatible, so newest-from-
+# the-PPA is right by construction.
+#
+# The key is stored armored (.asc), which apt reads directly -- no gnupg in
+# this image just to dearmor it.
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC8EC952E2A0E1FBDC5090F6A2C277A0A352154E5" \
+      -o /etc/apt/keyrings/ubuntu-toolchain-r.asc && \
+    echo "deb [signed-by=/etc/apt/keyrings/ubuntu-toolchain-r.asc] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu noble main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libstdc++6 libgcc-s1 && \
+    rm -rf /var/lib/apt/lists/*
