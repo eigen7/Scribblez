@@ -108,7 +108,9 @@ An ssh slot's machine is prepared once, by hand:
 Slots then behave like pods: the machine's CPU arch picks its bundle (generic
 `x86-64` fallback), which the machine still fetches from the bucket at
 startup, and the reconcile loop restarts a container that died (e.g. the
-machine rebooted). Results go the other way -- collected over ssh rather than
+machine rebooted); the machine pulls the current worker image as part of
+creating one, so a rebuilt image reaches it without anyone logging in.
+Results go the other way -- collected over ssh rather than
 uploaded -- so nothing but the bundle fetch touches R2. Delivered chunks are
 deleted from the container only once they are safely on the controller's disk;
 what a container has not yet handed over goes with it if the slot is removed. A scheduler gate parks the container by pausing it rather than

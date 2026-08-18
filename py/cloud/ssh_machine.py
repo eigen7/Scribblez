@@ -46,6 +46,10 @@ _PROBE_TIMEOUT = 15
 # worker's final uploads.
 _MUTATE_TIMEOUT = 90
 
+# A first pull of the worker image moves a gigabyte or so of NVIDIA runtime
+# over a home connection.
+_PULL_TIMEOUT = 1800
+
 
 class SshMachineError(Exception):
     """An SSH machine operation failed (host unreachable, docker error)."""
@@ -130,6 +134,16 @@ class SshMachine:
             ["docker", "inspect", "-f", "{{.State.Status}}", name], timeout=_PROBE_TIMEOUT
         )
         return classify_probe(res.returncode, res.stdout, res.stderr)
+
+    def pull_image(self, image: str):
+        """Fetch the newest `image` onto the machine. Containers start with
+        --pull=never, so this is where a machine picks up a rebuilt worker
+        image -- otherwise every machine would need a hand-run `docker pull`
+        after every image change. A private repo needs `docker login` here
+        (a one-time setup step), and this reports its failure as any other."""
+        res = self._run(["docker", "pull", image], timeout=_PULL_TIMEOUT)
+        if res.returncode != 0:
+            raise SshMachineError(f"{self.host}: pulling {image} failed: {res.stderr.strip()}")
 
     def run_container(self, name: str, image: str, env: dict[str, str]):
         """Create + start container `name` from `image`. The environment

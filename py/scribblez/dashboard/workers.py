@@ -41,6 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
+from cloud import runtime_abi
 from cloud.bundles import deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
@@ -60,7 +61,7 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.hardware import default_thread_count
-from scribblez.paths import REPO_ROOT
+from scribblez.paths import DEFAULT_MOUNT_ROOT, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
 
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
@@ -93,6 +94,29 @@ def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
     if w.desired_state != "running":
         return STOP
     return PARK if w.role in task.gates else RUN
+
+
+def check_worker_image_current():
+    """Refuse to deploy a bundle the published worker image cannot load.
+
+    Bundles are compiled here, in the dev container, and run there, against
+    the worker image's libraries -- so a dev image whose toolchain moved
+    produces binaries no worker can start (August 2026: gcc-16's libstdc++,
+    which crash-looped every ssh worker at import). build_docker_image.py
+    keeps the two in step; this catches the case where something did not.
+
+    Says nothing when no push has recorded what the image provides, which is
+    all that can honestly be said about it.
+    """
+    record = runtime_abi.read_record(DEFAULT_MOUNT_ROOT)
+    if record is None:
+        return
+    stale = runtime_abi.stale_libraries(record.get("versions", {}), runtime_abi.local_versions())
+    assert not stale, (
+        f"the worker image ({record.get('image')}) is older than this dev container on "
+        f"{', '.join(stale)}; bundles built here will not load on it. Rebuild it from the "
+        "host: ./build_and_push_worker_image.py"
+    )
 
 
 def _key(spec: workloads.WorkloadSpec, tag: str, worker_id: str = "") -> str:
@@ -249,6 +273,7 @@ class WorkerManager:
     def deploy(self, spec, task: tasks.TaskRecord) -> str:
         """Build the controller's tree, push it unless the bucket already has
         it, and pin the task to the result. Returns the bundle id."""
+        check_worker_image_current()
         creds, _ = self._cloud()
         manifest = deploy_current_tree(creds.r2, cache=self._source_digests)
         task.bundle_id = manifest.bundle_id
@@ -429,7 +454,12 @@ class WorkerManager:
         env["SCZ_SINK"] = "local"  # collected over ssh, not uploaded (ssh_transfer.py)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
-        SshMachine(w.host).run_container(
+        machine = SshMachine(w.host)
+        # Creating a container is the moment to take a rebuilt worker image;
+        # `docker run --pull=never` below then fails fast rather than pulling
+        # under the dashboard.
+        machine.pull_image(creds.registry.worker_image)
+        machine.run_container(
             _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
         )
         w.launched = True
