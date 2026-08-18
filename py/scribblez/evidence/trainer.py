@@ -142,13 +142,17 @@ def _load_split(store, params, ext: str, build, hash_attr: str) -> tuple:
     return train_ds, holdout_ds
 
 
+def _trajectory_dataset(files) -> TrajectoryDataset:
+    """A trajectory dataset, the corpus's information-condition arm adopted
+    first (it must precede the first dataset; re-adopting the same arm for
+    the holdout is a no-op)."""
+    adopt_information_condition(files)
+    return TrajectoryDataset(files)
+
+
 def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
-    """The trajectory (.sobs) side; adopts the corpus's information-condition
-    arm first (it must precede the first dataset)."""
-    train_files, _ = split_pairs(store, params.holdout_every)
-    if train_files:
-        adopt_information_condition(train_files)
-    train_ds, holdout_ds = _load_split(store, params, ".sobs", TrajectoryDataset, "proposer_hash")
+    """The trajectory (.sobs) side of the split."""
+    train_ds, holdout_ds = _load_split(store, params, ".sobs", _trajectory_dataset, "proposer_hash")
     if holdout_ds is train_ds:
         timed_print("no held-out pairs; metrics are on-train")
     return train_ds, holdout_ds
