@@ -91,7 +91,7 @@ RUN pip3 install --no-cache-dir \
       torch torchvision torchaudio
 RUN pip3 install --no-cache-dir \
       numpy scipy pandas matplotlib tqdm pytest natsort ipython onnx onnxscript onnxruntime \
-      ruff pypdf schedulefree
+      ruff pypdf
 RUN pip3 install --no-cache-dir bokeh==3.9.1  # must match pinned BokehJS version
 
 # 5) Playwright's Chromium for headless board-position rendering, at a
@@ -115,7 +115,12 @@ RUN python3 -c "import site; \
     open(site.getsitepackages()[0]+'/scribblez.pth','w').write('/workspace/repo/py\n')"
 
 
-# 8) Macondo's data-path env var, so it finds its kwg/leaves when the engine
+# 8) Temporary home for install targets that belong above. Putting new stuff
+#    here helps to make image rebuilds faster thanks to Docker caching
+#    mechanics. These items should occasionally be moved above.
+RUN pip3 install --no-cache-dir schedulefree
+
+# 9) Macondo's data-path env var, so it finds its kwg/leaves when the engine
 #    launches it as a subprocess.
 ENV MACONDO_CONFIG_DATA_PATH=/workspace/mount/macondo/data
 
