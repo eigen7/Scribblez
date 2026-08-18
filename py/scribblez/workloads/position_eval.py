@@ -70,6 +70,12 @@ class PositionEvalParams:
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")
+    optimizer: str = param(
+        "wsd",
+        "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
+        "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
+        "no horizon to pick, every generation's export deployable",
+    )
     lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
     lr_warmup_rows: int = param(
         200_000, "linear LR warmup length, in positions trained (~2.5 default generations)"
@@ -77,7 +83,8 @@ class PositionEvalParams:
     lr_cycle_rows: int = param(
         2_000_000,
         "period of the stable->decay->restart LR cycle, in positions trained "
-        "(~25 default generations; the last fifth of each cycle decays)",
+        "(~25 default generations; the last fifth of each cycle decays); "
+        "unused by the schedule_free arm, which has no cycle",
     )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     # Model.

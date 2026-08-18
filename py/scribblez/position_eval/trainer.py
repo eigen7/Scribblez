@@ -18,9 +18,9 @@ else is keyed on cumulative rows trained (the rows-clock): the dashboard
 x-axis and the restart cursor. A single rolling model.pt holds resume state,
 so pausing and restarting the worker continues exactly where it left off;
 SIGTERM stops at the next batch boundary, losing at most the current
-(uncheckpointed) generation. The learning rate follows the shared rows-clock
-WSD schedule (generational/controls.py); the CPU thread pools (DataLoader
-workers, torch intra-op threads) are live controls in the per-tag
+(uncheckpointed) generation. The optimizer and its learning-rate policy are
+the run's `optimizer` arm (generational/optim.py); the CPU thread pools
+(DataLoader workers, torch intra-op threads) are live controls in the per-tag
 dashboard.db, adopted at the next generation.
 
 Runs as the singleton `train` worker of the position_eval workload (launched
@@ -41,13 +41,8 @@ from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_input_shapes, set_contingent_features, set_opp_leave_input
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
-from scribblez.generational.controls import (
-    CpuController,
-    WsdLrController,
-    WsdSchedule,
-    init_controls,
-    progress_line,
-)
+from scribblez.generational.controls import CpuController, init_controls, progress_line
+from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PositionEvalModel
@@ -146,10 +141,15 @@ def _checkpoint_and_eval(
 
 
 def train_one_generation(
-    model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
+    model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
 ):
     """Train one epoch over the window ending at the cursor generation, then
-    checkpoint under that generation's index and advance the cursor."""
+    checkpoint under that generation's index and advance the cursor.
+
+    The optimizer arm is switched to training weights around the epoch and to
+    deployable ones around the checkpoint, so everything the checkpoint step
+    reads -- quality eval, ONNX export, saved state -- sees the same weights a
+    schedule-free run would deploy (a no-op under the WSD arm)."""
     gen = state.generation_index
     window = lifecycle.window_dirs(paths, gen, params.window)
     ds = SlogDataset(
@@ -170,19 +170,21 @@ def train_one_generation(
     )
     t0 = time.time()
     rows_before = state.rows_trained
+    optim_arm.train_mode()
     result = run_epoch(
         model,
         optimizer,
         batches,
         device,
         loss_cfg,
-        lr_fn=lr_controller.lr_fn,
+        lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, gen),
     )
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1
     elapsed = time.time() - t0
+    optim_arm.eval_mode()
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,
@@ -194,9 +196,10 @@ def train_one_generation(
         gen,
         result,
         elapsed,
-        lr_controller.current,
+        optim_arm.current,
         ctx,
     )
+    optim_arm.train_mode()
     if ctx["stats"] is not None:
         ctx["stats"].cycle_done(
             {"train_s": elapsed, "eval_s": eval_seconds},
@@ -208,13 +211,13 @@ def train_one_generation(
 def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    lr_controller = WsdLrController(conn, WsdSchedule.from_params(params), state.rows_trained)
+    optim_arm = build_optim_arm(conn, params, optimizer, state.rows_trained)
     cpu = CpuController(conn)
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index)
         train_one_generation(
-            model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
+            model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
         )
         evicted = lifecycle.evict_beyond_window(paths, state.generation_index - 1, params.window)
         if evicted:
@@ -317,9 +320,7 @@ def run(ctx: WorkerContext) -> int:
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=params.lr, weight_decay=params.weight_decay
-    )
+    optimizer = build_optimizer(model, params)
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, ctx.tag, asdict(params), n_params)
