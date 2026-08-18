@@ -121,7 +121,7 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
     ev_params = [p.detach().clone() for p in model.evidence_parameters()]
 
     opt = torch.optim.AdamW(model.evidence_parameters(), lr=1e-2)
-    cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05)
+    cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=1.0)
     result = run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8)
     assert result.rows > 0 and np.isfinite(result.losses["total"])
     after = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
@@ -434,3 +434,77 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     # Resume: the budget is spent, so the second run stops without a pass.
     assert trainer.run(scratch.ctx) == 0
     assert not (scratch.paths.checkpoints_dir / "model_epoch_0002.pt").exists()
+
+
+# --- divergence guards ---
+
+
+def test_non_finite_batches_are_skipped_without_a_step(traj_datasets, monkeypatch):
+    """A batch whose loss is non-finite takes no optimizer step and is counted;
+    the pass otherwise proceeds."""
+    from scribblez.evidence import train_loop
+
+    train, _ = traj_datasets
+    device = torch.device("cuda")
+    model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
+    model.freeze_backbone()
+    real = train_loop.compute_loss
+    calls = {"n": 0}
+
+    def poison_every_other(outputs, targets, cfg):
+        calls["n"] += 1
+        losses = real(outputs, targets, cfg)
+        if calls["n"] % 2 == 0:
+            losses = {k: v * float("nan") for k, v in losses.items()}
+        return losses
+
+    monkeypatch.setattr(train_loop, "compute_loss", poison_every_other)
+    before = [p.detach().clone() for p in model.evidence_parameters()]
+    opt = torch.optim.AdamW(model.evidence_parameters(), lr=1e-2)
+    cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=1.0)
+    result = run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8)
+    assert result.skipped >= 1 and result.n_batches >= 1
+    assert result.skipped + result.n_batches == calls["n"]
+    assert np.isfinite(result.losses["total"])
+    assert all(torch.isfinite(p).all() for p in model.evidence_parameters())
+    pairs = zip(before, model.evidence_parameters(), strict=True)
+    assert any(not torch.equal(a, b.detach()) for a, b in pairs)  # the good batches stepped
+
+
+def test_check_finite_stops_a_diverged_pass():
+    from scribblez.evidence import trainer
+    from scribblez.evidence.train_loop import EpochResult
+
+    model = _tiny_model()
+    ok = EpochResult({"total": 0.5}, 10, 100, 100, skipped=0)
+    trainer.check_finite(model, ok)  # healthy: no-op
+    with pytest.raises(RuntimeError, match="skipped|non-finite loss"):
+        trainer.check_finite(model, EpochResult({"total": 0.5}, 10, 100, 100, skipped=99))
+    with torch.no_grad():
+        model.proves_best[0].weight[0, 0] = float("nan")
+    with pytest.raises(RuntimeError, match="non-finite parameters"):
+        trainer.check_finite(model, ok)
+
+
+def test_gradients_are_clipped_to_the_configured_norm(traj_datasets):
+    """With clipping on, the total gradient norm handed to the optimizer never
+    exceeds grad_clip (checked by wrapping optimizer.step)."""
+    train, _ = traj_datasets
+    device = torch.device("cuda")
+    model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
+    model.freeze_backbone()
+    params = model.evidence_parameters()
+    opt = torch.optim.AdamW(params, lr=1e-2)
+    seen = []
+    real_step = opt.step
+
+    def recording_step(*a, **k):
+        seen.append(
+            float(torch.norm(torch.stack([p.grad.norm() for p in params if p.grad is not None])))
+        )
+        return real_step(*a, **k)
+
+    opt.step = recording_step
+    cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=0.01)
+    run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8)
+    assert seen and max(seen) <= 0.01 * (1 + 1e-4)

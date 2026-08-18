@@ -144,7 +144,17 @@ per loop iteration.
 
 All three output projections are zero-initialized and an empty evidence set
 hard-gates the stage off, so a fresh model — and any evidence-free forward at
-any weights — computes exactly the plain one-pass model. Training data comes
+any weights — computes exactly the plain one-pass model.
+
+Scale is pinned at the stage's seams: the fused tokens are LayerNorm'd before
+the self-attention; the cross-attention's queries and keys are LayerNorm'd
+per head (QK-norm) so its logits do not scale with the projection weights;
+and `attended`, the per-square `local` mix, and the pooled summary are each
+LayerNorm'd before their zero-init output projections. Without these the
+first evidence run's tokens grew 40× at peak LR while its loss stood still,
+its board rewrite outgrew the trunk map, and the frozen scoring attention
+reading that map blew the gradients up (see the trainer's clipping and
+divergence guards in `scribblez.evidence.train_loop` / `trainer`). Training data comes
 from evidence trajectories (`.sobs` observations paired with live-recomputed
 first-pass predictions, roadmap item 4).
 
@@ -171,6 +181,11 @@ sim outcomes, not teacher readouts (docs/roadmap.md item 2 explains why):
 | `wld` (conditioned) | sim W/D/L frequencies | soft cross-entropy | 1 |
 | `score_diff` (conditioned) | sim delta mean / std | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `gain` | `max(0, v_c − max prefix v)`, CRN-paired | Huber (δ=0.05) | `lambda_gain` = 1 |
+
+Gradients over the trainable params are clipped to `grad_clip` (default 1)
+per step; a batch with a non-finite loss or gradient takes no step and is
+counted, and a pass that leaves non-finite parameters or skips more than a
+handful of batches stops the run before anything is checkpointed.
 
 Held-out metrics compare the conditioned pass with the plain one on the same
 rows (soft-CE, value MAE), report the gain error and the acquisition hit rate

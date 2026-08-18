@@ -53,6 +53,7 @@ class LossConfig:
     huber_delta_mean: float
     huber_delta_std: float
     huber_delta_gain: float
+    grad_clip: float  # max gradient norm over the trainable params (0 = no clipping)
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -62,6 +63,7 @@ class LossConfig:
             args.huber_delta_mean,
             args.huber_delta_std,
             args.huber_delta_gain,
+            args.grad_clip,
         )
 
 
@@ -71,6 +73,7 @@ class EpochResult:
     n_batches: int
     rows: int  # held-out rows this epoch
     rows_trained: int  # cumulative held-out rows across the run
+    skipped: int = 0  # batches whose loss was non-finite (no step taken)
 
 
 def _scatter_rows(rows: torch.Tensor, flat: torch.Tensor, shape: tuple[int, int]) -> torch.Tensor:
@@ -194,10 +197,13 @@ def run_epoch(
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
     """One training pass. rows_trained counts held-out rows (the rows that
-    carry loss) and keys the rows-clock learning rate."""
+    carry loss) and keys the rows-clock learning rate. Gradients are clipped
+    to cfg.grad_clip over the optimizer's params; a batch with a non-finite
+    loss is skipped (see below)."""
     model.train()
+    trainable = [p for group in optimizer.param_groups for p in group["params"]]
     sums = {k: 0.0 for k in LOSS_KEYS}
-    n_batches = rows = 0
+    n_batches = rows = skipped = 0
     t0 = last_progress = time.time()
     for batch in batches:
         targets = _targets(batch, device)
@@ -209,8 +215,21 @@ def run_epoch(
                 group["lr"] = lr_fn(rows_trained)
         _, cond = conditioned_forward(model, batch, device, max_e)
         losses = compute_loss(cond, targets, cfg)
+        # A non-finite loss must not reach the optimizer: one such step
+        # poisons Adam's moments and every weight after it. Skip the batch
+        # and count it; the pass reports the count and the trainer stops the
+        # run when it is anything but rare.
+        if not torch.isfinite(losses["total"]):
+            skipped += 1
+            continue
         optimizer.zero_grad()
         losses["total"].backward()
+        # Clip, and skip a step whose gradient is non-finite (an overflow in
+        # backward can leave inf/nan grads under a finite loss).
+        norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.grad_clip or float("inf"))
+        if not torch.isfinite(norm):
+            skipped += 1
+            continue
         optimizer.step()
         n_batches += 1
         rows += m
@@ -221,7 +240,7 @@ def run_epoch(
             on_batch(n_batches, rows, time.time() - t0, rows_trained)
             last_progress = time.time()
     losses = {k: v / max(rows, 1) for k, v in sums.items()}
-    return EpochResult(losses, n_batches, rows, rows_trained)
+    return EpochResult(losses, n_batches, rows, rows_trained, skipped)
 
 
 class _Accumulator:
