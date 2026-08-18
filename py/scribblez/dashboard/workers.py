@@ -46,6 +46,7 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
 from cloud.ssh_machine import SshMachine
+from cloud.ssh_transfer import pull_results
 from scripts.cloud_fleet import (
     CpuResources,
     GpuResources,
@@ -66,8 +67,10 @@ CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 
 # Worker kinds that deliver through the results bucket, and so need the
-# per-task sync watcher and the scheduler's bucket mirror.
-BUCKET_KINDS = ("cloud", "ssh")
+# per-task sync watcher and the scheduler's bucket mirror. An ssh worker does
+# not: it delivers into its own container and the reconcile pass reads its
+# output back over the control link (cloud/ssh_transfer.py).
+BUCKET_KINDS = ("cloud",)
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
 # before probing again -- so a powered-off machine costs one connect timeout
@@ -423,6 +426,7 @@ class WorkerManager:
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id, kind="ssh",
         )  # fmt: skip
+        env["SCZ_SINK"] = "local"  # collected over ssh, not uploaded (ssh_transfer.py)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         SshMachine(w.host).run_container(
@@ -749,6 +753,13 @@ class WorkerManager:
                 continue
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for w, info in zip(task.workers, status, strict=True):
+                # Collect before enforcing: this slot may be about to be
+                # parked, and a pull needs its container running.
+                if w.kind == "ssh" and info["ssh_probe"] == "running":
+                    try:
+                        await self.offload(self._collect_ssh, spec, task, w)
+                    except Exception as e:  # noqa: BLE001 -- one slot must not stop the pass
+                        print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
                 # Contained per slot: one slot's failing enforcement (an ssh
                 # machine vanishing mid-action, a pod creation that keeps
                 # failing on an out-of-stock flavor) must not starve the rest
@@ -761,6 +772,15 @@ class WorkerManager:
                 except Exception as e:  # noqa: BLE001 -- enforcement must keep ticking
                     print(f"reconcile {spec.name}/{task.tag}/{w.worker_id}: {e}")
             self._ensure_sync(spec, task)
+
+    def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Read slot `w`'s finished outputs out of its container into the tag."""
+        paths = spec.paths(task.tag)
+        pull_results(
+            SshMachine(w.host), _container_name(spec, task.tag, w.worker_id),
+            remote_root=str(paths.root), local_root=paths.root,
+            data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
+        )  # fmt: skip
 
     def _tick_scheduler(self, spec, task: tasks.TaskRecord):
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))

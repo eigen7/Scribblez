@@ -11,6 +11,11 @@ An unreachable machine is a normal condition (powered off, lid closed), not an
 error: container_state() reports it as the "unreachable" probe state and the
 caller decides what to do. Mutating calls raise SshMachineError.
 
+Results come back the same way control goes out -- over this ssh connection,
+read out of the container with docker exec (see read_from_container). A worker
+on an operator's own machine therefore needs no bucket and no inbound network
+path to the controller.
+
 Stopping is not the only way to idle a container: pause/unpause suspend and
 resume its processes in place, keeping the unpacked bundle and the in-flight
 work. That is what the dashboard uses for a scheduler gate, which parks a
@@ -91,6 +96,27 @@ class SshMachine:
             )
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(command, _SSH_FAILED, "", "ssh timed out")
+
+    def exec_in_container(self, name: str, command: list[str]):
+        """Run `command` inside container `name`. Raises SshMachineError on
+        failure, like every other mutating call."""
+        self._mutate(["docker", "exec", name, *command])
+
+    def read_from_container(self, name: str, command: list[str]) -> bytes:
+        """Run `command` inside container `name` and return its stdout as
+        bytes -- how results are read out of a worker (a tar stream). Text
+        decoding would corrupt them, so this path stays binary."""
+        try:
+            res = subprocess.run(
+                self.argv(["docker", "exec", name, *command]),
+                capture_output=True,
+                timeout=_MUTATE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise SshMachineError(f"{self.host}: reading from {name} timed out") from None
+        if res.returncode != 0:
+            raise SshMachineError(f"{self.host}: {res.stderr.decode(errors='replace').strip()}")
+        return res.stdout
 
     def _mutate(self, command: list[str], stdin_text: str | None = None):
         res = self._run(command, timeout=_MUTATE_TIMEOUT, stdin_text=stdin_text)

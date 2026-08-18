@@ -33,9 +33,12 @@ and workload-specific analysis — all from the browser.
   running the image + bundle flow of [cloud_compute.md](cloud_compute.md); an
   ssh slot is that same image + bundle flow as a Docker container on a machine
   the operator owns (a spare laptop on the LAN, a home server), driven over
-  SSH. Cloud and ssh slots deliver through the results bucket, and while a
-  task has any, the server keeps a sync watcher running so their results
-  stream into the local mount. A slot's *actual* state can diverge from
+  SSH. Cloud slots deliver through the results bucket, and while a task has
+  any, the server keeps a sync watcher running so their results stream into
+  the local mount. An ssh slot skips the bucket entirely: it delivers into its
+  own container and the reconcile pass reads finished output back over the
+  control link (`py/cloud/ssh_transfer.py`), so a cycle on an operator's own
+  machine contains no network at all. A slot's *actual* state can diverge from
   desired (an operator-stopped pod, a dead subprocess, a reclaimed
   interruptible pod, an ssh machine that is off the network); the UI shows
   both, and the server reconciles desired vs. actual on startup and every few
@@ -103,9 +106,12 @@ An ssh slot's machine is prepared once, by hand:
   blocking the dashboard.
 
 Slots then behave like pods: the machine's CPU arch picks its bundle (generic
-`x86-64` fallback), results and stats ride the bucket and the sync watcher,
-and the reconcile loop restarts a container that died (e.g. the machine
-rebooted). A scheduler gate parks the container by pausing it rather than
+`x86-64` fallback), which the machine still fetches from the bucket at
+startup, and the reconcile loop restarts a container that died (e.g. the
+machine rebooted). Results go the other way -- collected over ssh rather than
+uploaded -- so nothing but the bundle fetch touches R2. Delivered chunks are
+deleted from the container only once they are safely on the controller's disk;
+what a container has not yet handed over goes with it if the slot is removed. A scheduler gate parks the container by pausing it rather than
 stopping it, so a gate that flips every minute costs nothing: no bundle
 refetch, and the chunk in flight survives. An operator pause still stops it
 (cleanly, flushing completed output). The bundle itself is deployed for you -- a task builds and pushes
