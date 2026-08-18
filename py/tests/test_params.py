@@ -61,3 +61,14 @@ def test_registry_params_all_schema_valid():
         # The env encoding round-trips the defaults.
         p = spec.params_cls()
         assert params_mod.from_env(spec.params_cls, params_mod.to_env(p)) == p
+
+
+def test_unknown_env_flags_variables_outside_the_schema():
+    env = {"SCZ_COUNT": "1", "SCZ_ELSEWHERE": "x", "SCZ_TAG": "t", "PATH": "/bin"}
+    assert params_mod.unknown_env(DemoParams, env) == ["SCZ_ELSEWHERE", "SCZ_TAG"]
+    assert params_mod.unknown_env(DemoParams, env, allowed=("SCZ_TAG",)) == ["SCZ_ELSEWHERE"]
+
+
+def test_unknown_env_accepts_a_fully_known_environment():
+    env = params_mod.to_env(DemoParams()) | {"SCZ_TAG": "t"}
+    assert params_mod.unknown_env(DemoParams, env, allowed=("SCZ_TAG",)) == []

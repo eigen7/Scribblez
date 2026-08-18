@@ -766,8 +766,10 @@ paths = SimpleNamespace(
     onnx_path=lambda epoch: root / "models" / f"model_epoch_{epoch:04d}.onnx",
 )
 ctx = SimpleNamespace(
-    params=params, tag="t", worker_id="w0", threads=1,
-    sink=SimpleNamespace(kind="local", push_json=lambda *a, **k: None),
+    params=params, tag="t", worker_id="w0", threads=1, kind="local",
+    sink=SimpleNamespace(
+        kind="local", push_json=lambda *a, **k: None, read_json=lambda *a, **k: None
+    ),
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )

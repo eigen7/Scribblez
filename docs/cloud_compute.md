@@ -63,7 +63,10 @@ Principles:
   fallback), unpacks it, and execs the bundle's worker entrypoint — so even
   the worker-loop logic is iterable without touching the image.
 - **Worker entrypoint** (`py/cloud/worker_entrypoint.py`): configured by
-  environment variables (see its docstring). Dispatches to the (workload,
+  environment variables (see its docstring). Refuses to start when the
+  environment names a workload parameter its bundle's schema does not know --
+  a bundle behind the controller would otherwise ignore the parameter and
+  deliver data silently unlike its fleetmates'. Dispatches to the (workload,
   role) runner from the workload registry, fetches the runner's declared data
   deps from public upstreams, writes a provenance manifest to the bucket, and
   loops the runner's cycle, delivering whole output files through the results

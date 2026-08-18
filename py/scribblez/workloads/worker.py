@@ -19,23 +19,37 @@ class WorkerStopped(Exception):
 RECENT_SAMPLES = 50
 
 
+def stats_rel_path(worker_id: str) -> str:
+    """Where a worker's stats record lives, relative to the tag root."""
+    return f"stats/{worker_id}.json"
+
+
 class WorkerStats:
     """The per-worker stats record published after every cycle: cumulative
     counters plus a bounded window of per-cycle samples, each carrying the
     role's declared timing phases (RoleSpec.stats). The dashboard's Stats tab
-    derives throughput and bottleneck breakdowns from these."""
+    derives throughput and bottleneck breakdowns from these.
+
+    The counters belong to the slot, not to this process: a worker resumes the
+    totals it last published, so the scheduler's pacing gate (which stops and
+    restarts generators many times an hour) reads as a pause rather than as
+    work undone. The sample window is not resumed -- it measures the rate right
+    now, and samples from before a gap would only blur that.
+    """
 
     def __init__(self, ctx):
         self._sink = ctx.sink
+        prior = ctx.sink.read_json(stats_rel_path(ctx.worker_id)) or {}
+        now = time.time()
         self._record = {
             "worker_id": ctx.worker_id,
-            "kind": ctx.sink.kind,
+            "kind": ctx.kind,
             "role": ctx.role.name,
             "threads": ctx.threads,
-            "started_at": time.time(),
-            "updated_at": time.time(),
-            "units_total": 0,
-            "cycles_total": 0,
+            "started_at": prior.get("started_at", now),  # the slot's first start
+            "updated_at": now,
+            "units_total": prior.get("units_total", 0),
+            "cycles_total": prior.get("cycles_total", 0),
             "recent": [],
             **ctx.provenance,
         }
@@ -57,4 +71,4 @@ class WorkerStats:
             }
         )
         del r["recent"][:-RECENT_SAMPLES]
-        self._sink.push_json(f"stats/{r['worker_id']}.json", r)
+        self._sink.push_json(stats_rel_path(r["worker_id"]), r)

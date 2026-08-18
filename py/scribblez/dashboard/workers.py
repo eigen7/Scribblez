@@ -263,6 +263,7 @@ class WorkerManager:
             "SCZ_SINK": "local",
             "SCZ_THREADS": str(w.threads),
             "SCZ_WORKER_ID": w.worker_id,
+            "SCZ_WORKER_KIND": "local",
         }  # fmt: skip
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
@@ -331,6 +332,7 @@ class WorkerManager:
         env = bundle_worker_env(
             creds, spec, task.tag, params,
             role=w.role, bundle_id=resolve_bundle_id(creds.r2, "latest"), worker_id=w.worker_id,
+            kind="ssh",
         )  # fmt: skip
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)

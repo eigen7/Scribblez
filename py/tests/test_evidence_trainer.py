@@ -474,6 +474,9 @@ class _Sink:
     def push_json(self, rel, obj):
         pass
 
+    def read_json(self, rel):
+        return None
+
 
 def _ctx(tmp_path, tag, params):
     from types import SimpleNamespace

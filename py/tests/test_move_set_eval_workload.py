@@ -36,6 +36,9 @@ class RecordingSink:
     def push_json(self, rel_path, obj):
         pass
 
+    def read_json(self, rel_path):
+        return None
+
 
 def test_workload_is_registered_with_a_valid_schema():
     spec = workloads.get("move_set_eval")
@@ -343,6 +346,7 @@ class StubCtx:
         self.tag = "t"
         self.params = MoveSetEvalParams()
         self.worker_id = "w0"
+        self.kind = "local"
         self.threads = 1
         self.max_cycles = max_cycles
         self.sink = sink
@@ -421,6 +425,9 @@ class StoringSink:
 
     def push_json(self, rel_path, obj):
         pass
+
+    def read_json(self, rel_path):
+        return None
 
 
 def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):

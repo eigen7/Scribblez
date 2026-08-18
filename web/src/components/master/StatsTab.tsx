@@ -12,7 +12,7 @@ import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
 type RoleStats = { title: string; unit: string; phases: Record<string, string> };
 type WorkerRow = {
   worker_id: string; role: string | null; kind: string; threads: number | null;
-  host_arch: string | null; bundle_arch: string | null;
+  bundle_id: string | null; host_arch: string | null; bundle_arch: string | null;
   units_total: number; cycles_total: number; updated_at: number;
   units_per_hour: number | null; phases: Record<string, number>; upload_mbps: number | null;
 };
@@ -85,6 +85,15 @@ function defaultRender(col: Col, w: WorkerRow): ReactNode {
   return typeof v === 'number' && !Number.isInteger(v) ? fmt(v) : String(v);
 }
 
+// A bundle id is "<git-sha-12>[-dirty]-<content-hash-8>"; the table shows the
+// git half (what identifies the code) and carries the whole id as a tooltip.
+// A local worker runs the controller's own tree and has no bundle.
+function bundleLabel(w: WorkerRow): ReactNode {
+  if (w.bundle_id == null) return dim('—');
+  const [sha, dirty] = w.bundle_id.split('-');
+  return <span title={w.bundle_id}>{sha}{dirty === 'dirty' ? '-dirty' : ''}</span>;
+}
+
 function archLabel(w: WorkerRow): ReactNode {
   if (w.host_arch == null) return dim('—');
   const runs = w.bundle_arch && w.bundle_arch !== w.host_arch ? ` (runs ${w.bundle_arch})` : '';
@@ -96,6 +105,7 @@ function columns(stats: RoleStats): Col[] {
     { header: 'worker', key: (w) => w.worker_id },
     { header: 'kind', key: (w) => w.kind },
     { header: 'threads', key: (w) => w.threads, numeric: true },
+    { header: 'bundle', key: (w) => w.bundle_id, render: bundleLabel },
     { header: 'arch', key: (w) => w.host_arch, render: archLabel },
     {
       header: stats.unit, key: (w) => w.units_total, numeric: true,
