@@ -68,7 +68,7 @@ Move hasty_best_move_reference(const MoveRequest& req) {
       have = true;
     }
   }
-  return have ? best : Move::pass();
+  return have ? best : exchange_or_pass(req);
 }
 
 namespace {
@@ -161,7 +161,7 @@ Move hasty_best_move_gaddag(const MoveRequest& req) {
     smg.generate_anchor(anchors[i], req.my_rack, moves);
     consider_moves(eq, req, leaves, moves, bm);
   }
-  return bm.have ? bm.move : Move::pass();
+  return bm.have ? bm.move : exchange_or_pass(req);
 }
 
 // Enumerates every non-empty sub-multiset of a rack and, in the same depth-first
@@ -339,7 +339,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
                         sub_terms[e.placed].data());
     consider_moves(eq, req, leaves, moves, bm);
   }
-  return bm.have ? bm.move : Move::pass();
+  return bm.have ? bm.move : exchange_or_pass(req);
 }
 
 // The HastyBot --player options, binding the softmax-sampler controls to the
@@ -373,7 +373,7 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   // generation that pure argmax play lacks.
   const std::vector<Move> plays = generate_legal_plays(req);
   const int n = plays.size();
-  if (n == 0) return Move::pass();
+  if (n == 0) return exchange_or_pass(req);
   const HastyEquity& eq = HastyEquity::instance();
   const std::vector<double> vals =
     eq.equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);

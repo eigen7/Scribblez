@@ -7,6 +7,7 @@
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
 #include "data/format_layout.h"
+#include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
@@ -3918,6 +3919,105 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   ASSERT_EQ(hasty_pick, topk1_pick);
 
   fs::remove_all(tmp);
+}
+
+// Regression: an all-consonant rack (no vowels) on an empty board has no legal
+// PLAY. HastyBot's move-selection paths used to fall straight through to
+// Move::pass() in that case without ever considering an exchange, even though
+// exchanging strictly dominates passing (both score 0, but exchanging gives a
+// shot at a better rack next turn). It must exchange whenever the bag can
+// support one, matching GreedyAgent's existing no-legal-play fallback.
+TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_hasty_exchange_XXXXXX";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  Dictionary dict = tiny_dict();  // no all-consonant entries
+  Board board;                    // empty board
+  Rack rack = rack_from("DDGPTWZ");
+  Rack opp;  // empty
+
+  MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
+  ASSERT_TRUE(generate_legal_plays(req).empty());  // sanity: no placement exists
+
+  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
+  const Move chosen = agent.make_move(req).move;
+  ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
+
+  fs::remove_all(tmp);
+}
+
+// Same regression, but on a real mid-game board instead of the empty-board
+// opening case above. Position lifted from an actual HastyBot-vs-HastyBot
+// self-play game (turn 30, NWL23): the mover holds AEFIORX with no legal PLAY
+// on the board these 29 prior turns produced, and HastyBot must exchange
+// rather than pass. Gated on the real NWL23 lexicon the game was generated
+// against (not committed to the repo).
+TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
+  const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
+  const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
+  if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
+    GTEST_SKIP() << "no NWL23 kwg/leaves";
+  }
+  HastyEquity::ensure_initialized("NWL23");
+  Dictionary dict = Dictionary::load_kwg(kwg_path);
+
+  // clang-format off
+  const std::string gcg_text = R"GCG(
+#character-encoding UTF-8
+#player1 HastyBot1 HastyBot
+#player2 HastyBot2 HastyBot
+#Rack1 AEFIORX
+>HastyBot1: AGMORTY H8 GOATY +26 26
+>HastyBot2: AEEORUW I8 OWE +24 24
+>HastyBot1: EIMMNRT G9 MM +25 51
+>HastyBot2: AEEIPRU 12H .AUPER +22 46
+>HastyBot1: EINNNRT 13J NINER +22 73
+>HastyBot2: EEIIUVV 14I VIE +18 64
+>HastyBot1: EFINOST 8H ..OFIEST +39 112
+>HastyBot2: DEIIUUV 7M DUI +15 79
+>HastyBot1: DDLNPS? J7 D.NS +24 136
+>HastyBot2: EIJNTUV N4 UNJ..T +29 108
+>HastyBot1: CDELPS? O1 CEPS +30 166
+>HastyBot2: EEINSTV 14M VET +22 130
+>HastyBot1: ADEGLL? 4J GALL.. +14 180
+>HastyBot2: ABEEINS 2J BEANI. +28 158
+>HastyBot1: AADEOT? 5J ODA +19 199
+>HastyBot2: AEHIIRS 1K AHI +23 181
+>HastyBot1: AEILOT? 15N TO +15 214
+>HastyBot2: DEIILRS M7 ..IL +9 190
+>HastyBot1: ABEEIL? 7J .E +8 222
+>HastyBot2: CDEIORS 5I C... +7 197
+>HastyBot1: ABEEIL? 10L E. +2 224
+>HastyBot2: DEHIORS 15K DO +11 208
+>HastyBot1: ABEFIL? L4 ..B +5 229
+>HastyBot2: AEHIRST K11 S.... +16 224
+>HastyBot1: AEFILX? N4 ......Ly +21 250
+>HastyBot2: AEHINRT O11 AH +10 234
+)GCG";
+  // clang-format on
+
+  ParsedGcgPosition pos;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position(gcg_text, /*open_leaves=*/false, &pos, &error)) << error;
+  ASSERT_EQ(pos.mover, 0);
+  ASSERT_EQ(pos.rack.to_string(), "AEFIORX");
+
+  const int my_score = pos.scores[pos.mover];
+  const int opp_score = pos.scores[1 - pos.mover];
+  MoveRequest req{pos.board, dict, pos.rack, pos.opp_leave, my_score, opp_score, pos.bag_size};
+  ASSERT_TRUE(generate_legal_plays(req).empty());  // sanity: no placement exists
+
+  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
+  const Move chosen = agent.make_move(req).move;
+  ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 }
 
 // ===========================================================================

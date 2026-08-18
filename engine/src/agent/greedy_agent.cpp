@@ -44,10 +44,7 @@ MoveDecision GreedyAgent::make_move(const MoveRequest& req) {
     return *top[d(rng_)];
   }
   // No legal plays.
-  if (req.bag_size >= RACK_SIZE) {
-    return Move::exchange(req.my_rack.counts());
-  }
-  return Move::pass();
+  return exchange_or_pass(req);
 }
 
 std::unique_ptr<GreedyAgent> GreedyAgent::from_spec(const std::vector<std::string>& tokens,

@@ -79,6 +79,10 @@ struct MoveDecision {
 // exists. Game's random-opening mode reaches off-policy positions with it.
 Move pick_uniform_random_play(const MoveRequest& req, std::mt19937_64& rng);
 
+// The fallback for an agent that found no legal PLAY: exchanging the whole
+// rack when the bag can support it, else passing (the only legal move left).
+Move exchange_or_pass(const MoveRequest& req);
+
 class Agent {
  public:
   Agent(int thread_id, const std::string& name) : thread_id_(thread_id), name_(name) {}
