@@ -38,12 +38,18 @@ and workload-specific analysis — all from the browser.
   stream into the local mount. A slot's *actual* state can diverge from
   desired (an operator-stopped pod, a dead subprocess, a reclaimed
   interruptible pod, an ssh machine that is off the network); the UI shows
-  both, and the server reconciles desired vs. actual on startup and
-  periodically.
+  both, and the server reconciles desired vs. actual on startup and every few
+  seconds. That pass is the only thing that talks to a machine or the cloud
+  API, and it does so off the event loop; every status request is served from
+  what it last observed, so no slow host can stall the dashboard. A slot the
+  pass has not reached yet reads `checking`.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as
-  `waiting (<reason>)` and resume automatically when released.
+  `waiting (<reason>)` and resume automatically when released. Parking suspends
+  what it cheaply can (an ssh container is paused, keeping its unpacked bundle
+  and in-flight chunk) and stops what it must: a local worker, which restarts
+  in a second, and a cloud pod, which bills while it idles.
 - **Interruptible rentals** — roles that tolerate preemption (the generators:
   at most one in-flight cycle lost) rent interruptible pods for the discount;
   preemption is handled by the reconcile loop, not a human.
@@ -99,7 +105,10 @@ An ssh slot's machine is prepared once, by hand:
 Slots then behave like pods: the machine's CPU arch picks its bundle (generic
 `x86-64` fallback), results and stats ride the bucket and the sync watcher,
 and the reconcile loop restarts a container that died (e.g. the machine
-rebooted). The bundle itself is deployed for you -- a task builds and pushes
+rebooted). A scheduler gate parks the container by pausing it rather than
+stopping it, so a gate that flips every minute costs nothing: no bundle
+refetch, and the chunk in flight survives. An operator pause still stops it
+(cleanly, flushing completed output). The bundle itself is deployed for you -- a task builds and pushes
 the controller's tree when its first remote worker starts, and pins the
 result, so every worker of one task runs identical code and editing code
 mid-run does not change what the fleet is executing. The Overview badges the

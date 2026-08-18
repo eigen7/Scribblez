@@ -97,6 +97,17 @@ class _MasterBase(tornado.web.RequestHandler):
             self.set_status(400)
             self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
 
+    async def guarded_offload(self, fn):
+        """`guarded`, with `fn` run off the event loop in the worker manager's
+        executor. Launching, removing and deploying are seconds of ssh, cloud
+        API and build work; the loop has to stay free to serve the status polls
+        the operator is watching while they happen."""
+        try:
+            self.write(await self.manager.offload(fn))
+        except _CLIENT_ERRORS as e:
+            self.set_status(400)
+            self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
+
     def task_or_fail(self, spec, tag: str) -> tasks.TaskRecord:
         task = tasks.load_task(spec, tag)
         assert task is not None, f"tag '{tag}' has no task record"
@@ -179,7 +190,7 @@ class TaskDeployHandler(_MasterBase):
     bucket lacks it, repin. Running remote workers are replaced with ones on
     the new bundle as reconcile next observes them."""
 
-    def post(self):
+    async def post(self):
         body = self.body()
         spec = self.spec(body)
 
@@ -187,7 +198,7 @@ class TaskDeployHandler(_MasterBase):
             task = self.task_or_fail(spec, body["tag"])
             return {"bundle_id": self.manager.deploy(spec, task)}
 
-        self.guarded(deploy)
+        await self.guarded_offload(deploy)
 
 
 class WorkerAddHandler(_MasterBase):
@@ -218,7 +229,7 @@ class WorkerAddHandler(_MasterBase):
 
 
 class WorkerActionHandler(_MasterBase):
-    def post(self):
+    async def post(self):
         body = self.body()
         spec = self.spec(body)
 
@@ -236,7 +247,7 @@ class WorkerActionHandler(_MasterBase):
                     self.manager.set_worker_state(spec, task, worker_id, run=action == "start")
             return {"ok": True, "workers": worker_ids}
 
-        self.guarded(act)
+        await self.guarded_offload(act)
 
 
 class CloudOffersHandler(_MasterBase):
