@@ -148,6 +148,9 @@ class EvidenceTrajectoriesParams:
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head (points)")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
+    grad_clip: float = param(
+        1.0, "max gradient norm over the fusion + proves-best params per step (0 = no clipping)"
+    )
 
 
 def max_evidence(params: EvidenceTrajectoriesParams) -> int:

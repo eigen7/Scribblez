@@ -138,6 +138,18 @@ class EvidenceFusion(nn.Module):
             nn.Linear(channels, channels),
         )
         self.token_fuse = nn.Linear(2 * channels + 2 * d_spatial, channels)
+        # Normalization at the stage's seams. Nothing upstream of these points
+        # is normalized (the token encoder is linear, the trunk map arrives as
+        # is), so under a peak-LR Adam run their scales drift up without bound
+        # -- the first evidence run's tokens grew 40x while its loss stood
+        # still, and its board rewrite outgrew the trunk map it corrects; the
+        # frozen scoring attention reading that inflated map is where the
+        # gradients blew up. Each norm sits before a zero-init projection, so
+        # the empty-set exactness contract is untouched.
+        self.token_norm = nn.LayerNorm(channels)
+        self.attended_norm = nn.LayerNorm(channels)
+        self.local_norm = nn.LayerNorm(d_spatial)
+        self.pooled_norm = nn.LayerNorm(channels)
         self.self_attn = nn.TransformerEncoderLayer(
             d_model=channels,
             nhead=num_heads,
@@ -148,6 +160,15 @@ class EvidenceFusion(nn.Module):
         self.q_proj = nn.Linear(channels, channels)
         self.k_proj = nn.Linear(channels, channels)
         self.v_proj = nn.Linear(channels, channels)
+        # QK-norm: the queries come straight off the trunk's board map and the
+        # keys off the token encoder, neither normalized, so without this the
+        # attention logits scale with the projection weights -- which Adam
+        # grows at a steady per-step rate whatever the gradient says, until a
+        # near-saturated softmax's transition gradients blow the run up (seen
+        # at the peak LR of the first evidence run). Normalizing per head
+        # bounds the logits; the learned affine keeps the temperature free.
+        self.q_norm = nn.LayerNorm(self.head_dim)
+        self.k_norm = nn.LayerNorm(self.head_dim)
         self.out_proj = _zero_init(nn.Linear(channels, channels))
         self.spatial_out = _zero_init(nn.Linear(d_spatial, channels))
         self.summary_out = _zero_init(nn.Linear(channels, 3 * channels))
@@ -165,7 +186,7 @@ class EvidenceFusion(nn.Module):
         feats = self.plane_conv(obs_planes.flatten(0, 1))  # (P*E, d, 15, 15)
         pooled = mean_max_pool(feats)  # (P*E, 2d)
         parts = [move_enc.flatten(0, 1), self.scalar_mlp(obs_scalars.flatten(0, 1)), pooled]
-        tokens = self.token_fuse(torch.cat(parts, dim=1))
+        tokens = self.token_norm(self.token_fuse(torch.cat(parts, dim=1)))
         return tokens.view(p, e, -1), feats.flatten(2).view(p, e, feats.shape[1], -1)
 
     def forward(
@@ -199,9 +220,11 @@ class EvidenceFusion(nn.Module):
         # the per-square half of the evidence, which pooling into a token
         # vector would erase.
         local = torch.einsum("pne,pedn->pnd", weights, spatial_feats)
-        delta = self.out_proj(attended) + self.spatial_out(local)
+        delta = self.out_proj(self.attended_norm(attended)) + self.spatial_out(
+            self.local_norm(local)
+        )
 
-        pooled = t.sum(dim=1) / denom.unsqueeze(-1)  # (P, C)
+        pooled = self.pooled_norm(t.sum(dim=1) / denom.unsqueeze(-1))  # (P, C)
         # Empty sets take the plain path bit-exactly, whatever the weights.
         has_evidence = mask.any(dim=1).to(board.dtype)
         board = board + delta * has_evidence.view(-1, 1, 1)
@@ -224,8 +247,8 @@ class EvidenceFusion(nn.Module):
         h, d = self.num_heads, self.head_dim
         attend_to = mask.clone()
         attend_to[:, 0] |= ~mask.any(dim=1)
-        q = self.q_proj(board).view(p, n, h, d).transpose(1, 2)  # (P, H, 225, d)
-        k = self.k_proj(tokens).view(p, -1, h, d).transpose(1, 2)  # (P, H, E, d)
+        q = self.q_norm(self.q_proj(board).view(p, n, h, d)).transpose(1, 2)  # (P, H, 225, d)
+        k = self.k_norm(self.k_proj(tokens).view(p, -1, h, d)).transpose(1, 2)  # (P, H, E, d)
         v = self.v_proj(tokens).view(p, -1, h, d).transpose(1, 2)
         logits = q @ k.transpose(-1, -2) / math.sqrt(d)  # (P, H, 225, E)
         logits = logits.masked_fill(~attend_to[:, None, None, :], -torch.inf)

@@ -162,7 +162,26 @@ def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
 
 
-def _metrics_record(epoch: int, state, settled: bool, losses: dict, m: dict, lr: float) -> dict:
+# Skipped (non-finite) batches tolerated per pass before the run is stopped:
+# an isolated bad batch is survivable, a stream of them is a diverged model.
+MAX_SKIPPED_PER_PASS = 10
+
+
+def check_finite(model, result):
+    """Stop the run -- before anything is checkpointed -- when the pass
+    diverged: non-finite parameters, or more skipped batches than an isolated
+    incident. The rolling checkpoint then holds the last good pass, and the
+    worker exits non-zero instead of logging NaN passes to the budget."""
+    bad = [n for n, p in model.named_parameters() if not torch.isfinite(p).all()]
+    if bad:
+        raise RuntimeError(f"diverged: non-finite parameters {bad[:4]}")
+    if result.skipped > MAX_SKIPPED_PER_PASS:
+        raise RuntimeError(f"diverged: {result.skipped} batches with a non-finite loss this pass")
+
+
+def _metrics_record(
+    epoch: int, state, settled: bool, losses: dict, m: dict, lr: float, skipped: int
+) -> dict:
     """The dashboard row: losses, and the plain-vs-conditioned metrics as
     *_acc series (the Loss tab's Accuracy panel) with the rest in the table."""
     record = {
@@ -174,6 +193,7 @@ def _metrics_record(epoch: int, state, settled: bool, losses: dict, m: dict, lr:
         "loss_score_diff": losses["score_diff"],
         "loss_gain": losses["gain"],
         "lr": lr,
+        "skipped_batches": skipped,
     }
     for k in ("cond_wld_ce", "plain_wld_ce", "cond_wld_ce_ev", "plain_wld_ce_ev"):
         if k in m:
@@ -210,6 +230,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     state.generation_index = epoch + 1
     state.settled_epochs += int(settled)
     train_s = time.time() - t0
+    check_finite(model, result)
 
     t1 = time.time()
     m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
@@ -229,9 +250,11 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         f"gain_mae={m.get('gain_mae', float('nan')):.4f} "
         f"gain_hit={m.get('gain_hit', float('nan')):.3f} "
         f"(base {m.get('gain_hit_baseline', float('nan')):.3f}) "
-        f"p0_maxdiff={m['exact_p0_maxdiff']:.1e} lr={lr_now:.2e} {train_s:.1f}s [{budget}]"
+        f"p0_maxdiff={m['exact_p0_maxdiff']:.1e} lr={lr_now:.2e} "
+        f"skipped={result.skipped} {train_s:.1f}s [{budget}]"
     )
-    db.write_metrics(conn, epoch, _metrics_record(epoch, state, settled, result.losses, m, lr_now))
+    record = _metrics_record(epoch, state, settled, result.losses, m, lr_now, result.skipped)
+    db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
     ctx["stats"].cycle_done(
@@ -329,4 +352,7 @@ def run(ctx: WorkerContext) -> int:
         )
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
+    except RuntimeError as e:
+        timed_print(f"{e}; the rolling checkpoint holds the last finite pass. Exiting.")
+        return 1
     return 0
