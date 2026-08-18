@@ -54,6 +54,7 @@ def worker_summary(record: dict, stats: StatsSpec) -> dict:
         "role": record.get("role"),
         "kind": record["kind"],
         "threads": record.get("threads"),
+        "bundle_id": record.get("bundle_id"),
         "host_arch": record.get("host_arch"),
         "bundle_arch": record.get("bundle_arch"),
         "units_total": record["units_total"],

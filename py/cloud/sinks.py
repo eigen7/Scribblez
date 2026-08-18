@@ -8,10 +8,11 @@ A role runner produces files in a private work dir and hands them to the sink:
                 <workload>/<tag>/ and the local copy deleted (the bucket is the
                 destination; the pod disk is scratch)
 
-Both expose the same two calls: `deliver(src, data_rel)` for data files
-(relative to the tag's data/ tree, mirrored as the bucket prefix) and
+Both expose the same three calls: `deliver(src, data_rel)` for data files
+(relative to the tag's data/ tree, mirrored as the bucket prefix),
 `push_json(rel, obj)` for small records (stats, provenance manifests, relative
-to the tag root / bucket prefix).
+to the tag root / bucket prefix), and `read_json(rel)` to read one back -- how
+a restarted worker recovers the counters it published before.
 """
 
 import json
@@ -32,6 +33,12 @@ class LocalSink:
         path = self._root / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(obj, indent=2) + "\n")
+
+    def read_json(self, rel_path: str) -> dict | None:
+        try:
+            return json.loads((self._root / rel_path).read_text())
+        except FileNotFoundError:
+            return None
 
     def deliver(self, src: Path, data_rel: str) -> int:
         """Move `src` to <tag>/data/<data_rel> (atomic rename). Returns 0: no
@@ -61,6 +68,18 @@ class R2Sink:
             input_text=json.dumps(obj, indent=2) + "\n",
         )
         assert res.returncode == 0, f"upload of {rel_path} failed: {res.stderr}"
+
+    def read_json(self, rel_path: str) -> dict | None:
+        """The record previously published at `rel_path`, or None if the
+        bucket has none (a first run) -- also None if the read itself fails,
+        which costs a restarted worker its counter history and nothing more."""
+        res = rclone(self._r2, "cat", self._path(*rel_path.split("/")), capture=True)
+        if res.returncode != 0:
+            return None
+        try:
+            return json.loads(res.stdout)
+        except json.JSONDecodeError:
+            return None
 
     def deliver(self, src: Path, data_rel: str) -> int:
         """Upload `src` to <workload>/<tag>/<data_rel> and delete the local

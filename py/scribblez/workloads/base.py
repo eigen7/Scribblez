@@ -138,6 +138,9 @@ class WorkerContext:
     threads: int
     max_cycles: int  # 0 = run until stopped
     sink: object  # cloud.sinks.LocalSink | R2Sink
+    # The slot kind reported in stats. In-process runners (CLI tools, tests)
+    # are local by construction; only a launcher of remote workers overrides it.
+    kind: str = "local"
     provenance: dict = field(default_factory=dict)
 
     def tag_paths(self) -> TagPaths:

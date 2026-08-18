@@ -79,15 +79,21 @@ def bundle_worker_env(
     role: str,
     bundle_id: str,
     worker_id: str,
+    kind: str,
 ) -> dict[str, str]:
     """The full environment for a worker that boots the image + bundle flow
     (a cloud pod or an ssh machine's container): bucket credentials, the
-    workload's SCZ_* definition, the bundle to run, and the slot identity."""
+    workload's SCZ_* definition, the bundle to run, and the slot identity.
+
+    `kind` travels because the worker cannot infer it: a pod and an ssh
+    container are the same image on the same bundle delivering to the same
+    bucket, and only the launcher knows which it started."""
     return {
         **r2_env(creds),
         **spec.worker_env(tag, params, role),
         "SCZ_BUNDLE": bundle_id,
         "SCZ_WORKER_ID": worker_id,
+        "SCZ_WORKER_KIND": kind,
     }
 
 
@@ -125,7 +131,7 @@ def pod_create_spec(
     """The POST /pods body for one cloud worker. Shared by this CLI and the
     dashboard's WorkerManager so pods are identical however launched."""
     env = bundle_worker_env(
-        creds, spec, tag, params, role=role, bundle_id=bundle_id, worker_id=name
+        creds, spec, tag, params, role=role, bundle_id=bundle_id, worker_id=name, kind="cloud"
     )
     return {
         "name": name,

@@ -81,6 +81,20 @@ def to_env(params) -> dict[str, str]:
     return out
 
 
+def unknown_env(params_cls: type, env=os.environ, *, allowed=()) -> list[str]:
+    """The SCZ_* variables in `env` naming neither a parameter of `params_cls`
+    nor one of `allowed` (the launcher's own worker-level knobs).
+
+    from_env reads the schema, not the environment, so a parameter the schema
+    predates is silently ignored rather than misapplied -- which lets a worker
+    on stale code produce data that looks valid and is not. Callers that know
+    the full set of variables they were launched with use this to refuse
+    instead.
+    """
+    known = {ENV_PREFIX + f.name.upper() for f in schema(params_cls)} | set(allowed)
+    return sorted(k for k in env if k.startswith(ENV_PREFIX) and k not in known)
+
+
 def from_env(params_cls: type, env=os.environ):
     """Build params from SCZ_* variables; absent variables keep their defaults."""
     kwargs = {}
