@@ -30,7 +30,7 @@ import tornado.web
 from bokeh.embed import json_item
 
 from scribblez import lane_analysis
-from scribblez.dashboard import db, master_api, plots
+from scribblez.dashboard import db, master_api, plots, trajectories_api
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     analyze_gcg,
@@ -770,6 +770,7 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
             (r"/api/position_eval/generations", PositionEvalGenerationsHandler),
             (r"/api/position_eval/position", PositionEvalPositionHandler),
             (r"/api/position_eval/alt_leave", PositionEvalAltLeaveHandler),
+            *trajectories_api.ROUTES,
         ],
         mount_root=mount_root,
         worker_manager=worker_manager,

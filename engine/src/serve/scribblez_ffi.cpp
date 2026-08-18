@@ -25,11 +25,13 @@
 #include "training/move_set_encoder.h"
 #include "training/position_eval_analysis.h"
 #include "training/training_targets.h"
+#include "training/trajectory_position.h"
 
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -69,6 +71,11 @@ struct ScribblezSession {
   int position_eval_analyze_gcg(const char* gcg_text, float* out_input) const;
   int position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str, float* out_input,
                                       char* out_err, int err_cap) const;
+  int gcg_position_inputs(const char* gcg_text, bool contingent_features, bool opp_leave_input,
+                          float* out_input, int input_cap, int32_t* out_score_diff, void* out_moves,
+                          int moves_cap, char* out_err, int err_cap) const;
+  int gcg_position_board_json(const char* gcg_text, bool open_leaves, char* out_json,
+                              int out_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
                            int task) const;
   StreamHandle* stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
@@ -480,6 +487,71 @@ int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* g
                                               const char* leave_str, float* out_input,
                                               char* out_err, int err_cap) {
   return s->position_eval_analyze_gcg_leave(gcg_text, leave_str, out_input, out_err, err_cap);
+}
+
+int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_features,
+                                          bool opp_leave_input, float* out_input, int input_cap,
+                                          int32_t* out_score_diff, void* out_moves, int moves_cap,
+                                          char* out_err, int err_cap) const {
+  if (out_err && err_cap > 0) out_err[0] = '\0';
+  if (!gcg_text || !out_input || !out_score_diff || (!out_moves && moves_cap > 0)) return -1;
+  try {
+    const scribblez::InputEncodingSpec arm{spec.dict, contingent_features, opp_leave_input};
+    if (scribblez::input_floats(arm) != input_cap) {
+      emit_string(std::format("input buffer holds {} floats but the arm encodes {}", input_cap,
+                              scribblez::input_floats(arm)),
+                  out_err, err_cap);
+      return -1;
+    }
+    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+    scribblez::TrajectoryDecision d;
+    std::string error;
+    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, opp_leave_input, &d, &error)) {
+      emit_string(error, out_err, err_cap);
+      return -1;
+    }
+    int score_diff = 0;
+    scribblez::encode_trajectory_decision(d, arm, out_input, &score_diff);
+    *out_score_diff = score_diff;
+    const int n = d.legal_moves.size();
+    if (n > 0 && moves_cap > 0) {
+      std::memcpy(out_moves, d.legal_moves.data(),
+                  size_t(std::min(n, moves_cap)) * sizeof(scribblez::Move));
+    }
+    return n;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
+int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text,
+                                  int contingent_features, int opp_leave_input, float* out_input,
+                                  int input_cap, int32_t* out_score_diff, void* out_moves,
+                                  int moves_cap, char* out_err, int err_cap) {
+  return s->gcg_position_inputs(gcg_text, contingent_features != 0, opp_leave_input != 0, out_input,
+                                input_cap, out_score_diff, out_moves, moves_cap, out_err, err_cap);
+}
+
+int ScribblezSession::gcg_position_board_json(const char* gcg_text, bool open_leaves,
+                                              char* out_json, int out_cap) const {
+  if (!gcg_text) return -1;
+  try {
+    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+    scribblez::TrajectoryDecision d;
+    std::string error;
+    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, open_leaves, &d, &error)) {
+      return -1;
+    }
+    return emit_string(scribblez::trajectory_decision_board_json(d), out_json, out_cap);
+  } catch (const std::exception&) {
+    return -1;
+  }
+}
+
+int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text, int open_leaves,
+                                      char* out_json, int out_cap) {
+  return s->gcg_position_board_json(gcg_text, open_leaves != 0, out_json, out_cap);
 }
 
 int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,

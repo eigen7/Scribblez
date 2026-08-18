@@ -35,6 +35,8 @@
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "training/training_task.h"
+#include "training/trajectory_position.h"
+#include "util/io.h"
 #include "util/math.h"
 #include "util/metaprogramming.h"
 #include "util/string.h"
@@ -5129,4 +5131,55 @@ TEST(MaxMovePerLane, TaskRow) {
     for (int i = 0; i < MaxMovePerLaneTask::kLabelFloats; ++i)
       ASSERT_EQ(row[MaxMovePerLaneTask::kInputFloats + i], ref_lab[i]);
   }
+}
+
+// The trajectory pane's decision-point reading of a position-set .gcg
+// (training/trajectory_position.h): the exhibit position parses to the seat,
+// rack and known leave its README states, the board row is the open-leaves
+// arm's, the score differential is the mover's, and every legal move --
+// among them the recorded HastyBot play, E11 GAVE (through the A of INCASED,
+// so "E11 G.VE") -- carries a notation in the bundle. Requires the NWL23 KWG +
+// leaves; skipped if absent.
+TEST(TrajectoryPosition, ExhibitDecisionPoint) {
+  namespace fs = std::filesystem;
+  using namespace scribblez;
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
+  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
+  const std::string gcg_path =
+    std::string(SCRIBBLEZ_POSITIONS_DIR) + "/NWL23/face-up-trajectory-set/egotize-lane.gcg";
+  if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  Dictionary dict = Dictionary::load_kwg(kwg);
+  HastyEquity::init(leaves, HastyEquity::default_peg_path());
+
+  TrajectoryDecision d;
+  std::string error;
+  ASSERT_TRUE(
+    read_trajectory_decision(util::read_file(gcg_path), dict, /*open_leaves=*/true, &d, &error))
+    << error;
+  EXPECT_EQ(d.position.mover, 0);
+  EXPECT_EQ(d.position.rack.to_string(), "AEEGSTV");
+  EXPECT_EQ(d.position.opp_leave.to_string(), "");  // Hasty_2 just bingoed
+  EXPECT_EQ(d.position.scores[0], 440);
+  EXPECT_EQ(d.position.scores[1], 387);
+  ASSERT_GT(d.legal_moves.size(), 100u);
+  const boost::json::object bundle =
+    boost::json::parse(trajectory_decision_board_json(d)).as_object();
+  const boost::json::array& notations = bundle.at("moves").as_array();
+  ASSERT_EQ(notations.size(), d.legal_moves.size());
+  bool saw_gave = false;
+  for (const auto& n : notations) saw_gave |= n.as_string() == "E11 G.VE";
+  EXPECT_TRUE(saw_gave);
+  EXPECT_EQ(bundle.at("mover").as_int64(), 0);
+  EXPECT_EQ(bundle.at("scores").as_array()[0].as_int64(), 440);
+  EXPECT_EQ(bundle.at("rack").as_array().size(), 7u);
+
+  const InputEncodingSpec arm{&dict, /*contingent_features=*/false, /*opp_leave_input=*/true};
+  std::vector<float> row(size_t(input_floats(arm)));
+  int score_diff = 0;
+  encode_trajectory_decision(d, arm, row.data(), &score_diff);
+  EXPECT_EQ(score_diff, 440 - 387);
+  // The hidden arm's row is a prefix-shaped sibling: same spatial block,
+  // fewer scalars.
+  const InputEncodingSpec hidden{&dict, false, false};
+  EXPECT_EQ(input_floats(arm), input_floats(hidden) + kOppLeaveCountFloats);
 }

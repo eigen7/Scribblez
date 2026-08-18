@@ -61,6 +61,7 @@ add_library(scribblez_core STATIC
   src/agent/sim_agent.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
+  src/training/trajectory_position.cpp
   src/util/seed_producer.cpp
   src/serve/web_server.cpp
   src/util/string.cpp
@@ -276,7 +277,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # setup_wizard.py) so they cross-validate against the real GADDAG when it is
   # installed (the .kwg is not committed; the tests skip gracefully if absent).
   target_compile_definitions(scribblez_tests PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+    SCRIBBLEZ_POSITIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../positions")
   gtest_discover_tests(scribblez_tests)
 
   # GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction

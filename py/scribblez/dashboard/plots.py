@@ -161,6 +161,16 @@ EVIDENCE_QUALITY = [
     ),
     ("Held-out value MAE: conditioned vs plain", ["cond_value_mae", "plain_value_mae"]),
     ("Proves-best gain MAE", ["gain_mae", "gain_mae_ev"]),
+    # The hand-maintained position set (positions/NWL23/face-up-trajectory-set,
+    # what the Trajectories tab shows): over every position and evidence
+    # prefix, the rank of the sim-best simmed candidate under the conditioned
+    # value vs the plain one (0 = best; lower is better), and how often each
+    # value's argmax over the simmed candidates is that sim-best one.
+    (
+        "Position set: sim-best rank, conditioned vs plain",
+        ["posset_cond_rank", "posset_plain_rank"],
+    ),
+    ("Position set: sim-best hit rate", ["posset_cond_hit", "posset_plain_hit"]),
 ]
 MSET_QUALITY = [
     ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_baseline"]),

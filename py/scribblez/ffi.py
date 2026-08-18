@@ -269,6 +269,30 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_format_layout_json.restype = ctypes.c_char_p
     lib.scribblez_format_layout_json.argtypes = []
 
+    lib.scribblez_gcg_position_inputs.restype = ctypes.c_int
+    lib.scribblez_gcg_position_inputs.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # gcg text
+        ctypes.c_int,  # contingent_features
+        ctypes.c_int,  # opp_leave_input
+        ctypes.POINTER(ctypes.c_float),  # out_input
+        ctypes.c_int,  # input_cap
+        ctypes.POINTER(ctypes.c_int32),  # out_score_diff
+        ctypes.c_void_p,  # out_moves
+        ctypes.c_int,  # moves_cap
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
+    lib.scribblez_gcg_position_board_json.restype = ctypes.c_int
+    lib.scribblez_gcg_position_board_json.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+
 
 _SETUP_DONE = False
 
@@ -723,6 +747,98 @@ def position_eval_board_json(gcg_text: str) -> dict:
         cap = n + 1
         out = ctypes.create_string_buffer(cap)
         n = fn(encoded, out, cap)
+    return json.loads(out.value.decode("utf-8"))
+
+
+@dataclass(frozen=True)
+class GcgPositionInputs:
+    """A position-set .gcg's decision point as the move set evaluation model's
+    inputs (see gcg_position_inputs)."""
+
+    input_spatial: np.ndarray  # (planes, 15, 15) float32
+    input_scalar: np.ndarray  # (scalars,) float32
+    score_diff: int  # the mover's pre-move score differential (points)
+    moves: np.ndarray  # (N,) MOVE_DTYPE: the full legal move list, equity-ranked
+
+
+# The legal-move buffer's first-try capacity; a busier position retries at the
+# reported count.
+_GCG_MOVES_FIRST_CAP = 4096
+
+
+def gcg_position_inputs(
+    gcg_text: str,
+    *,
+    contingent_features: bool,
+    opp_leave_input: bool,
+    spatial_planes: int,
+    scalar_size: int,
+) -> GcgPositionInputs:
+    """Encode a position-set .gcg's decision point (final recorded state, side
+    to move next, rack from its #RackN pragma) for the move set evaluation
+    model: the mover's pre-move board row under the given arm (independent of
+    the process-wide session's arm -- a checkpoint's config names its own),
+    the pre-move score differential, and the FULL legal move list in the
+    equity ranking the trajectory generator drew its candidates from.
+    `spatial_planes` / `scalar_size` are the model's (its checkpoint config);
+    a width the arm does not encode is a ValueError, as is a GCG that does
+    not parse."""
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    lib = _lib()
+    cells = 15 * 15
+    inp = np.zeros(spatial_planes * cells + scalar_size, dtype=np.float32)
+    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    score_diff = ctypes.c_int32(0)
+    err = ctypes.create_string_buffer(512)
+    cap = _GCG_MOVES_FIRST_CAP
+    while True:
+        moves = np.zeros(cap, dtype=MOVE_DTYPE)
+        n = lib.scribblez_gcg_position_inputs(
+            _session(),
+            gcg_text.encode("utf-8"),
+            int(contingent_features),
+            int(opp_leave_input),
+            inp_ptr,
+            len(inp),
+            ctypes.byref(score_diff),
+            moves.ctypes.data_as(ctypes.c_void_p),
+            cap,
+            err,
+            len(err),
+        )
+        if n < 0:
+            raise ValueError(err.value.decode("utf-8") or "gcg_position_inputs failed")
+        if n <= cap:
+            break
+        cap = n
+    return GcgPositionInputs(
+        input_spatial=inp[: spatial_planes * cells].reshape(spatial_planes, 15, 15),
+        input_scalar=inp[spatial_planes * cells :],
+        score_diff=int(score_diff.value),
+        moves=moves[:n].copy(),
+    )
+
+
+def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
+    """The trajectory pane's web-render bundle for a position-set .gcg's
+    decision point: the mover's-POV GameState (board / bonuses / rack / scores /
+    bag and opponent-rack counts / tile_scores) plus `mover`, `opp_leave`,
+    `last_move`, and `moves` -- every legal move's GCG notation, in
+    gcg_position_inputs' order under the same `open_leaves`. Raises OSError on
+    a parse error."""
+    lib = _lib()
+    fn = lib.scribblez_gcg_position_board_json
+    encoded = gcg_text.encode("utf-8")
+    cap = 1 << 16
+    out = ctypes.create_string_buffer(cap)
+    n = fn(_session(), encoded, int(open_leaves), out, cap)
+    if n < 0:
+        raise OSError("gcg_position_board_json failed (GCG parse error)")
+    if n >= cap:  # JSON was truncated; retry once at the exact size
+        cap = n + 1
+        out = ctypes.create_string_buffer(cap)
+        n = fn(_session(), encoded, int(open_leaves), out, cap)
     return json.loads(out.value.decode("utf-8"))
 
 

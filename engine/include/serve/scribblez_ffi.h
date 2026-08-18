@@ -205,6 +205,36 @@ int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* g
                                               const char* leave_str, float* out_input,
                                               char* out_err, int err_cap);
 
+// A position-set .gcg's decision point (read_gcg_position: final recorded
+// state, side to move next, rack from its #RackN pragma) as the move set
+// evaluation model's inputs -- what the dashboard's trajectory pane re-scores
+// under a torch checkpoint (training/trajectory_position.h). Encodes under an
+// explicit arm (contingent_features, opp_leave_input) rather than the
+// session's, so one dashboard process serves models of every arm; the session
+// contributes only its dictionary. opp_leave_input doubles as the information
+// condition the position's sidecars were simmed under.
+//   out_input      the mover's pre-move board row; `input_cap` must equal the
+//                  arm's input_floats, else -1 (the caller's model config
+//                  disagrees with the engine layout);
+//   out_score_diff the mover's pre-move score differential (points);
+//   out_moves      up to `moves_cap` 16-byte Moves: the FULL legal move list
+//                  in the equity ranking the trajectory generator drew from.
+// Returns the legal move count (which may exceed moves_cap -- retry with a
+// larger buffer; the row and differential are written either way), or -1 with
+// a reason in `out_err` (NUL-terminated, truncated to err_cap).
+int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text,
+                                  int contingent_features, int opp_leave_input, float* out_input,
+                                  int input_cap, int32_t* out_score_diff, void* out_moves,
+                                  int moves_cap, char* out_err, int err_cap);
+
+// The pane's web-render bundle for the same decision point: the mover's-POV
+// GameState JSON plus "mover", "opp_leave", "last_move", and "moves" -- every
+// legal move's GCG notation in the order scribblez_gcg_position_inputs emits
+// them under the same `open_leaves`. Returns the full JSON length (the dump
+// functions' retry/truncation contract), or -1 on a parse error.
+int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text, int open_leaves,
+                                      char* out_json, int out_cap);
+
 // Write a new .slog at `dst_path` containing the `num_picks` selected games,
 // in order. `src_paths[i]` and `game_indices[i]` together identify the i-th
 // game (a source .slog path and the game index within it). Games are copied

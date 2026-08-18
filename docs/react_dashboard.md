@@ -35,9 +35,11 @@ The training tabs render inside the master dashboard's task view
 |---|---|
 | position_eval | Loss · Positions · Training · Controls · Info |
 | max_move_per_lane | Loss · Lane analysis · Controls · Info |
+| evidence_trajectories | Loss · Trajectories · Training · Controls · Info |
 
 Loss/Training embed API figures and re-fetch when a cheap version token
-advances; Positions and Lane analysis are the native interactive tabs below.
+advances; Positions, Lane analysis and Trajectories are the native interactive
+tabs below.
 
 ## The position-evaluation Positions tab
 
@@ -59,6 +61,43 @@ ground truth over a GCG dataset
 - **UI**: generation slider, position picker, board + leave; paired
   model-vs-MC WLD bars; the MC score-delta histogram with the model's
   Gaussian overlaid.
+
+## The evidence-trajectories Trajectories tab
+
+Shows the sequential evidence loop thinking on a hand-maintained position set
+([positions/NWL23/face-up-trajectory-set](../positions/NWL23/face-up-trajectory-set/README.md)),
+and the trained model's response to it (roadmap items 2–4).
+
+- **Position sets**: a `.gcg` IS the position — its final recorded state,
+  the side to move next, that side's rack from a `#RackN` pragma. Sidecars
+  are simmed on first request under the tag's own proposer + recipe
+  (`sim_evidence.position_sets.ensure_sobs`, cached under
+  `<mount>/cache/trajectory_sets/`), so the tab shows exactly the
+  trajectory the generator would produce there.
+- **Model**: generation 0 is the frozen student itself (the tag's
+  `student_checkpoint`); N is the trainer's per-pass torch checkpoint
+  `checkpoints/model_epoch_{N-1}.pt`, run in torch on CPU
+  (`scribblez.evidence.trajectory_view`). The FFI (`gcg_position_inputs`)
+  rebuilds the decision the way the generator did — board row under the
+  checkpoint's arm, pre-move differential, the full equity-ranked legal move
+  list — the plain pass runs once per (checkpoint, position), and only the
+  fusion + re-score run per evidence prefix.
+- **UI**: generation slider, set/position pickers, an **evidence prefix**
+  slider (0 … the proposer picks; the uniform tail is never evidence); the
+  trajectory strip (anchor → proposals → tail, dimmed beyond the prefix,
+  each card with its sim value ± SE, delta moments, plain and conditioned
+  value); the board previewing the selected candidate with the Positions
+  tab's placement overlay (sim count planes vs the conditioned pass's
+  planes, residual | model | sim); and the legal moves re-ranked by the
+  conditioned value with the plain rank shift, the proves-best gain, and
+  the loop's **next sim** (argmax gain among the unsimmed) marked. At
+  prefix 0 the conditioned pass equals the plain one by construction; at
+  generation 0 conditioning is the identity and there is no gain column.
+- The trainer's `posset_*` metrics (Training tab) score the same set at
+  every prefix — the rank of the sim-best candidate under conditioned vs
+  plain value — so what it charts is what this tab shows.
+
+![The Trajectories tab on the egotize-lane exhibit: the anchor's opp-play-and-win residual lights the 13G–13N lane red (the model under-reads the opponent's EGOTIZE lane), the trajectory strip, and the conditioned re-ranking](images/trajectories_tab.png)
 
 ## The lane-analysis tab
 

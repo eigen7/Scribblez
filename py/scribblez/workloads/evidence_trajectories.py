@@ -48,6 +48,7 @@ from pathlib import Path
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
+from scribblez.sim_evidence.position_sets import TrajectoryRecipe
 from scribblez.workloads import mset_targets, pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 
@@ -148,6 +149,20 @@ class EvidenceTrajectoriesParams:
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head (points)")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
+
+
+def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
+    """The tag's trajectory recipe as the position-set sidecar cache keys it
+    (the dashboard's trajectory pane and the trainer's position-set metric
+    both sim the set under exactly the tag's recipe)."""
+    return TrajectoryRecipe(
+        rollouts=params.rollouts,
+        proposals_min=params.proposals_min,
+        proposals_max=params.proposals_max,
+        temperature=params.temperature,
+        proposal_pool=params.proposal_pool,
+        open_leaves=params.face_up_leaves,
+    )
 
 
 def max_evidence(params: EvidenceTrajectoriesParams) -> int:

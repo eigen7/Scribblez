@@ -483,3 +483,165 @@ def test_position_set_cache_regenerates_only_stale_or_missing(tmp_path, monkeypa
     d1 = PS.cache_dir(set_dir, model, recipe, tmp_path / "mount")
     d2 = PS.cache_dir(set_dir, model, PS.TrajectoryRecipe(rollouts=32), tmp_path / "mount")
     assert d1 != d2 and d1 != got["a"].parent
+
+
+# --- the trajectory pane's model side (scribblez.evidence.trajectory_view) ---
+
+TRAJECTORY_SET = POSITION_EVAL_SET.parent / "face-up-trajectory-set"
+KWG = Path("/workspace/mount/lexica/NWL23.kwg")
+
+
+def test_gcg_position_inputs_reads_the_exhibit_decision():
+    """The FFI's reading of the exhibit position: the mover's arm-sized row,
+    the pre-move differential, the full equity-ranked legal move list, and a
+    board bundle whose notations line up with it (E11 GAVE plays through the
+    A of INCASED, "E11 G.VE")."""
+    if not (KWG.exists() and LEAVES.exists()):
+        pytest.skip("NWL23 lexicon / leaves not installed")
+    from scribblez.ffi import gcg_position_board_json, gcg_position_inputs
+
+    text = (TRAJECTORY_SET / "egotize-lane.gcg").read_text()
+    inputs = gcg_position_inputs(
+        text, contingent_features=False, opp_leave_input=True, spatial_planes=85, scalar_size=163
+    )
+    assert inputs.input_spatial.shape == (85, 15, 15) and inputs.input_scalar.shape == (163,)
+    assert inputs.score_diff == 440 - 387
+    bundle = gcg_position_board_json(text, open_leaves=True)
+    assert len(bundle["moves"]) == len(inputs.moves) > 100
+    assert "E11 G.VE" in bundle["moves"]
+    assert bundle["mover"] == 0 and bundle["scores"] == [440, 387]
+    assert [t["letter"] for t in bundle["rack"]] == list("AEEGSTV")
+    # A width the arm does not encode is refused, naming the mismatch.
+    with pytest.raises(ValueError, match="floats"):
+        gcg_position_inputs(
+            text, contingent_features=True, opp_leave_input=True, spatial_planes=85, scalar_size=163
+        )
+
+
+def _tiny_evidence_checkpoint(trained: bool):
+    """A tiny frozen-backbone model under the session's default arm (the
+    fixture student's), as either checkpoint kind."""
+    from scribblez.evidence.checkpoints import EvidenceCheckpoint
+    from scribblez.ffi import get_input_shapes
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    shapes = {s.name: s.dims for s in get_input_shapes()}
+    torch.manual_seed(3)
+    model = MoveSetEvalModel(
+        spatial_planes=shapes["input_spatial"][0],
+        scalar_size=shapes["input_scalar"][0],
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    if trained:  # give the fusion stage non-trivial weights, as training would
+        with torch.no_grad():
+            for p in model.evidence_parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+    model.freeze_backbone()
+    cfg = {
+        "spatial_planes": shapes["input_spatial"][0],
+        "scalar_size": shapes["input_scalar"][0],
+        "contingent_features": True,
+        "open_leaves": False,
+    }
+    return EvidenceCheckpoint(model.eval(), cfg, trained=trained)
+
+
+@pytest.fixture(scope="module")
+def gcg_set(traj_corpus, tmp_path_factory) -> SimpleNamespace:
+    """A two-position .gcg set with trajectory sidecars from the fixture
+    student (gcg mode, 8 rollouts)."""
+    set_dir = tmp_path_factory.mktemp("gcgset")
+    for name in ("pos-1", "pos-2"):
+        _as_position(POSITION_EVAL_SET / f"{name}.gcg", set_dir / f"{name}.gcg")
+    out = tmp_path_factory.mktemp("gcgset_sobs")
+    r = subprocess.run(
+        [
+            str(TRAJECTORY_GENERATOR),
+            f"--gcg-dir={set_dir}",
+            f"--out-dir={out}",
+            f"--model={traj_corpus.dir / 'student.onnx'}",
+            "--fast-build",
+            "--rollouts=8",
+            "--proposals-min=1",
+            "--proposals-max=3",
+            "--proposal-pool=8",
+            "--threads=2",
+            "--seed=7",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, f"gcg mode failed: {r.stderr}"
+    return SimpleNamespace(set_dir=set_dir, sobs_dir=out)
+
+
+def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_set):
+    """gcg_position_inputs ranks exactly the legal set the generator ranked
+    (the .sobs num_legal_moves, every candidate located by bytes); the
+    conditioned pass at prefix 0 equals the plain one exactly; a longer
+    prefix moves the outputs; and the payload has the pane's shape."""
+    from scribblez.evidence.trajectory_view import (
+        DecisionAnalysis,
+        payload,
+        position_set_metrics,
+    )
+    from scribblez.ffi import gcg_position_board_json
+
+    ckpt = _tiny_evidence_checkpoint(trained=True)
+    analyses = []
+    for gcg in sorted(gcg_set.set_dir.glob("*.gcg")):
+        sobs = read_sobs(gcg_set.sobs_dir / f"{gcg.stem}.sobs")[0]
+        a = DecisionAnalysis(ckpt, gcg.read_text(), sobs, max_e=5, device="cpu")
+        analyses.append(a)
+        assert a.num_legal_moves == sobs.num_legal_moves
+        assert len(a.sim_index) == len(sobs.moves)
+        np.testing.assert_array_equal(a.conditioned(0).value, a.plain.value)
+        np.testing.assert_array_equal(a.conditioned(0).planes, a.plain.planes)
+        top = max(sobs.evidence_prefix_sizes())
+        if top > 0:
+            assert not np.array_equal(a.conditioned(top).value, a.plain.value)
+
+        notations = gcg_position_board_json(gcg.read_text(), open_leaves=False)["moves"]
+        assert len(notations) == a.num_legal_moves
+        view = payload(a, notations, top, slot=0, top_n=10)
+        assert view["prefix"] == top and view["max_prefix"] == top and view["trained"]
+        cards = view["trajectory"]
+        assert [c["slot"] for c in cards] == list(range(len(sobs.moves)))
+        assert all(c["in_prefix"] == (c["slot"] < top) for c in cards)
+        assert cards[-1]["tail"] == sobs.has_uniform_tail
+        assert cards[0]["notation"] == notations[a.sim_index[0]]
+        rows = {m["index"]: m for m in view["moves"]}
+        assert set(a.sim_index.tolist()) <= set(rows)  # every simmed candidate is a row
+        assert [m["cond_value"] for m in view["moves"]] == sorted(
+            (m["cond_value"] for m in view["moves"]), reverse=True
+        )
+        marked = [m for m in view["moves"] if m["next_sim"]]
+        if view["next_sim"] is not None:
+            assert len(marked) == 1 and marked[0]["slot"] is None  # unsimmed
+        planes = view["planes"]
+        assert planes["slot"] == 0 and set(planes["heads"]) == {
+            "opp_next_placement",
+            "self_next_placement",
+            "opp_win_placement",
+            "self_win_placement",
+        }
+        assert np.asarray(planes["heads"]["opp_next_placement"]["truth"]).shape == (15, 15)
+        assert payload(a, notations, top, slot=None)["planes"] is None
+    metrics = position_set_metrics(analyses)
+    assert metrics["posset_rows"] > 0
+    assert 0.0 <= metrics["posset_cond_hit"] <= 1.0
+
+    # Generation 0 (the student itself): conditioning is the identity at every
+    # prefix and the gain column is absent.
+    student = _tiny_evidence_checkpoint(trained=False)
+    gcg = sorted(gcg_set.set_dir.glob("*.gcg"))[0]
+    sobs = read_sobs(gcg_set.sobs_dir / f"{gcg.stem}.sobs")[0]
+    a0 = DecisionAnalysis(student, gcg.read_text(), sobs, max_e=5, device="cpu")
+    for p in sobs.evidence_prefix_sizes():
+        np.testing.assert_array_equal(a0.conditioned(p).value, a0.plain.value)
+    notations = gcg_position_board_json(gcg.read_text(), open_leaves=False)["moves"]
+    view0 = payload(a0, notations, 0)
+    assert not view0["trained"] and view0["next_sim"] is None
+    assert all(m["gain"] is None for m in view0["moves"])

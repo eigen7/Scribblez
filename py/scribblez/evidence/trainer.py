@@ -28,12 +28,14 @@ from dataclasses import asdict, dataclass
 import torch
 
 from scribblez.dashboard import db
+from scribblez.evidence.checkpoints import STUDENT_CONFIG_KEYS, EvidenceCheckpoint, load_student
 from scribblez.evidence.dataset import (
     TrajectoryDataset,
     adopt_information_condition,
     complete_pairs,
 )
 from scribblez.evidence.train_loop import LossConfig, evaluate, run_epoch
+from scribblez.evidence.trajectory_view import DecisionAnalysis, position_set_metrics
 from scribblez.ffi import move_encoding_version, set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
@@ -43,11 +45,12 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
-from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
+from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.evidence_trajectories import SLOGS_DIR, max_evidence
+from scribblez.workloads.evidence_trajectories import SLOGS_DIR, max_evidence, recipe_of
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -124,35 +127,44 @@ def epochs_left(params, state: EvidenceTrainState) -> bool:
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
 
 
-# What the model needs from the student's config to be rebuilt without it.
-_STUDENT_CONFIG_KEYS = (
-    "spatial_planes",
-    "scalar_size",
-    "trunk_channels",
-    "num_blocks",
-    "num_heads",
-    "contingent_features",
-    "open_leaves",
-    "move_encoding_version",
-)
+class PositionSetProbe:
+    """The hand-maintained position set (positions/NWL23/<DEFAULT_SET>) as a
+    per-pass readout: its .gcg positions with trajectory sidecars simmed under
+    this tag's proposer + recipe (the same sidecars the dashboard's
+    Trajectories tab shows), re-scored by the current model at every evidence
+    prefix (trajectory_view.position_set_metrics). Empty when the set is
+    absent or its sidecars cannot be generated -- the readout is optional and
+    never fails training."""
 
+    def __init__(self, params, student_cfg: dict, threads: int):
+        self.student_cfg = student_cfg
+        self.max_e = max_evidence(params)
+        self.positions: list[tuple[str, object]] = []  # (gcg text, SobsPosition)
+        set_dir = POSITIONS_ROOT / DEFAULT_SET
+        if not set_gcgs(set_dir):
+            return
+        try:
+            sobs = ensure_sobs(set_dir, params.proposer_model, recipe_of(params), threads)
+        except Exception as e:  # noqa: BLE001 -- an optional readout
+            timed_print(f"position-set metric disabled: {e}")
+            return
+        for gcg in set_gcgs(set_dir):
+            self.positions.append((gcg.read_text(), read_sobs(sobs[gcg.stem])[0]))
+        timed_print(f"position-set metric: {len(self.positions)} positions from {DEFAULT_SET}")
 
-def load_student(path: str, device) -> tuple[MoveSetEvalModel, dict]:
-    """The frozen-backbone model initialized from a move_set_eval rolling
-    checkpoint, and that checkpoint's config (the arch and encoding arm the
-    student was built against, which this model inherits)."""
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = ckpt["config"]
-    model = MoveSetEvalModel(
-        spatial_planes=cfg["spatial_planes"],
-        scalar_size=cfg["scalar_size"],
-        trunk_channels=cfg["trunk_channels"],
-        num_blocks=cfg["num_blocks"],
-        num_heads=cfg["num_heads"],
-    )
-    model.load_student(ckpt["model_state_dict"])
-    model.freeze_backbone()
-    return model.to(device), cfg
+    def metrics(self, model, device) -> dict[str, float]:
+        if not self.positions:
+            return {}
+        ckpt = EvidenceCheckpoint(model, self.student_cfg, trained=True)
+        try:
+            analyses = [
+                DecisionAnalysis(ckpt, text, sobs, self.max_e, device)
+                for text, sobs in self.positions
+            ]
+        except ValueError as e:  # a sidecar that does not match the position
+            timed_print(f"position-set metric skipped: {e}")
+            return {}
+        return position_set_metrics(analyses)
 
 
 def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
@@ -187,6 +199,7 @@ def _metrics_record(epoch: int, state, settled: bool, losses: dict, m: dict, lr:
     record["exact_p0_maxdiff"] = m["exact_p0_maxdiff"]
     record["eval_rows"] = m["rows"]
     record["eval_rows_ev"] = m["rows_ev"]
+    record.update({k: v for k, v in m.items() if k.startswith("posset_")})
     return record
 
 
@@ -213,6 +226,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
 
     t1 = time.time()
     m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
+    m.update(ctx["posset"].metrics(model, device))
     eval_s = time.time() - t1
     lr_now = ctx["lr_controller"].current
     budget = (
@@ -302,7 +316,7 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "config": {
             **asdict(params),
-            "student": {k: student_cfg[k] for k in _STUDENT_CONFIG_KEYS},
+            "student": {k: student_cfg[k] for k in STUDENT_CONFIG_KEYS},
             "open_leaves": train_ds.open_leaves,
             "proposer_hash": train_ds.proposer_hash,
         },
@@ -311,6 +325,7 @@ def run(ctx: WorkerContext) -> int:
         "loss_cfg": LossConfig.from_args(params),
         "max_e": max_e,
         "stats": WorkerStats(ctx),
+        "posset": PositionSetProbe(params, student_cfg, threads=ctx.threads),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=EvidenceTrainState)

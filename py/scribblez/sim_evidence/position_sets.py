@@ -19,9 +19,13 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from scribblez.paths import DEFAULT_MOUNT_ROOT, ENGINE_DIR
+from scribblez.paths import DEFAULT_MOUNT_ROOT, ENGINE_DIR, REPO_ROOT
 
 TRAJECTORY_GENERATOR = ENGINE_DIR / "evidence_trajectory_generator"
+# Where the hand-maintained sets live, and the one the dashboard opens on and
+# the trainer's position-set metric reads.
+POSITIONS_ROOT = REPO_ROOT / "positions" / "NWL23"
+DEFAULT_SET = "face-up-trajectory-set"
 CACHE_DIR = "cache/trajectory_sets"
 MANIFEST = "manifest.json"  # stem -> sha256 of the .gcg the sidecar was generated from
 
