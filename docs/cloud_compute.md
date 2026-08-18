@@ -52,7 +52,11 @@ Principles:
 - **Worker image** (`docker-setup/worker/`,
   `./build_and_push_worker_image.py`): dependency-only runtime image with the
   baked-in `bootstrap.py` entrypoint — no repo code, binaries, or lexica.
-  Rebuild only when `docker-setup/worker/` changes. The dashboard's ssh
+  Rebuild when `docker-setup/worker/` changes, and when the dev image's
+  toolchain or pinned libraries move: the image supplies the runtime every
+  bundle links against, so a compiler upgrade there (gcc-16's newer libstdc++,
+  say) leaves every bundle unable to load until the image is rebuilt and
+  re-pulled on each machine. The dashboard's ssh
   worker slots ([master_dashboard.md](master_dashboard.md)) run this same
   image on operator-owned machines.
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):

@@ -21,7 +21,8 @@ FROM ubuntu:24.04
 # Runtime deps:
 #   - boost/protobuf/numpy: shared libraries the engine binaries and the
 #     libscribblez_ffi ctypes wrapper link against (same Ubuntu 24.04 ABI as
-#     the dev image they were compiled in).
+#     the dev image they were compiled in -- except for libstdc++, which the
+#     dev image upgrades past the distribution's; see the last section).
 #   - g++: only for bootstrap.py's CPU-arch detection (`g++ -march=native
 #     -Q --help=target`), mirroring py/build.py's detect_host_arch().
 #   - git/curl/ca-certificates: runtime data fetches (Macondo strategy files,
@@ -60,3 +61,27 @@ ENV PYTHONUNBUFFERED=1
 
 COPY bootstrap.py /opt/scribblez/bootstrap.py
 ENTRYPOINT ["python3", "/opt/scribblez/bootstrap.py"]
+
+# Temporary home for install targets that belong above, kept last so adding one
+# rebuilds a single late layer instead of invalidating everything below it.
+# These items should occasionally be moved up.
+#
+# The C++ runtime the bundle was compiled against. The dev image builds with
+# gcc-16 from the ubuntu-toolchain-r PPA (C++26 reflection), whose libstdc++
+# is newer than Ubuntu 24.04's: binaries built there need GLIBCXX_3.4.35,
+# while the distribution ships 3.4.33, so every bundle failed to load here
+# with "version `GLIBCXX_3.4.35' not found" the moment the dev image's
+# toolchain moved. Taking the library from the dev image rather than pinning a
+# version keeps the two in step by construction, as the NVIDIA libraries above
+# already are. libstdc++ is backward compatible, so the distribution's own
+# packages (boost, protobuf, python3) keep working against the newer one.
+# Copied through a staging dir because the distribution's libstdc++.so.6 is a
+# symlink: writing the library under its own name and repointing the link keeps
+# the version-named file honest about what it holds.
+COPY --from=devlibs /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+                    /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 \
+                    /opt/devlibs/
+RUN install -m 644 /opt/devlibs/libstdc++.so.6 /usr/lib/x86_64-linux-gnu/libstdc++.so.6-dev && \
+    ln -sf libstdc++.so.6-dev /usr/lib/x86_64-linux-gnu/libstdc++.so.6 && \
+    install -m 644 /opt/devlibs/libgcc_s.so.1 /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 && \
+    rm -rf /opt/devlibs && ldconfig
