@@ -194,6 +194,27 @@ version has shown conditioning learns anything. Freezing also makes
 empty-evidence exactness structural, so no empty-prefix distillation rows are
 needed and the student's `.mset` labels are not a training input.
 
+The trainer's **unfrozen mode** (`unfreeze_backbone`) is the alternative the
+frozen design defers to: the whole model trains, and each step is joint —
+the sim-outcome loss on the conditioned pass over a trajectory batch, plus
+the ordinary student objective (soft-CE WLD, Huber score-diff, plane BCE)
+on the plain pass over a batch of the same games' `.mset` teacher labels,
+`total = distill + lambda_sim · sim`, one backward, one step. The
+distillation rows are what anchors the plain pass — without them the trunk
+would drift toward the sim targets on the handful of simmed candidates and
+lose the teacher's ranking over the rest; they never supervise the
+conditioned pass, whose targets stay sim outcomes. The backbone runs at
+`backbone_lr_mult` of the evidence path's rate. Because the plain
+student now moves, the run exports it per pass as ONNX (a later
+generation's proposer) and reports the frozen student's held-out sim soft-CE
+as a flat reference beside the moving plain and conditioned curves, with the
+`.mset` holdout's recall@1 / Spearman / loss (`distill_*`) as the
+distillation-health read. The comparison is the frozen run's floor:
+conditioned − plain soft-CE on the same held-out rows, and the proves-best
+hit rate against the plain-value baseline; the unfrozen run has to beat
+those without its plain pass falling below the student reference. Frozen
+stays the default; unfrozen is the experiment.
+
 - **Evidence tokens** — one per simmed candidate: its move encoding (the move
   encoder, reused) fused with its sim observations (maps, value, counts) **and
   the model's own predicted planes for that candidate**, the two plane stacks

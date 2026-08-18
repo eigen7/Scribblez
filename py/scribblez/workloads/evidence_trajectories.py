@@ -34,9 +34,10 @@ TensorRT (see move_set_eval).
 
 The singleton train role (scribblez/evidence/trainer.py) trains the fusion
 stage and the proves-best head over the tag's pair store, on top of the
-frozen student named by `student_checkpoint`, with the mset trainer's
-growing-corpus pacing: it absorbs each pass's new pairs and spends its epoch
-budget only once the store is final.
+student named by `student_checkpoint` -- its backbone frozen by default, or
+(`unfreeze_backbone`) trained jointly under the .mset distillation
+anchor -- with the mset trainer's growing-corpus pacing: it absorbs each
+pass's new pairs and spends its epoch budget only once the store is final.
 """
 
 import subprocess
@@ -89,7 +90,8 @@ class EvidenceTrajectoriesParams:
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
     proposal_pool: int = param(64, "proposals are drawn from the model's top-N unsimmed candidates")
     # The .mset labeling's stratified sample around the forced candidates
-    # (move_set_eval's quotas; not read by this workload's trainer).
+    # (move_set_eval's quotas; the resulting .mset labels are read by the trainer
+    # only in unfrozen mode).
     quota_top: int = param(4, "labeled candidates from the head of the equity ranking")
     quota_mid: int = param(4, "labeled candidates sampled from the contention zone")
     quota_tail: int = param(4, "labeled candidates sampled uniformly from the remaining ranks")
@@ -119,8 +121,29 @@ class EvidenceTrajectoriesParams:
     student_checkpoint: str = param(
         "",
         "absolute path to the move-set-eval student's rolling checkpoint (a move_set_eval "
-        "tag's checkpoints/model.pt) whose frozen backbone the fusion stage and proves-best "
-        "head train on top of; its arch and encoding arm are read from the checkpoint",
+        "tag's checkpoints/model.pt) whose backbone the fusion stage and proves-best head "
+        "train on top of; its arch and encoding arm are read from the checkpoint",
+    )
+    unfreeze_backbone: bool = param(
+        False,
+        "train the whole model jointly -- the conditioned pass on sim outcomes plus the plain "
+        "pass on the tag's .mset teacher labels (the distillation anchor) -- and export the "
+        "plain student per pass; off, the student's backbone is held at its checkpoint and "
+        "only the fusion stage and proves-best head train",
+    )
+    backbone_lr_mult: float = param(
+        0.1,
+        "unfrozen mode: the backbone's learning rate as a fraction of lr (the fusion stage "
+        "and head start from zero-init/random and want the full rate; the distilled trunk "
+        "should not be shaken at it)",
+    )
+    lambda_sim: float = param(
+        1.0,
+        "unfrozen mode: weight of the sim-outcome (conditioned) loss against the "
+        "distillation loss in the joint step's total (0 = plain distillation only)",
+    )
+    lambda_planes: float = param(
+        1.0, "unfrozen mode: placement-plane BCE weight in the distillation loss"
     )
     train_epochs: int = param(
         20,
@@ -150,7 +173,7 @@ class EvidenceTrajectoriesParams:
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
     grad_clip: float = param(
-        1.0, "max gradient norm over the fusion + proves-best params per step (0 = no clipping)"
+        1.0, "max gradient norm over all trainable params per step (0 = no clipping)"
     )
 
 

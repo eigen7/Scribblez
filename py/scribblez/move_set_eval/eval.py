@@ -41,6 +41,7 @@ import numpy as np
 import torch
 
 from .model import win_equity
+from .train_loop import TARGET_KEYS
 
 DEFAULT_KS = (1, 3, 5)
 
@@ -154,6 +155,7 @@ def evaluate(
     ks=DEFAULT_KS,
     seed: int = 0,
     max_candidates_per_batch: int = MAX_CANDIDATES_PER_BATCH,
+    loss_cfg=None,
 ) -> dict[str, float]:
     """Run the model over `dataset` and return the ranking metrics, each
     paired with the incumbent baseline computed on the same positions (see
@@ -165,10 +167,13 @@ def evaluate(
     "spearman" / "spearman_baseline", the exchange-slice metrics
     ("exch_retention@K", "exch_rank_regret", each with its baseline; see the
     module docstring), and the "positions" / "positions_with_exchanges"
-    denominators.
+    denominators. With a train_loop.LossConfig as `loss_cfg`, also the
+    distillation loss over the same forward, candidate-weighted like the
+    training epoch's: "loss" and its "loss_<term>" components.
     """
     model.eval()
     sums = {}
+    loss_sums: dict[str, float] = {}
     exch_sums = {"exch_rank_regret": 0.0, "exch_rank_regret_baseline": 0.0}
     for k in ks:
         sums[f"recall@{k}"] = sums[f"recall@{k}_baseline"] = 0.0
@@ -188,6 +193,8 @@ def evaluate(
         inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
         move_args = tuple(batch[key].to(device) for key in _MOVE_KEYS)
         out = model(*inputs, *move_args)
+        if loss_cfg is not None:
+            _accumulate_loss(loss_sums, out, batch, device, loss_cfg)
         if "target_planes" in batch:
             m = batch["move_pos_id"].shape[0]
             bce = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -241,4 +248,19 @@ def evaluate(
     # full-sweep holdout does not; the stratified fallback holdout does).
     if plane_candidates:
         metrics["plane_bce"] = plane_bce_sum / plane_candidates
+    if loss_cfg is not None:
+        n = max(loss_sums.pop("_candidates", 0), 1)
+        metrics.update({name: total / n for name, total in loss_sums.items()})
     return metrics
+
+
+def _accumulate_loss(sums: dict, out: dict, batch: dict, device, loss_cfg):
+    """Add one batch's candidate-weighted distillation loss terms to `sums`
+    ("loss", "loss_<term>", and the "_candidates" denominator)."""
+    targets = {k: batch[k].to(device) for k in TARGET_KEYS if k in batch}
+    losses = loss_cfg.loss(out, targets)
+    m = targets["target_wld"].shape[0]
+    sums["_candidates"] = sums.get("_candidates", 0) + m
+    for term, value in losses.items():
+        name = "loss" if term == "total" else f"loss_{term}"
+        sums[name] = sums.get(name, 0.0) + value.item() * m

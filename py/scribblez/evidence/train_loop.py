@@ -1,11 +1,15 @@
 """The evidence trainer's forward, loss, epoch loop, and held-out metrics.
 
-The forward is the model's staged path with the backbone frozen: board trunk,
-move encodings and the evidence-free first pass run under no_grad (the first
-pass supplies the predicted half of every evidence token), then the fusion
-stage and the conditioned re-score run with gradients -- only EvidenceFusion
-and the proves-best head learn. Loss is taken on the held-out simmed
-candidates (outside the prefix), against their own sim outcomes.
+The forward is the model's staged path: board trunk, move encodings, the
+evidence-free first pass (which supplies the predicted half of every evidence
+token, and is never a training path itself), then the fusion stage and the
+conditioned re-score. Loss is taken on the held-out simmed candidates
+(outside the prefix), against their own sim outcomes. With the backbone
+frozen the trunk and move encodings run under no_grad and only EvidenceFusion
+and the proves-best head learn; unfrozen, they carry gradients from the
+conditioned loss, and each step is joint with a distillation batch over the
+same games' .mset labels (Distillation) -- the ordinary student objective
+anchoring the plain pass while the sim loss trains the conditioned one.
 
 Metrics compare the conditioned pass with the plain one on the same held-out
 rows, so "does conditioning learn anything from sim outcomes" is read directly:
@@ -18,9 +22,10 @@ must agree there to floating-point noise.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,11 +33,15 @@ import torch
 import torch.nn.functional as F
 
 from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, EvidenceInputs
+from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.evidence import observed_planes, observed_scalars
 from scribblez.move_set_eval.model import win_equity
 from scribblez.sim_evidence.sobs import BOARD
 
+# The sim-outcome loss terms every epoch reports; a joint (unfrozen) epoch adds
+# DISTILL_LOSS_KEYS.
 LOSS_KEYS = ("total", "wld", "score_diff", "gain")
+DISTILL_LOSS_KEYS = ("sim", "distill", "distill_wld", "distill_score_diff", "distill_planes")
 
 _INPUT_KEYS = ("input_spatial", "input_scalar")
 _MOVE_KEYS = (
@@ -65,6 +74,18 @@ class LossConfig:
             args.huber_delta_gain,
             args.grad_clip,
         )
+
+
+@dataclass
+class Distillation:
+    """The joint step's distillation side (backbone unfrozen): an endless
+    stream of .mset batches -- one is consumed per trajectory batch -- and
+    the student objective over each (move_set_eval's LossConfig). The step's
+    total is distill + lambda_sim * sim."""
+
+    batches: Iterator[dict]
+    cfg: mset_train_loop.LossConfig
+    lambda_sim: float
 
 
 @dataclass
@@ -143,15 +164,19 @@ def conditioned_forward(
     model, batch: dict, device, max_e: int
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     """(plain, conditioned) score_moves outputs over the batch's flattened
-    candidates. The plain pass is computed without gradients (the backbone is
-    frozen and its outputs are the evidence tokens' predicted half); the
-    conditioned pass reads each position's evidence prefix."""
+    candidates; the conditioned pass reads each position's evidence prefix.
+    The trunk and move encodings carry gradients only when the backbone is
+    unfrozen; the plain pass never does -- it is the evidence tokens'
+    predicted half, an input, so it is computed under no_grad in either
+    mode."""
     spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
     pos_id = move_args[-1]
-    with torch.no_grad():
+    backbone_grad = torch.no_grad() if model.backbone_frozen else contextlib.nullcontext()
+    with backbone_grad:
         board, g = model.encode_board(spatial, scalar)
         e = model.encode_moves(board, *move_args)
+    with torch.no_grad():
         plain = model.score_moves(board, g, e, pos_id)
     evidence = batch_evidence_inputs(batch, move_args, plain, max_e, device)
     tokens, spatial_feats = model.encode_evidence(board, evidence)
@@ -184,6 +209,31 @@ def _targets(batch: dict, device) -> dict[str, torch.Tensor]:
     return {k: batch[k].to(device) for k in _TARGET_KEYS}
 
 
+def joint_loss(
+    sim: dict[str, torch.Tensor], distill: dict[str, torch.Tensor], lambda_sim: float
+) -> dict[str, torch.Tensor]:
+    """The unfrozen step's losses: the sim-outcome terms as reported by
+    compute_loss, the distillation terms under DISTILL_LOSS_KEYS, and the
+    optimized total distill + lambda_sim * sim."""
+    return {
+        **sim,
+        "total": distill["total"] + lambda_sim * sim["total"],
+        "sim": sim["total"],
+        "distill": distill["total"],
+        "distill_wld": distill["wld"],
+        "distill_score_diff": distill["score_diff"],
+        "distill_planes": distill["planes"],
+    }
+
+
+def set_lr(optimizer, lr: float):
+    """Apply the schedule's rate to every param group, times the group's own
+    `lr_mult` when it carries one (the unfrozen backbone's group runs at a
+    fraction of the evidence path's rate)."""
+    for group in optimizer.param_groups:
+        group["lr"] = lr * group.get("lr_mult", 1.0)
+
+
 def run_epoch(
     model,
     optimizer,
@@ -192,17 +242,21 @@ def run_epoch(
     cfg: LossConfig,
     max_e: int,
     *,
+    distill: Distillation | None = None,
     lr_fn: Callable[[int], float] | None = None,
     rows_trained: int = 0,
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
     """One training pass. rows_trained counts held-out rows (the rows that
-    carry loss) and keys the rows-clock learning rate. Gradients are clipped
-    to cfg.grad_clip over the optimizer's params; a batch with a non-finite
-    loss is skipped (see below)."""
+    carry loss) and keys the rows-clock learning rate. With `distill` each
+    step is joint (joint_loss) over the trajectory batch and one distillation
+    batch: one backward, one step. Gradients are clipped to cfg.grad_clip
+    over the optimizer's params; a batch with a non-finite loss is skipped
+    (see below)."""
     model.train()
     trainable = [p for group in optimizer.param_groups for p in group["params"]]
-    sums = {k: 0.0 for k in LOSS_KEYS}
+    keys = LOSS_KEYS if distill is None else LOSS_KEYS + DISTILL_LOSS_KEYS
+    sums = {k: 0.0 for k in keys}
     n_batches = rows = skipped = 0
     t0 = last_progress = time.time()
     for batch in batches:
@@ -211,10 +265,12 @@ def run_epoch(
         if m == 0:
             continue
         if lr_fn is not None:
-            for group in optimizer.param_groups:
-                group["lr"] = lr_fn(rows_trained)
+            set_lr(optimizer, lr_fn(rows_trained))
         _, cond = conditioned_forward(model, batch, device, max_e)
         losses = compute_loss(cond, targets, cfg)
+        if distill is not None:
+            d = mset_train_loop.batch_loss(model, next(distill.batches), device, distill.cfg)
+            losses = joint_loss(losses, d, distill.lambda_sim)
         # A non-finite loss must not reach the optimizer: one such step
         # poisons Adam's moments and every weight after it. Skip the batch
         # and count it; the pass reports the count and the trainer stops the

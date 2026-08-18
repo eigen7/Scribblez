@@ -1,16 +1,26 @@
 """The evidence_trajectories workload's train role: the fusion stage and the
-proves-best head, trained on the tag's trajectory pair store over a frozen
-student backbone.
+proves-best head, trained on the tag's trajectory pair store over the
+student backbone -- frozen, or jointly trained under a distillation anchor.
 
 The model is the move set evaluation student named by `student_checkpoint`
 (a move_set_eval tag's rolling checkpoint: weights plus the config it was
-built against), with its trunk, move encoder and distillation heads frozen;
-EvidenceFusion and the proves-best head are what learn (model.freeze_backbone).
-The student's information-condition arm must be the corpus's -- the trainer
-refuses a hidden-leaves student on an open-leaves corpus and vice versa.
+built against). Frozen mode (the default) holds its trunk,
+move encoder and distillation heads at the checkpoint; EvidenceFusion and the
+proves-best head are what learn (model.freeze_backbone). Unfrozen mode trains
+everything: each step is joint over a trajectory batch (the sim-outcome loss
+on the conditioned pass) and a batch of the same games' .mset teacher labels
+(the ordinary student objective on the plain pass, which anchors it), the
+backbone at `backbone_lr_mult` times the evidence path's rate. The plain
+student then changes each pass, so it is exported per pass as ONNX -- what a
+later generation's proposer is taken from -- and the frozen student's held-out
+sim soft-CE is reported as the flat reference the moving plain pass is read
+against (StudentReference). The student's information-condition arm must be
+the corpus's -- the trainer refuses a hidden-leaves student on an open-leaves
+corpus and vice versa.
 
 The loop is the mset trainer's growing-corpus loop: wait for the store, take
-up new pairs each pass into a file-level split, spend the epoch budget only on
+up new pairs each pass into a file-level split shared by the .sobs and .mset
+sides (a stem is train or held-out on both), spend the epoch budget only on
 passes over a finished corpus (pair_store.CorpusClock), record metrics to the
 dashboard DB, checkpoint. Every pass also writes its own checkpoint under
 checkpoints/model_epoch_NNNN.pt (model weights + config): the evidence path
@@ -33,8 +43,15 @@ from scribblez.evidence.dataset import (
     TrajectoryDataset,
     adopt_information_condition,
     complete_pairs,
+    trajectory_positions,
 )
-from scribblez.evidence.train_loop import LossConfig, evaluate, run_epoch
+from scribblez.evidence.train_loop import (
+    DISTILL_LOSS_KEYS,
+    Distillation,
+    LossConfig,
+    evaluate,
+    run_epoch,
+)
 from scribblez.evidence.trajectory_view import DecisionAnalysis, position_set_metrics
 from scribblez.ffi import move_encoding_version, set_contingent_features
 from scribblez.generational import checkpoint
@@ -45,6 +62,10 @@ from scribblez.generational.controls import (
     init_controls,
     progress_line,
 )
+from scribblez.move_set_eval import eval as mset_eval
+from scribblez.move_set_eval import train_loop as mset_train_loop
+from scribblez.move_set_eval.dataset import MsetDataset
+from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
@@ -64,13 +85,20 @@ class EvidenceTrainState(GenerationalState):
     settled_epochs: int = 0
 
 
-def split_pairs(store, holdout_every: int) -> tuple[list, list]:
-    """(train, holdout) .sobs paths of the store's complete pairs, split at
-    file level by stem hash (pair_store.split_pair_stems)."""
+def split_pairs(store, holdout_every: int, ext: str = ".sobs") -> tuple[list, list]:
+    """(train, holdout) `ext` sidecar paths of the store's complete pairs,
+    split at file level by stem hash (pair_store.split_pair_stems). The split
+    is of stems, so the .sobs side (the trajectory rows) and the .mset side
+    (the distillation rows) hold a game on the same side; a stem is listed
+    for `ext` only where that sidecar exists."""
     train, holdout = pair_store.split_pair_stems(
         [f.stem for f in complete_pairs(store)], holdout_every
     )
-    return [store / f"{s}.sobs" for s in train], [store / f"{s}.sobs" for s in holdout]
+    return _sidecars(store, train, ext), _sidecars(store, holdout, ext)
+
+
+def _sidecars(store, stems: list[str], ext: str) -> list:
+    return [p for s in stems if (p := store / f"{s}{ext}").is_file()]
 
 
 def store_is_ready(store, params) -> tuple[bool, str]:
@@ -96,26 +124,67 @@ def wait_for_store(store, params):
         time.sleep(POLL_SECONDS)  # SIGTERM raises WorkerStopped through this
 
 
-def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
-    train_files, holdout_files = split_pairs(store, params.holdout_every)
+def _load_split(store, params, ext: str, build, hash_attr: str) -> tuple:
+    """(train, holdout) datasets over one sidecar side of the split -- `build`
+    makes a dataset from a file list; both sides must agree on `hash_attr`
+    (the proposer or teacher). With no held-out files the training set stands
+    in (metrics are then on-train)."""
+    train_files, holdout_files = split_pairs(store, params.holdout_every, ext)
     if not train_files:
-        raise FileNotFoundError(f"no complete .slog/.sobs training pairs in {store}")
-    adopt_information_condition(train_files)
-    train_ds = TrajectoryDataset(train_files)
+        raise FileNotFoundError(f"no complete .slog/{ext} training pairs in {store}")
+    train_ds = build(train_files)
     if not holdout_files:
-        timed_print("no held-out pairs; metrics are on-train")
         return train_ds, train_ds
-    holdout_ds = TrajectoryDataset(holdout_files)
-    assert holdout_ds.proposer_hash == train_ds.proposer_hash, (
-        "train/holdout pairs disagree on the proposer hash"
+    holdout_ds = build(holdout_files)
+    assert getattr(holdout_ds, hash_attr) == getattr(train_ds, hash_attr), (
+        f"train/holdout {ext} pairs disagree on {hash_attr}"
     )
     return train_ds, holdout_ds
 
 
-def absorb_new_pairs(store, params, train_ds, holdout_ds) -> int:
-    """Ingest every pair delivered since the last pass into the side the split
-    assigns it (a pair's side is fixed the first time it is seen)."""
-    train_files, holdout_files = split_pairs(store, params.holdout_every)
+def _trajectory_dataset(files) -> TrajectoryDataset:
+    """A trajectory dataset, the corpus's information-condition arm adopted
+    first (it must precede the first dataset; re-adopting the same arm for
+    the holdout is a no-op)."""
+    adopt_information_condition(files)
+    return TrajectoryDataset(files)
+
+
+def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
+    """The trajectory (.sobs) side of the split."""
+    train_ds, holdout_ds = _load_split(store, params, ".sobs", _trajectory_dataset, "proposer_hash")
+    if holdout_ds is train_ds:
+        timed_print("no held-out pairs; metrics are on-train")
+    return train_ds, holdout_ds
+
+
+def _simmed_positions(mset_path) -> set[tuple[int, int]]:
+    """MsetDataset's `select` for the distillation side: the stem's trajectory
+    positions (evidence.dataset.trajectory_positions says why only those)."""
+    return trajectory_positions(mset_path.with_suffix(".sobs"))
+
+
+def _simmed_mset(files) -> MsetDataset:
+    """An .mset dataset restricted to the stems' trajectory positions; a
+    selection that matches nothing is a broken .sobs/.mset pairing and fails
+    here rather than starving the joint step (cycle_batches would spin)."""
+    ds = MsetDataset(mset_files=files, select=_simmed_positions)
+    if ds.num_positions == 0:
+        raise ValueError(f"no trajectory position found in the .mset labels of {files[0].parent}")
+    return ds
+
+
+def load_distill_datasets(store, params) -> tuple[MsetDataset, MsetDataset]:
+    """The unfrozen mode's .mset side of the same split, restricted to the
+    trajectory positions (the corpus's arm was adopted from the .sobs side;
+    the .mset labels were made under it)."""
+    return _load_split(store, params, ".mset", _simmed_mset, "model_hash")
+
+
+def absorb_new_pairs(store, params, train_ds, holdout_ds, ext: str = ".sobs") -> int:
+    """Ingest every `ext` pair delivered since the last pass into the side the
+    split assigns it (a pair's side is fixed the first time it is seen)."""
+    train_files, holdout_files = split_pairs(store, params.holdout_every, ext)
     seen = set(train_ds.files) | set(holdout_ds.files)
     added = train_ds.absorb(sorted(f for f in train_files if f not in seen))
     if holdout_ds is not train_ds:
@@ -125,6 +194,26 @@ def absorb_new_pairs(store, params, train_ds, holdout_ds) -> int:
 
 def epochs_left(params, state: EvidenceTrainState) -> bool:
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
+
+
+def build_optimizer(model, params) -> torch.optim.AdamW:
+    """AdamW over the trainable params: the evidence path at `lr`, and --
+    unfrozen -- the backbone as its own group at `lr * backbone_lr_mult`
+    (train_loop.set_lr applies the schedule through the group's `lr_mult`)."""
+    groups = [{"params": model.evidence_parameters()}]
+    if params.unfreeze_backbone:
+        groups.append({"params": model.backbone_parameters(), "lr_mult": params.backbone_lr_mult})
+    return torch.optim.AdamW(groups, lr=params.lr, weight_decay=params.weight_decay)
+
+
+def cycle_batches(dataset: MsetDataset, positions_per_batch: int, epoch: int):
+    """An endless stream of distillation batches for one pass: the dataset's
+    epoch under a pass-specific shuffle, restarted (reshuffled) whenever it
+    runs dry, so the trajectory side alone paces the pass."""
+    cycle = 0
+    while True:
+        yield from dataset.iter_batches(positions_per_batch, seed=cycle, epoch_index=epoch)
+        cycle += 1
 
 
 class PositionSetProbe:
@@ -167,11 +256,75 @@ class PositionSetProbe:
         return position_set_metrics(analyses)
 
 
+class StudentReference:
+    """The frozen student's held-out sim soft-CE (`student_wld_ce`, `_ev`) --
+    the flat reference line an unfrozen run's moving `plain_wld_ce` is read
+    against, on the same eval prefix draw (evaluate's fixed seed). Computed
+    from a pristine copy of the student, so it is what it claims after a
+    resume too, and recomputed only when the holdout grows."""
+
+    def __init__(self, student_checkpoint: str, device, batch_positions: int, max_e: int):
+        self.model, _ = load_student(student_checkpoint, device)
+        self.model.eval()
+        self.device = device
+        self.batch_positions = batch_positions
+        self.max_e = max_e
+        self._holdout_size = -1
+        self._metrics: dict[str, float] = {}
+
+    def metrics(self, holdout_ds: TrajectoryDataset) -> dict[str, float]:
+        if holdout_ds.num_positions != self._holdout_size:
+            m = evaluate(self.model, holdout_ds, self.device, self.batch_positions, self.max_e)
+            self._metrics = {
+                f"student_wld_ce{suffix}": m[f"plain_wld_ce{suffix}"]
+                for suffix in ("", "_ev")
+                if f"plain_wld_ce{suffix}" in m
+            }
+            self._holdout_size = holdout_ds.num_positions
+        return dict(self._metrics)
+
+
+def distill_metrics(model, holdout_ds: MsetDataset, device, batch_positions: int, cfg) -> dict:
+    """The plain pass's distillation health on the .mset holdout, as
+    `distill_*` series: the student trainer's ranking metrics against the
+    teacher (recall@1 with the incumbent baseline, Spearman), the plane BCE,
+    and the distillation loss itself."""
+    m = mset_eval.evaluate(
+        model, holdout_ds, device, positions_per_batch=batch_positions, loss_cfg=cfg
+    )
+    out = {
+        "distill_recall1": m["recall@1"],
+        "distill_recall1_baseline": m["recall@1_baseline"],
+        "distill_spearman": m["spearman"],
+        "distill_loss": m["loss"],
+        "distill_loss_wld": m["loss_wld"],
+    }
+    if "plane_bce" in m:
+        out["distill_plane_bce"] = m["plane_bce"]
+    return out
+
+
 def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     """The per-pass checkpoint the trajectory pane loads: weights + config."""
     path = paths.checkpoint_path(epoch)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
+
+
+def export_student(paths, model, epoch: int, student_cfg: dict):
+    """The unfrozen mode's per-pass plain-student ONNX (models/
+    model_epoch_NNNN.onnx), stamped with the student's arm and version as the
+    mset trainer stamps its own. The export covers the plain path only (the
+    evidence path's ONNX is roadmap item 5)."""
+    export_onnx(
+        model,
+        paths.onnx_path(epoch),
+        student_cfg["spatial_planes"],
+        student_cfg["scalar_size"],
+        contingent_features=student_cfg["contingent_features"],
+        opp_leave_input=student_cfg["open_leaves"],
+        move_encoding_version=student_cfg["move_encoding_version"],
+    )
 
 
 # Skipped (non-finite) batches tolerated per pass before the run is stopped:
@@ -195,7 +348,9 @@ def _metrics_record(
     epoch: int, state, settled: bool, losses: dict, m: dict, lr: float, skipped: int
 ) -> dict:
     """The dashboard row: losses, and the plain-vs-conditioned metrics as
-    *_acc series (the Loss tab's Accuracy panel) with the rest in the table."""
+    *_acc series (the Loss tab's Accuracy panel) with the rest in the table.
+    An unfrozen pass adds its joint-step terms (loss_sim, loss_distill_*) and
+    the student-reference / distill_* holdout series."""
     record = {
         "epoch": epoch,
         "positions": state.rows_trained,
@@ -207,6 +362,9 @@ def _metrics_record(
         "lr": lr,
         "skipped_batches": skipped,
     }
+    for k in DISTILL_LOSS_KEYS:
+        if k in losses:
+            record[f"loss_{k}"] = losses[k]
     for k in ("cond_wld_ce", "plain_wld_ce", "cond_wld_ce_ev", "plain_wld_ce_ev"):
         if k in m:
             record[k] = m[k]
@@ -219,8 +377,62 @@ def _metrics_record(
     record["exact_p0_maxdiff"] = m["exact_p0_maxdiff"]
     record["eval_rows"] = m["rows"]
     record["eval_rows_ev"] = m["rows_ev"]
-    record.update({k: v for k, v in m.items() if k.startswith("posset_")})
+    record.update({k: v for k, v in m.items() if k.startswith(("posset_", "student_", "distill_"))})
     return record
+
+
+def _distillation(params, ctx, epoch: int) -> Distillation | None:
+    """The joint step's distillation side for pass `epoch`; None in frozen mode."""
+    if ctx["distill_train_ds"] is None:
+        return None
+    batches = cycle_batches(ctx["distill_train_ds"], params.batch_positions, epoch)
+    return Distillation(batches, ctx["distill_loss_cfg"], params.lambda_sim)
+
+
+def _holdout_metrics(model, device, params, ctx) -> dict:
+    """The pass's held-out readout: plain vs conditioned on the trajectory
+    holdout and the position set; unfrozen, also the student reference and
+    the plain pass's distillation health."""
+    m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
+    m.update(ctx["posset"].metrics(model, device))
+    if ctx["distill_holdout_ds"] is not None:
+        m.update(ctx["student_ref"].metrics(ctx["holdout_ds"]))
+        m.update(
+            distill_metrics(
+                model,
+                ctx["distill_holdout_ds"],
+                device,
+                params.batch_positions,
+                ctx["distill_loss_cfg"],
+            )
+        )
+    return m
+
+
+def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -> str:
+    budget = (
+        f"{state.settled_epochs}/{params.train_epochs}"
+        if settled
+        else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
+    )
+    distill = ""
+    if "distill_recall1" in m:
+        distill = (
+            f"student={m.get('student_wld_ce', float('nan')):.4f} "
+            f"distill r@1={m['distill_recall1']:.3f} loss={m['distill_loss']:.4f} "
+        )
+    return (
+        f"[pass {epoch}] rows={state.rows_trained} loss={result.losses['total']:.4f} "
+        f"wld_ce cond={m.get('cond_wld_ce', float('nan')):.4f} "
+        f"plain={m.get('plain_wld_ce', float('nan')):.4f} "
+        f"(ev rows: cond={m.get('cond_wld_ce_ev', float('nan')):.4f} "
+        f"plain={m.get('plain_wld_ce_ev', float('nan')):.4f}) {distill}"
+        f"gain_mae={m.get('gain_mae', float('nan')):.4f} "
+        f"gain_hit={m.get('gain_hit', float('nan')):.3f} "
+        f"(base {m.get('gain_hit_baseline', float('nan')):.3f}) "
+        f"p0_maxdiff={m['exact_p0_maxdiff']:.1e} lr={lr_now:.2e} "
+        f"skipped={result.skipped} {train_s:.1f}s [{budget}]"
+    )
 
 
 def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, settled: bool):
@@ -235,6 +447,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         device,
         ctx["loss_cfg"],
         ctx["max_e"],
+        distill=_distillation(params, ctx, epoch),
         lr_fn=ctx["lr_controller"].lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
@@ -246,36 +459,74 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     check_finite(model, result)
 
     t1 = time.time()
-    m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
-    m.update(ctx["posset"].metrics(model, device))
+    m = _holdout_metrics(model, device, params, ctx)
     eval_s = time.time() - t1
     lr_now = ctx["lr_controller"].current
-    budget = (
-        f"{state.settled_epochs}/{params.train_epochs}"
-        if settled
-        else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
-    )
-    timed_print(
-        f"[pass {epoch}] rows={state.rows_trained} loss={result.losses['total']:.4f} "
-        f"wld_ce cond={m.get('cond_wld_ce', float('nan')):.4f} "
-        f"plain={m.get('plain_wld_ce', float('nan')):.4f} "
-        f"(ev rows: cond={m.get('cond_wld_ce_ev', float('nan')):.4f} "
-        f"plain={m.get('plain_wld_ce_ev', float('nan')):.4f}) "
-        f"gain_mae={m.get('gain_mae', float('nan')):.4f} "
-        f"gain_hit={m.get('gain_hit', float('nan')):.3f} "
-        f"(base {m.get('gain_hit_baseline', float('nan')):.3f}) "
-        f"p0_maxdiff={m['exact_p0_maxdiff']:.1e} lr={lr_now:.2e} "
-        f"skipped={result.skipped} {train_s:.1f}s [{budget}]"
-    )
+    timed_print(_pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx))
     record = _metrics_record(epoch, state, settled, result.losses, m, lr_now, result.skipped)
     db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
+    if params.unfreeze_backbone:
+        # Frozen, the plain model is the student byte for byte; only an
+        # unfrozen pass has a new plain student to export.
+        export_student(paths, model, epoch, ctx["config"]["student"])
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,
         nbytes=0,
     )
+
+
+def _loss_weights(params) -> dict:
+    """Each recorded loss series' coefficient in the optimized total, for the
+    dashboard's stacked loss panel: the sim terms (times lambda_sim in the
+    joint total), plus the distillation terms when unfrozen."""
+    sim = {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_gain": params.lambda_gain}
+    if not params.unfreeze_backbone:
+        return sim
+    return {
+        "loss_distill_wld": 1.0,
+        "loss_distill_score_diff": params.lambda_sd,
+        "loss_distill_planes": params.lambda_planes,
+        **{k: params.lambda_sim * w for k, w in sim.items()},
+    }
+
+
+def _report_model(model, params) -> int:
+    n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_total = sum(p.numel() for p in model.parameters())
+    what = "backbone unfrozen" if params.unfreeze_backbone else "fusion + proves-best head"
+    print(f"Model: {n_total:,} parameters, {n_train:,} trainable ({what})")
+    return n_train
+
+
+def _distill_ctx(store, params, device, max_e) -> dict:
+    """The unfrozen mode's run-context entries; None in frozen mode."""
+    if not params.unfreeze_backbone:
+        return {"distill_train_ds": None, "distill_holdout_ds": None}
+    train_ds, holdout_ds = load_distill_datasets(store, params)
+    print(
+        f"distill: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
+        f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates"
+    )
+    return {
+        "distill_train_ds": train_ds,
+        "distill_holdout_ds": holdout_ds,
+        "distill_loss_cfg": mset_train_loop.LossConfig.from_args(params),
+        "student_ref": StudentReference(
+            params.student_checkpoint, device, params.batch_positions, max_e
+        ),
+    }
+
+
+def _absorb(store, params, ctx) -> int:
+    """Take up the store's new pairs on both sides of the split; the count is
+    the .sobs side's, which paces the corpus clock."""
+    absorbed = absorb_new_pairs(store, params, ctx["train_ds"], ctx["holdout_ds"])
+    if ctx["distill_train_ds"] is not None:
+        absorb_new_pairs(store, params, ctx["distill_train_ds"], ctx["distill_holdout_ds"], ".mset")
+    return absorbed
 
 
 def run(ctx: WorkerContext) -> int:
@@ -289,10 +540,12 @@ def run(ctx: WorkerContext) -> int:
         print(f"error: student_checkpoint {params.student_checkpoint!r} is not a readable file")
         return 1
 
-    model, student_cfg = load_student(params.student_checkpoint, device)
+    model, student_cfg = load_student(
+        params.student_checkpoint, device, freeze=not params.unfreeze_backbone
+    )
     # The move rows this trainer encodes (candidates and evidence tokens) must
-    # be the rows the frozen student learned; a version bump in the engine
-    # would otherwise train the fusion against embeddings of the wrong layout.
+    # be the rows the student learned; a version bump in the engine would
+    # otherwise train the fusion against embeddings of the wrong layout.
     if student_cfg["move_encoding_version"] != move_encoding_version():
         print(
             f"error: the student was trained under move encoding version "
@@ -323,18 +576,12 @@ def run(ctx: WorkerContext) -> int:
         f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates "
         f"(open_leaves={train_ds.open_leaves}, proposer {train_ds.proposer_hash[:12]})"
     )
-    trainable = model.evidence_parameters()
-    n_train = sum(p.numel() for p in trainable)
-    n_total = sum(p.numel() for p in model.parameters())
-    print(f"Model: {n_total:,} parameters, {n_train:,} trainable (fusion + proves-best head)")
-    optimizer = torch.optim.AdamW(trainable, lr=params.lr, weight_decay=params.weight_decay)
+    n_train = _report_model(model, params)
+    optimizer = build_optimizer(model, params)
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, ctx.tag, asdict(params), n_train)
-    db.write_loss_weights(
-        conn,
-        {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_gain": params.lambda_gain},
-    )
+    db.write_loss_weights(conn, _loss_weights(params))
     init_controls(conn)
     run_ctx = {
         "config": {
@@ -349,6 +596,7 @@ def run(ctx: WorkerContext) -> int:
         "max_e": max_e,
         "stats": WorkerStats(ctx),
         "posset": PositionSetProbe(params, student_cfg, threads=ctx.threads),
+        **_distill_ctx(store, params, device, max_e),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=EvidenceTrainState)
@@ -358,8 +606,7 @@ def run(ctx: WorkerContext) -> int:
     try:
         clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs")
         while epochs_left(params, state):
-            absorbed = absorb_new_pairs(store, params, train_ds, holdout_ds)
-            settled = clock.is_final(absorbed)
+            settled = clock.is_final(_absorb(store, params, run_ctx))
             train_one_epoch(model, optimizer, conn, paths, device, params, state, run_ctx, settled)
         timed_print(
             f"Training complete: {state.settled_epochs} epochs over the finished corpus "
