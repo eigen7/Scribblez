@@ -77,6 +77,11 @@ BUCKET_KINDS = ("cloud",)
 # per reconcile pass, not one per pass on a host that is simply off.
 SSH_REPROBE_SECONDS = 30.0
 
+# A container that dies as fast as it is started is not going to be fixed by
+# starting it again: restarts back off from the pass interval up to this, and
+# reset the moment one is observed running.
+MAX_RESTART_BACKOFF_SECONDS = 300.0
+
 # How long an observation of a container or pod stands in for a fresh one.
 # Only the reconcile pass observes; status requests read what it left, so a
 # browser polling every 3 seconds costs no ssh round trips at all.
@@ -235,6 +240,12 @@ class WorkerManager:
         # Slot key -> (probe state, when observed). Written by the reconcile
         # pass, read by everything else (see _probe_container).
         self._probes: dict[str, tuple[str, float]] = {}
+        # Slot key -> why its container is not running (exit code + last log
+        # line), so a crash-looping worker explains itself on the dashboard
+        # instead of only in `docker logs`.
+        self._exits: dict[str, str] = {}
+        # Slot key -> (consecutive restarts, when the next one is allowed).
+        self._restarts: dict[str, tuple[int, float]] = {}
         # (pods by id, when listed), the cloud counterpart of _probes.
         self._pods: tuple[dict, float] = ({}, 0.0)
         # Where every blocking step runs (see _offload). One thread: the point
@@ -391,7 +402,16 @@ class WorkerManager:
                 self._ssh_down.pop(w.host, None)
         if not w.launched and probe not in ("unreachable", "missing"):
             w.launched = True  # the in-doubt start did create the container
-        self._probes[_key(spec, tag, w.worker_id)] = (probe, time.time())
+        key = _key(spec, tag, w.worker_id)
+        self._probes[key] = (probe, time.time())
+        if probe == "stopped":
+            self._exits[key] = SshMachine(w.host).container_exit(
+                _container_name(spec, tag, w.worker_id)
+            )
+        else:
+            self._exits.pop(key, None)
+        if probe == "running":
+            self._restarts.pop(key, None)  # it came up; it is not looping
         return probe
 
     def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord, *, observe: bool) -> str:
@@ -415,6 +435,19 @@ class WorkerManager:
         if not w.launched and probe == "unreachable":
             return "missing"
         return probe
+
+    def _restart_allowed(self, key: str) -> bool:
+        """Whether slot `key` may be (re)started now. A container that keeps
+        dying gets progressively longer between attempts, so a broken worker
+        costs one ssh round trip every few minutes rather than one per pass --
+        and its failure stays on screen instead of scrolling past."""
+        _, next_at = self._restarts.get(key, (0, 0.0))
+        return time.time() >= next_at
+
+    def _note_restart(self, key: str):
+        attempts = self._restarts.get(key, (0, 0.0))[0] + 1
+        backoff = min(MAX_RESTART_BACKOFF_SECONDS, OBSERVATION_TTL_SECONDS * 2 ** (attempts - 1))
+        self._restarts[key] = (attempts, time.time() + backoff)
 
     def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Create + start slot `w`'s container on its machine, on the task's
@@ -623,6 +656,9 @@ class WorkerManager:
                 info["state"] = _ssh_state(w.desired_state, probe, gated)
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {w.host}"
+                reason = self._exits.get(_key(spec, task.tag, w.worker_id))
+                if reason and not alive:
+                    info["exit_reason"] = reason
                 _accrue(w, alive, None)
             elif w.pod_id is None:  # not yet started, so no pod to observe
                 alive = False
@@ -825,10 +861,17 @@ class WorkerManager:
         directions and resumes the work mid-chunk.
         """
         machine, name = SshMachine(w.host), _container_name(spec, task.tag, w.worker_id)
+        key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
             if probe == "paused":
-                machine.unpause_container(name)
-            elif probe == "missing":
+                machine.unpause_container(name)  # resuming a parked worker is not a restart
+                return
+            if probe not in ("missing", "stopped"):
+                return  # running, or nothing this pass can act on
+            if not self._restart_allowed(key):
+                return
+            self._note_restart(key)
+            if probe == "missing":
                 self._run_ssh_container(spec, task, w)
             elif probe == "stopped" and w.bundle_id != task.bundle_id:
                 # Redeployed since this container was created. Its bundle is
