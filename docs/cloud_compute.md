@@ -87,7 +87,10 @@ Principles:
   pod-spec path, so pods are identical however launched.
 - **Results sync** (`./py/scripts/cloud_sync.py`): pulls the workload's
   inbound bucket prefixes into `<mount>/tags/<workload>/<tag>/`, merging with
-  locally generated data for the same tag. Prefixes the controller host itself
+  locally generated data for the same tag. Cloud pods only -- an ssh worker's
+  results are read straight out of its container over the control link
+  (`py/cloud/ssh_transfer.py`), which is both faster and one fewer place for
+  them to be. Prefixes the controller host itself
   maintains in the bucket are deliberately not pulled.
 - **Credentials** (`<mount>/cloud/credentials.json`): one operator-filled file
   (template from setup_wizard.py; validated end-to-end by
