@@ -99,7 +99,12 @@ An ssh slot's machine is prepared once, by hand:
 Slots then behave like pods: the machine's CPU arch picks its bundle (generic
 `x86-64` fallback), results and stats ride the bucket and the sync watcher,
 and the reconcile loop restarts a container that died (e.g. the machine
-rebooted). A machine that is off the network shows `unreachable`; the server
+rebooted). The bundle itself is deployed for you -- a task builds and pushes
+the controller's tree when its first remote worker starts, and pins the
+result, so every worker of one task runs identical code and editing code
+mid-run does not change what the fleet is executing. The Overview badges the
+tree having moved on and offers Redeploy, which repins the task and replaces
+its containers (a pod's or container's bundle is fixed at creation). A machine that is off the network shows `unreachable`; the server
 leaves it alone — its worker may well still be running — and resumes control
 when SSH works again. Keep the machine from sleeping on lid-close if it is a
 laptop.

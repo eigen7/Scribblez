@@ -16,6 +16,13 @@ Bucket layout:
 
 The bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash
 makes successive pushes from the same (possibly dirty) tree distinct.
+
+Deployment is not a step an operator has to remember: `deploy_current_tree`
+builds every supported arch and pushes only when the bucket's LATEST does not
+already carry this tree, and the dashboard calls it before launching a worker
+that runs from a bundle. Its "is this tree already deployed?" test is the
+manifest's `source_hash` -- a digest of the exact files a bundle ships -- not
+the bundle_id, which is deliberately fresh on every push.
 """
 
 import hashlib
@@ -24,9 +31,11 @@ import subprocess
 import tarfile
 import tempfile
 from dataclasses import asdict, dataclass
+from dataclasses import fields as fields_of
 from pathlib import Path
 
-from build import SUPPORTED_ARCHS, arch_build_dir
+from build import SUPPORTED_ARCHS, arch_build_dir, build_all_archs, detect_host_arch
+from scribblez.hardware import default_thread_count
 from scribblez.paths import REPO_ROOT
 
 from cloud.credentials import R2Credentials
@@ -59,6 +68,10 @@ class BundleManifest:
     git_sha: str
     git_dirty: bool
     archs: list[str]
+    # Digest of the files this bundle shipped (see source_hash). Empty for
+    # bundles pushed before the field existed, which therefore never match a
+    # local tree -- the first deployment against one pushes.
+    source_hash: str = ""
 
 
 def _git(*args: str) -> str:
@@ -90,6 +103,49 @@ def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
     return tar_path
 
 
+def _shipped_files() -> list[tuple[str, Path]]:
+    """Every file a bundle ships, as (identity, path): each supported arch's
+    binaries plus the shared py/ tree, named as they appear inside a tarball."""
+    files = [
+        (f"{arch}/{name}", Path(arch_build_dir(arch)) / "engine" / name)
+        for arch in SUPPORTED_ARCHS
+        for name in BUNDLE_BINARY_NAMES
+    ]
+    files += [
+        (str(path.relative_to(REPO_ROOT)), path)
+        for path in (REPO_ROOT / "py").rglob("*")
+        if path.is_file() and not set(path.parts) & _TAR_EXCLUDE_DIRS
+    ]
+    return sorted(files)
+
+
+def source_hash(cache: dict | None = None) -> str | None:
+    """A digest of the tree a bundle would ship right now, or None when some
+    arch is unbuilt (nothing to compare until a build produces it).
+
+    This is the deployment test, and it covers compiled binaries rather than
+    git state: two pushes of one tree get different bundle_ids by design, and
+    a `-dirty` sha says a tree changed without saying into what. Hashing 20 MB
+    costs ~80 ms, which is too much for a status poll, so `cache` (owned by
+    the caller, keyed by path) holds each file's digest against its size and
+    mtime and reduces a repeat call to a stat walk.
+    """
+    digest = hashlib.sha256()
+    for identity, path in _shipped_files():
+        try:
+            stamp = path.stat()
+        except FileNotFoundError:
+            return None
+        key = (stamp.st_size, stamp.st_mtime_ns)
+        cached = cache.get(path) if cache is not None else None
+        if cached is None or cached[0] != key:
+            cached = (key, hashlib.sha256(path.read_bytes()).hexdigest())
+            if cache is not None:
+                cache[path] = cached
+        digest.update(f"{identity}:{cached[1]}\n".encode())
+    return digest.hexdigest()
+
+
 def create_bundle(out_dir: Path) -> tuple[list[Path], BundleManifest]:
     """Build one tarball per supported arch plus manifest.json under `out_dir`
     from the current tree, returning (tarball paths, manifest)."""
@@ -101,7 +157,11 @@ def create_bundle(out_dir: Path) -> tuple[list[Path], BundleManifest]:
     dirty = bool(_git("status", "--porcelain"))
     bundle_id = f"{sha[:12]}{'-dirty' if dirty else ''}-{digest.hexdigest()[:8]}"
     manifest = BundleManifest(
-        bundle_id=bundle_id, git_sha=sha, git_dirty=dirty, archs=list(SUPPORTED_ARCHS)
+        bundle_id=bundle_id,
+        git_sha=sha,
+        git_dirty=dirty,
+        archs=list(SUPPORTED_ARCHS),
+        source_hash=source_hash(),
     )
     (out_dir / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
     return tarballs, manifest
@@ -125,6 +185,53 @@ def push_bundle(r2: R2Credentials) -> BundleManifest:
         )
         assert res.returncode == 0, f"updating {LATEST_NAME} failed: {res.stderr}"
     return manifest
+
+
+def read_manifest(r2: R2Credentials, bundle_id: str) -> BundleManifest | None:
+    """Bundle `bundle_id`'s manifest, or None if the bucket has no such bundle."""
+    path = bucket_path(r2, BUNDLES_PREFIX, bundle_id, "manifest.json")
+    res = rclone(r2, "cat", path, capture=True)
+    if res.returncode != 0:
+        return None
+    fields = json.loads(res.stdout)
+    known = {f.name for f in fields_of(BundleManifest)}
+    return BundleManifest(**{k: v for k, v in fields.items() if k in known})
+
+
+def latest_manifest(r2: R2Credentials) -> BundleManifest | None:
+    """The manifest of the bundle at LATEST, or None if nothing is pushed."""
+    res = rclone(r2, "cat", bucket_path(r2, BUNDLES_PREFIX, LATEST_NAME), capture=True)
+    return read_manifest(r2, res.stdout.strip()) if res.returncode == 0 else None
+
+
+def build_all_supported_archs(jobs: int | None = None):
+    """Rebuild every arch a bundle ships, incrementally (a no-op costs
+    seconds). Release, matching py/build.py's default."""
+    failed = build_all_archs(
+        SUPPORTED_ARCHS, "Release", jobs or default_thread_count(), detect_host_arch()
+    )
+    assert not failed, f"build failed for arch(s): {', '.join(sorted(failed))}"
+
+
+def deploy_current_tree(
+    r2: R2Credentials, *, jobs: int | None = None, cache=None
+) -> BundleManifest:
+    """Make LATEST be this tree, and return the manifest it now points at.
+
+    Building first is not optional: the fingerprint covers compiled binaries,
+    so pushing without it would ship an arch nobody rebuilt under a fresh,
+    current-looking bundle id -- the exact deception this whole mechanism
+    exists to prevent. The upload is skipped when LATEST already carries this
+    tree, so a redeploy of unchanged code leaves running tasks pinned where
+    they are.
+    """
+    build_all_supported_archs(jobs)
+    current = source_hash(cache)
+    assert current is not None, "a build just ran; every arch's binaries must exist"
+    latest = latest_manifest(r2)
+    if latest is not None and latest.source_hash == current:
+        return latest
+    return push_bundle(r2)
 
 
 def resolve_bundle_id(r2: R2Credentials, ref: str) -> str:

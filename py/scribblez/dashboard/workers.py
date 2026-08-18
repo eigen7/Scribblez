@@ -39,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-from cloud.bundles import resolve_bundle_id
+from cloud.bundles import deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
@@ -206,6 +206,43 @@ class WorkerManager:
         self._creds: CloudCredentials | None = None
         self._client: RunpodClient | None = None
         self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
+        # Per-file digests behind source_hash, so the drift check every status
+        # poll makes costs a stat walk rather than 20 MB of hashing.
+        self._source_digests: dict = {}
+
+    # ---- bundle deployment -------------------------------------------------
+
+    def deploy(self, spec, task: tasks.TaskRecord) -> str:
+        """Build the controller's tree, push it unless the bucket already has
+        it, and pin the task to the result. Returns the bundle id."""
+        creds, _ = self._cloud()
+        manifest = deploy_current_tree(creds.r2, cache=self._source_digests)
+        task.bundle_id = manifest.bundle_id
+        task.bundle_source_hash = manifest.source_hash
+        tasks.save_task(spec, task)
+        return manifest.bundle_id
+
+    def task_bundle_id(self, spec, task: tasks.TaskRecord) -> str:
+        """The bundle this task's remote workers run, deployed on first use.
+
+        Deployment is not an operator step: a task that has never launched a
+        bucket-delivering worker gets the controller's current tree built and
+        pushed here, and every later worker joins that same bundle. Pinning is
+        what keeps an experiment homogeneous -- editing code mid-run leaves the
+        fleet on the code it started with, and moving it is the explicit
+        redeploy action.
+        """
+        return task.bundle_id or self.deploy(spec, task)
+
+    def bundle_drift(self, task: tasks.TaskRecord) -> bool:
+        """Whether the controller's tree has changed since the task pinned its
+        bundle -- what the dashboard badges, and the cue to redeploy. False
+        while nothing is pinned, and while an arch is unbuilt (there is no
+        tree to compare until a build produces one)."""
+        if not task.bundle_source_hash:
+            return False
+        current = source_hash(self._source_digests)
+        return current is not None and current != task.bundle_source_hash
 
     # ---- cloud plumbing --------------------------------------------------
 
@@ -221,10 +258,11 @@ class WorkerManager:
         creation."""
         creds, client = self._cloud()
         params = params_mod.validate(spec.params_cls, task.params)
+        w.bundle_id = self.task_bundle_id(spec, task)
         body = pod_create_spec(
             creds, spec, task.tag, params,
             name=w.worker_id, role=w.role,
-            bundle_id=resolve_bundle_id(creds.r2, "latest"),
+            bundle_id=w.bundle_id,
             resources=_worker_resources(w),
         )  # fmt: skip
         w.pod_id = client.create_pod(body)["id"]
@@ -325,14 +363,14 @@ class WorkerManager:
         return probe
 
     def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Create + start slot `w`'s container on its machine, on the latest
+        """Create + start slot `w`'s container on its machine, on the task's
         bundle (matching what a fresh pod would run)."""
         creds, _ = self._cloud()
         params = params_mod.validate(spec.params_cls, task.params)
+        w.bundle_id = self.task_bundle_id(spec, task)
         env = bundle_worker_env(
             creds, spec, task.tag, params,
-            role=w.role, bundle_id=resolve_bundle_id(creds.r2, "latest"), worker_id=w.worker_id,
-            kind="ssh",
+            role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id, kind="ssh",
         )  # fmt: skip
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
@@ -500,6 +538,7 @@ class WorkerManager:
                 "gpu_count": w.gpu_count,
                 "pod_id": w.pod_id,
                 "host": w.host,
+                "bundle_id": w.bundle_id,
             }
             if gated:
                 info["gate_reason"] = task.gates[w.role]
@@ -651,7 +690,13 @@ class WorkerManager:
         elif w.kind == "ssh":
             probe = info["ssh_probe"]
             name = _container_name(spec, task.tag, w.worker_id)
-            if should_run and probe == "stopped":
+            if should_run and probe == "stopped" and w.bundle_id != task.bundle_id:
+                # Redeployed since this container was created. Its bundle is
+                # fixed in the environment it was created with, so the slot
+                # joins the task's new bundle by being replaced, not restarted.
+                SshMachine(w.host).remove_container(name)
+                self._run_ssh_container(spec, task, w)
+            elif should_run and probe == "stopped":
                 SshMachine(w.host).start_container(name)
             elif should_run and probe == "missing":
                 self._run_ssh_container(spec, task, w)

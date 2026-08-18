@@ -156,6 +156,8 @@ class TaskHandler(_MasterBase):
                 "data_dir": str(spec.data_dir(tag)),
                 "workers": workers,
                 "spend": spend,
+                "bundle_id": task.bundle_id if task else None,
+                "bundle_drift": self.manager.bundle_drift(task) if task else False,
             }
 
         self.guarded(info)
@@ -170,6 +172,22 @@ class TaskDeleteHandler(_MasterBase):
             return {"ok": True}
 
         self.guarded(delete)
+
+
+class TaskDeployHandler(_MasterBase):
+    """Move a task onto the controller's current tree: build, push if the
+    bucket lacks it, repin. Running remote workers are replaced with ones on
+    the new bundle as reconcile next observes them."""
+
+    def post(self):
+        body = self.body()
+        spec = self.spec(body)
+
+        def deploy():
+            task = self.task_or_fail(spec, body["tag"])
+            return {"bundle_id": self.manager.deploy(spec, task)}
+
+        self.guarded(deploy)
 
 
 class WorkerAddHandler(_MasterBase):
@@ -275,6 +293,7 @@ MASTER_ROUTES = [
     (r"/api/tasks", TaskCreateHandler),
     (r"/api/task", TaskHandler),
     (r"/api/task/delete", TaskDeleteHandler),
+    (r"/api/task/deploy", TaskDeployHandler),
     (r"/api/task/workers", WorkerAddHandler),
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/cloud/offers", CloudOffersHandler),

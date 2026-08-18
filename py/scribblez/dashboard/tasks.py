@@ -44,6 +44,10 @@ class WorkerRecord:
     gpu_type_id: str | None = None  # cloud GPU pod: Runpod gpuTypeId
     gpu_count: int | None = None  # cloud GPU pod: number of GPUs
     pod_id: str | None = None  # cloud: the backing pod, created on first start (None until then)
+    # cloud/ssh: the bundle the pod/container was created with. A pod's or
+    # container's environment fixes its bundle at creation, so a slot whose id
+    # no longer matches its task's is replaced rather than restarted.
+    bundle_id: str | None = None
     cost_per_hr: float | None = None  # cloud: last observed rental rate
     spend: float = 0.0  # estimated dollars spent by this slot so far
     observed_at: float | None = None  # when the slot was last observed
@@ -64,6 +68,13 @@ class TaskRecord:
     # Estimated spend of worker slots that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
+    # The bundle every bucket-delivering worker of this task runs, pinned when
+    # the first one launches: an experiment's fleet stays homogeneous, and code
+    # edited mid-run cannot silently become what the fleet is executing. The
+    # source digest it was built from rides along so drift is a local
+    # comparison (see WorkerManager.bundle_drift) rather than a bucket read.
+    bundle_id: str | None = None
+    bundle_source_hash: str = ""
 
     def worker(self, worker_id: str) -> WorkerRecord:
         for w in self.workers:

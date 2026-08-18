@@ -16,8 +16,14 @@ type WorkerInfo = {
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
-  gate_reason?: string;
+  gate_reason?: string; bundle_id: string | null;
 };
+
+// A slot still on the bundle the task has moved off: it gets replaced with one
+// on the task's bundle the next time reconcile finds it stopped.
+function onOldBundle(w: WorkerInfo, taskBundle: string | null): boolean {
+  return w.bundle_id != null && taskBundle != null && w.bundle_id !== taskBundle;
+}
 
 function workerResources(w: WorkerInfo): string {
   if (w.kind === 'local') return `${w.threads} threads`;
@@ -33,6 +39,7 @@ type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean | string> | null;
   created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; spend: number;
+  bundle_id: string | null; bundle_drift: boolean;
 };
 
 const stateColors: Record<string, string> = {
@@ -508,8 +515,9 @@ function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
   );
 }
 
-function WorkersTable({ workers, onAction }: {
-  workers: WorkerInfo[]; onAction: (workerId: string, action: string) => void;
+function WorkersTable({ workers, taskBundle, onAction }: {
+  workers: WorkerInfo[]; taskBundle: string | null;
+  onAction: (workerId: string, action: string) => void;
 }) {
   if (workers.length === 0) {
     return <div style={{ color: '#556070', fontStyle: 'italic' }}>No workers yet.</div>;
@@ -538,7 +546,14 @@ function WorkersTable({ workers, onAction }: {
               <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{w.worker_id}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>{w.role}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>{w.kind}</td>
-              <td style={{ padding: '6px 14px 6px 0' }}>{workerResources(w)}</td>
+              <td style={{ padding: '6px 14px 6px 0' }}>
+                {workerResources(w)}
+                {onOldBundle(w, taskBundle) && (
+                  <span style={{ color: '#a05a00' }} title={`created on bundle ${w.bundle_id}`}>
+                    {' '}· old bundle
+                  </span>
+                )}
+              </td>
               <td
                 style={{ padding: '6px 14px 6px 0', color: stateColors[w.state] ?? '#1a1f28', fontWeight: 600 }}
                 title={w.gate_reason ? `parked by the scheduler: ${w.gate_reason}` : undefined}
@@ -574,6 +589,9 @@ function WorkersTable({ workers, onAction }: {
 function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
   const [info, setInfo] = useState<TaskInfo | null>(null);
   const [error, setError] = useState('');
+  // A redeploy builds every arch before it pushes; on a cold tree that is
+  // minutes, so the button reports itself rather than looking dead.
+  const [deploying, setDeploying] = useState(false);
 
   const refresh = useCallback(() => {
     getJSON(`/api/task?workload=${workload.name}&tag=${encodeURIComponent(tag)}`)
@@ -595,6 +613,18 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
       refresh();
     } catch (e) {
       setError(String(e));
+    }
+  };
+  const redeploy = async () => {
+    setError('');
+    setDeploying(true);
+    try {
+      await postJSON('/api/task/deploy', { workload: workload.name, tag });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeploying(false);
     }
   };
   // Cost accrues while a pod is really up (observed), not merely desired-running.
@@ -619,6 +649,9 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
             ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
             ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
             ['data dir', info.data_dir],
+            ['bundle', info.bundle_id
+              ? <span title={info.bundle_id}>{info.bundle_id.split('-')[0]}</span>
+              : 'none yet (deployed when the first remote worker starts)'],
             ['cloud burn rate', `$${cloudCost.toFixed(3)}/hr`],
             ['cloud spend (est. total)', `$${info.spend.toFixed(2)}`],
           ]} />
@@ -629,6 +662,19 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
             : <span style={{ color: '#556070' }}>unknown (pre-dashboard tag)</span>}
         </Card>
       </div>
+      {info.bundle_drift && (
+        <div className="card" style={{ color: '#a05a00', marginTop: 14, display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span>
+            The controller's code has changed since this task pinned its bundle. Remote workers
+            keep running the pinned one; redeploying builds the current tree, pushes it, and
+            replaces them.
+          </span>
+          <Button
+            label={deploying ? 'Deploying…' : 'Redeploy'} disabled={deploying}
+            onClick={redeploy}
+          />
+        </div>
+      )}
       {info.has_task && (
         <Card title="Workers">
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
@@ -643,7 +689,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
             </span>
           </div>
           <WorkersTable
-            workers={info.workers}
+            workers={info.workers} taskBundle={info.bundle_id}
             onAction={(workerId, action) => act({ worker_id: workerId, action })}
           />
           {workload.roles.map((role) => (
