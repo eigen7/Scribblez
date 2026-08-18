@@ -54,13 +54,15 @@ bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b) {
 }
 
 Move hasty_best_move_reference(const MoveRequest& req) {
-  const std::vector<Move> plays = generate_legal_plays(req);
+  std::vector<Move> candidates = generate_legal_plays(req);
+  const std::vector<Move> exchanges = generate_legal_exchanges(req);
+  candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
   const HastyEquity& eq = HastyEquity::instance();
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
   bool have = false;
   Move best;
   double best_eq = 0.0;
-  for (const Move& m : plays) {
+  for (const Move& m : candidates) {
     const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
     if (!have || hasty_move_better(e, m, best_eq, best)) {
       best = m;
@@ -161,6 +163,7 @@ Move hasty_best_move_gaddag(const MoveRequest& req) {
     smg.generate_anchor(anchors[i], req.my_rack, moves);
     consider_moves(eq, req, leaves, moves, bm);
   }
+  consider_moves(eq, req, leaves, generate_legal_exchanges(req), bm);
   return bm.have ? bm.move : Move::pass();
 }
 
@@ -339,6 +342,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
                         sub_terms[e.placed].data());
     consider_moves(eq, req, leaves, moves, bm);
   }
+  consider_moves(eq, req, leaves, generate_legal_exchanges(req), bm);
   return bm.have ? bm.move : Move::pass();
 }
 
@@ -368,15 +372,17 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
     return hasty_best_move_wmp_impl(req);
   }
 
-  // Exploratory: generate every legal play, rank by equity, keep the top-K, and
-  // softmax-sample among them to inject exploration into self-play data
-  // generation that pure argmax play lacks.
-  const std::vector<Move> plays = generate_legal_plays(req);
-  const int n = plays.size();
+  // Exploratory: generate every legal play and exchange, rank by equity, keep
+  // the top-K, and softmax-sample among them to inject exploration into
+  // self-play data generation that pure argmax play lacks.
+  std::vector<Move> candidates = generate_legal_plays(req);
+  const std::vector<Move> exchanges = generate_legal_exchanges(req);
+  candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
+  const int n = candidates.size();
   if (n == 0) return Move::pass();
   const HastyEquity& eq = HastyEquity::instance();
   const std::vector<double> vals =
-    eq.equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+    eq.equities(candidates, req.board, req.bag_size, req.opp_rack, req.my_rack);
 
   const int k = std::min(top_k_, n);
   std::vector<int> idx(n);
@@ -386,7 +392,7 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
   std::vector<double> top_vals(k);
   for (int j = 0; j < k; ++j) top_vals[j] = vals[idx[j]];
   const int chosen = sampler_.sample(top_vals, k, temperature_, rng_);
-  return plays[size_t(idx[chosen])];
+  return candidates[size_t(idx[chosen])];
 }
 
 Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }

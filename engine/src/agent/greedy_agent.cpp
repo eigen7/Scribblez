@@ -43,10 +43,10 @@ MoveDecision GreedyAgent::make_move(const MoveRequest& req) {
     std::uniform_int_distribution<size_t> d(0, top.size() - 1);
     return *top[d(rng_)];
   }
-  // No legal plays.
-  if (req.bag_size >= RACK_SIZE) {
-    return Move::exchange(req.my_rack.counts());
-  }
+  // No legal plays: exchange the entire rack if the bag can support it (a
+  // deliberately naive policy -- GreedyAgent doesn't reason about leave
+  // quality, so it doesn't try to keep a good partial leave), else pass.
+  if (req.bag_size >= RACK_SIZE) return Move::exchange(req.my_rack.counts());
   return Move::pass();
 }
 
