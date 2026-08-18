@@ -50,7 +50,12 @@ _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 # (a change in any count means that tab's data advanced). Mirrors the Bokeh shell's
 # per-tab ``watch()``.
 # How often the WorkerManager closes desired-vs-actual worker-slot gaps.
-RECONCILE_SECONDS = 30
+# How often the reconcile pass runs. It is the only observer of ssh containers
+# and cloud pods, and the only thing that acts on a scheduler gate, so its
+# period is also how long a released worker waits before resuming. Every step
+# runs off the event loop (WorkerManager.offload), which is what makes a period
+# this short affordable.
+RECONCILE_SECONDS = 5
 
 VERSION_TABLES = (
     "metrics",
@@ -821,17 +826,20 @@ def run(port: int, mount_root: str):
     (a single control plane owns the local workers). The WorkerManager
     reconciles worker slots at boot (relaunching local workers that should be
     running) and every RECONCILE_SECONDS thereafter (restarting interruptible
-    pods Runpod reclaimed). On shutdown, owned local workers get SIGTERM (they
-    flush and exit); cloud pods keep running.
+    pods Runpod reclaimed). Its blocking work runs in the manager's executor,
+    so serving the dashboard never waits on ssh, the cloud API or a build; a
+    pass that overruns simply delays the next one (PeriodicCallback awaits it).
+    On shutdown, owned local workers get SIGTERM (they flush and exit); cloud
+    pods keep running.
     """
     _acquire_control_lock(mount_root)
     manager = WorkerManager()
     make_app(mount_root, manager).listen(port, address="127.0.0.1")
     loop = tornado.ioloop.IOLoop.current()
 
-    def reconcile():
+    async def reconcile():
         try:
-            manager.reconcile()
+            await manager.reconcile()
         except Exception as e:  # noqa: BLE001 -- reconciliation must keep ticking
             print(f"reconcile: {e}")
 

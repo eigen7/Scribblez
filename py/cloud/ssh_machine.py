@@ -10,6 +10,12 @@ instead of hanging the dashboard).
 An unreachable machine is a normal condition (powered off, lid closed), not an
 error: container_state() reports it as the "unreachable" probe state and the
 caller decides what to do. Mutating calls raise SshMachineError.
+
+Stopping is not the only way to idle a container: pause/unpause suspend and
+resume its processes in place, keeping the unpacked bundle and the in-flight
+work. That is what the dashboard uses for a scheduler gate, which parks a
+worker many times an hour (docker stop, then a start that re-runs the image's
+bootstrap, costs a minute of every cycle and discards the chunk in flight).
 """
 
 import shlex
@@ -41,16 +47,19 @@ class SshMachineError(Exception):
 
 
 def classify_probe(returncode: int, stdout: str, stderr: str) -> str:
-    """Map a `docker inspect -f {{.State.Running}}` result onto the probe
-    states: "running" | "stopped" | "missing" | "unreachable". Only a definite
-    "No such object" counts as missing; any other failure (ssh itself, a down
-    docker daemon) is "unreachable", so the caller never recreates a container
-    it merely could not see."""
-    if returncode == 0:
-        return "running" if stdout.strip() == "true" else "stopped"
-    if returncode != _SSH_FAILED and "No such object" in stderr:
-        return "missing"
-    return "unreachable"
+    """Map a `docker inspect -f {{.State.Status}}` result onto the probe
+    states: "running" | "paused" | "stopped" | "missing" | "unreachable". Only
+    a definite "No such object" counts as missing; any other failure (ssh
+    itself, a down docker daemon) is "unreachable", so the caller never
+    recreates a container it merely could not see."""
+    if returncode != 0:
+        if returncode != _SSH_FAILED and "No such object" in stderr:
+            return "missing"
+        return "unreachable"
+    status = stdout.strip()
+    if status in ("running", "paused"):
+        return status
+    return "stopped"  # created / exited / dead: nothing of it is executing
 
 
 def env_file(env: dict[str, str]) -> str:
@@ -92,7 +101,7 @@ class SshMachine:
     def container_state(self, name: str) -> str:
         """Probe state of container `name`; see classify_probe."""
         res = self._run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", name], timeout=_PROBE_TIMEOUT
+            ["docker", "inspect", "-f", "{{.State.Status}}", name], timeout=_PROBE_TIMEOUT
         )
         return classify_probe(res.returncode, res.stdout, res.stderr)
 
@@ -121,6 +130,15 @@ class SshMachine:
 
     def start_container(self, name: str):
         self._mutate(["docker", "start", name])
+
+    def pause_container(self, name: str):
+        """Suspend the container's processes (SIGSTOP-like, via the freezer
+        cgroup). Nothing is lost and nothing restarts on resume -- the point of
+        using this for a gate rather than stop/start."""
+        self._mutate(["docker", "pause", name])
+
+    def unpause_container(self, name: str):
+        self._mutate(["docker", "unpause", name])
 
     def stop_container(self, name: str):
         # SIGTERM with a grace period long enough to flush completed output

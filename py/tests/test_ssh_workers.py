@@ -17,8 +17,11 @@ from scripts.cloud_fleet import bundle_worker_env
 
 
 def test_classify_probe():
-    assert classify_probe(0, "true\n", "") == "running"
-    assert classify_probe(0, "false\n", "") == "stopped"
+    assert classify_probe(0, "running\n", "") == "running"
+    assert classify_probe(0, "paused\n", "") == "paused"
+    # created / exited / dead all mean nothing of it is executing.
+    assert classify_probe(0, "exited\n", "") == "stopped"
+    assert classify_probe(0, "created\n", "") == "stopped"
     assert classify_probe(1, "", "Error: No such object: scz-x") == "missing"
     # ssh's own failure (exit 255) is unreachable even if the message happens
     # to mention objects; so is any docker failure that is not a definite
@@ -30,6 +33,10 @@ def test_classify_probe():
 
 def test_ssh_state_mapping():
     assert _ssh_state("running", "running", gated=True) == "waiting"
+    # A gate parks an ssh container by pausing it; that is still "waiting".
+    assert _ssh_state("running", "paused", gated=True) == "waiting"
+    assert _ssh_state("running", "unknown", gated=False) == "checking"
+    assert _ssh_state("paused", "paused", gated=False) == "stopping"
     assert _ssh_state("running", "running", gated=False) == "running"
     assert _ssh_state("running", "stopped", gated=False) == "exited"
     assert _ssh_state("running", "missing", gated=False) == "exited"
