@@ -722,6 +722,49 @@ h1 {
   border-color: #aed581;
 }
 
+/* Export-GCG dialog: the radio group choosing how much of the opponent's rack
+   the file's #Rack lines reveal. */
+.gcg-export-note {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #bdc3c7;
+}
+
+.gcg-export-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.gcg-export-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border: 1px solid #4a6278;
+  border-radius: 4px;
+  background: #2c3e50;
+  color: #ecf0f1;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.gcg-export-choice:hover {
+  border-color: #aed581;
+}
+
+.gcg-export-choice input {
+  grid-row: span 2;
+  cursor: pointer;
+}
+
+.gcg-export-choice-hint {
+  font-size: 11px;
+  color: #95a5a6;
+}
+
 /* Manual tool */
 .manual-layout {
   display: flex;
