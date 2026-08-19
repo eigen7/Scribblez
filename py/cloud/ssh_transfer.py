@@ -145,7 +145,7 @@ def pull_results(
         container, collect_command(remote_root, taking, COLLECT_TIMEOUT_SECONDS)
     )
     names = _extract(archive, local_root)
-    delivered = [name for name in names if name in set(taking)]
+    delivered = [name for name in names if name in taking]
     if delivered:
         paths = [f"{remote_root}/{name}" for name in delivered]
         machine.exec_in_container(container, ["rm", "-f", *paths])

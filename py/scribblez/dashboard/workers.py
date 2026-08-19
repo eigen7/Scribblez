@@ -694,7 +694,9 @@ class WorkerManager:
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {w.host}"
                 waiting = self._undelivered.get(_key(spec, task.tag, w.worker_id))
-                if waiting:
+                if waiting is not None:
+                    # Zero is reported too: "drained" and "never collected
+                    # from" mean different things to anyone about to remove it.
                     info["undelivered"] = waiting
                 reason = self._exits.get(_key(spec, task.tag, w.worker_id))
                 if reason and not alive:
@@ -915,21 +917,18 @@ class WorkerManager:
             self._note_restart(key)
             if probe == "missing":
                 self._run_ssh_container(spec, task, w)
-            elif probe == "stopped" and w.bundle_id != task.bundle_id:
-                # Redeployed since this container was created. Its bundle is
-                # fixed in the environment it was created with, so the slot
-                # joins the task's new bundle by being replaced, not restarted
-                # -- but only once a collection has confirmed it is holding
-                # nothing, since replacing it discards whatever it still has.
-                # Otherwise start it, which is what lets the next passes drain
-                # it (collection needs a running container).
-                if self._undelivered.get(key) == 0:
+            elif probe == "stopped":
+                # A container redeployed out from under is replaced rather than
+                # restarted -- its bundle is fixed in the environment it was
+                # created with -- but only once a collection has confirmed it
+                # is holding nothing, since replacing it discards whatever it
+                # still has. Starting it is what lets the next passes drain it:
+                # collection needs a running container.
+                if w.bundle_id != task.bundle_id and self._undelivered.get(key) == 0:
                     machine.remove_container(name)
                     self._run_ssh_container(spec, task, w)
                 else:
                     machine.start_container(name)
-            elif probe == "stopped":
-                machine.start_container(name)
         elif intent == PARK and probe == "running":
             machine.pause_container(name)
         elif intent == STOP and probe in ("running", "paused"):

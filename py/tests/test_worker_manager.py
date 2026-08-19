@@ -485,3 +485,37 @@ def test_deploy_says_nothing_about_an_image_no_push_has_described(manager, spec,
     # _cloud is the fixture's tripwire: reaching it means the check passed.
     with pytest.raises(AssertionError, match="launched compute"):
         manager.deploy(spec, task)
+
+
+def test_collecting_records_what_the_container_still_holds(manager, spec, task, monkeypatch):
+    """This wiring is what stands between a redeployed container and having
+    its undelivered output thrown away, so it is worth pinning down."""
+    from cloud.ssh_transfer import PullResult
+
+    monkeypatch.setattr(
+        workers_mod,
+        "pull_results",
+        lambda *a, **k: PullResult(pulled=["data/staging/c1.slog"], remaining=87),
+    )
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    manager._collect_ssh(spec, task, w)
+    assert manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] == 87
+
+
+def test_status_reports_the_backlog_including_none_left(manager, spec, task, monkeypatch):
+    """Zero and "never collected from" are different answers to "is it safe to
+    remove this?", so the status distinguishes them."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    key = workers_mod._key(spec, task.tag, w.worker_id)
+
+    (info,) = manager.worker_status(spec, task)
+    assert "undelivered" not in info  # nothing has collected from it yet
+
+    manager._undelivered[key] = 340
+    (info,) = manager.worker_status(spec, task)
+    assert info["undelivered"] == 340
+
+    manager._undelivered[key] = 0
+    (info,) = manager.worker_status(spec, task)
+    assert info["undelivered"] == 0
