@@ -8,6 +8,7 @@ fail, so a regression back toward launch-on-add breaks loudly.
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 from scribblez import workloads
@@ -20,6 +21,10 @@ from scribblez.dashboard.workers import (
     _worker_resources,
 )
 from scripts.cloud_fleet import CpuResources, GpuResources
+
+# The fixture below replaces the launch paths with _fail; a test that wants to
+# exercise one for real puts this back.
+_REAL_RUN_SSH_CONTAINER = WorkerManager._run_ssh_container
 
 
 def _fail(*args, **kwargs):
@@ -226,6 +231,10 @@ def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, m
     assert not manager.bundle_drift(task)
 
 
+# Enough of a credentials object for the container-creation path.
+_CREDS = SimpleNamespace(registry=SimpleNamespace(worker_image="repo/worker"), r2=None)
+
+
 class _RecordingSshMachine(_FakeSshMachine):
     """Records the container operations reconcile performs."""
 
@@ -234,6 +243,12 @@ class _RecordingSshMachine(_FakeSshMachine):
 
     def start_container(self, name):
         self.ops.append(("start", name))
+
+    def pull_image(self, image):
+        self.ops.append(("pull", image))
+
+    def run_container(self, name, image, env):
+        self.ops.append(("run", name))
 
     def pause_container(self, name):
         self.ops.append(("pause", name))
@@ -274,7 +289,7 @@ def test_a_redeployed_task_replaces_its_ssh_container(manager, spec, task, monke
         lambda self, spec, task, w: recreated.append(w.worker_id),
     )
     w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
-    manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] = 0
+    w.undelivered = 0
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
     assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
@@ -289,17 +304,18 @@ def test_a_container_still_holding_output_is_drained_before_it_is_replaced(
     running -- and the replacement waits for a collection to report zero."""
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
     w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
-    manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] = 900
+    w.undelivered = 900
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
     assert [op for op, _ in _RecordingSshMachine.ops] == ["start"]
 
 
 def test_a_container_of_unknown_backlog_is_not_replaced_either(manager, spec, task, monkeypatch):
-    """No collection has reported on it (the dashboard restarted, say), so
-    nothing is known about what it holds -- which is not the same as empty."""
+    """No collection has ever reported on it, and its record predates the
+    count -- which is not the same as knowing it is empty."""
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
     w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    w.undelivered = None
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
     assert [op for op, _ in _RecordingSshMachine.ops] == ["start"]
@@ -499,7 +515,8 @@ def test_collecting_records_what_the_container_still_holds(manager, spec, task, 
     )
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._collect_ssh(spec, task, w)
-    assert manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] == 87
+    assert w.undelivered == 87
+    assert tasks.load_task(spec, "t").worker(w.worker_id).undelivered == 87  # survives a restart
 
 
 def test_status_reports_the_backlog_including_none_left(manager, spec, task, monkeypatch):
@@ -507,15 +524,93 @@ def test_status_reports_the_backlog_including_none_left(manager, spec, task, mon
     remove this?", so the status distinguishes them."""
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
-    key = workers_mod._key(spec, task.tag, w.worker_id)
 
     (info,) = manager.worker_status(spec, task)
-    assert "undelivered" not in info  # nothing has collected from it yet
+    assert info["undelivered"] is None  # nothing has collected from it yet
 
-    manager._undelivered[key] = 340
+    w.undelivered = 340
     (info,) = manager.worker_status(spec, task)
     assert info["undelivered"] == 340
 
-    manager._undelivered[key] = 0
+    w.undelivered = 0
     (info,) = manager.worker_status(spec, task)
     assert info["undelivered"] == 0
+
+
+def test_a_drained_container_on_an_old_bundle_is_stopped_so_it_can_be_replaced(
+    manager, spec, task, monkeypatch
+):
+    """Replacement only acts on a container that is down, and draining one
+    leaves it running -- so without this the slot ran on the old bundle
+    forever, which is what pinning a task to a bundle exists to prevent."""
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    w.undelivered = 0
+    running = {"observed_running": True, "ssh_probe": "running"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, running)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["stop"]
+
+
+def test_a_drained_container_on_the_task_bundle_is_left_alone(manager, spec, task, monkeypatch):
+    """Only a bundle it has moved past justifies stopping a working worker."""
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b1")
+    w.undelivered = 0
+    running = {"observed_running": True, "ssh_probe": "running"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, running)
+    assert _RecordingSshMachine.ops == []
+
+
+def test_a_container_that_never_came_up_is_replaced_by_a_redeploy(manager, spec, task, monkeypatch):
+    """A crash-looping container has nothing to hand over -- it is created
+    holding nothing -- and a redeploy is often exactly the fix for whatever it
+    is crashing on, so it must not be restarted forever instead."""
+    recreated = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_run_ssh_container",
+        lambda self, spec, task, w: recreated.append(w.worker_id),
+    )
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    w.undelivered = 0  # what _run_ssh_container records when it creates one
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
+    assert recreated == [w.worker_id]
+
+
+def test_an_unreachable_machine_is_not_acted_on(manager, spec, task, monkeypatch):
+    """Its container may well be running; nothing here can tell."""
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b1")
+    for probe in ("unreachable", "unknown"):
+        manager._reconcile_worker(
+            spec, task, w, workers_mod.RUN, {"observed_running": False, "ssh_probe": probe}
+        )
+    assert _RecordingSshMachine.ops == []
+
+
+def test_a_reused_worker_id_does_not_inherit_a_backlog(manager, spec, task, monkeypatch):
+    """Slot ids are reused once freed, and a count that outlived its slot
+    would block the new container's replacement and misreport what removing it
+    would discard."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "missing")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.undelivered = 900
+    manager.remove_worker(spec, task, w.worker_id)
+
+    fresh = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    assert fresh.worker_id == w.worker_id  # the id came back
+    assert fresh.undelivered is None
+
+
+def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task, monkeypatch):
+    """What makes a container that never came up replaceable rather than
+    restarted forever: it is known empty from the moment it exists."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    manager._run_ssh_container(spec, task, w)
+    assert (w.launched, w.undelivered, w.bundle_id) == (True, 0, "b1")

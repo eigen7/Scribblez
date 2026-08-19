@@ -119,8 +119,10 @@ bounded batch, so a backlog drains at a steady rate instead of each attempt
 having to move everything that has piled up; the workers table shows what a
 container is still holding. Delivered chunks are deleted from it only once
 they are safely on the controller's disk, and a container is replaced (after a
-redeploy) only once it has handed everything over -- but one that is *removed*
-takes its undelivered output with it. A scheduler gate parks the container by pausing it rather than
+redeploy) only once it has handed everything over: one still holding output is
+started so the next passes can drain it, and stopped again to be replaced once
+it is empty. Removing a slot, by contrast, discards whatever its container
+still holds -- the dashboard says how much before it does. A scheduler gate parks the container by pausing it rather than
 stopping it, so a gate that flips every minute costs nothing: no bundle
 refetch, and the chunk in flight survives. An operator pause still stops it
 (cleanly, flushing completed output). The bundle itself is deployed for you -- a task builds and pushes

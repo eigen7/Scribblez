@@ -95,6 +95,16 @@ OBSERVATION_TTL_SECONDS = 5.0
 RUN, PARK, STOP = "run", "park", "stop"
 
 
+def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
+    """Whether slot `w`'s container may be thrown away for one on the task's
+    bundle: it has to be on a different bundle, and known to be holding
+    nothing. A container created but never collected from reports zero from
+    the moment it is created, so one that never came up at all -- the state a
+    redeploy is often trying to fix -- is replaceable rather than restarted
+    forever."""
+    return w.bundle_id != task.bundle_id and w.undelivered == 0
+
+
 def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
     if w.desired_state != "running":
         return STOP
@@ -270,10 +280,6 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
-        # Slot key -> delivered files its container still holds, as of the last
-        # collection. Replacing a container discards whatever it has not handed
-        # over, so this is what says when that is safe.
-        self._undelivered: dict[str, int] = {}
         # (pods by id, when listed), the cloud counterpart of _probes.
         self._pods: tuple[dict, float] = ({}, 0.0)
         # Where every blocking step runs (see _offload). One thread: the point
@@ -500,6 +506,7 @@ class WorkerManager:
             _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
         )
         w.launched = True
+        w.undelivered = 0  # a container just created is holding nothing
         tasks.save_task(spec, task)
 
     # ---- slot operations -------------------------------------------------
@@ -680,6 +687,9 @@ class WorkerManager:
                 "pod_id": w.pod_id,
                 "host": w.host,
                 "bundle_id": w.bundle_id,
+                # Zero and None differ to anyone about to remove the slot:
+                # drained, versus nothing known about what it holds.
+                "undelivered": w.undelivered,
             }
             if gated:
                 info["gate_reason"] = task.gates[w.role]
@@ -693,11 +703,6 @@ class WorkerManager:
                 info["state"] = _ssh_state(w.desired_state, probe, gated)
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {w.host}"
-                waiting = self._undelivered.get(_key(spec, task.tag, w.worker_id))
-                if waiting is not None:
-                    # Zero is reported too: "drained" and "never collected
-                    # from" mean different things to anyone about to remove it.
-                    info["undelivered"] = waiting
                 reason = self._exits.get(_key(spec, task.tag, w.worker_id))
                 if reason and not alive:
                     info["exit_reason"] = reason
@@ -860,7 +865,8 @@ class WorkerManager:
             remote_root=str(paths.root), local_root=paths.root,
             data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
         )  # fmt: skip
-        self._undelivered[_key(spec, task.tag, w.worker_id)] = result.remaining
+        w.undelivered = result.remaining
+        tasks.save_task(spec, task)
 
     def _tick_scheduler(self, spec, task: tasks.TaskRecord):
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
@@ -904,37 +910,46 @@ class WorkerManager:
         third of the machine's duty cycle. A pause is instant in both
         directions and resumes the work mid-chunk.
         """
-        machine, name = SshMachine(w.host), _container_name(spec, task.tag, w.worker_id)
+        machine = SshMachine(w.host)
+        name = _container_name(spec, task.tag, w.worker_id)
         key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
             if probe == "paused":
                 machine.unpause_container(name)  # resuming a parked worker is not a restart
-                return
-            if probe not in ("missing", "stopped"):
-                return  # running, or nothing this pass can act on
-            if not self._restart_allowed(key):
-                return
-            self._note_restart(key)
-            if probe == "missing":
-                self._run_ssh_container(spec, task, w)
-            elif probe == "stopped":
-                # A container redeployed out from under is replaced rather than
-                # restarted -- its bundle is fixed in the environment it was
-                # created with -- but only once a collection has confirmed it
-                # is holding nothing, since replacing it discards whatever it
-                # still has. Starting it is what lets the next passes drain it:
-                # collection needs a running container.
-                if w.bundle_id != task.bundle_id and self._undelivered.get(key) == 0:
-                    machine.remove_container(name)
-                    self._run_ssh_container(spec, task, w)
-                else:
-                    machine.start_container(name)
+            elif probe == "running":
+                if _replaceable(w, task):
+                    # The task has redeployed past this container and it has
+                    # handed everything over: stopping it is how it gets
+                    # replaced, which the next pass does. As with any stop, the
+                    # cycle in flight is lost.
+                    machine.stop_container(name)
+            elif probe in ("missing", "stopped") and self._restart_allowed(key):
+                # Anything else -- unreachable, or not observed yet -- is not
+                # something this pass can act on.
+                self._note_restart(key)
+                self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
             machine.pause_container(name)
         elif intent == STOP and probe in ("running", "paused"):
             if probe == "paused":
                 machine.unpause_container(name)  # docker stop cannot signal a frozen process
             machine.stop_container(name)
+
+    def _start_or_replace(self, machine, name, spec, task: tasks.TaskRecord, w, probe: str):
+        """Bring a container that is not running back up.
+
+        A container's bundle is fixed in the environment it was created with,
+        so a slot joins a bundle the task has moved to by being replaced. That
+        destroys anything the container never handed over, so it waits until a
+        collection has reported the container empty -- and a container holding
+        output is started instead, which is what lets the next passes drain it.
+        """
+        if probe == "stopped" and not _replaceable(w, task):
+            machine.start_container(name)
+            return
+        if probe == "stopped":
+            machine.remove_container(name)
+        self._run_ssh_container(spec, task, w)
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);

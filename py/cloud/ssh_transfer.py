@@ -44,10 +44,18 @@ from pathlib import Path
 # Records the worker keeps writing to and reading back: copied, never removed.
 RECORD_DIRS = ("stats", "params")
 
-# Delivered files moved per pull. Sized so one pull is seconds of transfer
-# rather than minutes -- a chunk is well under a megabyte, and the pass that
-# calls this has other slots to serve.
-BATCH = 16
+# Delivered files moved per pull. The bound being on files rather than on the
+# backlog is the point; the size trades drain rate against how long one pull
+# holds the pass's single blocking thread. Measured on this fleet: 32 chunks is
+# ~20 MB raw, ~0.4 s to compress and ~1.4 s to move over a link clocked at
+# 7.5 MB/s -- around a third of a pass, and ~13 net files drained per pass
+# against one worker's production.
+BATCH = 32
+
+# Compression level for the stream. The worker machine is busy playing games,
+# and its CPU is scarcer than the link: on real chunks, level 1 costs 0.2 s and
+# the default 0.7 s, for 13% fewer bytes -- a net loss at this bandwidth.
+COMPRESSION = "gzip -1"
 
 # What the in-container tar is allowed, enforced inside the container so a
 # transfer that overruns dies with its ssh client instead of outliving it. An
@@ -69,18 +77,31 @@ class PullResult:
     remaining: int  # delivered files still in the container
 
 
-def list_command(root: str, data_dirs: list[str]) -> list[str]:
-    """The in-container command listing delivered files, oldest name first.
+def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
+    """The in-container command listing the next `batch` delivered files,
+    oldest name first, then a "TOTAL <n>" line counting everything waiting.
 
     Names begin with the timestamp their chunk was written at, so sorting them
-    drains in production order."""
+    drains in production order. Only the batch crosses the wire: a backlog of
+    ten thousand would otherwise ship a third of a megabyte of filenames every
+    pass to choose sixteen of them."""
     dirs = " ".join(shlex.quote(d) for d in data_dirs)
     return [
         "sh",
         "-c",
         f"cd {shlex.quote(root)} 2>/dev/null || exit 0\n"
-        f'for d in {dirs}; do [ -d "$d" ] && ls -1 "$d" | sed "s|^|$d/|"; done | sort',
+        f'for d in {dirs}; do [ -d "$d" ] && ls -1 "$d" | sed "s|^|$d/|"; done | sort'
+        f" | awk -v n={batch} 'NR<=n {{ print }} END {{ print \"TOTAL\", NR+0 }}'",
     ]
+
+
+def parse_listing(output: bytes) -> tuple[list[str], int]:
+    """The batch of names and the total waiting, from list_command's output.
+    An empty output means the tag root does not exist there yet."""
+    lines = output.decode(errors="replace").split()
+    if len(lines) < 2 or lines[-2] != "TOTAL":
+        return [], 0
+    return lines[:-2], int(lines[-1])
 
 
 def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
@@ -96,7 +117,7 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
         f"set -- {quoted}\n"
         f'for d in {records}; do [ -d "$d" ] && set -- "$@" "$d"; done\n'
         '[ "$#" -eq 0 ] && exit 0\n'
-        f'exec timeout {seconds} tar -czf - "$@"',
+        f"exec timeout {seconds} tar -c --use-compress-program='{COMPRESSION}' -f - \"$@\"",
     ]
 
 
@@ -137,9 +158,8 @@ def pull_results(
     runs the same layout under the same mount root -- but they are different
     machines' paths, and only one of them can be opened here.
     """
-    listing = machine.read_from_container(container, list_command(remote_root, data_dirs))
-    waiting = listing.decode(errors="replace").split()
-    taking = waiting[:batch]
+    listing = machine.read_from_container(container, list_command(remote_root, data_dirs, batch))
+    taking, waiting = parse_listing(listing)
 
     archive = machine.read_from_container(
         container, collect_command(remote_root, taking, COLLECT_TIMEOUT_SECONDS)
@@ -149,4 +169,4 @@ def pull_results(
     if delivered:
         paths = [f"{remote_root}/{name}" for name in delivered]
         machine.exec_in_container(container, ["rm", "-f", *paths])
-    return PullResult(pulled=names, remaining=len(waiting) - len(delivered))
+    return PullResult(pulled=names, remaining=waiting - len(delivered))
