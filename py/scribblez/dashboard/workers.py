@@ -106,7 +106,7 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
         "container": _container_name(spec, task.tag, w.worker_id),
         "remote_root": str(paths.root),
         "local_root": paths.root,
-        "data_dirs": [f"data/{sub}" for sub in spec.sync_data_dirs],
+        "data_dirs": [f"data/{sub}" for sub in spec.collected_dirs],
     }
 
 

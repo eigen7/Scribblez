@@ -9,7 +9,7 @@ from scribblez import selfplay
 from scribblez.dashboard import api, db
 from scribblez.match_eval import harness, runner
 from scribblez.match_eval.harness import RoundResult
-from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
@@ -192,13 +192,17 @@ def test_assigned_model_reads_the_inbox(tmp_path):
     assert runner._assigned_model(paths, "w0") is None
     (inbox / "lexicon_frozen.bin").touch()  # a sidecar is not an assignment
     assert runner._assigned_model(paths, "w0") is None
+    # Nor is a model this worker has already played, still there for the
+    # controller's benefit.
+    (inbox / f"{paths.onnx_path(3).name}{DONE_SUFFIX}").touch()
+    assert runner._assigned_model(paths, "w0") is None
     (inbox / paths.onnx_path(5).name).touch()
     (inbox / paths.onnx_path(10).name).touch()
     assigned = runner._assigned_model(paths, "w0")
     assert paths.onnx_epoch(assigned) == 10  # newest first
 
 
-def test_run_delivers_the_result_and_clears_the_inbox(tmp_path, monkeypatch):
+def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatch):
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     inbox = paths.match_inbox_dir("w0")
     inbox.mkdir(parents=True)
@@ -217,7 +221,10 @@ def test_run_delivers_the_result_and_clears_the_inbox(tmp_path, monkeypatch):
     assert runner.run(ctx) == 0
 
     assert str(model) in played[0]  # the assigned model is what was played
-    assert not model.exists()  # cleared only after delivery
+    # Marked only after delivery, and marked rather than removed: the
+    # controller still needs the generation to count as spoken for until the
+    # result reaches it (match_eval/dispatch.py).
+    assert [p.name for p in inbox.iterdir()] == [f"{model.name}{DONE_SUFFIX}"]
     delivered = list(paths.match_results_dir.glob("*.json"))
     assert [p.name for p in delivered] == ["gen_000020-w0.json"]
     record = json.loads(delivered[0].read_text())

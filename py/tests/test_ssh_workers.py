@@ -1,6 +1,8 @@
 """Unit tests for the ssh worker kind's pure logic: probe classification, the
 display-state mapping, ssh/env-file construction, and worker env assembly."""
 
+import subprocess
+
 import pytest
 from cloud import ssh_machine
 from cloud.credentials import (
@@ -162,3 +164,34 @@ def test_any_other_copy_failure_raises(monkeypatch, tmp_path):
     for stderr in (b"Error response from daemon: No such container: c\n", b"ssh: refused\n"):
         with pytest.raises(SshMachineError):
             _copy(monkeypatch, tmp_path, _FakeCompleted(1, stderr=stderr))
+
+
+def _write(monkeypatch, tmp_path, completed):
+    """SshMachine.write_to_container against a canned `docker exec` result."""
+
+    def fake_run(argv, **kwargs):
+        if completed is None:
+            raise subprocess.TimeoutExpired(argv, 1)
+        kwargs["stdin"].read()  # the real call streams the file
+        return completed
+
+    monkeypatch.setattr(ssh_machine.subprocess, "run", fake_run)
+    src = tmp_path / "model_epoch_0010.onnx"
+    src.write_bytes(b"weights")
+    SshMachine("user@h").write_to_container("c", ["sh", "-c", "cat > x"], src)
+
+
+def test_write_to_container_streams_the_file(monkeypatch, tmp_path):
+    _write(monkeypatch, tmp_path, _FakeCompleted(0))
+
+
+def test_a_failed_write_raises(monkeypatch, tmp_path):
+    """A push that did not land must not read as one that did: the controller
+    would then wait forever for a match its worker was never given."""
+    with pytest.raises(SshMachineError):
+        _write(monkeypatch, tmp_path, _FakeCompleted(1, stderr=b"no such container: c\n"))
+
+
+def test_a_write_that_times_out_raises(monkeypatch, tmp_path):
+    with pytest.raises(SshMachineError):
+        _write(monkeypatch, tmp_path, None)

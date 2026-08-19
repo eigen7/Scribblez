@@ -87,6 +87,17 @@ class WorkloadSpec:
     # data/ subdirectories cloud workers deliver into; cloud_sync pulls exactly
     # these bucket prefixes (plus stats/ and params/) down to the local mount.
     sync_data_dirs: tuple[str, ...] = ()
+    # data/ subdirectories only local and ssh workers deliver into. An ssh
+    # collection takes these as well (collected_dirs below), but they never
+    # exist in the bucket, so asking cloud_sync for them would be one rclone
+    # per watcher cycle against a prefix nothing can ever write.
+    local_data_dirs: tuple[str, ...] = ()
+
+    @property
+    def collected_dirs(self) -> tuple[str, ...]:
+        """Every data/ subdirectory a worker delivers into -- what a collection
+        from an ssh container looks through."""
+        return self.sync_data_dirs + self.local_data_dirs
 
     def paths(self, tag: str, mount_root=None) -> TagPaths:
         return TagPaths(tag, self.name, *([mount_root] if mount_root else []))

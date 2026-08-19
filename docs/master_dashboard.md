@@ -103,7 +103,9 @@ An ssh slot's machine is prepared once, by hand:
   aliases both work — and the config file persists alongside the key, so an
   alias defined once keeps working too.
 - **Docker**: installed, with the SSH user able to run it (in the `docker`
-  group).
+  group). A GPU role (match_eval) additionally needs the NVIDIA container
+  toolkit, since its container is run with `--gpus all`; without it the
+  container fails to start and the slot's exit reason says so.
 - **Worker image**: pulled once — `docker login` (the image repo is private;
   see `registry.worker_image` in the credentials file) then
   `docker pull <worker image>`. Containers start with `--pull=never`, so a

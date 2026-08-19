@@ -6,7 +6,7 @@ from pathlib import Path
 from scribblez.dashboard import db
 from scribblez.dashboard.slot_files import LocalSlotFiles
 from scribblez.match_eval import dispatch
-from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
 
@@ -136,15 +136,59 @@ def test_assign_gives_an_idle_slot_the_frontier_generation(tmp_path):
         paths.onnx_path(10).name,
     ]
 
-    # Once the match is delivered the next one is assigned, and the sidecar
-    # that is already there is left alone.
-    (inbox / paths.onnx_path(10).name).unlink()
+    # Once the result is recorded the mark is cleared, the next generation is
+    # assigned, and the sidecar that is already there is left alone.
+    _mark_played(inbox, paths.onnx_path(10).name)
     db.write_match_eval(conn, 10, {**_result(10), "positions": 0})
     dispatch._assign(paths, conn, 5, _slot(paths))
     assert sorted(p.name for p in inbox.iterdir()) == [
         "lexicon_frozen.bin",
         paths.onnx_path(15).name,
     ]
+
+
+def _mark_played(inbox: Path, name: str):
+    """What a worker does to a model once its result is on its way out."""
+    (inbox / name).rename(inbox / f"{name}{DONE_SUFFIX}")
+
+
+def test_a_played_generation_holds_the_slot_until_its_result_is_recorded(tmp_path):
+    """The window that matters is the one between a worker finishing and the
+    controller having the result in hand -- for a container, a collection
+    away, and collections fail. A slot freed on the worker's schedule would be
+    handed back the generation it just played."""
+    paths = _paths(tmp_path)
+    conn = db.connect(paths.dashboard_db)
+    for gen in (10, 15):
+        paths.onnx_path(gen).write_bytes(b"onnx")
+
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    inbox = paths.match_inbox_dir("w0")
+    _mark_played(inbox, paths.onnx_path(15).name)  # played, result not yet ingested
+
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    assert [p.name for p in inbox.iterdir()] == [f"{paths.onnx_path(15).name}{DONE_SUFFIX}"]
+
+    # Recording it is what frees the slot -- and clears the mark.
+    db.write_match_eval(conn, 15, {**_result(15), "positions": 0})
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    assert [p.name for p in inbox.iterdir()] == [paths.onnx_path(10).name]
+
+
+def test_tick_assigns_nothing_when_the_cadence_disables_match_eval(tmp_path):
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    paths.onnx_path(10).touch()
+    _deliver(paths, _result(10))
+
+    dispatch.tick(
+        _Spec(tmp_path), "t", PositionEvalParams(match_every_generations=0), [_slot(paths)]
+    )
+    assert not paths.match_inbox_dir("w0").exists()
+    # Ingest still runs: a result already delivered belongs in the database
+    # however the cadence has since been set.
+    conn = db.connect(paths.dashboard_db)
+    assert [r["epoch"] for r in db.read_all_match_eval(conn)] == [10]
 
 
 def test_assign_does_nothing_without_a_due_generation(tmp_path):

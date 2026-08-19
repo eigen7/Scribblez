@@ -60,6 +60,12 @@ MATCH_RESULTS_DIR = "match_results"
 # apart from the shared blobs beside it in models/ (see onnx_sidecars).
 ONNX_PREFIX = "model_epoch_"
 
+# Appended to an assigned model by the worker that has finished playing it.
+# Part of the inbox protocol rather than a detail of either side: the worker
+# stops offering it, while the controller still counts the generation as
+# spoken for (match_eval/dispatch.py).
+DONE_SUFFIX = ".done"
+
 
 class TagPaths:
     """Resolves every per-tag artifact path under `<mount_root>/tags/<task>/<tag>/`."""
@@ -171,8 +177,6 @@ class TagPaths:
         return self.data_dir / MATCH_RESULTS_DIR
 
     def match_inbox_dir(self, worker_id: str) -> Path:
-        """Where a match-eval slot is handed the model it is to play: the
-        controller puts one there, the worker plays it and removes it, so the
-        directory holding an export means that slot's match is still in
-        flight."""
+        """Where a match-eval slot is handed the model it is to play
+        (match_eval/dispatch.py owns what the directory's contents mean)."""
         return self.data_dir / MATCH_INBOX_DIR / worker_id

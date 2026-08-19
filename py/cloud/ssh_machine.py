@@ -125,21 +125,27 @@ class SshMachine:
         failure, like every other mutating call."""
         self._mutate(["docker", "exec", name, *command])
 
-    def read_from_container(self, name: str, command: list[str]) -> bytes:
-        """Run `command` inside container `name` and return its stdout as
-        bytes -- how results are read out of a worker (a tar stream). Text
-        decoding would corrupt them, so this path stays binary."""
+    def _exec(self, argv: list[str], *, timeout: int, doing: str, stdin=None) -> bytes:
+        """Run one `docker exec` and return its stdout as bytes. Binary
+        throughout: what these calls carry is a tar stream or a model, which
+        text decoding would corrupt. `doing` names the operation in the error
+        a timeout raises."""
         try:
-            res = subprocess.run(
-                self.argv(["docker", "exec", name, *command]),
-                capture_output=True,
-                timeout=_MUTATE_TIMEOUT,
-            )
+            res = subprocess.run(self.argv(argv), stdin=stdin, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise SshMachineError(f"{self.host}: reading from {name} timed out") from None
+            raise SshMachineError(f"{self.host}: {doing} timed out") from None
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: {res.stderr.decode(errors='replace').strip()}")
         return res.stdout
+
+    def read_from_container(self, name: str, command: list[str]) -> bytes:
+        """Run `command` inside container `name` and return its stdout -- how
+        results are read out of a worker (a tar stream)."""
+        return self._exec(
+            ["docker", "exec", name, *command],
+            timeout=_MUTATE_TIMEOUT,
+            doing=f"reading from {name}",
+        )
 
     def write_to_container(self, name: str, command: list[str], src: Path):
         """Run `command` inside container `name` with the bytes of `src` on its
@@ -148,17 +154,12 @@ class SshMachine:
         than read into memory: what travels this way is a model, tens of
         megabytes of it, and the dashboard holds no copy of it."""
         with open(src, "rb") as f:
-            try:
-                res = subprocess.run(
-                    self.argv(["docker", "exec", "-i", name, *command]),
-                    stdin=f,
-                    capture_output=True,
-                    timeout=_WRITE_TIMEOUT,
-                )
-            except subprocess.TimeoutExpired:
-                raise SshMachineError(f"{self.host}: writing to {name} timed out") from None
-        if res.returncode != 0:
-            raise SshMachineError(f"{self.host}: {res.stderr.decode(errors='replace').strip()}")
+            self._exec(
+                ["docker", "exec", "-i", name, *command],
+                timeout=_WRITE_TIMEOUT,
+                doing=f"writing to {name}",
+                stdin=f,
+            )
 
     def _mutate(self, command: list[str], stdin_text: str | None = None):
         res = self._run(command, timeout=_MUTATE_TIMEOUT, stdin_text=stdin_text)

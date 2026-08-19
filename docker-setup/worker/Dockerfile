@@ -65,6 +65,14 @@ COPY --from=devlibs /usr/local/cuda/lib64/libcudart.so.12.9.79 /usr/lib/x86_64-l
 # worker with a different GPU, and every GPU machine must build its own. That
 # happens once per container (~1 minute); plans are refittable, so later
 # generations reuse the cached plan and only swap in their weights.
+#
+# It sits in the one image deliberately, rather than in a `-gpu` tag layered
+# on top of it. The cost of that choice is ~1.4 GB of extra pull on every CPU
+# pod that will never dlopen it, against which one image is one thing to
+# build, push, record an ABI for, and reason about when a worker will not
+# start. Splitting is a one-line change here plus an image choice at the
+# container-creation sites, should the pull cost of a large fleet ever
+# outweigh that.
 COPY --from=devlibs /usr/lib/x86_64-linux-gnu/libnvinfer_builder_resource.so.10.11.0 \
                     /usr/lib/x86_64-linux-gnu/
 

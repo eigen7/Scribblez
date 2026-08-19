@@ -14,9 +14,9 @@ nothing but its own directory -- which is what lets the role run on a machine
 that has neither the database nor the exports, e.g. a second machine doing the
 eval matches while this one trains.
 
-The model is removed only once its result is delivered, so an interrupted
-match (SIGTERM, a killed container) is replayed from the same fixed seeds on
-the next start rather than being lost or half-recorded.
+An interrupted match (SIGTERM, a killed container) leaves the model where it
+was, so the next start replays it from the same fixed seeds rather than losing
+it or recording half of it.
 """
 
 import json
@@ -26,13 +26,17 @@ from pathlib import Path
 
 from scribblez import stats
 from scribblez.match_eval import harness
-from scribblez.paths import MATCH_RESULTS_DIR, ONNX_PREFIX, TagPaths
+from scribblez.paths import DONE_SUFFIX, MATCH_RESULTS_DIR, ONNX_PREFIX, TagPaths
 from scribblez.stats import SprtResult
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # How often to re-check the inbox when the controller has assigned nothing.
-POLL_SECONDS = 10
+# Short because it is dead time on the eval machine at the worst moment: the
+# next assignment lands just after a match ends, so a long poll would idle the
+# GPU for half of it on every match. Listing a directory that holds at most a
+# couple of files costs microseconds.
+POLL_SECONDS = 1
 
 
 def _assigned_model(paths: TagPaths, worker_id: str) -> Path | None:
@@ -146,6 +150,11 @@ def run(ctx: WorkerContext) -> int:
     print(
         f"worker {ctx.worker_id}: match eval for tag '{ctx.tag}' vs '{ctx.params.match_opponent}'"
     )
+    if ctx.params.match_every_generations <= 0:
+        # Said once rather than exiting: an exited worker is one the reconcile
+        # pass respawns, so a disabled tag would become a restart loop. The
+        # slot idles instead, and its log says why it will never do anything.
+        print("match_every_generations is 0: match eval is disabled for this tag")
 
     cycles = 0
     try:
@@ -160,9 +169,12 @@ def run(ctx: WorkerContext) -> int:
             outcome = _play_match(ctx, gen, model)
             record = match_record(ctx, gen, outcome, time.monotonic() - t0)
             nbytes = _deliver(ctx, record)
-            # Only now: an inbox still holding the model is what tells the
-            # controller this match has not been played.
-            model.unlink()
+            # Marked, not removed: the controller reads the inbox to decide
+            # what to assign, and until it has the result in hand -- which for
+            # a container is a collection away -- this generation must still
+            # count as spoken for. It removes the marker once the result is
+            # recorded (match_eval/dispatch.py).
+            model.rename(model.with_name(model.name + DONE_SUFFIX))
             stats_rec.cycle_done(
                 {"match_s": record["elapsed_s"]}, units=outcome.games, nbytes=nbytes
             )

@@ -2,12 +2,12 @@
 
 Some roles are not self-directing: the controller decides what a slot should
 work on next and puts the input where the worker will find it (match eval: the
-ONNX export of the generation to play), then reads the directory back to learn
-whether that work is still in flight. Where "there" is depends on the slot
-kind -- the tag's own data tree for a local worker, a container on another
-machine for an ssh one -- so both are presented through the two calls a
-dispatch needs (scribblez/match_eval/dispatch.py), which therefore never
-branches on kind.
+ONNX export of the generation to play), reads the directory back to learn
+whether that work is still in flight, and removes what the exchange is
+finished with. Where "there" is depends on the slot kind -- the tag's own data
+tree for a local worker, a container on another machine for an ssh one -- so
+both are presented through the three calls a dispatch needs
+(scribblez/match_eval/dispatch.py), which therefore never branches on kind.
 
 Paths are relative to the tag root, the one layout both sides share: the
 container runs the controller's own tree under the same mount root, so a
@@ -21,7 +21,7 @@ local or ssh, and its RoleSpec says so.
 import os
 from pathlib import Path
 
-from cloud.ssh_transfer import list_dir, push_file
+from cloud.ssh_transfer import list_dir, push_file, remove_file
 
 
 class LocalSlotFiles:
@@ -53,6 +53,9 @@ class LocalSlotFiles:
         tmp.symlink_to(src)
         os.replace(tmp, dest)
 
+    def remove(self, rel: str):
+        (self._root / rel).unlink(missing_ok=True)
+
 
 class SshSlotFiles:
     """An ssh slot's world: its container, over the control link (which is how
@@ -69,3 +72,6 @@ class SshSlotFiles:
 
     def put(self, src: Path, rel: str):
         push_file(self._machine, self._container, remote_root=self._root, rel_dest=rel, src=src)
+
+    def remove(self, rel: str):
+        remove_file(self._machine, self._container, remote_root=self._root, rel=rel)

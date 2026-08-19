@@ -153,5 +153,6 @@ SPEC = WorkloadSpec(
     ),
     scheduler="scribblez.generational.scheduler:tick_for_task",
     progress="scribblez.generational.scheduler:progress",
-    sync_data_dirs=(STAGING_DIR, MATCH_RESULTS_DIR),
+    sync_data_dirs=(STAGING_DIR,),
+    local_data_dirs=(MATCH_RESULTS_DIR,),
 )

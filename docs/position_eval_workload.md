@@ -133,11 +133,16 @@ a generation and ingests what comes back
 (`scribblez/match_eval/dispatch.py`, ticked per task by the reconcile loop).
 
 ```
-controller: newest export with no match row   ──ONNX──►  data/match_inbox/<worker_id>/
-                                                              │  worker: play the match
-data/match_results/*.json  ◄──result──                        ▼  (SPRT-checked paired rounds)
+controller picks the newest export with no match row
         │
-        ▼ controller ingest: a match_eval row + match_* metrics, keyed by generation
+        ▼  put in the slot's inbox (symlink locally, a push over ssh)
+data/match_inbox/<worker_id>/model_epoch_NNNN.onnx
+        │
+        ▼  worker plays it: SPRT-checked paired rounds, then marks it .done
+data/match_results/gen_NNNNNN-<worker_id>.json
+        │
+        ▼  controller ingest: a match_eval row + match_* metrics, keyed by generation
+           (and the .done mark is cleared, freeing the slot)
 ```
 
 That split is what lets the slot sit on another machine. The database and the
@@ -148,13 +153,15 @@ the control connection the dashboard already holds open
 "link" being a symlink into `models/` — so there is one runner and one set of
 rules rather than one per kind.
 
-**The inbox is the ledger.** A worker deletes the model only after its result
-is delivered, so an inbox still holding an export means that match is
-unfinished — through a crash, a stopped container, a dashboard restart — and
-nothing is assigned over the top of it. Nothing durable records what is in
-flight, because the directory already says. Ingest is idempotent (a row is
-keyed by its generation), so a result pulled twice costs nothing, and a file
-that is not a result is quarantined as `.bad` rather than retried forever.
+**The inbox is the ledger**, and it holds a generation until that generation is
+recorded — not until the worker is done with it. Nothing durable records what
+is in flight, because the directory already says. The distinction matters
+because a container's result reaches the controller by collection, a separate
+step that can fail or time out for passes on end: a ledger that emptied when
+the worker finished would offer the same generation up again in that gap and
+replay a match the machine had already played. Ingest is idempotent anyway (a
+row is keyed by its generation), and a file that is not a result is
+quarantined as `.bad` rather than retried forever.
 
 Shared external-data blobs beside the exports (the frozen-lexicon blob, when
 the model has one) go with the first assignment and stay: a model does not
@@ -177,7 +184,8 @@ needed, `generate_data.py` still exists.
 | trainer crash | training halts; generation continues to the ahead-limit gate | respawn resumes from the rolling checkpoint |
 | sync lag | chunks arrive late to staging | ingest is idempotent; late chunks join the open generation |
 | corrupt staged chunk | quarantined as `.bad`, never assigned | — |
-| match_eval worker or container dies mid-match | the model is still in its inbox, so the match counts as unplayed | it replays from the same fixed seeds on the next start |
+| match_eval worker or container dies mid-match | the model is still in its inbox unmarked, so the match counts as unplayed | it replays from the same fixed seeds on the next start |
+| a push is cut off mid-model | the size check fails, so nothing lands under the name the worker polls for | the next pass re-pushes |
 | match_eval machine unreachable | no matches; training is unaffected | reconcile resumes assigning when it answers again |
 
 ## Dashboard UI
