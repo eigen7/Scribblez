@@ -79,7 +79,7 @@ def _rows_left(params, state: GenerationalState) -> bool:
 
 
 def _checkpoint_and_eval(
-    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, lr_now, ctx
+    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, optim_arm, ctx
 ):
     """Export ONNX, record the trained generation's metrics + eval (keyed on
     the generation index `gen`, with the rows-clock stored as `positions`),
@@ -93,6 +93,7 @@ def _checkpoint_and_eval(
     null."""
     sys.stdout.write("\n")
     avg = result.losses
+    lr_now = optim_arm.current
     ci = gen
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
@@ -113,6 +114,9 @@ def _checkpoint_and_eval(
         "wld_acc": result.wld_acc,
         "lr": lr_now,
         "elapsed_s": elapsed,
+        # Whatever else the arm wants on the record -- for a schedule-free run
+        # the averaging weight, which is what anneals there in place of the rate.
+        **optim_arm.metrics(),
     }
     # Aggregate model-vs-Monte-Carlo quality over the large held-out dataset,
     # folded into the same metrics record so the Loss tab plots it alongside the
@@ -196,7 +200,7 @@ def train_one_generation(
         gen,
         result,
         elapsed,
-        optim_arm.current,
+        optim_arm,
         ctx,
     )
     optim_arm.train_mode()

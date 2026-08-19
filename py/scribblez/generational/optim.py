@@ -20,8 +20,8 @@ eval_mode rather than knowing which arm needs them; under `wsd` they do
 nothing, because there the live weights are the only weights.
 
 Both arms present one surface: the per-step `lr_fn` run_epoch applies (None
-when the arm imposes no schedule), the `current` rate for the metrics row, and
-the two mode hooks.
+when the arm imposes no schedule), the `current` rate for the metrics row, any
+extra `metrics()` the arm wants recorded alongside it, and the two mode hooks.
 """
 
 from __future__ import annotations
@@ -61,6 +61,9 @@ def build_optimizer(model, params):
 class WsdArm:
     """AdamW under the rows-clock WSD schedule, with no mode to switch."""
 
+    #: Nothing beyond `current`: the rate is the whole story for this arm.
+    metrics = staticmethod(dict)
+
     def __init__(self, conn, params, rows_trained: int):
         schedule = WsdSchedule(arm_lr(params), params.lr_warmup_rows, params.lr_cycle_rows)
         self._controller = WsdLrController(conn, schedule, rows_trained)
@@ -77,19 +80,50 @@ class WsdArm:
         pass
 
 
+def _averaging_weight(group) -> float:
+    """The weight the last step gave the base iterate in the deployed average.
+
+    This is where a schedule-free run does its annealing: the rate never moves,
+    but each new base iterate enters the average with a smaller share of it, so
+    the deployed weights settle the way a decaying step size would settle them.
+    With the default `r`, the share falls off as 1/k.
+
+    schedulefree computes the weight inside step() and does not keep it, so it
+    is recomputed here from the group -- `k` has already been incremented past
+    the step, which is exactly the exponent that step used."""
+    if not group["weight_sum"]:
+        return 1.0  # before the first step the base iterate would be the average
+    weight = group["k"] ** group["r"] * group["lr_max"] ** group["weight_lr_power"]
+    return weight / group["weight_sum"]
+
+
 class ScheduleFreeArm:
     """AdamWScheduleFree at a constant rate, plus the averaged-iterate swap.
 
-    `lr_fn` is None so run_epoch leaves the rate alone -- the optimizer's own
-    warmup is the only ramp, and after it the rate never moves. `current`
-    reports that constant so the dashboard's learning-rate plot still says what
-    the generation ran at (a flat line being the honest picture of an arm that
-    schedules nothing)."""
+    `lr_fn` is None so run_epoch leaves the rate alone: this arm anneals by
+    averaging rather than by stepping the rate down, so nothing per-batch has
+    to move it. `current` reports the rate the optimizer actually applied,
+    which is the constant except during its own warmup ramp; the annealing that
+    the rate no longer shows is recorded separately by `metrics`."""
 
     def __init__(self, params, optimizer):
         self._optimizer = optimizer
         self.lr_fn = None
-        self.current = arm_lr(params)
+        self._nominal_lr = arm_lr(params)
+
+    @property
+    def _group(self) -> dict:
+        return self._optimizer.param_groups[0]
+
+    @property
+    def current(self) -> float:
+        # scheduled_lr is 0 until the first step has ramped it.
+        return self._group["scheduled_lr"] or self._nominal_lr
+
+    def metrics(self) -> dict:
+        """The averaging weight, so the Training tab plots what actually
+        anneals here rather than a flat rate that looks like nothing moved."""
+        return {"averaging_weight": _averaging_weight(self._group)}
 
     def train_mode(self):
         self._optimizer.train()
