@@ -12,6 +12,7 @@ namespace scribblez {
 class TileCounts {
  public:
   void add(Tile t) { ++counts_[t]; }
+  void add(Tile t, int n) { counts_[t] += n; }
   bool remove(Tile t);
   int count(Tile t) const { return counts_[t]; }
   int blanks() const { return counts_[BLANK]; }
