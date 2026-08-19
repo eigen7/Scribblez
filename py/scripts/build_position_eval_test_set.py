@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Build (or re-score) the large position-evaluation Monte-Carlo test set.
 
-The dataset is a set of penultimate-bingo positions (see
-docs/lexical_features_for_value.md and the position-evaluation test-set README): each
-is a board where the opponent bingoed on the previous turn, so a Monte-Carlo
-rollout can sample its rack cleanly from the unseen pool with no leave model. The
-aggregate W/L/D and score-delta distribution over many rollouts is the
-low-variance "true value" the position evaluation model should predict.
+The dataset is a set of post-move positions (see the position-evaluation test-set
+READMEs): each is a board right after one player's tile placement at a
+training-eligible turn, sampled from HastyBot self-play. The aggregate W/L/D and
+score-delta distribution over many Monte-Carlo rollouts is the low-variance "true
+value" the position evaluation model should predict.
 
 The committed artifacts live under positions/<lexicon>/<dataset>/:
   * part-NNN.gcgs  -- the harvested GCG positions, ~100 concatenated GCG blocks
@@ -38,7 +37,7 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENGINE_BIN = REPO_ROOT / "target" / "engine"
-HARVESTER = ENGINE_BIN / "harvest_bingo_positions_tool"
+HARVESTER = ENGINE_BIN / "harvest_positions_tool"
 MC_SIM = ENGINE_BIN / "monte_carlo_sim_tool"
 
 # Each harvested GCG block starts with this line; it is the record boundary the
