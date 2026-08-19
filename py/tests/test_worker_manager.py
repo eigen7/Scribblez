@@ -436,3 +436,27 @@ def test_resuming_a_parked_worker_is_not_a_restart(manager, spec, task, monkeypa
         manager._reconcile_worker(spec, task, w, workers_mod.RUN, paused)
     assert [op for op, _ in _RecordingSshMachine.ops] == ["unpause"] * 4
     assert manager._restarts == {}
+
+
+def test_deploy_refuses_a_worker_image_that_cannot_load_this_tree(manager, spec, task, monkeypatch):
+    """Deploying a bundle onto an image whose libraries are older than the
+    ones it was compiled against just crash-loops every worker."""
+    monkeypatch.setattr(
+        workers_mod.runtime_abi, "read_record",
+        lambda root: {"image": "w", "versions": {"libstdc++.so.6": "libstdc++.so.6.0.33"}},
+    )  # fmt: skip
+    monkeypatch.setattr(
+        workers_mod.runtime_abi, "local_versions",
+        lambda: {"libstdc++.so.6": "libstdc++.so.6.0.35"},
+    )  # fmt: skip
+    with pytest.raises(AssertionError, match="build_and_push_worker_image"):
+        manager.deploy(spec, task)
+
+
+def test_deploy_says_nothing_about_an_image_no_push_has_described(manager, spec, task, monkeypatch):
+    """The record only exists once a push has written one; its absence is not
+    evidence of a stale image."""
+    monkeypatch.setattr(workers_mod.runtime_abi, "read_record", lambda root: None)
+    # _cloud is the fixture's tripwire: reaching it means the check passed.
+    with pytest.raises(AssertionError, match="launched compute"):
+        manager.deploy(spec, task)
