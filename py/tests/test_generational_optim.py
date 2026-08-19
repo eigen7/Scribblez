@@ -9,6 +9,7 @@ wrong corrupts a resumed run silently.
 
 from dataclasses import dataclass
 
+import pytest
 import torch
 from scribblez.generational.checkpoint import GenerationalState, resume, save
 from scribblez.generational.optim import (
@@ -152,3 +153,45 @@ def test_the_resolved_rate_reaches_both_arms():
     wsd = _Params(optimizer=OPTIMIZER_WSD)
     arm = build_optim_arm(None, wsd, build_optimizer(model, wsd), wsd.lr_warmup_rows)
     assert arm.current == DEFAULT_LR[OPTIMIZER_WSD]
+
+
+def test_the_wsd_arm_reports_no_extra_metrics():
+    """`lr` already tells the whole story there, so the averaging-weight panel
+    stays absent on a WSD run rather than showing a meaningless flat line."""
+    assert WsdArm(None, _Params(optimizer=OPTIMIZER_WSD), 0).metrics() == {}
+
+
+def test_the_averaging_weight_falls_off_as_training_proceeds():
+    """The schedule-free arm's annealing lives here: the rate is constant, but
+    each new base iterate enters the deployed average with a smaller share."""
+    model = _model()
+    params = _Params(lr_warmup_rows=0)
+    opt = build_optimizer(model, params)
+    arm = ScheduleFreeArm(params, opt)
+    arm.train_mode()
+
+    _step(model, opt, n=1)
+    first = arm.metrics()["averaging_weight"]
+    _step(model, opt, n=9)
+    tenth = arm.metrics()["averaging_weight"]
+
+    assert first == 1.0  # the first base iterate is the whole average
+    assert tenth == pytest.approx(0.1)  # ... and the tenth is a tenth of it
+    assert tenth < first
+
+
+def test_the_reported_rate_is_the_one_the_optimizer_applied():
+    """During its own warmup the schedule-free arm is below its nominal rate,
+    so `current` reports the ramp rather than the constant it is heading for."""
+    model = _model()
+    params = _Params(lr_warmup_rows=80, batch_size=8)  # 10 steps of warmup
+    opt = build_optimizer(model, params)
+    arm = ScheduleFreeArm(params, opt)
+    nominal = DEFAULT_LR[OPTIMIZER_SCHEDULE_FREE]
+
+    assert arm.current == nominal  # before any step, the nominal rate
+    arm.train_mode()
+    _step(model, opt, n=1)
+    assert arm.current == pytest.approx(nominal / 10)  # one step into the ramp
+    _step(model, opt, n=19)
+    assert arm.current == nominal  # past it

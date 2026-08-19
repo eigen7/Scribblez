@@ -141,9 +141,16 @@ LOSS = [
         ],
     )
 ]
-# The learning rate is stepped down multiplicatively (by hand from the Controls
-# tab) and spans orders of magnitude, so it reads best on a log y-axis.
-TRAINING = [("Learning rate", ["lr"], {"log": True}), ("Epoch time (s)", ["elapsed_s"])]
+# The learning rate spans orders of magnitude, so it reads best on a log y-axis.
+# The averaging-weight panel is there for schedule-free runs (the arm records
+# it, a WSD run does not, and the panel is then absent): that arm holds its rate
+# constant and anneals by giving each new base iterate a smaller share of the
+# deployed average, so the weight is the curve the rate would otherwise show.
+TRAINING = [
+    ("Learning rate", ["lr"], {"log": True}),
+    ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
+    ("Epoch time (s)", ["elapsed_s"]),
+]
 # Move-set-eval distillation quality: the teacher win-equity the student's
 # top-K forfeits (lower is better), with the incumbent ranking's (played
 # move, then equity head) regret@1 as the flat reference line. The
