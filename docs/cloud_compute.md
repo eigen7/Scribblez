@@ -61,7 +61,12 @@ Principles:
   (`py/cloud/runtime_abi.py`) so a deploy from a dev container the image has
   fallen behind refuses instead of shipping binaries no worker can start. The dashboard's ssh
   worker slots ([master_dashboard.md](master_dashboard.md)) run this same
-  image on operator-owned machines.
+  image on operator-owned machines, GPU roles included: it carries TensorRT's
+  2 GB builder resource so a worker can turn an ONNX export into an engine
+  plan, which a machine with its own GPU must do for itself -- a plan is valid
+  only for the compute capability it was built on, so the controller cannot
+  build one for it. Such a container is run with `--gpus all`, which needs the
+  NVIDIA container toolkit installed on that machine.
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
   the engine builds once per supported CPU microarchitecture
   (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch
@@ -139,15 +144,15 @@ fees).
 
 - **GPU workloads.** The first consumer is waiting: move_set_eval's generate
   role (roadmap A2) runs the TensorRT teacher and is pinned to local workers
-  until pods can host it. Remaining pieces: a worker-image variant on a CUDA
-  runtime base with the same bootstrap contract (the current image ships the
-  TensorRT runtime libs so binaries load, but not
-  `libnvinfer_builder_resource`, which the builder dlopens — a cold plan build
-  on a fresh pod would fail), and a way to ship a per-tag input artifact like
-  the teacher ONNX to workers (all data flow is push-only today; a
-  `worker_deps`-style fetcher over the existing R2 credentials is the natural
-  shape). Bundles, bucket layout, fleet CLI, and dashboard pod specs are
-  already GPU-ready, and the generator binary already rides in the bundle.
+  until pods can host it. Two of the pieces now exist for operator-owned
+  machines: the image carries `libnvinfer_builder_resource`, so a cold plan
+  build works wherever the image runs, and a per-tag input artifact can be put
+  into a worker (match eval's model assignment, over the control link). What a
+  pod still needs is the artifact leg, since nothing reaches into a rented
+  pod's filesystem — a `worker_deps`-style fetcher over the existing R2
+  credentials is the natural shape. Bundles, bucket layout, fleet CLI, and
+  dashboard pod specs are already GPU-ready, and the generator binary already
+  rides in the bundle.
 - **Volunteer compute.** A volunteer is, to first order, someone running the
   worker image (publicly pullable; it contains no redistribution-restricted
   data) with a participation token. The one necessary change is credentials —

@@ -4,11 +4,17 @@ Three roles on one tag: any number of interchangeable generate workers
 (local/cloud) producing self-play chunks into the tag's staging area, a
 singleton local train worker consuming complete generations (sliding window,
 one epoch per generation, per-checkpoint ONNX + dashboard metrics), and a
-singleton local match_eval worker turning exported checkpoints into match-play
+singleton match_eval worker turning exported checkpoints into match-play
 readouts against a fixed opponent (scribblez/match_eval/runner.py). The
 generation scheduler (scribblez/generational/scheduler.py) assigns staged
 chunks to generation directories and paces the generator fleet against the
 trainer's published cursor.
+
+The match_eval slot may sit on another machine (kind "ssh"), which is how the
+eval matches stop competing with training for this host's GPU. Its work is
+assigned and its results ingested by the controller
+(scribblez/match_eval/dispatch.py), so the slot needs neither the exports nor
+the database -- only a GPU and the worker image.
 
 Parameters here are the frozen task params: they define the corpus and the
 model, so every worker on a tag must share them. Live operator knobs
@@ -20,6 +26,7 @@ from dataclasses import dataclass
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_WSD, OPTIMIZERS
 from scribblez.params import param
+from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
 
@@ -136,8 +143,10 @@ SPEC = WorkloadSpec(
             name="match_eval",
             title="Match eval (GPU)",
             runner="scribblez.match_eval.runner:run",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            dispatch="scribblez.match_eval.dispatch:tick",
             singleton=True,
-            kinds=("local",),
+            kinds=("local", "ssh"),
             gpu=True,
             stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
         ),
@@ -145,4 +154,5 @@ SPEC = WorkloadSpec(
     scheduler="scribblez.generational.scheduler:tick_for_task",
     progress="scribblez.generational.scheduler:progress",
     sync_data_dirs=(STAGING_DIR,),
+    local_data_dirs=(MATCH_RESULTS_DIR,),
 )

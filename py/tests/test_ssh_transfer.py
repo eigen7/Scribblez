@@ -1,4 +1,4 @@
-"""Tests for reading an ssh worker's results out of its container.
+"""Tests for moving files between the controller and an ssh worker's container.
 
 The container commands are plain POSIX sh and coreutils, so the fake machine
 here runs them for real against a directory standing in for the container's
@@ -13,7 +13,10 @@ from cloud.ssh_transfer import (
     BATCH,
     INCOMING_DIR,
     collect_command,
+    list_dir,
     pull_results,
+    push_file,
+    remove_file,
     sweep_stopped,
 )
 
@@ -23,9 +26,10 @@ DATA_DIRS = ["data/staging"]
 class _FakeMachine:
     """Runs container commands against `root`, a stand-in for the container."""
 
-    def __init__(self, root):
+    def __init__(self, root, push_bytes: int | None = None):
         self.root = root
         self.execs = []
+        self.push_bytes = push_bytes  # None: the whole file arrives
 
     def read_from_container(self, container: str, command: list[str]) -> bytes:
         assert command[:2] == ["sh", "-c"]
@@ -36,6 +40,14 @@ class _FakeMachine:
     def exec_in_container(self, container: str, command: list[str]):
         self.execs.append(command)
         subprocess.run(command, cwd=self.root, check=True)
+
+    def write_to_container(self, container: str, command: list[str], src):
+        assert command[:2] == ["sh", "-c"]
+        with open(src, "rb") as f:
+            data = f.read()[: self.push_bytes]  # a link that dies mid-push sends less
+        res = subprocess.run(["sh", "-c", command[2]], cwd=self.root, input=data)
+        if res.returncode != 0:
+            raise SshMachineError("push failed")
 
 
 def _container(tmp_path, **files):
@@ -283,3 +295,60 @@ def test_a_sweep_clears_a_spool_left_by_a_process_that_died(tmp_path):
 
     sweep_stopped(_Empty(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
     assert not orphan.exists()
+
+
+def test_a_push_lands_atomically_where_the_worker_looks(tmp_path):
+    container = _container(tmp_path)
+    machine = _FakeMachine(container)
+    remote_root = str(container / "tag")
+    src = tmp_path / "model_epoch_0010.onnx"
+    src.write_bytes(b"weights")
+    inbox = "data/match_inbox/ssh-0"
+
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == []
+    push_file(machine, "c", remote_root=remote_root, rel_dest=f"{inbox}/{src.name}", src=src)
+
+    landed = container / "tag" / inbox / src.name
+    assert landed.read_bytes() == b"weights"
+    # Nothing half-written is left under the temporary name the push uses.
+    assert [p.name for p in landed.parent.iterdir()] == [src.name]
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == [src.name]
+
+
+def test_a_push_cut_off_midway_never_lands(tmp_path):
+    """`cat` cannot tell a truncated stream from a whole one -- it exits 0 on
+    the EOF a dropped link produces just as happily. A short model landing
+    under the name the worker polls for would wedge the slot: it reads as a
+    match in flight, so nothing replaces it, and the engine dies on it as fast
+    as the container can be restarted."""
+    container = _container(tmp_path)
+    machine = _FakeMachine(container, push_bytes=4096)
+    remote_root = str(container / "tag")
+    src = tmp_path / "model_epoch_0010.onnx"
+    src.write_bytes(b"w" * 100_000)
+    inbox = "data/match_inbox/ssh-0"
+
+    with pytest.raises(SshMachineError):
+        push_file(machine, "c", remote_root=remote_root, rel_dest=f"{inbox}/{src.name}", src=src)
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == []
+    # What it did leave is invisible to the listing, and the next push
+    # overwrites it.
+    machine.push_bytes = None
+    push_file(machine, "c", remote_root=remote_root, rel_dest=f"{inbox}/{src.name}", src=src)
+    assert (container / "tag" / inbox / src.name).read_bytes() == src.read_bytes()
+    assert [p.name for p in (container / "tag" / inbox).iterdir()] == [src.name]
+
+
+def test_removing_a_file_from_a_container(tmp_path):
+    container = _container(tmp_path)
+    remote_root = str(container / "tag")
+    inbox = "data/match_inbox/ssh-0"
+    played = container / "tag" / inbox / "model_epoch_0010.onnx.done"
+    played.parent.mkdir(parents=True)
+    played.write_text("x")
+
+    machine = _FakeMachine(container)
+    remove_file(machine, "c", remote_root=remote_root, rel=f"{inbox}/{played.name}")
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == []
+    # Absent is success: the mark may have gone with a replaced container.
+    remove_file(machine, "c", remote_root=remote_root, rel=f"{inbox}/{played.name}")

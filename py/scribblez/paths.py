@@ -13,6 +13,8 @@ to a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
       data/
         staging/                  generator chunks awaiting generation assignment
         work/<worker_id>/         a generator's private in-progress cycle output
+        match_inbox/<worker_id>/  the model a match-eval slot was assigned
+        match_results/            finished matches awaiting ingest into dashboard.db
         test/                     *.slog  -- frozen held-out games (+ manifest.json)
         generations/gen_NNNNNN/   *.slog  -- one generation (+ manifest.json)
       checkpoints/                model.pt (rolling resume checkpoint)
@@ -46,6 +48,23 @@ KILL_TEST = "kill_test"
 MOVE_SET_EVAL = "move_set_eval"
 EVIDENCE_TRAJECTORIES = "evidence_trajectories"
 MATCH_ARMS = "match_arms"
+
+# The data/ subdirectories the match-eval roundtrip uses. Named here (rather
+# than where they are read) because they are two ends of one exchange between
+# machines: the controller writes an inbox the worker polls, the worker
+# delivers a result the controller ingests.
+MATCH_INBOX_DIR = "match_inbox"
+MATCH_RESULTS_DIR = "match_results"
+
+# Filename stem prefix of a per-generation ONNX export, which is what tells one
+# apart from the shared blobs beside it in models/ (see onnx_sidecars).
+ONNX_PREFIX = "model_epoch_"
+
+# Appended to an assigned model by the worker that has finished playing it.
+# Part of the inbox protocol rather than a detail of either side: the worker
+# stops offering it, while the controller still counts the generation as
+# spoken for (match_eval/dispatch.py).
+DONE_SUFFIX = ".done"
 
 
 class TagPaths:
@@ -133,4 +152,31 @@ class TagPaths:
         return self.checkpoints_dir / "model.pt"
 
     def onnx_path(self, epoch: int) -> Path:
-        return self.onnx_dir / f"model_epoch_{epoch:04d}.onnx"
+        return self.onnx_dir / f"{ONNX_PREFIX}{epoch:04d}.onnx"
+
+    @staticmethod
+    def onnx_epoch(path: Path) -> int:
+        """The epoch an export's filename encodes -- the inverse of onnx_path."""
+        return int(path.stem.rsplit("_", 1)[1])
+
+    @property
+    def onnx_sidecars(self) -> list[Path]:
+        """Files in models/ that the exports reference rather than being one:
+        the shared external-data blob the frozen lexicon buffers live in
+        (position_eval/onnx_export.py), written once and pointed at by every
+        generation. A model only loads beside them, so anything given a model
+        is given these too."""
+        return sorted(
+            p for p in self.onnx_dir.glob("*") if p.is_file() and not p.name.startswith(ONNX_PREFIX)
+        )
+
+    @property
+    def match_results_dir(self) -> Path:
+        """Finished matches a match-eval worker has delivered, awaiting the
+        controller's ingest into dashboard.db (match_eval/dispatch.py)."""
+        return self.data_dir / MATCH_RESULTS_DIR
+
+    def match_inbox_dir(self, worker_id: str) -> Path:
+        """Where a match-eval slot is handed the model it is to play
+        (match_eval/dispatch.py owns what the directory's contents mean)."""
+        return self.data_dir / MATCH_INBOX_DIR / worker_id

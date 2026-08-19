@@ -60,6 +60,7 @@ from tornado.ioloop import IOLoop
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks
+from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.hardware import default_thread_count
 from scribblez.paths import DEFAULT_MOUNT_ROOT, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
@@ -105,7 +106,7 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
         "container": _container_name(spec, task.tag, w.worker_id),
         "remote_root": str(paths.root),
         "local_root": paths.root,
-        "data_dirs": [f"data/{sub}" for sub in spec.sync_data_dirs],
+        "data_dirs": [f"data/{sub}" for sub in spec.collected_dirs],
     }
 
 
@@ -535,7 +536,10 @@ class WorkerManager:
         # under the dashboard.
         machine.pull_image(creds.registry.worker_image)
         machine.run_container(
-            _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
+            _container_name(spec, task.tag, w.worker_id),
+            creds.registry.worker_image,
+            env,
+            gpus=spec.role(w.role).gpu,
         )
         w.launched = True
         w.undelivered = 0  # a container just created is holding nothing
@@ -572,8 +576,7 @@ class WorkerManager:
     def add_ssh(
         self, spec, task: tasks.TaskRecord, role: str, host: str, threads: int | None
     ) -> tasks.WorkerRecord:
-        role_spec = self._check_role(spec, task, role, "ssh")
-        assert not role_spec.gpu, f"role '{role}' needs GPU hardware; the worker image is CPU-only"
+        self._check_role(spec, task, role, "ssh")
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
@@ -875,6 +878,11 @@ class WorkerManager:
         pid/pod runtime, so it holds a paused worker down even across a
         dashboard restart or a second dashboard instance.
 
+        It is also where the controller's half of a dispatch-driven role runs
+        (RoleSpec.dispatch): assigning those slots their next piece of work and
+        ingesting what they have delivered, once the pass knows which of them
+        are really running.
+
         This pass is the only observer: it refreshes the container probes and
         pod listing everything else reads, which also makes it the spend-accrual
         heartbeat when no browser is polling.
@@ -885,8 +893,6 @@ class WorkerManager:
                     await self.offload(self._tick_scheduler, spec, task)
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
-            if not task.workers:
-                continue
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for w, info in zip(task.workers, status, strict=True):
                 # Collect before enforcing: this slot may be about to be
@@ -907,6 +913,13 @@ class WorkerManager:
                     )
                 except Exception as e:  # noqa: BLE001 -- enforcement must keep ticking
                     print(f"reconcile {spec.name}/{task.tag}/{w.worker_id}: {e}")
+            for role in spec.roles:
+                if not role.dispatch:
+                    continue
+                try:
+                    await self.offload(self._dispatch_role, spec, task, role, status)
+                except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
+                    print(f"dispatch {spec.name}/{task.tag}/{role.name}: {e}")
             self._ensure_sync(spec, task)
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
@@ -921,6 +934,40 @@ class WorkerManager:
         result = pull_results(SshMachine(w.host), **_transfer_target(spec, task, w))
         w.undelivered = result.remaining
         tasks.save_task(spec, task)
+
+    def _dispatch_role(self, spec, task: tasks.TaskRecord, role, status: list[dict]):
+        """Run one role's controller-side tick: hand its running slots their
+        next piece of work, and take in what they have delivered.
+
+        Only running slots are offered: a paused container cannot be written
+        to, and an assignment is worth making when there is something to act on
+        it. Ingest is not conditional on any of that -- results already
+        collected must reach the database even when every slot of the role is
+        gone -- so the tick runs whether or not the list is empty.
+        """
+        slots = [
+            self._slot_files(spec, task, w)
+            for w, info in zip(task.workers, status, strict=True)
+            if w.role == role.name and info["observed_running"]
+        ]
+        params = params_mod.validate(spec.params_cls, task.params)
+        workloads.resolve(role.dispatch)(spec, task.tag, params, slots)
+
+    def _slot_files(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """The way into slot `w`'s filesystem (dashboard/slot_files.py)."""
+        paths = spec.paths(task.tag)
+        assert w.kind in ("local", "ssh"), (
+            f"a {w.kind} slot has no reachable filesystem; a dispatch-driven role's "
+            "kinds are local and ssh"
+        )
+        if w.kind == "ssh":
+            return SshSlotFiles(
+                w.worker_id,
+                SshMachine(w.host),
+                _container_name(spec, task.tag, w.worker_id),
+                str(paths.root),
+            )
+        return LocalSlotFiles(w.worker_id, paths.root)
 
     def _tick_scheduler(self, spec, task: tasks.TaskRecord):
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))

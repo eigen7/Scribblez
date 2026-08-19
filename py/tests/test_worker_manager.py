@@ -13,14 +13,18 @@ from types import SimpleNamespace
 import pytest
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
-from scribblez.dashboard import tasks
+from scribblez.dashboard import db, tasks
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.workers import (
     WorkerManager,
     _cloud_state,
+    _container_name,
     _resource_record_fields,
     _worker_resources,
 )
+from scribblez.paths import TagPaths
+from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
+from scribblez.workloads.position_eval import PositionEvalParams
 from scripts.cloud_fleet import CpuResources, GpuResources
 
 # The fixture below replaces the launch paths with _fail; a test that wants to
@@ -248,8 +252,8 @@ class _RecordingSshMachine(_FakeSshMachine):
     def pull_image(self, image):
         self.ops.append(("pull", image))
 
-    def run_container(self, name, image, env):
-        self.ops.append(("run", name))
+    def run_container(self, name, image, env, *, gpus=False):
+        self.ops.append(("run", "gpu" if gpus else name))
 
     def copy_from_container(self, name, path, dest):
         self.ops.append(("copy", path))
@@ -619,6 +623,78 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, w)
     assert (w.launched, w.undelivered, w.bundle_id) == (True, 0, "b1")
+
+
+class _DispatchSpec:
+    """position_eval's match_eval role with its tag tree in the test's tmp dir:
+    what reconcile and the dispatch tick ask of a spec."""
+
+    name = "position_eval"
+    scheduler = ""
+    params_cls = PositionEvalParams
+    roles = (POSITION_EVAL_SPEC.role("match_eval"),)
+
+    def __init__(self, mount_root):
+        self._mount_root = mount_root
+
+    def paths(self, tag: str) -> TagPaths:
+        return TagPaths(tag, "position_eval", mount_root=self._mount_root)
+
+    def role(self, name: str):
+        return POSITION_EVAL_SPEC.role(name)
+
+
+def test_reconcile_dispatches_to_running_slots_only(manager, tmp_path, monkeypatch):
+    """The controller's half of a dispatch-driven role runs from the reconcile
+    pass, against the slots that are really running: a model pushed to a slot
+    whose worker is down would sit there unplayed while the ledger read as a
+    match in flight."""
+    spec = _DispatchSpec(tmp_path)
+    task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
+    paths = spec.paths("t")
+    paths.onnx_dir.mkdir(parents=True)
+    paths.onnx_path(10).write_bytes(b"onnx")
+    db.connect(paths.dashboard_db).close()
+
+    running = manager.add_local(spec, task, "match_eval", threads=1)
+    task.workers.append(
+        tasks.WorkerRecord(
+            worker_id="local-1", role="match_eval", kind="local", desired_state="paused"
+        )
+    )
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(WorkerManager, "_local_alive", lambda self, spec, task, w: w is running)
+    monkeypatch.setattr(WorkerManager, "_reconcile_worker", lambda *a, **k: None)
+    asyncio.run(manager.reconcile())
+
+    assert [p.name for p in paths.match_inbox_dir(running.worker_id).iterdir()] == [
+        paths.onnx_path(10).name
+    ]
+    assert not paths.match_inbox_dir("local-1").exists()
+
+
+def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
+    """A container for a GPU role is run with --gpus: the match-eval worker
+    plays a neural agent, which needs the machine's GPU (and the worker image
+    carries the TensorRT builder for it)."""
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    _RecordingSshMachine.ops = []
+
+    generator = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    manager._run_ssh_container(spec, task, generator)
+    matcher = manager.add_ssh(spec, task, "match_eval", host="user@laptop", threads=None)
+    manager._run_ssh_container(spec, task, matcher)
+
+    assert [arg for op, arg in _RecordingSshMachine.ops if op == "run"] == [
+        _container_name(spec, "t", generator.worker_id),
+        "gpu",
+    ]
 
 
 def test_a_running_container_still_holding_output_is_not_stopped_by_a_redeploy(

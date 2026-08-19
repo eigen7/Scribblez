@@ -26,6 +26,7 @@ bootstrap, costs a minute of every cycle and discards the chunk in flight).
 import shlex
 import subprocess
 from pathlib import Path
+from typing import IO
 
 # ConnectTimeout bounds how long an unreachable host can stall a probe;
 # ControlMaster/ControlPersist multiplex every call onto one shared connection,
@@ -57,6 +58,11 @@ _PULL_TIMEOUT = 1800
 # second what older versions did. Matching too narrowly here would turn "this
 # worker produced nothing" into an error that blocks its replacement forever.
 _PATH_NOT_IN_CONTAINER = ("Could not find the file", "No such container:path")
+
+# Sending a file into a container. Long because what goes this way is a model
+# (tens of megabytes) over a home network, and a push that gives up leaves the
+# slot with nothing to work on until the next pass tries again.
+_WRITE_TIMEOUT = 600
 
 # Reading a container's output directory out of it. Generous because it is the
 # last look at a container about to be destroyed and there is no way to ask how
@@ -120,21 +126,43 @@ class SshMachine:
         failure, like every other mutating call."""
         self._mutate(["docker", "exec", name, *command])
 
-    def read_from_container(self, name: str, command: list[str]) -> bytes:
-        """Run `command` inside container `name` and return its stdout as
-        bytes -- how results are read out of a worker (a tar stream). Text
-        decoding would corrupt them, so this path stays binary."""
+    def _exec(
+        self, argv: list[str], *, timeout: int, doing: str, stdin: IO[bytes] | None = None
+    ) -> bytes:
+        """Run one `docker exec` and return its stdout as bytes. Binary
+        throughout: what these calls carry is a tar stream or a model, which
+        text decoding would corrupt. `doing` names the operation in the error
+        a timeout raises."""
         try:
-            res = subprocess.run(
-                self.argv(["docker", "exec", name, *command]),
-                capture_output=True,
-                timeout=_MUTATE_TIMEOUT,
-            )
+            res = subprocess.run(self.argv(argv), stdin=stdin, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise SshMachineError(f"{self.host}: reading from {name} timed out") from None
+            raise SshMachineError(f"{self.host}: {doing} timed out") from None
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: {res.stderr.decode(errors='replace').strip()}")
         return res.stdout
+
+    def read_from_container(self, name: str, command: list[str]) -> bytes:
+        """Run `command` inside container `name` and return its stdout -- how
+        results are read out of a worker (a tar stream)."""
+        return self._exec(
+            ["docker", "exec", name, *command],
+            timeout=_MUTATE_TIMEOUT,
+            doing=f"reading from {name}",
+        )
+
+    def write_to_container(self, name: str, command: list[str], src: Path):
+        """Run `command` inside container `name` with the bytes of `src` on its
+        stdin -- how a file goes the other way, from the controller into a
+        worker (cloud/ssh_transfer.py's push). Streamed from the file rather
+        than read into memory: what travels this way is a model, tens of
+        megabytes of it, and the dashboard holds no copy of it."""
+        with open(src, "rb") as f:
+            self._exec(
+                ["docker", "exec", "-i", name, *command],
+                timeout=_WRITE_TIMEOUT,
+                doing=f"writing to {name}",
+                stdin=f,
+            )
 
     def _mutate(self, command: list[str], stdin_text: str | None = None):
         res = self._run(command, timeout=_MUTATE_TIMEOUT, stdin_text=stdin_text)
@@ -203,20 +231,27 @@ class SshMachine:
             return False
         raise SshMachineError(f"{self.host}: {stderr.strip()}")
 
-    def run_container(self, name: str, image: str, env: dict[str, str]):
+    def run_container(self, name: str, image: str, env: dict[str, str], *, gpus: bool = False):
         """Create + start container `name` from `image`. The environment
         (which includes bucket credentials) travels on the ssh pipe as an
         --env-file rather than on the remote command line, where it would be
         visible in the machine's process list. --pull=never keeps a missing
         image an instant, actionable error instead of a multi-minute pull
         blocking the dashboard: pulling is a one-time manual setup step (the
-        image repo is private, so it needs a docker login anyway)."""
+        image repo is private, so it needs a docker login anyway).
+
+        `gpus` gives the container the machine's GPUs, for a role that runs
+        one (match eval plays a neural agent). It needs the NVIDIA container
+        toolkit installed there; without it `docker run` fails immediately and
+        says so, which is the honest answer for a machine that cannot serve
+        the role."""
         self._mutate(
             [
                 "docker",
                 "run",
                 "--detach",
                 "--pull=never",
+                *(["--gpus", "all"] if gpus else []),
                 "--name",
                 name,
                 "--env-file",

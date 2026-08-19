@@ -1,4 +1,5 @@
-"""Reading a worker's results out of its container, over the control ssh link.
+"""Moving files between the controller and a worker's container, over the
+control ssh link.
 
 An ssh worker runs on a machine the operator owns, one the controller already
 reaches over ssh to manage its container. Its outputs used to travel the same
@@ -17,6 +18,12 @@ back to it, an address that survives DHCP, and a key -- for no gain, since the
 bytes are the same either way. It also fails better: a controller that is down
 or restarting leaves the worker generating into its own filesystem, and the
 next pass collects the backlog.
+
+The same link carries the other direction for roles whose work the controller
+assigns: push_file puts a file where the worker will find it (match eval: the
+ONNX of the generation to play) and list_dir reads back what is there. Both
+run over the connection that is already open, so a machine the controller can
+manage is a machine it can feed -- no bucket, and no second credential.
 
 A pull takes a bounded batch, not everything waiting. Taking everything made a
 pull's cost grow with the backlog it existed to drain, which is a loop that
@@ -130,6 +137,61 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
         '[ "$#" -eq 0 ] && exit 0\n'
         f"exec timeout {seconds} tar -c --use-compress-program='{COMPRESSION}' -f - \"$@\"",
     ]
+
+
+def write_command(root: str, rel_dest: str, size: int) -> list[str]:
+    """The in-container command reading `size` bytes off stdin into `rel_dest`.
+
+    It lands under a dotted temporary name in its own directory and is renamed
+    into place, so the worker -- which polls for exactly these files -- never
+    opens a half-written one, and a push that dies mid-stream leaves nothing
+    but a leftover the next one overwrites (dotted, so it is not in the
+    listing either).
+
+    The size is checked before the rename because `cat` cannot tell a
+    truncated stream from a complete one: it exits 0 on any EOF, including the
+    one a dropped link produces, and would hand the worker a short model under
+    the name that means "ready". That file would then wedge the slot -- it
+    reads as a match in flight, so nothing replaces it, and the worker dies on
+    it as fast as the container can be restarted."""
+    dest = f"{root}/{rel_dest}"
+    parent, _, name = dest.rpartition("/")
+    tmp = f"{parent}/.{name}.part"
+    return [
+        "sh",
+        "-c",
+        f"set -e\n"
+        f"mkdir -p {shlex.quote(parent)}\n"
+        f"cat > {shlex.quote(tmp)}\n"
+        f"n=$(( $(wc -c < {shlex.quote(tmp)}) ))\n"
+        f'[ "$n" -eq {size} ] || {{ echo "{name}: got $n of {size} bytes" >&2; exit 1; }}\n'
+        f"mv {shlex.quote(tmp)} {shlex.quote(dest)}",
+    ]
+
+
+def list_dir_command(root: str, rel: str) -> list[str]:
+    """The in-container command naming what is in `rel`. A directory that does
+    not exist yet is empty, not an error: nothing has been pushed there."""
+    return ["sh", "-c", f"ls -1 {shlex.quote(f'{root}/{rel}')} 2>/dev/null || true"]
+
+
+def push_file(machine, container: str, *, remote_root: str, rel_dest: str, src: Path):
+    """Send `src` into `container` at `rel_dest` (relative to the tag root
+    there). Raises if it did not arrive whole."""
+    command = write_command(remote_root, rel_dest, src.stat().st_size)
+    machine.write_to_container(container, command, src)
+
+
+def list_dir(machine, container: str, *, remote_root: str, rel: str) -> list[str]:
+    """What `container` holds under `rel` (relative to the tag root there)."""
+    output = machine.read_from_container(container, list_dir_command(remote_root, rel))
+    return output.decode(errors="replace").split()
+
+
+def remove_file(machine, container: str, *, remote_root: str, rel: str):
+    """Delete `rel` inside `container`. Absent is success, as it is for the
+    delivered files a pull removes."""
+    machine.exec_in_container(container, ["rm", "-f", f"{remote_root}/{rel}"])
 
 
 def _extract(

@@ -28,7 +28,11 @@ control table, adopted by the trainer at its natural cadence), and
 The scheduler tick runs inside the dashboard server's reconcile loop (the one
 always-on controller-host process) and gets `SchedulerHooks`:
 `gate(role, reason)` to park a role's workers distinctly from operator pause,
-and `mirror(chunk, dest)` to replay ingests in the bucket. Client-side, a
+and `mirror(chunk, dest)` to replay ingests in the bucket. The same loop runs
+a role's `dispatch` tick, if it declares one: the controller-side half of a
+role whose work it assigns rather than the worker choosing it (match_eval,
+below), which gets one handle per running slot onto that slot's filesystem
+(`scribblez/dashboard/slot_files.py`). Client-side, a
 parallel registry (`web/src/workloads.tsx`) maps workload name → extra tab
 components; the server never renders tabs, only generic data endpoints.
 
@@ -42,13 +46,15 @@ pairs to the tag's data store.
 |---|---|---|---|---|
 | `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
 | `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, write dashboard.db |
-| `match_eval` | singleton | local (the GPU box) | — | play sequential-test-checked paired matches for each exported checkpoint against a fixed opponent, write dashboard.db (position_eval only; docs/roadmap.md A1) |
+| `match_eval` | singleton | local + ssh (needs a GPU) | — | play sequential-test-checked paired matches for the checkpoint the controller assigns it, against a fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only
-consumes exported ONNX checkpoints, pacing itself off `models/` so the
-training loop is never blocked. A single-machine run attaches one local
-generator and the trainer (plus, optionally, the match_eval worker) to the
-same task; the CPU split between them is the slots' thread counts.
+consumes exported ONNX checkpoints, so the training loop is never blocked. A
+single-machine run attaches one local generator and the trainer (plus,
+optionally, the match_eval worker) to the same task; the CPU split between
+them is the slots' thread counts. Putting the match_eval slot on a second
+machine (kind `ssh`) is how the eval matches stop competing with training for
+the GPU — see the match-eval roundtrip below.
 
 ## Data flow: staging + controller-side ingest
 
@@ -120,6 +126,57 @@ runner for headless debugging. SIGTERM pauses; resume repeats at most one
 generation from the last checkpoint. Live controls (LR, loader threads) come from
 dashboard.db. A fresh start is a fresh tag; there is no in-place run reset.
 
+## The match_eval roundtrip
+
+The match-eval worker does not choose its own work: the controller assigns it
+a generation and ingests what comes back
+(`scribblez/match_eval/dispatch.py`, ticked per task by the reconcile loop).
+
+```
+controller picks the newest export with no match row
+        │
+        ▼  put in the slot's inbox (symlink locally, a push over ssh)
+data/match_inbox/<worker_id>/model_epoch_NNNN.onnx
+        │
+        ▼  worker plays it: SPRT-checked paired rounds, then marks it .done
+data/match_results/gen_NNNNNN-<worker_id>.json
+        │
+        ▼  controller ingest: a match_eval row + match_* metrics, keyed by generation
+```
+
+The `.done` mark is not cleared by the ingest. It is cleared the next time that
+slot is offered work, which is the only moment its presence matters; until then
+it sits in the inbox unused, and a mark can outlive its row for as long as
+nothing new is due.
+
+That split is what lets the slot sit on another machine. The database and the
+exports both live on the controller, neither reachable from an ssh worker's
+container; what crosses the link is one model in and one small JSON out, over
+the control connection the dashboard already holds open
+(`py/cloud/ssh_transfer.py`). A local slot takes the identical path — its
+"link" being a symlink into `models/` — so there is one runner and one set of
+rules rather than one per kind.
+
+**The inbox is the ledger**, and it holds a generation until that generation is
+accounted for — not until the worker is done with it. Nothing durable records
+what is in flight, because the directory already says. The distinction matters
+because a container's result reaches the controller by collection, a separate
+step that can fail or time out for passes on end: a ledger that emptied when
+the worker finished would offer the same generation up again in that gap and
+replay a match the machine had already played. Ingest is idempotent anyway (a
+row is keyed by its generation).
+
+Accounted for means recorded, or delivered and found unreadable. A file that is
+not a result is quarantined as `.bad` rather than retried forever, and that
+counts as settling its generation: nothing further is coming for it, so the
+mark stops holding the slot, the generation falls due again, and the match is
+replayed. A terminal outcome that did not release the slot would strand it —
+the readout would simply stop, with one line in the log to say why.
+
+Shared external-data blobs beside the exports (the frozen-lexicon blob, when
+the model has one) go with the first assignment and stay: a model does not
+load without them, and every generation references the same bytes.
+
 ## Seeds
 
 Generators always run `play_game` with seed 0 (the binary draws from
@@ -137,6 +194,9 @@ needed, `generate_data.py` still exists.
 | trainer crash | training halts; generation continues to the ahead-limit gate | respawn resumes from the rolling checkpoint |
 | sync lag | chunks arrive late to staging | ingest is idempotent; late chunks join the open generation |
 | corrupt staged chunk | quarantined as `.bad`, never assigned | — |
+| match_eval worker or container dies mid-match | the model is still in its inbox unmarked, so the match counts as unplayed | it replays from the same fixed seeds on the next start |
+| a push is cut off mid-model | the size check fails, so nothing lands under the name the worker polls for | the next pass re-pushes |
+| match_eval machine unreachable | no matches; training is unaffected | reconcile resumes assigning when it answers again |
 
 ## Dashboard UI
 

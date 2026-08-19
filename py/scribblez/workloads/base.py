@@ -60,6 +60,14 @@ class RoleSpec:
     # cheaper, but Runpod may stop them at any time. Only for roles that
     # tolerate preemption (the reconcile loop restarts reclaimed pods).
     interruptible: bool = False
+    # Dotted path to a controller-side tick for this role,
+    # dispatch(spec, tag, params, slots) -- for a role whose work the
+    # controller assigns rather than the worker choosing it, and whose results
+    # it ingests. `slots` holds one scribblez/dashboard/slot_files.py handle
+    # per running slot of the role, the only way into a worker's filesystem;
+    # since a rented pod has no such handle, such a role's kinds are local and
+    # ssh. "" for the self-directing roles (a generator picks its own work).
+    dispatch: str = ""
     stats: StatsSpec | None = None
 
 
@@ -79,6 +87,17 @@ class WorkloadSpec:
     # data/ subdirectories cloud workers deliver into; cloud_sync pulls exactly
     # these bucket prefixes (plus stats/ and params/) down to the local mount.
     sync_data_dirs: tuple[str, ...] = ()
+    # data/ subdirectories only local and ssh workers deliver into. An ssh
+    # collection takes these as well (collected_dirs below), but they never
+    # exist in the bucket, so asking cloud_sync for them would be one rclone
+    # per watcher cycle against a prefix nothing can ever write.
+    local_data_dirs: tuple[str, ...] = ()
+
+    @property
+    def collected_dirs(self) -> tuple[str, ...]:
+        """Every data/ subdirectory a worker delivers into -- what a collection
+        from an ssh container looks through."""
+        return self.sync_data_dirs + self.local_data_dirs
 
     def paths(self, tag: str, mount_root=None) -> TagPaths:
         return TagPaths(tag, self.name, *([mount_root] if mount_root else []))
