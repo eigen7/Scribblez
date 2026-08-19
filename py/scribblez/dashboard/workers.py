@@ -253,7 +253,13 @@ def _ssh_state(desired: str, probe: str, gated: bool) -> str:
         return "stopping" if probe in ("running", "paused") else "paused"
     if probe == "missing":
         return "starting"
-    return "running" if probe == "running" else "exited"
+    if probe == "running":
+        return "running"
+    # Paused while it is meant to be running: a gate released between the pass
+    # that parked it and the one that will resume it. Reporting that as
+    # "exited" -- next to an empty exit reason, because nothing exited --
+    # describes a healthy worker as a dead one.
+    return "starting" if probe == "paused" else "exited"
 
 
 def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str | None) -> str:

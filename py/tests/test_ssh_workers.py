@@ -198,3 +198,13 @@ def test_a_failed_write_raises(monkeypatch, tmp_path):
 def test_a_write_that_times_out_raises(monkeypatch, tmp_path):
     with pytest.raises(SshMachineError):
         _write(monkeypatch, tmp_path, None)
+
+
+def test_a_paused_container_between_gates_is_not_reported_as_exited():
+    """A gate parks an ssh container by pausing it and releases it a pass
+    before anything unpauses it. In that window the slot is healthy and about
+    to resume -- calling it "exited", beside an empty exit reason, sent an
+    operator looking for a crash that had not happened."""
+    assert _ssh_state("running", "paused", gated=True) == "waiting"
+    assert _ssh_state("running", "paused", gated=False) == "starting"
+    assert _ssh_state("running", "stopped", gated=False) == "exited"  # this one really did
