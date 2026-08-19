@@ -52,9 +52,12 @@ enum class RackSlotState : uint8_t { UNKNOWN, KNOWN, EMPTY };
 // A rack slot as shown in the UI: KNOWN carries a revealed tile; UNKNOWN is a
 // tile that is present but hidden (rendered as "?", still selectable for
 // exchange); EMPTY is a slot holding no tile (rendered as empty space).
+// `drawn` marks a tile the player drew to replace what their last move used,
+// as opposed to one that move left them holding; the two are shaded apart.
 struct DisplaySlot {
   RackSlotState state = RackSlotState::UNKNOWN;
   Tile tile = EMPTY_SQUARE;
+  bool drawn = false;
 };
 using RackDisplay = std::array<DisplaySlot, kRackSlots>;
 
@@ -73,44 +76,40 @@ RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   return display;
 }
 
-// How much of the rack of the player yet to move a reviewed position reveals.
-// That player's leave -- the tiles they kept from their own last move -- was
-// deducible from that move; the tiles they drew to replace what they played
-// were not.
-enum class OpponentRackView : uint8_t { HIDDEN, LEAVES, RACKS };
-
-constexpr const char* kOpponentRackViewNames[] = {"hidden", "leaves", "racks"};
-
-const char* opponent_rack_view_name(OpponentRackView view) {
-  return kOpponentRackViewNames[int(view)];
+// Marks every revealed tile of `display` that `leave` does not cover as drawn:
+// the tiles the player took onto their rack after their last move, as opposed
+// to the ones that move left them. A tile counts as part of the leave at most
+// as many times as `leave` holds it.
+void mark_drawn_tiles(RackDisplay* display, TileCounts leave) {
+  for (DisplaySlot& slot : *display) {
+    if (slot.state != RackSlotState::KNOWN) continue;
+    slot.drawn = !leave.remove(slot.tile);
+  }
 }
 
-std::optional<OpponentRackView> parse_opponent_rack_view(const std::string& name) {
-  for (std::size_t i = 0; i < std::size(kOpponentRackViewNames); ++i) {
-    if (name == kOpponentRackViewNames[i]) return OpponentRackView(i);
+// How much of the opponent's rack the '#Rack' pragmata of an exported GCG
+// reveal. The opponent is the player on turn, the one whose tiles a position
+// exported for study must not give away: their leave -- what their own last
+// move kept -- was deducible from that move, but the tiles they drew to replace
+// the ones it played were not.
+enum class GcgOpponentRack : uint8_t { FULL, LEAVE, HIDDEN };
+
+constexpr const char* kGcgOpponentRackNames[] = {"full", "leave", "hidden"};
+
+std::optional<GcgOpponentRack> parse_gcg_opponent_rack(const std::string& name) {
+  for (std::size_t i = 0; i < std::size(kGcgOpponentRackNames); ++i) {
+    if (name == kGcgOpponentRackNames[i]) return GcgOpponentRack(i);
   }
   return std::nullopt;
 }
 
-// The revealed tiles of a rack display, as counts.
-TileCounts known_tiles(const RackDisplay& display) {
-  TileCounts counts;
-  for (const DisplaySlot& slot : display) {
-    if (slot.state == RackSlotState::KNOWN) counts.add(slot.tile);
-  }
-  return counts;
-}
-
-// `display` with every revealed tile that `revealed` does not cover turned back
-// into a hidden "?" slot -- each tile stays revealed at most as many times as
-// `revealed` holds it. Empty slots are left alone, so a hidden rack still shows
-// how many tiles it holds.
-RackDisplay hide_beyond(const RackDisplay& display, TileCounts revealed) {
-  RackDisplay out = display;
-  for (DisplaySlot& slot : out) {
-    if (slot.state != RackSlotState::KNOWN) continue;
-    if (revealed.remove(slot.tile)) continue;
-    slot = {RackSlotState::UNKNOWN, EMPTY_SQUARE};
+// `slots` with every tile `revealed` does not cover cleared, so a rack field
+// writes those slots as unknown ('_'). Each tile survives at most as many times
+// as `revealed` holds it.
+RackSlots keep_only(const RackSlots& slots, TileCounts revealed) {
+  RackSlots out;
+  for (int i = 0; i < kRackSlots; ++i) {
+    if (slots[i].has_value() && revealed.remove(slots[i].value())) out[i] = slots[i];
   }
   return out;
 }
@@ -274,15 +273,19 @@ boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
           r.emplace_back(boost::json::object{{"letter", std::string(1, slot.tile.to_char())},
                                              {"score", slot.tile.value()},
                                              {"known", true},
-                                             {"present", true}});
+                                             {"present", true},
+                                             {"drawn", slot.drawn}});
           break;
         case RackSlotState::UNKNOWN:
-          r.emplace_back(boost::json::object{
-            {"letter", "?"}, {"score", 0}, {"known", false}, {"present", true}});
+          r.emplace_back(boost::json::object{{"letter", "?"},
+                                             {"score", 0},
+                                             {"known", false},
+                                             {"present", true},
+                                             {"drawn", slot.drawn}});
           break;
         case RackSlotState::EMPTY:
           r.emplace_back(boost::json::object{
-            {"letter", ""}, {"score", 0}, {"known", false}, {"present", false}});
+            {"letter", ""}, {"score", 0}, {"known", false}, {"present", false}, {"drawn", false}});
           break;
       }
     }
@@ -335,7 +338,7 @@ class ManualGame {
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
     const int bag_count = bag_estimate(snap.board);
-    const std::array<RackDisplay, 2> display_racks = visible_racks_for_view();
+    const std::array<RackDisplay, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
 
     boost::json::object o;
     o["type"] = "manual_state";
@@ -349,11 +352,10 @@ class ManualGame {
     o["lexicon"] = Lexicon::instance().name();
     o["max_name_len"] = kMaxNameLen;
     o["status"] = status_;
-    o["gcg_text"] = build_gcg();
     o["tile_scores"] = tile_score_map();
     o["view_ply"] = view_ply_;
-    o["opponent_rack_view"] = opponent_rack_view_name(opponent_rack_view_);
     o["tail_ply"] = int(turns_.size());
+    o["tail_player"] = turn_player_;
     o["backtracking"] = is_backtracking();
     o["game_over"] = !end_adjustments_.empty();
     o["racks"] = racks_json(display_racks);
@@ -696,15 +698,6 @@ class ManualGame {
     }
   }
 
-  void set_opponent_rack_view(const std::string& name) {
-    const std::optional<OpponentRackView> view = parse_opponent_rack_view(name);
-    if (!view.has_value()) {
-      status_ = "Unknown opponent rack view";
-      return;
-    }
-    opponent_rack_view_ = view.value();
-  }
-
   void fork_game() {
     if (!is_backtracking()) {
       status_ = "Already at latest position";
@@ -788,9 +781,18 @@ class ManualGame {
     status_ = "Loaded " + source_name;
   }
 
-  // The current game serialized as GCG text. The front-end offers it for
-  // download, so the file is written browser-side rather than here.
-  std::string build_gcg() const {
+  // The reply to an export request: the GCG text for the front-end to save.
+  // Nullopt if `opponent_rack` does not name a reveal mode.
+  std::optional<boost::json::object> gcg_export_json(const std::string& opponent_rack) const {
+    const std::optional<GcgOpponentRack> mode = parse_gcg_opponent_rack(opponent_rack);
+    if (!mode.has_value()) return std::nullopt;
+    return boost::json::object{{"type", "manual_gcg"}, {"text", build_gcg(mode.value())}};
+  }
+
+  // The current game serialized as GCG text, revealing `opponent_rack` of the
+  // rack of the player on turn. The front-end offers it for download, so the
+  // file is written browser-side rather than here.
+  std::string build_gcg(GcgOpponentRack opponent_rack) const {
     GameLogStorage log;
     log.player_names = names_;
     log.final_scores = scores_;
@@ -807,15 +809,19 @@ class ManualGame {
       log.turns.push_back(t.record);
       rack_fields.push_back(gcg_rack_field(t.rack_before_slots));
       exchange_fields.push_back(t.exchange_field);
-      post_event_racks.push_back(
-        {maybe_rack_pragma(t.racks_after_turn[0]), maybe_rack_pragma(t.racks_after_turn[1])});
+      // A post-event pragma states the racks as they stood after that event,
+      // so it is masked against what was deducible by then -- one turn further
+      // on than the event itself.
+      const int ply = int(post_event_racks.size()) + 1;
+      post_event_racks.push_back({rack_pragma(0, t.racks_after_turn[0], ply, opponent_rack),
+                                  rack_pragma(1, t.racks_after_turn[1], ply, opponent_rack)});
     }
 
     GcgWriteOptions opts;
     opts.lexicon_name = Lexicon::instance().name();
     opts.notes.push_back("Generated by Scribblez manual GCG tool on " + now_string());
-    opts.initial_rack1 = maybe_rack_pragma(racks_[0]);
-    opts.initial_rack2 = maybe_rack_pragma(racks_[1]);
+    opts.initial_rack1 = rack_pragma(0, racks_[0], turns_.size(), opponent_rack);
+    opts.initial_rack2 = rack_pragma(1, racks_[1], turns_.size(), opponent_rack);
     opts.rack_before_fields = std::move(rack_fields);
     opts.exchange_fields = std::move(exchange_fields);
     opts.post_event_racks = std::move(post_event_racks);
@@ -920,6 +926,33 @@ class ManualGame {
     return has_known_tiles(slots) ? RackSlotState::EMPTY : RackSlotState::UNKNOWN;
   }
 
+  // A '#Rack' pragma for `player` holding `slots` at `ply`, as an export
+  // reveals it. Only the opponent's rack is masked; the player whose position
+  // is being studied keeps theirs whole.
+  std::optional<std::string> rack_pragma(int player, const RackSlots& slots, int ply,
+                                         GcgOpponentRack opponent_rack) const {
+    if (player != turn_player_ || opponent_rack == GcgOpponentRack::FULL) {
+      return maybe_rack_pragma(slots);
+    }
+    if (opponent_rack == GcgOpponentRack::HIDDEN) return std::nullopt;
+    return maybe_rack_pragma(keep_only(slots, leave_after_last_move(player, ply)));
+  }
+
+  // The tiles `player` kept from their own last move before `ply`: the leave
+  // that move revealed, holding nothing of what they drew to replace the tiles
+  // it used. Empty before the player's first turn.
+  TileCounts leave_after_last_move(int player, int ply) const {
+    TileCounts leave;
+    for (int i = ply - 1; i >= 0; --i) {
+      if (turns_[i].record.player != player) continue;
+      for (const DisplaySlot& slot : post_move_rack_from_turn(turns_[i])) {
+        if (slot.state == RackSlotState::KNOWN) leave.add(slot.tile);
+      }
+      break;
+    }
+    return leave;
+  }
+
   RackDisplay post_move_rack_from_turn(const ManualTurn& t) const {
     const RackSlotState hidden = hidden_state_for(t.rack_before_slots);
     std::array<RackSlotState, kRackSlots> state;
@@ -971,38 +1004,6 @@ class ManualGame {
     }
   }
 
-  // The racks as shown for the viewed position: the reconstructed racks, less
-  // whatever `opponent_rack_view_` hides. Hiding applies only while reviewing an
-  // earlier turn -- at the latest position both racks are the ones the user
-  // enters and plays from, so they always show in full.
-  std::array<RackDisplay, 2> visible_racks_for_view() const {
-    const ManualSnapshot& snap = snapshots_[view_ply_];
-    std::array<RackDisplay, 2> out = display_racks_for_view(view_ply_, snap.racks);
-    if (!is_backtracking() || opponent_rack_view_ == OpponentRackView::RACKS) return out;
-
-    // The hidden rack belongs to the player yet to move: the viewed position is
-    // the one the mover just created, and it is the mover's play that is under
-    // review, so the rack unseen from where they sat is the one still to move.
-    // The mover's own rack keeps showing the leave their move produced.
-    const int opponent = snap.turn_player;
-    const TileCounts revealed = opponent_rack_view_ == OpponentRackView::LEAVES
-                                  ? deducible_leave(opponent, view_ply_)
-                                  : TileCounts();
-    out[opponent] = hide_beyond(out[opponent], revealed);
-    return out;
-  }
-
-  // The tiles `player` kept from their own last move before `ply`: their leave,
-  // which their move revealed without revealing what they drew to replace what
-  // it used. Empty before the player's first turn.
-  TileCounts deducible_leave(int player, int ply) const {
-    for (int i = ply - 1; i >= 0; --i) {
-      if (turns_[i].record.player != player) continue;
-      return known_tiles(post_move_rack_from_turn(turns_[i]));
-    }
-    return TileCounts();
-  }
-
   std::array<RackDisplay, 2> display_racks_for_view(
     int view_ply, const std::array<RackSlots, 2>& fallback) const {
     // An unrevealed slot of a rack we have no count for is assumed to be a held
@@ -1027,6 +1028,10 @@ class ManualGame {
       out[waiting] = display_from_slots(fallback[waiting], RackSlotState::UNKNOWN);
     }
 
+    // Their rack is a leave plus what they drew onto it; the two are shaded
+    // apart, so say which slots are which.
+    mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
+
     // At the final position, the player who didn't go out still holds their
     // leftover tiles. These survive only in the end-of-game adjustment (the
     // per-turn racks are cleared after each move), so reveal them here. The
@@ -1034,6 +1039,7 @@ class ManualGame {
     if (view_ply == int(turns_.size())) {
       if (const auto tiles = end_rack_tiles_for(waiting)) {
         out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
+        mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
       }
     }
     return out;
@@ -1108,27 +1114,37 @@ class ManualGame {
   std::vector<ParsedGcgEndAdjustment> end_adjustments_;
   int view_ply_ = 0;
   int turn_player_ = 0;
-  OpponentRackView opponent_rack_view_ = OpponentRackView::HIDDEN;
   std::string status_;
 };
 
-void handle_message(ManualGame& game, const boost::json::object& obj) {
+// Applies one front-end message, returning the direct reply it calls for (only
+// an export does; every other message is answered by the state that follows).
+std::optional<boost::json::object> handle_message(ManualGame& game,
+                                                  const boost::json::object& obj) {
   const std::string type = str_field(obj, "type");
+  if (type == "export_gcg") {
+    std::optional<boost::json::object> gcg = game.gcg_export_json(str_field(obj, "opponent_rack"));
+    if (!gcg.has_value()) {
+      return boost::json::object{{"type", "manual_error"},
+                                 {"message", "Unknown GCG opponent-rack mode"}};
+    }
+    return gcg;
+  }
   if (type == "set_name") {
     game.set_name(int_field(obj, "player"), str_field(obj, "name"));
-    return;
+    return std::nullopt;
   }
   if (type == "set_rack_slot") {
     game.set_rack_slot(int_field(obj, "player"), int_field(obj, "slot"), str_field(obj, "letter"));
-    return;
+    return std::nullopt;
   }
   if (type == "clear_rack_slot") {
     game.clear_rack_slot(int_field(obj, "player"), int_field(obj, "slot"));
-    return;
+    return std::nullopt;
   }
   if (type == "pass") {
     game.pass_turn(int_field(obj, "player"));
-    return;
+    return std::nullopt;
   }
   if (type == "exchange") {
     std::vector<int> slots;
@@ -1139,7 +1155,7 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
       }
     }
     game.exchange_turn(int_field(obj, "player"), slots);
-    return;
+    return std::nullopt;
   }
   if (type == "play") {
     boost::json::array placements;
@@ -1147,32 +1163,29 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
     if (it != obj.end() && it->value().is_array()) placements = it->value().as_array();
     game.play_turn(int_field(obj, "player"), int_field(obj, "row"), int_field(obj, "col"),
                    str_field(obj, "dir"), str_field(obj, "word"), placements);
-    return;
+    return std::nullopt;
   }
   if (type == "jump_to_ply") {
     game.jump_to_ply(int_field(obj, "ply"));
-    return;
-  }
-  if (type == "set_opponent_rack_view") {
-    game.set_opponent_rack_view(str_field(obj, "view"));
-    return;
+    return std::nullopt;
   }
   if (type == "fork_game") {
     game.fork_game();
-    return;
+    return std::nullopt;
   }
   if (type == "load_gcg_text") {
     game.load_gcg_text(str_field(obj, "text"), str_field(obj, "file_name"));
-    return;
+    return std::nullopt;
   }
   if (type == "reset") {
     game.reset();
-    return;
+    return std::nullopt;
   }
   if (type == "create_random_game") {
     game.create_random_game();
-    return;
+    return std::nullopt;
   }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -1225,7 +1238,8 @@ int main(int argc, char** argv) {
           continue;
         }
         if (!parsed.is_object()) continue;
-        scribblez::handle_message(game, parsed.as_object());
+        const auto reply = scribblez::handle_message(game, parsed.as_object());
+        if (reply.has_value()) session.send_text(boost::json::serialize(*reply));
         session.send_text(boost::json::serialize(game.state_json()));
       }
     }

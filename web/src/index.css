@@ -484,6 +484,13 @@ h1 {
   cursor: grabbing;
 }
 
+/* A tile drawn after the player's last move, tinted green so it reads apart
+   from the plain wheat of the leave that move left them holding. */
+.rack-tile.drawn-tile {
+  background: #b7d49a;
+  border-color: #7ba85f;
+}
+
 /* Exchange mode: tiles become click-to-toggle, with a highlight ring and
    a small "↻" badge on tiles staged for exchange. */
 .rack-tile.clickable-tile {
@@ -722,6 +729,49 @@ h1 {
   border-color: #aed581;
 }
 
+/* Export-GCG dialog: the radio group choosing how much of the opponent's rack
+   the file's #Rack lines reveal. */
+.gcg-export-note {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #bdc3c7;
+}
+
+.gcg-export-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.gcg-export-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border: 1px solid #4a6278;
+  border-radius: 4px;
+  background: #2c3e50;
+  color: #ecf0f1;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.gcg-export-choice:hover {
+  border-color: #aed581;
+}
+
+.gcg-export-choice input {
+  grid-row: span 2;
+  cursor: pointer;
+}
+
+.gcg-export-choice-hint {
+  font-size: 11px;
+  color: #95a5a6;
+}
+
 /* Manual tool */
 .manual-layout {
   display: flex;
@@ -837,38 +887,6 @@ h1 {
 
 .manual-history-panel {
   margin-top: 12px;
-}
-
-/* Turn History header: the panel title, with the opponent-rack visibility
-   control sharing its line. */
-.manual-history-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.manual-rack-view {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: #bdc3c7;
-}
-
-.manual-rack-view select {
-  padding: 3px 6px;
-  border: 1px solid #4a6278;
-  border-radius: 4px;
-  background: #2c3e50;
-  color: #ecf0f1;
-  font-size: 12px;
-  outline: none;
-}
-
-.manual-rack-view select:focus {
-  border-color: #aed581;
 }
 
 .manual-history {

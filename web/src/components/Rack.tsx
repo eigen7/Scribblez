@@ -85,6 +85,7 @@ const Rack: React.FC<RackProps> = ({
             clickable ? 'clickable-tile' : '',
             selectedForExchange ? 'selected-for-exchange' : '',
             selectedTileIndex === i ? 'selected-rack-slot' : '',
+            t.isDrawn ? 'drawn-tile' : '',
           ]
             .filter(Boolean)
             .join(' ');
@@ -99,6 +100,7 @@ const Rack: React.FC<RackProps> = ({
               onClick={clickable ? () => onTileClick?.(i) : undefined}
               onDragOver={allowSlotDrop ? (e) => e.preventDefault() : undefined}
               onDrop={allowSlotDrop ? (e) => handleSlotDrop(e, i) : undefined}
+              title={t.isDrawn ? 'drawn since this player\'s last move' : undefined}
             >
               <span className="rack-tile-letter">
                 {isBlank ? (showQuestionForBlank ? '?' : '') : t.letter === '?' ? '?' : t.letter}

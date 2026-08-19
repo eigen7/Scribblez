@@ -3,12 +3,13 @@ import { toBlob } from 'html-to-image';
 import Board from './components/Board';
 import Rack from './components/Rack';
 import ScoreBoard from './components/ScoreBoard';
-import { DragTilePayload, PlacedTile } from './types';
+import { DragTilePayload, PlacedTile, TileInfo } from './types';
 
 type ManualDirection = 'horizontal' | 'vertical';
-// How much of the rack of the player yet to move a reviewed turn reveals: none
-// of it, the leave their last move left them, or the whole rack they drew up to.
-type OpponentRackView = 'hidden' | 'leaves' | 'racks';
+// How much of the opponent's rack an exported GCG's #Rack lines reveal. The
+// opponent is the player on turn at the latest position, whose tiles a position
+// exported for study must not give away.
+type GcgOpponentRack = 'full' | 'leave' | 'hidden';
 type CandidateSource = { source: 'bag' } | { source: 'rack'; slot: number };
 type ManualCandidate = PlacedTile & CandidateSource;
 
@@ -16,6 +17,10 @@ interface ManualRackSlot {
   letter: string;
   score: number;
   known: boolean;
+  // Whether the player drew this tile after their own last move. Their leave
+  // and their replenishment are shaded apart, so a reviewed position shows at a
+  // glance which of the tiles they hold their last play accounts for.
+  drawn: boolean;
   // Whether a tile occupies this slot at all. A present-but-unknown slot
   // renders as a "?" tile (selectable for exchange); an absent slot renders as
   // empty space.
@@ -63,17 +68,11 @@ interface UnseenSlot {
   present: boolean;
 }
 
-function rackSlotToTile(slot: ManualRackSlot): {
-  letter: string;
-  score: number;
-  isBlank?: boolean;
-  isUnknown?: boolean;
-  isAbsent?: boolean;
-} {
+function rackSlotToTile(slot: ManualRackSlot): TileInfo {
   if (!slot.present) return { letter: '', score: 0, isAbsent: true };
   if (!slot.known) return { letter: '?', score: 0, isUnknown: true };
-  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true };
-  return { letter: slot.letter, score: slot.score };
+  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true, isDrawn: slot.drawn };
+  return { letter: slot.letter, score: slot.score, isDrawn: slot.drawn };
 }
 
 const DISTRIBUTION: ReadonlyArray<readonly [string, number]> = [
@@ -99,14 +98,29 @@ interface ManualState {
   end_adjustments: EndAdjustment[];
   last_move: [number, number][];
   view_ply: number;
-  opponent_rack_view: OpponentRackView;
   tail_ply: number;
+  // The player on turn at the latest position: the "opponent" whose rack the
+  // GCG export can mask.
+  tail_player: 0 | 1;
   backtracking: boolean;
   game_over: boolean;
   status?: string;
   tile_scores: Record<string, number>;
-  gcg_text: string;
 }
+
+const GCG_OPPONENT_RACK_CHOICES: ReadonlyArray<{
+  value: GcgOpponentRack;
+  label: string;
+  hint: string;
+}> = [
+  { value: 'full', label: 'Full rack', hint: 'every tile, the ones drawn after their last move included' },
+  { value: 'leave', label: 'Leave only', hint: 'what their last move kept; the tiles they drew stay "_"' },
+  { value: 'hidden', label: 'Hidden', hint: 'no #Rack line for them at all' },
+];
+
+// How long to wait for the engine's answer to an export request before giving
+// up on the save.
+const GCG_REQUEST_TIMEOUT_MS = 5000;
 
 interface PlayBuildResult {
   row: number;
@@ -195,9 +209,16 @@ function AppManual() {
     col: number;
     source: CandidateSource;
   } | null>(null);
+  const [gcgExportOpen, setGcgExportOpen] = useState(false);
+  const [gcgOpponentRack, setGcgOpponentRack] = useState<GcgOpponentRack>('full');
   const loadInputRef = useRef<HTMLInputElement | null>(null);
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // The outstanding request for GCG text, resolved by the engine's reply.
+  const gcgRequestRef = useRef<{
+    resolve: (text: string) => void;
+    reject: (error: Error) => void;
+  } | null>(null);
 
   const interactionLocked = !!state?.backtracking;
 
@@ -236,7 +257,10 @@ function AppManual() {
       if (msg.type === 'manual_state') {
         setState(msg as ManualState);
         setStatus((msg as ManualState).status ?? '');
+      } else if (msg.type === 'manual_gcg') {
+        gcgRequestRef.current?.resolve(msg.text ?? '');
       } else if (msg.type === 'manual_error') {
+        gcgRequestRef.current?.reject(new Error(msg.message ?? 'backend error'));
         setStatus(msg.message ?? 'Unknown backend error.');
       }
     };
@@ -595,19 +619,44 @@ function AppManual() {
     setExchangeSelected(new Set());
   };
 
+  // Ask the engine to serialize the game, revealing `opponentRack` of the
+  // opponent's rack. Only one request is outstanding at a time.
+  const requestGcg = useCallback(
+    (opponentRack: GcgOpponentRack) =>
+      new Promise<string>((resolve, reject) => {
+        gcgRequestRef.current?.reject(new Error('superseded by another export'));
+        const timer = window.setTimeout(() => {
+          gcgRequestRef.current = null;
+          reject(new Error('the engine did not answer'));
+        }, GCG_REQUEST_TIMEOUT_MS);
+        const settle = (finish: () => void) => {
+          window.clearTimeout(timer);
+          gcgRequestRef.current = null;
+          finish();
+        };
+        gcgRequestRef.current = {
+          resolve: (text) => settle(() => resolve(text)),
+          reject: (error) => settle(() => reject(error)),
+        };
+        send({ type: 'export_gcg', opponent_rack: opponentRack });
+      }),
+    [send],
+  );
+
   // Save the current game as GCG via the browser's native "Save As" dialog, so
   // the location is a native-filesystem path the user navigates to (like Load
-  // Game's file chooser). The GCG text comes from the engine in the state.
+  // Game's file chooser). The picker opens on this click, before the engine's
+  // text is awaited, so the click's user activation still counts.
   const exportGcg = useCallback(() => {
-    const text = state?.gcg_text ?? '';
+    setGcgExportOpen(false);
     return saveViaPicker(
-      async () => new Blob([text], { type: 'text/plain' }),
+      async () => new Blob([await requestGcg(gcgOpponentRack)], { type: 'text/plain' }),
       `${exportBase}.gcg`,
       { 'text/plain': ['.gcg'] },
       'GCG',
       setStatus,
     );
-  }, [state?.gcg_text, exportBase]);
+  }, [requestGcg, gcgOpponentRack, exportBase]);
 
   // Render the board + racks + history + sidebar to a PNG matching the
   // on-screen look, and save it via the same native dialog. The page title is
@@ -850,7 +899,7 @@ function AppManual() {
           <div className="action-bar manual-secondary-actions">
             <button className="btn btn-submit" onClick={forkGame}>Fork Game</button>
             <button className="btn btn-pass" onClick={triggerLoad}>Load Game</button>
-            <button className="btn btn-exchange" onClick={exportGcg}>Export GCG</button>
+            <button className="btn btn-exchange" onClick={() => setGcgExportOpen(true)}>Export GCG</button>
             <button className="btn btn-exchange" onClick={exportPng}>Export PNG</button>
             <input
               ref={loadInputRef}
@@ -866,21 +915,8 @@ function AppManual() {
           </div>
 
           <div className="move-list manual-history-panel">
-            <div className="move-list-header manual-history-header">
+            <div className="move-list-header">
               <h3>Turn History ({state.turns.length})</h3>
-              <label className="manual-rack-view">
-                Opponent rack:
-                <select
-                  value={state.opponent_rack_view}
-                  onChange={(e) =>
-                    send({ type: 'set_opponent_rack_view', view: e.target.value as OpponentRackView })
-                  }
-                >
-                  <option value="hidden">Hidden</option>
-                  <option value="leaves">Open leaves</option>
-                  <option value="racks">Open racks</option>
-                </select>
-              </label>
             </div>
             <div className="manual-history">
               <button
@@ -971,6 +1007,39 @@ function AppManual() {
           </div>
         </div>
       </div>
+
+      {gcgExportOpen && (
+        <div className="modal-overlay" onClick={() => setGcgExportOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Export GCG</h3>
+            <p className="gcg-export-note">
+              How much of {state.player_names[state.tail_player]}'s rack &mdash; the player on turn
+              &mdash; the file's #Rack lines reveal:
+            </p>
+            <div className="gcg-export-choices">
+              {GCG_OPPONENT_RACK_CHOICES.map(({ value, label, hint }) => (
+                <label key={value} className="gcg-export-choice">
+                  <input
+                    type="radio"
+                    name="gcg-opponent-rack"
+                    value={value}
+                    checked={gcgOpponentRack === value}
+                    onChange={() => setGcgOpponentRack(value)}
+                  />
+                  <span className="gcg-export-choice-label">{label}</span>
+                  <span className="gcg-export-choice-hint">{hint}</span>
+                </label>
+              ))}
+            </div>
+            <div className="action-bar">
+              <button className="btn btn-submit" onClick={exportGcg}>Export</button>
+              <button className="btn btn-clear" onClick={() => setGcgExportOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {blankPending && (
         <div className="modal-overlay" onClick={() => setBlankPending(null)}>
