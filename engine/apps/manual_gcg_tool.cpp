@@ -73,6 +73,48 @@ RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   return display;
 }
 
+// How much of the rack of the player yet to move a reviewed position reveals.
+// That player's leave -- the tiles they kept from their own last move -- was
+// deducible from that move; the tiles they drew to replace what they played
+// were not.
+enum class OpponentRackView : uint8_t { HIDDEN, LEAVES, RACKS };
+
+constexpr const char* kOpponentRackViewNames[] = {"hidden", "leaves", "racks"};
+
+const char* opponent_rack_view_name(OpponentRackView view) {
+  return kOpponentRackViewNames[int(view)];
+}
+
+std::optional<OpponentRackView> parse_opponent_rack_view(const std::string& name) {
+  for (std::size_t i = 0; i < std::size(kOpponentRackViewNames); ++i) {
+    if (name == kOpponentRackViewNames[i]) return OpponentRackView(i);
+  }
+  return std::nullopt;
+}
+
+// The revealed tiles of a rack display, as counts.
+TileCounts known_tiles(const RackDisplay& display) {
+  TileCounts counts;
+  for (const DisplaySlot& slot : display) {
+    if (slot.state == RackSlotState::KNOWN) counts.add(slot.tile);
+  }
+  return counts;
+}
+
+// `display` with every revealed tile that `revealed` does not cover turned back
+// into a hidden "?" slot -- each tile stays revealed at most as many times as
+// `revealed` holds it. Empty slots are left alone, so a hidden rack still shows
+// how many tiles it holds.
+RackDisplay hide_beyond(const RackDisplay& display, TileCounts revealed) {
+  RackDisplay out = display;
+  for (DisplaySlot& slot : out) {
+    if (slot.state != RackSlotState::KNOWN) continue;
+    if (revealed.remove(slot.tile)) continue;
+    slot = {RackSlotState::UNKNOWN, EMPTY_SQUARE};
+  }
+  return out;
+}
+
 struct ManualTurn {
   TurnRecord record;
   bool include_rack_before = false;
@@ -293,7 +335,7 @@ class ManualGame {
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
     const int bag_count = bag_estimate(snap.board);
-    const std::array<RackDisplay, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
+    const std::array<RackDisplay, 2> display_racks = visible_racks_for_view();
 
     boost::json::object o;
     o["type"] = "manual_state";
@@ -310,6 +352,7 @@ class ManualGame {
     o["gcg_text"] = build_gcg();
     o["tile_scores"] = tile_score_map();
     o["view_ply"] = view_ply_;
+    o["opponent_rack_view"] = opponent_rack_view_name(opponent_rack_view_);
     o["tail_ply"] = int(turns_.size());
     o["backtracking"] = is_backtracking();
     o["game_over"] = !end_adjustments_.empty();
@@ -653,6 +696,15 @@ class ManualGame {
     }
   }
 
+  void set_opponent_rack_view(const std::string& name) {
+    const std::optional<OpponentRackView> view = parse_opponent_rack_view(name);
+    if (!view.has_value()) {
+      status_ = "Unknown opponent rack view";
+      return;
+    }
+    opponent_rack_view_ = view.value();
+  }
+
   void fork_game() {
     if (!is_backtracking()) {
       status_ = "Already at latest position";
@@ -919,6 +971,38 @@ class ManualGame {
     }
   }
 
+  // The racks as shown for the viewed position: the reconstructed racks, less
+  // whatever `opponent_rack_view_` hides. Hiding applies only while reviewing an
+  // earlier turn -- at the latest position both racks are the ones the user
+  // enters and plays from, so they always show in full.
+  std::array<RackDisplay, 2> visible_racks_for_view() const {
+    const ManualSnapshot& snap = snapshots_[view_ply_];
+    std::array<RackDisplay, 2> out = display_racks_for_view(view_ply_, snap.racks);
+    if (!is_backtracking() || opponent_rack_view_ == OpponentRackView::RACKS) return out;
+
+    // The hidden rack belongs to the player yet to move: the viewed position is
+    // the one the mover just created, and it is the mover's play that is under
+    // review, so the rack unseen from where they sat is the one still to move.
+    // The mover's own rack keeps showing the leave their move produced.
+    const int opponent = snap.turn_player;
+    const TileCounts revealed = opponent_rack_view_ == OpponentRackView::LEAVES
+                                  ? deducible_leave(opponent, view_ply_)
+                                  : TileCounts();
+    out[opponent] = hide_beyond(out[opponent], revealed);
+    return out;
+  }
+
+  // The tiles `player` kept from their own last move before `ply`: their leave,
+  // which their move revealed without revealing what they drew to replace what
+  // it used. Empty before the player's first turn.
+  TileCounts deducible_leave(int player, int ply) const {
+    for (int i = ply - 1; i >= 0; --i) {
+      if (turns_[i].record.player != player) continue;
+      return known_tiles(post_move_rack_from_turn(turns_[i]));
+    }
+    return TileCounts();
+  }
+
   std::array<RackDisplay, 2> display_racks_for_view(
     int view_ply, const std::array<RackSlots, 2>& fallback) const {
     // An unrevealed slot of a rack we have no count for is assumed to be a held
@@ -1024,6 +1108,7 @@ class ManualGame {
   std::vector<ParsedGcgEndAdjustment> end_adjustments_;
   int view_ply_ = 0;
   int turn_player_ = 0;
+  OpponentRackView opponent_rack_view_ = OpponentRackView::HIDDEN;
   std::string status_;
 };
 
@@ -1066,6 +1151,10 @@ void handle_message(ManualGame& game, const boost::json::object& obj) {
   }
   if (type == "jump_to_ply") {
     game.jump_to_ply(int_field(obj, "ply"));
+    return;
+  }
+  if (type == "set_opponent_rack_view") {
+    game.set_opponent_rack_view(str_field(obj, "view"));
     return;
   }
   if (type == "fork_game") {
