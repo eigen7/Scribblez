@@ -47,10 +47,12 @@ and workload-specific analysis — all from the browser.
   seconds. That pass is the only thing that talks to a machine or the cloud
   API, and it does so off the event loop; every status request is served from
   what it last observed, so no slow host can stall the dashboard. A slot the
-  pass has not reached yet reads `checking`. A container that is not running
-  carries its reason -- exit code and last log line -- into the workers table,
-  and one that keeps dying is retried with a growing delay rather than every
-  pass.
+  pass has not reached yet reads `checking`, and one whose container does not
+  exist yet reads `starting` — which lasts as long as taking the image does on
+  a machine that has never run one. A container that is not running carries its
+  reason — exit code and last log line, or why its creation failed — into the
+  workers table, and one that keeps dying is retried with a growing delay
+  rather than every pass.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as
@@ -110,7 +112,10 @@ An ssh slot's machine is prepared once, by hand:
   see `registry.worker_image` in the credentials file) then
   `docker pull <worker image>`. Containers start with `--pull=never`, so a
   missing image is an instant, actionable error rather than a long pull
-  blocking the dashboard.
+  blocking the dashboard — creating one takes the current image first, as its
+  own step. That step is why a machine's first Start sits in `starting` for
+  minutes: the image is several gigabytes, and doing this pull by hand
+  beforehand is what turns that into a fast start.
 
 Slots then behave like pods: the machine's CPU arch picks its bundle (generic
 `x86-64` fallback), which the machine still fetches from the bucket at

@@ -46,7 +46,7 @@ from cloud.bundles import deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from cloud.ssh_machine import SshMachine
+from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, sweep_stopped
 from scripts.cloud_fleet import (
     CpuResources,
@@ -233,7 +233,16 @@ def _ssh_state(desired: str, probe: str, gated: bool) -> str:
     state rather than a guess either way: the machine may be powered off with
     the worker gone, or merely off the network with the worker still running.
     A gated slot reads `waiting` whether its container is paused (the usual
-    case) or still winding down."""
+    case) or still winding down.
+
+    A slot that should be running and has no container is `starting`, not
+    `exited`: the two probe states mean different things to whoever is
+    watching. `stopped` is a container that ran and died, which is the alarm
+    the word carries; `missing` is one that does not exist yet, which is the
+    ordinary state of a slot between the operator's Start and the moment its
+    container exists -- and that is not a moment, it is however long the
+    machine takes to pull an image measured in gigabytes. Reading that as
+    `exited` announced a dead worker every time one was created."""
     if probe == "unknown":
         return "checking"
     if gated:
@@ -242,6 +251,8 @@ def _ssh_state(desired: str, probe: str, gated: bool) -> str:
         return "unreachable"
     if desired == "paused":
         return "stopping" if probe in ("running", "paused") else "paused"
+    if probe == "missing":
+        return "starting"
     return "running" if probe == "running" else "exited"
 
 
@@ -474,8 +485,11 @@ class WorkerManager:
             self._exits[key] = SshMachine(w.host).container_exit(
                 _container_name(spec, tag, w.worker_id)
             )
-        else:
+        elif probe in ("running", "paused"):
             self._exits.pop(key, None)
+        # A probe that finds no container clears nothing: what it is likely to
+        # find is a slot whose creation failed, and that failure is the only
+        # account of why it is not running.
         if probe == "running":
             self._restarts.pop(key, None)  # it came up; it is not looping
         if probe == "unreachable":
@@ -531,16 +545,26 @@ class WorkerManager:
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = SshMachine(w.host)
-        # Creating a container is the moment to take a rebuilt worker image;
-        # `docker run --pull=never` below then fails fast rather than pulling
-        # under the dashboard.
-        machine.pull_image(creds.registry.worker_image)
-        machine.run_container(
-            _container_name(spec, task.tag, w.worker_id),
-            creds.registry.worker_image,
-            env,
-            gpus=spec.role(w.role).gpu,
-        )
+        key = _key(spec, task.tag, w.worker_id)
+        try:
+            # Creating a container is the moment to take a rebuilt worker
+            # image; `docker run --pull=never` below then fails fast rather
+            # than pulling under the dashboard.
+            machine.pull_image(creds.registry.worker_image)
+            machine.run_container(
+                _container_name(spec, task.tag, w.worker_id),
+                creds.registry.worker_image,
+                env,
+                gpus=spec.role(w.role).gpu,
+            )
+        except SshMachineError as e:
+            # The slot will read `starting` until this succeeds, since nothing
+            # of it exists to have exited. Recording why keeps that from being
+            # the whole story a machine that cannot serve the role ever tells:
+            # a missing NVIDIA toolkit, an image nobody logged in to pull.
+            self._exits[key] = str(e)
+            raise
+        self._exits.pop(key, None)
         w.launched = True
         w.undelivered = 0  # a container just created is holding nothing
         tasks.save_task(spec, task)

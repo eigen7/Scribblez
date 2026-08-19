@@ -673,6 +673,42 @@ def test_reconcile_dispatches_to_running_slots_only(manager, tmp_path, monkeypat
     assert not paths.match_inbox_dir("local-1").exists()
 
 
+def test_a_slot_being_created_reads_as_starting_not_exited(manager, spec, task, monkeypatch):
+    """What the operator sees between pressing Start and the container
+    existing -- on a machine taking a new image, minutes of it."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    _FakeSshMachine.state = "missing"
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched = "running", False
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "starting"
+
+
+def test_a_creation_that_failed_says_why(manager, spec, task, monkeypatch):
+    """A slot whose container cannot be created reads `starting` forever,
+    since nothing of it exists to have exited. The reason is the only account
+    of that, so a probe finding no container must not wipe it."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    _FakeSshMachine.state = "missing"
+
+    def refuse(self, image):
+        raise SshMachineError("user@laptop: pulling scribblez failed: no basic auth credentials")
+
+    monkeypatch.setattr(_FakeSshMachine, "pull_image", refuse, raising=False)
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state = "running"
+    with pytest.raises(SshMachineError):
+        manager._run_ssh_container(spec, task, w)
+
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "starting"
+    assert "no basic auth credentials" in info["exit_reason"]
+
+
 def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
     """A container for a GPU role is run with --gpus: the match-eval worker
     plays a neural agent, which needs the machine's GPU (and the worker image
