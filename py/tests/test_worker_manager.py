@@ -274,10 +274,35 @@ def test_a_redeployed_task_replaces_its_ssh_container(manager, spec, task, monke
         lambda self, spec, task, w: recreated.append(w.worker_id),
     )
     w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] = 0
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
     assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
     assert recreated == [w.worker_id]
+
+
+def test_a_container_still_holding_output_is_drained_before_it_is_replaced(
+    manager, spec, task, monkeypatch
+):
+    """Replacing a container discards whatever it never handed over. Starting
+    it is what lets the next passes collect from it -- a pull needs it
+    running -- and the replacement waits for a collection to report zero."""
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    manager._undelivered[workers_mod._key(spec, task.tag, w.worker_id)] = 900
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["start"]
+
+
+def test_a_container_of_unknown_backlog_is_not_replaced_either(manager, spec, task, monkeypatch):
+    """No collection has reported on it (the dashboard restarted, say), so
+    nothing is known about what it holds -- which is not the same as empty."""
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["start"]
 
 
 def test_intent_separates_a_gate_from_an_operator_pause():

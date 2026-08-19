@@ -270,6 +270,10 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
+        # Slot key -> delivered files its container still holds, as of the last
+        # collection. Replacing a container discards whatever it has not handed
+        # over, so this is what says when that is safe.
+        self._undelivered: dict[str, int] = {}
         # (pods by id, when listed), the cloud counterpart of _probes.
         self._pods: tuple[dict, float] = ({}, 0.0)
         # Where every blocking step runs (see _offload). One thread: the point
@@ -689,6 +693,9 @@ class WorkerManager:
                 info["state"] = _ssh_state(w.desired_state, probe, gated)
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {w.host}"
+                waiting = self._undelivered.get(_key(spec, task.tag, w.worker_id))
+                if waiting:
+                    info["undelivered"] = waiting
                 reason = self._exits.get(_key(spec, task.tag, w.worker_id))
                 if reason and not alive:
                     info["exit_reason"] = reason
@@ -843,13 +850,15 @@ class WorkerManager:
             self._ensure_sync(spec, task)
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Read slot `w`'s finished outputs out of its container into the tag."""
+        """Read a batch of slot `w`'s finished outputs out of its container
+        into the tag, and remember how much it still holds."""
         paths = spec.paths(task.tag)
-        pull_results(
+        result = pull_results(
             SshMachine(w.host), _container_name(spec, task.tag, w.worker_id),
             remote_root=str(paths.root), local_root=paths.root,
             data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
         )  # fmt: skip
+        self._undelivered[_key(spec, task.tag, w.worker_id)] = result.remaining
 
     def _tick_scheduler(self, spec, task: tasks.TaskRecord):
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
@@ -909,9 +918,16 @@ class WorkerManager:
             elif probe == "stopped" and w.bundle_id != task.bundle_id:
                 # Redeployed since this container was created. Its bundle is
                 # fixed in the environment it was created with, so the slot
-                # joins the task's new bundle by being replaced, not restarted.
-                machine.remove_container(name)
-                self._run_ssh_container(spec, task, w)
+                # joins the task's new bundle by being replaced, not restarted
+                # -- but only once a collection has confirmed it is holding
+                # nothing, since replacing it discards whatever it still has.
+                # Otherwise start it, which is what lets the next passes drain
+                # it (collection needs a running container).
+                if self._undelivered.get(key) == 0:
+                    machine.remove_container(name)
+                    self._run_ssh_container(spec, task, w)
+                else:
+                    machine.start_container(name)
             elif probe == "stopped":
                 machine.start_container(name)
         elif intent == PARK and probe == "running":

@@ -114,9 +114,13 @@ startup, and the reconcile loop restarts a container that died (e.g. the
 machine rebooted); the machine pulls the current worker image as part of
 creating one, so a rebuilt image reaches it without anyone logging in.
 Results go the other way -- collected over ssh rather than
-uploaded -- so nothing but the bundle fetch touches R2. Delivered chunks are
-deleted from the container only once they are safely on the controller's disk;
-what a container has not yet handed over goes with it if the slot is removed. A scheduler gate parks the container by pausing it rather than
+uploaded -- so nothing but the bundle fetch touches R2. Each pass collects a
+bounded batch, so a backlog drains at a steady rate instead of each attempt
+having to move everything that has piled up; the workers table shows what a
+container is still holding. Delivered chunks are deleted from it only once
+they are safely on the controller's disk, and a container is replaced (after a
+redeploy) only once it has handed everything over -- but one that is *removed*
+takes its undelivered output with it. A scheduler gate parks the container by pausing it rather than
 stopping it, so a gate that flips every minute costs nothing: no bundle
 refetch, and the chunk in flight survives. An operator pause still stops it
 (cleanly, flushing completed output). The bundle itself is deployed for you -- a task builds and pushes

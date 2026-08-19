@@ -16,7 +16,7 @@ type WorkerInfo = {
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
-  gate_reason?: string; bundle_id: string | null; exit_reason?: string;
+  gate_reason?: string; bundle_id: string | null; exit_reason?: string; undelivered?: number;
 };
 
 // A slot still on the bundle the task has moved off: it gets replaced with one
@@ -551,6 +551,14 @@ function WorkersTable({ workers, taskBundle, onAction }: {
               <td style={{ padding: '6px 14px 6px 0' }}>{w.kind}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>
                 {workerResources(w)}
+                {w.undelivered != null && (
+                  <span
+                    style={{ color: '#a05a00' }}
+                    title="finished output the container still holds; collected a batch per pass"
+                  >
+                    {' '}· {w.undelivered} pending
+                  </span>
+                )}
                 {onOldBundle(w, taskBundle) && (
                   <span style={{ color: '#a05a00' }} title={`created on bundle ${w.bundle_id}`}>
                     {' '}· old bundle
