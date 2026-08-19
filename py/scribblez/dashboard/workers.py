@@ -83,13 +83,6 @@ SSH_REPROBE_SECONDS = 30.0
 # reset the moment one is observed running.
 MAX_RESTART_BACKOFF_SECONDS = 300.0
 
-# Starts that never produced a running container before one on a bundle the
-# task has moved past is replaced anyway. Collecting needs a container that
-# stays up, so one that will not cannot be drained the efficient way -- and
-# restarting it forever puts the redeploy that would fix whatever it is dying
-# of permanently out of reach. It is swept whole first, so nothing is lost.
-REPLACE_AFTER_FAILED_STARTS = 3
-
 # How long an observation of a container or pod stands in for a fresh one.
 # Only the reconcile pass observes; status requests read what it left, so a
 # browser polling every 3 seconds costs no ssh round trips at all.
@@ -100,6 +93,20 @@ OBSERVATION_TTL_SECONDS = 5.0
 # "park" and "stop" both mean not-working; they differ in how much of the
 # worker survives it, which matters where restarting is expensive.
 RUN, PARK, STOP = "run", "park", "stop"
+
+
+def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
+    """Where slot `w`'s output lives, on both machines. The container runs the
+    controller's own layout under the same mount root, so the two roots read
+    alike -- but they are different machines' paths, and both collection paths
+    (a batched pull, a sweep of a stopped container) need all four."""
+    paths = spec.paths(task.tag)
+    return {
+        "container": _container_name(spec, task.tag, w.worker_id),
+        "remote_root": str(paths.root),
+        "local_root": paths.root,
+        "data_dirs": [f"data/{sub}" for sub in spec.sync_data_dirs],
+    }
 
 
 def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
@@ -477,11 +484,6 @@ class WorkerManager:
         if not w.launched and probe == "unreachable":
             return "missing"
         return probe
-
-    def _failed_starts(self, key: str) -> int:
-        """Consecutive starts of this slot's container that never produced one
-        observed running (the count is dropped the moment one does)."""
-        return self._restarts.get(key, (0, 0.0))[0]
 
     def _restart_allowed(self, key: str) -> bool:
         """Whether slot `key` may be (re)started now. A container that keeps
@@ -871,18 +873,13 @@ class WorkerManager:
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Read a batch of slot `w`'s finished outputs out of its container
         into the tag, and remember how much it still holds."""
-        paths = spec.paths(task.tag)
         # Unknown until this pull says otherwise. A collection that fails --
         # a link slow enough to keep hitting the transfer timeout, say, while
         # the far cheaper probe still reports the container running -- must not
         # leave the last count standing in for knowledge: it would go on
         # claiming "drained" while the container fills up.
         w.undelivered = None
-        result = pull_results(
-            SshMachine(w.host), _container_name(spec, task.tag, w.worker_id),
-            remote_root=str(paths.root), local_root=paths.root,
-            data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
-        )  # fmt: skip
+        result = pull_results(SshMachine(w.host), **_transfer_target(spec, task, w))
         w.undelivered = result.remaining
         tasks.save_task(spec, task)
 
@@ -962,17 +959,15 @@ class WorkerManager:
         collection has reported the container empty -- and a container holding
         output is started instead, which is what lets the next passes drain it.
 
-        A container that will not stay up is never collected from, so it would
-        wait forever; after enough failed starts it is replaced regardless,
-        having been swept first.
+        A container that will not stay up is never collected from, so its count
+        never falls to zero and it is never replaced here: it goes on being
+        restarted, visibly, on the bundle it has. Recovering it means deciding
+        to discard whatever it holds -- an amount nothing can measure once it
+        stops staying up -- which is the operator's call from the workers
+        table, where Remove says what would go, and not one to make
+        automatically.
         """
-        key = _key(spec, task.tag, w.worker_id)
-        # The count includes the attempt being made now, so the replacement is
-        # what happens after REPLACE_AFTER_FAILED_STARTS starts have failed.
-        stuck = (
-            w.bundle_id != task.bundle_id and self._failed_starts(key) > REPLACE_AFTER_FAILED_STARTS
-        )
-        if probe == "stopped" and not (_replaceable(w, task) or stuck):
+        if probe == "stopped" and not _replaceable(w, task):
             machine.start_container(name)
             return
         if probe == "stopped":
@@ -986,12 +981,7 @@ class WorkerManager:
 
     def _sweep_ssh(self, machine, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Collect from a stopped container, the last chance to do so."""
-        paths = spec.paths(task.tag)
-        sweep_stopped(
-            machine, _container_name(spec, task.tag, w.worker_id),
-            remote_root=str(paths.root), local_root=paths.root,
-            data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
-        )  # fmt: skip
+        sweep_stopped(machine, **_transfer_target(spec, task, w))
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);

@@ -8,6 +8,7 @@ filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 import subprocess
 
 import pytest
+from cloud.ssh_machine import SshMachineError
 from cloud.ssh_transfer import (
     BATCH,
     INCOMING_DIR,
@@ -213,9 +214,10 @@ def test_a_sweep_reads_a_stopped_container_and_places_files_where_they_belong(tm
         tar.addfile(info, io.BytesIO(b"flush"))
 
     class _Stopped:
-        def copy_from_container(self, container, path):
+        def copy_from_container(self, container, path, dest):
             assert path.endswith("/data/staging")
-            return payload.getvalue()
+            dest.write_bytes(payload.getvalue())
+            return True
 
     local = tmp_path / "local"
     local.mkdir()
@@ -224,12 +226,14 @@ def test_a_sweep_reads_a_stopped_container_and_places_files_where_they_belong(tm
     )
     assert names == ["data/staging/c1-ssh-0.slog"]
     assert (local / "data/staging/c1-ssh-0.slog").read_text() == "flush"
+    # The archive it streamed through is not left behind.
+    assert not list((local / INCOMING_DIR).glob("sweep-*"))
 
 
 def test_a_sweep_of_a_container_with_nothing_in_it_is_empty(tmp_path):
     class _Empty:
-        def copy_from_container(self, container, path):
-            return b""  # the path is not there at all
+        def copy_from_container(self, container, path, dest):
+            return False  # the path is not there at all
 
     local = tmp_path / "local"
     local.mkdir()
@@ -237,6 +241,22 @@ def test_a_sweep_of_a_container_with_nothing_in_it_is_empty(tmp_path):
         sweep_stopped(_Empty(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
         == []
     )
+
+
+def test_a_sweep_that_fails_midway_leaves_no_archive_behind(tmp_path):
+    """The stream lands in a file so it need not be held in memory; a failed
+    sweep must not leave that file in the tag either."""
+
+    class _Broken:
+        def copy_from_container(self, container, path, dest):
+            dest.write_bytes(b"partial")
+            raise SshMachineError("connection reset")
+
+    local = tmp_path / "local"
+    local.mkdir()
+    with pytest.raises(SshMachineError):
+        sweep_stopped(_Broken(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
+    assert not list((local / INCOMING_DIR).glob("sweep-*"))
 
 
 def test_an_unparseable_listing_is_reported_as_unknown(tmp_path):

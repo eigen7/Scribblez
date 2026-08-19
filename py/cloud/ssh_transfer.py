@@ -127,15 +127,18 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
     ]
 
 
-def _extract(archive: bytes, root: Path, mode: str = "r:gz", prefix: str = "") -> list[str]:
-    """Unpack `archive` under `root`, atomically per file, returning the paths
-    written relative to `root`. `prefix` is prepended to each member name, for
-    an archive that does not already name things the way this tree does."""
-    if not archive:
-        return []
+def _extract(archive, root: Path, mode: str = "r:gz", prefix: str = "") -> list[str]:
+    """Unpack `archive` -- bytes, or a file object to read as a stream -- under
+    `root`, atomically per file, returning the paths written relative to
+    `root`. `prefix` is prepended to each member name, for an archive that does
+    not already name things the way this tree does."""
+    if isinstance(archive, bytes):
+        if not archive:
+            return []
+        archive = BytesIO(archive)
     names = []
-    with tarfile.open(fileobj=BytesIO(archive), mode=mode) as tar:
-        for member in tar.getmembers():
+    with tarfile.open(fileobj=archive, mode=mode) as tar:
+        for member in tar:
             if not member.isfile():
                 continue
             name = f"{prefix}{member.name}"
@@ -160,15 +163,32 @@ def sweep_stopped(
     there it would go into the bin with the container. `docker cp` reads a
     stopped one, so this is the last look before a replacement.
 
-    Unbounded by design: a container is only stopped for replacement once a
-    collection has reported it empty, so what a sweep finds is one worker's
-    dying gasp rather than a backlog.
+    Takes the directory whole rather than in batches, because a stopped
+    container cannot be asked what is in it. That is affordable only because a
+    container is stopped for replacement solely after a collection reported it
+    empty, so a sweep finds one worker's dying gasp: were something ever to
+    replace a container holding a backlog, this would be moving gigabytes in
+    one call. It streams through a file rather than memory even so -- the size
+    is a remote machine's business, not something to hold in the dashboard.
+    Uncompressed, unlike a collection: what a sweep moves is a couple of
+    megabytes, and the shell pipeline that would compress it costs the ability
+    to tell a failed copy from an empty one (see copy_from_container).
     """
     names = []
+    incoming = local_root / INCOMING_DIR
+    incoming.mkdir(parents=True, exist_ok=True)
     for data_dir in data_dirs:
-        archive = machine.copy_from_container(container, f"{remote_root}/{data_dir}")
-        # docker cp names members relative to the copied directory's parent.
-        names += _extract(archive, local_root, mode="r:", prefix=f"{Path(data_dir).parent}/")
+        archive = incoming / f"sweep-{Path(data_dir).name}.tar"
+        try:
+            path = f"{remote_root}/{data_dir}"
+            if not machine.copy_from_container(container, path, archive):
+                continue
+            with open(archive, "rb") as stream:
+                # docker cp names members relative to the copied directory's
+                # parent, and "r|" reads without holding the archive.
+                names += _extract(stream, local_root, mode="r|", prefix=f"{Path(data_dir).parent}/")
+        finally:
+            archive.unlink(missing_ok=True)
     return names
 
 

@@ -25,6 +25,7 @@ bootstrap, costs a minute of every cycle and discards the chunk in flight).
 
 import shlex
 import subprocess
+from pathlib import Path
 
 # ConnectTimeout bounds how long an unreachable host can stall a probe;
 # ControlMaster/ControlPersist multiplex every call onto one shared connection,
@@ -49,6 +50,19 @@ _MUTATE_TIMEOUT = 90
 # A first pull of the worker image moves a gigabyte or so of NVIDIA runtime
 # over a home connection.
 _PULL_TIMEOUT = 1800
+
+# How `docker cp` says the path is not in the container, which is a legitimate
+# empty answer rather than a failure. Two spellings because the message was
+# reworded: the first is what Docker 29 emits (checked against the fleet), the
+# second what older versions did. Matching too narrowly here would turn "this
+# worker produced nothing" into an error that blocks its replacement forever.
+_PATH_NOT_IN_CONTAINER = ("Could not find the file", "No such container:path")
+
+# Reading a container's output directory out of it. Generous because it is the
+# last look at a container about to be destroyed and there is no way to ask how
+# much there is first -- and because failing means the replacement is cancelled
+# and the whole copy is repeated next pass.
+_COPY_TIMEOUT = 1800
 
 
 class SshMachineError(Exception):
@@ -145,25 +159,49 @@ class SshMachine:
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: pulling {image} failed: {res.stderr.strip()}")
 
-    def copy_from_container(self, name: str, path: str) -> bytes:
+    def copy_from_container(self, name: str, path: str, dest: Path) -> bool:
         """`path` out of container `name`, as a tar stream whose member names
         are relative to its parent. Unlike exec, this works on a container that
         is stopped -- the only way to read what a worker flushed on its way
-        down. A path the container does not have is empty, not an error."""
-        try:
-            res = subprocess.run(
-                self.argv(["docker", "cp", f"{name}:{path}", "-"]),
-                capture_output=True,
-                timeout=_PULL_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            raise SshMachineError(f"{self.host}: copying {path} from {name} timed out") from None
+        down. A path the container does not have is empty, not an error: a
+        worker that died before producing anything never made its output
+        directory, and that must not be mistaken for a failure to read it.
+
+        Anything else raises, which is the safe direction: the caller sweeps a
+        container in order to destroy it, so a read that failed for a reason
+        nobody recognised must stop that, not look like "nothing there".
+
+        The stream is written to `dest` rather than returned, because its size
+        is the container's whole output directory and holding that in the
+        dashboard's memory is not something this can promise about a machine it
+        does not control.
+
+        Uncompressed, unlike a collection: piping through gzip would put the
+        pipeline's exit status in gzip's hands rather than docker's, and gzip
+        exits happily on the empty stream a failed `docker cp` hands it -- so a
+        real error would arrive here as "nothing there", which is the one
+        answer that lets the caller destroy the container. `set -o pipefail`
+        would settle it, but the fleet's /bin/sh is dash, which has no such
+        option. What is not compressed is one worker's dying gasp; see
+        ssh_transfer.sweep_stopped. Returns whether anything was written."""
+        with open(dest, "wb") as out:
+            try:
+                res = subprocess.run(
+                    self.argv(["docker", "cp", f"{name}:{path}", "-"]),
+                    stdout=out,
+                    stderr=subprocess.PIPE,
+                    timeout=_COPY_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                raise SshMachineError(
+                    f"{self.host}: copying {path} from {name} timed out"
+                ) from None
+        if res.returncode == 0:
+            return dest.stat().st_size > 0
         stderr = res.stderr.decode(errors="replace")
-        if res.returncode != 0:
-            if "No such container:path" in stderr:
-                return b""
-            raise SshMachineError(f"{self.host}: {stderr.strip()}")
-        return res.stdout
+        if any(phrase in stderr for phrase in _PATH_NOT_IN_CONTAINER):
+            return False
+        raise SshMachineError(f"{self.host}: {stderr.strip()}")
 
     def run_container(self, name: str, image: str, env: dict[str, str]):
         """Create + start container `name` from `image`. The environment

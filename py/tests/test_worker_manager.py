@@ -251,9 +251,9 @@ class _RecordingSshMachine(_FakeSshMachine):
     def run_container(self, name, image, env):
         self.ops.append(("run", name))
 
-    def copy_from_container(self, name, path):
+    def copy_from_container(self, name, path, dest):
         self.ops.append(("copy", path))
-        return b""
+        return False
 
     def pause_container(self, name):
         self.ops.append(("pause", name))
@@ -659,7 +659,7 @@ def test_a_container_is_not_destroyed_when_its_final_sweep_fails(manager, spec, 
     Leaving the slot on the old bundle is recoverable; the output is not."""
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
 
-    def boom(self, name, path):
+    def boom(self, name, path, dest):
         raise SshMachineError("connection reset")
 
     monkeypatch.setattr(_RecordingSshMachine, "copy_from_container", boom)
@@ -671,48 +671,23 @@ def test_a_container_is_not_destroyed_when_its_final_sweep_fails(manager, spec, 
     assert _RecordingSshMachine.ops == []  # nothing removed
 
 
-def test_a_crashlooping_container_on_an_old_bundle_is_eventually_swept_and_replaced(
-    manager, spec, task, monkeypatch
-):
-    """It ran long enough to accumulate a backlog and then stopped staying up,
-    so no collection can reach it and the count never falls to zero. Restarting
-    it forever would put the redeploy -- often the fix for whatever it is dying
-    of -- permanently out of reach."""
-    recreated = []
-    monkeypatch.setattr(
-        WorkerManager,
-        "_run_ssh_container",
-        lambda self, spec, task, w: recreated.append(w.worker_id),
-    )
-    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
-    w.undelivered = 40  # what the last collection that could run saw
-    key = workers_mod._key(spec, task.tag, w.worker_id)
-    stopped = {"observed_running": False, "ssh_probe": "stopped"}
-
-    for attempt in range(workers_mod.REPLACE_AFTER_FAILED_STARTS):
-        manager._restarts[key] = (attempt, 0.0)  # backoff elapsed
-        manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["start"] * 3
-    assert recreated == []
-
-    manager._restarts[key] = (workers_mod.REPLACE_AFTER_FAILED_STARTS, 0.0)
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    # Swept before it goes, so its backlog is not the price of recovering.
-    assert [op for op, _ in _RecordingSshMachine.ops][-2:] == ["copy", "remove"]
-    assert recreated == [w.worker_id]
-
-
-def test_a_crashlooping_container_on_the_task_bundle_is_only_restarted(
-    manager, spec, task, monkeypatch
-):
-    """Replacing it would produce an identical container; the backoff is the
-    whole response."""
+def test_a_crashlooping_container_is_restarted_not_destroyed(manager, spec, task, monkeypatch):
+    """It ran long enough to hold a backlog and then stopped staying up, so
+    nothing can collect from it and nothing can measure what it holds.
+    Recovering the slot means discarding that, which is the operator's call --
+    the workers table shows the reason it is down and Remove says what would
+    go. An automatic replacement here would be this PR's own bug, wearing the
+    disguise of a repair."""
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
-    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b1")
-    w.undelivered = 40
-    key = workers_mod._key(spec, task.tag, w.worker_id)
-    stopped = {"observed_running": False, "ssh_probe": "stopped"}
-    for attempt in range(workers_mod.REPLACE_AFTER_FAILED_STARTS + 3):
-        manager._restarts[key] = (attempt, 0.0)
-        manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert {op for op, _ in _RecordingSshMachine.ops} == {"start"}
+    for bundle in ("b1", "b2"):  # its own bundle, and one the task moved past
+        w = _stopped_ssh_slot(
+            manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle=bundle
+        )
+        w.undelivered = 40
+        key = workers_mod._key(spec, task.tag, w.worker_id)
+        stopped = {"observed_running": False, "ssh_probe": "stopped"}
+        for attempt in range(6):
+            manager._restarts[key] = (attempt, 0.0)  # backoff elapsed
+            manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+        assert {op for op, _ in _RecordingSshMachine.ops} == {"start"}
+        manager.remove_worker(spec, task, w.worker_id)
