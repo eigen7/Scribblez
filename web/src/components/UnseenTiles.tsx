@@ -14,6 +14,11 @@ const DISTRIBUTION: ReadonlyArray<readonly [string, number]> = [
 
 interface UnseenTilesProps {
   state: GameState;
+  // Tiles known to sit outside the board and the POV's own rack -- the
+  // opponent's face-up leave -- as letters ('?' = a blank). They vacate the
+  // grid and the count like the rack's do: what remains is the pool actually
+  // hidden from the POV (the bag plus the opponent's unseen draws).
+  alsoSeen?: string;
 }
 
 // Count how many of each letter currently sit on the board. Lowercase board
@@ -41,9 +46,12 @@ function countRack(rack: GameState['rack']): Record<string, number> {
   return out;
 }
 
-const UnseenTiles: React.FC<UnseenTilesProps> = ({ state }) => {
+const UnseenTiles: React.FC<UnseenTilesProps> = ({ state, alsoSeen = '' }) => {
   const onBoard = countBoard(state.board);
   const inRack = countRack(state.rack);
+  for (const letter of alsoSeen) {
+    inRack[letter] = (inRack[letter] ?? 0) + 1;
+  }
 
   // Walk the distribution alphabetically; for each letter render `remaining`
   // filled slots then `total - remaining` empty slots so removed tiles vacate
@@ -58,7 +66,7 @@ const UnseenTiles: React.FC<UnseenTilesProps> = ({ state }) => {
   }
   // Sanity: the distribution sums to 100, so slots is always length 100.
 
-  const unseenCount = state.bag_count + state.opponent_rack_count;
+  const unseenCount = state.bag_count + state.opponent_rack_count - alsoSeen.length;
 
   return (
     <div className="unseen-tiles">
