@@ -3,7 +3,7 @@ import { toBlob } from 'html-to-image';
 import Board from './components/Board';
 import Rack from './components/Rack';
 import ScoreBoard from './components/ScoreBoard';
-import { DragTilePayload, PlacedTile } from './types';
+import { DragTilePayload, PlacedTile, TileInfo } from './types';
 
 type ManualDirection = 'horizontal' | 'vertical';
 // How much of the opponent's rack an exported GCG's #Rack lines reveal. The
@@ -17,6 +17,10 @@ interface ManualRackSlot {
   letter: string;
   score: number;
   known: boolean;
+  // Whether the player drew this tile after their own last move. Their leave
+  // and their replenishment are shaded apart, so a reviewed position shows at a
+  // glance which of the tiles they hold their last play accounts for.
+  drawn: boolean;
   // Whether a tile occupies this slot at all. A present-but-unknown slot
   // renders as a "?" tile (selectable for exchange); an absent slot renders as
   // empty space.
@@ -64,17 +68,11 @@ interface UnseenSlot {
   present: boolean;
 }
 
-function rackSlotToTile(slot: ManualRackSlot): {
-  letter: string;
-  score: number;
-  isBlank?: boolean;
-  isUnknown?: boolean;
-  isAbsent?: boolean;
-} {
+function rackSlotToTile(slot: ManualRackSlot): TileInfo {
   if (!slot.present) return { letter: '', score: 0, isAbsent: true };
   if (!slot.known) return { letter: '?', score: 0, isUnknown: true };
-  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true };
-  return { letter: slot.letter, score: slot.score };
+  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true, isDrawn: slot.drawn };
+  return { letter: slot.letter, score: slot.score, isDrawn: slot.drawn };
 }
 
 const DISTRIBUTION: ReadonlyArray<readonly [string, number]> = [

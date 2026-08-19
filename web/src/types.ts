@@ -5,6 +5,9 @@ export interface TileInfo {
   isUnknown?: boolean;
   // No tile occupies this slot; rendered as empty space rather than a "?" tile.
   isAbsent?: boolean;
+  // The player drew this tile after their last move, rather than keeping it
+  // from that move's leave; shaded apart from the leave.
+  isDrawn?: boolean;
 }
 
 export interface DragTilePayload {

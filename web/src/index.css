@@ -484,6 +484,13 @@ h1 {
   cursor: grabbing;
 }
 
+/* A tile drawn after the player's last move, shaded apart from the leave that
+   move left them holding. */
+.rack-tile.drawn-tile {
+  background: #cbb994;
+  border-color: #a68f60;
+}
+
 /* Exchange mode: tiles become click-to-toggle, with a highlight ring and
    a small "↻" badge on tiles staged for exchange. */
 .rack-tile.clickable-tile {

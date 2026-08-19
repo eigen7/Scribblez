@@ -52,9 +52,12 @@ enum class RackSlotState : uint8_t { UNKNOWN, KNOWN, EMPTY };
 // A rack slot as shown in the UI: KNOWN carries a revealed tile; UNKNOWN is a
 // tile that is present but hidden (rendered as "?", still selectable for
 // exchange); EMPTY is a slot holding no tile (rendered as empty space).
+// `drawn` marks a tile the player drew to replace what their last move used,
+// as opposed to one that move left them holding; the two are shaded apart.
 struct DisplaySlot {
   RackSlotState state = RackSlotState::UNKNOWN;
   Tile tile = EMPTY_SQUARE;
+  bool drawn = false;
 };
 using RackDisplay = std::array<DisplaySlot, kRackSlots>;
 
@@ -71,6 +74,17 @@ RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
     }
   }
   return display;
+}
+
+// Marks every revealed tile of `display` that `leave` does not cover as drawn:
+// the tiles the player took onto their rack after their last move, as opposed
+// to the ones that move left them. A tile counts as part of the leave at most
+// as many times as `leave` holds it.
+void mark_drawn_tiles(RackDisplay* display, TileCounts leave) {
+  for (DisplaySlot& slot : *display) {
+    if (slot.state != RackSlotState::KNOWN) continue;
+    slot.drawn = !leave.remove(slot.tile);
+  }
 }
 
 // How much of the opponent's rack the '#Rack' pragmata of an exported GCG
@@ -259,15 +273,19 @@ boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
           r.emplace_back(boost::json::object{{"letter", std::string(1, slot.tile.to_char())},
                                              {"score", slot.tile.value()},
                                              {"known", true},
-                                             {"present", true}});
+                                             {"present", true},
+                                             {"drawn", slot.drawn}});
           break;
         case RackSlotState::UNKNOWN:
-          r.emplace_back(boost::json::object{
-            {"letter", "?"}, {"score", 0}, {"known", false}, {"present", true}});
+          r.emplace_back(boost::json::object{{"letter", "?"},
+                                             {"score", 0},
+                                             {"known", false},
+                                             {"present", true},
+                                             {"drawn", slot.drawn}});
           break;
         case RackSlotState::EMPTY:
           r.emplace_back(boost::json::object{
-            {"letter", ""}, {"score", 0}, {"known", false}, {"present", false}});
+            {"letter", ""}, {"score", 0}, {"known", false}, {"present", false}, {"drawn", false}});
           break;
       }
     }
@@ -1010,6 +1028,10 @@ class ManualGame {
       out[waiting] = display_from_slots(fallback[waiting], RackSlotState::UNKNOWN);
     }
 
+    // Their rack is a leave plus what they drew onto it; the two are shaded
+    // apart, so say which slots are which.
+    mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
+
     // At the final position, the player who didn't go out still holds their
     // leftover tiles. These survive only in the end-of-game adjustment (the
     // per-turn racks are cleared after each move), so reveal them here. The
@@ -1017,6 +1039,7 @@ class ManualGame {
     if (view_ply == int(turns_.size())) {
       if (const auto tiles = end_rack_tiles_for(waiting)) {
         out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
+        mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
       }
     }
     return out;
