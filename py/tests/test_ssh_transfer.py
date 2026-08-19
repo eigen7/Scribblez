@@ -8,7 +8,13 @@ filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 import subprocess
 
 import pytest
-from cloud.ssh_transfer import BATCH, INCOMING_DIR, collect_command, pull_results
+from cloud.ssh_transfer import (
+    BATCH,
+    INCOMING_DIR,
+    collect_command,
+    pull_results,
+    sweep_stopped,
+)
 
 DATA_DIRS = ["data/staging"]
 
@@ -192,3 +198,52 @@ def test_records_come_back_even_with_no_data_waiting(tmp_path):
     _, result = _pull(tmp_path, remote, local)
     assert result.pulled == ["stats/ssh-0.json"]
     assert (local / "stats/ssh-0.json").read_text() == '{"units_total": 7}'
+
+
+def test_a_sweep_reads_a_stopped_container_and_places_files_where_they_belong(tmp_path):
+    """docker cp names members relative to the copied directory's parent, so
+    "staging/c1.slog" has to land as "data/staging/c1.slog"."""
+    import io
+    import tarfile
+
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as tar:
+        info = tarfile.TarInfo("staging/c1-ssh-0.slog")
+        info.size = 5
+        tar.addfile(info, io.BytesIO(b"flush"))
+
+    class _Stopped:
+        def copy_from_container(self, container, path):
+            assert path.endswith("/data/staging")
+            return payload.getvalue()
+
+    local = tmp_path / "local"
+    local.mkdir()
+    names = sweep_stopped(
+        _Stopped(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS
+    )
+    assert names == ["data/staging/c1-ssh-0.slog"]
+    assert (local / "data/staging/c1-ssh-0.slog").read_text() == "flush"
+
+
+def test_a_sweep_of_a_container_with_nothing_in_it_is_empty(tmp_path):
+    class _Empty:
+        def copy_from_container(self, container, path):
+            return b""  # the path is not there at all
+
+    local = tmp_path / "local"
+    local.mkdir()
+    assert (
+        sweep_stopped(_Empty(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
+        == []
+    )
+
+
+def test_an_unparseable_listing_is_reported_as_unknown(tmp_path):
+    """The total decides whether a container may be destroyed, so a count
+    nobody can vouch for must not read as empty."""
+    from cloud.ssh_transfer import parse_listing
+
+    assert parse_listing(b"") == ([], 0)  # no tag root there yet: a real zero
+    assert parse_listing(b"data/staging/a.slog\n") == ([], None)  # sentinel missing
+    assert parse_listing(b"data/staging/a.slog\nTOTAL 9\n") == (["data/staging/a.slog"], 9)

@@ -47,7 +47,7 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
 from cloud.ssh_machine import SshMachine
-from cloud.ssh_transfer import pull_results
+from cloud.ssh_transfer import pull_results, sweep_stopped
 from scripts.cloud_fleet import (
     CpuResources,
     GpuResources,
@@ -860,6 +860,12 @@ class WorkerManager:
         """Read a batch of slot `w`'s finished outputs out of its container
         into the tag, and remember how much it still holds."""
         paths = spec.paths(task.tag)
+        # Unknown until this pull says otherwise. A collection that fails --
+        # a link slow enough to keep hitting the transfer timeout, say, while
+        # the far cheaper probe still reports the container running -- must not
+        # leave the last count standing in for knowledge: it would go on
+        # claiming "drained" while the container fills up.
+        w.undelivered = None
         result = pull_results(
             SshMachine(w.host), _container_name(spec, task.tag, w.worker_id),
             remote_root=str(paths.root), local_root=paths.root,
@@ -948,8 +954,22 @@ class WorkerManager:
             machine.start_container(name)
             return
         if probe == "stopped":
+            # Take what it flushed on the way down before the container (and
+            # its filesystem) go. If that fails, so does the replacement: the
+            # slot keeps running on the old bundle, which is recoverable, where
+            # throwing the output away is not.
+            self._sweep_ssh(machine, spec, task, w)
             machine.remove_container(name)
         self._run_ssh_container(spec, task, w)
+
+    def _sweep_ssh(self, machine, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Collect from a stopped container, the last chance to do so."""
+        paths = spec.paths(task.tag)
+        sweep_stopped(
+            machine, _container_name(spec, task.tag, w.worker_id),
+            remote_root=str(paths.root), local_root=paths.root,
+            data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
+        )  # fmt: skip
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);

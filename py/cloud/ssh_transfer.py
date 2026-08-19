@@ -48,8 +48,8 @@ RECORD_DIRS = ("stats", "params")
 # backlog is the point; the size trades drain rate against how long one pull
 # holds the pass's single blocking thread. Measured on this fleet: 32 chunks is
 # ~20 MB raw, ~0.4 s to compress and ~1.4 s to move over a link clocked at
-# 7.5 MB/s -- around a third of a pass, and ~13 net files drained per pass
-# against one worker's production.
+# 7.5 MB/s -- around a third of a pass, and ~29 net files drained per pass
+# against one worker's ~2.5.
 BATCH = 32
 
 # Compression level for the stream. The worker machine is busy playing games,
@@ -74,7 +74,7 @@ class PullResult:
     """What one pull moved, and what it left for the next one."""
 
     pulled: list[str]  # paths relative to the tag root, as extracted
-    remaining: int  # delivered files still in the container
+    remaining: int | None  # delivered files still there; None if that is unclear
 
 
 def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
@@ -95,12 +95,18 @@ def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
     ]
 
 
-def parse_listing(output: bytes) -> tuple[list[str], int]:
+def parse_listing(output: bytes) -> tuple[list[str], int | None]:
     """The batch of names and the total waiting, from list_command's output.
-    An empty output means the tag root does not exist there yet."""
+
+    No output at all means the tag root does not exist there yet -- a real
+    zero. Output without the sentinel is not understood, and says so: the
+    total ends up deciding whether a container may be destroyed, so a count
+    nobody can vouch for must not read as "empty"."""
+    if not output.strip():
+        return [], 0
     lines = output.decode(errors="replace").split()
     if len(lines) < 2 or lines[-2] != "TOTAL":
-        return [], 0
+        return [], None
     return lines[:-2], int(lines[-1])
 
 
@@ -121,23 +127,48 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
     ]
 
 
-def _extract(archive: bytes, root: Path) -> list[str]:
-    """Unpack `archive` under `root`, atomically per file. Returns the archive
-    member names, which are paths relative to `root`."""
+def _extract(archive: bytes, root: Path, mode: str = "r:gz", prefix: str = "") -> list[str]:
+    """Unpack `archive` under `root`, atomically per file, returning the paths
+    written relative to `root`. `prefix` is prepended to each member name, for
+    an archive that does not already name things the way this tree does."""
     if not archive:
         return []
     names = []
-    with tarfile.open(fileobj=BytesIO(archive), mode="r:gz") as tar:
+    with tarfile.open(fileobj=BytesIO(archive), mode=mode) as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
-            staged = root / INCOMING_DIR / member.name
+            name = f"{prefix}{member.name}"
+            staged = root / INCOMING_DIR / name
             staged.parent.mkdir(parents=True, exist_ok=True)
             staged.write_bytes(tar.extractfile(member).read())
-            dest = root / member.name
+            dest = root / name
             dest.parent.mkdir(parents=True, exist_ok=True)
             staged.replace(dest)
-            names.append(member.name)
+            names.append(name)
+    return names
+
+
+def sweep_stopped(
+    machine, container: str, *, remote_root: str, local_root: Path, data_dirs: list[str]
+) -> list[str]:
+    """Take everything a stopped container still holds, before it is destroyed.
+
+    A container is stopped gracefully -- SIGTERM, then a minute in which the
+    worker flushes the output it has finished -- and that flush lands after the
+    last collection could run, since collecting needs a running container. Left
+    there it would go into the bin with the container. `docker cp` reads a
+    stopped one, so this is the last look before a replacement.
+
+    Unbounded by design: a container is only stopped for replacement once a
+    collection has reported it empty, so what a sweep finds is one worker's
+    dying gasp rather than a backlog.
+    """
+    names = []
+    for data_dir in data_dirs:
+        archive = machine.copy_from_container(container, f"{remote_root}/{data_dir}")
+        # docker cp names members relative to the copied directory's parent.
+        names += _extract(archive, local_root, mode="r:", prefix=f"{Path(data_dir).parent}/")
     return names
 
 
@@ -169,4 +200,5 @@ def pull_results(
     if delivered:
         paths = [f"{remote_root}/{name}" for name in delivered]
         machine.exec_in_container(container, ["rm", "-f", *paths])
-    return PullResult(pulled=names, remaining=waiting - len(delivered))
+    remaining = None if waiting is None else waiting - len(delivered)
+    return PullResult(pulled=names, remaining=remaining)

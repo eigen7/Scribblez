@@ -145,6 +145,26 @@ class SshMachine:
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: pulling {image} failed: {res.stderr.strip()}")
 
+    def copy_from_container(self, name: str, path: str) -> bytes:
+        """`path` out of container `name`, as a tar stream whose member names
+        are relative to its parent. Unlike exec, this works on a container that
+        is stopped -- the only way to read what a worker flushed on its way
+        down. A path the container does not have is empty, not an error."""
+        try:
+            res = subprocess.run(
+                self.argv(["docker", "cp", f"{name}:{path}", "-"]),
+                capture_output=True,
+                timeout=_PULL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise SshMachineError(f"{self.host}: copying {path} from {name} timed out") from None
+        stderr = res.stderr.decode(errors="replace")
+        if res.returncode != 0:
+            if "No such container:path" in stderr:
+                return b""
+            raise SshMachineError(f"{self.host}: {stderr.strip()}")
+        return res.stdout
+
     def run_container(self, name: str, image: str, env: dict[str, str]):
         """Create + start container `name` from `image`. The environment
         (which includes bucket credentials) travels on the ssh pipe as an

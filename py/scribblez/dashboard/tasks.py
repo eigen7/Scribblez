@@ -48,10 +48,14 @@ class WorkerRecord:
     # container's environment fixes its bundle at creation, so a slot whose id
     # no longer matches its task's is replaced rather than restarted.
     bundle_id: str | None = None
-    # ssh: delivered files the container still holds, as of the last
-    # collection -- None until one has reported. Durable because it decides
-    # whether replacing the container is safe, and a dashboard restart must not
-    # turn "holding six hours of work" into "nothing known, go ahead".
+    # ssh: delivered files the container still holds. Zero from the moment the
+    # container is created (it cannot hold anything yet, which is what lets one
+    # that never came up be replaced), then whatever each collection finds --
+    # and None whenever that is not known: before a container exists, and again
+    # if a collection fails, since a stale count would go on claiming "drained"
+    # while the container fills up. Durable because it decides whether
+    # replacing the container is safe, and a dashboard restart must not turn
+    # "holding six hours of work" into "nothing known, go ahead".
     undelivered: int | None = None
     cost_per_hr: float | None = None  # cloud: last observed rental rate
     spend: float = 0.0  # estimated dollars spent by this slot so far

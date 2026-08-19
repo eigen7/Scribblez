@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.dashboard import workers as workers_mod
@@ -250,6 +251,10 @@ class _RecordingSshMachine(_FakeSshMachine):
     def run_container(self, name, image, env):
         self.ops.append(("run", name))
 
+    def copy_from_container(self, name, path):
+        self.ops.append(("copy", path))
+        return b""
+
     def pause_container(self, name):
         self.ops.append(("pause", name))
 
@@ -292,7 +297,7 @@ def test_a_redeployed_task_replaces_its_ssh_container(manager, spec, task, monke
     w.undelivered = 0
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["copy", "remove"]  # swept first
     assert recreated == [w.worker_id]
 
 
@@ -573,7 +578,7 @@ def test_a_container_that_never_came_up_is_replaced_by_a_redeploy(manager, spec,
     w.undelivered = 0  # what _run_ssh_container records when it creates one
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["remove"]
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["copy", "remove"]  # swept first
     assert recreated == [w.worker_id]
 
 
@@ -614,3 +619,53 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, w)
     assert (w.launched, w.undelivered, w.bundle_id) == (True, 0, "b1")
+
+
+def test_a_running_container_still_holding_output_is_not_stopped_by_a_redeploy(
+    manager, spec, task, monkeypatch
+):
+    """Stopping it costs the cycle in flight and strands the rest, and the
+    redeploy has all the time in the world: it waits for the drain."""
+    running = {"observed_running": True, "ssh_probe": "running"}
+    for holding in (900, None):
+        w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+        w.undelivered = holding
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, running)
+        assert _RecordingSshMachine.ops == [], f"stopped a container holding {holding}"
+        manager.remove_worker(spec, task, w.worker_id)
+
+
+def test_a_failed_collection_gives_up_the_count_rather_than_keeping_a_stale_one(
+    manager, spec, task, monkeypatch
+):
+    """A count only means something while collection is working. Left
+    standing, a container whose pulls keep failing would report the last
+    number it managed -- or the zero it was created with -- and be replaced or
+    removed as drained while it filled up."""
+
+    def boom(*args, **kwargs):
+        raise SshMachineError("read timed out")
+
+    monkeypatch.setattr(workers_mod, "pull_results", boom)
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.undelivered = 0  # what creation recorded
+    with pytest.raises(SshMachineError):
+        manager._collect_ssh(spec, task, w)
+    assert w.undelivered is None
+
+
+def test_a_container_is_not_destroyed_when_its_final_sweep_fails(manager, spec, task, monkeypatch):
+    """The sweep is the last chance at what the worker flushed while stopping.
+    Leaving the slot on the old bundle is recoverable; the output is not."""
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
+
+    def boom(self, name, path):
+        raise SshMachineError("connection reset")
+
+    monkeypatch.setattr(_RecordingSshMachine, "copy_from_container", boom)
+    w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
+    w.undelivered = 0
+    stopped = {"observed_running": False, "ssh_probe": "stopped"}
+    with pytest.raises(SshMachineError):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
+    assert _RecordingSshMachine.ops == []  # nothing removed
