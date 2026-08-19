@@ -33,3 +33,6 @@ generated on demand under `<mount>/cache/trajectory_sets/<set>/` by
   one sim of GAVE observes opp-play-and-win mass there. The exhibit: does the
   conditioned re-scoring lift a lane-blocking alternative? (The position
   before the last move of `position-eval-test-dataset/pos-6.gcg`.)
+
+- `quit.gcg` - The highest scoring plays here are N4 bingos. But we can see
+  dangerous responses from the opponent thanks to the open leaves.
