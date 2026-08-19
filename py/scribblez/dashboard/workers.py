@@ -83,6 +83,13 @@ SSH_REPROBE_SECONDS = 30.0
 # reset the moment one is observed running.
 MAX_RESTART_BACKOFF_SECONDS = 300.0
 
+# Starts that never produced a running container before one on a bundle the
+# task has moved past is replaced anyway. Collecting needs a container that
+# stays up, so one that will not cannot be drained the efficient way -- and
+# restarting it forever puts the redeploy that would fix whatever it is dying
+# of permanently out of reach. It is swept whole first, so nothing is lost.
+REPLACE_AFTER_FAILED_STARTS = 3
+
 # How long an observation of a container or pod stands in for a fresh one.
 # Only the reconcile pass observes; status requests read what it left, so a
 # browser polling every 3 seconds costs no ssh round trips at all.
@@ -470,6 +477,11 @@ class WorkerManager:
         if not w.launched and probe == "unreachable":
             return "missing"
         return probe
+
+    def _failed_starts(self, key: str) -> int:
+        """Consecutive starts of this slot's container that never produced one
+        observed running (the count is dropped the moment one does)."""
+        return self._restarts.get(key, (0, 0.0))[0]
 
     def _restart_allowed(self, key: str) -> bool:
         """Whether slot `key` may be (re)started now. A container that keeps
@@ -949,8 +961,18 @@ class WorkerManager:
         destroys anything the container never handed over, so it waits until a
         collection has reported the container empty -- and a container holding
         output is started instead, which is what lets the next passes drain it.
+
+        A container that will not stay up is never collected from, so it would
+        wait forever; after enough failed starts it is replaced regardless,
+        having been swept first.
         """
-        if probe == "stopped" and not _replaceable(w, task):
+        key = _key(spec, task.tag, w.worker_id)
+        # The count includes the attempt being made now, so the replacement is
+        # what happens after REPLACE_AFTER_FAILED_STARTS starts have failed.
+        stuck = (
+            w.bundle_id != task.bundle_id and self._failed_starts(key) > REPLACE_AFTER_FAILED_STARTS
+        )
+        if probe == "stopped" and not (_replaceable(w, task) or stuck):
             machine.start_container(name)
             return
         if probe == "stopped":

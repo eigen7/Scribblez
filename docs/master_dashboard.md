@@ -122,7 +122,10 @@ they are safely on the controller's disk, and a container is replaced (after a
 redeploy) only once it has handed everything over: one still holding output is
 started so the next passes can drain it, and stopped again to be replaced once
 it is empty -- with a final sweep of the stopped container, since stopping it
-gracefully is what makes the worker flush its last finished output. Removing a slot, by contrast, discards whatever its container
+gracefully is what makes the worker flush its last finished output. A container
+that will not stay up cannot be drained that way at all, so after a few failed
+starts it is swept whole and replaced anyway: otherwise a redeploy, which is
+often the fix for whatever it is dying of, could never reach it. Removing a slot, by contrast, discards whatever its container
 still holds -- the dashboard says how much before it does. A scheduler gate parks the container by pausing it rather than
 stopping it, so a gate that flips every minute costs nothing: no bundle
 refetch, and the chunk in flight survives. An operator pause still stops it
