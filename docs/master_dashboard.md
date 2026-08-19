@@ -12,7 +12,9 @@ and workload-specific analysis — all from the browser.
   dataclass, worker roles, an optional scheduler, and progress counters. The
   params dataclass is the single source of truth for parameters — its fields
   generate both the web form (with validation) and the CLI flags, so the CLI
-  and dashboard cannot drift.
+  and dashboard cannot drift. A field declaring `choices` closes its value set:
+  validation and the CLI both enforce it, and the form renders a selector that
+  starts unchosen, so a run cannot inherit a choice nobody made.
 - **Task** — one (workload, tag) pair with a fixed parameter set, recorded in
   `task.json` at the tag's root (`<mount>/tags/<workload>/<tag>/`). Parameters
   freeze at task creation because every worker on a tag must run identical

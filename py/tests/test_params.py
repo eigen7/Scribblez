@@ -72,3 +72,56 @@ def test_unknown_env_flags_variables_outside_the_schema():
 def test_unknown_env_accepts_a_fully_known_environment():
     env = params_mod.to_env(DemoParams()) | {"SCZ_TAG": "t"}
     assert params_mod.unknown_env(DemoParams, env, allowed=("SCZ_TAG",)) == []
+
+
+@dataclass(frozen=True)
+class ClosedParams:
+    """A field whose value set is closed, alongside an open one."""
+
+    mode: str = param("a", "a closed str", choices=("a", "b"))
+    rate: float = param(1.0, "an open float")
+
+
+def test_schema_carries_choices():
+    fields = {f.name: f for f in params_mod.schema(ClosedParams)}
+    assert fields["mode"].choices == ("a", "b")
+    assert fields["rate"].choices is None
+    # public_schema is what the dashboard form reads.
+    public = {f["name"]: f["choices"] for f in params_mod.public_schema(ClosedParams)}
+    assert public["mode"] == ("a", "b")
+    assert public["rate"] is None
+
+
+def test_validate_rejects_a_value_outside_the_set():
+    """A misspelt choice is refused where it is entered, rather than passing
+    validation and failing later in whatever consumes it."""
+    with pytest.raises(params_mod.ParamsError) as e:
+        params_mod.validate(ClosedParams, {"mode": "c"})
+    assert "expected one of ['a', 'b']" in e.value.args[0]
+
+
+def test_validate_accepts_a_value_in_the_set():
+    assert params_mod.validate(ClosedParams, {"mode": "b", "rate": 2.0}).mode == "b"
+
+
+def test_a_closed_field_still_type_checks_first():
+    with pytest.raises(params_mod.ParamsError) as e:
+        params_mod.validate(ClosedParams, {"mode": 7})
+    assert "expected a string" in e.value.args[0]
+
+
+def test_argparse_enforces_the_set():
+    parser = argparse.ArgumentParser()
+    params_mod.add_arguments(parser, ClosedParams)
+    assert parser.parse_args(["--mode", "b"]).mode == "b"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--mode", "c"])
+
+
+def test_a_default_outside_its_own_choices_is_a_declaration_error():
+    @dataclass(frozen=True)
+    class Bad:
+        mode: str = param("z", "bad default", choices=("a",))
+
+    with pytest.raises(AssertionError, match="not among its choices"):
+        params_mod.schema(Bad)

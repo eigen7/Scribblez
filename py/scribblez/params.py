@@ -12,6 +12,11 @@ that single declaration:
 
 Supported field kinds: int, float, str, and bool (bool fields must default to
 False so the argparse mapping to store_true flags stays faithful).
+
+A field may also declare `choices`, closing its value set. Validation then
+rejects anything outside it -- so a bad value is refused where it is entered
+rather than surfacing later as a worker crash -- argparse enforces the same
+set, and the dashboard form renders a selector rather than a text box.
 """
 
 import dataclasses
@@ -22,9 +27,14 @@ ENV_PREFIX = "SCZ_"
 _KINDS = ("int", "float", "str", "bool")
 
 
-def param(default, help: str) -> dataclasses.Field:
-    """Declare one parameter field: `x: int = param(200, "what x means")`."""
-    return dataclasses.field(default=default, metadata={"help": help})
+def param(default, help: str, choices=None) -> dataclasses.Field:
+    """Declare one parameter field: `x: int = param(200, "what x means")`.
+
+    `choices`, when given, is the closed set of values the field accepts."""
+    return dataclasses.field(
+        default=default,
+        metadata={"help": help, "choices": tuple(choices) if choices is not None else None},
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -33,6 +43,7 @@ class ParamField:
     kind: str  # one of _KINDS
     default: object
     help: str
+    choices: tuple | None = None  # the closed set of accepted values, if the field has one
 
 
 class ParamsError(Exception):
@@ -46,7 +57,12 @@ def schema(params_cls: type) -> list[ParamField]:
         assert kind in _KINDS, f"{params_cls.__name__}.{f.name}: unsupported kind {kind}"
         if kind == "bool":
             assert f.default is False, f"{f.name}: bool params must default to False"
-        out.append(ParamField(f.name, kind, f.default, f.metadata.get("help", "")))
+        choices = f.metadata.get("choices")
+        if choices is not None:
+            assert kind != "bool", f"{f.name}: a bool field is already a closed set"
+            assert f.default in choices, f"{f.name}: default {f.default!r} is not among its choices"
+            assert len(set(choices)) == len(choices), f"{f.name}: duplicate choices"
+        out.append(ParamField(f.name, kind, f.default, f.metadata.get("help", ""), choices))
     return out
 
 
@@ -63,7 +79,8 @@ def add_arguments(parser, params_cls: type):
             parser.add_argument(flag, action="store_true", help=f.help)
         else:
             py_type = {"int": int, "float": float, "str": str}[f.kind]
-            parser.add_argument(flag, type=py_type, default=f.default, help=f.help)
+            choices = list(f.choices) if f.choices else None
+            parser.add_argument(flag, type=py_type, default=f.default, help=f.help, choices=choices)
 
 
 def from_args(params_cls: type, args):
@@ -129,6 +146,13 @@ def _coerce(f: ParamField, value):
     return value
 
 
+def _check_choice(f: ParamField, value):
+    """Reject a value outside a closed field's set, naming what was allowed."""
+    if f.choices is not None and value not in f.choices:
+        raise ValueError(f"{f.name}: expected one of {list(f.choices)}, got {value!r}")
+    return value
+
+
 def validate(params_cls: type, raw: dict):
     """Build params from a JSON-ish dict, raising ParamsError naming every
     unknown field and type mismatch; absent fields keep their defaults."""
@@ -139,7 +163,7 @@ def validate(params_cls: type, raw: dict):
         if name not in raw:
             continue
         try:
-            kwargs[name] = _coerce(f, raw[name])
+            kwargs[name] = _check_choice(f, _coerce(f, raw[name]))
         except ValueError as e:
             errors.append(str(e))
     if errors:
