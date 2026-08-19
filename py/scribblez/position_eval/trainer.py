@@ -29,6 +29,7 @@ scripts/position_eval/train.py CLI for headless debugging.
 """
 
 import functools
+import itertools
 import os
 import sys
 import time
@@ -144,6 +145,27 @@ def _checkpoint_and_eval(
     return time.time() - t_eval
 
 
+# Input batches the schedule-free arm recomputes BatchNorm statistics over
+# before the checkpoint reads the model (optim.ScheduleFreeArm.eval_mode): a
+# prefix of a fresh pass over the window, forward-only, so a small fraction of
+# the epoch's cost. Ten batches already reproduce the statistics of a full
+# pass; 32 leaves margin. The WSD arm never pulls from the generator.
+BN_RECALIBRATION_BATCHES = 32
+
+
+def _recalibration_batches(ds, params, gen, device):
+    """(spatial, scalar) input pairs on `device` for BatchNorm recalibration,
+    drawn from `ds` under a seed distinct from the epoch's."""
+    batches = ds.iter_batches(
+        params.batch_size,
+        seed=gen * 1000003 + 1,
+        turns_per_game=params.turns_per_game,
+        epoch_index=gen,
+    )
+    for batch in itertools.islice(batches, BN_RECALIBRATION_BATCHES):
+        yield batch["input_spatial"].to(device), batch["input_scalar"].to(device)
+
+
 def train_one_generation(
     model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
 ):
@@ -188,7 +210,7 @@ def train_one_generation(
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1
     elapsed = time.time() - t0
-    optim_arm.eval_mode()
+    optim_arm.eval_mode(model, _recalibration_batches(ds, params, gen, device))
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,

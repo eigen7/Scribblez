@@ -2,9 +2,10 @@
 
 The schedule-free arm keeps two sets of weights and swaps the live ones, so
 the tests that matter here are about the swap: that a checkpoint written in
-eval mode is what a deployed model would see, and that resuming from one
-returns to exactly the training weights the run left off at. Getting that
-wrong corrupts a resumed run silently.
+eval mode is what a deployed model would see, that resuming from one returns to
+exactly the training weights the run left off at, and that BatchNorm statistics
+are recomputed for the swapped-in weights. Getting the first two wrong corrupts
+a resumed run silently; the third silently degrades every export.
 """
 
 from dataclasses import dataclass
@@ -89,7 +90,7 @@ def test_the_wsd_arm_still_drives_the_rows_clock_schedule():
     # Mid-warmup, the schedule is below the peak and rising off the rows clock.
     assert arm.lr_fn(40) < arm.lr_fn(60) <= DEFAULT_LR[OPTIMIZER_WSD]
     arm.train_mode()  # no-op under this arm, but the trainer calls it either way
-    arm.eval_mode()
+    arm.eval_mode(model, [])
 
 
 def test_schedule_free_eval_mode_swaps_to_different_weights():
@@ -102,7 +103,7 @@ def test_schedule_free_eval_mode_swaps_to_different_weights():
     arm.train_mode()
     _step(model, opt)
     training = [p.detach().clone() for p in model.parameters()]
-    arm.eval_mode()
+    arm.eval_mode(model, [])
     assert not all(torch.equal(a, b) for a, b in zip(training, model.parameters(), strict=True))
 
 
@@ -119,7 +120,7 @@ def test_schedule_free_survives_an_eval_mode_checkpoint_roundtrip(tmp_path):
     _step(model, opt)
     expected = [p.detach().clone() for p in model.parameters()]
 
-    arm.eval_mode()  # what _checkpoint_and_eval runs inside
+    arm.eval_mode(model, [])  # what _checkpoint_and_eval runs inside
     save(paths, model, opt, GenerationalState(24, 3), {})
 
     model2 = _model()
@@ -130,6 +131,55 @@ def test_schedule_free_survives_an_eval_mode_checkpoint_roundtrip(tmp_path):
 
     for a, b in zip(expected, model2.parameters(), strict=True):
         assert torch.allclose(a, b, atol=1e-6), "resumed run diverged from the training weights"
+
+
+def _bn_model() -> torch.nn.Module:
+    torch.manual_seed(0)
+    return torch.nn.Sequential(torch.nn.Linear(4, 3), torch.nn.BatchNorm1d(3))
+
+
+def _bn_step(model, opt, n: int = 3):
+    for i in range(n):
+        opt.zero_grad()
+        model(torch.randn(8, 4, generator=torch.Generator().manual_seed(i))).sum().backward()
+        opt.step()
+
+
+def test_schedule_free_eval_mode_recomputes_batchnorm_for_the_deployed_weights():
+    """Running statistics accumulate at the training weights; eval_mode must
+    replace them with the deployed weights' own, exactly (a cumulative average
+    over the given batches), and hand the momentum back for the next epoch."""
+    model = _bn_model()
+    params = _Params()
+    opt = build_optimizer(model, params)
+    arm = ScheduleFreeArm(params, opt)
+    arm.train_mode()
+    _bn_step(model, opt)
+    bn = model[1]
+    momentum = bn.momentum
+    x = torch.randn(32, 4, generator=torch.Generator().manual_seed(99))
+    batches = [(x[:16], None), (x[16:], None)]
+
+    # A scalar-free stand-in for the trainer's (spatial, scalar) pairs.
+    class _Wrapped(torch.nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, spatial, scalar):
+            return self.inner(spatial)
+
+    arm.eval_mode(_Wrapped(model), batches)
+    assert not model.training
+    assert bn.momentum == momentum
+    with torch.no_grad():  # the deployed (averaged) weights' pre-BN activations
+        pre = [model[0](b) for b, _ in batches]
+    # A cumulative average (momentum=None) is the mean over batches of each
+    # batch's statistics, the variance unbiased as BatchNorm tracks it.
+    assert torch.allclose(bn.running_mean, torch.stack([a.mean(0) for a in pre]).mean(0), atol=1e-6)
+    assert torch.allclose(
+        bn.running_var, torch.stack([a.var(0, unbiased=True) for a in pre]).mean(0), atol=1e-5
+    )
 
 
 def test_an_unset_rate_falls_back_to_the_arms_default():
