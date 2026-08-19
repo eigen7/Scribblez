@@ -47,20 +47,31 @@ Compares each model generation's prediction against a committed Monte-Carlo
 ground truth over a GCG dataset
 (`positions/NWL23/position-eval-test-dataset/`).
 
-- **Dataset contract**: each `pos-N.gcg`'s penultimate move is a bingo (so
-  the player to act drew a clean full rack); the analysis position is the
-  board *after the final recorded move*, evaluated from the POV of the player
-  who made it, with their leave as the rack.
+- **Dataset contract** ([the set's README](../positions/NWL23/position-eval-test-dataset/README.md)):
+  each `pos-N.gcg` IS a post-move position -- the board *after the final
+  recorded move*, evaluated from the POV of the player who made it, with
+  their leave as the rack. The opponent (to act next) holds what their own
+  last recorded move retained plus hidden draws. Engine reader:
+  `read_gcg_post_move` in `data/gcg_post_move.h`, shared by the truth and
+  the encoder.
 - **Ground truth**: `monte_carlo_sim_tool` plays each position out ~10k
   times and commits exact W/L/D plus the final-score-delta histogram beside
-  the GCGs.
+  the GCGs -- once per **information condition**, since the truth depends on
+  what a rollout knows of the opponent's leave
+  (`monte-carlo-sim-results.face-up-leaves.json`: the leave is seated every
+  rollout; `monte-carlo-sim-results.hidden-leaves.json`: it is inferred from
+  their last move with `belief::RackInferrer` and sampled per rollout,
+  uniform after a bingo). A tag is measured against the truth of its own
+  `face_up_leaves` param (read from its task.json).
 - **Predictions**: an FFI replays the GCG into an input tensor byte-identical
   to a training row; the trainer's checkpoint hook evaluates the dataset
   batch per generation and writes WLD + score-delta mean/std into the tag's
   `dashboard.db`.
-- **UI**: generation slider, position picker, board + leave; paired
-  model-vs-MC WLD bars; the MC score-delta histogram with the model's
-  Gaussian overlaid.
+- **UI**: generation slider, position picker, board + both racks (the POV's
+  leave; the opponent's leave -- spelled out under face-up leaves, "?" under
+  hidden -- plus their green-shaded hidden draws); paired model-vs-MC WLD
+  bars; the MC score-delta histogram with the model's Gaussian overlaid; an
+  alternate-leaves what-if (model only) for either rack.
 
 ## The evidence-trajectories Trajectories tab
 

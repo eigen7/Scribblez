@@ -1,5 +1,7 @@
+#include "data/gcg_post_move.h"
 #include "data/gcg_reader.h"
 #include "game/tile.h"
+#include "game/tile_counts.h"
 
 #include <gtest/gtest.h>
 
@@ -127,6 +129,77 @@ TEST(GcgPositionTest, RefusesAMissingRackPragma) {
   std::string error;
   EXPECT_FALSE(read_gcg_position(gcg, false, &p, &error));
   EXPECT_NE(error.find("#Rack1"), std::string::npos);
+}
+
+// The position-evaluation datasets' reading: the board after the final move,
+// from the POV of the seat that made it, holding its leave. The opponent's
+// retained leave and the observation of their last move (board, move, the pool
+// unseen to the POV while it was played) come along for the sims.
+TEST(GcgPostMoveTest, FinalMoverPovWithOpponentLeaveAndObservation) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n"
+    ">Bob: BBBBCDE 9D BBB +8 8\n"
+    ">Alice: AAAAEFG 10D AAA +6 12\n";
+
+  ParsedGcgPostMove p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_post_move(gcg, &p, &error)) << error;
+  EXPECT_EQ(p.start_player, 0);
+  EXPECT_EQ(p.leave.to_string(), "AEFG");
+  EXPECT_EQ(p.scores[0], 12);
+  EXPECT_EQ(p.scores[1], 8);
+  EXPECT_EQ(p.board.num_tiles(), 9);
+  // Bob kept BCDE after playing BBB.
+  EXPECT_EQ(p.opp_leave.to_string(), "BCDE");
+  ASSERT_TRUE(p.opp_observation.has_value());
+  // Bob's move was played on the board holding only Alice's AAA ...
+  EXPECT_EQ(p.opp_observation->board_before.num_tiles(), 3);
+  EXPECT_EQ(p.opp_observation->move.num_glyphs(), 3);
+  // ... while Alice held AAAAEFG: the pool unseen to her was 100 - 3 - 7.
+  EXPECT_EQ(p.opp_observation->pool.size(), 90);
+  EXPECT_EQ(p.opp_observation->pool.count(Tile::from_char('A')), 9 - 3 - 4);
+  EXPECT_EQ(p.opp_observation->pool.count(Tile::from_char('B')), 2);
+}
+
+TEST(GcgPostMoveTest, OpeningMoveHasNoOpponentEvidence) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n";
+  ParsedGcgPostMove p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_post_move(gcg, &p, &error)) << error;
+  EXPECT_EQ(p.leave.to_string(), "AAAA");
+  EXPECT_TRUE(p.opp_leave.empty());
+  EXPECT_FALSE(p.opp_observation.has_value());
+}
+
+TEST(GcgPostMoveTest, RefusesANonPlayFinalMove) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n"
+    ">Bob: BBBBCDE -  +0 0\n";
+  ParsedGcgPostMove p;
+  std::string error;
+  EXPECT_FALSE(read_gcg_post_move(gcg, &p, &error));
+  EXPECT_NE(error.find("not a tile placement"), std::string::npos);
+}
+
+TEST(UnseenCountsTest, FullDistributionMinusBoardAndRack) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAA? 8D AAa +6 6\n";
+  ParsedGcgPostMove p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_post_move(gcg, &p, &error)) << error;
+  const TileCounts unseen = unseen_counts(p.board, p.leave);
+  EXPECT_EQ(unseen.size(), 100 - 3 - 4);
+  EXPECT_EQ(unseen.count(Tile::from_char('A')), 9 - 2 - 4);
+  EXPECT_EQ(unseen.blanks(), 1);  // the designated blank on the board counts as a blank
 }
 
 }  // namespace

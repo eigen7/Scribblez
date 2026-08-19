@@ -2,7 +2,6 @@
 
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
-#include "data/gcg_reader.h"
 #include "game/bag.h"
 #include "game/game.h"
 #include "game/glyph.h"
@@ -12,6 +11,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -29,18 +29,56 @@ struct RolloutResult {
   Move self_first{};  // start_player's first move of the rollout
 };
 
+// The leave a rollout seats the opponent with, under the condition. Face-up:
+// the known leave, every rollout. Hidden: a draw from the posterior their last
+// move induces, or nothing (a uniform full draw) when that move carried no
+// information -- which is also what an empty face-up leave amounts to, so the
+// two conditions coincide on every position whose opponent kept nothing.
+class OppLeaveSampler {
+ public:
+  OppLeaveSampler(const ParsedGcgPostMove& pos, const Dictionary& dict, LeaveCondition condition,
+                  const belief::RackInferrer::Params& infer);
+
+  Rack leave(uint64_t seed) const;
+
+ private:
+  // A stream of its own, so the variate that picks the leave is not also the
+  // first number that shuffles the pool it is then refilled from.
+  static constexpr uint64_t kLeaveStream = 0x9E3779B97F4A7C15ULL;
+  Rack fixed_;
+  belief::RackPosterior posterior_;
+};
+
+OppLeaveSampler::OppLeaveSampler(const ParsedGcgPostMove& pos, const Dictionary& dict,
+                                 LeaveCondition condition,
+                                 const belief::RackInferrer::Params& infer) {
+  if (condition == LeaveCondition::kFaceUp) {
+    fixed_ = pos.opp_leave;
+  } else if (pos.opp_observation) {
+    posterior_ = belief::RackInferrer(dict, infer).infer(*pos.opp_observation, /*seed=*/0);
+  }
+}
+
+Rack OppLeaveSampler::leave(uint64_t seed) const {
+  if (posterior_.empty()) return fixed_;
+  std::mt19937_64 rng(seed ^ kLeaveStream);
+  return posterior_.sample(std::uniform_real_distribution<double>(0.0, 1.0)(rng));
+}
+
 // One rollout (seed g): play to the end from start_player's POV. The unseen pool
 // (shared helper in sim_runner.h) is built from the board and start_player's
-// leave; the opponent's actual rack is unknown, so it stays in the pool (the
-// rollout re-samples it -- a clean full draw, since the opponent bingoed).
-RolloutResult rollout(const MonteCarloPosition& pos, const Dictionary& dict, Agent& a0, Agent& a1,
-                      uint64_t seed) {
-  const int opponent = 1 - pos.start_player;  // bingoed last turn, so plays first
+// leave; the opponent is seated with the leave the sampler gives this rollout
+// and draws the rest of its rack from the pool.
+RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agent& a0, Agent& a1,
+                      const OppLeaveSampler& sampler, bool face_up, uint64_t seed) {
+  const int opponent = 1 - pos.start_player;  // moved before start_player, so plays first
   std::array<Rack, 2> known;
   known[pos.start_player] = pos.leave;  // start_player keeps its leave
-  known[opponent] = Rack{};             // the opponent draws a fresh rack from the pool
-  const Bag pool = unseen_pool(pos.board, pos.leave, seed);
+  known[opponent] = sampler.leave(seed);
+  Bag pool = unseen_pool(pos.board, pos.leave, seed);
+  for (int i = 0; i < known[opponent].size(); ++i) pool.remove(known[opponent].tiles()[i]);
   Game game(a0, a1, dict, seed);
+  game.set_face_up_leaves(face_up);
   game.play_from(pos.board, pos.scores, known, pool, /*to_move=*/opponent);
   const GameLog log = game.log();
 
@@ -82,8 +120,9 @@ void accumulate_rollout(const RolloutResult& r, MonteCarloResult* out) {
 
 // Worker: plays games {t+1, t+1+threads, ...} (each seeded by its own g, so the
 // thread split doesn't affect any game's outcome) and accumulates into *out.
-void monte_carlo_worker(const MonteCarloPosition& pos, const Dictionary& dict, int n, int threads,
-                        int t, MonteCarloResult* out) {
+void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, int n, int threads,
+                        int t, const OppLeaveSampler& sampler, bool face_up,
+                        MonteCarloResult* out) {
   // Default solver params, matching the self-play generation that produces the
   // training data (py/scribblez/selfplay.py): the ground truth must reflect the
   // same rollout policy the model's targets are drawn from.
@@ -94,7 +133,7 @@ void monte_carlo_worker(const MonteCarloPosition& pos, const Dictionary& dict, i
   p1.hasty.name = "H1";
   EndgameHastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int g = t + 1; g <= n; g += threads)
-    accumulate_rollout(rollout(pos, dict, a0, a1, uint64_t(g)), out);
+    accumulate_rollout(rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
 }
 
 // A flat row-major 15x15 count plane as a nested [row][col] JSON array (board
@@ -128,40 +167,21 @@ boost::json::object MonteCarloResult::to_json() const {
   return o;
 }
 
-bool parse_monte_carlo_position(const std::string& gcg_text, MonteCarloPosition* out,
-                                std::string* error) {
-  ParsedGcgGame game;
-  if (!read_gcg_text(gcg_text, &game, error)) return false;
-  if (game.snapshots.empty() || game.turns.empty()) {
-    if (error) *error = "GCG has no turns";
-    return false;
-  }
-  const ParsedGcgSnapshot& final_pos = game.snapshots.back();
-  out->board = final_pos.board;
-  out->scores = final_pos.scores;
-  // turn_player is the seat to act next (the bingoer); start_player is the one that
-  // made the final move.
-  out->start_player = 1 - final_pos.turn_player;
-
-  const TurnRecord& last = game.turns.back().record;
-  if (last.move.type() != MoveType::PLAY) {
-    if (error) *error = "final move is not a tile placement";
-    return false;
-  }
-  Rack leave = last.rack_before;
-  for (int i = 0; i < last.move.num_glyphs(); ++i) leave.remove(last.move.glyph(i).rack_tile());
-  out->leave = leave;
-  return true;
+const char* leave_condition_name(LeaveCondition condition) {
+  return condition == LeaveCondition::kFaceUp ? "face-up-leaves" : "hidden-leaves";
 }
 
-MonteCarloResult run_monte_carlo(const MonteCarloPosition& pos, const Dictionary& dict, int n,
-                                 int threads) {
+MonteCarloResult run_monte_carlo(const ParsedGcgPostMove& pos, const Dictionary& dict, int n,
+                                 int threads, LeaveCondition condition,
+                                 const belief::RackInferrer::Params& infer) {
   threads = std::clamp(threads, 1, std::max(1, n));
+  const OppLeaveSampler sampler(pos, dict, condition, infer);
+  const bool face_up = condition == LeaveCondition::kFaceUp;
   std::vector<MonteCarloResult> partials(threads);
   std::vector<std::thread> workers;
   for (int t = 0; t < threads; ++t)
     workers.emplace_back(monte_carlo_worker, std::cref(pos), std::cref(dict), n, threads, t,
-                         &partials[t]);
+                         std::cref(sampler), face_up, &partials[t]);
   for (auto& w : workers) w.join();
 
   MonteCarloResult total;

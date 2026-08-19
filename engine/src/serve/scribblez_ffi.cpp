@@ -72,10 +72,10 @@ struct ScribblezSession {
   int position_eval_analyze_gcg(const char* gcg_text, bool contingent_features,
                                 bool opp_leave_input, float* out_input, int input_cap,
                                 char* out_err, int err_cap) const;
-  int position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                      bool contingent_features, bool opp_leave_input,
-                                      float* out_input, int input_cap, char* out_err,
-                                      int err_cap) const;
+  int position_eval_analyze_gcg_leaves(const char* gcg_text, const char* leave_str,
+                                       const char* opp_leave_str, bool contingent_features,
+                                       bool opp_leave_input, float* out_input, int input_cap,
+                                       char* out_err, int err_cap) const;
   int gcg_position_inputs(const char* gcg_text, bool contingent_features, bool opp_leave_input,
                           float* out_input, int input_cap, int32_t* out_score_diff, void* out_moves,
                           int moves_cap, char* out_err, int err_cap) const;
@@ -499,11 +499,9 @@ int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int
   }
 }
 
-int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                                      bool contingent_features,
-                                                      bool opp_leave_input, float* out_input,
-                                                      int input_cap, char* out_err,
-                                                      int err_cap) const {
+int ScribblezSession::position_eval_analyze_gcg_leaves(
+  const char* gcg_text, const char* leave_str, const char* opp_leave_str, bool contingent_features,
+  bool opp_leave_input, float* out_input, int input_cap, char* out_err, int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !leave_str || !out_input) return -1;
   try {
@@ -511,8 +509,10 @@ int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, cons
       analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
     if (!arm) return -1;
     std::string error;
-    if (!scribblez::encode_position_eval_analysis_input_with_leave(gcg_text, leave_str, *arm,
-                                                                   out_input, &error)) {
+    const std::optional<std::string> opp_leave =
+      opp_leave_str ? std::optional<std::string>(opp_leave_str) : std::nullopt;
+    if (!scribblez::encode_position_eval_analysis_input_with_leaves(
+          gcg_text, leave_str, opp_leave ? &*opp_leave : nullptr, *arm, out_input, &error)) {
       emit_string(error, out_err, err_cap);
       return -1;
     }
@@ -523,13 +523,14 @@ int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, cons
   }
 }
 
-int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
-                                              const char* leave_str, int contingent_features,
-                                              int opp_leave_input, float* out_input, int input_cap,
-                                              char* out_err, int err_cap) {
-  return s->position_eval_analyze_gcg_leave(gcg_text, leave_str, contingent_features != 0,
-                                            opp_leave_input != 0, out_input, input_cap, out_err,
-                                            err_cap);
+int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* gcg_text,
+                                               const char* leave_str, const char* opp_leave_str,
+                                               int contingent_features, int opp_leave_input,
+                                               float* out_input, int input_cap, char* out_err,
+                                               int err_cap) {
+  return s->position_eval_analyze_gcg_leaves(gcg_text, leave_str, opp_leave_str,
+                                             contingent_features != 0, opp_leave_input != 0,
+                                             out_input, input_cap, out_err, err_cap);
 }
 
 int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_features,

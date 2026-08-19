@@ -29,19 +29,21 @@ import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
 
-from scribblez import lane_analysis
-from scribblez.dashboard import db, master_api, plots, trajectories_api
+from scribblez import lane_analysis, workloads
+from scribblez import params as params_mod
+from scribblez.dashboard import db, master_api, plots, tasks, trajectories_api
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     InputArm,
     analyze_gcg,
     analyze_position_eval_gcg,
-    analyze_position_eval_gcg_leave,
+    analyze_position_eval_gcg_leaves,
     position_eval_board_json,
 )
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import MASK_HEAD_NAMES
+from scribblez.workloads.position_eval import PositionEvalParams
 
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
 _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
@@ -265,18 +267,32 @@ def _position_eval_board(position: int) -> tuple:
     return gcg.stem, position_eval_board_json(gcg.read_text())
 
 
-@lru_cache(maxsize=1)
-def _mc_ground_truth() -> dict:
-    """The committed Monte-Carlo ground truth, keyed by position name (pos-1, ...)."""
-    path = position_eval_analysis.DEFAULT_DATASET / position_eval_analysis.GROUND_TRUTH_FILENAME
+def _position_eval_face_up_leaves(task: str, tag: str) -> bool:
+    """The information condition a position_eval tag trains under (its frozen
+    `face_up_leaves` param): which Monte-Carlo truth it is measured against and
+    how much of the opponent's rack the Positions tab shows. KeyError for a tag
+    with no task.json."""
+    record = tasks.load_task(workloads.get(task), tag)
+    if record is None:
+        raise KeyError(f"tag {tag!r} has no task.json")
+    return params_mod.validate(PositionEvalParams, record.params).face_up_leaves
+
+
+@lru_cache(maxsize=2)
+def _mc_ground_truth(face_up_leaves: bool) -> dict:
+    """The committed Monte-Carlo ground truth under an information condition,
+    keyed by position name (pos-1, ...)."""
+    path = position_eval_analysis.ground_truth_path(
+        position_eval_analysis.DEFAULT_DATASET, face_up_leaves
+    )
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def _mc_payload(name: str) -> dict:
+def _mc_payload(name: str, face_up_leaves: bool) -> dict:
     """A position's Monte-Carlo ground truth shaped for the UI: W/L/D as fractions, the
     exact score-delta histogram as sorted [delta, count] pairs, and the mean delta (the
     UI derives the std from the histogram)."""
-    gt = _mc_ground_truth().get(name, {})
+    gt = _mc_ground_truth(face_up_leaves).get(name, {})
     n = gt.get("n", 0)
     wld = gt.get("wld", {})
     hist = sorted((int(d), c) for d, c in gt.get("score_delta_hist", {}).items())
@@ -289,14 +305,14 @@ def _mc_payload(name: str) -> dict:
     }
 
 
-def _placement_block(name: str, pred) -> dict | None:
+def _placement_block(name: str, face_up_leaves: bool, pred) -> dict | None:
     """The Positions tab's residual-heat-map payload: for each of the four placement
     heads, the Monte-Carlo truth (per-square rollout fraction count/n, board frame)
     paired with the model's on-demand sigmoid prediction (`pred`, or None).
 
     None when the ground-truth file carries no per-square planes (an older
-    monte-carlo-sim-results.json), so the frontend can hide the overlay."""
-    gt = _mc_ground_truth().get(name, {})
+    results file), so the frontend can hide the overlay."""
+    gt = _mc_ground_truth(face_up_leaves).get(name, {})
     planes = gt.get("placement")
     if planes is None:
         return None
@@ -310,11 +326,18 @@ def _placement_block(name: str, pred) -> dict | None:
 
 
 def position_eval_position_payload(conn, position: int, generation, tag, task, mount_root) -> dict:
-    """The full per-position view: board + leave for rendering, the Monte-Carlo ground
-    truth, and the selected generation's model prediction (WLD + score-delta Gaussian)
-    -- or None when no prediction exists for this generation/position. The `placement`
-    block pairs the per-square Monte-Carlo truth with the model's on-demand
-    placement-head predictions for the residual heat-map overlay."""
+    """The full per-position view: board + both racks for rendering, the Monte-Carlo
+    ground truth of the tag's information condition, and the selected generation's
+    model prediction (WLD + score-delta Gaussian) -- or None when no prediction
+    exists for this generation/position. The `placement` block pairs the per-square
+    Monte-Carlo truth with the model's on-demand placement-head predictions for the
+    residual heat-map overlay.
+
+    The opponent's rack is their retained leave plus hidden draws: `opp_leave_size`
+    tiles of leave, spelled out in `opp_leave` under face-up leaves and withheld
+    (None) under hidden leaves -- the client never receives tiles the condition
+    says it cannot see -- and the rest of `opponent_rack_count` drawn since."""
+    face_up_leaves = _position_eval_face_up_leaves(task, tag)
     name, bundle = _position_eval_board(position)
     pred = (
         db.read_position_eval_pred(conn, generation, position)
@@ -341,11 +364,14 @@ def position_eval_position_payload(conn, position: int, generation, tag, task, m
         "scores": bundle["scores"],
         "bag_count": bundle["bag_count"],
         "opponent_rack_count": bundle["opponent_rack_count"],
+        "face_up_leaves": face_up_leaves,
+        "opp_leave": bundle["opp_leave"] if face_up_leaves else None,
+        "opp_leave_size": len(bundle["opp_leave"]),
         "generation": generation,
         "has_prediction": pred is not None,
-        "mc": _mc_payload(name),
+        "mc": _mc_payload(name, face_up_leaves),
         "model": model,
-        "placement": _placement_block(name, placement_pred),
+        "placement": _placement_block(name, face_up_leaves, placement_pred),
     }
 
 
@@ -690,6 +716,9 @@ class PositionEvalPositionHandler(_Base):
                     self.mount_root,
                 )
             )
+        except KeyError as e:  # a tag with no task.json: its condition is unknown
+            self.set_status(404)
+            self.write({"error": str(e)})
         except OSError:  # engine unavailable -> can't build the board
             self.set_status(503)
             self.write({"error": "engine unavailable; cannot build board"})
@@ -699,9 +728,11 @@ class PositionEvalPositionHandler(_Base):
 
 
 class PositionEvalAltLeaveHandler(_Base):
-    """Evaluate the selected generation's model on a position with an alternate leave (a
-    what-if). Query: position, generation, leave. Returns the model's W/L/D + score-delta
-    mean/std, or a 400 with a human-readable reason for an invalid/unavailable leave."""
+    """Evaluate the selected generation's model on a position with alternate leaves (a
+    what-if). Query: position, generation, leave, and optionally opp_leave (the
+    opponent's; meaningful only to a model with an opponent-leave input). Returns the
+    model's W/L/D + score-delta mean/std, or a 400 with a human-readable reason for an
+    invalid/unavailable leave."""
 
     def get(self):
         files = _position_eval_dataset_files()
@@ -711,6 +742,7 @@ class PositionEvalAltLeaveHandler(_Base):
             self.write({"error": "position out of range"})
             return
         leave = self.get_query_argument("leave", "").strip()
+        opp_leave = self.get_query_argument("opp_leave", None)
         conn = self._open_conn()
         try:
             generation = _resolve_position_eval_generation(
@@ -732,8 +764,14 @@ class PositionEvalAltLeaveHandler(_Base):
             return
         sess = _position_eval_onnx_session(onnx_path)
         arm = _position_eval_model_arm(sess)
+        if opp_leave is not None and not arm.opp_leave_input:
+            self.set_status(400)
+            self.write({"error": "this model has no opponent-leave input"})
+            return
         try:
-            inp = analyze_position_eval_gcg_leave(files[position].read_text(), leave, arm)
+            inp = analyze_position_eval_gcg_leaves(
+                files[position].read_text(), leave, opp_leave, arm
+            )
         except ValueError as e:  # bad size / unavailable tiles / stale model -> show the reason
             self.set_status(400)
             self.write({"error": str(e)})
@@ -745,6 +783,7 @@ class PositionEvalAltLeaveHandler(_Base):
         self.write(
             {
                 "leave": leave,
+                "opp_leave": opp_leave,
                 "generation": generation,
                 "model": _run_position_eval_onnx(sess, arm, inp),
             }

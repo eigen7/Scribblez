@@ -13,7 +13,8 @@ from scribblez.ffi import (
     BOARD_CELLS,
     InputArm,
     analyze_position_eval_gcg,
-    analyze_position_eval_gcg_leave,
+    analyze_position_eval_gcg_leaves,
+    position_eval_board_json,
     session_input_arm,
 )
 from scribblez.position_eval import analysis
@@ -80,10 +81,36 @@ def test_a_width_the_arm_does_not_encode_is_refused():
     with pytest.raises(ValueError, match="the arm encodes"):
         analyze_position_eval_gcg(text, stale)
     with pytest.raises(ValueError, match="the arm encodes"):
-        analyze_position_eval_gcg_leave(text, "CEMR", stale)
+        analyze_position_eval_gcg_leaves(text, "CEMR", None, stale)
 
 
 def test_a_bad_position_is_an_os_error_not_a_width_error():
     _text()
     with pytest.raises(OSError):
         analyze_position_eval_gcg("#character-encoding UTF-8\n", session_input_arm())
+
+
+def test_ground_truth_is_per_condition():
+    d = analysis.DEFAULT_DATASET
+    assert analysis.ground_truth_path(d, True) == d / "monte-carlo-sim-results.face-up-leaves.json"
+    assert analysis.ground_truth_path(d, False) == d / "monte-carlo-sim-results.hidden-leaves.json"
+
+
+def test_alternate_leaves_reproduce_the_recorded_encoding():
+    """Re-submitting the recorded leaves as alternates encodes the same row; an
+    alternate opponent leave must match the recorded one's size (empty here:
+    the opponent bingoed), and the POV leave may not spend tiles twice."""
+    text = _text()
+    arm = _arm(contingent=False, opp_leave=True)
+    bundle = position_eval_board_json(text)
+    leave = "".join(t["letter"] for t in bundle["rack"])  # a blank renders as "?"
+    assert bundle["opp_leave"] == ""
+    recorded = analyze_position_eval_gcg(text, arm)
+    np.testing.assert_array_equal(analyze_position_eval_gcg_leaves(text, leave, "", arm), recorded)
+    np.testing.assert_array_equal(
+        analyze_position_eval_gcg_leaves(text, leave, None, arm), recorded
+    )
+    with pytest.raises(ValueError, match="opponent leave must have 0 tile"):
+        analyze_position_eval_gcg_leaves(text, leave, "A", arm)
+    with pytest.raises(ValueError, match="POV leave must have"):
+        analyze_position_eval_gcg_leaves(text, leave + "A", None, arm)

@@ -1,23 +1,33 @@
 # Large position-evaluation Monte-Carlo test set
 
-A machine-harvested companion to `../position-eval-test-dataset/` (10 hand-built
-positions), scaled up for gauging the impact of features on the position evaluation
-model. Every position is a **penultimate-bingo** board: the opponent bingoed on
-the previous turn, so its rack is a clean full draw and a Monte-Carlo rollout can
-sample it uniformly from the unseen pool with no opponent-leave model. See
-`docs/lexical_features_for_value.md` for why this set matters and its caveats
-(it measures the penultimate-bingo slice, not the full position distribution).
+A machine-harvested companion to `../position-eval-test-dataset/` (the
+hand-built positions), scaled up for gauging the impact of features on the
+position evaluation model: post-move positions sampled from HastyBot self-play
+(`harvest_positions_tool`: one training-eligible tile placement per game,
+uniformly), each with a Monte-Carlo ground truth. The dataset contract is the
+small set's (see its README). See `docs/lexical_features_for_value.md` for
+why this set matters and its caveats.
+
+The **currently committed** bundles predate the general sampler: they are
+penultimate-bingo positions (the opponent bingoed on the previous turn, so its
+leave is empty), harvested by games whose HastyBot ran without leave values
+(fixed since). Re-harvest to get the full position distribution.
 
 ## Contents
 
 - `part-NNN.gcgs` — the harvested positions, ~100 concatenated GCG blocks per
   file. Each block begins with `#character-encoding UTF-8` (the record boundary)
   and keeps every move line's `rack_before` (the sim reads the final mover's
-  leave from it) but contains **no** `#Rack` pragmas, so the bingoer's actual
-  drawn rack is never recorded. A `#note` on each block carries its source game
-  seed. These are committed.
-- `monte-carlo-sim-results.json` — the MC ground truth (W/L/D + exact
-  score-delta histogram) keyed by position stem. Committed.
+  leave, and the opponent's retained leave, from them) but contains **no**
+  `#Rack` pragmas, so neither player's post-move draw is recorded. A `#note`
+  on each block carries its source game seed. These are committed.
+- `monte-carlo-sim-results.<condition>.json` — the MC ground truth (W/L/D +
+  exact score-delta histogram) keyed by position stem, one file per
+  information condition (what a rollout knows of the opponent's leave;
+  `engine/include/sim/monte_carlo_sim.h`). Committed. For the current
+  penultimate-bingo contents the conditions coincide (the opponent kept
+  nothing), so `face-up-leaves` is a symlink to `hidden-leaves`; a re-harvest
+  writes two real files.
 - `pos-*.gcg` — transient loose files the C++ tools consume; produced by
   exploding the bundles and removed after scoring. Git-ignored, never committed.
 

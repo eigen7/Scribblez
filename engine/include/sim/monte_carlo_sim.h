@@ -1,7 +1,8 @@
 #pragma once
 
+#include "belief/rack_inference.h"
+#include "data/gcg_post_move.h"
 #include "game/board.h"
-#include "game/rack.h"
 #include "lexicon/dictionary.h"
 
 #include <boost/json.hpp>
@@ -12,22 +13,23 @@
 
 namespace scribblez {
 
-// The analysis position parsed from a penultimate-bingo GCG: the board and
-// scores after the final recorded move, plus the seat that made it -- the POV
-// the position evaluation model evaluates -- and its leave. The other seat
-// bingoed on the penultimate move, so in a rollout it draws a clean full rack
-// and, having moved earlier, plays first.
-struct MonteCarloPosition {
-  Board board;
-  std::array<int, 2> scores{0, 0};
-  int start_player = 0;  // seat that made the final move (the evaluated POV)
-  Rack leave;            // start_player's leave = final rack_before minus the placed tiles
+// The information condition a ground truth is computed under -- what a rollout
+// knows about the opponent's leave (the tiles their last move retained; their
+// replenishment is hidden either way). The position-evaluation model trained
+// under a condition is measured against the truth of that same condition.
+enum class LeaveCondition {
+  // The leave is public: every rollout seats the opponent with it.
+  kFaceUp,
+  // The leave is inferred from their last move (belief::RackInferrer, the
+  // Macondo rangefinder port) and sampled per rollout from the posterior; when
+  // the move carries no information (a bingo, a pass, no recorded move) the
+  // whole rack is a uniform draw from the unseen pool.
+  kHidden,
 };
 
-// False (with *error set, when non-null) if the GCG has no turns or its final
-// move is not a tile play.
-bool parse_monte_carlo_position(const std::string& gcg_text, MonteCarloPosition* out,
-                                std::string* error);
+// "face-up-leaves" / "hidden-leaves": the suffix of the results file the
+// condition's ground truth is committed under.
+const char* leave_condition_name(LeaveCondition condition);
 
 // Per-square placement counts over the rollouts, from `start_player`'s POV, in
 // board frame. Mirrors the position-evaluation model's four placement heads: in
@@ -59,10 +61,14 @@ struct MonteCarloResult {
 
 // Play `n` rollouts from `pos` to a natural game end, EndgameHastyBot vs
 // EndgameHastyBot at the self-play defaults (greedy static equity until the
-// bag empties, then class-only endgame solves). Game g is seeded by g, so the
-// aggregate is deterministic and independent of how the games spread across
-// the workers.
-MonteCarloResult run_monte_carlo(const MonteCarloPosition& pos, const Dictionary& dict, int n,
-                                 int threads);
+// bag empties, then class-only endgame solves), the opponent's leave seated
+// per `condition` (a face-up rollout is also played as the face-up variant,
+// the information condition its training games are generated under). Game g
+// is seeded by g, so the aggregate is deterministic and independent of how the
+// games spread across the workers. `infer` parameterizes the hidden
+// condition's leave inference.
+MonteCarloResult run_monte_carlo(const ParsedGcgPostMove& pos, const Dictionary& dict, int n,
+                                 int threads, LeaveCondition condition,
+                                 const belief::RackInferrer::Params& infer = {});
 
 }  // namespace scribblez

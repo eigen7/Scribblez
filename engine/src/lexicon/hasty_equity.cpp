@@ -131,6 +131,10 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
 }
 
 TurnLeaves HastyEquity::turn_leaves(const Rack& my_rack) const {
+  // The greedy HastyBot path prices every leave through this table rather
+  // than equity(), so it needs the same guard: an unloaded table silently
+  // values every leave at 0, which is a different bot.
+  if (!ready_) throw util::Exception("HastyEquity::init() was not called");
   return TurnLeaves(my_rack, leave_values_);
 }
 
@@ -166,6 +170,7 @@ void enum_sub_leaves(const std::vector<std::pair<Tile, int>>& types, size_t i, R
 
 void HastyEquity::best_leaves_by_size(const Rack& my_rack,
                                       std::array<double, RACK_SIZE + 1>& out) const {
+  if (!ready_) throw util::Exception("HastyEquity::init() was not called");
   out.fill(-1e18);
   std::vector<std::pair<Tile, int>> types;
   for (Tile L = Tile::of(0); L < 26; ++L) {

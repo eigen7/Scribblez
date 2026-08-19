@@ -208,7 +208,7 @@ MSET_QUALITY = [
         ["exch_retention1", "exch_retention3", "exch_retention5", "exch_retention1_baseline"],
     ),
 ]
-# Aggregate model-vs-Monte-Carlo quality curves over the large penultimate-bingo
+# Aggregate model-vs-Monte-Carlo quality curves over the large position-evaluation
 # dataset, shown on the Loss tab beneath the training curves. Lower is better for all:
 # how far the model's predicted value is from the Monte-Carlo ground truth, split by
 # head (win/draw/loss vs. score-differential mean/std).

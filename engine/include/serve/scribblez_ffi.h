@@ -176,10 +176,11 @@ int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t 
 int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg_text,
                                             char* out_json, int out_cap, float* out_input);
 
-// Parse a penultimate-bingo GCG's text into its analysis position and fill
+// Parse a dataset GCG's text into its post-move position and fill
 // `out_input` with the position evaluation model's input tensor, encoded from
 // the POV of the player that made the final recorded move (whose leave is the
-// encode-time rack). The encoding replays the recorded moves, so it is
+// encode-time rack; the opponent-leave arm also reads what the opponent's last
+// move retained). The encoding replays the recorded moves, so it is
 // byte-identical to a training row's input for the same position. Encodes
 // under an explicit arm (contingent_features, opp_leave_input) rather than
 // the session's, so one dashboard process serves models of every arm (the
@@ -194,22 +195,24 @@ int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_tex
                                         int err_cap);
 
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
-// tile_scores, plus a "start_player" field) for a penultimate-bingo GCG's
-// analysis position, from the POV of the player that made the final move (its
-// leave is the shown rack), into `out_json` (NUL-terminated, truncated to
-// out_cap). Returns the full JSON length (same retry/truncation contract as
+// tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
+// a dataset GCG's post-move position, from the POV of the player that made the
+// final move (its leave is the shown rack), into `out_json` (NUL-terminated,
+// truncated to out_cap). Returns the full JSON length (same retry/truncation contract as
 // the dump functions), or -1 on a parse error / non-PLAY final move.
 int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap);
 
-// Like scribblez_position_eval_analyze_gcg, but encodes from an explicit
-// alternate `leave_str` ('?' = a blank) -- a dashboard what-if -- instead of
-// the GCG's recorded leave. The alternate leave must match the recorded
-// leave's tile count and use only tiles available off the board; a violation
-// is one more -1-with-reason, phrased for a person.
-int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
-                                              const char* leave_str, int contingent_features,
-                                              int opp_leave_input, float* out_input, int input_cap,
-                                              char* out_err, int err_cap);
+// Like scribblez_position_eval_analyze_gcg, but encodes from explicit
+// alternate leaves ('?' = a blank) -- a dashboard what-if -- instead of the
+// GCG's recorded ones: `leave_str` for the POV and, unless NULL, `opp_leave_str`
+// for the opponent. Each alternate must match the tile count of the leave it
+// replaces and the two together use only tiles available off the board; a
+// violation is one more -1-with-reason, phrased for a person.
+int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* gcg_text,
+                                               const char* leave_str, const char* opp_leave_str,
+                                               int contingent_features, int opp_leave_input,
+                                               float* out_input, int input_cap, char* out_err,
+                                               int err_cap);
 
 // A position-set .gcg's decision point (read_gcg_position: final recorded
 // state, side to move next, rack from its #RackN pragma) as the move set

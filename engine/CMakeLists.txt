@@ -21,6 +21,7 @@ add_library(scribblez_core STATIC
   src/game/game.cpp
   src/game/game_log.cpp
   src/data/gcg_reader.cpp
+  src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
   src/data/binary_log.cpp
   src/encoding/game_state_encoder.cpp
@@ -254,8 +255,8 @@ target_link_libraries(sim_obs_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-add_executable(harvest_bingo_positions_tool apps/harvest_bingo_positions_tool.cpp)
-target_link_libraries(harvest_bingo_positions_tool PRIVATE
+add_executable(harvest_positions_tool apps/harvest_positions_tool.cpp)
+target_link_libraries(harvest_positions_tool PRIVATE
   scribblez_core
   Boost::program_options
   Boost::json
@@ -286,6 +287,15 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
   target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_gcg_reader)
+
+  # Monte-Carlo ground truth under the two leave conditions (hidden vs
+  # face-up); gated on the lexicon mount like scribblez_tests.
+  add_executable(test_monte_carlo_sim tests/test_monte_carlo_sim.cpp)
+  target_link_libraries(test_monte_carlo_sim PRIVATE scribblez_core Boost::json GTest::gtest_main)
+  target_compile_definitions(test_monte_carlo_sim PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+    SCRIBBLEZ_POSITIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../positions")
+  gtest_discover_tests(test_monte_carlo_sim)
 
   # Endgame solver tests: Board make/unmake round-trips and EndgameSolver
   # correctness (brute-force differential, oracle positions, determinism, node
