@@ -29,10 +29,9 @@ from __future__ import annotations
 import torch
 from schedulefree import AdamWScheduleFree
 
+from .arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZER_WSD
 from .controls import WsdLrController, WsdSchedule
 
-OPTIMIZER_WSD = "wsd"
-OPTIMIZER_SCHEDULE_FREE = "schedule_free"
 OPTIMIZERS = (OPTIMIZER_WSD, OPTIMIZER_SCHEDULE_FREE)
 
 

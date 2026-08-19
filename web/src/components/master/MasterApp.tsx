@@ -10,6 +10,8 @@ import TaskView from './TaskView';
 export type ParamField = {
   name: string; kind: 'int' | 'float' | 'str' | 'bool';
   default: number | boolean | string; help: string;
+  // Allowed value -> the defaults it implies for other fields; null if open.
+  choices: Record<string, Record<string, number | boolean | string>> | null;
 };
 export type Role = {
   name: string; title: string; singleton: boolean; kinds: string[]; interruptible: boolean;
@@ -51,17 +53,52 @@ export function Button({ label, onClick, disabled, tone }: {
   );
 }
 
-// The new-tag section: a tag-name input plus one typed input per schema field,
-// validated client-side (ints must parse) and server-side (the create endpoint
-// re-validates and reports errors verbatim).
-function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
+// One control per schema field: a checkbox for a bool, a selector for a field
+// whose value set is closed, a text box otherwise.
+function ParamInput({ p, value, bad, onChange, onChoose }: {
+  p: ParamField; value: string | boolean; bad: boolean;
+  onChange: (v: string | boolean) => void; onChoose: (v: string) => void;
+}) {
+  if (p.kind === 'bool') {
+    return (
+      <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
+    );
+  }
+  const style = {
+    ...inputStyle, width: p.kind === 'str' ? 160 : 90,
+    borderColor: bad ? '#b23b3b' : '#b8c4d0',
+  };
+  if (p.choices) {
+    return (
+      <select style={style} value={String(value ?? '')} onChange={(e) => onChoose(e.target.value)}>
+        <option value="">— choose —</option>
+        {Object.keys(p.choices).map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+    );
+  }
+  return (
+    <input style={style} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />
+  );
+}
+
+// The new-tag section: a tag-name input plus one control per schema field,
+// validated client-side (ints must parse, closed fields must be chosen) and
+// server-side (the create endpoint re-validates and reports errors verbatim).
+//
+// A closed field starts unchosen rather than defaulted, so the arm a run is
+// built on has to be picked rather than inherited by not looking -- and
+// picking it re-seeds the defaults it implies, so the rate that goes with an
+// optimizer never has to be remembered.
+export function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
   const [tag, setTag] = useState('');
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setValues(Object.fromEntries(workload.params.map((p) => [p.name, p.kind === 'bool' ? false : String(p.default)])));
+    setValues(Object.fromEntries(workload.params.map(
+      (p) => [p.name, p.kind === 'bool' ? false : p.choices ? '' : String(p.default)],
+    )));
   }, [workload]);
 
   const numberOk = (p: ParamField, raw: string) =>
@@ -70,7 +107,18 @@ function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (t
   const badNumbers = workload.params.filter(
     (p) => (p.kind === 'int' || p.kind === 'float') && !numberOk(p, String(values[p.name] ?? '')),
   );
-  const canCreate = tagOk && badNumbers.length === 0 && !busy;
+  const unchosen = workload.params.filter((p) => p.choices && !values[p.name]);
+  const canCreate = tagOk && badNumbers.length === 0 && unchosen.length === 0 && !busy;
+
+  // Choosing re-seeds every field that choice carries a default for.
+  const choose = (p: ParamField, value: string) =>
+    setValues((v) => ({
+      ...v,
+      [p.name]: value,
+      ...Object.fromEntries(Object.entries(p.choices?.[value] ?? {}).map(
+        ([name, d]) => [name, typeof d === 'boolean' ? d : String(d)],
+      )),
+    }));
 
   const coerce = (p: ParamField) => {
     const raw = values[p.name];
@@ -110,22 +158,13 @@ function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (t
         {workload.params.map((p) => (
           <label key={p.name} style={{ fontSize: 13 }} title={p.help}>
             {p.name}<br />
-            {p.kind === 'bool' ? (
-              <input
-                type="checkbox"
-                checked={Boolean(values[p.name])}
-                onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.checked }))}
-              />
-            ) : (
-              <input
-                style={{
-                  ...inputStyle, width: p.kind === 'str' ? 160 : 90,
-                  borderColor: badNumbers.some((b) => b.name === p.name) ? '#b23b3b' : '#b8c4d0',
-                }}
-                value={String(values[p.name] ?? '')}
-                onChange={(e) => setValues((v) => ({ ...v, [p.name]: e.target.value }))}
-              />
-            )}
+            <ParamInput
+              p={p}
+              value={values[p.name] ?? ''}
+              bad={[...badNumbers, ...unchosen].some((b) => b.name === p.name)}
+              onChange={(v) => setValues((s) => ({ ...s, [p.name]: v }))}
+              onChoose={(v) => choose(p, v)}
+            />
           </label>
         ))}
         <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
