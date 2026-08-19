@@ -583,9 +583,12 @@ class WorkerManager:
             elif not run:
                 self._stop_local(spec, task, w)
         elif w.kind == "ssh":
-            # An unreachable machine gets no action either way: the desired
-            # state is saved, and reconcile enforces it once probes succeed.
-            probe = self._probe_container(spec, task.tag, w)
+            # Freshly observed: dispatching a start or stop off a remembered
+            # state would send the wrong command (or, for a slot no pass has
+            # reached yet, none at all). An unreachable machine gets no action
+            # either way: the desired state is saved, and reconcile enforces it
+            # once probes succeed.
+            probe = self._probe_container(spec, task.tag, w, observe=True)
             name = _container_name(spec, task.tag, w.worker_id)
             if start and probe == "stopped":
                 SshMachine(w.host).start_container(name)
