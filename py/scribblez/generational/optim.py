@@ -29,10 +29,15 @@ from __future__ import annotations
 import torch
 from schedulefree import AdamWScheduleFree
 
-from .arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZER_WSD
 from .controls import WsdLrController, WsdSchedule
+from .optimizer_arms import DEFAULT_LR, OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 
-OPTIMIZERS = (OPTIMIZER_WSD, OPTIMIZER_SCHEDULE_FREE)
+
+def arm_lr(params) -> float:
+    """The run's learning rate: the task's, or its arm's default when unset."""
+    if params.optimizer not in DEFAULT_LR:
+        raise ValueError(f"unknown optimizer {params.optimizer!r}; expected one of {OPTIMIZERS}")
+    return params.lr or DEFAULT_LR[params.optimizer]
 
 
 def build_optimizer(model, params):
@@ -42,23 +47,23 @@ def build_optimizer(model, params):
     state: the schedule-free arm's own warmup is counted in optimizer steps,
     converted here from the same `lr_warmup_rows` the WSD arm ramps over so one
     knob covers both."""
+    lr = arm_lr(params)
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
         return AdamWScheduleFree(
             model.parameters(),
-            lr=params.lr,
+            lr=lr,
             weight_decay=params.weight_decay,
             warmup_steps=params.lr_warmup_rows // params.batch_size,
         )
-    if params.optimizer == OPTIMIZER_WSD:
-        return torch.optim.AdamW(model.parameters(), lr=params.lr, weight_decay=params.weight_decay)
-    raise ValueError(f"unknown optimizer {params.optimizer!r}; expected one of {OPTIMIZERS}")
+    return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=params.weight_decay)
 
 
 class WsdArm:
     """AdamW under the rows-clock WSD schedule, with no mode to switch."""
 
     def __init__(self, conn, params, rows_trained: int):
-        self._controller = WsdLrController(conn, WsdSchedule.from_params(params), rows_trained)
+        schedule = WsdSchedule(arm_lr(params), params.lr_warmup_rows, params.lr_cycle_rows)
+        self._controller = WsdLrController(conn, schedule, rows_trained)
         self.lr_fn = self._controller.lr_fn
 
     @property
@@ -84,7 +89,7 @@ class ScheduleFreeArm:
     def __init__(self, params, optimizer):
         self._optimizer = optimizer
         self.lr_fn = None
-        self.current = params.lr
+        self.current = arm_lr(params)
 
     def train_mode(self):
         self._optimizer.train()

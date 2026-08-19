@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { NewTagForm, type Workload } from '../components/master/MasterApp';
 
-// The new-tag form's handling of a closed parameter: it starts unchosen so a
-// run cannot inherit an arm nobody picked, blocks creation until it is picked,
-// and re-seeds the defaults that choice implies for the other fields.
+// The new-tag form's handling of a closed parameter: it renders as a selector
+// over the schema's value set and starts unchosen, so a run cannot inherit a
+// choice nobody made.
 
 const postJSON = vi.fn();
 vi.mock('../lib/api', () => ({ getJSON: vi.fn(), postJSON: (...a: unknown[]) => postJSON(...a) }));
@@ -15,11 +15,8 @@ const workload: Workload = {
   title: 'Train position evaluation',
   roles: [],
   params: [
-    {
-      name: 'optimizer', kind: 'str', default: 'wsd', help: 'the arm',
-      choices: { wsd: { lr: 0.001 }, schedule_free: { lr: 0.0025 } },
-    },
-    { name: 'lr', kind: 'float', default: 0.001, help: 'the rate', choices: null },
+    { name: 'optimizer', kind: 'str', default: 'wsd', help: 'the arm', choices: ['wsd', 'schedule_free'] },
+    { name: 'lr', kind: 'float', default: 0, help: "0 = the arm's own default", choices: null },
     { name: 'batch_size', kind: 'int', default: 256, help: 'batch', choices: null },
   ],
 };
@@ -36,7 +33,7 @@ const createButton = () => screen.getByText('Create').closest('button') as HTMLB
 describe('NewTagForm with a closed parameter', () => {
   beforeEach(() => postJSON.mockReset());
 
-  it('renders it as a selector that starts unchosen', () => {
+  it('renders it as a selector over the schema set, starting unchosen', () => {
     setup();
     expect(optimizer().value).toBe('');
     expect([...optimizer().options].map((o) => o.value)).toEqual(['', 'wsd', 'schedule_free']);
@@ -45,37 +42,26 @@ describe('NewTagForm with a closed parameter', () => {
   it('blocks creation until it is chosen', () => {
     setup();
     expect(createButton().disabled).toBe(true);
-    fireEvent.change(optimizer(), { target: { value: 'wsd' } });
+    fireEvent.change(optimizer(), { target: { value: 'schedule_free' } });
     expect(createButton().disabled).toBe(false);
   });
 
-  it('re-seeds the defaults the choice implies', () => {
+  it('leaves an open field at its schema default', () => {
     setup();
     fireEvent.change(optimizer(), { target: { value: 'schedule_free' } });
-    expect(lr().value).toBe('0.0025');
-    // ... and switching back re-seeds the other arm's rate.
-    fireEvent.change(optimizer(), { target: { value: 'wsd' } });
-    expect(lr().value).toBe('0.001');
+    expect(lr().value).toBe('0');  // the trainer resolves 0 to the arm's rate
   });
 
-  it('submits the seeded values, coerced to their kinds', async () => {
+  it('submits the values coerced to their kinds', async () => {
     postJSON.mockResolvedValue({ tag: 'tryit' });
     setup();
     fireEvent.change(optimizer(), { target: { value: 'schedule_free' } });
+    fireEvent.change(lr(), { target: { value: '0.0003' } });
     fireEvent.click(createButton());
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/tasks', {
       workload: 'position_eval',
       tag: 'tryit',
-      params: { optimizer: 'schedule_free', lr: 0.0025, batch_size: 256 },
+      params: { optimizer: 'schedule_free', lr: 0.0003, batch_size: 256 },
     }));
-  });
-
-  it('keeps a hand-edited rate until the arm changes under it', () => {
-    setup();
-    fireEvent.change(optimizer(), { target: { value: 'wsd' } });
-    fireEvent.change(lr(), { target: { value: '0.0003' } });
-    expect(lr().value).toBe('0.0003');
-    fireEvent.change(optimizer(), { target: { value: 'schedule_free' } });
-    expect(lr().value).toBe('0.0025');
   });
 });

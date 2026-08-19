@@ -10,8 +10,7 @@ import TaskView from './TaskView';
 export type ParamField = {
   name: string; kind: 'int' | 'float' | 'str' | 'bool';
   default: number | boolean | string; help: string;
-  // Allowed value -> the defaults it implies for other fields; null if open.
-  choices: Record<string, Record<string, number | boolean | string>> | null;
+  choices: string[] | null;  // the closed set of accepted values; null if open
 };
 export type Role = {
   name: string; title: string; singleton: boolean; kinds: string[]; interruptible: boolean;
@@ -55,9 +54,8 @@ export function Button({ label, onClick, disabled, tone }: {
 
 // One control per schema field: a checkbox for a bool, a selector for a field
 // whose value set is closed, a text box otherwise.
-function ParamInput({ p, value, bad, onChange, onChoose }: {
-  p: ParamField; value: string | boolean; bad: boolean;
-  onChange: (v: string | boolean) => void; onChoose: (v: string) => void;
+function ParamInput({ p, value, bad, onChange }: {
+  p: ParamField; value: string | boolean; bad: boolean; onChange: (v: string | boolean) => void;
 }) {
   if (p.kind === 'bool') {
     return (
@@ -70,9 +68,9 @@ function ParamInput({ p, value, bad, onChange, onChoose }: {
   };
   if (p.choices) {
     return (
-      <select style={style} value={String(value ?? '')} onChange={(e) => onChoose(e.target.value)}>
+      <select style={style} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
         <option value="">— choose —</option>
-        {Object.keys(p.choices).map((c) => <option key={c} value={c}>{c}</option>)}
+        {p.choices.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
     );
   }
@@ -86,9 +84,7 @@ function ParamInput({ p, value, bad, onChange, onChoose }: {
 // server-side (the create endpoint re-validates and reports errors verbatim).
 //
 // A closed field starts unchosen rather than defaulted, so the arm a run is
-// built on has to be picked rather than inherited by not looking -- and
-// picking it re-seeds the defaults it implies, so the rate that goes with an
-// optimizer never has to be remembered.
+// built on has to be picked rather than inherited by not looking.
 export function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
   const [tag, setTag] = useState('');
   const [values, setValues] = useState<Record<string, string | boolean>>({});
@@ -109,16 +105,6 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   );
   const unchosen = workload.params.filter((p) => p.choices && !values[p.name]);
   const canCreate = tagOk && badNumbers.length === 0 && unchosen.length === 0 && !busy;
-
-  // Choosing re-seeds every field that choice carries a default for.
-  const choose = (p: ParamField, value: string) =>
-    setValues((v) => ({
-      ...v,
-      [p.name]: value,
-      ...Object.fromEntries(Object.entries(p.choices?.[value] ?? {}).map(
-        ([name, d]) => [name, typeof d === 'boolean' ? d : String(d)],
-      )),
-    }));
 
   const coerce = (p: ParamField) => {
     const raw = values[p.name];
@@ -163,7 +149,6 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
               value={values[p.name] ?? ''}
               bad={[...badNumbers, ...unchosen].some((b) => b.name === p.name)}
               onChange={(v) => setValues((s) => ({ ...s, [p.name]: v }))}
-              onChoose={(v) => choose(p, v)}
             />
           </label>
         ))}

@@ -76,19 +76,20 @@ def test_unknown_env_accepts_a_fully_known_environment():
 
 @dataclass(frozen=True)
 class ClosedParams:
-    """A closed field plus the field its choices carry defaults for."""
+    """A field whose value set is closed, alongside an open one."""
 
-    mode: str = param("a", "a closed str", choices={"a": {"rate": 1.0}, "b": {"rate": 2.0}})
-    rate: float = param(1.0, "a float the mode re-seeds")
+    mode: str = param("a", "a closed str", choices=("a", "b"))
+    rate: float = param(1.0, "an open float")
 
 
 def test_schema_carries_choices():
     fields = {f.name: f for f in params_mod.schema(ClosedParams)}
-    assert fields["mode"].choices == {"a": {"rate": 1.0}, "b": {"rate": 2.0}}
+    assert fields["mode"].choices == ("a", "b")
     assert fields["rate"].choices is None
     # public_schema is what the dashboard form reads.
     public = {f["name"]: f["choices"] for f in params_mod.public_schema(ClosedParams)}
-    assert public["mode"]["b"] == {"rate": 2.0}
+    assert public["mode"] == ("a", "b")
+    assert public["rate"] is None
 
 
 def test_validate_rejects_a_value_outside_the_set():
@@ -120,7 +121,7 @@ def test_argparse_enforces_the_set():
 def test_a_default_outside_its_own_choices_is_a_declaration_error():
     @dataclass(frozen=True)
     class Bad:
-        mode: str = param("z", "bad default", choices={"a": {}})
+        mode: str = param("z", "bad default", choices=("a",))
 
     with pytest.raises(AssertionError, match="not among its choices"):
         params_mod.schema(Bad)

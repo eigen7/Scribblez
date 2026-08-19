@@ -12,12 +12,16 @@ from dataclasses import dataclass
 import torch
 from scribblez.generational.checkpoint import GenerationalState, resume, save
 from scribblez.generational.optim import (
-    OPTIMIZER_SCHEDULE_FREE,
-    OPTIMIZER_WSD,
     ScheduleFreeArm,
     WsdArm,
+    arm_lr,
     build_optim_arm,
     build_optimizer,
+)
+from scribblez.generational.optimizer_arms import (
+    DEFAULT_LR,
+    OPTIMIZER_SCHEDULE_FREE,
+    OPTIMIZER_WSD,
 )
 from scribblez.paths import POSITION_EVAL, TagPaths
 
@@ -29,7 +33,7 @@ class _Params:
     """The fields the arms read off a trainer's params dataclass."""
 
     optimizer: str = OPTIMIZER_SCHEDULE_FREE
-    lr: float = 1e-3
+    lr: float = 0.0
     weight_decay: float = 1e-4
     batch_size: int = 8
     lr_warmup_rows: int = 80
@@ -73,7 +77,7 @@ def test_the_arms_report_their_schedule():
     arm = build_optim_arm(None, params, build_optimizer(model, params), 0)
     assert isinstance(arm, ScheduleFreeArm)
     assert arm.lr_fn is None
-    assert arm.current == params.lr
+    assert arm.current == DEFAULT_LR[OPTIMIZER_SCHEDULE_FREE]
 
 
 def test_the_wsd_arm_still_drives_the_rows_clock_schedule():
@@ -82,7 +86,7 @@ def test_the_wsd_arm_still_drives_the_rows_clock_schedule():
     arm = build_optim_arm(None, params, build_optimizer(model, params), 0)
     assert isinstance(arm, WsdArm)
     # Mid-warmup, the schedule is below the peak and rising off the rows clock.
-    assert arm.lr_fn(40) < arm.lr_fn(60) <= params.lr
+    assert arm.lr_fn(40) < arm.lr_fn(60) <= DEFAULT_LR[OPTIMIZER_WSD]
     arm.train_mode()  # no-op under this arm, but the trainer calls it either way
     arm.eval_mode()
 
@@ -125,3 +129,26 @@ def test_schedule_free_survives_an_eval_mode_checkpoint_roundtrip(tmp_path):
 
     for a, b in zip(expected, model2.parameters(), strict=True):
         assert torch.allclose(a, b, atol=1e-6), "resumed run diverged from the training weights"
+
+
+def test_an_unset_rate_falls_back_to_the_arms_default():
+    """`lr` means different things to the two arms, so one default cannot serve
+    both: 0 asks for whichever the chosen arm wants."""
+    assert arm_lr(_Params(optimizer=OPTIMIZER_WSD)) == DEFAULT_LR[OPTIMIZER_WSD]
+    assert arm_lr(_Params(optimizer=OPTIMIZER_SCHEDULE_FREE)) == DEFAULT_LR[OPTIMIZER_SCHEDULE_FREE]
+    assert DEFAULT_LR[OPTIMIZER_WSD] != DEFAULT_LR[OPTIMIZER_SCHEDULE_FREE]
+
+
+def test_a_named_rate_wins_over_the_arms_default():
+    assert arm_lr(_Params(optimizer=OPTIMIZER_SCHEDULE_FREE, lr=3e-4)) == 3e-4
+
+
+def test_the_resolved_rate_reaches_both_arms():
+    """Whatever arm_lr returns is what the optimizer and the schedule run at --
+    not the raw 0 the task left behind."""
+    model = _model()
+    sf = _Params(optimizer=OPTIMIZER_SCHEDULE_FREE)
+    assert build_optimizer(model, sf).param_groups[0]["lr"] == DEFAULT_LR[OPTIMIZER_SCHEDULE_FREE]
+    wsd = _Params(optimizer=OPTIMIZER_WSD)
+    arm = build_optim_arm(None, wsd, build_optimizer(model, wsd), wsd.lr_warmup_rows)
+    assert arm.current == DEFAULT_LR[OPTIMIZER_WSD]

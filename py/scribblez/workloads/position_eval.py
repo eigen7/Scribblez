@@ -18,7 +18,7 @@ resources (threads/vcpus) live on the worker slots.
 
 from dataclasses import dataclass
 
-from scribblez.generational.arms import ARM_DEFAULTS, OPTIMIZER_WSD
+from scribblez.generational.optimizer_arms import OPTIMIZER_WSD, OPTIMIZERS
 from scribblez.params import param
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
@@ -76,13 +76,13 @@ class PositionEvalParams:
         "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
         "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
         "no horizon to pick, every generation's export deployable",
-        choices=ARM_DEFAULTS,
+        choices=OPTIMIZERS,
     )
     lr: float = param(
-        1e-3,
-        "learning rate: the peak the warmup-stable-decay schedule decays away from under the "
-        "wsd arm, the constant the averaged iterate is taken around under schedule_free "
-        "(picking an arm re-seeds this with that arm's default)",
+        0.0,
+        "learning rate -- the peak the warmup-stable-decay schedule decays away from under the "
+        "wsd arm, the constant the averaged iterate is taken around under schedule_free; "
+        "0 = the arm's own default",
     )
     lr_warmup_rows: int = param(
         200_000, "linear LR warmup length, in positions trained (~2.5 default generations)"
