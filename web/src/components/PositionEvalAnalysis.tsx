@@ -5,6 +5,7 @@ import Rack from './Rack';
 import UnseenTiles from './UnseenTiles';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
+import { oppRackTiles } from '../lib/oppRack';
 import { buildPlacementOverlay, OverlayMode, PlacementData } from '../lib/placementOverlay';
 import {
   HeadSelection,
@@ -41,18 +42,20 @@ interface Model {
 
 interface AltResult {
   leave: string;
+  opp_leave: string | null;
   generation: number;
   model: Model;
 }
 
-// The model's evaluation of a hypothetical alternate leave (model only -- there is no
-// Monte-Carlo ground truth for an arbitrary leave).
+// The model's evaluation of hypothetical alternate leaves (model only -- there is no
+// Monte-Carlo ground truth for arbitrary leaves).
 function AltLeaveResult({ result }: { result: AltResult }) {
   const m = result.model;
   return (
     <div style={{ marginTop: 8, padding: '8px 11px', background: '#eef3f8', borderRadius: 6, fontSize: 13, maxWidth: 360 }}>
       <div>
-        Alternate leave <b>{result.leave.toUpperCase()}</b>{' '}
+        Alternate leave <b>{result.leave.toUpperCase()}</b>
+        {result.opp_leave != null && <> · opponent <b>{result.opp_leave.toUpperCase()}</b></>}{' '}
         <span style={{ color: '#667', fontSize: 12 }}>(model only — gen {result.generation})</span>
       </div>
       <div style={{ marginTop: 4 }}>
@@ -77,6 +80,13 @@ interface Payload {
   scores: [number, number];
   bag_count: number;
   opponent_rack_count: number;
+  // The tag's information condition, and the opponent's rack under it: their
+  // last move retained opp_leave_size tiles -- spelled out in opp_leave under
+  // face-up leaves, withheld (null) under hidden -- and the rest of
+  // opponent_rack_count was drawn since.
+  face_up_leaves: boolean;
+  opp_leave: string | null;
+  opp_leave_size: number;
   generation: number | null;
   has_prediction: boolean;
   mc: MC;
@@ -234,6 +244,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
   const [overlayMode, setOverlayMode] = useState<OverlayMode>('residual');
   const [altOpen, setAltOpen] = useState(false);
   const [altLeave, setAltLeave] = useState('');
+  const [altOppLeave, setAltOppLeave] = useState('');
   const [altResult, setAltResult] = useState<AltResult | null>(null);
   const [altError, setAltError] = useState<string | null>(null);
   const [altBusy, setAltBusy] = useState(false);
@@ -305,10 +316,15 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     setAltError(null);
   }, [posIdx, effGen]);
 
-  // Evaluate the selected model on the entered alternate leave. Uses a raw fetch (not
-  // getJSON) so a 400's validation message reaches the UI instead of being swallowed.
+  // Evaluate the selected model on the entered alternate leaves (an empty opponent
+  // field keeps the recorded opponent leave). Uses a raw fetch (not getJSON) so a
+  // 400's validation message reaches the UI instead of being swallowed.
   const submitAlt = async () => {
     const leave = altLeave.trim();
+    // Entered opponent text may outlive its usefulness (a switch to a tag or
+    // position where the field is disabled); send it only where it applies.
+    const oppApplies = payload != null && payload.face_up_leaves && payload.opp_leave_size > 0;
+    const oppLeave = oppApplies ? altOppLeave.trim() : '';
     if (!leave || !tag) return;
     setAltBusy(true);
     setAltError(null);
@@ -317,7 +333,8 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
       const g = effGen == null ? 'latest' : String(effGen);
       const r = await fetch(
         `/api/position_eval/alt_leave?task=${task}&tag=${tag}&position=${posIdx}` +
-          `&generation=${g}&leave=${encodeURIComponent(leave)}`,
+          `&generation=${g}&leave=${encodeURIComponent(leave)}` +
+          (oppLeave ? `&opp_leave=${encodeURIComponent(oppLeave)}` : ''),
       );
       const d = await r.json();
       if (!r.ok || d.error) setAltError(d.error || `request failed (${r.status})`);
@@ -402,6 +419,8 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
           <div style={{ fontSize: 13, color: '#2c3540', margin: '4px 2px 10px' }}>
             POV: <b>Player {payload.start_player + 1}</b> (just moved) — score{' '}
             <b>{payload.scores[0]}</b>–{payload.scores[1]}
+            {' · '}
+            {payload.face_up_leaves ? 'face-up leaves' : 'hidden leaves'}
             {!payload.has_prediction && (
               <span style={{ color: '#a05a00', marginLeft: 10 }}>· no model prediction yet</span>
             )}
@@ -424,13 +443,15 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                 cellHalos={placementOverlay?.halos}
               />
             </div>
-            {/* The unseen pool the Monte-Carlo samples: 100 tiles minus the board and
-                the POV's leave (i.e. the bag + the opponent's rack). Constrained to the
-                game app's sidebar width so the tiles render at the same size. Below it,
-                in the same column, sits the placement-overlay head picker, mode control,
-                and legend. */}
+            {/* The pool hidden from the POV: 100 tiles minus the board, the POV's
+                leave, and -- under face-up leaves -- the opponent's known leave
+                (leaving the bag + the opponent's unseen draws, what the Monte-Carlo
+                actually samples). Constrained to the game app's sidebar width so the
+                tiles render at the same size. Below it, in the same column, sits the
+                placement-overlay head picker, mode control, and legend. */}
             <div style={{ width: 320, flexShrink: 0 }}>
               <UnseenTiles
+                alsoSeen={payload.opp_leave ?? ''}
                 state={{
                   type: 'state',
                   board: payload.board,
@@ -457,16 +478,40 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
           </div>
 
           <div className="lane-rack">
-            <Rack
-              tiles={payload.rack}
-              usedIndices={NO_USED}
-              label={`Leave (Player ${payload.start_player + 1})`}
-              interactive={false}
-            />
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <Rack
+                tiles={payload.rack}
+                usedIndices={NO_USED}
+                label={`Leave (Player ${payload.start_player + 1})`}
+                interactive={false}
+              />
+              <div>
+                <Rack
+                  tiles={oppRackTiles(
+                    payload.opp_leave,
+                    payload.opp_leave_size,
+                    payload.opponent_rack_count,
+                    payload.tile_scores,
+                  )}
+                  usedIndices={NO_USED}
+                  label={`Opponent (Player ${2 - payload.start_player})`}
+                  interactive={false}
+                  hideScoreForQuestion
+                />
+                <div style={{ fontSize: 12, color: '#445063', marginTop: 4 }}>
+                  <span style={{ ...SW, background: '#b7d49a' }} />
+                  drawn since their last move
+                  {payload.opp_leave_size > 0 &&
+                    (payload.face_up_leaves
+                      ? ` · first ${payload.opp_leave_size}: their leave`
+                      : ` · first ${payload.opp_leave_size}: their leave (hidden)`)}
+                </div>
+              </div>
+            </div>
             <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               {!altOpen ? (
                 <button className="arrow" style={{ padding: '4px 10px', width: 'auto' }} onClick={() => setAltOpen(true)}>
-                  Alternate Leave
+                  Alternate Leaves
                 </button>
               ) : (
                 <>
@@ -476,6 +521,34 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                     spellCheck={false}
                     placeholder={`${payload.rack.length} tiles, e.g. ZQU?`}
                     onChange={(e) => setAltLeave(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitAlt();
+                      if (e.key === 'Escape') setAltOpen(false);
+                    }}
+                    style={{ fontFamily: 'monospace', fontSize: 14, padding: '4px 8px', width: 150, textTransform: 'uppercase' }}
+                  />
+                  {/* The opponent's what-if leave feeds the model's opponent-leave
+                      input, so it exists only under face-up leaves, and only when
+                      their leave has tiles to vary. Empty keeps the recorded leave. */}
+                  <input
+                    value={altOppLeave}
+                    spellCheck={false}
+                    disabled={!payload.face_up_leaves || payload.opp_leave_size === 0}
+                    placeholder={
+                      !payload.face_up_leaves
+                        ? 'opp: n/a'
+                        : payload.opp_leave_size === 0
+                          ? 'opp: empty leave'
+                          : `opp: ${payload.opp_leave_size} tiles`
+                    }
+                    title={
+                      !payload.face_up_leaves
+                        ? 'this model has no opponent-leave input'
+                        : payload.opp_leave_size === 0
+                          ? "the opponent's recorded leave is empty; there is nothing to vary"
+                          : 'alternate opponent leave (empty keeps the recorded one)'
+                    }
+                    onChange={(e) => setAltOppLeave(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') submitAlt();
                       if (e.key === 'Escape') setAltOpen(false);
