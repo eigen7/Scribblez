@@ -35,6 +35,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -68,9 +69,13 @@ struct ScribblezSession {
                          int out_cap) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
-  int position_eval_analyze_gcg(const char* gcg_text, float* out_input) const;
-  int position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str, float* out_input,
-                                      char* out_err, int err_cap) const;
+  int position_eval_analyze_gcg(const char* gcg_text, bool contingent_features,
+                                bool opp_leave_input, float* out_input, int input_cap,
+                                char* out_err, int err_cap) const;
+  int position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
+                                      bool contingent_features, bool opp_leave_input,
+                                      float* out_input, int input_cap, char* out_err,
+                                      int err_cap) const;
   int gcg_position_inputs(const char* gcg_text, bool contingent_features, bool opp_leave_input,
                           float* out_input, int input_cap, int32_t* out_score_diff, void* out_moves,
                           int moves_cap, char* out_err, int err_cap) const;
@@ -89,6 +94,10 @@ struct ScribblezSession {
   scribblez::InputEncodingSpec spec;
 
  private:
+  std::optional<scribblez::InputEncodingSpec> analysis_arm(bool contingent_features,
+                                                           bool opp_leave_input, int input_cap,
+                                                           char* out_err, int err_cap) const;
+
   // The spec's input tensor shapes, advertised through input_shapes(). The dim
   // arrays live in the session so the pointers stay valid for its lifetime.
   int spatial_dims_[3];
@@ -434,22 +443,48 @@ int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg
   return s->max_move_per_lane_analyze_gcg(gcg_text, out_json, out_cap, out_input);
 }
 
-int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, float* out_input) const {
+// The explicit arm an analysis entry point encodes under, or nullopt with the
+// width mismatch reported in `out_err`: the caller's buffer is sized for its
+// model, and a model from another encoding era cannot be fed today's rows.
+std::optional<scribblez::InputEncodingSpec> ScribblezSession::analysis_arm(
+  bool contingent_features, bool opp_leave_input, int input_cap, char* out_err, int err_cap) const {
+  const scribblez::InputEncodingSpec arm{spec.dict, contingent_features, opp_leave_input};
+  if (scribblez::input_floats(arm) != input_cap) {
+    emit_string(std::format("input buffer holds {} floats but the arm encodes {}", input_cap,
+                            scribblez::input_floats(arm)),
+                out_err, err_cap);
+    return std::nullopt;
+  }
+  return arm;
+}
+
+int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, bool contingent_features,
+                                                bool opp_leave_input, float* out_input,
+                                                int input_cap, char* out_err, int err_cap) const {
+  if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !out_input) return -1;
   try {
+    const auto arm =
+      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    if (!arm) return -1;
     std::string error;
-    if (!scribblez::encode_position_eval_analysis_input(gcg_text, spec, out_input, &error)) {
+    if (!scribblez::encode_position_eval_analysis_input(gcg_text, *arm, out_input, &error)) {
+      emit_string(error, out_err, err_cap);
       return -1;
     }
-    return input_floats();
-  } catch (const std::exception&) {
+    return input_cap;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
     return -1;
   }
 }
 
 int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                        float* out_input) {
-  return s->position_eval_analyze_gcg(gcg_text, out_input);
+                                        int contingent_features, int opp_leave_input,
+                                        float* out_input, int input_cap, char* out_err,
+                                        int err_cap) {
+  return s->position_eval_analyze_gcg(gcg_text, contingent_features != 0, opp_leave_input != 0,
+                                      out_input, input_cap, out_err, err_cap);
 }
 
 int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap) {
@@ -465,18 +500,23 @@ int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int
 }
 
 int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, const char* leave_str,
-                                                      float* out_input, char* out_err,
+                                                      bool contingent_features,
+                                                      bool opp_leave_input, float* out_input,
+                                                      int input_cap, char* out_err,
                                                       int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !leave_str || !out_input) return -1;
   try {
+    const auto arm =
+      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    if (!arm) return -1;
     std::string error;
-    if (!scribblez::encode_position_eval_analysis_input_with_leave(gcg_text, leave_str, spec,
+    if (!scribblez::encode_position_eval_analysis_input_with_leave(gcg_text, leave_str, *arm,
                                                                    out_input, &error)) {
       emit_string(error, out_err, err_cap);
       return -1;
     }
-    return input_floats();
+    return input_cap;
   } catch (const std::exception& e) {
     emit_string(e.what(), out_err, err_cap);
     return -1;
@@ -484,9 +524,12 @@ int ScribblezSession::position_eval_analyze_gcg_leave(const char* gcg_text, cons
 }
 
 int scribblez_position_eval_analyze_gcg_leave(ScribblezSession* s, const char* gcg_text,
-                                              const char* leave_str, float* out_input,
+                                              const char* leave_str, int contingent_features,
+                                              int opp_leave_input, float* out_input, int input_cap,
                                               char* out_err, int err_cap) {
-  return s->position_eval_analyze_gcg_leave(gcg_text, leave_str, out_input, out_err, err_cap);
+  return s->position_eval_analyze_gcg_leave(gcg_text, leave_str, contingent_features != 0,
+                                            opp_leave_input != 0, out_input, input_cap, out_err,
+                                            err_cap);
 }
 
 int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_features,
@@ -496,13 +539,9 @@ int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !out_input || !out_score_diff || (!out_moves && moves_cap > 0)) return -1;
   try {
-    const scribblez::InputEncodingSpec arm{spec.dict, contingent_features, opp_leave_input};
-    if (scribblez::input_floats(arm) != input_cap) {
-      emit_string(std::format("input buffer holds {} floats but the arm encodes {}", input_cap,
-                              scribblez::input_floats(arm)),
-                  out_err, err_cap);
-      return -1;
-    }
+    const auto arm =
+      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    if (!arm) return -1;
     scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
     scribblez::TrajectoryDecision d;
     std::string error;
@@ -511,7 +550,7 @@ int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_
       return -1;
     }
     int score_diff = 0;
-    scribblez::encode_trajectory_decision(d, arm, out_input, &score_diff);
+    scribblez::encode_trajectory_decision(d, *arm, out_input, &score_diff);
     *out_score_diff = score_diff;
     const int n = d.legal_moves.size();
     if (n > 0 && moves_cap > 0) {

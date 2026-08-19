@@ -44,6 +44,9 @@ class _ScribblezShape(ctypes.Structure):
 # ---------------------------------------------------------------------------
 
 
+BOARD_CELLS = 15 * 15
+
+
 @dataclass(frozen=True)
 class ShapeInfo:
     name: str
@@ -103,7 +106,12 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_position_eval_analyze_gcg.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
+        ctypes.c_int,  # contingent_features
+        ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
+        ctypes.c_int,  # input_cap
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
     ]
 
     lib.scribblez_position_eval_board_json.restype = ctypes.c_int
@@ -118,7 +126,10 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # leave_str
+        ctypes.c_int,  # contingent_features
+        ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
+        ctypes.c_int,  # input_cap
         ctypes.c_char_p,  # out_err
         ctypes.c_int,  # err_cap
     ]
@@ -690,37 +701,103 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
     return json.loads(out.value.decode("utf-8")), inp
 
 
-def analyze_position_eval_gcg(gcg_text: str) -> np.ndarray:
+@dataclass(frozen=True)
+class InputArm:
+    """A board-row encoding arm together with the input widths a model built
+    for it declares. The engine encodes under the arm and refuses a width it
+    does not produce, so a model from another encoding era is caught at the
+    encode call rather than fed a misaligned row. `session_input_arm()` is the
+    process-wide session's own; a served ONNX model's comes from its metadata
+    and declared input shapes."""
+
+    contingent_features: bool
+    opp_leave_input: bool
+    spatial_planes: int
+    scalar_size: int
+
+    @property
+    def input_floats(self) -> int:
+        return self.spatial_planes * BOARD_CELLS + self.scalar_size
+
+    def split(self, flat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """A flat row under this arm as its (spatial (P, 15, 15), scalar (S,)) halves."""
+        spatial = flat[: self.spatial_planes * BOARD_CELLS].reshape(self.spatial_planes, 15, 15)
+        return spatial, flat[self.spatial_planes * BOARD_CELLS :]
+
+
+def session_input_arm() -> InputArm:
+    """The arm the process-wide session encodes under, with its widths."""
+    shapes = {s.name: s.dims for s in get_input_shapes()}
+    return InputArm(
+        _CONTINGENT_FEATURES,
+        _OPP_LEAVE_INPUT,
+        shapes["input_spatial"][0],
+        shapes["input_scalar"][0],
+    )
+
+
+def analyze_position_eval_gcg(gcg_text: str, arm: InputArm) -> np.ndarray:
     """Encode a penultimate-bingo GCG's analysis position into the position
-    evaluation model's flat float32 input tensor (input_floats() long).
+    evaluation model's flat float32 input tensor under `arm` (arm.input_floats
+    long; the session contributes only its dictionary).
 
     The position is the board after the final recorded move, encoded from the POV of
     the player that made it (its leave is the encode-time rack) -- the same seat the
-    Monte-Carlo ground truth scores. Raises IOError on a parse error or a non-PLAY
-    final move.
+    Monte-Carlo ground truth scores. Raises ValueError when the arm does not encode
+    the declared widths (a model from another encoding era), OSError on a parse error
+    or a non-PLAY final move.
     """
     lib = _lib()
-    inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
+    inp = np.zeros(arm.input_floats, dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    if lib.scribblez_position_eval_analyze_gcg(_session(), gcg_text.encode("utf-8"), inp_ptr) < 0:
-        raise OSError("analyze_position_eval_gcg failed (GCG parse error or non-PLAY final move)")
+    err = ctypes.create_string_buffer(256)
+    n = lib.scribblez_position_eval_analyze_gcg(
+        _session(),
+        gcg_text.encode("utf-8"),
+        int(arm.contingent_features),
+        int(arm.opp_leave_input),
+        inp_ptr,
+        len(inp),
+        err,
+        len(err),
+    )
+    if n < 0:
+        _raise_analysis_error(err.value.decode("utf-8"))
     return inp
 
 
-def analyze_position_eval_gcg_leave(gcg_text: str, leave: str) -> np.ndarray:
+def _raise_analysis_error(reason: str):
+    """The engine's one -1 covers two callers' concerns: a width the arm does not
+    encode (the caller's model is wrong for today's layout) and a position that
+    does not parse (the GCG is wrong)."""
+    if "the arm encodes" in reason:
+        raise ValueError(reason)
+    raise OSError(reason or "GCG parse error or non-PLAY final move")
+
+
+def analyze_position_eval_gcg_leave(gcg_text: str, leave: str, arm: InputArm) -> np.ndarray:
     """Encode the analysis position with an explicit alternate `leave` ('?' =
     a blank) instead of the GCG's recorded one -- a dashboard what-if.
 
     Board, scores, and moves are unchanged; only the rack and unseen-pool features
     reflect the new leave. Raises ValueError with a human-readable reason on a size
-    mismatch or unavailable tiles, OSError on a GCG parse error.
+    mismatch, unavailable tiles, or a width the arm does not encode; OSError on a GCG
+    parse error.
     """
     lib = _lib()
-    inp = np.zeros(lib.scribblez_input_floats(_session()), dtype=np.float32)
+    inp = np.zeros(arm.input_floats, dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     err = ctypes.create_string_buffer(256)
     n = lib.scribblez_position_eval_analyze_gcg_leave(
-        _session(), gcg_text.encode("utf-8"), leave.encode("utf-8"), inp_ptr, err, len(err)
+        _session(),
+        gcg_text.encode("utf-8"),
+        leave.encode("utf-8"),
+        int(arm.contingent_features),
+        int(arm.opp_leave_input),
+        inp_ptr,
+        len(inp),
+        err,
+        len(err),
     )
     if n < 0:
         raise ValueError(err.value.decode("utf-8") or "invalid alternate leave")
@@ -786,8 +863,7 @@ def gcg_position_inputs(
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
     lib = _lib()
-    cells = 15 * 15
-    inp = np.zeros(spatial_planes * cells + scalar_size, dtype=np.float32)
+    inp = np.zeros(spatial_planes * BOARD_CELLS + scalar_size, dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     score_diff = ctypes.c_int32(0)
     err = ctypes.create_string_buffer(512)
@@ -813,8 +889,8 @@ def gcg_position_inputs(
             break
         cap = n
     return GcgPositionInputs(
-        input_spatial=inp[: spatial_planes * cells].reshape(spatial_planes, 15, 15),
-        input_scalar=inp[spatial_planes * cells :],
+        input_spatial=inp[: spatial_planes * BOARD_CELLS].reshape(spatial_planes, 15, 15),
+        input_scalar=inp[spatial_planes * BOARD_CELLS :],
         score_diff=int(score_diff.value),
         moves=moves[:n].copy(),
     )
