@@ -61,7 +61,12 @@ Principles:
   (`py/cloud/runtime_abi.py`) so a deploy from a dev container the image has
   fallen behind refuses instead of shipping binaries no worker can start. The dashboard's ssh
   worker slots ([master_dashboard.md](master_dashboard.md)) run this same
-  image on operator-owned machines.
+  image on operator-owned machines, GPU roles included: it carries TensorRT's
+  2 GB builder resource so a worker can turn an ONNX export into an engine
+  plan, which a machine with its own GPU must do for itself -- a plan is valid
+  only for the compute capability it was built on, so the controller cannot
+  build one for it. Such a container is run with `--gpus all`, which needs the
+  NVIDIA container toolkit installed on that machine.
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
   the engine builds once per supported CPU microarchitecture
   (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch

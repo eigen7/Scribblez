@@ -1,4 +1,4 @@
-"""Tests for reading an ssh worker's results out of its container.
+"""Tests for moving files between the controller and an ssh worker's container.
 
 The container commands are plain POSIX sh and coreutils, so the fake machine
 here runs them for real against a directory standing in for the container's
@@ -13,7 +13,9 @@ from cloud.ssh_transfer import (
     BATCH,
     INCOMING_DIR,
     collect_command,
+    list_dir,
     pull_results,
+    push_file,
     sweep_stopped,
 )
 
@@ -36,6 +38,11 @@ class _FakeMachine:
     def exec_in_container(self, container: str, command: list[str]):
         self.execs.append(command)
         subprocess.run(command, cwd=self.root, check=True)
+
+    def write_to_container(self, container: str, command: list[str], src):
+        assert command[:2] == ["sh", "-c"]
+        with open(src, "rb") as f:
+            subprocess.run(["sh", "-c", command[2]], cwd=self.root, stdin=f, check=True)
 
 
 def _container(tmp_path, **files):
@@ -283,3 +290,21 @@ def test_a_sweep_clears_a_spool_left_by_a_process_that_died(tmp_path):
 
     sweep_stopped(_Empty(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
     assert not orphan.exists()
+
+
+def test_a_push_lands_atomically_where_the_worker_looks(tmp_path):
+    container = _container(tmp_path)
+    machine = _FakeMachine(container)
+    remote_root = str(container / "tag")
+    src = tmp_path / "model_epoch_0010.onnx"
+    src.write_bytes(b"weights")
+    inbox = "data/match_inbox/ssh-0"
+
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == []
+    push_file(machine, "c", remote_root=remote_root, rel_dest=f"{inbox}/{src.name}", src=src)
+
+    landed = container / "tag" / inbox / src.name
+    assert landed.read_bytes() == b"weights"
+    # Nothing half-written is left under the temporary name the push uses.
+    assert [p.name for p in landed.parent.iterdir()] == [src.name]
+    assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == [src.name]

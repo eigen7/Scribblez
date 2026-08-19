@@ -1,8 +1,10 @@
-"""Tests for the match harness and the match_eval role's pure parts."""
+"""Tests for the match harness and the match_eval role's worker half."""
 
 import json
+from pathlib import Path
 
 import pytest
+from cloud.sinks import LocalSink
 from scribblez import selfplay
 from scribblez.dashboard import api, db
 from scribblez.match_eval import harness, runner
@@ -135,7 +137,7 @@ def test_match_eval_figure_is_serializable(tmp_path):
     assert {"doc", "root_id", "target_id"} <= set(item)
 
 
-def _ctx(**param_overrides) -> WorkerContext:
+def _ctx(sink=None, **param_overrides) -> WorkerContext:
     return WorkerContext(
         spec=SPEC,
         role=SPEC.role("match_eval"),
@@ -144,8 +146,11 @@ def _ctx(**param_overrides) -> WorkerContext:
         worker_id="w0",
         threads=2,
         max_cycles=1,
-        sink=None,
+        sink=sink,
     )
+
+
+_MODEL = Path("/models/model_epoch_0003.onnx")
 
 
 def test_play_match_accumulates_rounds_until_the_budget(monkeypatch):
@@ -158,7 +163,7 @@ def test_play_match_accumulates_rounds_until_the_budget(monkeypatch):
         return RoundResult([0.5] * num_pairs, wins=num_pairs, draws=0, losses=num_pairs)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(match_round_pairs=2, match_max_pairs=5), gen=3)
+    outcome = runner._play_match(_ctx(match_round_pairs=2, match_max_pairs=5), 3, _MODEL)
     assert seeds == [1, 3, 5]
     assert outcome.pair_counts == [0, 0, 5, 0, 0]
     assert (outcome.wins, outcome.draws, outcome.losses) == (5, 0, 5)
@@ -173,24 +178,50 @@ def test_play_match_stops_on_a_decision(monkeypatch):
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(match_round_pairs=4, match_max_pairs=100), gen=3)
+    outcome = runner._play_match(_ctx(match_round_pairs=4, match_max_pairs=100), 3, _MODEL)
     assert calls == [4]
     assert outcome.sprt.decision == "H1"
     assert outcome.games == 8
 
 
-def test_pending_generation_prefers_the_frontier(tmp_path):
+def test_assigned_model_reads_the_inbox(tmp_path):
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
-    conn = db.connect(paths.dashboard_db)
-    paths.onnx_dir.mkdir(parents=True)
-    for gen in (4, 5, 10, 15, 16):
-        paths.onnx_path(gen).touch()
+    inbox = paths.match_inbox_dir("w0")
+    assert runner._assigned_model(paths, "w0") is None  # no inbox yet: idle
+    inbox.mkdir(parents=True)
+    assert runner._assigned_model(paths, "w0") is None
+    (inbox / "lexicon_frozen.bin").touch()  # a sidecar is not an assignment
+    assert runner._assigned_model(paths, "w0") is None
+    (inbox / paths.onnx_path(5).name).touch()
+    (inbox / paths.onnx_path(10).name).touch()
+    assigned = runner._assigned_model(paths, "w0")
+    assert paths.onnx_epoch(assigned) == 10  # newest first
 
-    assert runner._pending_generation(paths, conn, every=5) == 15
-    db.write_match_eval(conn, 15, _match_record())
-    assert runner._pending_generation(paths, conn, every=5) == 10
-    db.write_match_eval(conn, 10, _match_record())
-    db.write_match_eval(conn, 5, _match_record())
-    assert runner._pending_generation(paths, conn, every=5) is None
-    # every=1 picks up the non-multiple stragglers too.
-    assert runner._pending_generation(paths, conn, every=1) == 16
+
+def test_run_delivers_the_result_and_clears_the_inbox(tmp_path, monkeypatch):
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    inbox = paths.match_inbox_dir("w0")
+    inbox.mkdir(parents=True)
+    model = inbox / paths.onnx_path(20).name
+    model.touch()
+    monkeypatch.setattr(WorkerContext, "tag_paths", lambda self: paths)
+
+    played = []
+
+    def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
+        played.append(spec0)
+        return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
+
+    monkeypatch.setattr(runner.harness, "play_round", fake_round)
+    ctx = _ctx(sink=LocalSink(paths.root), match_round_pairs=4, match_max_pairs=8)
+    assert runner.run(ctx) == 0
+
+    assert str(model) in played[0]  # the assigned model is what was played
+    assert not model.exists()  # cleared only after delivery
+    delivered = list(paths.match_results_dir.glob("*.json"))
+    assert [p.name for p in delivered] == ["gen_000020-w0.json"]
+    record = json.loads(delivered[0].read_text())
+    assert record["epoch"] == 20
+    assert record["decision"] == "H1"
+    assert record["games"] == 8
+    assert "positions" not in record  # the controller's column, not the worker's

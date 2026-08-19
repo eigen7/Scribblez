@@ -10,9 +10,12 @@
 #
 # Built and pushed by ./build_and_push_worker_image.py, which requires the local dev
 # image (default "scribblez") to be present: the engine binaries dynamically
-# link CUDA/TensorRT (the NN inference code is compiled in unconditionally,
-# though CPU workloads never execute it), and those libraries are copied out
-# of the dev image rather than shipped via a multi-gigabyte NVIDIA base image.
+# link CUDA/TensorRT, and those libraries are copied out of the dev image
+# rather than shipped via a multi-gigabyte NVIDIA base image.
+#
+# The image serves GPU roles too (match eval on an operator's own machine, run
+# with `docker run --gpus all`), so it carries what building a TensorRT engine
+# needs as well as what running one does -- see the builder-resource section.
 ARG DEV_IMAGE=scribblez
 FROM ${DEV_IMAGE} AS devlibs
 
@@ -50,6 +53,21 @@ COPY --from=devlibs /usr/lib/x86_64-linux-gnu/libnvinfer.so.10.11.0 \
                     /usr/lib/x86_64-linux-gnu/libonnx_proto.so.1 \
                     /usr/lib/x86_64-linux-gnu/
 COPY --from=devlibs /usr/local/cuda/lib64/libcudart.so.12.9.79 /usr/lib/x86_64-linux-gnu/
+
+# TensorRT's builder resource, dlopen'd by name (no soname symlink) the first
+# time a process turns an ONNX model into an engine plan. Without it a GPU
+# worker dies at createInferBuilder with "Unable to load library:
+# libnvinfer_builder_resource.so.10.11.0".
+#
+# It is 2 GB, which doubles the image -- the price of the plan cache being
+# per-GPU: a plan is valid only for the compute capability it was built on
+# (nn/cuda_util.h), so a plan built on the controller cannot be shipped to a
+# worker with a different GPU, and every GPU machine must build its own. That
+# happens once per container (~1 minute); plans are refittable, so later
+# generations reuse the cached plan and only swap in their weights.
+COPY --from=devlibs /usr/lib/x86_64-linux-gnu/libnvinfer_builder_resource.so.10.11.0 \
+                    /usr/lib/x86_64-linux-gnu/
+
 RUN ln -s libnvinfer.so.10.11.0      /usr/lib/x86_64-linux-gnu/libnvinfer.so.10 && \
     ln -s libnvonnxparser.so.10.11.0 /usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10 && \
     ln -s libcudart.so.12.9.79       /usr/lib/x86_64-linux-gnu/libcudart.so.12 && \

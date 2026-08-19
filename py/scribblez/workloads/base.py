@@ -60,6 +60,14 @@ class RoleSpec:
     # cheaper, but Runpod may stop them at any time. Only for roles that
     # tolerate preemption (the reconcile loop restarts reclaimed pods).
     interruptible: bool = False
+    # Dotted path to a controller-side tick for this role,
+    # dispatch(spec, tag, params, slots) -- for a role whose work the
+    # controller assigns rather than the worker choosing it, and whose results
+    # it ingests. `slots` holds one scribblez/dashboard/slot_files.py handle
+    # per running slot of the role, the only way into a worker's filesystem;
+    # since a rented pod has no such handle, such a role's kinds are local and
+    # ssh. "" for the self-directing roles (a generator picks its own work).
+    dispatch: str = ""
     stats: StatsSpec | None = None
 
 

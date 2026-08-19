@@ -18,6 +18,7 @@ from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.workers import (
     WorkerManager,
     _cloud_state,
+    _container_name,
     _resource_record_fields,
     _worker_resources,
 )
@@ -248,8 +249,8 @@ class _RecordingSshMachine(_FakeSshMachine):
     def pull_image(self, image):
         self.ops.append(("pull", image))
 
-    def run_container(self, name, image, env):
-        self.ops.append(("run", name))
+    def run_container(self, name, image, env, *, gpus=False):
+        self.ops.append(("run", "gpu" if gpus else name))
 
     def copy_from_container(self, name, path, dest):
         self.ops.append(("copy", path))
@@ -619,6 +620,30 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, w)
     assert (w.launched, w.undelivered, w.bundle_id) == (True, 0, "b1")
+
+
+def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
+    """A container for a GPU role is run with --gpus: the match-eval worker
+    plays a neural agent, which needs the machine's GPU (and the worker image
+    carries the TensorRT builder for it)."""
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    _RecordingSshMachine.ops = []
+
+    generator = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    manager._run_ssh_container(spec, task, generator)
+    matcher = manager.add_ssh(spec, task, "match_eval", host="user@laptop", threads=None)
+    manager._run_ssh_container(spec, task, matcher)
+
+    assert [arg for op, arg in _RecordingSshMachine.ops if op == "run"] == [
+        _container_name(spec, "t", generator.worker_id),
+        "gpu",
+    ]
 
 
 def test_a_running_container_still_holding_output_is_not_stopped_by_a_redeploy(
