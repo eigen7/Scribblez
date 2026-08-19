@@ -22,6 +22,7 @@
 #include "game/move.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
+#include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "util/misc.h"
 
@@ -134,6 +135,7 @@ int main(int argc, char** argv) {
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     const std::string& lexicon = scribblez::Lexicon::instance().name();
+    scribblez::HastyEquity::ensure_initialized(lexicon);
     const std::filesystem::path dir = std::filesystem::path("positions") / lexicon / dataset_name;
     std::filesystem::create_directories(dir);
 
