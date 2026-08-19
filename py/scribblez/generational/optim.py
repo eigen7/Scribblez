@@ -15,9 +15,16 @@ Two arms, selected by a frozen task param:
 The averaging is why the arms need a mode: schedule-free training steps at one
 point (`y`) and deploys another (`x`), keeping the difference in optimizer
 state, so the live weights have to be swapped before anything reads the model
-and swapped back afterwards. The trainer brackets its phases with train_mode /
-eval_mode rather than knowing which arm needs them; under `wsd` they do
-nothing, because there the live weights are the only weights.
+and swapped back afterwards. The swap alone is not enough for a model with
+BatchNorm: the running statistics accumulate during training, i.e. at `y`, and
+are wrong for `x` (the schedulefree README's BatchNorm caveat). Measured on the
+position-evaluation large test set, a schedule-free export read that way had
+its placement heads badly under-confident (calibration slope 1.44 instead of
+~1.05) and a 10% worse win MAE; so eval_mode also recomputes every BatchNorm
+layer's statistics at `x` over a few training batches, which restores both.
+The trainer brackets its phases with train_mode / eval_mode rather than knowing
+which arm needs them; under `wsd` they do nothing, because there the live
+weights are the only weights and the statistics already match them.
 
 Both arms present one surface: the per-step `lr_fn` run_epoch applies (None
 when the arm imposes no schedule), the `current` rate for the metrics row, any
@@ -76,7 +83,7 @@ class WsdArm:
     def train_mode(self):
         pass
 
-    def eval_mode(self):
+    def eval_mode(self, model, batches):
         pass
 
 
@@ -128,8 +135,31 @@ class ScheduleFreeArm:
     def train_mode(self):
         self._optimizer.train()
 
-    def eval_mode(self):
+    def eval_mode(self, model, batches):
+        """Swap the averaged iterate in and recompute `model`'s BatchNorm
+        statistics for it over `batches` (an iterable of (spatial, scalar)
+        input pairs on the model's device; a few dozen batches suffice)."""
         self._optimizer.eval()
+        recalibrate_batchnorm(model, batches)
+
+
+@torch.no_grad()
+def recalibrate_batchnorm(model, batches):
+    """Replace every BatchNorm layer's running statistics with the exact
+    (cumulative, momentum=None) mean/variance of the live weights' activations
+    over `batches`, leaving the model in eval mode. Each layer's momentum is
+    restored afterwards so training resumes with the ordinary running update."""
+    bn_layers = [m for m in model.modules() if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
+    momenta = [m.momentum for m in bn_layers]
+    for m in bn_layers:
+        m.reset_running_stats()
+        m.momentum = None
+    model.train()
+    for spatial, scalar in batches:
+        model(spatial, scalar)
+    model.eval()
+    for m, momentum in zip(bn_layers, momenta, strict=True):
+        m.momentum = momentum
 
 
 def build_optim_arm(conn, params, optimizer, rows_trained: int):
