@@ -21,6 +21,7 @@ add_library(scribblez_core STATIC
   src/game/game.cpp
   src/game/game_log.cpp
   src/data/gcg_reader.cpp
+  src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
   src/data/binary_log.cpp
   src/encoding/game_state_encoder.cpp

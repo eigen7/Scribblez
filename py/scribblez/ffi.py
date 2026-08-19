@@ -121,11 +121,12 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # out_cap
     ]
 
-    lib.scribblez_position_eval_analyze_gcg_leave.restype = ctypes.c_int
-    lib.scribblez_position_eval_analyze_gcg_leave.argtypes = [
+    lib.scribblez_position_eval_analyze_gcg_leaves.restype = ctypes.c_int
+    lib.scribblez_position_eval_analyze_gcg_leaves.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # leave_str
+        ctypes.c_char_p,  # opp_leave_str (NULL keeps the recorded one)
         ctypes.c_int,  # contingent_features
         ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
@@ -737,13 +738,14 @@ def session_input_arm() -> InputArm:
 
 
 def analyze_position_eval_gcg(gcg_text: str, arm: InputArm) -> np.ndarray:
-    """Encode a penultimate-bingo GCG's analysis position into the position
-    evaluation model's flat float32 input tensor under `arm` (arm.input_floats
-    long; the session contributes only its dictionary).
+    """Encode a dataset GCG's post-move position into the position evaluation
+    model's flat float32 input tensor under `arm` (arm.input_floats long; the
+    session contributes only its dictionary).
 
     The position is the board after the final recorded move, encoded from the POV of
     the player that made it (its leave is the encode-time rack) -- the same seat the
-    Monte-Carlo ground truth scores. Raises ValueError when the arm does not encode
+    Monte-Carlo ground truth scores; the opponent-leave arm also reads what the
+    opponent's last move retained. Raises ValueError when the arm does not encode
     the declared widths (a model from another encoding era), OSError on a parse error
     or a non-PLAY final move.
     """
@@ -775,23 +777,28 @@ def _raise_analysis_error(reason: str):
     raise OSError(reason or "GCG parse error or non-PLAY final move")
 
 
-def analyze_position_eval_gcg_leave(gcg_text: str, leave: str, arm: InputArm) -> np.ndarray:
-    """Encode the analysis position with an explicit alternate `leave` ('?' =
-    a blank) instead of the GCG's recorded one -- a dashboard what-if.
+def analyze_position_eval_gcg_leaves(
+    gcg_text: str, leave: str, opp_leave: str | None, arm: InputArm
+) -> np.ndarray:
+    """Encode the analysis position with explicit alternate leaves ('?' = a
+    blank) instead of the GCG's recorded ones -- a dashboard what-if: `leave`
+    for the POV and, unless None, `opp_leave` for the opponent (read by the
+    opponent-leave arm only).
 
-    Board, scores, and moves are unchanged; only the rack and unseen-pool features
-    reflect the new leave. Raises ValueError with a human-readable reason on a size
-    mismatch, unavailable tiles, or a width the arm does not encode; OSError on a GCG
-    parse error.
+    Board, scores, and moves are unchanged; only the rack, opponent-leave, and
+    unseen-pool features reflect the new leaves. Raises ValueError with a
+    human-readable reason on a size mismatch, unavailable tiles, or a width the
+    arm does not encode; OSError on a GCG parse error.
     """
     lib = _lib()
     inp = np.zeros(arm.input_floats, dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     err = ctypes.create_string_buffer(256)
-    n = lib.scribblez_position_eval_analyze_gcg_leave(
+    n = lib.scribblez_position_eval_analyze_gcg_leaves(
         _session(),
         gcg_text.encode("utf-8"),
         leave.encode("utf-8"),
+        None if opp_leave is None else opp_leave.encode("utf-8"),
         int(arm.contingent_features),
         int(arm.opp_leave_input),
         inp_ptr,
@@ -805,11 +812,13 @@ def analyze_position_eval_gcg_leave(gcg_text: str, leave: str, arm: InputArm) ->
 
 
 def position_eval_board_json(gcg_text: str) -> dict:
-    """The web-render board bundle for a penultimate-bingo GCG's analysis
-    position (board / bonuses / rack / tile_scores / start_player), parsed to a dict.
+    """The web-render board bundle for a dataset GCG's post-move position (board
+    / bonuses / rack / tile_scores / start_player / last_move / opp_leave), parsed
+    to a dict.
 
     The board is the position after the final recorded move; the rack is the leave of
-    the player that made it (the evaluated POV). Raises IOError on a parse error or a
+    the player that made it (the evaluated POV); opp_leave is what the opponent's last
+    recorded move retained ('?' = a blank). Raises IOError on a parse error or a
     non-PLAY final move.
     """
     lib = _lib()
