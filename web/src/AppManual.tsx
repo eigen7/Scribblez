@@ -6,6 +6,9 @@ import ScoreBoard from './components/ScoreBoard';
 import { DragTilePayload, PlacedTile } from './types';
 
 type ManualDirection = 'horizontal' | 'vertical';
+// How much of the rack of the player yet to move a reviewed turn reveals: none
+// of it, the leave their last move left them, or the whole rack they drew up to.
+type OpponentRackView = 'hidden' | 'leaves' | 'racks';
 type CandidateSource = { source: 'bag' } | { source: 'rack'; slot: number };
 type ManualCandidate = PlacedTile & CandidateSource;
 
@@ -96,6 +99,7 @@ interface ManualState {
   end_adjustments: EndAdjustment[];
   last_move: [number, number][];
   view_ply: number;
+  opponent_rack_view: OpponentRackView;
   tail_ply: number;
   backtracking: boolean;
   game_over: boolean;
@@ -862,8 +866,21 @@ function AppManual() {
           </div>
 
           <div className="move-list manual-history-panel">
-            <div className="move-list-header">
+            <div className="move-list-header manual-history-header">
               <h3>Turn History ({state.turns.length})</h3>
+              <label className="manual-rack-view">
+                Opponent rack:
+                <select
+                  value={state.opponent_rack_view}
+                  onChange={(e) =>
+                    send({ type: 'set_opponent_rack_view', view: e.target.value as OpponentRackView })
+                  }
+                >
+                  <option value="hidden">Hidden</option>
+                  <option value="leaves">Open leaves</option>
+                  <option value="racks">Open racks</option>
+                </select>
+              </label>
             </div>
             <div className="manual-history">
               <button

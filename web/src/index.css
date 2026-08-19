@@ -839,6 +839,38 @@ h1 {
   margin-top: 12px;
 }
 
+/* Turn History header: the panel title, with the opponent-rack visibility
+   control sharing its line. */
+.manual-history-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manual-rack-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #bdc3c7;
+}
+
+.manual-rack-view select {
+  padding: 3px 6px;
+  border: 1px solid #4a6278;
+  border-radius: 4px;
+  background: #2c3e50;
+  color: #ecf0f1;
+  font-size: 12px;
+  outline: none;
+}
+
+.manual-rack-view select:focus {
+  border-color: #aed581;
+}
+
 .manual-history {
   max-height: 420px;
   overflow-y: auto;
