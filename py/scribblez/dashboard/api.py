@@ -33,10 +33,10 @@ from scribblez import lane_analysis
 from scribblez.dashboard import db, master_api, plots, trajectories_api
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
+    InputArm,
     analyze_gcg,
     analyze_position_eval_gcg,
     analyze_position_eval_gcg_leave,
-    get_input_shapes,
     position_eval_board_json,
 )
 from scribblez.paths import TagPaths
@@ -373,46 +373,36 @@ def _position_eval_onnx_session(onnx_path: Path):
     return sess
 
 
-def _position_eval_onnx_feed(sess, flat_input: np.ndarray) -> dict:
-    """The ``{input_spatial, input_scalar}`` feed for `sess` from the dashboard
-    session's full flat input row.
-
-    The model declares its own arm in its ONNX metadata_props
-    ("contingent_features", stamped at export; absent means off). A baseline model
-    consumes the base layout, whose spatial planes and scalars are prefixes of the
-    full blocks, so its declared input widths select the right slices."""
+def _position_eval_model_arm(sess) -> InputArm:
+    """The arm an exported model consumes, from its ONNX metadata_props (stamped
+    at export; an absent flag means off) and its declared input widths. The
+    dashboard encodes each position under the model's own arm -- one process
+    serves models of every arm -- and the engine refuses the widths of a model
+    from another encoding era at the encode call."""
     meta = sess.get_modelmeta().custom_metadata_map
-    contingent = meta.get("contingent_features") == "true"
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
-    planes = int(model_inputs["input_spatial"][1])
-    scalars = int(model_inputs["input_scalar"][1])
-    full_planes = {s.name: s.dims for s in get_input_shapes()}["input_spatial"][0]
-    if contingent != (planes == full_planes):
-        raise ValueError("ONNX metadata arm disagrees with the declared input widths")
-    cells = position_eval_analysis.BOARD_SIZE**2
-    spatial = flat_input[: planes * cells].reshape(1, planes, 15, 15).astype(np.float32)
-    scalar = flat_input[full_planes * cells :][:scalars].reshape(1, -1).astype(np.float32)
-    return {"input_spatial": spatial, "input_scalar": scalar}
-
-
-def _position_eval_onnx_fits_encoder(sess) -> bool:
-    """True iff `sess`'s declared input widths fit within the dashboard session's
-    current encoder row -- its planes and scalars are prefixes of the full blocks. A
-    model exported under an earlier, differently sized encoding does not fit and
-    cannot be run on today's inputs."""
-    model_inputs = {i.name: i.shape for i in sess.get_inputs()}
-    full = {s.name: s.dims for s in get_input_shapes()}
-    return (
-        int(model_inputs["input_spatial"][1]) <= full["input_spatial"][0]
-        and int(model_inputs["input_scalar"][1]) <= full["input_scalar"][0]
+    return InputArm(
+        contingent_features=meta.get("contingent_features") == "true",
+        opp_leave_input=meta.get("opp_leave_input") == "true",
+        spatial_planes=int(model_inputs["input_spatial"][1]),
+        scalar_size=int(model_inputs["input_scalar"][1]),
     )
 
 
-def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
-    """Run the exported post-move model on one flat input tensor and decode the value
-    outputs: W/L/D probabilities and the score-delta mean/std."""
-    sess = _position_eval_onnx_session(onnx_path)
-    wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(sess, flat_input))
+def _position_eval_onnx_feed(arm: InputArm, flat_input: np.ndarray) -> dict:
+    """The ``{input_spatial, input_scalar}`` feed from a row encoded under `arm`."""
+    spatial, scalar = arm.split(flat_input)
+    return {
+        "input_spatial": spatial[None].astype(np.float32),
+        "input_scalar": scalar[None].astype(np.float32),
+    }
+
+
+def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
+    """Run an exported post-move model on one flat input row (encoded under the
+    model's `arm`) and decode the value outputs: W/L/D probabilities and the
+    score-delta mean/std."""
+    wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(arm, flat_input))
     probs = np.exp(wld[0] - wld[0].max())
     probs /= probs.sum()
     return {
@@ -422,17 +412,16 @@ def _run_position_eval_onnx(onnx_path: Path, flat_input: np.ndarray) -> dict:
     }
 
 
-def _run_position_eval_masks(onnx_path: Path, flat_input: np.ndarray) -> dict:
-    """The exported model's four placement-mask heads for one flat input, as
-    board-frame (15, 15) sigmoid-probability arrays keyed by head name.
+def _run_position_eval_masks(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
+    """The exported model's four placement-mask heads for one flat input row
+    (encoded under the model's `arm`), as board-frame (15, 15)
+    sigmoid-probability arrays keyed by head name.
 
     The analysis encoder never flips the board (apply_flip=False in
     position_eval_analysis.cpp), so the convolutional mask heads emit their squares
     in the same row/col frame as the board -- the frame the Monte-Carlo ground-truth
     planes use -- and need no transpose."""
-    sess = _position_eval_onnx_session(onnx_path)
-    feed = _position_eval_onnx_feed(sess, flat_input)
-    outs = sess.run(list(MASK_HEAD_NAMES), feed)
+    outs = sess.run(list(MASK_HEAD_NAMES), _position_eval_onnx_feed(arm, flat_input))
     return {
         name: 1.0 / (1.0 + np.exp(-out[0])) for name, out in zip(MASK_HEAD_NAMES, outs, strict=True)
     }
@@ -441,19 +430,22 @@ def _run_position_eval_masks(onnx_path: Path, flat_input: np.ndarray) -> dict:
 @lru_cache(maxsize=256)
 def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
     """The mask predictions for one on-disk ONNX file + dataset position: board-frame
-    sigmoid (15, 15) arrays keyed by head name, or None when the file's declared input
-    widths don't fit the dashboard session's current encoder (an earlier, differently
-    sized encoding era).
+    sigmoid (15, 15) arrays keyed by head name, or None when the engine does not
+    encode the model's declared input widths (an earlier, differently sized
+    encoding era).
 
     Cached per (onnx_path, position): an ONNX export is atomic (a temp file renamed
     into place), so a path that exists is always complete and its content never
-    changes -- the memoized planes never go stale. The fits-encoder=False result is
+    changes -- the memoized planes never go stale. The cannot-encode result is
     likewise permanent for that path, so caching it is fine too."""
-    onnx_path = Path(onnx_path_str)
-    if not _position_eval_onnx_fits_encoder(_position_eval_onnx_session(onnx_path)):
-        return None
+    sess = _position_eval_onnx_session(Path(onnx_path_str))
+    arm = _position_eval_model_arm(sess)
     gcg = _position_eval_dataset_files()[position]
-    return _run_position_eval_masks(onnx_path, analyze_position_eval_gcg(gcg.read_text()))
+    try:
+        flat = analyze_position_eval_gcg(gcg.read_text(), arm)
+    except ValueError:  # the model's widths are not today's layout
+        return None
+    return _run_position_eval_masks(sess, arm, flat)
 
 
 def _position_eval_placement_pred(tag, task, mount_root, generation, position):
@@ -731,16 +723,6 @@ class PositionEvalAltLeaveHandler(_Base):
             self.set_status(404)
             self.write({"error": "no model generations recorded yet"})
             return
-        try:
-            inp = analyze_position_eval_gcg_leave(files[position].read_text(), leave)
-        except ValueError as e:  # bad size / unavailable tiles -> show the reason
-            self.set_status(400)
-            self.write({"error": str(e)})
-            return
-        except OSError:
-            self.set_status(503)
-            self.write({"error": "engine unavailable; cannot encode position"})
-            return
         onnx_path = TagPaths(
             self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
         ).onnx_path(generation)
@@ -748,11 +730,23 @@ class PositionEvalAltLeaveHandler(_Base):
             self.set_status(404)
             self.write({"error": f"model for generation {generation} is not available"})
             return
+        sess = _position_eval_onnx_session(onnx_path)
+        arm = _position_eval_model_arm(sess)
+        try:
+            inp = analyze_position_eval_gcg_leave(files[position].read_text(), leave, arm)
+        except ValueError as e:  # bad size / unavailable tiles / stale model -> show the reason
+            self.set_status(400)
+            self.write({"error": str(e)})
+            return
+        except OSError:
+            self.set_status(503)
+            self.write({"error": "engine unavailable; cannot encode position"})
+            return
         self.write(
             {
                 "leave": leave,
                 "generation": generation,
-                "model": _run_position_eval_onnx(onnx_path, inp),
+                "model": _run_position_eval_onnx(sess, arm, inp),
             }
         )
 

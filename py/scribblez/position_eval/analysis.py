@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from natsort import natsorted
 
-from scribblez.ffi import analyze_position_eval_gcg
+from scribblez.ffi import InputArm, analyze_position_eval_gcg
 from scribblez.paths import REPO_ROOT
 
 # The frozen evaluation sets: penultimate-bingo positions whose Monte-Carlo ground
@@ -75,9 +75,9 @@ def _dataset_items(dataset_dir: str | Path) -> list[tuple[str, str]]:
     return items
 
 
-def load_inputs(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
-    """(names, inputs): each position's flat position-eval model-input tensor,
-    stacked (N, F).
+def load_inputs(dataset_dir: str | Path, arm: InputArm) -> tuple[list[str], np.ndarray]:
+    """(names, inputs): each position's flat position-eval model-input tensor
+    under `arm`, stacked (N, F).
 
     `names` are the position stems (matching the Monte-Carlo ground-truth keys). Each
     input is encoded from the POV of the player that made the final move -- the same
@@ -85,7 +85,7 @@ def load_inputs(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
     """
     items = _dataset_items(dataset_dir)
     names = [stem for stem, _ in items]
-    rows = [analyze_position_eval_gcg(text) for _, text in items]
+    rows = [analyze_position_eval_gcg(text, arm) for _, text in items]
     return names, (np.stack(rows) if rows else np.zeros((0, 0), np.float32))
 
 

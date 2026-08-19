@@ -38,7 +38,12 @@ import torch
 
 from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
-from scribblez.ffi import get_input_shapes, set_contingent_features, set_opp_leave_input
+from scribblez.ffi import (
+    get_input_shapes,
+    session_input_arm,
+    set_contingent_features,
+    set_opp_leave_input,
+)
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, init_controls, progress_line
@@ -241,7 +246,7 @@ def load_position_eval(spatial_planes: int) -> dict | None:
     Positions tab pairs them with the Monte-Carlo ground truth."""
     dataset = str(position_eval_analysis.DEFAULT_DATASET)
     try:
-        names, inputs = position_eval_analysis.load_inputs(dataset)
+        names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
     except Exception as e:  # missing lexicon / unreadable dataset
         timed_print(f"position-evaluation eval disabled: {e}")
         return None
@@ -269,7 +274,7 @@ def load_position_eval_quality(spatial_planes: int) -> dict | None:
     Loss tab."""
     dataset = str(position_eval_analysis.LARGE_DATASET)
     try:
-        names, inputs = position_eval_analysis.load_inputs(dataset)
+        names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
         gt = position_eval_analysis.load_ground_truth(dataset, names)
     except Exception as e:  # missing lexicon / dataset / ground truth
         timed_print(f"position-evaluation quality eval disabled: {e}")
