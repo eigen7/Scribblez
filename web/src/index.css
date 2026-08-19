@@ -484,11 +484,11 @@ h1 {
   cursor: grabbing;
 }
 
-/* A tile drawn after the player's last move, shaded apart from the leave that
-   move left them holding. */
+/* A tile drawn after the player's last move, tinted green so it reads apart
+   from the plain wheat of the leave that move left them holding. */
 .rack-tile.drawn-tile {
-  background: #cbb994;
-  border-color: #a68f60;
+  background: #b7d49a;
+  border-color: #7ba85f;
 }
 
 /* Exchange mode: tiles become click-to-toggle, with a highlight ring and
