@@ -691,3 +691,49 @@ def test_a_crashlooping_container_is_restarted_not_destroyed(manager, spec, task
             manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
         assert {op for op, _ in _RecordingSshMachine.ops} == {"start"}
         manager.remove_worker(spec, task, w.worker_id)
+
+
+def test_an_unreachable_machine_gives_up_a_recorded_zero(manager, spec, task, monkeypatch):
+    """The count says the container was empty when someone last looked. A
+    machine off the network for hours has a worker that went on filling it the
+    whole time, and believing the old zero would authorise sweeping -- in one
+    unbounded copy -- exactly the backlog this PR exists to bound."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "unreachable")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.launched, w.undelivered = True, 0
+
+    manager.worker_status(spec, task, observe=True)
+    assert w.undelivered is None
+
+    # A positive count only ever refuses, so it is kept.
+    w.undelivered = 40
+    manager.worker_status(spec, task, observe=True)
+    assert w.undelivered == 40
+
+
+def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, task, monkeypatch):
+    """Whatever the workers did while no dashboard was watching is precisely
+    what a zero from before the restart does not cover. A positive count
+    survives: forgetting that is how a backlog gets thrown away."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    drained = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    drained.undelivered = 0
+    holding = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    holding.undelivered = 900
+    tasks.save_task(spec, task)
+
+    # The walk is pinned to this task: _all_tasks otherwise lists the real
+    # mount, and a test that reads it passes or fails on what happens to be
+    # there.
+    monkeypatch.setattr(tasks, "list_tags", lambda spec: [{"tag": "t", "has_task": True}])
+    fresh = WorkerManager()  # the dashboard comes back up
+    monkeypatch.setattr(fresh, "_cloud", _fail)
+    reloaded = next(t for _, t in fresh._all_tasks() if t.tag == "t")
+    assert reloaded.worker(drained.worker_id).undelivered is None
+    assert reloaded.worker(holding.worker_id).undelivered == 900
+    # Vetted once, then left alone: a count this process recorded stands.
+    reloaded.worker(drained.worker_id).undelivered = 0
+    tasks.save_task(spec, reloaded)
+    again = next(t for _, t in fresh._all_tasks() if t.tag == "t")
+    assert again.worker(drained.worker_id).undelivered == 0

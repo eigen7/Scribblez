@@ -267,3 +267,19 @@ def test_an_unparseable_listing_is_reported_as_unknown(tmp_path):
     assert parse_listing(b"") == ([], 0)  # no tag root there yet: a real zero
     assert parse_listing(b"data/staging/a.slog\n") == ([], None)  # sentinel missing
     assert parse_listing(b"data/staging/a.slog\nTOTAL 9\n") == (["data/staging/a.slog"], 9)
+
+
+def test_a_sweep_clears_a_spool_left_by_a_process_that_died(tmp_path):
+    """The spool is removed in a finally, which a killed process does not run.
+    Nothing else cleans .incoming, so the next sweep does."""
+    local = tmp_path / "local"
+    (local / INCOMING_DIR).mkdir(parents=True)
+    orphan = local / INCOMING_DIR / "sweep-staging.tar"
+    orphan.write_bytes(b"x" * 1000)
+
+    class _Empty:
+        def copy_from_container(self, container, path, dest):
+            return False
+
+    sweep_stopped(_Empty(), "c", remote_root="/tag", local_root=local, data_dirs=DATA_DIRS)
+    assert not orphan.exists()

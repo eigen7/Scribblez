@@ -40,6 +40,7 @@ import tarfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from typing import IO
 
 # Records the worker keeps writing to and reading back: copied, never removed.
 RECORD_DIRS = ("stats", "params")
@@ -67,6 +68,10 @@ COLLECT_TIMEOUT_SECONDS = 60
 # tag root, so moving it to its final place is a rename on one filesystem --
 # a chunk appears in staging whole or not at all.
 INCOMING_DIR = ".incoming"
+
+# Names the file a sweep streams through, so one left behind by a process that
+# died mid-copy is recognisable -- and removable -- by the next sweep.
+SPOOL_PREFIX = "sweep-"
 
 
 @dataclass(frozen=True)
@@ -127,7 +132,9 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
     ]
 
 
-def _extract(archive, root: Path, mode: str = "r:gz", prefix: str = "") -> list[str]:
+def _extract(
+    archive: bytes | IO[bytes], root: Path, mode: str = "r:gz", prefix: str = ""
+) -> list[str]:
     """Unpack `archive` -- bytes, or a file object to read as a stream -- under
     `root`, atomically per file, returning the paths written relative to
     `root`. `prefix` is prepended to each member name, for an archive that does
@@ -138,6 +145,9 @@ def _extract(archive, root: Path, mode: str = "r:gz", prefix: str = "") -> list[
         archive = BytesIO(archive)
     names = []
     with tarfile.open(fileobj=archive, mode=mode) as tar:
+        # Iterated rather than read through getmembers(), which a stream ("r|",
+        # what sweep_stopped uses) cannot serve: it allows one forward pass, so
+        # building the member list would consume the data before extraction.
         for member in tar:
             if not member.isfile():
                 continue
@@ -165,11 +175,12 @@ def sweep_stopped(
 
     Takes the directory whole rather than in batches, because a stopped
     container cannot be asked what is in it. That is affordable only because a
-    container is stopped for replacement solely after a collection reported it
-    empty, so a sweep finds one worker's dying gasp: were something ever to
-    replace a container holding a backlog, this would be moving gigabytes in
-    one call. It streams through a file rather than memory even so -- the size
-    is a remote machine's business, not something to hold in the dashboard.
+    sweep runs solely on a container recorded as holding nothing -- a
+    collection said so, or it never came up long enough to hold anything -- so
+    what it finds is one worker's dying gasp: were something ever to replace a
+    container holding a backlog, this would be gigabytes in one call. It
+    streams through a file rather than memory even so -- the size is a remote
+    machine's business, not something to hold in the dashboard.
     Uncompressed, unlike a collection: what a sweep moves is a couple of
     megabytes, and the shell pipeline that would compress it costs the ability
     to tell a failed copy from an empty one (see copy_from_container).
@@ -177,8 +188,10 @@ def sweep_stopped(
     names = []
     incoming = local_root / INCOMING_DIR
     incoming.mkdir(parents=True, exist_ok=True)
+    for stale in incoming.glob(f"{SPOOL_PREFIX}*"):
+        stale.unlink()  # a spool from a sweep whose process died mid-copy
     for data_dir in data_dirs:
-        archive = incoming / f"sweep-{Path(data_dir).name}.tar"
+        archive = incoming / f"{SPOOL_PREFIX}{Path(data_dir).name}.tar"
         try:
             path = f"{remote_root}/{data_dir}"
             if not machine.copy_from_container(container, path, archive):

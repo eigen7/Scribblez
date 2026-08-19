@@ -109,6 +109,19 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
     }
 
 
+def _forget_empty(w: tasks.WorkerRecord):
+    """Give up a count of zero, keeping any other.
+
+    Zero is the one value that authorises destroying a container, and it is
+    only worth anything while it is current: a machine that has been off the
+    network for hours has a worker that went on filling it up the whole time.
+    A positive count is kept because it only ever refuses -- being wrong about
+    it costs nothing.
+    """
+    if w.undelivered == 0:
+        w.undelivered = None
+
+
 def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
     """Whether slot `w`'s container may be thrown away for one on the task's
     bundle: it has to be on a different bundle, and known to be holding
@@ -288,6 +301,9 @@ class WorkerManager:
         # Slot key -> (probe state, when observed). Written by the reconcile
         # pass, read by everything else (see _probe_container).
         self._probes: dict[str, tuple[str, float]] = {}
+        # Tasks whose recorded counts this process has already vetted; see
+        # _forget_stale_counts.
+        self._counted_from: set[str] = set()
         # Slot key -> why its container is not running (exit code + last log
         # line), so a crash-looping worker explains itself on the dashboard
         # instead of only in `docker logs`.
@@ -461,6 +477,8 @@ class WorkerManager:
             self._exits.pop(key, None)
         if probe == "running":
             self._restarts.pop(key, None)  # it came up; it is not looping
+        if probe == "unreachable":
+            _forget_empty(w)
         return probe
 
     def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord, *, observe: bool) -> str:
@@ -701,6 +719,7 @@ class WorkerManager:
                 "pod_id": w.pod_id,
                 "host": w.host,
                 "bundle_id": w.bundle_id,
+                "launched": w.launched,
                 # Zero and None differ to anyone about to remove the slot:
                 # drained, versus nothing known about what it holds.
                 "undelivered": w.undelivered,
@@ -812,7 +831,27 @@ class WorkerManager:
             for row in tasks.list_tags(spec):
                 if not row["has_task"]:
                     continue
-                yield spec, tasks.load_task(spec, row["tag"])
+                task = tasks.load_task(spec, row["tag"])
+                self._forget_stale_counts(spec, task)
+                yield spec, task
+
+    def _forget_stale_counts(self, spec, task: tasks.TaskRecord):
+        """The first time this process sees a task, drop any recorded zero.
+
+        The count is durable so that a restart cannot forget a container is
+        holding hours of work -- but it must not let one inherit the opposite
+        claim either, since whatever the workers did while nothing was
+        watching is exactly what a zero from before the restart does not
+        cover.
+        """
+        key = _key(spec, task.tag)
+        if key in self._counted_from:
+            return
+        self._counted_from.add(key)
+        for w in task.workers:
+            if w.kind == "ssh":
+                _forget_empty(w)
+        tasks.save_task(spec, task)
 
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
@@ -959,13 +998,14 @@ class WorkerManager:
         collection has reported the container empty -- and a container holding
         output is started instead, which is what lets the next passes drain it.
 
-        A container that will not stay up is never collected from, so its count
-        never falls to zero and it is never replaced here: it goes on being
-        restarted, visibly, on the bundle it has. Recovering it means deciding
-        to discard whatever it holds -- an amount nothing can measure once it
-        stops staying up -- which is the operator's call from the workers
-        table, where Remove says what would go, and not one to make
-        automatically.
+        A container that will not stay up is never collected from, so a count
+        it had when it stopped staying up is the last word on it: one that was
+        holding a backlog stays pinned to its bundle, restarted and visibly
+        down, because recovering the slot would mean discarding an amount
+        nothing can measure any more -- the operator's call from the workers
+        table, where Remove says what would go. One that never held anything
+        is replaceable as ever; the rule is _replaceable's, not "a collection
+        said so".
         """
         if probe == "stopped" and not _replaceable(w, task):
             machine.start_container(name)

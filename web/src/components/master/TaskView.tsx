@@ -16,7 +16,8 @@ type WorkerInfo = {
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
-  gate_reason?: string; bundle_id: string | null; exit_reason?: string; undelivered: number | null;
+  gate_reason?: string; bundle_id: string | null; exit_reason?: string;
+  undelivered: number | null; launched: boolean;
 };
 
 // A slot still on the bundle the task has moved off. It joins the task's bundle
@@ -45,7 +46,9 @@ function workerResources(w: WorkerInfo): string {
 // they would be discarding instead of being stopped, since discarding it is
 // sometimes exactly the intent.
 function discardWarning(workers: WorkerInfo[]): string | null {
-  const holding = workers.filter((w) => w.kind === 'ssh' && w.undelivered !== 0);
+  // A slot whose container was never created holds nothing by definition;
+  // warning about it would spend the dialog's credibility on a false alarm.
+  const holding = workers.filter((w) => w.kind === 'ssh' && w.launched && w.undelivered !== 0);
   if (holding.length === 0) return null;
   const described = holding.map((w) => (
     w.undelivered == null
