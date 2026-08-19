@@ -419,7 +419,10 @@ hypergeometric prior over draws from the unseen pool, a temperature-softened
 static-equity likelihood, exhaustive enumeration of small leave spaces with
 importance sampling above them, and the posterior a simulation would sample
 racks from ([belief/rack_inference.h](../engine/include/belief/rack_inference.h)).
-Tested, with no consumer — expected rather than an oversight.
+Tested; its one consumer is offline: the hidden-leaves Monte-Carlo ground truth
+of the position-evaluation test sets samples the opponent's leave from this
+posterior ([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)),
+at the default (Macondo) temperature — nothing in play uses it.
 
 Resuming means pricing the posterior against ground truth (a `.slog` replay
 recovers the leave the opponent actually held), which is also what sets the

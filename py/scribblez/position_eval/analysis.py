@@ -3,7 +3,10 @@ predictions over it for the dashboard.
 
 Ground truth (per-position win/loss/draw + the exact final-score-delta distribution)
 is precomputed offline by the `monte_carlo_sim_tool` and committed alongside the
-dataset as `monte-carlo-sim-results.json`. This module owns the Python side: listing
+dataset, one file per information condition (what a rollout knows of the
+opponent's leave): `monte-carlo-sim-results.face-up-leaves.json` and
+`monte-carlo-sim-results.hidden-leaves.json`. A model is measured against the
+truth of the condition it trains under. This module owns the Python side: listing
 the dataset's GCG positions, building the model-input batch from them (via
 `scribblez.ffi.analyze_position_eval_gcg`), and decoding a model's outputs into the
 per-position predictions the dashboard stores. The trainer writes those predictions
@@ -22,19 +25,26 @@ from natsort import natsorted
 from scribblez.ffi import InputArm, analyze_position_eval_gcg
 from scribblez.paths import REPO_ROOT
 
-# The frozen evaluation sets: penultimate-bingo positions whose Monte-Carlo ground
-# truth lives in monte-carlo-sim-results.json next to the GCGs. DEFAULT_DATASET is the
-# small hand-built set (loose .gcg files) the Positions tab scrubs; LARGE_DATASET is
-# the machine-harvested set (committed as part-*.gcgs bundles) the Loss tab's
-# aggregate quality curves are measured over.
+# The frozen evaluation sets: post-move positions (the final recorded move is
+# the evaluated player's) whose Monte-Carlo ground truth lives next to the GCGs.
+# DEFAULT_DATASET is the small hand-built set (loose .gcg files) the Positions
+# tab scrubs; LARGE_DATASET is the machine-harvested penultimate-bingo set
+# (committed as part-*.gcgs bundles) the Loss tab's aggregate quality curves are
+# measured over.
 DEFAULT_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset"
 LARGE_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large"
-GROUND_TRUTH_FILENAME = "monte-carlo-sim-results.json"
 
 # The record boundary in a part-*.gcgs bundle: every GCG block starts with this line.
 GCG_MARKER = "#character-encoding UTF-8"
 
 BOARD_SIZE = 15
+
+
+def ground_truth_path(dataset_dir: str | Path, face_up_leaves: bool) -> Path:
+    """The dataset's Monte-Carlo results file for an information condition (the
+    names monte_carlo_sim_tool writes)."""
+    condition = "face-up-leaves" if face_up_leaves else "hidden-leaves"
+    return Path(dataset_dir) / f"monte-carlo-sim-results.{condition}.json"
 
 
 def dataset_gcgs(dataset_dir: str | Path) -> list[Path]:
@@ -121,16 +131,17 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
     return {"wld": wld, "sd_mean": sd[:, 0], "sd_std": sd[:, 1]}
 
 
-def load_ground_truth(dataset_dir: str | Path, names: list[str]) -> dict:
-    """Per-position Monte-Carlo ground truth, aligned to `names`.
+def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves: bool) -> dict:
+    """Per-position Monte-Carlo ground truth under an information condition,
+    aligned to `names`.
 
-    Reads monte-carlo-sim-results.json and returns arrays over the positions:
+    Reads the condition's results file and returns arrays over the positions:
         win_eq (N,)   empirical win equity (win + 0.5*draw)
         wld    (N, 3) empirical [win, draw, loss] fractions (model output order)
         mean   (N,)   final-score-delta mean (points)
         std    (N,)   final-score-delta std (points)
     """
-    gt = json.loads((Path(dataset_dir) / GROUND_TRUTH_FILENAME).read_text())
+    gt = json.loads(ground_truth_path(dataset_dir, face_up_leaves).read_text())
     n = len(names)
     win_eq = np.empty(n, np.float32)
     wld = np.empty((n, 3), np.float32)

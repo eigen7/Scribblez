@@ -33,6 +33,7 @@ from scribblez.ffi import (
     get_input_shapes,
     set_opp_leave_input,
 )
+from scribblez.position_eval.analysis import ground_truth_path
 from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     MOVE_EXCHANGE,
@@ -109,8 +110,10 @@ def run_heads(model, spatial, scalar, planes, scalars, mask) -> dict:
     }
 
 
-def mc_ground_truth(gcg_path: Path) -> dict | None:
-    results = gcg_path.parent / "monte-carlo-sim-results.json"
+def mc_ground_truth(gcg_path: Path, open_leaves: bool) -> dict | None:
+    """The position's committed Monte-Carlo truth under the probe's information
+    condition, or None when the dataset has none."""
+    results = ground_truth_path(gcg_path.parent, open_leaves)
     if not results.exists():
         return None
     entry = json.loads(results.read_text()).get(gcg_path.stem)
@@ -205,7 +208,7 @@ def main():
     spatial = torch.from_numpy(row[:spatial_floats].reshape(1, *shapes["input_spatial"])).to(device)
     scalar = torch.from_numpy(row[spatial_floats:].reshape(1, -1)).to(device)
 
-    truth = mc_ground_truth(gcg_path)
+    truth = mc_ground_truth(gcg_path, args.open_leaves)
     if truth:
         print("\n=== Monte-Carlo ground truth (committed, 10k rollouts) ===")
         print(

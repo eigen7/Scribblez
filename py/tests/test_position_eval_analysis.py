@@ -90,6 +90,12 @@ def test_a_bad_position_is_an_os_error_not_a_width_error():
         analyze_position_eval_gcg("#character-encoding UTF-8\n", session_input_arm())
 
 
+def test_ground_truth_is_per_condition():
+    d = analysis.DEFAULT_DATASET
+    assert analysis.ground_truth_path(d, True) == d / "monte-carlo-sim-results.face-up-leaves.json"
+    assert analysis.ground_truth_path(d, False) == d / "monte-carlo-sim-results.hidden-leaves.json"
+
+
 def test_alternate_leaves_reproduce_the_recorded_encoding():
     """Re-submitting the recorded leaves as alternates encodes the same row; an
     alternate opponent leave must match the recorded one's size (empty here:

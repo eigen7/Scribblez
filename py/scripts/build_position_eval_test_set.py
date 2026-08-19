@@ -8,10 +8,14 @@ rollout can sample its rack cleanly from the unseen pool with no leave model. Th
 aggregate W/L/D and score-delta distribution over many rollouts is the
 low-variance "true value" the position evaluation model should predict.
 
-Two committed artifacts live under positions/<lexicon>/<dataset>/:
+The committed artifacts live under positions/<lexicon>/<dataset>/:
   * part-NNN.gcgs  -- the harvested GCG positions, ~100 concatenated GCG blocks
                       per file (each block begins with `#character-encoding`);
-  * monte-carlo-sim-results.json -- the MC ground truth, keyed by position stem.
+  * monte-carlo-sim-results.<condition>.json -- the MC ground truth keyed by
+    position stem, one file per information condition (hidden-leaves,
+    face-up-leaves; see engine/include/sim/monte_carlo_sim.h). On a
+    penultimate-bingo position the two coincide (the opponent kept nothing),
+    so the tool writes the same truth under both names.
 
 The loose per-position pos-*.gcg files the C++ tools consume are transient: this
 script explodes the bundles into them, scores, then removes them.
@@ -153,7 +157,7 @@ def main() -> int:
 
     if not args.keep_loose:
         clear_loose_gcgs(dataset)
-    print(f"Done. Ground truth: {dataset / 'monte-carlo-sim-results.json'}", flush=True)
+    print(f"Done. Ground truth: {dataset / 'monte-carlo-sim-results.<condition>.json'}", flush=True)
     return 0
 
 

@@ -16,8 +16,13 @@ sample it uniformly from the unseen pool with no opponent-leave model. See
   leave from it) but contains **no** `#Rack` pragmas, so the bingoer's actual
   drawn rack is never recorded. A `#note` on each block carries its source game
   seed. These are committed.
-- `monte-carlo-sim-results.json` — the MC ground truth (W/L/D + exact
-  score-delta histogram) keyed by position stem. Committed.
+- `monte-carlo-sim-results.hidden-leaves.json` — the MC ground truth (W/L/D +
+  exact score-delta histogram) keyed by position stem. Committed.
+  `monte-carlo-sim-results.face-up-leaves.json` is a symlink to it: the truth
+  is computed per information condition (what a rollout knows of the
+  opponent's leave; `engine/include/sim/monte_carlo_sim.h`), and on a
+  penultimate-bingo position the conditions coincide -- the opponent kept
+  nothing.
 - `pos-*.gcg` — transient loose files the C++ tools consume; produced by
   exploding the bundles and removed after scoring. Git-ignored, never committed.
 

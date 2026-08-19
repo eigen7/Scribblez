@@ -289,15 +289,15 @@ def eval_position_eval(model, position_eval: dict, device, conn, generation: int
     db.write_position_eval_preds(conn, generation, positions, preds)
 
 
-def load_position_eval_quality(spatial_planes: int) -> dict | None:
-    """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth once
-    (or None if the dataset or its ground truth is unavailable). At each checkpoint
-    the model is run over it and aggregate quality scalars are recorded for the
-    Loss tab."""
+def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict | None:
+    """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth
+    (the run's information condition) once, or None if the dataset or its ground
+    truth is unavailable. At each checkpoint the model is run over it and
+    aggregate quality scalars are recorded for the Loss tab."""
     dataset = str(position_eval_analysis.LARGE_DATASET)
     try:
         names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
-        gt = position_eval_analysis.load_ground_truth(dataset, names)
+        gt = position_eval_analysis.load_ground_truth(dataset, names, face_up_leaves)
     except Exception as e:  # missing lexicon / dataset / ground truth
         timed_print(f"position-evaluation quality eval disabled: {e}")
         return None
@@ -373,7 +373,7 @@ def run(ctx: WorkerContext) -> int:
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
         "position_eval": load_position_eval(spatial_planes),
-        "position_eval_quality": load_position_eval_quality(spatial_planes),
+        "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
         "stats": WorkerStats(ctx),
     }
 
