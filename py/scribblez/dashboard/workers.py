@@ -47,7 +47,7 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
 from cloud.ssh_machine import SshMachine
-from cloud.ssh_transfer import pull_results
+from cloud.ssh_transfer import pull_results, sweep_stopped
 from scripts.cloud_fleet import (
     CpuResources,
     GpuResources,
@@ -93,6 +93,43 @@ OBSERVATION_TTL_SECONDS = 5.0
 # "park" and "stop" both mean not-working; they differ in how much of the
 # worker survives it, which matters where restarting is expensive.
 RUN, PARK, STOP = "run", "park", "stop"
+
+
+def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
+    """Where slot `w`'s output lives, on both machines. The container runs the
+    controller's own layout under the same mount root, so the two roots read
+    alike -- but they are different machines' paths, and both collection paths
+    (a batched pull, a sweep of a stopped container) need all four."""
+    paths = spec.paths(task.tag)
+    return {
+        "container": _container_name(spec, task.tag, w.worker_id),
+        "remote_root": str(paths.root),
+        "local_root": paths.root,
+        "data_dirs": [f"data/{sub}" for sub in spec.sync_data_dirs],
+    }
+
+
+def _forget_empty(w: tasks.WorkerRecord):
+    """Give up a count of zero, keeping any other.
+
+    Zero is the one value that authorises destroying a container, and it is
+    only worth anything while it is current: a machine that has been off the
+    network for hours has a worker that went on filling it up the whole time.
+    A positive count is kept because it only ever refuses -- being wrong about
+    it costs nothing.
+    """
+    if w.undelivered == 0:
+        w.undelivered = None
+
+
+def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
+    """Whether slot `w`'s container may be thrown away for one on the task's
+    bundle: it has to be on a different bundle, and known to be holding
+    nothing. A container created but never collected from reports zero from
+    the moment it is created, so one that never came up at all -- the state a
+    redeploy is often trying to fix -- is replaceable rather than restarted
+    forever."""
+    return w.bundle_id != task.bundle_id and w.undelivered == 0
 
 
 def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
@@ -264,6 +301,9 @@ class WorkerManager:
         # Slot key -> (probe state, when observed). Written by the reconcile
         # pass, read by everything else (see _probe_container).
         self._probes: dict[str, tuple[str, float]] = {}
+        # Tasks whose recorded counts this process has already vetted; see
+        # _forget_stale_counts.
+        self._counted_from: set[str] = set()
         # Slot key -> why its container is not running (exit code + last log
         # line), so a crash-looping worker explains itself on the dashboard
         # instead of only in `docker logs`.
@@ -437,6 +477,8 @@ class WorkerManager:
             self._exits.pop(key, None)
         if probe == "running":
             self._restarts.pop(key, None)  # it came up; it is not looping
+        if probe == "unreachable":
+            _forget_empty(w)
         return probe
 
     def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord, *, observe: bool) -> str:
@@ -496,6 +538,7 @@ class WorkerManager:
             _container_name(spec, task.tag, w.worker_id), creds.registry.worker_image, env
         )
         w.launched = True
+        w.undelivered = 0  # a container just created is holding nothing
         tasks.save_task(spec, task)
 
     # ---- slot operations -------------------------------------------------
@@ -676,6 +719,10 @@ class WorkerManager:
                 "pod_id": w.pod_id,
                 "host": w.host,
                 "bundle_id": w.bundle_id,
+                "launched": w.launched,
+                # Zero and None differ to anyone about to remove the slot:
+                # drained, versus nothing known about what it holds.
+                "undelivered": w.undelivered,
             }
             if gated:
                 info["gate_reason"] = task.gates[w.role]
@@ -784,7 +831,27 @@ class WorkerManager:
             for row in tasks.list_tags(spec):
                 if not row["has_task"]:
                     continue
-                yield spec, tasks.load_task(spec, row["tag"])
+                task = tasks.load_task(spec, row["tag"])
+                self._forget_stale_counts(spec, task)
+                yield spec, task
+
+    def _forget_stale_counts(self, spec, task: tasks.TaskRecord):
+        """The first time this process sees a task, drop any recorded zero.
+
+        The count is durable so that a restart cannot forget a container is
+        holding hours of work -- but it must not let one inherit the opposite
+        claim either, since whatever the workers did while nothing was
+        watching is exactly what a zero from before the restart does not
+        cover.
+        """
+        key = _key(spec, task.tag)
+        if key in self._counted_from:
+            return
+        self._counted_from.add(key)
+        for w in task.workers:
+            if w.kind == "ssh":
+                _forget_empty(w)
+        tasks.save_task(spec, task)
 
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
@@ -843,13 +910,17 @@ class WorkerManager:
             self._ensure_sync(spec, task)
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Read slot `w`'s finished outputs out of its container into the tag."""
-        paths = spec.paths(task.tag)
-        pull_results(
-            SshMachine(w.host), _container_name(spec, task.tag, w.worker_id),
-            remote_root=str(paths.root), local_root=paths.root,
-            data_dirs=[f"data/{sub}" for sub in spec.sync_data_dirs],
-        )  # fmt: skip
+        """Read a batch of slot `w`'s finished outputs out of its container
+        into the tag, and remember how much it still holds."""
+        # Unknown until this pull says otherwise. A collection that fails --
+        # a link slow enough to keep hitting the transfer timeout, say, while
+        # the far cheaper probe still reports the container running -- must not
+        # leave the last count standing in for knowledge: it would go on
+        # claiming "drained" while the container fills up.
+        w.undelivered = None
+        result = pull_results(SshMachine(w.host), **_transfer_target(spec, task, w))
+        w.undelivered = result.remaining
+        tasks.save_task(spec, task)
 
     def _tick_scheduler(self, spec, task: tasks.TaskRecord):
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
@@ -893,33 +964,64 @@ class WorkerManager:
         third of the machine's duty cycle. A pause is instant in both
         directions and resumes the work mid-chunk.
         """
-        machine, name = SshMachine(w.host), _container_name(spec, task.tag, w.worker_id)
+        machine = SshMachine(w.host)
+        name = _container_name(spec, task.tag, w.worker_id)
         key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
             if probe == "paused":
                 machine.unpause_container(name)  # resuming a parked worker is not a restart
-                return
-            if probe not in ("missing", "stopped"):
-                return  # running, or nothing this pass can act on
-            if not self._restart_allowed(key):
-                return
-            self._note_restart(key)
-            if probe == "missing":
-                self._run_ssh_container(spec, task, w)
-            elif probe == "stopped" and w.bundle_id != task.bundle_id:
-                # Redeployed since this container was created. Its bundle is
-                # fixed in the environment it was created with, so the slot
-                # joins the task's new bundle by being replaced, not restarted.
-                machine.remove_container(name)
-                self._run_ssh_container(spec, task, w)
-            elif probe == "stopped":
-                machine.start_container(name)
+            elif probe == "running":
+                if _replaceable(w, task):
+                    # The task has redeployed past this container and it has
+                    # handed everything over: stopping it is how it gets
+                    # replaced, which the next pass does. As with any stop, the
+                    # cycle in flight is lost.
+                    machine.stop_container(name)
+            elif probe in ("missing", "stopped") and self._restart_allowed(key):
+                # Anything else -- unreachable, or not observed yet -- is not
+                # something this pass can act on.
+                self._note_restart(key)
+                self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
             machine.pause_container(name)
         elif intent == STOP and probe in ("running", "paused"):
             if probe == "paused":
                 machine.unpause_container(name)  # docker stop cannot signal a frozen process
             machine.stop_container(name)
+
+    def _start_or_replace(self, machine, name, spec, task: tasks.TaskRecord, w, probe: str):
+        """Bring a container that is not running back up.
+
+        A container's bundle is fixed in the environment it was created with,
+        so a slot joins a bundle the task has moved to by being replaced. That
+        destroys anything the container never handed over, so it waits until a
+        collection has reported the container empty -- and a container holding
+        output is started instead, which is what lets the next passes drain it.
+
+        A container that will not stay up is never collected from, so a count
+        it had when it stopped staying up is the last word on it: one that was
+        holding a backlog stays pinned to its bundle, restarted and visibly
+        down, because recovering the slot would mean discarding an amount
+        nothing can measure any more -- the operator's call from the workers
+        table, where Remove says what would go. One that never held anything
+        is replaceable as ever; the rule is _replaceable's, not "a collection
+        said so".
+        """
+        if probe == "stopped" and not _replaceable(w, task):
+            machine.start_container(name)
+            return
+        if probe == "stopped":
+            # Take what it flushed on the way down before the container (and
+            # its filesystem) go. If that fails, so does the replacement: the
+            # slot keeps running on the old bundle, which is recoverable, where
+            # throwing the output away is not.
+            self._sweep_ssh(machine, spec, task, w)
+            machine.remove_container(name)
+        self._run_ssh_container(spec, task, w)
+
+    def _sweep_ssh(self, machine, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Collect from a stopped container, the last chance to do so."""
+        sweep_stopped(machine, **_transfer_target(spec, task, w))
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);

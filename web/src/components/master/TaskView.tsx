@@ -17,12 +17,20 @@ type WorkerInfo = {
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
   gate_reason?: string; bundle_id: string | null; exit_reason?: string;
+  undelivered: number | null; launched: boolean;
 };
 
-// A slot still on the bundle the task has moved off: it gets replaced with one
-// on the task's bundle the next time reconcile finds it stopped.
+// A slot still on the bundle the task has moved off. It joins the task's bundle
+// by being replaced, which reconcile does once the slot is stopped and has
+// handed over everything it collected -- until then it simply runs on.
 function onOldBundle(w: WorkerInfo, taskBundle: string | null): boolean {
   return w.bundle_id != null && taskBundle != null && w.bundle_id !== taskBundle;
+}
+
+// A short amber aside after a worker's resources: something true of the slot
+// that is not its state.
+function Note({ text, title }: { text: string; title: string }) {
+  return <span style={{ color: '#a05a00' }} title={title}>{' '}· {text}</span>;
 }
 
 function workerResources(w: WorkerInfo): string {
@@ -30,6 +38,24 @@ function workerResources(w: WorkerInfo): string {
   if (w.kind === 'ssh') return `${w.host}${w.threads ? ` (${w.threads} threads)` : ''}`;
   if (w.gpu_type_id) return `${w.gpu_count}× ${w.gpu_type_id}`;
   return `${w.vcpus} vcpu ${w.flavor}`;
+}
+
+// Removing an ssh slot deletes its container, and with it any finished output
+// the collection pass has not moved yet. Reconcile's own replace path waits for
+// a collection to report zero before it does that; an operator is told what
+// they would be discarding instead of being stopped, since discarding it is
+// sometimes exactly the intent.
+function discardWarning(workers: WorkerInfo[]): string | null {
+  // A slot whose container was never created holds nothing by definition;
+  // warning about it would spend the dialog's credibility on a false alarm.
+  const holding = workers.filter((w) => w.kind === 'ssh' && w.launched && w.undelivered !== 0);
+  if (holding.length === 0) return null;
+  const described = holding.map((w) => (
+    w.undelivered == null
+      ? `${w.worker_id} (never collected from)`
+      : `${w.worker_id} (${w.undelivered} files)`
+  ));
+  return `Discard finished output still held by ${described.join(', ')}?`;
 }
 
 // A slot mid-transition: its process/pod has not yet caught up to the operator's
@@ -522,6 +548,11 @@ function WorkersTable({ workers, taskBundle, onAction }: {
   workers: WorkerInfo[]; taskBundle: string | null;
   onAction: (workerId: string, action: string) => void;
 }) {
+  const onRemove = (w: WorkerInfo) => {
+    const warning = discardWarning([w]);
+    if (warning && !window.confirm(warning)) return;
+    onAction(w.worker_id, 'remove');
+  };
   if (workers.length === 0) {
     return <div style={{ color: '#556070', fontStyle: 'italic' }}>No workers yet.</div>;
   }
@@ -551,10 +582,14 @@ function WorkersTable({ workers, taskBundle, onAction }: {
               <td style={{ padding: '6px 14px 6px 0' }}>{w.kind}</td>
               <td style={{ padding: '6px 14px 6px 0' }}>
                 {workerResources(w)}
+                {w.undelivered ? (
+                  <Note
+                    text={`${w.undelivered} pending`}
+                    title="finished output the container still holds; collected a batch per pass"
+                  />
+                ) : null}
                 {onOldBundle(w, taskBundle) && (
-                  <span style={{ color: '#a05a00' }} title={`created on bundle ${w.bundle_id}`}>
-                    {' '}· old bundle
-                  </span>
+                  <Note text="old bundle" title={`created on bundle ${w.bundle_id}`} />
                 )}
               </td>
               <td
@@ -587,7 +622,7 @@ function WorkersTable({ workers, taskBundle, onAction }: {
                 <span title={w.observed_running ? 'pause the worker before removing it' : undefined}>
                   <Button
                     label="Remove" tone="danger" disabled={w.observed_running || inFlight}
-                    onClick={() => onAction(w.worker_id, 'remove')}
+                    onClick={() => onRemove(w)}
                   />
                 </span>
               </td>
@@ -639,6 +674,11 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
     } finally {
       setDeploying(false);
     }
+  };
+  const removeAll = () => {
+    const warning = discardWarning(info.workers);
+    if (warning && !window.confirm(warning)) return;
+    act({ action: 'remove' });
   };
   // Cost accrues while a pod is really up (observed), not merely desired-running.
   const cloudCost = info.workers.reduce((s, w) => s + (w.observed_running ? w.cost_per_hr ?? 0 : 0), 0);
@@ -697,7 +737,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
               <Button
                 label="Remove all" tone="danger"
                 disabled={anyAlive || info.workers.length === 0}
-                onClick={() => act({ action: 'remove' })}
+                onClick={() => removeAll()}
               />
             </span>
           </div>

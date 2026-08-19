@@ -2,13 +2,19 @@
 display-state mapping, ssh/env-file construction, and worker env assembly."""
 
 import pytest
+from cloud import ssh_machine
 from cloud.credentials import (
     CloudCredentials,
     R2Credentials,
     RegistryConfig,
     RunpodCredentials,
 )
-from cloud.ssh_machine import SshMachine, classify_probe, env_file
+from cloud.ssh_machine import (
+    SshMachine,
+    SshMachineError,
+    classify_probe,
+    env_file,
+)
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard.tasks import TaskRecord, WorkerRecord
@@ -106,3 +112,53 @@ def test_bundle_worker_env_composition():
     assert env["SCZ_BUNDLE"] == "bid"
     assert env["SCZ_WORKER_ID"] == "ssh-0"
     assert env["SCZ_WORKER_KIND"] == "ssh"
+
+
+class _FakeCompleted:
+    def __init__(self, returncode, stdout=b"", stderr=b""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _copy(monkeypatch, tmp_path, completed) -> tuple[bool, bytes]:
+    """SshMachine.copy_from_container against a canned `docker cp` result.
+    Returns what it reported and what it spooled."""
+
+    def fake_run(argv, stdout=None, **kwargs):
+        if completed.returncode == 0:
+            stdout.write(completed.stdout)
+        return completed
+
+    monkeypatch.setattr(ssh_machine.subprocess, "run", fake_run)
+    dest = tmp_path / "sweep.tar"
+    wrote = SshMachine("user@h").copy_from_container("c", "/tag/data/staging", dest)
+    return wrote, dest.read_bytes()
+
+
+def test_copy_from_container_spools_the_stream(monkeypatch, tmp_path):
+    wrote, spooled = _copy(monkeypatch, tmp_path, _FakeCompleted(0, stdout=b"tarbytes"))
+    assert (wrote, spooled) == (True, b"tarbytes")
+
+
+def test_an_empty_stream_reports_nothing_written(monkeypatch, tmp_path):
+    assert _copy(monkeypatch, tmp_path, _FakeCompleted(0)) == (False, b"")
+
+
+def test_a_path_the_container_never_made_is_empty_not_an_error(monkeypatch, tmp_path):
+    """Verbatim from Docker 29 on the fleet. A worker that died before
+    producing anything never made its output directory, and the sweep that
+    precedes replacing it must not read that as a failure -- doing so would
+    block the replacement forever."""
+    missing = (
+        b"Error response from daemon: Could not find the file /tag/data/staging in container c\n"
+    )
+    assert _copy(monkeypatch, tmp_path, _FakeCompleted(1, stderr=missing))[0] is False
+    older = b"Error: No such container:path: c:/tag/data/staging\n"  # before Docker reworded it
+    assert _copy(monkeypatch, tmp_path, _FakeCompleted(1, stderr=older))[0] is False
+
+
+def test_any_other_copy_failure_raises(monkeypatch, tmp_path):
+    """The caller sweeps a container in order to destroy it, so a read that
+    failed for an unrecognised reason has to stop that."""
+    for stderr in (b"Error response from daemon: No such container: c\n", b"ssh: refused\n"):
+        with pytest.raises(SshMachineError):
+            _copy(monkeypatch, tmp_path, _FakeCompleted(1, stderr=stderr))
