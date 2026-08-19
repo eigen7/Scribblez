@@ -46,8 +46,11 @@ def test_ssh_state_mapping():
     assert _ssh_state("running", "unknown", gated=False) == "checking"
     assert _ssh_state("paused", "paused", gated=False) == "stopping"
     assert _ssh_state("running", "running", gated=False) == "running"
+    # A container that ran and died is the alarm `exited` carries; one that
+    # does not exist yet is a slot on its way up, and saying "exited" for the
+    # minutes an image pull takes reports a failure that has not happened.
     assert _ssh_state("running", "stopped", gated=False) == "exited"
-    assert _ssh_state("running", "missing", gated=False) == "exited"
+    assert _ssh_state("running", "missing", gated=False) == "starting"
     assert _ssh_state("running", "unreachable", gated=False) == "unreachable"
     assert _ssh_state("paused", "running", gated=False) == "stopping"
     assert _ssh_state("paused", "stopped", gated=False) == "paused"
