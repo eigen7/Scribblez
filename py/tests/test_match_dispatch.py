@@ -64,14 +64,17 @@ def test_pending_generation_prefers_the_frontier(tmp_path):
     for gen in (4, 5, 10, 15, 16):
         paths.onnx_path(gen).touch()
 
-    assert dispatch.pending_generation(paths, conn, every=5) == 15
+    def pending(every: int):
+        return dispatch.pending_generation(paths, dispatch.recorded_generations(conn), every)
+
+    assert pending(5) == 15
     db.write_match_eval(conn, 15, {**_result(15), "positions": 0})
-    assert dispatch.pending_generation(paths, conn, every=5) == 10
+    assert pending(5) == 10
     db.write_match_eval(conn, 10, {**_result(10), "positions": 0})
     db.write_match_eval(conn, 5, {**_result(5), "positions": 0})
-    assert dispatch.pending_generation(paths, conn, every=5) is None
+    assert pending(5) is None
     # every=1 picks up the non-multiple stragglers too.
-    assert dispatch.pending_generation(paths, conn, every=1) == 16
+    assert pending(1) == 16
 
 
 def test_ingest_writes_rows_and_metrics(tmp_path):
@@ -169,7 +172,8 @@ def test_a_played_generation_holds_the_slot_until_its_result_is_recorded(tmp_pat
     dispatch._assign(paths, conn, 5, _slot(paths))
     assert [p.name for p in inbox.iterdir()] == [f"{paths.onnx_path(15).name}{DONE_SUFFIX}"]
 
-    # Recording it is what frees the slot -- and clears the mark.
+    # Recording it settles the generation; the mark is then cleared the next
+    # time the slot is offered work, which is why gen 10 is still exported here.
     db.write_match_eval(conn, 15, {**_result(15), "positions": 0})
     dispatch._assign(paths, conn, 5, _slot(paths))
     assert [p.name for p in inbox.iterdir()] == [paths.onnx_path(10).name]
@@ -220,3 +224,63 @@ def test_tick_is_a_no_op_before_the_trainer_has_run(tmp_path):
     paths.root.mkdir(parents=True)
     dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [_slot(paths)])
     assert not paths.dashboard_db.exists()
+
+
+def test_a_quarantined_result_does_not_strand_the_slot(tmp_path):
+    """A result that cannot be read is a terminal outcome like any other: it
+    frees the slot. A mark waiting for a row that will never be written would
+    stop the tag's readout for good, recoverable only by hand."""
+    paths = _paths(tmp_path)
+    conn = db.connect(paths.dashboard_db)
+    paths.onnx_path(25).write_bytes(b"onnx")
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    inbox = paths.match_inbox_dir("w0")
+    _mark_played(inbox, paths.onnx_path(25).name)
+
+    paths.match_results_dir.mkdir(parents=True, exist_ok=True)
+    (paths.match_results_dir / "gen_000025-w0.json").write_text("{ damaged in transit")
+    assert dispatch.ingest(paths, conn) == []
+    assert not db.read_all_match_eval(conn)  # nothing was recorded for it
+
+    # The generation simply falls due again and is replayed.
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    assert [p.name for p in inbox.iterdir()] == [paths.onnx_path(25).name]
+
+
+def test_a_quarantined_file_that_is_not_a_result_is_ignored(tmp_path):
+    """Ingest sets aside whatever it finds, so what a .bad name means cannot be
+    assumed -- and one nobody can parse must not break every later pass."""
+    paths = _paths(tmp_path)
+    conn = db.connect(paths.dashboard_db)
+    paths.match_results_dir.mkdir(parents=True)
+    (paths.match_results_dir / "stray-notes.bad").write_text("x")
+    paths.onnx_path(10).write_bytes(b"onnx")
+
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    assert [p.name for p in paths.match_inbox_dir("w0").iterdir()] == [paths.onnx_path(10).name]
+
+
+def test_tick_records_delivered_results_with_no_worker_left(tmp_path):
+    """A slot can be paused or removed after its container's output was
+    collected. The result is on this disk either way, and belongs in the
+    database."""
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    _deliver(paths, _result(10))
+
+    dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [])
+    conn = db.connect(paths.dashboard_db)
+    assert [r["epoch"] for r in db.read_all_match_eval(conn)] == [10]
+
+
+def test_tick_leaves_an_idle_tag_alone(tmp_path):
+    """Every task of the workload is ticked every few seconds forever, so a
+    tag with nothing to do must not be opened: applying the schema to an
+    archived database recreates its write-ahead log on every pass."""
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    for stray in paths.root.glob("dashboard.db-*"):
+        stray.unlink()
+
+    dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [])
+    assert not list(paths.root.glob("dashboard.db-*"))

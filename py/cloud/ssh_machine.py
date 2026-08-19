@@ -26,6 +26,7 @@ bootstrap, costs a minute of every cycle and discards the chunk in flight).
 import shlex
 import subprocess
 from pathlib import Path
+from typing import IO
 
 # ConnectTimeout bounds how long an unreachable host can stall a probe;
 # ControlMaster/ControlPersist multiplex every call onto one shared connection,
@@ -125,7 +126,9 @@ class SshMachine:
         failure, like every other mutating call."""
         self._mutate(["docker", "exec", name, *command])
 
-    def _exec(self, argv: list[str], *, timeout: int, doing: str, stdin=None) -> bytes:
+    def _exec(
+        self, argv: list[str], *, timeout: int, doing: str, stdin: IO[bytes] | None = None
+    ) -> bytes:
         """Run one `docker exec` and return its stdout as bytes. Binary
         throughout: what these calls carry is a tar stream or a model, which
         text decoding would corrupt. `doing` names the operation in the error

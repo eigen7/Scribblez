@@ -142,8 +142,12 @@ data/match_inbox/<worker_id>/model_epoch_NNNN.onnx
 data/match_results/gen_NNNNNN-<worker_id>.json
         │
         ▼  controller ingest: a match_eval row + match_* metrics, keyed by generation
-           (and the .done mark is cleared, freeing the slot)
 ```
+
+The `.done` mark is not cleared by the ingest. It is cleared the next time that
+slot is offered work, which is the only moment its presence matters; until then
+it sits in the inbox unused, and a mark can outlive its row for as long as
+nothing new is due.
 
 That split is what lets the slot sit on another machine. The database and the
 exports both live on the controller, neither reachable from an ssh worker's
@@ -154,14 +158,20 @@ the control connection the dashboard already holds open
 rules rather than one per kind.
 
 **The inbox is the ledger**, and it holds a generation until that generation is
-recorded — not until the worker is done with it. Nothing durable records what
-is in flight, because the directory already says. The distinction matters
+accounted for — not until the worker is done with it. Nothing durable records
+what is in flight, because the directory already says. The distinction matters
 because a container's result reaches the controller by collection, a separate
 step that can fail or time out for passes on end: a ledger that emptied when
 the worker finished would offer the same generation up again in that gap and
 replay a match the machine had already played. Ingest is idempotent anyway (a
-row is keyed by its generation), and a file that is not a result is
-quarantined as `.bad` rather than retried forever.
+row is keyed by its generation).
+
+Accounted for means recorded, or delivered and found unreadable. A file that is
+not a result is quarantined as `.bad` rather than retried forever, and that
+counts as settling its generation: nothing further is coming for it, so the
+mark stops holding the slot, the generation falls due again, and the match is
+replayed. A terminal outcome that did not release the slot would strand it —
+the readout would simply stop, with one line in the log to say why.
 
 Shared external-data blobs beside the exports (the frozen-lexicon blob, when
 the model has one) go with the first assignment and stay: a model does not

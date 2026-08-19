@@ -14,19 +14,26 @@ being a symlink into models/ -- so there is one runner and one set of rules
 rather than one per kind.
 
 The inbox is the ledger, and it holds a generation until that generation is
-recorded here -- not until the worker is done with it. The worker marks the
-model it has played (DONE_SUFFIX) rather than deleting it, and the controller
-removes the mark only once the result is in the database. The gap between
+accounted for here -- not until the worker is done with it. The worker marks
+the model it has played (DONE_SUFFIX) rather than deleting it. The gap between
 those two moments is real and wide: a container's result reaches the
 controller by collection, which is a separate step of the reconcile pass and
 can fail or time out for passes on end. A ledger that emptied when the worker
 finished would offer that generation up again in exactly that gap, and the
 machine would replay a match it had already played.
 
-So an inbox holding either an unplayed export or an unrecorded mark means that
-slot is spoken for. Ingest is idempotent anyway (a match row is keyed by its
-generation), which is what keeps the database consistent when a worker is
-interrupted and replays its own match.
+So an inbox holding either an unplayed export or a mark for an unaccounted
+generation means that slot is spoken for. Ingest is idempotent anyway (a match
+row is keyed by its generation), which is what keeps the database consistent
+when a worker is interrupted and replays its own match.
+
+Accounted for means recorded, or delivered and found unreadable: a quarantined
+result is never coming back, so its mark stops holding the slot and the
+generation simply falls due again and is replayed. Marks are cleared when the
+slot is next offered work, not when the result lands -- there is nothing to
+clear up for until then, and looking costs a round trip to another machine. A
+mark can therefore outlive its row for as long as nothing new is due, which is
+harmless: it blocks only assignment, and there is none to make.
 """
 
 import json
@@ -69,12 +76,11 @@ def recorded_generations(conn) -> set[int]:
     return {r["epoch"] for r in conn.execute("SELECT epoch FROM match_eval")}
 
 
-def pending_generation(paths: TagPaths, conn, every: int) -> int | None:
+def pending_generation(paths: TagPaths, recorded: set[int], every: int) -> int | None:
     """The newest exported generation that is due a match and has none. Newest
     first keeps the readout tracking the training frontier; older stragglers
     backfill on later cycles."""
-    done = recorded_generations(conn)
-    pending = [g for g in exported_generations(paths) if g % every == 0 and g not in done]
+    pending = [g for g in exported_generations(paths) if g % every == 0 and g not in recorded]
     return max(pending) if pending else None
 
 
@@ -138,21 +144,40 @@ def _inbox_epoch(name: str) -> int:
     return TagPaths.onnx_epoch(Path(name.removesuffix(DONE_SUFFIX)))
 
 
-def _spoken_for(conn, slot, inbox: str, held: list[str]) -> bool:
-    """Whether `slot` is still occupied by a generation, clearing the marks it
-    is finished with on the way. A mark whose result is in the database has
-    served its purpose; one whose result is not has not, and neither has an
-    export the worker has yet to play."""
-    occupied = False
-    recorded = recorded_generations(conn)
-    for name in held:
-        if not name.startswith(ONNX_PREFIX):
+def _result_epoch(path: Path) -> int:
+    """The generation a delivered result's name carries (gen_NNNNNN-<worker>).
+    Split at the first dash, since a worker id has dashes of its own."""
+    return int(path.stem.split("-", 1)[0].removeprefix("gen_"))
+
+
+def _quarantined_generations(paths: TagPaths) -> set[int]:
+    """Generations whose delivered result was unreadable. Nothing further is
+    coming for them, so they are as settled as recorded ones -- and, having no
+    row, they fall due again and are replayed.
+
+    A quarantined file whose name is not a result's is skipped: ingest sets
+    aside whatever it finds in the directory, so this cannot assume the name
+    was written by a worker of ours.
+    """
+    epochs = set()
+    for path in paths.match_results_dir.glob("*.bad"):
+        try:
+            epochs.add(_result_epoch(path))
+        except ValueError:
             continue
-        if name.endswith(DONE_SUFFIX) and _inbox_epoch(name) in recorded:
-            slot.remove(f"{inbox}/{name}")
-        else:
-            occupied = True
-    return occupied
+    return epochs
+
+
+def _spent_marks(held: list[str], settled: set[int]) -> list[str]:
+    """The marks in `held` whose generation is accounted for: their exchange is
+    over, and the inbox entry is all that is left of it."""
+    return [
+        name
+        for name in held
+        if name.startswith(ONNX_PREFIX)
+        and name.endswith(DONE_SUFFIX)
+        and _inbox_epoch(name) in settled
+    ]
 
 
 def _assign(paths: TagPaths, conn, every: int, slot):
@@ -163,13 +188,17 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     matches are all played would otherwise pay one every pass to learn there
     was nothing to send.
     """
-    gen = pending_generation(paths, conn, every)
+    recorded = recorded_generations(conn)
+    gen = pending_generation(paths, recorded, every)
     if gen is None:
         return
     inbox = _rel(paths, paths.match_inbox_dir(slot.worker_id))
     held = slot.list(inbox)
-    if _spoken_for(conn, slot, inbox, held):
-        return
+    spent = _spent_marks(held, recorded | _quarantined_generations(paths))
+    for name in spent:
+        slot.remove(f"{inbox}/{name}")
+    if any(name.startswith(ONNX_PREFIX) and name not in spent for name in held):
+        return  # an unplayed export, or one whose result is still on its way
     # The shared external-data blobs go first and stay: a model does not load
     # without them, and they are identical for every generation.
     for sidecar in paths.onnx_sidecars:
