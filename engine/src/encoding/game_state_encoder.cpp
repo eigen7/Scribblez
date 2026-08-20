@@ -73,50 +73,43 @@ int encode_placement_plane(const Move& m, bool flip, float* out) {
   return 1;
 }
 
-// The kCrossCheckPlanes cross-check planes at `out`: horizontal A..Z, then
-// vertical A..Z. A vertical plane reads the transposed cross-check table and
-// the above/below neighbors.
+// Set `cc`'s legal letters at `cell` across a 26-plane block. A square with no
+// perpendicular run constrains nothing, and says so by staying zero rather
+// than by setting all 26 of its planes.
+void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
+  if (!cc.has_neighbor) return;
+  for (int l = 0; l < 26; ++l) {
+    if (cc.mask & (1u << l)) planes[l * kBoardCells + cell] = 1.0f;
+  }
+}
+
+// The kCrossCheckPlanes cross-check planes at `out`: the letters a HORIZONTAL
+// word may place on each empty square (A..Z), then the same for a VERTICAL
+// word.
+//
+// A word running along one axis places exactly one tile in each lane of the
+// other, so the letters it may put on an empty square are exactly that
+// square's PERPENDICULAR cross-check set -- the letters completing a valid
+// word with the tiles the square abuts across the word's direction. That holds
+// at every word length, which is what makes it a per-square fact worth a
+// plane. The word's own validity is not such a fact: it depends on the whole
+// play, so intersecting it in here would deny letters that a longer word
+// legitimately places (an `A` on a square reading `_XI` is illegal alone and
+// legal in AXIOM) while collapsing both blocks onto one-tile legality.
 int encode_cross_check_planes(const Board& board, bool flip, float* out) {
   float* h_planes = out;
   float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
-  const auto& hcross = board.cross_checks(/*transposed=*/false);
-  const auto& vcross = board.cross_checks(/*transposed=*/true);
+  // A horizontal word's cross words run down the columns, which is what the
+  // non-transposed cache holds; a vertical word's run along the rows.
+  const auto& horizontal_play_cross = board.cross_checks(/*transposed=*/false);
+  const auto& vertical_play_cross = board.cross_checks(/*transposed=*/true);
 
   for (int r = 0; r < kBoardSide; ++r) {
     for (int c = 0; c < kBoardSide; ++c) {
       if (!board.at(r, c).is_empty()) continue;
-
-      const bool fuse_horizontal = (c > 0 && !board.at(r, c - 1).is_empty()) ||
-                                   (c + 1 < kBoardSide && !board.at(r, c + 1).is_empty());
-      const bool fuse_vertical = (r > 0 && !board.at(r - 1, c).is_empty()) ||
-                                 (r + 1 < kBoardSide && !board.at(r + 1, c).is_empty());
-
       const int out_ix = plane_idx(r, c, flip);
-      if (fuse_horizontal) {
-        // Horizontal play at (r,c):
-        //   - perpendicular (vertical) legality comes from the non-transposed cache;
-        //   - fused main-word (left/right) legality comes from the transposed cache.
-        const uint32_t perp_mask = hcross[r * kBoardSide + c].mask;
-        const uint32_t main_mask = vcross[c * kBoardSide + r].mask;
-        const uint32_t mask = perp_mask & main_mask;
-        for (int l = 0; l < 26; ++l) {
-          if ((mask & (1u << l)) == 0) continue;
-          h_planes[l * kBoardCells + out_ix] = 1.0f;
-        }
-      }
-
-      if (fuse_vertical) {
-        // Vertical play at (r,c):
-        //   - fused main-word (above/below) legality comes from the non-transposed cache;
-        //   - perpendicular (horizontal) legality comes from the transposed cache.
-        const uint32_t main_mask = hcross[r * kBoardSide + c].mask;
-        const uint32_t perp_mask = vcross[c * kBoardSide + r].mask;
-        const uint32_t mask = main_mask & perp_mask;
-        for (int l = 0; l < 26; ++l) {
-          if ((mask & (1u << l)) == 0) continue;
-          v_planes[l * kBoardCells + out_ix] = 1.0f;
-        }
-      }
+      write_cross_check(horizontal_play_cross[r * kBoardSide + c], out_ix, h_planes);
+      write_cross_check(vertical_play_cross[c * kBoardSide + r], out_ix, v_planes);
     }
   }
   return kCrossCheckPlanes;

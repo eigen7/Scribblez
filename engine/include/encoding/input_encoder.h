@@ -18,9 +18,13 @@
 //     kSelfPlacement  squares the POV player covered on their most recent turn.
 //     kOppPlacement   the same for the opponent, so the two together encode the
 //                     last two plies.
-//     kCrossChecks    horizontal then vertical: plane L marks empty squares
-//                     where placing L fuses with a neighbor along that axis and
-//                     satisfies the lexicon's cross-check mask.
+//     kCrossChecks    horizontal then vertical: plane L marks the empty squares
+//                     a word running along that axis may place L on -- the
+//                     square's cross-check set perpendicular to that axis,
+//                     which constrains a word of any length through it. A
+//                     square with no perpendicular run constrains nothing and
+//                     stays zero; the board planes already show it has no
+//                     neighbor there.
 //     kContingent     the contingent-draw potential maps -- best /
 //                     draw-weighted / rack-alone next-turn plays painted onto
 //                     their placed cells (see contingent_map.h).

@@ -673,6 +673,12 @@ TEST(Movegen, SingleTileVerticalHooks) {
   ASSERT_EQ(dawg.size(), plays.size());
 }
 
+// A square's cross-check set constrains the axis PERPENDICULAR to the run it
+// abuts: a square under the Q of QI limits what a HORIZONTAL word may place
+// there (its cross word runs down through the Q), and a square beside the I
+// limits what a VERTICAL word may place there. So the hooks above and below
+// QI belong to the horizontal block and the hooks left and right of it to the
+// vertical block.
 TEST(Encoder, CrossCheckPlanesQi) {
   using namespace scribblez::binlog;
 
@@ -720,20 +726,29 @@ TEST(Encoder, CrossCheckPlanesQi) {
     }
   };
 
-  // Horizontal hooks after QI:
+  // Squares left and right of QI: their cross word runs across, through the
+  // QI, so they constrain a VERTICAL word placing a tile there.
   //   - right of I: QIS -> only 'S'
   //   - left of Q: none in this fixture dictionary
-  assert_horizontal_set(7, 9, {'S'});
+  assert_vertical_set(7, 9, {'S'});
+  assert_vertical_set(7, 6, {});
+  // Nothing runs down through either square, so a horizontal word there is
+  // unconstrained by cross-checks and the block stays zero.
+  assert_horizontal_set(7, 9, {});
   assert_horizontal_set(7, 6, {});
 
-  // Vertical hooks after QI:
+  // Squares above and below QI: their cross word runs down, so they constrain
+  // a HORIZONTAL word placing a tile there.
   //   - below Q: QI -> only 'I'
   //   - above I: AI BI GI HI KI LI MI OI PI QI SI TI XI
   //   - below I: ID IF IN IS IT
-  assert_vertical_set(8, 7, {'I'});
-  assert_vertical_set(6, 7, {});
-  assert_vertical_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
-  assert_vertical_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
+  assert_horizontal_set(8, 7, {'I'});
+  assert_horizontal_set(6, 7, {});
+  assert_horizontal_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
+  assert_horizontal_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
+  assert_vertical_set(8, 7, {});
+  assert_vertical_set(6, 8, {});
+  assert_vertical_set(8, 8, {});
 
   // Occupied squares never carry cross-check planes.
   assert_horizontal_set(7, 7, {});
@@ -748,6 +763,41 @@ TEST(Encoder, CrossCheckPlanesQi) {
   ASSERT_EQ(h_cross_check(z, 14, 14), 0.0f);
   ASSERT_EQ(v_cross_check(a, 0, 0), 0.0f);
   ASSERT_EQ(v_cross_check(z, 14, 14), 0.0f);
+}
+
+// The cross-check set must NOT be intersected with the main word's own
+// validity. A square's legal letters are those completing its perpendicular
+// word, and the word running through the square may be longer than the run it
+// abuts -- so a letter illegal as a lone tile can be legal inside a longer
+// word. Here (7,8) reads `_XI` across and `_VOW` down: no word is `_XI`, so no
+// vertical word may place anything there, while AVOW lets a horizontal word
+// place an `A` (AXIOM does exactly that). Intersecting the two would report
+// the square as taking no letter at all, in either direction.
+TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
+  Dictionary d = Dictionary::build_from_words({"AVOW", "AXIOM", "VOW", "XI"});
+
+  // "XI" across at (7,9)..(7,10) and "VOW" down at (8,8)..(10,8), leaving
+  // (7,8) empty with a run to its right and a run below it.
+  Move xi = make_play_full(7, 9, /*horizontal=*/true, 0b11, 9,
+                           {Glyph::of(Tile::from_char('X')), Glyph::of(Tile::from_char('I'))});
+  Move vow = make_play_full(8, 8, /*horizontal=*/false, 0b111, 9,
+                            {Glyph::of(Tile::from_char('V')), Glyph::of(Tile::from_char('O')),
+                             Glyph::of(Tile::from_char('W'))});
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  enc.apply_move(xi);
+  enc.apply_move(vow);
+
+  Rack active_rack;
+  std::vector<float> out(kInputFloats, 0.0f);
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+
+  const auto at = [&out](int plane0, char ch) {
+    return out[(plane0 + Tile::from_char(ch).index()) * 225 + 7 * 15 + 8];
+  };
+  for (char ch = 'A'; ch <= 'Z'; ++ch) {
+    ASSERT_EQ(at(kHorizontalCrossCheckPlane0, ch), (ch == 'A' ? 1.0f : 0.0f)) << ch;
+    ASSERT_EQ(at(kVerticalCrossCheckPlane0, ch), 0.0f) << ch;
+  }
 }
 
 // The production replay path (PositionEncoder, used by both the streaming and
@@ -775,13 +825,14 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   enc.encode_row<PositionEvalTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
                                    /*flip=*/false, row.data());
 
-  auto h_cross_check = [&row](char ch, int r, int c) {
-    return row[(kHorizontalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
+  auto v_cross_check = [&row](char ch, int r, int c) {
+    return row[(kVerticalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
   };
-  // Right of the I, only QIS extends horizontally (per the fixture dictionary):
-  // 'S' is set and every other letter is clear.
+  // Right of the I the cross word is QIS (per the fixture dictionary), which
+  // constrains a vertical word placing a tile there: 'S' is set and every
+  // other letter is clear.
   for (char ch = 'A'; ch <= 'Z'; ++ch) {
-    ASSERT_EQ(h_cross_check(ch, 7, 9), (ch == 'S' ? 1.0f : 0.0f));
+    ASSERT_EQ(v_cross_check(ch, 7, 9), (ch == 'S' ? 1.0f : 0.0f));
   }
 }
 
