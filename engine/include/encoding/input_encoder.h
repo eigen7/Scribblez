@@ -84,7 +84,11 @@ struct InputEncodingSpec {
 // where the engine-side loader rejects a stale model instead of silently
 // feeding it off-distribution rows. Absent in exports predating the entry,
 // which read as version 0 -- the version at the entry's introduction.
-inline constexpr int kInputEncodingVersion = 0;
+//
+//   1: cross-check planes hold the square's perpendicular cross-check set
+//      rather than its one-tile-placement legality, and the diagonal flip
+//      swaps the two halves along with transposing them.
+inline constexpr int kInputEncodingVersion = 1;
 
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
