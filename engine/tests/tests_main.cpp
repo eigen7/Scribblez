@@ -635,12 +635,30 @@ TEST(Encoder, FlipSymmetry) {
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
     ASSERT_EQ(normal[i], flipped[i]);
   }
+  // The cross-check halves must actually differ here, or the swap below would
+  // hold for the wrong reason.
+  bool halves_differ = false;
+  for (int i = 0; i < kHorizontalCrossCheckPlanes * 225 && !halves_differ; ++i) {
+    halves_differ =
+      normal[kHorizontalCrossCheckPlane0 * 225 + i] != normal[kVerticalCrossCheckPlane0 * 225 + i];
+  }
+  ASSERT_TRUE(halves_differ);
+
   // Every spatial plane (including both placement planes) is transposed under
-  // the flip.
+  // the flip. The cross-check halves also exchange: their contents name an
+  // axis, and the flip exchanges the axes, so a plane of letters a horizontal
+  // word may place becomes one of letters a vertical word may place.
   for (int p = 0; p < kSpatialPlanes; ++p) {
+    int src = p;
+    if (p >= kHorizontalCrossCheckPlane0 && p < kVerticalCrossCheckPlane0) {
+      src = p + kHorizontalCrossCheckPlanes;
+    } else if (p >= kVerticalCrossCheckPlane0 &&
+               p < kHorizontalCrossCheckPlane0 + kCrossCheckPlanes) {
+      src = p - kHorizontalCrossCheckPlanes;
+    }
     for (int r = 0; r < 15; ++r) {
       for (int c = 0; c < 15; ++c) {
-        ASSERT_EQ(flipped[p * 225 + r * 15 + c], normal[p * 225 + c * 15 + r]);
+        ASSERT_EQ(flipped[p * 225 + r * 15 + c], normal[src * 225 + c * 15 + r]);
       }
     }
   }

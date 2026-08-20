@@ -53,6 +53,8 @@
 //
 // The board is invariant under the diagonal flip (r,c) -> (c,r), so
 // `apply_flip` transposes every spatial plane and leaves the scalars alone.
+// The flip also exchanges the two axes, so the kCrossChecks halves -- the only
+// block whose contents name an axis -- swap with each other as they transpose.
 
 namespace scribblez {
 

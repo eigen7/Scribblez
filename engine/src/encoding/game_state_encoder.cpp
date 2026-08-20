@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 namespace scribblez {
 
@@ -99,6 +100,11 @@ void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
 int encode_cross_check_planes(const Board& board, bool flip, float* out) {
   float* h_planes = out;
   float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
+  // The flip exchanges the two axes, so a set constraining horizontal play
+  // constrains vertical play once flipped: the blocks swap, on top of each
+  // plane transposing. This is the only spatial block whose contents name an
+  // axis, and so the only one for which transposing alone is not the flip.
+  if (flip) std::swap(h_planes, v_planes);
   // A horizontal word's cross words run down the columns, which is what the
   // non-transposed cache holds; a vertical word's run along the rows.
   const auto& horizontal_play_cross = board.cross_checks(/*transposed=*/false);
