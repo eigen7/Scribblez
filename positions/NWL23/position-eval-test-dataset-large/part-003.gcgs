@@ -2,1537 +2,1598 @@
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000322)
+#note Harvested post-move position (game seed 1000300)
+>Hasty_1: AAEEHTV H4 HEAVE +30 30
+>Hasty_2: ABGNOSX 5E NOS.BAG +40 40
+>Hasty_1: AAFLNRT K2 FLA.RANT +62 92
+>Hasty_2: BJNPRSX F4 B.X +28 68
+>Hasty_1: DDGILO? 8A DIsLODG. +83 175
+>Hasty_2: EJNOPRS L1 JEON +49 117
+>Hasty_1: DIKOUWY 1L .OUK +45 220
+>Hasty_2: AIPRSTU C6 UP.TAIRS +76 193
+>Hasty_1: DEIORWY M3 WEIRDY +45 265
+>Hasty_2: DEEEGIT 9F EIDE +27 220
+>Hasty_1: AILMOOZ B10 ZOO +67 332
+>Hasty_2: AEEGLOT A12 GALE +27 247
+>Hasty_1: AFIILMR D12 MILF +42 374
+>Hasty_2: EEEOQTU I4 O.E +12 259
+>Hasty_1: AIIRSTU 15D .RUIT +24 398
+>Hasty_2: EEHQTTU 8M .EH +27 286
+>Hasty_1: AAIIPSW 10E AW +28 426
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000301)
+>Hasty_1: BHLNPP? -BLNPP +0 0
+>Hasty_2: ADFMRTX H4 DRAFT +22 22
+>Hasty_1: BHKRZ?? 6F KB.R +20 20
+>Hasty_2: LMNNOTX F3 MON. +10 32
+>Hasty_1: DHIWZ?? 4D WH. +18 38
+>Hasty_2: CEELNTX G8 EXCEL +24 56
+>Hasty_1: ADIIZ?? 11E ID.AlIZe +114 152
+>Hasty_2: BEEIINT 5C BEE. +27 83
+>Hasty_1: EGGILOT 12A GIGOT +20 172
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000302)
+>Hasty_1: EEHNNSW H4 WHEEN +30 30
+>Hasty_2: AFJLOZ? 6F JO. +26 26
+>Hasty_1: ADILNSU 9H SUNDIAL +72 102
+>Hasty_2: AEFLOZ? L4 FOcAL.ZE +90 116
+>Hasty_1: AEEOQRU N6 QUA.E +36 138
+>Hasty_2: AAEEOTX M2 AXE +25 141
+>Hasty_1: CEEOORR 2I OCRE.E +28 166
+>Hasty_2: AAEFGOT 1E FAGOT +29 170
+>Hasty_1: BGINORR O4 BRING +55 221
+>Hasty_2: AEEHLP? 2E EH +31 201
+>Hasty_1: BEIORRY 7F OY.R +30 251
+>Hasty_2: AELMPS? 12F AMPuLES +116 317
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000303)
+>Hasty_1: GHMRRST H6 GRR +8 8
+>Hasty_2: AEEFILP I5 FIE +13 13
+>Hasty_1: BHMOOST J7 BOTH +22 30
+>Hasty_2: AEELOPY 11G PLOYE +33 46
+>Hasty_1: IMNOSWY L11 SNOWY +41 71
+>Hasty_2: ACEENN? 8A ENhANCE. +80 126
+>Hasty_1: AEFIMTU 15G TUMEF. +42 113
+>Hasty_2: ADIIOU? B1 AUDItIO. +70 196
+>Hasty_1: ACINPRT 1A C.NTRAIP +167 280
+>Hasty_2: AELNRSV A8 .NSLAVER +86 282
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000304)
+>Hasty_1: BELNOSU H4 BOULE +20 20
+>Hasty_2: ADEKNRX I3 KEX +32 32
+>Hasty_1: AENRST? J3 AToNERS +78 98
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000305)
+>Hasty_1: CILNTVW H5 WILT +14 14
+>Hasty_2: BDEHNOZ 6F ZE.N +33 33
+>Hasty_1: CEKNTVV -KVV +0 14
+>Hasty_2: BDHOSWX J2 DHOWS +34 67
+>Hasty_1: CEINRTU 8A INTERCU. +83 97
+>Hasty_2: ABDHMX? 4I H.AX +28 95
+>Hasty_1: GIRSSSY 3I S.Y +21 118
+>Hasty_2: BDIMNP? G8 .PBIND +16 111
+>Hasty_1: DEGIRSS 14A DIGRESS +84 202
+>Hasty_2: AELMQV? A12 QA.i +69 180
+>Hasty_1: AAEGIRU 12A .UAI +26 228
+>Hasty_2: DEELMOV E10 DELV. +32 212
+>Hasty_1: AEGIMNR B2 RENAMI.G +84 312
+>Hasty_2: CEKMOPU A1 MOPE +36 248
+>Hasty_1: AEILORV H1 OVA +28 340
+>Hasty_2: CJKNORU D4 JUNK.R +34 282
+>Hasty_1: EEILRTT 12G .ETTLIER +68 408
+>Hasty_2: ACEEIOR N10 CE.IA +26 308
+>Hasty_1: ABLOTY? 11K ABY. +31 439
+>Hasty_2: AEEEOOR -EEOO +0 308
+>Hasty_1: FLOOTU? E2 FOOT +27 466
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000306)
+>Hasty_1: ILNOPRT H4 PONTIL +22 22
+>Hasty_2: BEELNOU G5 BOULE +23 23
+>Hasty_1: ADERRW? 5C DRAW..REs +106 128
+>Hasty_2: AACEEIN I4 A.EAE +20 43
+>Hasty_1: GIJMORT 4A GRIOT +25 153
+>Hasty_2: CEEIINN A4 .ENIC +24 67
+>Hasty_1: IJMOQRT 6E MO...R +28 181
+>Hasty_2: AACEINO C1 CON..IA +22 89
+>Hasty_1: FIJMQST 2B M.TIF +36 217
+>Hasty_2: ADEIKNS 1E KINDA +41 130
+>Hasty_1: AEJQRSV 1A VA. +28 245
+>Hasty_2: ADEEGST 7C .GE +10 140
+>Hasty_1: EHIJQRS -JQ +0 245
+>Hasty_2: ADELSTY 4H ..YED +29 169
+>Hasty_1: EHIIRST 3B I. +8 253
+>Hasty_2: ABELSTW 3K BAWL +25 194
+>Hasty_1: EEHIRST O1 RESH +43 296
+>Hasty_2: AEGOSTY 2J YOGA +31 225
+>Hasty_1: EEIOTUU N3 .OUIE +12 308
+>Hasty_2: AEFJSTU 8L JUST +63 288
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000307)
+>Hasty_1: ACNQSUV H7 VAC +16 16
+>Hasty_2: AFGILNX 8G F.X +13 13
+>Hasty_1: AHNQSUU 10H SUQ +41 57
+>Hasty_2: AGILNRR 7F RI.AL +26 39
+>Hasty_1: AAHNTTU 6I TAUNT +21 78
+>Hasty_2: GLNNRSY K10 SYN +25 64
+>Hasty_1: AEEHOOT L11 OOH +21 99
+>Hasty_2: DGLLNPR -DGLLNP +0 64
+>Hasty_1: AEEEOTT M12 TOEA +21 120
+>Hasty_2: ADDEIOR L1 ORDAI.ED +76 140
+>Hasty_1: BDEEIMT 2G TIMBE.ED +88 208
+>Hasty_2: AEISTWY 1K Y.WIE +46 186
+>Hasty_1: EEGKRRT 1D GREEK +56 264
+>Hasty_2: ADIRSTZ 15K IZ.RD +75 261
+>Hasty_1: AEFMNRT 3F FARM +33 297
+>Hasty_2: AAEISTU 8K A.IEU +18 279
+>Hasty_1: CENNOST 14E CONSENT +65 362
+>Hasty_2: ABEOOST 13H OBA +19 298
+>Hasty_1: GGHIJLP H12 J..H +66 428
+>Hasty_2: EEIOST? 4A ETOIlES +73 371
+>Hasty_1: GGILPU? 3A PUG +24 452
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000308)
+>Hasty_1: IIKNNSV H4 KININ +28 28
+>Hasty_2: ABDDIOS 4H .IDDO +22 22
+>Hasty_1: DFOSUVW M1 VOWS +32 60
+>Hasty_2: ABELORS 1H ABSOL.ER +176 198
+>Hasty_1: ADEFIUV I7 FAUVE +27 87
+>Hasty_2: ABEGOSU H11 BOGUS +31 229
+>Hasty_1: ADDGIN? K4 .ADDlING +94 181
+>Hasty_2: AEHLMNU 2F ALMEH +41 270
+>Hasty_1: IJLPTWX 2M .X +36 217
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000309)
+>Hasty_1: GIKLOOT H4 LOOKIT +22 22
+>Hasty_2: ADERRSZ 5E RAZ.RED +68 68
+>Hasty_1: ADEGOST I8 DOTAGES +67 89
+>Hasty_2: FILMOSS 6J FOILS +34 102
+>Hasty_1: AACEETU M3 ACU.EATE +74 163
+>Hasty_2: AEMQRSW N10 WARMS +49 151
+>Hasty_1: EIIINO? M13 OI +14 177
+>Hasty_2: EHJQUVW 8L W.VE +42 193
+>Hasty_1: EEIIIN? 4L I.E +10 187
+>Hasty_2: BEHJOQU 4D JOB +30 223
+>Hasty_1: EIINNT? 12B ENTIcIN. +68 255
+>Hasty_2: EHNQUXY B10 QU.ENY +76 299
+>Hasty_1: DEGINRY 15A E.RY +42 297
+>Hasty_2: ACEHMUX 6E CHA. +49 348
+>Hasty_1: DDGIINT J9 DID +18 315
+>Hasty_2: ELMUUX? 14D MUX +35 383
+>Hasty_1: GHINOTV L10 NIGHT +35 350
+>Hasty_2: EELOSU? O1 LOUSE +25 408
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000310)
+>Hasty_1: BCEIIIW H5 BICE +16 16
+>Hasty_2: EHIKQRT 6F KH. +20 20
+>Hasty_1: EFIIRW? G8 WIFtIER +69 85
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000311)
+>Hasty_1: ADEOSTU H7 AUTOED +18 18
+>Hasty_2: AEEHLU? 12A UnHEALE. +74 74
+>Hasty_1: EFMRSSU 11E FEM.S +36 54
+>Hasty_2: EILLORR B8 LORI.ER +16 90
+>Hasty_1: AEHLRSU I2 HAULERS +67 121
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000312)
+>Hasty_1: ENRRRSV -NRRV +0 0
+>Hasty_2: AEHIOPU H4 OUPHE +22 22
+>Hasty_1: AEEKLRS 9B LEAKERS +74 74
+>Hasty_2: AIMOTTV C2 MOTIVAT. +78 100
+>Hasty_1: ADFFGOW 5G G.FFAW +32 106
+>Hasty_2: ACEIJNO D1 JANE +48 148
+>Hasty_1: DDELLOY F6 YOD.LLED +73 179
+>Hasty_2: CIMNORZ 4K ZOIC +51 199
+>Hasty_1: ABORSSY 12C ROS.BAYS +78 257
+>Hasty_2: EEGMNPR 6K PERM +34 233
+>Hasty_1: DEGHIIX 10A GID +26 283
+>Hasty_2: DEGLNNU 1D .UNGLED +48 281
+>Hasty_1: EHIINRX J10 XI. +26 309
+>Hasty_2: AINNORR A10 .ARRON +24 305
+>Hasty_1: AEHINRU 11D HU.A +27 336
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000313)
+>Hasty_1: EEHLRTY H4 ETHYL +24 24
+>Hasty_2: AIOOOSZ 7E OOZ. +26 26
+>Hasty_1: ADEEIRR D4 READIER +86 110
+>Hasty_2: AAINOST C8 ATONIAS +73 99
+>Hasty_1: AEINPRU B13 PIU +18 128
+>Hasty_2: CCDENSU F6 C.NDUCES +71 170
+>Hasty_1: AEEINRX A14 AX +57 185
+>Hasty_2: EIKNSTV B10 KI +35 205
+>Hasty_1: BEEIINR E2 BIER +18 203
+>Hasty_2: EFINSTV C1 FIVE +23 228
+>Hasty_1: AAEINUU I3 UNAI +14 217
+>Hasty_2: INSTTTW J6 TWIT +17 245
+>Hasty_1: AEERRUV K9 ERUV +16 233
+>Hasty_2: GJMNST? 3H M.NG +21 266
+>Hasty_1: AELOQRS 2B Q. +22 255
+>Hasty_2: ADJSTY? H1 Di...... +48 314
+>Hasty_1: AEHLORS L1 SHOALER +80 335
+>Hasty_2: ABJOSTY F1 BY +30 344
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000314)
+>Hasty_1: AEHIRVY H4 HEAVY +36 36
+>Hasty_2: FMNPUX? 6G F.UX +30 30
+>Hasty_1: EIIIOR? 5J OI +13 49
+>Hasty_2: BHMNPZ? 4J PHiZ +51 81
+>Hasty_1: AEIINR? G8 AIRlINE +63 112
+>Hasty_2: ABEEMNU H12 NUMB +36 117
+>Hasty_1: ABEGJKM 12C JAMB..G +38 150
+>Hasty_2: ACEELOO 13A COOEE +38 155
+>Hasty_1: EIKPSTU A9 UPTI.KS +48 198
+>Hasty_2: ADILQWY M2 WI. +30 185
+>Hasty_1: CEEEOOS 5D COOE. +19 217
+>Hasty_2: AADLNQY D4 Y.LAD +26 211
+>Hasty_1: EEORRST 10C RESO.TER +62 279
+>Hasty_2: ANNOQSW 3L Q. +21 232
+>Hasty_1: DEEIILN 14A .I +16 295
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000315)
+>Hasty_1: LNORUVW H8 VROUW +30 30
+>Hasty_2: EEEIJOU 8F JU.IE +15 15
+>Hasty_1: ILNOTY? K4 TYLOsIN +83 113
+>Hasty_2: BDEELOV L1 VOLE +26 41
+>Hasty_1: ADDDEGN M2 DANGED +32 145
+>Hasty_2: BDEENUX N6 XED +55 96
+>Hasty_1: ADEMRSS 11E REM.DAS +60 205
+>Hasty_2: BEKNQUU O7 NEUK +37 133
+>Hasty_1: CGILLRS 13C GRILLS +28 233
+>Hasty_2: BEFMQRU 2J QU.. +34 167
+>Hasty_1: ACEEINT 12G E. +10 243
+>Hasty_2: ABEFMRT 10A FERBAM +33 200
+>Hasty_1: AACEINT A10 .ACIAE +42 285
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000316)
+>Hasty_1: AEINPQW H7 QI +22 22
+>Hasty_2: ANNOORU I8 NOUN +7 7
+>Hasty_1: AENNOPW J10 PAWN +27 49
+>Hasty_2: AEEORUY K11 YOU +31 38
+>Hasty_1: DEIMNO? 14D DOMINEs +74 123
+>Hasty_2: AAEENRS 15D ARENA +36 74
+>Hasty_1: EIILOR? 12J ..OLIE +20 143
+>Hasty_2: EPSSTTW O10 TW.EPS +33 107
+>Hasty_1: AEILNR? M6 LINEAR.y +68 211
+>Hasty_2: ACEOOST 8K CO.TO +24 131
+>Hasty_1: AAGILOT N1 LAOGAI +22 233
+>Hasty_2: AEEFHSS 1K SHE.F +45 176
+>Hasty_1: ABEEGTT 13E TEG +20 253
+>Hasty_2: AEESXYZ L1 .AZY +38 214
+>Hasty_1: ABEIKTT O3 KIBE +28 281
+>Hasty_2: EERRSSX G8 REX +14 228
+>Hasty_1: ADOTTUV F9 TAV +21 302
+>Hasty_2: EEIRRSS 3J RE. +12 240
+>Hasty_1: DDGOTTU E7 DOUT +18 320
+>Hasty_2: EIMRRSS K3 .MIR +19 259
+>Hasty_1: ADEGHTV D4 HATED +30 350
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000317)
+>Hasty_1: EHINOOT H6 OHO +12 12
+>Hasty_2: HMNNOOV I7 MHO +27 27
+>Hasty_1: BEEINTX J9 EX +27 39
+>Hasty_2: ANNNOSV G6 NONA +23 50
+>Hasty_1: ABEINST K7 BASINET +80 119
+>Hasty_2: DKNSVW? 12J V.ND +16 66
+>Hasty_1: DEFILRT L2 FLIRTED +85 204
+>Hasty_2: IIKSUW? N6 WIKIUpS +82 148
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000318)
+>Hasty_1: AAEGLNW H4 WANGLE +28 28
+>Hasty_2: AEILSTX 5E SAX.TILE +110 110
+>Hasty_1: AAEGKNU 4G A.AKEN +49 77
+>Hasty_2: BEEEIOT 6F BE.E +35 145
+>Hasty_1: AGPSSTU 9B UPSTAG.S +67 144
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000319)
+>Hasty_1: CELNORT H4 COLTER +22 22
+>Hasty_2: EGNOSU? 5D mUNG.OSE +82 82
+>Hasty_1: INNPPY? 4K NIPPY +34 56
+>Hasty_2: EFNORSV O1 ENV. +30 112
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000320)
+>Hasty_1: EGKMRR? H5 MERK +20 20
+>Hasty_2: GIOPSTU 4B PIGOUTS +84 84
+>Hasty_1: DGOORY? B2 GY.O +20 40
+>Hasty_2: AEEGLRS A5 GALERES +77 161
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000321)
+>Hasty_1: DENOORY H4 YONDER +28 28
+>Hasty_2: INOOOTU 7E OUT.O +8 8
+>Hasty_1: DIORTTX 5E RID.TTO +32 60
+>Hasty_2: IIJNNOP 8A JINNI +41 49
+>Hasty_1: ABDLRWX 4D WAX +37 97
+>Hasty_2: GHIOPUW 3B WHOP +34 83
+>Hasty_1: BDKLMRY B6 BL.MY +26 123
+>Hasty_2: AAGGIUU -AAGGIUU +0 83
+>Hasty_1: ADKRRST L1 KARTS +37 160
+>Hasty_2: AAEEILO C5 LOA.EE +25 108
+>Hasty_1: ADELNRT 1I RAN.LED +36 196
+>Hasty_2: ABIIISU 3K U.BIA +14 122
+>Hasty_1: AEFLPQT 2A FEAL +35 231
+>Hasty_2: EIISSUV 1A IS +27 149
+>Hasty_1: FIMPQRT O3 .RMPIT +33 264
+>Hasty_2: EEISUUV -EIUUV +0 149
+>Hasty_1: FGGQRT? -FGGQT +0 264
+>Hasty_2: EEEIIOS A8 .EE +21 170
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000322)
 >Hasty_1: ACGILNP H4 PLACING +80 80
->Hasty_2: AAAEIRU H2 RE....... +14 14
+>Hasty_2: AAAEIRU 5H .AURAE +12 12
+>Hasty_1: AINNOTY 4K ATONY +32 112
+>Hasty_2: AEEEIIY I9 AIYEE +16 28
+>Hasty_1: EINNRUV O1 VIN. +30 142
+>Hasty_2: BCEIOT? 12H C.nOBITE +80 108
+>Hasty_1: EFIJNRU 3M JU. +42 184
+>Hasty_2: AHLPRTX O10 PR.TAX +45 153
+>Hasty_1: EFINNOR 7H .ONFINER +65 249
+>Hasty_2: AHIILRS H12 .HAI +32 185
+>Hasty_1: DGHMORT M11 M.GHT +22 271
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000324)
->Hasty_1: EFOOTV? H4 FOVEa +28 28
->Hasty_2: AEINOTY 4D NOTI.Y +24 24
->Hasty_1: GHORSTT 5G T.OTHS +25 53
->Hasty_2: AAELMNS L1 SALE.MAN +74 98
->Hasty_1: AAEGLOR 3C REGAL +25 78
+#note Harvested post-move position (game seed 1000323)
+>Hasty_1: EILOTYZ H4 ZLOTY +54 54
+>Hasty_2: CDEMORW 5G C.OWDER +26 26
+>Hasty_1: EEILORT K5 .OLERITE +68 122
+>Hasty_2: AAFIMNR 4L FARM +36 62
+>Hasty_1: AAEGGOR 3M GOA +22 144
+>Hasty_2: AINPRSS 9B SPRAINS +81 143
+>Hasty_1: AEEGIRS D8 G.EASIER +74 218
+>Hasty_2: AEEHNX? J8 HEXANEs +118 261
+>Hasty_1: EIILQY? 8A QI +35 253
+>Hasty_2: EIMOTVW I11 VOW +31 292
+>Hasty_1: CEILTY? 15B dI.ECTLY +86 339
+>Hasty_2: DEFIIMT 8J ..FTED +51 343
+>Hasty_1: AILNOUU O1 UL..A +21 360
+>Hasty_2: IIIMNRU 14J .URIMI +14 357
+>Hasty_1: EEINOOU G7 IO.ONE +15 375
+>Hasty_2: AIKNPST O12 PA.K +39 396
+>Hasty_1: BEEHJNU F8 J.BE +44 419
+>Hasty_2: ABDINST 12F D.B... +27 423
+>Hasty_1: ADEHNTU L12 DU.N +34 453
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000325)
+#note Harvested post-move position (game seed 1000324)
+>Hasty_1: EFOOTV? H5 FOOT +14 14
+>Hasty_2: AEINOTY I7 YO +20 20
+>Hasty_1: EGRSTV? 4F GRaVEST +77 91
+>Hasty_2: AEHINST K4 .HANTIES +94 114
+>Hasty_1: AAELMNO J9 OMA +25 116
+>Hasty_2: AALLNUW I11 WAUL +14 128
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000325)
 >Hasty_1: EHINPTY H3 PHYTIN +36 36
->Hasty_2: DEEGNVY 4H .EDGY +26 26
->Hasty_1: AAEENOU 3F EU.NEA +19 55
->Hasty_2: AEILNUV 4A VEINAL +28 54
->Hasty_1: AACDEOR A1 CAR.ED +36 91
->Hasty_2: AACIMNU 2I AMNIC +34 88
->Hasty_1: ABHNOTX 5C TAX +42 133
->Hasty_2: AIMRRSU 8B MURRAI.S +61 149
->Hasty_1: BFHNOO? 1D BeHOOF +55 188
+>Hasty_2: DEEGNVY 5G G.VED +26 26
+>Hasty_1: AAEENOU I4 A.ENUE +23 59
+>Hasty_2: AEILNUY G5 .UY +24 50
+>Hasty_1: AACDEOR F6 CARED +37 96
+>Hasty_2: AAEILNN E6 ALANINE +86 136
+>Hasty_1: AACHIMO D9 AMAH +39 135
+>Hasty_2: BIMNRTX C9 BINT +34 170
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000326)
+#note Harvested post-move position (game seed 1000326)
 >Hasty_1: AEISSTV H6 STEVIAS +72 72
 >Hasty_2: ABDEEIL 12A BELADIE. +78 78
 >Hasty_1: AEEITWX 13A AXITE +46 118
+>Hasty_2: ADGIORU A8 DAGO.. +30 108
+>Hasty_1: EEKOOWZ 11D WOK +40 158
+>Hasty_2: CFILRTU 6F FU.TIC +21 129
+>Hasty_1: EEIIOOZ 8A .OOZIE +26 184
+>Hasty_2: EILLRTU 10A .LUT +14 143
+>Hasty_1: ABDEIOT K5 I.EBOAT +44 228
+>Hasty_2: AEILNRW L7 WAILER +36 179
+>Hasty_1: ADDEFOP L1 FADED +31 259
+>Hasty_2: AENNSY? 2J YE.NS +32 211
+>Hasty_1: MNNOPRV J5 V.NO +25 284
+>Hasty_2: ALNNRS? 1H SNAR. +31 242
+>Hasty_1: EJMNPRR 10H .MP..ER +19 303
+>Hasty_2: LNNTU?? O4 TUNNeLs +79 321
+>Hasty_1: GGIJNQR 7E QI +28 331
+>Hasty_2: EEHHMOU M2 .OME +30 351
+>Hasty_1: GGJNOPR B12 ..PO +26 357
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000327)
->Hasty_1: ELOORSV H4 VERSO +24 24
->Hasty_2: ABCIITW 4H .IATIC +22 22
->Hasty_1: CGLOPQR I3 Q. +21 45
->Hasty_2: ABEGHIW G4 AWEIGH +43 65
->Hasty_1: CGLNOPR F5 OP +27 72
->Hasty_2: ABDILNX E5 LAX +40 105
->Hasty_1: ACGGLNR D6 CARL +25 97
->Hasty_2: BDFINNR 4C DIF +28 133
->Hasty_1: EGGKNNN 3B KEG +25 122
->Hasty_2: BMNNORS 2A MOB +32 165
->Hasty_1: BGLNNN? J2 Li.NG +21 143
->Hasty_2: NNRSTU? M2 No.TURNS +72 237
->Hasty_1: BIMNNOU I7 MOB +25 168
->Hasty_2: AAAIIPZ C7 ZA +52 289
->Hasty_1: EINNUUY 8A UN..Y +42 210
->Hasty_2: AAIIPTT 8K PI.TA +24 313
->Hasty_1: AEINOUV F9 AVION +21 231
->Hasty_2: AADEIOT D6 ....OAD +20 333
->Hasty_1: EEHORTU N8 .HEREOUT +81 312
->Hasty_2: AEEEFIT O12 FETA +52 385
+#note Harvested post-move position (game seed 1000327)
+>Hasty_1: ELOORSV H5 LEVO +14 14
+>Hasty_2: ABCIITW 5C TWIBI. +22 22
+>Hasty_1: CGOQRRS -GQR +0 14
+>Hasty_2: ACEGHIP 4A CHEAP +46 68
+>Hasty_1: ACNORSX C3 R..AX +40 54
+>Hasty_2: ADGIILN G8 DIALING +64 132
+>Hasty_1: ACGNNOS 11D CON.ANGS +94 148
+>Hasty_2: FGLMNNR 6B F.NG +28 160
+>Hasty_1: BLORT?? 15D BOLsTeR +89 237
+>Hasty_2: LMNNORU I2 NURL +17 177
+>Hasty_1: AADIIQU 2F QUI. +33 270
+>Hasty_2: EIMNOYZ D8 ZIN.Y +58 235
+>Hasty_1: AADISTU 14J AUDIT +20 290
+>Hasty_2: ADEMOOV F4 O.A +31 266
+>Hasty_1: AAEHPSS O11 PHASE +49 339
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000328)
+#note Harvested post-move position (game seed 1000328)
 >Hasty_1: ELNNOT? H4 LENTO +12 12
->Hasty_2: AEFKMPS 6F KE.AFS +31 31
->Hasty_1: IMNORU? K3 MON.IeUR +68 80
->Hasty_2: DEGILMP L1 GIMP +36 67
->Hasty_1: ACDEFOX 8J D.FACE +45 125
->Hasty_2: ABDEELS N4 DEBA.LES +71 138
->Hasty_1: EHLNOUX O1 LUXE +40 165
+>Hasty_2: AEFKMPS 6F KE.AF +30 30
+>Hasty_1: IMNORU? J2 UNcI.ORM +64 76
+>Hasty_2: DEILMPS 10D DIMPLES +85 115
+>Hasty_1: ACDEFGX D8 FA.GED +32 108
+>Hasty_2: ABEENOS 8A BEE. +27 142
+>Hasty_1: CDHILUX I9 H.LIX +38 146
+>Hasty_2: ACNOOS? 8J .ACOON +33 175
+>Hasty_1: AACDUWY C11 AWAY +34 180
+>Hasty_2: AEGIRS? A8 .EARInGS +83 258
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000329)
+#note Harvested post-move position (game seed 1000329)
 >Hasty_1: EILMQVZ H7 QI +22 22
->Hasty_2: BEEGNOU G8 BEGONE +15 15
->Hasty_1: EILMRVZ H13 REZ +38 60
->Hasty_2: GLNTUUW 11E GL.W +16 31
->Hasty_1: ILMOSSV 13F V..ISMOS +28 88
->Hasty_2: GHNOTUU 14J HON +33 64
->Hasty_1: AACEEKL 12L CALK +42 130
->Hasty_2: BEGTTUU 15K BEG +21 85
->Hasty_1: AEEENSY O8 SNEA.Y +39 169
->Hasty_2: DJMTTUU 15K ...UM +30 115
->Hasty_1: AEEILP? D7 EPILAtE +81 250
->Hasty_2: DJNTTUU E5 JUN +22 137
->Hasty_1: AEIINTV I4 INVITE +28 278
->Hasty_2: DFORTTU N9 OF +28 165
->Hasty_1: ADEEOOX C7 DOX +48 326
->Hasty_2: DIRTTUY H1 YURT +27 192
->Hasty_1: AACDEEO 10F A.ED +28 354
->Hasty_2: ADIITTU 8A AT.. +18 210
->Hasty_1: ACENOP? M3 APNOEiC +86 440
->Hasty_2: DFIITTU L3 DUIT +25 235
+>Hasty_2: BEEGNOU 8D BOUG.E +12 12
+>Hasty_1: EILMRVZ E5 VIZ.R +34 56
+>Hasty_2: EGLNNTU D8 .EGUN +18 30
+>Hasty_1: ELMOSSW 9H SWOLE +33 89
+>Hasty_2: AGHLNOT 8L HONG +45 75
+>Hasty_1: ACEEKMS 10J KAME +46 135
+>Hasty_2: ABELNTT 11K BELT +33 108
+>Hasty_1: CEEJSSY O11 SYCEE +49 184
+>Hasty_2: ADIMNPT F6 DA.NT +33 141
+>Hasty_1: AJLNSU? 14J JUNgL. +56 240
+>Hasty_2: EIIIMPT C12 IMPI +18 159
+>Hasty_1: AAFNRSV 15A NA.F +33 273
+>Hasty_2: EEIOOTX 15H OXO +39 198
+>Hasty_1: ADEORSV B6 OVERSAD +69 342
+>Hasty_2: AEEIITY A8 YEET +42 240
+>Hasty_1: ACDIPTU E11 PTUI +25 367
+>Hasty_2: AFIINT? O1 FAINTIn. +86 326
+>Hasty_1: AACDDLT L7 T....D +24 391
+>Hasty_2: EERRRSW 4L WRE. +14 340
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000330)
->Hasty_1: BFIIOS? H4 FOrBS +26 26
->Hasty_2: DGJNNST 5G D.NGS +14 14
->Hasty_1: BIILOVY I7 YOB +28 54
->Hasty_2: JNNOORT J8 NOON +13 27
->Hasty_1: AHIILRV K10 HAIL +23 77
->Hasty_2: IIJRSTU 13I JI.TS +40 67
->Hasty_1: HIIIRVX L13 .IX +18 95
->Hasty_2: DIIKRUY J2 RID.Y +20 87
->Hasty_1: EHIILRV 15H HELI. +45 140
->Hasty_2: IIKOPRU I3 KI. +30 117
->Hasty_1: CEGIPRV 6D GIVE. +19 159
->Hasty_2: EIMOPRU K3 PO.ER +29 146
->Hasty_1: CEEPRRU 14B PRECURE +81 240
->Hasty_2: AILMTUU 2D TUMULA. +23 169
+#note Harvested post-move position (game seed 1000330)
+>Hasty_1: BFIIOS? H7 FIB +16 16
+>Hasty_2: DGJNNST 8F DJ.N +12 12
+>Hasty_1: BIOSVY? J6 VIS +27 43
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000331)
+#note Harvested post-move position (game seed 1000331)
 >Hasty_1: EENNPQT H4 PENNE +20 20
->Hasty_2: BDHMNOS 5D MOSH.D +24 24
->Hasty_1: AEILOQT 4C QAT +34 54
->Hasty_2: BENRRRT 9G BRENT +19 43
->Hasty_1: EILOPST K5 PLOT.IES +90 144
->Hasty_2: AAENRRR L2 ARREAR +20 63
->Hasty_1: ABDEGKW J7 DA.K +41 185
->Hasty_2: EHIINOU 6F HO.E +36 99
->Hasty_1: BEGGOVW 7E GOW. +31 216
->Hasty_2: AFIIMNU 8A ANIMI +33 132
->Hasty_1: ABEEGUV M4 EAVE +27 243
->Hasty_2: EFNORU? 13H FORtUNE +80 212
->Hasty_1: BDFGJNU 3J BU.D +32 275
->Hasty_2: AIOSUY? O7 OUgIYAS +90 302
->Hasty_1: EFGJNOW N10 GON.F +40 315
+>Hasty_2: BDHMNOS 5G D.MOB +20 20
+>Hasty_1: AEILOQT K3 QI.LA +16 36
+>Hasty_2: EHNRRRS 4J H.RER +21 41
+>Hasty_1: EOPSTTT 8K STOPT +41 77
+>Hasty_2: AENNRRS 8B ENSNAR.R +59 100
+>Hasty_1: ABDEEKT 6J B.EAK +41 118
+>Hasty_2: AEGHOUW 3M HOW +30 130
+>Hasty_1: DEIIOTV N8 .IVOTED +42 160
+>Hasty_2: AEFGGMU 13I MUGGE. +26 156
+>Hasty_1: AAEEINU L12 A.UE +12 172
+>Hasty_2: ADFJOR? O1 JO. +39 195
+>Hasty_1: AEFINNS 14D FANNIES +72 244
+>Hasty_2: ADFOR?? 15F OAF +37 232
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000332)
->Hasty_1: AAEEIIU H6 EAU +6 6
->Hasty_2: AEEEHOY G4 AHOY +25 25
->Hasty_1: AAEIIOU 5E AA. +12 18
->Hasty_2: CEEEMSX H1 EXES +39 64
->Hasty_1: EEIIOTU I2 IT +15 33
->Hasty_2: ACEEIMR 4A CREAM +28 92
->Hasty_1: EEILOPU A1 OIL.UP +30 63
->Hasty_2: BBEEINY 3C BY +27 119
->Hasty_1: EEJKQS? 7A SuQ +32 95
->Hasty_2: BEEINTW 6F W.. +27 146
->Hasty_1: DEEJKOT 7G ..JE +22 117
->Hasty_2: ABEEINT 6J BEANIE +26 172
->Hasty_1: DEKORTV O1 REVOK.D +48 165
->Hasty_2: DFLNRTT L4 DR.FT +20 192
->Hasty_1: FLNNRTT 1F TR.F +13 178
->Hasty_2: AAELNTU C7 .UANTAL +34 226
->Hasty_1: LMNNSTZ 12B Z.S +24 202
->Hasty_2: EGIIRV? 13C .IVERInG +64 290
->Hasty_1: LMNNOTU H12 M.LO +27 229
+#note Harvested post-move position (game seed 1000332)
+>Hasty_1: AAEEIIU -AAEIIU +0 0
+>Hasty_2: AEEEHOY H6 EYE +12 12
+>Hasty_1: AEMOSUX G7 MOXA +36 36
+>Hasty_2: ACDEHOT F8 DOH +41 53
+>Hasty_1: AEEHRSU H10 HUE +16 52
+>Hasty_2: ACELLPT I9 CAPLET +30 83
+>Hasty_1: AAEERSY 15F AYES +32 84
+>Hasty_2: AIILPS? 14G An.ISLIP +78 161
+>Hasty_1: ADERTTW 13B WARTED +33 117
+>Hasty_2: ANNRRTU 11H ..TURN +16 177
+>Hasty_1: CEFJNTU 14A JET +32 149
+>Hasty_2: AALNNRR 15L ANAL +24 201
+>Hasty_1: ACEFNUU L9 FU.CU.. +24 173
+>Hasty_2: GLNRRSZ -GLNRR +0 201
+>Hasty_1: AEIINV? 12C VAIN +28 201
+>Hasty_2: AOQSTVZ A14 .O +27 228
+>Hasty_1: BDEEII? K5 BEEDI +21 222
+>Hasty_2: AQRSTVZ L4 QAT +30 258
+>Hasty_1: EGGILO? M3 GIG +27 249
+>Hasty_2: INORSVZ N6 VIZORS +37 295
+>Hasty_1: EGLOTW? J6 WO +29 278
+>Hasty_2: EENORRS 13K E.RO +21 316
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000333)
->Hasty_1: ACEEPQT H4 PEACE +24 24
->Hasty_2: EGILNOR 8H .LOIGNER +83 83
->Hasty_1: EINPQTT I3 QI +25 49
->Hasty_2: AAEITUZ J2 ZIT +48 131
->Hasty_1: DEINPTT 9H DIPT +28 77
->Hasty_2: AADEEGU K5 AUD..EE +32 163
->Hasty_1: DEFNTVW L11 WEFT +25 102
->Hasty_2: ADGLOR? M3 LaRGA.DO +74 237
->Hasty_1: AADENSV O6 VE.ANDAS +63 165
->Hasty_2: ABBITTU 14J BA.TU +26 263
+#note Harvested post-move position (game seed 1000333)
+>Hasty_1: ACEEPQT H7 QAT +24 24
+>Hasty_2: EGILNOR 8B REGION.L +61 61
+>Hasty_1: CEEINPP C8 .PICENE +28 52
+>Hasty_2: AEETTUZ 11C .UZ +28 89
+>Hasty_1: ADDEIIP B12 PADI +26 78
+>Hasty_2: AEEGTTV D10 T.TEE +29 118
+>Hasty_1: DDDEFIW E4 WIDD.E +22 100
+>Hasty_2: AGLORV? D2 VLOG +29 147
+>Hasty_1: AADEFSU 2A FAU.E +22 122
+>Hasty_2: AABBRT? 1E BARBATe +84 231
+>Hasty_1: AADIIST I7 I.IAD +23 145
+>Hasty_2: EJLLRRU 11I .ULLER +14 245
+>Hasty_1: ACGSSTV J10 G.VS +19 164
+>Hasty_2: EIJOORT L9 JO.TIER +30 275
+>Hasty_1: ACEHSST 15D SACHETS +96 260
+>Hasty_2: AENNORS 1A ON +23 298
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000334)
->Hasty_1: DEOQUU? H4 QUOtED +50 50
->Hasty_2: AACMNPW G8 MACAW +21 21
->Hasty_1: BDIOUVY H11 BOVID +46 96
->Hasty_2: AIMNNPW I3 WIMP +34 55
->Hasty_1: CHKUXYZ 11E CH..UK +34 130
->Hasty_2: AFIJLNN J11 .ANJI +32 87
->Hasty_1: AANOXYZ J1 AZO +37 167
->Hasty_2: EFIILNS 1G FIN.LISE +86 173
->Hasty_1: ADNRSXY O1 DRAYS +78 245
->Hasty_2: EGLRTTU F3 GUTTLER +69 242
->Hasty_1: EFLNOOX 4L FOX. +34 279
->Hasty_2: EGHNRY? K6 HENRYs +56 298
->Hasty_1: EEELNOS 3L OLE. +26 305
->Hasty_2: AEGNRTV 15J .NVERT +39 337
->Hasty_1: DEENORS 15A ENDORSE. +83 388
->Hasty_2: ABEGIOT B10 BIOGE. +30 367
+#note Harvested post-move position (game seed 1000334)
+>Hasty_1: DEOQUU? H5 QUOD +28 28
+>Hasty_2: AACMNPW G7 WAP +27 27
+>Hasty_1: BDEIOU? 5D OBlI.UED +126 154
+>Hasty_2: ACMNNVY 4A CAVY +40 67
+>Hasty_1: ACIMWXZ 4J WIZ +38 192
+>Hasty_2: FHJKMNN B2 KH.F +28 95
+>Hasty_1: AACILMX A4 .ICALA +35 227
+>Hasty_2: AJMNNNO B9 NONMAN +22 117
+>Hasty_1: EIIMRSX A13 MIX +42 269
+>Hasty_2: DEGJRST C7 JET +23 140
+>Hasty_1: EILRSTU E5 .URLIEST +70 339
+>Hasty_2: DFGOORS F10 FOOD +33 173
+>Hasty_1: EGHLNY? C12 YEN +32 371
+>Hasty_2: EEGRRSS 15C SERGERS +84 257
+>Hasty_1: AEEGHL? 3J EH +18 389
+>Hasty_2: DNORRTV G11 DROV. +21 278
+>Hasty_1: AEGILT? 14I EGALITe +74 463
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000335)
+#note Harvested post-move position (game seed 1000335)
 >Hasty_1: DDEFGPU H4 FUDGED +32 32
->Hasty_2: EFNORSV 4G O.FERS +24 24
->Hasty_1: DGHIOPT F2 DIGHT +30 62
->Hasty_2: BENORVY J2 VE.RY +27 51
->Hasty_1: CDEEOPZ 2B DOZE. +32 94
->Hasty_2: ABBINOU D1 A.ON +28 79
->Hasty_1: CEEHLPQ C1 H.PE +33 127
->Hasty_2: BBIORUU B4 BUBO +19 98
->Hasty_1: CEILLQ? A7 mICELL +25 152
->Hasty_2: EIIJRU? 1A JE..d +46 144
->Hasty_1: ALNOQTT L1 QAT. +23 175
->Hasty_2: AIIRRUW 1L .UAI +39 183
->Hasty_1: LNNOOST 5D SO. +26 201
->Hasty_2: IKORRWY N1 .RROWY +40 223
->Hasty_1: ELNNOOT O4 NEON +18 219
->Hasty_2: IKLMNRU B10 MI +22 245
->Hasty_1: GILMOTW C6 OWL +23 242
->Hasty_2: KLNNRUX 8G K.X +14 259
->Hasty_1: EGIIIMT 9F MI.I +26 268
->Hasty_2: ALNNRRU 10D ULAN +19 278
->Hasty_1: EGISTTV 8L VIGS +51 319
->Hasty_2: EEINPRR 11F REPINER +81 359
->Hasty_1: AEINSTT 13A SATINET +74 393
+>Hasty_2: EFNORSV G3 FON +17 17
+>Hasty_1: DGHIOPT 5D PIG..T +18 50
+>Hasty_2: EORRSVY E2 REV.SORY +64 81
+>Hasty_1: BDDEHOZ 8A DOZE. +48 98
+>Hasty_2: ABCEEIU 2B ACE.B +30 111
+>Hasty_1: BDEHHLQ B5 BEH.LD +18 116
+>Hasty_2: EILORUU 4C LU. +20 131
+>Hasty_1: EHIJQ?? F5 .HI +30 146
+>Hasty_2: AEIIORU 1F AUREI +19 150
+>Hasty_1: EJLQT?? B1 Q.T +12 158
+>Hasty_2: AINOOTW C6 WA.OO +36 186
+>Hasty_1: EJLOR?? J3 JOstLER +71 229
+>Hasty_2: IKNNSTY 11C STINKY +44 230
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000337)
+#note Harvested post-move position (game seed 1000336)
+>Hasty_1: DEEFITU H4 FEUED +26 26
+>Hasty_2: GLLOORT 4H .ORGOT +20 20
+>Hasty_1: AAEILTT 8H .ILATATE +80 106
+>Hasty_2: EGJLLTW 3L JELL +35 55
+>Hasty_1: AHLORSU O1 HU.LOA +30 136
+>Hasty_2: EFGITW? J8 .EFTWInG +72 127
+>Hasty_1: EIIORSS 14G IRO.ISES +64 200
+>Hasty_2: AERRSST 11D RESTAR.S +82 209
+>Hasty_1: ADEEIQZ N6 ZE.A +64 264
+>Hasty_2: DIKNOUV 5C INVOK.D +33 242
+>Hasty_1: BDEIQX? 4C QI +37 301
+>Hasty_2: IIIPPRU 13M PIU +20 262
+>Hasty_1: BCDEMX? 13G BEM.X +47 348
+>Hasty_2: IIMNOPR 15D PRION +44 306
+>Hasty_1: CDETUY? M7 D.Y +27 375
+>Hasty_2: DEGIMNN I7 D.ME. +30 336
+>Hasty_1: BCCETU? 12A CUBE +26 401
+>Hasty_2: AGINNNW 12L NAW +23 359
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000337)
 >Hasty_1: AAIJNOT H4 JOINT +40 40
->Hasty_2: CCEIRUV 4H .IVER +30 30
->Hasty_1: AAEFORW 5K FEW +30 70
->Hasty_2: CCELNUW 5D LEUC.N +18 48
->Hasty_1: AAORRRS 3K ROARS +19 89
->Hasty_2: COQTWZ? H1 COn..... +48 96
->Hasty_1: AADEHRX 4A HEXAD +47 136
->Hasty_2: IOQTTWZ O1 QI. +36 132
->Hasty_1: AAEEMRS 8C AMREE.AS +63 199
->Hasty_2: AORTTWZ 7C ZOA +49 181
+>Hasty_2: CCEIRUV 4H .UVIE +30 30
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000338)
+#note Harvested post-move position (game seed 1000338)
 >Hasty_1: AHIJSST H4 HAJIS +38 38
->Hasty_2: AAALNQS 7G Q.S +23 23
+>Hasty_2: AAALNQS 7G Q. +21 21
 >Hasty_1: ALMOSTT 5D STOM.TAL +90 128
->Hasty_2: AAAILNO C3 LIANA +23 46
+>Hasty_2: AAALNOS C2 ANOA +19 40
+>Hasty_1: DIIRWY? 6J WIRY +33 161
+>Hasty_2: AADELOS 4E ALO.A +18 58
+>Hasty_1: DIIORU? 8H .IlUROID +77 238
+>Hasty_2: CDDEGRS 2B C.DGED +26 84
+>Hasty_1: EEELPRV 1F PEEVE +37 275
+>Hasty_2: AIORSTZ 4A ZO. +22 106
+>Hasty_1: BEELNPR 3H BEN +28 303
+>Hasty_2: AAEIRST O8 .ATARIES +80 186
+>Hasty_1: EILNNPR 14J PENIL. +28 331
+>Hasty_2: ACGORTU 15F COUGAR +33 219
+>Hasty_1: DINRST? 13D NITRiDS +65 396
+>Hasty_2: BEEELTY 12A BETEL +26 245
+>Hasty_1: FHNOUVX B10 FO.HN +38 434
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000339)
->Hasty_1: AELMOTW H4 METAL +20 20
->Hasty_2: AEFHTTZ G5 FAZE +56 56
->Hasty_1: IOOSTUW I4 OWTS +37 57
->Hasty_2: EEHNRTT 3I NETHER +29 85
->Hasty_1: DDGIOQU 9D QUID +36 93
->Hasty_2: AIPPTVW 2J PIA +28 113
->Hasty_1: DEGINNO C9 ENDING +34 127
->Hasty_2: AEEPTVW 1L PAVE +47 160
->Hasty_1: ACENOOY 14A OO.ENY +36 163
->Hasty_2: EEHORTW 1D WHERETO +106 266
->Hasty_1: ACIOOTU A12 CO.T +27 190
->Hasty_2: ACIORV? E5 bIVO.AC +44 310
->Hasty_1: AABILOU 15F ABOULIA +85 275
->Hasty_2: DEEIRSS M9 DESIRES +80 390
->Hasty_1: ADKLRY? L8 YARaK +48 323
+#note Harvested post-move position (game seed 1000339)
+>Hasty_1: AELMOTW H7 MOW +16 16
+>Hasty_2: AEFHTTZ G8 HAFT +22 22
+>Hasty_1: AEILSTT 7G S.ALTITE +75 91
+>Hasty_2: EEEOTUZ J3 TOUZ.E +35 57
+>Hasty_1: DDGINQR 5I Q.ID +28 119
+>Hasty_2: AEEPPVW H1 WEAVE +60 117
+>Hasty_1: DGINNNR 8L DING +33 152
+>Hasty_2: AEEEEPP 4L EPEE +20 137
+>Hasty_1: ACNNNRY I9 NANNY +20 172
+>Hasty_2: AEEHOPR J10 HOE +31 168
+>Hasty_1: CIOORTU 12H U..ROTIC +28 200
+>Hasty_2: AEOOPRR 3L POOR +30 198
+>Hasty_1: ACILOV? 13B VOCALIt. +83 283
+>Hasty_2: AABDEIR 2L ABRI +35 233
+>Hasty_1: AEERSSY 6N YE +27 310
+>Hasty_2: ADDEKL? D7 DEADLo.K +82 315
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000340)
+#note Harvested post-move position (game seed 1000340)
 >Hasty_1: EEFOSUY H4 YOUSE +24 24
 >Hasty_2: EEHIJMN 6F JE. +26 26
 >Hasty_1: AEFMQTW I3 FEW +23 47
->Hasty_2: EHIMNOR J2 HERN +32 58
->Hasty_1: AEMQST? K5 SQuAT +40 87
->Hasty_2: AILLMNO 8J L.MINA +33 91
->Hasty_1: CEEMORS O7 R.CEMOSE +63 150
->Hasty_2: ELOOOTV G3 VOT. +26 117
->Hasty_1: EEOOUXY 13J OXEYE. +32 182
->Hasty_2: ADEFLOO N10 DEL.AF +45 162
->Hasty_1: ABIIORU 12J BAR +27 209
->Hasty_2: ABGLOOO 11K LA +27 189
->Hasty_1: DIILOTU N1 DILUTIO. +74 283
->Hasty_2: ABGOOO? 1K ABO.e +30 219
+>Hasty_2: EHIMNOR 7F OH. +28 54
+>Hasty_1: AEMQST? 8A MASQuE +88 135
+>Hasty_2: EILMNNR J2 MERLIN +33 87
+>Hasty_1: ACELRST C8 .CARLETS +76 211
+>Hasty_2: ENOOOTV 12A VO.TE +24 111
+>Hasty_1: EEOOUXY 11E OXEYE +34 245
+>Hasty_2: ABDFNOO 10E FADO +35 146
+>Hasty_1: AIIOORU 15C .OUARI +21 266
+>Hasty_2: ABBGLNO B10 BO.B +30 176
+>Hasty_1: ADILOT? 14F DOgTAIL +73 339
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000341)
+#note Harvested post-move position (game seed 1000341)
 >Hasty_1: DEEEFNU H4 FEUED +26 26
->Hasty_2: CDHOORW 5C CHOWD.R +32 32
->Hasty_1: AENNOOQ 4D ANE +23 49
->Hasty_2: GKLLORU F3 L..K +21 53
->Hasty_1: AINOOQT 4H .AINT +18 67
->Hasty_2: GLOPRSU K2 LO.GSPUR +72 125
->Hasty_1: EEFOOQS 2J F.EES +32 99
+>Hasty_2: CDHOORW G7 HOW +29 29
+>Hasty_1: AENNOOQ F8 NOON +15 41
+>Hasty_2: CDGLORU E9 CLOUD +30 59
+>Hasty_1: AEIKLQR 4H .AQIR +34 75
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000342)
->Hasty_1: DHHKQTU H7 HUH +18 18
->Hasty_2: ABDOTUW I6 BOTA +22 22
->Hasty_1: DEJKQTT J9 JET +25 43
->Hasty_2: ADIIUWY J3 WADY +34 56
->Hasty_1: DDKOOQT K2 KOTO +29 72
->Hasty_2: EIILSUU K9 ILEUS +30 86
->Hasty_1: DDINQRU 13K .QUID +30 102
->Hasty_2: EILNPU? 4D INcULP..E +94 180
->Hasty_1: CDIMNOR M1 NORDIC +30 132
+#note Harvested post-move position (game seed 1000342)
+>Hasty_1: DHHKQTU H6 THUD +16 16
+>Hasty_2: ABDOTUW 6F BA.TU +15 15
+>Hasty_1: AEHJKQT 5E QAT +30 46
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000343)
+#note Harvested post-move position (game seed 1000343)
 >Hasty_1: AILLMRT H4 MITRAL +22 22
 >Hasty_2: AEIIORV 4D VIRE.IA +24 24
 >Hasty_1: ABDFILO F2 FO.BIDAL +74 96
 >Hasty_2: EGNOTU? 8H .UTOGENy +80 104
 >Hasty_1: AIINOQU 8A QUINO. +48 144
+>Hasty_2: IJLNRTX 9K NIX +40 144
+>Hasty_1: AAAILOS 10B ALIAS +26 170
+>Hasty_2: BEJLRTT 10J JET +33 177
+>Hasty_1: ADEEENO N6 DO.EE +23 193
+>Hasty_2: BLOPRST 7M L.B +20 197
+>Hasty_1: AEGNOPR E1 GON.A +27 220
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000344)
+#note Harvested post-move position (game seed 1000344)
 >Hasty_1: AEIMNQU H8 UMIAQ +52 52
->Hasty_2: BDHISTU 13C DHUTIS +39 39
->Hasty_1: AEMNORS D7 MENORA.S +78 130
->Hasty_2: BEFIINO E5 NEIF +23 62
->Hasty_1: EEGNOR? F1 ERElONG +73 203
->Hasty_2: BDEEIOS 9G E.BODIES +68 130
->Hasty_1: AEHIRY? K4 HAYRI.Es +106 309
+>Hasty_2: BDHISTU 12H .UBIT +32 32
+>Hasty_1: AEMNORS 13E OARSMEN +93 145
+>Hasty_2: DEFHINS 8H .NFISHED +98 130
+>Hasty_1: EEGIOO? L1 OOGEnIE. +68 213
+>Hasty_2: DEENRSY 14B NERDY +50 180
+>Hasty_1: AEHIRU? 1H EUpH.RIA +140 353
+>Hasty_2: ENNORST 11B NORTEN.S +71 251
+>Hasty_1: KLLOTXY 15A LOX +41 394
+>Hasty_2: AAABEIJ 11K JAB +46 297
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000345)
+#note Harvested post-move position (game seed 1000345)
 >Hasty_1: BIOPSSU H4 PUBIS +24 24
->Hasty_2: DEGINTV I3 VINED +30 30
->Hasty_1: EEOORSY 3I .EERY +22 46
->Hasty_2: BGHILOT G5 HOB +31 61
->Hasty_1: CEEEOOS 5E CO...ES +48 94
->Hasty_2: GIIKLT? E3 TI.KLInG +64 125
->Hasty_1: CEEJORV 3A EJEC.OR +34 128
->Hasty_2: AEEFIOU 2J FOE +31 156
->Hasty_1: ADERRV? A1 oV.RDARE +158 286
->Hasty_2: AEGGIPU 1L PAGE +38 194
+>Hasty_2: DEGINTV 7G V.G +13 13
+>Hasty_1: EEOORSY 8H .OOEY +15 39
+>Hasty_2: BDEILNT 5E DIL.ENT +32 45
+>Hasty_1: CEHIORS 4A CHIRO +29 68
+>Hasty_2: BEEEIK? 3B EKE +33 78
+>Hasty_1: CEEJRSV L1 JEERS +49 117
+>Hasty_2: BEEIIO? 1L .IBE +39 117
+>Hasty_1: AACEFUV 6F FU. +35 152
+>Hasty_2: DEIOR?? 2H OvER.DIt +80 197
+>Hasty_1: AACEGRV 1F VEG +30 182
+>Hasty_2: GMOPSXZ A4 .OMPS +33 230
+>Hasty_1: AAACRTW 7L AWA +15 197
+>Hasty_2: AGRTUXZ 6N ZA +62 292
+>Hasty_1: AACLORT N6 ..ATAR +17 214
+>Hasty_2: GNRSTUX 12I GRUNTS +30 322
+>Hasty_1: CDILMOY O8 YOM +45 259
+>Hasty_2: ELNNRTX K11 L.X +20 342
+>Hasty_1: CDHIILT 9I DIT +17 276
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000346)
->Hasty_1: AEFQRTU H4 QUARTE +50 50
->Hasty_2: AEIINRT 10D INERTIA +77 77
->Hasty_1: EFIOPST 7C PIEFO.TS +68 118
->Hasty_2: ADDEERW 8A AWED +39 116
+#note Harvested post-move position (game seed 1000346)
+>Hasty_1: AEFQRTU H4 QUART +48 48
+>Hasty_2: AEIINRT 9F INERTIA +74 74
+>Hasty_1: EEFIPST 10F FET +45 93
+>Hasty_2: ADDEEOR 8A DEODAR +36 110
+>Hasty_1: EIMNPSW 11E PEWS +48 141
+>Hasty_2: AEEHNST A1 HASTENE. +89 199
+>Hasty_1: IMNORXY 8L MINX +55 196
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000347)
+#note Harvested post-move position (game seed 1000347)
 >Hasty_1: AFHKOOW H8 WHOOF +36 36
->Hasty_2: AEEEIT? I8 EErIE +24 24
->Hasty_1: AEIKPRR J3 PARKIER +85 121
->Hasty_2: ADDSTUX J12 SAX +32 56
->Hasty_1: AAEEENN K8 NENE +22 143
->Hasty_2: DDILOTU 3H LU.OID +20 76
->Hasty_1: AAAENYY L6 YAY +28 171
->Hasty_2: DEHLNRT 4I H.NDER +36 112
->Hasty_1: AAENNNS O4 SENNA +30 201
->Hasty_2: AGIILRT 13I R.GTAIL +24 136
->Hasty_1: ANOSTTV G6 VAST +30 231
->Hasty_2: BCEIMTU O12 C.UB +33 169
->Hasty_1: FIINORT 2K FRONT +30 261
->Hasty_2: EIIMOTU 1M MOI +30 199
->Hasty_1: ADDIIJR L13 .AJ +18 279
->Hasty_2: EISTTUW M6 EW +23 222
->Hasty_1: DDIILRU N8 DID +12 291
->Hasty_2: EEISTTU 9G .....S +19 241
->Hasty_1: ILLMORU H1 MI. +15 306
->Hasty_2: BEEITTU 7I B. +18 259
->Hasty_1: ELLORTU M12 R.TO +15 321
->Hasty_2: EEIOTTU G1 ET +8 267
->Hasty_1: AELLPU? 5B PLEUrAL +74 395
->Hasty_2: EIOOQTU D1 QUIT. +48 315
+>Hasty_2: AEEEIT? G8 AE +14 14
+>Hasty_1: AEIKPRR F2 PARKIER +77 113
+>Hasty_2: DEEIST? 1D DESTInE +91 105
+>Hasty_1: DEENNUX 2I EX +51 164
+>Hasty_2: AAEILOY 5D OA.Y +22 127
+>Hasty_1: DENNNUY 12H .UNNY +22 186
+>Hasty_2: AAEHILR 2I ..HALE +32 159
+>Hasty_1: DEELNNN 1L LEND +25 211
+>Hasty_2: AIIINRS 2A INIA +11 170
+>Hasty_1: AEGNNRV A1 V.NEGAR +36 247
+>Hasty_2: IORSSTT 8A SORT +51 221
+>Hasty_1: BCEMNTU 11D BUNC. +18 265
+>Hasty_2: FIIIRST 13C IRITIS +29 250
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000348)
->Hasty_1: BEMNPR? H4 BuMPER +28 28
->Hasty_2: LORRUXY 5E LUX.RY +30 30
->Hasty_1: AAENOOT 4G A.OON +23 51
->Hasty_2: ACLORRT 3B CARROT +29 59
->Hasty_1: AAETVW? B2 A.TiVE +36 87
->Hasty_2: AAEEELY 2E AY +28 87
->Hasty_1: AEIILOW A7 WALIE +29 116
->Hasty_2: AEEELMW 6F MA. +34 121
->Hasty_1: EEHINOU 3J HONE +25 141
->Hasty_2: EEELOTW 2K TOWEL +26 147
->Hasty_1: EGIIJRU 12A REJIG +38 179
->Hasty_2: ADEESSU 1L SADE +37 184
->Hasty_1: AEHIINU C10 HA.I +28 207
->Hasty_2: ACENSTU 9E UNC.ATES +64 248
->Hasty_1: EIKNTUU B12 .KE +20 227
->Hasty_2: BDEIILS O1 ..IDIBLE +39 287
->Hasty_1: FIINTUU A1 IF +20 247
->Hasty_2: EIOPRSS 15A ESPOIRS +88 375
->Hasty_1: INTTUUZ N8 TIZ +34 281
+#note Harvested post-move position (game seed 1000348)
+>Hasty_1: BEMNPR? H5 BERM +16 16
+>Hasty_2: LORRUXY G6 ROUX +29 29
+>Hasty_1: AENOPT? F3 POlENTA +82 98
+>Hasty_2: ALLORRY E9 LORRY +26 55
+>Hasty_1: AACTVW? 13B WAV. +26 124
+>Hasty_2: AAEEELY B10 LEE.AY +28 83
+>Hasty_1: AACIIT? A4 ACTInIA +79 203
+>Hasty_2: AEELMOW 15A W.LE +33 116
+>Hasty_1: EEHNOTU E2 HONE +22 225
+>Hasty_2: AEIJMOR D1 JO +22 138
+>Hasty_1: AEGSTUU 5H .AGUET +18 243
+>Hasty_2: ADEIMRS C2 SEDARIM +78 216
+>Hasty_1: AEHINSU 4L HUE +24 267
+>Hasty_2: ACKNTTU 6L TACK +25 241
+>Hasty_1: ADEILNS O6 .NAIDELS +92 359
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000349)
+#note Harvested post-move position (game seed 1000349)
 >Hasty_1: DEEGINT H7 TINGED +20 20
 >Hasty_2: EEIORST 9B SEROTI.E +61 61
->Hasty_1: EEINNOU 8A NENE +22 42
->Hasty_2: DEIKNRV 10D EKIN. +27 88
->Hasty_1: AGIJOTU B5 AJI.. +28 70
->Hasty_2: DHIPRTV A1 THRIP +37 125
->Hasty_1: CGLOOTU C3 LOCO +28 98
->Hasty_2: ADEGOVW D4 WAG +43 168
->Hasty_1: BGIITUY 7E BIT.Y +15 113
->Hasty_2: AADEEOV 12C DEAVE. +22 190
->Hasty_1: ACEEGIU B1 AE +16 129
->Hasty_2: AABFLOZ 6I AZO +37 227
->Hasty_1: CEGILPU 5K PICUL +26 155
->Hasty_2: AABFLRT 4H FATAL +33 260
->Hasty_1: EEGHNOR O5 .EGHORN +33 188
->Hasty_2: BFIORY? H1 BIF.Y +48 308
->Hasty_1: DEMRUU? 2E REs.DUUM +64 252
->Hasty_2: ELORVW? N2 VRO.W +51 359
+>Hasty_1: EEINNOU D9 .EUNION +16 36
+>Hasty_2: DEIKNRV 14D .VERKIND +70 131
+>Hasty_1: AEGJPTT 11C J.GAT. +28 64
+>Hasty_2: CEGHILO C11 .OG +30 161
+>Hasty_1: AEIOPTW 8A POW +31 95
+>Hasty_2: CEHIILY 7B HELICI.Y +85 246
+>Hasty_1: AAABEIT 15K ABATE +33 128
+>Hasty_2: AACEEEF 12H .EFACE +24 270
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000350)
+#note Harvested post-move position (game seed 1000350)
 >Hasty_1: CHJLPRT H6 PHT +16 16
->Hasty_2: CDRSUU? 6F CU.iDS +20 20
->Hasty_1: CEEJLLR K2 JEER. +24 40
->Hasty_2: ANOQRUY 3I QU.RY +54 74
->Hasty_1: CLLNNSW M2 W.NNS +11 51
->Hasty_2: AFNNNOS L1 FA.O +41 115
->Hasty_1: CEILLOU 4D LOCULI +29 80
->Hasty_2: FINNNOS N1 IS +32 147
->Hasty_1: BEEOPRT 5A REBOP +28 108
->Hasty_2: EFGNNNO A4 F.EON +36 183
->Hasty_1: EEEIOTW B3 EE.W +33 141
->Hasty_2: AGIINNT 8H .AINTING +80 263
->Hasty_1: DEIMOTZ I8 .TOMIZED +81 222
->Hasty_2: ABDIMRX 15H A.MIX +69 332
->Hasty_1: AHINRTV J10 HAT +33 255
->Hasty_2: ABDDGRU H10 DAB +29 361
->Hasty_1: AAINORV B8 OVARIAN +76 331
->Hasty_2: DGIRUV? 15H .....InG +54 415
+>Hasty_2: CDRSUU? 6F DU. +10 10
+>Hasty_1: CEEJLLR F1 JELLE. +16 32
+>Hasty_2: ACNRSU? 8A ReCUSAN. +80 90
+>Hasty_1: CNOQRWY 1F .OW +39 71
+>Hasty_2: FINNNSS I3 FINS +18 108
+>Hasty_1: CNOQRUY B6 QU.RY +44 115
+>Hasty_2: EFINNOS 4H S.NFONIE +76 184
+>Hasty_1: CNOOPRT O1 COP.N +27 142
+>Hasty_2: BEEEGOW 5K EWE +29 213
+>Hasty_1: AEIORTT 3L TO +16 158
+>Hasty_2: BDEGIIO C3 BIDI +25 238
+>Hasty_1: AEIMRTZ A10 MAZIER +88 246
+>Hasty_2: DEGIORX D1 OXIDE +41 279
+>Hasty_1: AABMTTV B12 ATT +23 269
+>Hasty_2: DGHINRR 10A ..RRH +13 292
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000351)
->Hasty_1: BCINTY? H7 BITChY +32 32
->Hasty_2: AAEEOSY I6 AYS +23 23
->Hasty_1: EGHKNOX J4 KEX +55 87
->Hasty_2: AEEIMOR K3 AIMER +38 61
->Hasty_1: DEGHNOW L1 GOWNED +62 149
->Hasty_2: AEELORR M1 ORLE +33 94
->Hasty_1: AADEGHI G7 AHA +26 175
->Hasty_2: ADEOPRU 1J PO..ED +30 124
->Hasty_1: DEFGISV 2F FIDGE +26 201
->Hasty_2: AIIJRU? H1 n.UJA +60 184
->Hasty_1: ADPRSTV 8K SPRAT +38 239
->Hasty_2: IILNRUV L8 .ULVINI +24 208
->Hasty_1: CDEENVZ 14I DEZ.NC +40 279
->Hasty_2: GINORUW 15G GROW +32 240
->Hasty_1: AAABERV F7 BARE +29 308
->Hasty_2: ILNNRSU O10 LINNS +25 265
->Hasty_1: AALMTTV 12D MALT. +20 328
->Hasty_2: EIORSTU 13A STOURIE +77 342
->Hasty_1: AFHIOTV A8 FAITH. +48 376
+#note Harvested post-move position (game seed 1000351)
+>Hasty_1: BCINTY? H7 BY +14 14
+>Hasty_2: AAEEOSY I7 YEA +27 27
+>Hasty_1: CEIKNT? J2 ThICKEN +88 102
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000352)
->Hasty_1: AEELMNU H4 MELENA +22 22
->Hasty_2: AINNST? 5D ANcI.NTS +78 78
->Hasty_1: AAADOTU G7 DATA +18 40
->Hasty_2: EFNOORW I9 WOONERF +78 156
->Hasty_1: ACOORU? 12D COURA.tO +70 110
->Hasty_2: DEIIOSS 15E OSSI.IED +92 248
->Hasty_1: BCDEEGO 4A COED +26 136
+#note Harvested post-move position (game seed 1000352)
+>Hasty_1: AEELMNU H4 ULEMA +16 16
+>Hasty_2: AINNST? 5D ANNa.IST +78 78
+>Hasty_1: AAADENT G7 AA +10 26
+>Hasty_2: EFNOOOR E1 FORE.OON +61 139
+>Hasty_1: ADENTW? D7 WETlAND +80 106
+>Hasty_2: CEIOORS 10B CO.ORISE +67 206
+>Hasty_1: BCDEIOS J8 BODICES +83 189
+>Hasty_2: ADEGGQY 8J .AGGED +39 245
+>Hasty_1: AEEEORU 1D A.ORE +27 216
+>Hasty_2: DEHQTTY 11C H.YED +44 289
+>Hasty_1: EEGIKPU F1 .KE +35 251
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000353)
+#note Harvested post-move position (game seed 1000353)
 >Hasty_1: EGNOOTU H4 OUTGONE +68 68
 >Hasty_2: EFHILNS 7A FLESHIN. +67 67
 >Hasty_1: AAGNRS? 8H .RGANzAS +77 145
 >Hasty_2: CEJRUVY F6 J.VEY +42 109
->Hasty_1: BFHOOPS A4 BOF.OS +51 196
+>Hasty_1: BFHOOPS A4 BOF.O +48 193
 >Hasty_2: CDDERUY N8 .DDUCER +30 139
->Hasty_1: HIILPRW B2 WHIP +32 228
->Hasty_2: MOQRUY? D7 .QUiRMY +60 199
->Hasty_1: DIILMRT C13 MID +26 254
->Hasty_2: AEEIOTT C1 TEAT +28 227
->Hasty_1: IILOORT 12H OOLITI. +20 274
->Hasty_2: AEEIOPX 11I PAX +48 275
->Hasty_1: EGINORT O1 GENITOR. +80 354
->Hasty_2: AEEEIIO D3 OE +22 297
+>Hasty_1: HIIPRSW 15L WISH +54 247
+>Hasty_2: LMOQRY? E9 MOLY +27 166
+>Hasty_1: DIMPRTU 12A DUMP. +30 277
+>Hasty_2: EIIQRT? I3 QI +23 189
+>Hasty_1: AEIORTT L6 TE.TORIA +66 343
+>Hasty_2: EIIORT? O1 dIORITE. +74 263
+>Hasty_1: AEENPTX B9 EXE.NT +58 401
+>Hasty_2: AEGIILO C12 .OI +16 279
+>Hasty_1: AAENPSV D1 PAVANE. +30 431
+>Hasty_2: AEGILNR 1A GRA.LINE +149 428
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000354)
->Hasty_1: AAEGIIN H4 GENII +16 16
->Hasty_2: GLMNNTY 5G M.LTY +20 20
->Hasty_1: AAAHOOP G4 A.AH +27 43
->Hasty_2: GNNUWY? F6 WaGYU +40 60
->Hasty_1: AHOOPRS E1 PHAROS +29 72
->Hasty_2: CIIINNV 8A VICIN. +39 99
->Hasty_1: AEIORRS A6 SA.ORIER +62 134
->Hasty_2: EEEEINR 1C RE.INE +27 126
+#note Harvested post-move position (game seed 1000354)
+>Hasty_1: AAEGIIN H8 AGAIN +14 14
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000355)
->Hasty_1: AEEIJO? H4 JIAOs +38 38
->Hasty_2: CDEOWWX I3 CODEX +57 57
->Hasty_1: DEEIQUY 4H ..YED +32 70
->Hasty_2: ENOWWY? 5G W..OWEd +44 101
->Hasty_1: EEINQTU 8A QUIETEN. +101 171
->Hasty_2: EEFINOY 3K FOY +31 132
+#note Harvested post-move position (game seed 1000355)
+>Hasty_1: AEEIJO? H5 JIAO +22 22
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000356)
->Hasty_1: BDEEGLS H4 BEDELS +24 24
->Hasty_2: AEFINR? 5D FlAN.RIE +90 90
->Hasty_1: AEGIOSU 8F EU.OGIAS +60 84
+#note Harvested post-move position (game seed 1000356)
+>Hasty_1: BDEEGLS H4 GLEBE +20 20
+>Hasty_2: AEFINR? 5D FRAu.EIN +90 90
+>Hasty_1: DEIOSSU E1 DESI.OUS +59 79
+>Hasty_2: AAEPRTY 8A PRAY. +42 132
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000357)
->Hasty_1: AAGNOPU H4 PANGA +22 22
->Hasty_2: DENNOPU G3 DOPE +19 19
->Hasty_1: EIMOTUV F6 MOTIVE +36 58
->Hasty_2: ANNORUU I3 NANO +21 40
->Hasty_1: CFIOSUY 4G ...CIFY +34 92
->Hasty_2: ABNRTUU 3M BAN +24 64
->Hasty_1: GORSTTU I8 ROTGUTS +62 154
->Hasty_2: EOORTUU 5D TRE... +28 92
+#note Harvested post-move position (game seed 1000357)
+>Hasty_1: AAGNOPU H4 GUANO +16 16
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000358)
+#note Harvested post-move position (game seed 1000358)
 >Hasty_1: AIKPQRV H4 QAPIK +60 60
 >Hasty_2: DEELORT 7C DOLER.TE +63 63
->Hasty_1: BILPRVV 6H .IP +25 85
+>Hasty_1: BILPRVV 5E VIV. +20 80
+>Hasty_2: AABFNNR 6J FAN +27 90
+>Hasty_1: ABLPRSU 9B BURLAPS +86 166
+>Hasty_2: ABEMNOR 10F BO +24 114
+>Hasty_1: ADEEEEN B9 .ENDEE +22 188
+>Hasty_2: AAEMNRW A13 MAW +30 144
+>Hasty_1: AEGINOT L6 .EGATION +72 260
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000359)
+#note Harvested post-move position (game seed 1000359)
 >Hasty_1: DINNQRY H8 RINDY +26 26
->Hasty_2: DEEEEGU G9 GEE +16 16
->Hasty_1: AAEGNPQ I7 PEG +20 46
->Hasty_2: DEEHIOU J5 OHED +24 40
->Hasty_1: AABNQTZ K3 QANAT +42 88
->Hasty_2: EEIILUU 3K .UEUE +28 68
->Hasty_1: ABEIRUZ F10 BRAIZE +58 146
->Hasty_2: ACFIILY O1 FL.Y +42 110
->Hasty_1: CORSTUV 15A CUTOV.RS +176 322
->Hasty_2: ACIIKRU 6J ..ICK +24 134
->Hasty_1: MOOORT? M6 .OaTROOM +76 398
->Hasty_2: AAIRSTU O6 SITAR +30 164
+>Hasty_2: DEEEEGU 10F DE.GUE +14 14
+>Hasty_1: AAEGNPQ J9 Q.AG +14 40
+>Hasty_2: BEEHIOZ 11C BIZE +33 47
+>Hasty_1: AEEINPT 12A PIETA +39 79
+>Hasty_2: EHLORUU 12J .HOUL +18 65
+>Hasty_1: ACEEFIN G2 FAIENCE +68 147
+>Hasty_2: ACERSUY O8 YUCAS +44 109
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000360)
+#note Harvested post-move position (game seed 1000360)
 >Hasty_1: AABEET? H8 EATABlE +72 72
 >Hasty_2: DEEIJOU 12H .OUJEE +30 30
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000361)
+#note Harvested post-move position (game seed 1000361)
 >Hasty_1: CFIIJLV H4 CIVIL +26 26
 >Hasty_2: ADEIORS 4E IDO.RASE +72 72
->Hasty_1: EFJLTY? 3B FLuTEY +44 70
+>Hasty_1: EFJLTY? 3J LEFTY +31 57
+>Hasty_2: ABHHITT 3C HABIT +32 104
+>Hasty_1: EFJOTW? 5C JOT +30 87
+>Hasty_2: DHIMSTT N2 M.TH +24 128
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000362)
+#note Harvested post-move position (game seed 1000362)
 >Hasty_1: AEGHINP H4 HEAPING +84 84
 >Hasty_2: MOOOQTZ G3 ZOOM +36 36
->Hasty_1: BDEENN? I6 DENE +23 107
+>Hasty_1: BDEENN? I6 DEN +18 102
 >Hasty_2: AOQRTUU 3B QUART. +48 84
->Hasty_1: BEFLNO? D2 B.cLOFEN +76 183
->Hasty_2: KNOOPRU 8A POK.R +33 117
+>Hasty_1: BEFLNO? D2 B.cLOFEN +76 178
+>Hasty_2: EKNOPRU 8A PUK. +30 114
+>Hasty_1: IJMNOOO C8 .IMONO +29 207
+>Hasty_2: EILNORT A5 TER.INOL +61 175
+>Hasty_1: CDEHIJO E5 OHED +42 249
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000363)
+#note Harvested post-move position (game seed 1000363)
 >Hasty_1: ACDLNTW H6 CLAW +18 18
 >Hasty_2: EEHIRVY 6F VI.HY +32 32
->Hasty_1: AADENTT I6 .ADEAN +24 42
->Hasty_2: EEEIOQR H11 EERIE +20 52
->Hasty_1: EJRTTUY J2 JETT. +31 73
->Hasty_2: GOOQSZ? 3I Z.rOS +46 98
->Hasty_1: EINNRUY 4L YIN +24 97
->Hasty_2: EGHLOQW J9 EH +32 130
->Hasty_1: EEMNPRU 14E PER.NEUM +66 163
->Hasty_2: EGLOQTW 13C GLOWE. +34 164
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000364)
+#note Harvested post-move position (game seed 1000364)
 >Hasty_1: CDEGIIV H4 VICED +30 30
 >Hasty_2: EEINSST 5D SIEN.TES +82 82
 >Hasty_1: AAGHIOO 6H .OHOG +36 66
+>Hasty_2: DFNNOSU 6A UNFOND +27 109
+>Hasty_1: AAAFIUU -AAAFIUU +0 66
+>Hasty_2: IMPRSTY A6 .MPTY +36 145
+>Hasty_1: ADDEITU G8 AUDITED +64 130
+>Hasty_2: IIIORS? M3 IRIS +20 165
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000365)
+#note Harvested post-move position (game seed 1000365)
 >Hasty_1: ACDNOTW H4 ADOWN +20 20
->Hasty_2: ALNRRRT 4D ANTR.L +12 12
->Hasty_1: AACEKTU 3B CAKE +28 48
->Hasty_2: AALORRR I6 ROAR +16 28
->Hasty_1: AEITUUV B2 A.TIVE +38 86
->Hasty_2: ADEEILR C7 LEADIER +73 101
->Hasty_1: HTUUUUV A1 UH +20 106
+>Hasty_2: ALNRRRT 4H .RRANT +12 12
+>Hasty_1: AACEKTU M2 AT.ACK +34 54
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000366)
+#note Harvested post-move position (game seed 1000366)
 >Hasty_1: AEGILTW H4 WIGLET +28 28
 >Hasty_2: AILNORW I7 AWOL +20 20
->Hasty_1: AACEIOS 11E ACAIS +22 50
->Hasty_2: DEINPRX H11 .NDEX +42 62
->Hasty_1: DEMORTU 14B UDOMET.R +76 126
->Hasty_2: IIPRSSU 9C SPIRI..US +63 125
->Hasty_1: AEHIKLV 15B HAKE +39 165
+>Hasty_1: AACEIOS G2 CIAO +14 42
+>Hasty_2: DEINPRX J5 NIXED +35 55
+>Hasty_1: AEMRSTU 11C MATURES +76 118
+>Hasty_2: DIPRSSU E5 DISRUP.S +72 127
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000367)
+#note Harvested post-move position (game seed 1000367)
 >Hasty_1: BCEIIIN H5 BICE +16 16
 >Hasty_2: DEELOOV 5H .ELOVED +26 26
 >Hasty_1: IIMNSST K2 SIM.NIST +60 76
->Hasty_2: ELOPRTU J7 POULTER +69 95
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000368)
+#note Harvested post-move position (game seed 1000368)
 >Hasty_1: BIKNOOU H8 BOINK +32 32
->Hasty_2: AEEIPTU I9 PTUI +26 26
->Hasty_1: CELOOUW J6 CLUE +17 49
->Hasty_2: AAEEILT G7 TALA +20 46
->Hasty_1: EIOOOTW F8 TEW +41 90
->Hasty_2: EEEIIII 6I I.E +5 51
->Hasty_1: IOOORU? K8 tRIO +15 105
->Hasty_2: EEIIIJV K3 JIV. +28 79
->Hasty_1: ADEFOOU L1 FEOD +39 144
->Hasty_2: DEEIIOU M2 DE +29 108
->Hasty_1: ANORTUY 1H TRAY. +33 177
->Hasty_2: EIIIOOU L7 OE +6 114
->Hasty_1: BDNOPUZ L11 PONZU +38 215
->Hasty_2: AIIILOU 14L .OA +24 138
->Hasty_1: ABDFSST 15K T.FAS +31 246
->Hasty_2: IIILQUX M5 LUX +35 173
->Hasty_1: ABDIOSS N1 OSSIA +31 277
->Hasty_2: GIIIQTY 1N .Y +15 188
->Hasty_1: BDEEELR O5 BLEEDER +85 362
->Hasty_2: GIIIQRT J12 RIG +15 203
+>Hasty_2: AEEIPTU 12D UPTA.E +24 24
+>Hasty_1: CELOOUW I7 COW +28 60
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000369)
+#note Harvested post-move position (game seed 1000369)
 >Hasty_1: EGLRSUU H2 REGULUS +70 70
->Hasty_2: ABNNOOV G2 OBA +20 20
->Hasty_1: AEHINOQ 7G Q.INOA +26 96
->Hasty_2: ENNNOOV F2 NONE +20 40
->Hasty_1: CDEHISS J4 SCH.EIDS +76 172
->Hasty_2: DFNOTV? 11E FONDe.T +40 80
->Hasty_1: DEPRTTY 8L YETT +42 214
->Hasty_2: AENPTVY H10 A.VENT +42 122
->Hasty_1: DFOPRRZ 5B FROZ. +34 248
->Hasty_2: AELLPTY D2 ALL.TYPE +82 204
->Hasty_1: BDMPRRR C9 BRRR +16 264
->Hasty_2: EGGIMOW 10E EW +31 235
->Hasty_1: DEIIMPU 4J .PUMED +26 290
->Hasty_2: EGGIMNO 5J .OME +32 267
->Hasty_1: AIITWX? N8 .AXITIc +58 348
->Hasty_2: GGIIIIN M11 GIG +21 288
->Hasty_1: CDEHIKW 3L HEW +41 389
->Hasty_2: EIIINSV B1 VINI.IES +82 370
->Hasty_1: ACDEIKO A7 DECK +42 431
+>Hasty_2: ABNNOOV G7 NOVA +17 17
+>Hasty_1: AEHINOQ 5G Q.INOA +30 100
+>Hasty_2: BCENNOO H10 NOCEBO +41 58
+>Hasty_1: DEHISS? M2 SwISHED +88 188
+>Hasty_2: DDFNPTT 4L F.ND +30 88
+>Hasty_1: AENRTTY 13H .NTREATY +74 262
+>Hasty_2: DEPPTTY O12 T.PY +39 127
+>Hasty_1: AEFLORZ O4 .OZER +45 307
+>Hasty_2: DELMPTT 3C TEMPL.D +30 157
+>Hasty_1: ABFLMRR 4A FLAM +36 343
+>Hasty_2: EGGIOTW F10 WIG +29 186
+>Hasty_1: BEIIRRU A1 BUR.I +30 373
+>Hasty_2: EEGNOTX 5C GOX +31 217
+>Hasty_1: AEIRTW? L7 WAITER.d +81 454
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000370)
+#note Harvested post-move position (game seed 1000370)
 >Hasty_1: EGIRSTV H4 GRIVETS +76 76
 >Hasty_2: ABDEIKR 8A BIDARKE. +98 98
->Hasty_1: AHILOQZ 4H .HAZI +36 112
->Hasty_2: CDEEEOT K2 DO.E +28 126
->Hasty_1: ELOOQRY 6K RELY +30 142
->Hasty_2: CEEENTU 5D CENT.E +21 147
->Hasty_1: GOOOOQT J1 TOG. +15 157
->Hasty_2: BEIISUW M1 WEBS +37 184
->Hasty_1: NOOOOQU B6 QU.N +33 190
->Hasty_2: GIINOUY D1 YOGI. +30 214
->Hasty_1: INOOOOR C6 IN.OOR +26 216
->Hasty_2: EILMNU? 2A LIN.lEUM +72 286
->Hasty_1: AOOPRSV 1L S.AP +30 246
->Hasty_2: AADEOUW A1 A.OW +33 319
->Hasty_1: ALNOORV 1F ONO +25 271
->Hasty_2: ADEJTU? E8 .EADJUsT +80 399
->Hasty_1: AADELRV 15A VELD. +33 304
+>Hasty_1: AHILOQZ 10F QI. +32 108
+>Hasty_2: CDEEEOT C8 .ECODE +22 120
+>Hasty_1: AEHLOOZ 12A ZE.A +48 156
+>Hasty_2: EENRTUY F10 .UERY +25 145
+>Hasty_1: HLOOOOT 7G O.OLO +13 169
+>Hasty_2: EGIINST L1 IGNITES +77 222
+>Hasty_1: BHNOOTW A12 .OON +39 208
+>Hasty_2: GINNOUY 2J YO.IN +34 256
+>Hasty_1: BEHRTW? 1H WEB +31 239
+>Hasty_2: AGLMNUV E3 VULGA. +20 276
+>Hasty_1: HPRRST? B5 THR.P +22 261
+>Hasty_2: AADMNOW K6 W.ODMAN +31 307
+>Hasty_1: AELRSU? O1 EStRUAL +81 342
+>Hasty_2: AADJNT? 12H JNA.A +40 347
+>Hasty_1: EHIMTTU H12 .EHU +42 384
+>Hasty_2: ADFLST? 14H .oLDFAST +82 429
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000371)
+#note Harvested post-move position (game seed 1000371)
 >Hasty_1: DIIJSTY H8 DITSY +26 26
->Hasty_2: ACEHIRW 12D CHEW. +32 32
->Hasty_1: IJKMUW? G5 MUJIK +45 71
->Hasty_2: AEIORRR 5E AR.OIRE +36 68
->Hasty_1: BFGOOW? 4H WOOFs +46 117
->Hasty_2: AENNORR 11E ARO.E +27 95
->Hasty_1: BEEFGNS 6J BEEFS +35 152
->Hasty_2: INNNPRV I9 PI. +22 117
->Hasty_1: BGILNRT 10B GLIB +19 171
->Hasty_2: LLNNNRV 6G .N +8 125
->Hasty_1: EHNNRTU 7K THE +25 196
->Hasty_2: GLLNNRV F4 G.R +11 136
->Hasty_1: AINNRU? B3 UNARmIN. +60 256
->Hasty_2: DLLNNOV 8A V.LL +24 160
+>Hasty_2: ACEHIRW 10F WI.CH +29 29
+>Hasty_1: IJKMUW? 11J MUJIK +43 69
+>Hasty_2: AEEORRR N11 .ORE +16 45
+>Hasty_1: BFGOOW? O5 FOGBOWs +113 182
+>Hasty_2: AEENORR 12L ON. +26 71
+>Hasty_1: AEFNNRS E4 FANNERS +84 266
+>Hasty_2: AEEEPRR D1 PEREA +32 103
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000372)
+#note Harvested post-move position (game seed 1000372)
 >Hasty_1: BDEMOOT H4 BOOMED +28 28
->Hasty_2: IIRRRV? I3 cIRRI +18 18
->Hasty_1: ACFISTW J4 SAC +30 58
->Hasty_2: EINNRTV G1 NEVI +17 35
->Hasty_1: AEFIITW 1D FAI.T +36 94
->Hasty_2: AEEFNRT 2F F.E +29 64
->Hasty_1: EILOSWW D1 .LEWS +22 116
->Hasty_2: ACEENRT C3 REENACT +83 147
->Hasty_1: INOUUW? B2 WINO +26 142
+>Hasty_2: IIRRRV? 8E RIV.R +8 8
+>Hasty_1: ACFISTW I3 WAIF +25 53
+>Hasty_2: EIINRT? E4 INTE.IoR +78 86
+>Hasty_1: ACEINST 11D C.EATINS +70 123
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000373)
+#note Harvested post-move position (game seed 1000373)
 >Hasty_1: EEINOVV H5 VIVE +20 20
 >Hasty_2: ADEINNO 5F DE.ONIAN +74 74
 >Hasty_1: AEGHNOR 7C HANGO.ER +71 91
+>Hasty_2: AAIPRRT 8A PAIR +29 103
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000374)
->Hasty_1: AEGOPRX H5 EXPO +26 26
->Hasty_2: CDEINT? 5E INC.nTED +90 90
->Hasty_1: ACGIRTU 4J URATIC +32 58
+#note Harvested post-move position (game seed 1000374)
+>Hasty_1: AEGOPRX H7 GOX +22 22
+>Hasty_2: CDEINT? 8H .CcIDENT +86 86
+>Hasty_1: ACEPRTU L1 CAPTURE. +82 104
+>Hasty_2: AABEIOW M2 WAE +27 113
+>Hasty_1: AELOTTV N1 VALET +36 140
+>Hasty_2: ABIIOPS 1G BIOPI. +36 149
+>Hasty_1: ALOSTTU G9 OUTLAST +69 209
+>Hasty_2: AEEHNNS J3 ENHAN.ES +64 213
+>Hasty_1: IIKNTVZ 2F ZITI +41 250
+>Hasty_2: AAMOOUY 15F A.OMY +30 243
+>Hasty_1: BEKNORV 14J BEVOR +45 295
+>Hasty_2: AAENOSU 3C ANOA +19 262
+>Hasty_1: DDGIKNR C1 GR.NDKID +66 361
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000375)
+#note Harvested post-move position (game seed 1000375)
 >Hasty_1: AEEIIRU H8 URAEI +12 12
 >Hasty_2: ELMMNQ? 10F Qu.LM +41 41
->Hasty_1: CEEGIII 11E GI +17 29
+>Hasty_1: CEEGIII -EGIII +0 12
 >Hasty_2: EEMNNRU 11J MENU +18 59
->Hasty_1: CEEEIIO L7 EOCE.E +18 47
->Hasty_2: EEINNOR 8J NO.NER +18 77
->Hasty_1: HIIIRST 12D RISH. +31 78
->Hasty_2: ADEHIKO 13A HIKED +33 110
->Hasty_1: AEIIOTV 14B TAV +28 106
->Hasty_2: AAEOOT? G9 O.T.EAr +18 128
->Hasty_1: EIINOTU 15G .OUTINE +21 127
->Hasty_2: AABDOTY O2 BOATYA.D +65 193
->Hasty_1: ADEILOU N6 OD.A +20 147
+>Hasty_1: CEEENOO L7 EOCE.E +18 30
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000376)
->Hasty_1: AACDJNR H4 CANARD +24 24
->Hasty_2: AEFFNST 10C NAFFEST +81 81
->Hasty_1: BBJNTTZ 7G J.B +23 47
->Hasty_2: EENPRTU 11B PUREE +33 114
->Hasty_1: ABNRTTZ 12E TZAR +35 82
->Hasty_2: AAEINTU 4D TUNI.AE +18 132
->Hasty_1: BGINORT 3I BORING +33 115
->Hasty_2: AADLVV? 2H nAVAL +38 170
->Hasty_1: EEKQRT? 1D KERnE +42 157
->Hasty_2: DDEGIVW N1 WI.GED +32 202
->Hasty_1: CILNQRT E3 Q.ILT +28 185
->Hasty_2: DIILOOV O6 OVOID +30 232
->Hasty_1: CMNNRUX 1M C.M +30 215
->Hasty_2: AGIILST 8A GAITS +36 268
->Hasty_1: INNRUUX N9 XI +25 240
->Hasty_2: EEEILLP 4L PE. +24 292
->Hasty_1: NNOORUU B11 .ORNO +14 254
->Hasty_2: DEEILLO 14B .IELLOED +61 353
->Hasty_1: EHNTUUW 15G WHEN +53 307
+#note Harvested post-move position (game seed 1000376)
+>Hasty_1: AACDJNR H7 JAR +20 20
+>Hasty_2: AEFFNST 6G NAFFEST +82 82
+>Hasty_1: ACDNNTZ K2 CAND.NT +20 40
+>Hasty_2: BBERTTU 3J B.RBUT +20 102
+>Hasty_1: AAENPRZ O1 PA.ZER +81 121
+>Hasty_2: AEEIOTU L8 OUTIE +15 117
+>Hasty_1: ADGINRV 11K V.D +14 135
+>Hasty_2: AAELV?? N8 cAVEoLA +90 207
+>Hasty_1: AEGIKNR O12 KING +56 191
+>Hasty_2: DEEIQRW 4H DWI.E +30 237
+>Hasty_1: AEGILRR H1 GIR. +18 209
+>Hasty_2: CEINOQR 2G Q. +11 248
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000377)
->Hasty_1: ADEGMOR H4 GORMED +24 24
->Hasty_2: AEENNUU G7 UNAU +17 17
->Hasty_1: AEEHORT F5 TORAH +25 49
->Hasty_2: EELNTTT E1 TELNET +18 35
->Hasty_1: ABEELTW 1B WET.ABLE +92 141
->Hasty_2: DEJPTUY I9 JUDY +46 81
->Hasty_1: EEGILPR J7 GRIPE +43 184
->Hasty_2: ADEPRT? 12B PEDAnTR. +78 159
->Hasty_1: AEEFGLR 2A REFE.L +43 227
->Hasty_2: ACEEHTV A2 .ECHEAT +45 204
->Hasty_1: AADGNOQ 11A GONAD +29 256
->Hasty_2: IIOOOVW K11 VOW +32 236
->Hasty_1: AAILMQ? 2I MAQuILA +92 348
->Hasty_2: EIIOOSX B5 EX +55 291
+#note Harvested post-move position (game seed 1000377)
+>Hasty_1: ADEGMOR H4 DOGMA +22 22
+>Hasty_2: AEENNUU G7 UNAU +13 13
+>Hasty_1: EEHORRT H10 HERETO +35 57
+>Hasty_2: EEELNTT 4A TELNETE. +70 83
+>Hasty_1: ABLRTTW 13C WATTL. +20 77
+>Hasty_2: DEJPRUY B1 DUP.RY +40 123
+>Hasty_1: BEEGILR A6 BILGE +31 108
+>Hasty_2: ADEJPR? 12B JAPE +41 164
+>Hasty_1: AEEFGRR 5E REF.RGE +55 163
+>Hasty_2: ADEHRV? 15H .VERHAnD +104 268
+>Hasty_1: ACDENQT 14B QAT +35 198
+>Hasty_2: AIIOOOW 14J WOO +34 302
+>Hasty_1: ACDENO? L1 CElADON +87 285
+>Hasty_2: AIIILMO 1A I.IOM +27 329
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000378)
+#note Harvested post-move position (game seed 1000378)
 >Hasty_1: AEGOORU H8 AERUGO +18 18
->Hasty_2: DHNOOOU I11 NOH +24 24
->Hasty_1: CJMNOYY 11F JO..CY +36 54
->Hasty_2: ADEOOTU 12B OUTDO +21 45
->Hasty_1: EEFMNRY G3 FRENEMY +87 141
->Hasty_2: AEEGNRT 5D GEN.RATE +86 131
->Hasty_1: IIIILTU 4I LITU +14 155
->Hasty_2: BEPRRV? E1 PREV.RBs +64 195
->Hasty_1: AABEIII 4D A.E. +22 177
->Hasty_2: ELLMNSX 1E .LEX +39 234
->Hasty_1: ABDIIIS 8A BIDI. +24 201
->Hasty_2: ACELMNS B2 MESCAL.N +78 312
->Hasty_1: AEHIST? 14B AITcHES +92 293
+>Hasty_2: DHNOOOU I12 OHO +22 22
+>Hasty_1: CJMNOYY J13 MYC +39 57
+>Hasty_2: ADENOTU 15J .OTEAU +27 49
+>Hasty_1: EEFJNOY I7 JEFE +39 96
+>Hasty_2: DGNNRRT -DGNNRT +0 49
+>Hasty_1: EINOTUY J6 YO +22 118
+>Hasty_2: BIIILRR N10 BIRRI. +28 77
+>Hasty_1: EINPRTU O7 PURINE +36 154
+>Hasty_2: AEEILV? K4 ELAtIVE +82 159
+>Hasty_1: ACLNNST L1 CLAN +22 176
+>Hasty_2: BDEFMSW 1L .WMS +33 192
+>Hasty_1: AEHNSTZ L10 HAZE +37 213
+>Hasty_2: BDEFQSV 11K S.V.. +36 228
+>Hasty_1: ILNSTTT J1 TILT +9 222
+>Hasty_2: BDEFQRX G9 DEX +34 262
+>Hasty_1: ADDNOST M1 .AND +27 249
+>Hasty_2: ABFQRW? 1H QA. +36 298
+>Hasty_1: DEIIOST 2G OI +13 262
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000379)
->Hasty_1: EIIJNO? H4 JOINEd +40 40
->Hasty_2: AOOPSX? I8 SOAPbOX +71 71
->Hasty_1: ABIIRTW H13 WAB +38 78
->Hasty_2: EEEMTVW J10 WEET +39 110
->Hasty_1: DIIORST H1 DIS...... +48 126
->Hasty_2: EKMPSUV K9 KEPS +42 152
->Hasty_1: ACGIORT 3D ORGA.TIC +63 189
->Hasty_2: DHMTUUV L12 THUD +26 178
+#note Harvested post-move position (game seed 1000379)
+>Hasty_1: EIIJNO? H5 JOIN +22 22
+>Hasty_2: AOOPSX? G7 SOAPbOX +80 80
+>Hasty_1: ABEIIW? 5H .IBE +26 48
+>Hasty_2: EERTTVW 12G .VERWET +34 114
+>Hasty_1: AEIMSW? L1 SEMIrAW +87 135
+>Hasty_2: DKOPSTU 1H KUDO. +30 144
+>Hasty_1: ACDGHTU H12 .UGH +42 177
+>Hasty_2: AIOPSTU N6 UTOPIAS +77 221
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000380)
+#note Harvested post-move position (game seed 1000380)
 >Hasty_1: BEJLMX? H4 JuMBLE +48 48
->Hasty_2: EFHHIIN G9 FEH +22 22
->Hasty_1: CKRSUXY 10C CRUX.S +48 96
->Hasty_2: AHIINNT I8 AH +24 46
->Hasty_1: ADFKRYY I6 AY.. +29 125
->Hasty_2: IINNOPT J4 NIP +24 70
->Hasty_1: CDFGKRY E9 D.CKY +30 155
->Hasty_2: IINOOTT 4H .I.NI +24 94
->Hasty_1: EFGLORS M1 FOGS +29 184
->Hasty_2: EOOOTTU D12 OOT +23 117
->Hasty_1: AAELMPR 2J PAR.LE +28 212
->Hasty_2: EELOTUW 1M .EW +44 161
->Hasty_1: ADIIIMN C6 AMNI. +13 225
->Hasty_2: ELNORTU 1G ENROL +21 182
->Hasty_1: DEEIIST 2A DEITIES +72 297
->Hasty_2: EEOSTUU A2 .UTEOUS +27 209
+>Hasty_2: EFHHIIN 6F HE.IN +20 20
+>Hasty_1: CKRSUXY 10G CRUX +46 94
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000381)
->Hasty_1: ABFIINT H4 FAINT +24 24
->Hasty_2: EILLRRT 4H .LIRTER +20 20
->Hasty_1: ABEEIMS 8A BEAMIES. +95 119
->Hasty_2: EEILOSY O4 SEELY +39 59
+#note Harvested post-move position (game seed 1000381)
+>Hasty_1: ABFIINT H7 FIB +16 16
+>Hasty_2: EILLRRT G3 RILLET +16 16
+>Hasty_1: AEIMNST 5D MAN.IEST +90 106
+>Hasty_2: AEEORSY 4A YORE +30 46
+>Hasty_1: EEGIJPW 6C JEWE. +31 137
+>Hasty_2: AELSSUZ A1 LAZ. +48 94
+>Hasty_1: GINOPTT I8 POTTING +72 209
+>Hasty_2: AEIQSSU H12 QUAI +95 189
+>Hasty_1: AEGMOSU 7B MOUE +29 238
+>Hasty_2: CENPSSV 10F VES. +24 213
+>Hasty_1: AABEGIS 8A GABS +48 286
+>Hasty_2: CDDLNPS I3 PL.D +10 223
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000383)
+#note Harvested post-move position (game seed 1000382)
+>Hasty_1: BDEEKLR H4 KERBED +36 36
+>Hasty_2: AEHOOWZ 6F WA.EZ +45 45
+>Hasty_1: DILMNOU G8 MODULI +19 55
+>Hasty_2: CHIOOOY 12D HOO.Y +30 75
+>Hasty_1: ADGIINR C9 RAIDING +83 138
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 Hasty_1 Hasty_1
+#player2 Hasty_2 Hasty_2
+#note Harvested post-move position (game seed 1000383)
 >Hasty_1: DEIMORS H4 MISDOER +76 76
 >Hasty_2: AAEOSTT 10F AE.OSTAT +62 62
 >Hasty_1: AEGNNRT 11A REGNANT +70 146
 >Hasty_2: EIILNRW B8 WIR.LINE +76 138
+>Hasty_1: AEJLNOR A5 JOLE +48 194
+>Hasty_2: AEHKMR? M8 HA.MaKER +84 222
+>Hasty_1: ABCINRT 15A T.RBIC +39 233
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000384)
+#note Harvested post-move position (game seed 1000384)
 >Hasty_1: ADHIPTW H4 WHIPT +34 34
 >Hasty_2: DIMNOOS 8A MONODIS. +86 86
 >Hasty_1: AAADLRT 5H .ADAL +18 52
->Hasty_2: EIKNOOR L3 RE.INK +30 116
->Hasty_1: AGHMQRT 8L .HAT +33 85
->Hasty_2: FILNOOV 3I FLO.IN +26 142
->Hasty_1: DFGIMQR 2M QI +37 122
->Hasty_2: AIOSVZ? 1N ZA +45 187
->Hasty_1: DFGIMRV B6 FI.RD +21 143
->Hasty_2: IORSUV? D1 VIRtUOS. +78 265
->Hasty_1: AEGILMV A1 GLAIVE +38 181
->Hasty_2: EEGRSTT F6 GR.SETTE +65 330
->Hasty_1: CEEGMPR 1D .ERGE +27 208
+>Hasty_2: EIKNOOR L3 RE.OOK +30 116
+>Hasty_1: AGHMQRT C5 TRA.Q +25 77
+>Hasty_2: FIILNNV M7 FIN +26 142
+>Hasty_1: DFGHIIM N5 GIF +18 95
+>Hasty_2: AILNSVZ O4 VINAL +51 193
+>Hasty_1: DHIIMV? 3J VI.ID +18 113
+>Hasty_2: AEIRSUZ N9 AZURES +72 265
+>Hasty_1: EGHLMT? F3 MEGaL.TH +71 184
+>Hasty_2: CEEIRST E8 .ESERTIC +79 344
+>Hasty_1: EEGOPRT 13G PROTEGE. +80 264
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000385)
+#note Harvested post-move position (game seed 1000385)
 >Hasty_1: AGHLNOY H4 HOAGY +32 32
 >Hasty_2: DEIKNU? 6G b.UDEKIN +68 68
->Hasty_1: AEJLLNR L4 JA.ER +34 66
+>Hasty_1: AEJLLNR K5 J.LL +22 54
 >Hasty_2: AAEERTW 4C AWEAT.ER +78 146
->Hasty_1: GILLNST C2 ST.LLING +74 140
+>Hasty_1: AEGINRS O6 SEARING +93 147
+>Hasty_2: ADMTVXZ N8 ZAX +73 219
+>Hasty_1: AILNOPR 12H PAROLIN. +78 225
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000386)
+#note Harvested post-move position (game seed 1000386)
 >Hasty_1: AHIPRTZ H6 PHIZ +36 36
 >Hasty_2: ADEIMY? I8 DAYtIME +81 81
 >Hasty_1: ABHNORT H11 ABHOR +56 92
->Hasty_2: ABDERUW 11E AUR..ED +28 109
->Hasty_1: AEEGINT 8H ..EATING +33 125
->Hasty_2: ABDFGWW 7K FAB +25 134
->Hasty_1: ELNOOTV 9K VETO +28 153
->Hasty_2: DFGLNWW F10 F.ND +16 150
->Hasty_1: ILLNOUV L3 OVUL... +20 173
->Hasty_2: GLOOWW? 10M tWO +32 182
->Hasty_1: EILNNRR O10 .NLINE +21 194
->Hasty_2: AGLMOSW 14B GLOWS +33 215
->Hasty_1: EEIKRRU M1 EEK +26 220
->Hasty_2: AEGMQTU 1H EQUAT. +48 263
->Hasty_1: EIJORRU 12A REJOI. +30 250
->Hasty_2: AGIMRSS 2H RIMS +37 300
->Hasty_1: CEIOPRU A5 CROUPIE. +86 336
->Hasty_2: ACEGNST N1 STANCE +47 347
+>Hasty_2: ABDERUW 6H .UB +13 94
+>Hasty_1: AEEGINT J9 GAE +28 120
+>Hasty_2: AADDERW K1 AWARDED +82 176
+>Hasty_1: EFGINTW 1J T.WING +42 162
+>Hasty_2: LLNOOTV 3H VOL.NT +20 196
+>Hasty_1: EFFLNUV 11G F...FUL +24 186
+>Hasty_2: ILOOOR? 10A ROsOLIO +65 261
+>Hasty_1: EEMNNRV D7 VEN.MER +26 212
+>Hasty_2: AEEIKSU A8 EU.EKA +45 306
+>Hasty_1: EGJNQTU L10 J.G +22 234
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000387)
+#note Harvested post-move position (game seed 1000387)
 >Hasty_1: EILNRUX H8 LUREX +40 40
 >Hasty_2: AEERST? 11D ETAg.RES +78 78
 >Hasty_1: CINRSTU E4 INSTRUC. +70 110
 >Hasty_2: DEGJOUZ D1 JUDGE +52 130
+>Hasty_1: DGKLPS? J10 K.G +18 128
+>Hasty_2: EEIOOWZ 8A WOOE. +27 157
+>Hasty_1: ADILPS? 8H .AnDSLIP +83 211
+>Hasty_2: EIIOSVZ 1D .IVES +45 202
+>Hasty_1: BFGNOQT I7 Q.T +26 237
+>Hasty_2: HIIOOOZ K4 ZOOI. +30 232
+>Hasty_1: ABFGNOR L3 BARF +47 284
+>Hasty_2: AAAHINO G9 HO.AN +33 265
+>Hasty_1: EGMNNOT M2 NOG +29 313
+>Hasty_2: AABDILY 6B BAY. +33 298
+>Hasty_1: EEELMNT 12A NEEM +22 335
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000388)
+#note Harvested post-move position (game seed 1000388)
 >Hasty_1: AEIKLOY H4 YOKEL +32 32
->Hasty_2: EIILNOW G5 LOWE +30 30
->Hasty_1: ADEIIOZ F7 ADOZE +45 77
->Hasty_2: IINNRTY E11 YIN +22 52
->Hasty_1: EIIINNU 10F .EIN +13 90
->Hasty_2: INOQRRT D12 QI +46 98
->Hasty_1: IINOOTU C13 TIN +12 102
->Hasty_2: ANOPRRT 15A NO.PAR +33 131
->Hasty_1: AAEIOOU I6 AE +18 120
->Hasty_2: AENPRT? J8 PAsTERN +73 204
->Hasty_1: AAFIOOU K11 IF +19 139
->Hasty_2: AGHIILR 14A AH. +24 228
->Hasty_1: AAFOOSU L12 FOOS +34 173
->Hasty_2: GIILRSU A8 SILURI.. +27 255
->Hasty_1: AAGILMU 15L .MUG +21 194
->Hasty_2: CEGJORT 8J .ROJET +48 303
->Hasty_1: AAEILNV O4 AVEN.AIL +62 256
->Hasty_2: ACDEGX? N10 XED +54 357
+>Hasty_2: EIILNOW I5 WINO +24 24
+>Hasty_1: ADEIIOZ J1 AZIDE +41 73
+>Hasty_2: EILNRTY 1D INTERL.Y +86 110
+>Hasty_1: EIINNOU 2B ENNUI +22 95
+>Hasty_2: OOOPQRT 3I Q. +21 131
+>Hasty_1: AAAAEIO -AAAAIO +0 95
+>Hasty_2: NOOOPRT 2J .OON +18 149
+>Hasty_1: AEEFIP? 1A EF +20 115
+>Hasty_2: FGOOPRT 3L FOG +23 172
+>Hasty_1: AAEIIP? D1 ..IA +8 123
+>Hasty_2: EHOPRRT 5E THR...R +52 224
+>Hasty_1: AEIPSU? O1 AUSPIcE +91 214
+>Hasty_2: EGIJLOP J8 GOJI +32 256
+>Hasty_1: BDIMNOS 8L MOBS +60 274
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000389)
+#note Harvested post-move position (game seed 1000389)
 >Hasty_1: EEGGOTT H5 TEGG +12 12
->Hasty_2: AELNOQX 6E AXL. +27 27
->Hasty_1: EIINOST 9E INOSITE +66 78
->Hasty_2: AEHNOQU J6 QUO.HA +46 73
->Hasty_1: ABEPRRY K8 P.ABERRY +97 175
->Hasty_2: EEILNOT 8J ..TION +27 100
->Hasty_1: EIJRRTT 15E JITTER. +51 226
->Hasty_2: CEEFGIL O2 FLEECI.G +65 165
->Hasty_1: BDDDIRS 8A DRIBS +35 261
+>Hasty_2: AELNOQX 5H .AXOL +24 24
+>Hasty_1: EIINOST M2 INOSITE +79 91
+>Hasty_2: AEHNQRU 8K QU.AN +45 69
+>Hasty_1: ABEOPRY L2 BOY.A +38 129
+>Hasty_2: EEHILRT 4I HE +19 88
+>Hasty_1: EIJPRRT 6F JE.P +37 166
+>Hasty_2: EILRRTT J3 R.. +10 98
+>Hasty_1: EGIIRRT O2 RETIRI.G +60 226
+>Hasty_2: CEILRTT 9I CLIT +22 120
+>Hasty_1: BDDDFIS -BDDF +0 226
+>Hasty_2: DEIORTT 7E TO +11 131
+>Hasty_1: ADEISSY 8E AY +20 246
+>Hasty_2: DEFIRTZ D8 FRITZ +55 186
+>Hasty_1: DEEIOSS 10J OSE +24 270
+>Hasty_2: ADEIPRU 2I UP +29 215
+>Hasty_1: BDDEISW 9B BI.DS +27 297
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000390)
->Hasty_1: AHLOOSZ H5 ZOOS +26 26
->Hasty_2: ADEENNR 8F EN.NARED +60 60
->Hasty_1: AEEHILO 5G A.OLE +28 54
->Hasty_2: AEEKLOY 4K YOKEL +31 91
->Hasty_1: EHIILPY O1 HIP.Y +39 93
->Hasty_2: AAEFORU M2 FA.ER +24 115
->Hasty_1: AEIILMO M8 .AIMIO +20 113
->Hasty_2: ADNOPUU L11 UPDO +29 144
->Hasty_1: BEELNTV K7 B.ENT +24 137
->Hasty_2: AIINOUU N12 UNAI +17 161
->Hasty_1: EIJLMVV F6 JE. +26 163
->Hasty_2: EIOSUWX 15H OWIES +36 197
->Hasty_1: CILMQVV J14 Q. +31 194
->Hasty_2: DGGINUX O13 GID +32 229
->Hasty_1: BCILMVV 4C CLIMB +26 220
->Hasty_2: GNSTTUX 9J T.X.S +23 252
->Hasty_1: EFRRTVV G13 FET +19 239
->Hasty_2: EEGNRTU 9C GENRE +23 275
->Hasty_1: GHRRUVV 14F V.G +18 257
->Hasty_2: ADIRTU? D7 pR.AUDIT +68 343
->Hasty_1: HRRTUV? 15A HURsT +29 286
+#note Harvested post-move position (game seed 1000390)
+>Hasty_1: AHLOOSZ H6 ZOO +24 24
+>Hasty_2: ADEENNR 9G EN +16 16
+>Hasty_1: AEHILOS I6 AHI +32 56
+>Hasty_2: ADEEENR H6 ....ED +16 32
+>Hasty_1: AEKLOSY J7 OKAY +32 88
+>Hasty_2: AEEELNR K9 NEE +13 45
+>Hasty_1: EILLOPS 12I LIPO +18 106
+>Hasty_2: AAELORY L9 YA +17 62
+>Hasty_1: EFLORSU F3 OURSELF +68 174
+>Hasty_2: AEILMOR E4 MOIRA +28 90
+>Hasty_1: ABDNPTU 8L PUNT +38 212
+>Hasty_2: EELNOUV D1 VOLE +32 122
+>Hasty_1: ABDIIIM D6 BIDI +23 235
+>Hasty_2: EJNUVWX G1 VEX +38 160
+>Hasty_1: ACEIMQS C9 QI +42 277
+>Hasty_2: DIJNNUW N6 JU. +26 186
+>Hasty_1: ACEGGMS B10 MAGES +38 315
+>Hasty_2: BDINNTW 13B .NWIND +24 210
+>Hasty_1: CEGRRST E11 GR.T +10 325
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000391)
->Hasty_1: FIJMVWW H7 VIM +16 16
->Hasty_2: AEEOTVY I8 TYEE +24 24
->Hasty_1: FJKLNWW 11H L.WK +22 38
->Hasty_2: AGIORSV 12C VIRAGOS +85 109
->Hasty_1: BFIJNRW F11 W.IF +18 56
+#note Harvested post-move position (game seed 1000391)
+>Hasty_1: FIJMVWW -FIJVWW +0 0
+>Hasty_2: AEEOTVY H4 OVATE +18 18
+>Hasty_1: GIKLMNS I6 MILK +25 25
+>Hasty_2: BEIIRSY 6G I..BI +15 33
+>Hasty_1: AAEGMNS 3B SAGAMEN +81 106
+>Hasty_2: AEEIRSY D1 YA.E +24 57
+>Hasty_1: AADNQRU 5K QUAD +50 156
+>Hasty_2: EIIIRST N2 IRI. +10 67
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000392)
->Hasty_1: EFOPRUY H4 FOYER +30 30
->Hasty_2: ADIJLNO 6F JA. +29 29
->Hasty_1: FHIIPRU G5 P.H +25 55
->Hasty_2: DILNOTV 7F O..D +19 48
->Hasty_1: AFIIRRU 4H .RIAR +16 71
->Hasty_2: ILNORTV K1 VOL.NT +18 66
->Hasty_1: BFISTUX M4 SUBFIX +39 110
->Hasty_2: AEIQRTT L8 QAT +52 118
->Hasty_1: AABILNT 2E ABLATI.N +68 178
->Hasty_2: EEINRTU K9 RETINUE +76 194
->Hasty_1: ACEIIOW 1K .OICE +36 214
+#note Harvested post-move position (game seed 1000392)
+>Hasty_1: EFOPRUY H8 ROUPY +28 28
+>Hasty_2: ADIJLNO 10F JO.AL +30 30
+>Hasty_1: EFFHIIR 11J IFFIER +26 54
+>Hasty_2: ADINRTV N10 V.RDIN +36 66
+>Hasty_1: BHORSTX 9G H.B +31 85
+>Hasty_2: AAEQTTT O11 .EATA +32 98
+>Hasty_1: ALORSTX L11 .OLX +28 113
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000393)
+#note Harvested post-move position (game seed 1000393)
 >Hasty_1: AIIITUZ H5 ZITI +26 26
 >Hasty_2: AABJORX 5E BRA.A +32 32
 >Hasty_1: AILNOPU 4B PULAO +20 46
 >Hasty_2: EEGJOSX 3A GOXES +55 87
 >Hasty_1: EILNOPR 4I PROLINE +74 120
 >Hasty_2: CDEEIJR K1 REJ.ICED +86 173
->Hasty_1: BEEERSU 6F BR.S +30 150
->Hasty_2: AFKORT? O2 FR.AKOuT +92 265
->Hasty_1: AEEEMSU 3K .AM +34 184
->Hasty_2: ACGHILT 1H CHI.AL +36 301
->Hasty_1: EEEISU? 7F sE.S +21 205
->Hasty_2: DEGNOTU L7 TONGUED +76 377
->Hasty_1: DEEINNU 13E UNDENIE. +63 268
->Hasty_2: EINOQRT E9 TORQ.E +30 407
+>Hasty_1: BEEERSU 8K .EBUR +27 147
+>Hasty_2: AFKORT? 3M KAF +39 212
+>Hasty_1: ACEEMSS G5 .MESACES +73 220
+>Hasty_2: HLORTT? N8 .LTRaHOT +74 286
+>Hasty_1: ADEGII? 15H DIGErA.I +131 351
+>Hasty_2: DNNNOTU O1 UN..D +27 313
+>Hasty_1: EEINOQR 6K .INQ +35 386
+>Hasty_2: DMNNOTV 11D DOV.N +18 331
+>Hasty_1: EEOOORT 1G TORE.O +21 407
+>Hasty_2: GIMNTTU M13 UT. +18 349
+>Hasty_1: AAEEIOW B1 WO..IE +26 433
+>Hasty_2: GIMNTWY A6 WYTING +44 393
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000394)
+#note Harvested post-move position (game seed 1000394)
 >Hasty_1: ADEIPRY H7 DRAPEY +32 32
->Hasty_2: AEJOWZ? G6 JEeZ +56 56
->Hasty_1: BIOOTUX I9 XI +48 80
->Hasty_2: AAGNOQW 12C GOWAN. +26 82
->Hasty_1: BNOOSTU I1 BOUTONS +66 146
->Hasty_2: AEEIOQT 13B QI +28 110
->Hasty_1: EIIMOOR 1I .OOMIER +42 188
->Hasty_2: AEEEFOT J1 .FT +29 139
->Hasty_1: ABEEIPT 14A PIETA +40 228
->Hasty_2: AADEEEO 11D DA +19 158
->Hasty_1: ABDEILV N1 .VADIBLE +90 318
->Hasty_2: AEEEIOO A14 .A +12 170
->Hasty_1: ADEHIRW O8 RAWHIDE +101 419
->Hasty_2: AEEEIOO N10 AE +16 186
+>Hasty_2: AEJOWZ? G8 AZO +49 49
+>Hasty_1: BIOOTUX F10 BOTOX +49 81
+>Hasty_2: EGJNQW? E11 JaW +48 97
+>Hasty_1: AEEINSU I12 EAU +9 90
+>Hasty_2: EGINOQT 14H Q.OTING +38 135
+>Hasty_1: EEIMNRS M7 REINSME. +74 164
+>Hasty_2: EEFIIOO 15G OI +39 174
+>Hasty_1: ABDEEPT 8L B.EP +33 197
+>Hasty_2: AEEFIIO 12L A.IE +14 188
+>Hasty_1: AADELTV J10 VAT +20 217
+>Hasty_2: DEFIIOO F3 FOODIE +17 205
+>Hasty_1: ADDEEHL E5 HEAD +36 253
+>Hasty_2: AAFIIRW 3C WAI. +20 225
+>Hasty_1: CDEELLL 2B CELL +21 274
+>Hasty_2: AFIINRU D1 F..IR +30 255
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000395)
->Hasty_1: ERRRSTV H4 VERST +24 24
->Hasty_2: AHIIMOS I7 HOMAS +28 28
->Hasty_1: CLORRU? J2 CORULeR +74 98
->Hasty_2: AAFIIIV 4F VI.A.IA +26 54
+#note Harvested post-move position (game seed 1000395)
+>Hasty_1: ERRRSTV -RRV +0 0
+>Hasty_2: AHIIMOS H8 OHIA +14 14
+>Hasty_1: ELORST? 11D LEOT.RdS +78 78
+>Hasty_2: ACGIMSU 12A MAGI +24 38
+>Hasty_1: AADIQRV I6 QADI +25 103
+>Hasty_2: CEFKSU? G6 FUCK +40 78
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000396)
+#note Harvested post-move position (game seed 1000396)
 >Hasty_1: ABEETUV H4 BEAUT +20 20
->Hasty_2: ADEINOO G5 DANIO +18 18
->Hasty_1: ACEEFRV 5G ..FACER +26 46
->Hasty_2: EHIIIOR 4L HEIR +28 46
->Hasty_1: AEIUVW? O2 AI.WaVE +36 82
->Hasty_2: IINNOOR I2 ROO. +12 58
->Hasty_1: EGGRUWX J4 W.XER +39 121
->Hasty_2: IIMNNSS 9E MI.SIS +33 91
->Hasty_1: AEGGGLU 8A GAUGE +31 152
->Hasty_2: NNNSTTY 3K STY +30 121
->Hasty_1: AFGLLMT 7C MAG +25 177
->Hasty_2: EEINNNT K5 .INE +19 140
->Hasty_1: AFLLOTT L8 FLOAT +34 211
->Hasty_2: ENNOPTZ K11 ZEP +52 192
->Hasty_1: CJLOPRT 1F CLOP +34 245
->Hasty_2: EENNORT N8 TENONER +70 262
->Hasty_1: ADJQRTU 6B QAT +41 286
+>Hasty_2: ADEINOO 4H .OOED +16 16
+>Hasty_1: ACEEFRV 5K FAVE +33 53
+>Hasty_2: AIIIINR -III +0 16
+>Hasty_1: CEHIRUW O5 RUCHE +41 94
+>Hasty_2: AAINNR? N9 NAvARIN +68 84
+>Hasty_1: GIMORVW 15J VOWI.G +51 145
+>Hasty_2: EHLRSSX N4 L.X +51 135
+>Hasty_1: AEGLMNR G7 MANGLER +74 219
+>Hasty_2: EHRRSSY H12 HERS +44 179
+>Hasty_1: AGLMTTT F12 MATT +19 238
+>Hasty_2: EFIRSTY 12L FR.Y +28 207
+>Hasty_1: AGLNOOT 15A GALOO. +24 262
+>Hasty_2: CEIPSTZ 5B PECTIZ.S +94 301
+>Hasty_1: EINOQRT 3M QI +33 295
+>Hasty_2: ADDELPU B2 DUP.ED +28 329
+>Hasty_1: BEINORT A6 BORNITE +87 382
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000397)
+#note Harvested post-move position (game seed 1000397)
 >Hasty_1: AAEORST H3 AEROSAT +66 66
->Hasty_2: BDDLNNO 4D BOLD.D +20 20
+>Hasty_2: BDDLNNO 6F BL.ND +18 18
 >Hasty_1: CEHIIMS 8A ISCHEMI. +107 173
->Hasty_2: EFNNRT? B2 FERNiN.T +70 90
->Hasty_1: ADLNOO? C8 .ANOODLe +75 248
+>Hasty_2: DFNORT? K1 FRONTeD +78 96
+>Hasty_1: ADELNOO C8 .ANOODLE +74 247
+>Hasty_2: BEGKPQ? 15A PE.K +45 141
+>Hasty_1: NRTTUUV D2 UNTRUT. +20 267
+>Hasty_2: BFGIQS? 1H QuI.F +69 210
+>Hasty_1: AEIMUVY 2K .AVEY +27 294
+>Hasty_2: BDGINPS O1 G.P +27 237
+>Hasty_1: AIIMUUW -IIUUW +0 294
+>Hasty_2: BDIILNS E10 BINDIS +29 266
+>Hasty_1: AAJLMOR 2B JO.AL +28 322
+>Hasty_2: IILRRSY 13E .RILY +14 280
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000398)
+#note Harvested post-move position (game seed 1000398)
 >Hasty_1: ILMNQSU H4 QUINS +48 48
 >Hasty_2: EIINNO? 8A cONIINE. +74 74
->Hasty_1: ACILMWZ B7 C.LZA +36 84
+>Hasty_1: ACILMWZ 7E MAW. +28 76
+>Hasty_2: BEJKNOO 6F BO.NK +44 118
+>Hasty_1: AACEILZ C6 CA.ALIZE +92 168
+>Hasty_2: CEEEJMO 12A ME.E +36 154
+>Hasty_1: GILPRVV B11 P.RV +24 192
+>Hasty_2: ACEEEJO 15A JOE +40 194
+>Hasty_1: ADGHILV 9E GID +29 221
+>Hasty_2: ACEENRS K4 CASERNE +80 274
+>Hasty_1: AHILTTV J10 HILT +28 249
+>Hasty_2: AAEEIOW 12H WA.IE +24 298
+>Hasty_1: ADETTV? 8K .AVED +30 279
+>Hasty_2: ADELORU N2 AUREOL.D +72 370
+>Hasty_1: BLSTTX? D11 T.XTS +40 319
+>Hasty_2: FHPRSTY O1 HYP +42 412
+>Hasty_1: BDFLOT? M1 OFT +31 350
+>Hasty_2: FGORRST M11 FROG +25 437
 #character-encoding UTF-8
 #lexicon NWL23
 #player1 Hasty_1 Hasty_1
 #player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000399)
+#note Harvested post-move position (game seed 1000399)
 >Hasty_1: CEGINNY H4 YINCE +28 28
->Hasty_2: AEGJMRT G3 JAM +29 29
->Hasty_1: GINQSUW 6G S.UG +22 50
->Hasty_2: BEFGMRT 4D EMB.. +24 53
->Hasty_1: EINQUW? 5A QUIrE +35 85
->Hasty_2: AFGLLRT B1 ARTF.L +22 75
->Hasty_1: BENNTTW 1A B.WN +30 115
->Hasty_2: AEEGLOR G8 AEROGEL +62 137
->Hasty_1: DENNTTX 13C TEXT.D +28 143
->Hasty_2: EHILSUV 15C ELVISH +48 185
->Hasty_1: INNRSSU E11 NI. +20 163
->Hasty_2: AEIORTU 12G .OATIER +22 207
->Hasty_1: AHNRSSU 11K SHARN +27 190
->Hasty_2: ELOOUVZ O8 OZO.E +45 252
->Hasty_1: ADEISU? K1 DUAlISE +70 260
->Hasty_2: DEIILUV 1G DIVI.E +36 288
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000400)
->Hasty_1: FIKOQRU H4 QUIRK +56 56
->Hasty_2: ABLPRSS 9E BAPS +30 30
->Hasty_1: EFNOORY 10D FEY +34 90
->Hasty_2: AELNORS 11B LOANERS +85 115
->Hasty_1: AGJNOOR 12A RANG +30 120
->Hasty_2: DEGNTUV B10 G..DE +22 137
->Hasty_1: EIIJMOO A12 .IME +25 145
->Hasty_2: ENOTTUV 4H .UOTE +28 165
->Hasty_1: EIJOOSZ H11 .IZES +45 190
->Hasty_2: ADNPTUV M2 PAD +28 193
->Hasty_1: IJNOOOW N1 JOW +39 229
->Hasty_2: EGNTTUV L3 V.NGE +18 211
->Hasty_1: INOORTU O1 OI +38 267
->Hasty_2: AHITTTU I13 AHI +26 237
->Hasty_1: EINORTU M7 ROUTINE +71 338
->Hasty_2: AETTTUW A7 WETA +24 261
->Hasty_1: ADLMORT 8L D.OM +40 378
->Hasty_2: ELNTTU? B1 LUNeTTE +71 332
->Hasty_1: ABELRST J7 LABRETS +73 451
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000402)
->Hasty_1: EEIIIIS H6 SEE +6 6
->Hasty_2: AEIIOY? G5 hIYA +23 23
->Hasty_1: GIIIINQ 6F Q.. +32 38
->Hasty_2: BEGIORW F8 BEWIG +24 47
->Hasty_1: GIIIILN 12C GIN.ILI +20 58
->Hasty_2: EMNOPRT E9 PEO. +25 72
->Hasty_1: AACGINT 11H AGNATIC +75 133
->Hasty_2: AMNNRTT H11 ..ARM +21 93
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000403)
->Hasty_1: AEILTTW H4 WATTLE +26 26
->Hasty_2: HIIIRTU 3F RUTH +22 22
->Hasty_1: ADEIMPR 6A PREADMI. +71 97
->Hasty_2: AEIIIUZ 5D ZA +39 61
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000404)
->Hasty_1: AAEEEQR H8 AREAE +12 12
->Hasty_2: BDHLLLO 12G B.HOLD +24 24
->Hasty_1: EIILOQU K8 QUEL. +28 40
->Hasty_2: ACLLNSU 8B CALLUN.S +61 85
->Hasty_1: IIOORST 13I ORS +27 67
->Hasty_2: AEIIPX? B1 EPItAXI. +118 203
->Hasty_1: GIIKORT 1A R.IKI +42 109
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000405)
->Hasty_1: CENWYZ? H4 ZiNCY +56 56
->Hasty_2: CDDEKLR 5G D.CKED +26 26
->Hasty_1: AEENRWX 4K REWAX +54 110
->Hasty_2: BEEEGLR 3I GLEBE +39 65
->Hasty_1: EGGINOU 2M EGG +16 126
->Hasty_2: AEEFIRR 1H FAERIE +37 102
->Hasty_1: EILNOPU 6C LOUPE. +17 143
->Hasty_2: DEIOORY C2 DIRE.Y +28 130
->Hasty_1: HINNNNT 7F IN.H +23 166
->Hasty_2: AAIIOOR B1 RIA +14 144
->Hasty_1: NNNOSTT 8F ST. +16 182
->Hasty_2: AINOOSU 9D NAOS +18 162
->Hasty_1: NNNORTT A1 OR +16 198
->Hasty_2: AABILOU B7 ABOULIA +66 228
->Hasty_1: ANNNOTT A5 NONA +30 228
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000406)
->Hasty_1: DIMTUU? H6 TrIDUUM +74 74
->Hasty_2: DELRTVX 6H .EXT +27 27
->Hasty_1: EFINNSU 13B FUNNIES +82 156
->Hasty_2: DLOPRRV 5I PO +17 44
->Hasty_1: AEEINOO 14B ANE +20 176
->Hasty_2: CDLRRVY 4J CRY +28 72
->Hasty_1: EILOOR? 15D wOOLIER +70 246
->Hasty_2: ADIKLRV 12D KA +28 100
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000407)
->Hasty_1: ADETUYY H7 YAY +18 18
->Hasty_2: BKLNOPV G4 KNOB +23 23
->Hasty_1: DEERTTU I4 UTTERED +77 95
->Hasty_2: FLNPVWZ 3I PWN +25 48
->Hasty_1: EGINOUU 3I ...ING +24 119
->Hasty_2: AEFLQVZ J9 ZEAL +35 83
->Hasty_1: EIIOUU? 2I sEI +24 143
->Hasty_2: DFGHQTV L2 F.GHT +30 113
->Hasty_1: DEINOUU F4 OUD +23 166
->Hasty_2: ADIOQRV K10 VAIR +27 140
->Hasty_1: EEINSU? 14I ENSUItE +74 240
->Hasty_2: ADIMNOQ 13M QI +45 185
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000408)
->Hasty_1: ACEHITY H4 YACHTIE +88 88
->Hasty_2: DEGNOST 5E DOT.GES +36 36
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000409)
->Hasty_1: EEGHOTV H8 GOETH +26 26
->Hasty_2: ADEPSTX 11E SPA.TED +40 40
->Hasty_1: EEGILNV J8 LEV.EING +72 98
->Hasty_2: AEIIWX? 8J .EXIcA +60 100
->Hasty_1: ENORRST 15E STRON.ER +80 178
->Hasty_2: HIJTUW? G7 HaJ +43 143
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000410)
->Hasty_1: ABEIIL? H4 BAILIEs +72 72
->Hasty_2: DEENWWZ 6G W.NZE +37 37
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000411)
->Hasty_1: ADIOOS? H3 wOODSIA +66 66
->Hasty_2: AAFNOOR G7 OAF +25 25
->Hasty_1: ACDEGLZ 6H .AZED +36 102
->Hasty_2: AMNOPRR 5K MAP +25 50
->Hasty_1: CEGLNQR 4G C.NGER +31 133
->Hasty_2: AINORRV I9 VAIN +24 74
->Hasty_1: BEEILPQ H11 BELIE +31 164
->Hasty_2: IOORRTU 11E ORI.. +14 88
->Hasty_1: EENPQRS J8 PEES +30 194
->Hasty_2: DMORTU? 15B UDOMeT.R +61 149
->Hasty_1: DELNQRR 14D LED +20 214
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000412)
->Hasty_1: DEFSVXY H5 DEXY +30 30
->Hasty_2: AEEIILL I6 LIE +21 21
->Hasty_1: EFOSTVW J5 EFS +38 68
->Hasty_2: AEGILPR G6 PARGE +38 59
->Hasty_1: EEOTUVW F10 WOVE +31 99
->Hasty_2: AHIILNO 14B HALON +33 92
->Hasty_1: AEEOTUZ 15A ZOEAE +57 156
->Hasty_2: IIINNRU 13A URN +18 110
->Hasty_1: AANRTTU H10 TANTRA +27 183
->Hasty_2: IIIINTU 11E I.T. +17 127
->Hasty_1: ADHJNRU 4J RAJ +27 210
->Hasty_2: IIIINOU L4 .OIN +11 138
->Hasty_1: DGHIMNU K3 H.M +26 236
->Hasty_2: IIIIRUU I6 ...R +5 143
->Hasty_1: DGINOUW 2I DOWING +38 274
->Hasty_2: IIIIQUU 1L QI +44 187
->Hasty_1: DELRTUY 15H .DULTERY +89 363
->Hasty_2: AIIIKUU 3M KI +29 216
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000414)
->Hasty_1: BINORRS H4 BIRRS +20 20
->Hasty_2: DIINPUV 6F VI.ID +21 21
->Hasty_1: GHINOOS 4F HO.OING +26 46
->Hasty_2: CNOPTUU 3C CUTUP +36 57
->Hasty_1: CEOOQS? D1 EQ.eS +28 74
->Hasty_2: AEMNNOO 1B AN.MONE +27 84
->Hasty_1: AACEEOO 5A CEA.E +14 88
->Hasty_2: AALORTU F6 .ALUATOR +63 147
->Hasty_1: AGNOOTU A4 O.TAGON +33 121
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000415)
->Hasty_1: AEGINST H2 INGESTA +70 70
->Hasty_2: ADEOOPU 4H .APED +18 18
->Hasty_1: AFLMNRT 5K FARM +31 101
->Hasty_2: DGIOORU 3J ODOUR +27 45
->Hasty_1: EGLLNTY 6N YE +28 129
->Hasty_2: EEGINOS I8 GENOISE +63 108
->Hasty_1: AGILLNT 8D TALL..ING +64 193
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000416)
->Hasty_1: AEGIOWY H4 YOWIE +30 30
->Hasty_2: EFNORUY I7 FRY +28 28
->Hasty_1: ADFGILZ 4D GLAZ. +36 66
->Hasty_2: EENNOTU J8 NONET +15 43
->Hasty_1: ADFIINV K11 FAV +30 96
->Hasty_2: AEIJLLU 14J JAIL +37 80
->Hasty_1: BDIIINO 15L DINO +28 124
->Hasty_2: EEELTU? K2 EUsTELE +66 146
->Hasty_1: BBIIRSU 12J ..BBIS +22 146
->Hasty_2: IINNORT D3 I.NITRON +60 206
->Hasty_1: HIKOQRU O7 QUIRK. +57 203
->Hasty_2: AADEOU? 14J ....ED +35 241
->Hasty_1: DEHOPPW C9 HOPPED +47 250
->Hasty_2: AACOSU? 2G ArAC.OUS +80 321
->Hasty_1: AEGGLNW 1C WAGGLE +41 291
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000417)
->Hasty_1: FFJORTW H7 JOW +26 26
->Hasty_2: AIIOORZ I4 ORZO +24 24
->Hasty_1: CFFHRRT 4H F.RTH +30 56
->Hasty_2: AIIINTT J6 ATT +28 52
->Hasty_1: CEEFRVY 5E FEVE. +27 83
->Hasty_2: GIIINN? E5 .INIkING +72 124
->Hasty_1: ACEIORY D12 AERY +28 111
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000418)
->Hasty_1: AHIINSU H5 HINS +14 14
->Hasty_2: CEFINOO 5D FINC. +26 26
->Hasty_1: AEGILRU 4A GRAIL +28 42
->Hasty_2: ABEIOOR A1 BOO.ER +27 53
->Hasty_1: AENTUU? 7C UNgUE.TA +60 102
->Hasty_2: ACINNRS 4H CAIRNS +35 88
->Hasty_1: ADEEHMT L3 A.THEMED +67 169
->Hasty_2: AGNOTUX M6 AXON +49 137
->Hasty_1: DEIJOPY 8K E..JI +42 211
->Hasty_2: EGOTUV? 9B OUTGaVE +76 213
->Hasty_1: DOOPWYY M1 YOW. +30 241
->Hasty_2: DFGKLRS 6K D..KS +23 236
->Hasty_1: DEMOPWY O1 MYOPE. +48 289
->Hasty_2: DFGILQR 10H DIF +28 264
->Hasty_1: BDEELWZ 1H DWEEB. +54 343
->Hasty_2: AAGILQR J10 .AQIR +19 283
->Hasty_1: ALNRRUZ 3I ZA +44 387
->Hasty_2: AEEGLST 15D GELATES +98 381
->Hasty_1: LNORRTU 9K T..ON +18 405
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000419)
->Hasty_1: AEGILMN H2 GEMINAL +76 76
->Hasty_2: ALOPUY? 3C OPAqU.LY +78 78
->Hasty_1: AGINPTT G7 PATTING +75 151
->Hasty_2: BFIMNNR 4C FIB +33 111
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000420)
->Hasty_1: ACDLRSZ H4 CZARS +38 38
->Hasty_2: EELNOSX 4G S.OLEX +30 30
->Hasty_1: BDGILMN 5K MIB +31 69
->Hasty_2: AEENRRS 8A RARENES. +77 107
->Hasty_1: DGLMNT? D3 LoDGM.NT +72 141
->Hasty_2: ADEFGIU 10B FA.IGUED +75 182
->Hasty_1: AEOOSU? 11B EASt +27 168
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000421)
->Hasty_1: EEEKSUZ H4 ZUKES +56 56
->Hasty_2: ACDEJNT 5E ADJ.NCT +68 68
->Hasty_1: AEEFNNR 4A FRENA +26 82
->Hasty_2: DEEHIUV B2 DE.IVE +36 104
->Hasty_1: AAEHINT 8G A.THENIA +62 144
->Hasty_2: FHNSTUU O4 HUNTS +72 176
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000422)
->Hasty_1: ADLNOOO H7 ONLOAD +18 18
->Hasty_2: ADJLTTU G5 TAJ +35 35
->Hasty_1: AABELOT 5E TO.ABLE +36 54
->Hasty_2: DILTUW? 10H .UTWILeD +63 98
->Hasty_1: AEEGORV O3 OVERAGE. +101 155
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000423)
->Hasty_1: AEENTV? H4 VENTAgE +76 76
->Hasty_2: EFGMSTX 11H SEXT +32 32
->Hasty_1: EGILMP? 5D IMPL.dGE +98 174
->Hasty_2: DFGKMOT L3 MOD +26 58
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000424)
->Hasty_1: AENRUX? H3 EXURbAN +92 92
->Hasty_2: BEEKRTV 4C VERTE. +32 32
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000426)
->Hasty_1: INNSTUV H5 VINS +14 14
->Hasty_2: AMNORSS 5F SO.RANS +20 20
->Hasty_1: EIINRTU 8A NEURITI. +77 91
->Hasty_2: DEGMOOR 4A GROOMED +81 101
->Hasty_1: AAMOOTX 7B OXO +39 130
->Hasty_2: ADEEIPT A1 PEA.E +24 125
->Hasty_1: AAAJMTZ 3F MATZA +37 167
->Hasty_2: DFITTUW 2J FID +28 153
->Hasty_1: AEJKLOY 1K LEAKY +45 212
->Hasty_2: BBITTUW H1 WI. +18 171
->Hasty_1: EGIJORV N1 .OJI +30 242
->Hasty_2: BBNTTUW C1 BUB. +16 187
->Hasty_1: AEEGQRV 4J VEE +28 270
->Hasty_2: EINTTTW O4 TWINE +30 217
->Hasty_1: AAGHQR? N6 QuAG +67 337
->Hasty_2: EFNOSTT 10J FONTS +34 251
->Hasty_1: AEHLLRU 11I LEHUA +35 372
->Hasty_2: CEGILTU 12L GELT +23 274
->Hasty_1: CDEHLR? F8 .RaCHLED +65 437
->Hasty_2: ACINOPU 15D PU.IC +39 313
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 Hasty_1 Hasty_1
-#player2 Hasty_2 Hasty_2
-#note Harvested penultimate-bingo position (game seed 1000427)
->Hasty_1: ILNRRTY H8 LINTY +24 24
->Hasty_2: GGISUUV 12D VUGG. +26 26
->Hasty_1: INORRR? 7F RIgOR +14 38
->Hasty_2: AHIOSUW K5 WISHA +27 53
->Hasty_1: BEIKNNR 8K .IKER +39 77
->Hasty_2: DLORSTU L2 DUROS +19 72
->Hasty_1: BDEMNNO J9 BONDMEN +70 147
->Hasty_2: CDEEILT 15H DE.TICLE +158 230
->Hasty_1: AAAFNNU N10 FAUNA. +34 181
->Hasty_2: DILNOVZ F10 ZI. +33 263
->Hasty_1: AEEINPY M10 EYNE +30 211
->Hasty_2: DFLNOOV 3I VOD.N +26 289
->Hasty_1: AIPPQRT G9 QI +54 265
->Hasty_2: AFLOOTW 2J WA. +31 320
->Hasty_1: ACPPRTX 11E X. +36 301
->Hasty_2: FLLOOOT 1G FOOT +27 347
->Hasty_1: ACJPPRT 2F JAR +33 334
->Hasty_2: AELLOS? O1 SALLOwE. +74 421
->Hasty_1: CEEPPTT M1 TE.ET +21 355
+>Hasty_2: AEGJMRT G3 JAG +27 27
+>Hasty_1: GINQSUW 4E QU.. +16 44
+>Hasty_2: BEFMMRT 8D FEMM. +16 43
+>Hasty_1: EGINSUW 6G G.U +17 61
+>Hasty_2: ABLLRT? E4 .AT +24 67
+>Hasty_1: EEINSTW F8 .EW +16 77
+>Hasty_2: BBLLRT? -BBLLT +0 67
+>Hasty_1: EEINNST D8 .ENNIEST +74 151
+>Hasty_2: ADEORR? 15A mOR.ARED +122 189
+>Hasty_1: HLLSUVX I1 LUVS +28 179
+>Hasty_2: EHIRSSU 1H S.USHIER +185 374
+>Hasty_1: AHILOTX 13C H.LIX +46 225
