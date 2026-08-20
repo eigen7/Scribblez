@@ -21,6 +21,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/monte_carlo_sim.h"
+#include "util/exception.h"
 #include "util/io.h"
 #include "util/misc.h"
 #include "util/string.h"
@@ -50,6 +51,16 @@ fs::path results_path(const fs::path& dataset, scribblez::LeaveCondition conditi
          std::format("monte-carlo-sim-results.{}.json", scribblez::leave_condition_name(condition));
 }
 
+// --condition: which of kConditions to score, as include flags.
+std::array<bool, 2> parse_conditions(const std::string& arg) {
+  if (arg == "both") return {true, true};
+  for (int c = 0; c < 2; ++c) {
+    if (arg == scribblez::leave_condition_name(kConditions[c])) return {c == 0, c == 1};
+  }
+  throw scribblez::util::CleanException(
+    "--condition must be 'both', 'hidden-leaves', or 'face-up-leaves' (got '{}')", arg);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -59,6 +70,7 @@ int main(int argc, char** argv) {
     int games = 10000;
     int threads = scribblez::util::default_thread_count();
     scribblez::belief::RackInferrer::Params infer;
+    std::string condition = "both";
 
     po::options_description desc("monte_carlo_sim_tool options");
     desc.add_options()("help,h", "show this help and exit")(
@@ -67,11 +79,15 @@ int main(int argc, char** argv) {
       "games", po::value<int>(&games)->default_value(games),
       "Monte-Carlo rollouts per position (seeds 1..games)")(
       "threads", po::value<int>(&threads)->default_value(threads), "parallel workers")(
+      "condition", po::value<std::string>(&condition)->default_value(condition),
+      "which information condition to score: both, hidden-leaves, or face-up-leaves "
+      "(one condition regenerates just its results file)")(
       "infer-temperature", po::value<double>(&infer.temperature)->default_value(infer.temperature),
       "hidden-leaves condition: the leave inference's likelihood temperature (equity points)");
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);
+    const std::array<bool, 2> selected = parse_conditions(condition);
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
@@ -95,9 +111,11 @@ int main(int argc, char** argv) {
       }
       const std::string stem = gcg.stem().string();
       for (int c = 0; c < 2; ++c) {
+        if (!selected[c]) continue;
         // An empty opponent leave makes the conditions coincide: nothing is
-        // known face-up, and hidden has nothing to infer from.
-        if (c == 1 && pos.opp_leave.empty()) {
+        // known face-up, and hidden has nothing to infer from. Reuse the
+        // hidden result when this run computed it.
+        if (c == 1 && selected[0] && pos.opp_leave.empty()) {
           out[1][stem] = out[0][stem];
           continue;
         }
@@ -111,7 +129,12 @@ int main(int argc, char** argv) {
     }
 
     for (int c = 0; c < 2; ++c) {
+      if (!selected[c]) continue;
       const fs::path out_path = results_path(dataset, kConditions[c]);
+      // Unlink before writing: were the destination a symlink (one condition's
+      // file once aliased the other's), an ofstream would write THROUGH it and
+      // clobber the file it points at.
+      fs::remove(out_path);
       std::ofstream os(out_path);
       scribblez::util::pretty_print(os, json::value(std::move(out[c])));
       os << "\n";

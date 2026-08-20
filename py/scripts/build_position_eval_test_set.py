@@ -101,6 +101,12 @@ def main() -> int:
     p.add_argument("--games", type=int, default=10000, help="Monte-Carlo rollouts per position.")
     p.add_argument("--threads", type=int, default=0, help="MC worker threads (0 = tool default).")
     p.add_argument(
+        "--condition",
+        default="both",
+        choices=["both", "hidden-leaves", "face-up-leaves"],
+        help="information condition(s) to score; one condition regenerates just its results file.",
+    )
+    p.add_argument(
         "--skip-harvest",
         action="store_true",
         help="Re-score the committed bundles without replaying games.",
@@ -152,6 +158,7 @@ def main() -> int:
     ]
     if args.threads > 0:
         mc_cmd += ["--threads", str(args.threads)]
+    mc_cmd += ["--condition", args.condition]
     run(mc_cmd)
 
     if not args.keep_loose:

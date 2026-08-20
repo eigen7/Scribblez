@@ -8,11 +8,6 @@ uniformly), each with a Monte-Carlo ground truth. The dataset contract is the
 small set's (see its README). See `docs/lexical_features_for_value.md` for
 why this set matters and its caveats.
 
-The **currently committed** bundles predate the general sampler: they are
-penultimate-bingo positions (the opponent bingoed on the previous turn, so its
-leave is empty), harvested by games whose HastyBot ran without leave values
-(fixed since). Re-harvest to get the full position distribution.
-
 ## Contents
 
 - `part-NNN.gcgs` — the harvested positions, ~100 concatenated GCG blocks per
@@ -24,10 +19,9 @@ leave is empty), harvested by games whose HastyBot ran without leave values
 - `monte-carlo-sim-results.<condition>.json` — the MC ground truth (W/L/D +
   exact score-delta histogram) keyed by position stem, one file per
   information condition (what a rollout knows of the opponent's leave;
-  `engine/include/sim/monte_carlo_sim.h`). Committed. For the current
-  penultimate-bingo contents the conditions coincide (the opponent kept
-  nothing), so `face-up-leaves` is a symlink to `hidden-leaves`; a re-harvest
-  writes two real files.
+  `engine/include/sim/monte_carlo_sim.h`). Committed, always two real files
+  (never a symlink: the scoring tool writes each condition's file, and a link
+  would route one condition's write into the other's file).
 - `pos-*.gcg` — transient loose files the C++ tools consume; produced by
   exploding the bundles and removed after scoring. Git-ignored, never committed.
 
