@@ -64,13 +64,32 @@ def test_film_at_init_matches_additive_with_shared_weights():
     assert torch.allclose(sa, sf, atol=1e-6)  # returned scalar projection (beta) unchanged
 
 
+def _first_gpool_block(trunk):
+    for block in trunk.blocks:
+        if isinstance(block, GlobalPoolingResBlock):
+            return block
+    raise AssertionError("no global-pooling block in the trunk")
+
+
 def test_nonzero_gamma_changes_the_output():
     """With gamma perturbed off zero the FiLM path actually modulates -- the
-    capacity the zero init hides is reachable, not dead."""
-    film = _trunk(use_film=True)
+    capacity the zero init hides is reachable, not dead. Both injection sites are
+    checked separately (a dropped multiply at either would otherwise be dead code
+    that the zero-init tests above cannot catch): the stem gain, and a global-pool
+    block's gain half."""
     sp, sc = torch.randn(2, P, 15, 15), torch.randn(2, S)
+
+    film = _trunk(use_film=True)
     with torch.no_grad():
         base, _ = film(sp, sc)
         film.stem_gamma.weight.normal_(std=0.1)
         moved, _ = film(sp, sc)
-    assert not torch.allclose(base, moved)
+    assert not torch.allclose(base, moved), "stem gamma is not applied"
+
+    film = _trunk(use_film=True)
+    block = _first_gpool_block(film)
+    with torch.no_grad():
+        base, _ = film(sp, sc)
+        block.pool_fc.weight[block.spatial_channels :].normal_(std=0.1)  # the gamma half
+        moved, _ = film(sp, sc)
+    assert not torch.allclose(base, moved), "global-pool block gamma is not applied"

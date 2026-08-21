@@ -5,8 +5,8 @@ The face-up-leaves model is supposed to read a square's cross-check planes (whic
 letters may legally play there) *gated by* the opponent's face-up leave (which
 letters the opponent actually holds). The failure mode this tool measures is the
 model reading the letter mask through a fixed tile-frequency prior instead --
-ignoring the leave entirely. It runs the three acceptance probes from the roadmap
-against one ONNX checkpoint (onnxruntime, CPU):
+ignoring the leave entirely. It runs three probes against one ONNX checkpoint
+(onnxruntime, CPU):
 
   1. LETTER SELECTIVITY -- force a hook square's cross-check mask to each single
      letter and read Pr[opp plays there]. A frequency-prior model ranks by tile
@@ -20,8 +20,8 @@ against one ONNX checkpoint (onnxruntime, CPU):
      split |pred - truth| by whether a cell carries cross-check bits.
 
 The motivating case is pos-09 M7: the opponent holds G and GNU plays vertically
-there (MC truth 0.668). Post-#90 that set lives in the V (vertical) cross-check
-block; the tool auto-detects which block carries a square's set.
+there (MC truth 0.668). A vertical play's constraint lives in the V (vertical)
+cross-check block; the tool auto-detects which block carries a square's set.
 """
 
 import argparse
