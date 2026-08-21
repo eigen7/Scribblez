@@ -31,8 +31,8 @@ generated on demand under `<mount>/cache/trajectory_sets/<set>/` by
   bingoed INCASED. HastyBot plays E11 GAVE, opening 13G to EGOTIZE, which
   Hasty_2 draws with probability ~8%. The plain model under-reads the lane;
   one sim of GAVE observes opp-play-and-win mass there. The exhibit: does the
-  conditioned re-scoring lift a lane-blocking alternative? (The position
-  before the last move of `position-eval-test-dataset/pos-6.gcg`.)
+  conditioned re-scoring lift a lane-blocking alternative? (Frozen for the
+  tests as `engine/tests/data/egotize-lane.gcg`; edit both or neither.)
 
 - `quit.gcg` - The highest scoring plays here are N4 bingos. But we can see
   dangerous responses from the opponent thanks to the open leaves.

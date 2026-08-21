@@ -16,8 +16,10 @@ leave). `#RackN` pragmas are not read here. The bag must be non-empty (the
 sims need it). Engine reader: `read_gcg_post_move` in `data/gcg_post_move.h`;
 `manual_gcg_tool` writes conforming files.
 
-The original ten positions are penultimate-bingo boards (the opponent just
-bingoed, so their leave is empty); the convention does not require that.
+The convention does not require any particular shape. The set is regenerated
+wholesale (files are renamed and re-shaped when it is), so nothing outside the
+dashboard and the sim tool may depend on a file here: tests read frozen copies
+under `engine/tests/data/` instead.
 
 ## Ground truth
 
