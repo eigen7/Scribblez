@@ -116,6 +116,7 @@ class PositionEvalParams:
         "off trains the smaller ablation baseline",
     )
     # Loss.
+    lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")
     lambda_next_placement: float = param(0.5, "marginal placement loss weight (opp and self)")
     lambda_win_placement: float = param(0.5, "win-placement conjunction loss weight (opp and self)")
