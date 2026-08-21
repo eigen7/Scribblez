@@ -133,6 +133,9 @@ void DataLoader::DataFile::load() {
   std::unique_lock<std::mutex> lock(mutex_);
   if (!buffer_) {
     buffer_ = read_whole_file(path_, file_size_);
+    // Record the outcome so a waiter can tell a failed load from a pending one.
+    // A later retry that succeeds clears the flag.
+    load_failed_ = buffer_ == nullptr;
   }
   lock.unlock();
   cv_.notify_all();
@@ -150,8 +153,38 @@ int64_t DataLoader::DataFile::unload() {
 
 const char* DataLoader::DataFile::buffer() const {
   std::unique_lock<std::mutex> lock(mutex_);
-  cv_.wait(lock, [this] { return buffer_ != nullptr; });
+  // Wait for the load to resolve either way; a failed load leaves buffer_ null
+  // but sets load_failed_, so the waiter returns nullptr instead of hanging.
+  cv_.wait(lock, [this] { return buffer_ != nullptr || load_failed_; });
   return buffer_;
+}
+
+// ===========================================================================
+// LoadFailureLatch
+// ===========================================================================
+
+void DataLoader::LoadFailureLatch::reset() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  failed_ = false;
+  path_.clear();
+}
+
+void DataLoader::LoadFailureLatch::record(const std::string& path) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!failed_) {  // first failing file of the batch wins the message
+    failed_ = true;
+    path_ = path;
+  }
+}
+
+bool DataLoader::LoadFailureLatch::failed() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return failed_;
+}
+
+std::string DataLoader::LoadFailureLatch::path() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return path_;
 }
 
 // ===========================================================================
@@ -401,9 +434,14 @@ void DataLoader::FileManager::exit_prefetch_loop() {
 // WorkerThread
 // ===========================================================================
 
-DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
+DataLoader::WorkerThread::WorkerThread(FileManager* file_manager, ThreadTable* table,
+                                       LoadFailureLatch* load_failure, int id,
                                        const InputEncodingSpec& spec, DecodeTask task)
-    : file_manager_(file_manager), table_(table), id_(id), decoder_(spec, task) {
+    : file_manager_(file_manager),
+      table_(table),
+      load_failure_(load_failure),
+      id_(id),
+      decoder_(spec, task) {
   thread_ = std::thread(&WorkerThread::loop, this);
 }
 
@@ -456,7 +494,14 @@ void DataLoader::WorkerThread::do_work() {
   if (unit_.local_positions.empty()) return;
 
   DataFile* file = unit_.file;
-  const char* buf = file->buffer();  // blocks until loaded
+  const char* buf = file->buffer();  // blocks until the load resolves
+  if (!buf) {
+    // The body could not be read (deleted or truncated under the reader). Latch
+    // it and leave this unit's rows untouched; load_batch raises on the caller's
+    // thread rather than letting the wait above hang forever.
+    load_failure_->record(file->path());
+    return;
+  }
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
     // Each local position is a flat (game, turn) sample index within the file.
@@ -471,11 +516,12 @@ void DataLoader::WorkerThread::do_work() {
 // WorkManager
 // ===========================================================================
 
-DataLoader::WorkManager::WorkManager(FileManager* file_manager, int num_threads,
-                                     const InputEncodingSpec& spec, DecodeTask task)
+DataLoader::WorkManager::WorkManager(FileManager* file_manager, LoadFailureLatch* load_failure,
+                                     int num_threads, const InputEncodingSpec& spec,
+                                     DecodeTask task)
     : thread_table_(num_threads) {
   for (int i = 0; i < num_threads; ++i) {
-    workers_.push_back(new WorkerThread(file_manager, &thread_table_, i, spec, task));
+    workers_.push_back(new WorkerThread(file_manager, &thread_table_, load_failure, i, spec, task));
   }
 }
 
@@ -631,8 +677,8 @@ DataLoader::DataLoader(const Params& params)
     : params_(params),
       file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1),
                     params.task == DecodeTask::kMaxMovePerLane),
-      work_manager_(&file_manager_, std::max(params.num_worker_threads, 1), params.spec,
-                    params.task) {}
+      work_manager_(&file_manager_, &load_failure_, std::max(params.num_worker_threads, 1),
+                    params.spec, params.task) {}
 
 DataLoader::~DataLoader() = default;
 
@@ -682,9 +728,21 @@ int DataLoader::load_batch(float* output) {
     return 0;
   }
 
+  load_failure_.reset();
   file_manager_.prepare_work_units(work_units);
   work_manager_.process(work_units, epoch_config_, output);
   file_manager_.reset_prefetch_loop();
+
+  // A worker that could not read its file latched the path instead of blocking
+  // forever. Surface it as a clean error on this thread rather than returning a
+  // batch with unwritten rows.
+  if (load_failure_.failed()) {
+    epoch_active_ = false;
+    throw util::CleanException(
+      "DataLoader: could not read .slog body '{}' (deleted or truncated under the reader?); "
+      "aborting the epoch instead of blocking",
+      load_failure_.path());
+  }
 
   if (n_rows < epoch_config_.batch_size) {
     epoch_active_ = false;

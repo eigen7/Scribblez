@@ -148,7 +148,9 @@ class DataLoader {
     // Frees the buffer and returns the bytes freed, or 0 if it was not loaded.
     int64_t unload();
 
-    // Blocks until the file is loaded.
+    // Blocks until the file's load resolves, then returns its body -- or
+    // nullptr if the load failed (the file was unreadable). Never blocks
+    // forever on a failed load.
     const char* buffer() const;
 
     // The (game, turn) a flat position index in [0, num_positions()) stands
@@ -181,6 +183,29 @@ class DataLoader {
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
     char* buffer_ = nullptr;
+    // Set once a load() attempt has run and come back empty (open error, short
+    // read). Distinguishes "loaded and failed" from "not yet loaded" so a
+    // waiter in buffer() can give up instead of blocking on a body that will
+    // never arrive.
+    bool load_failed_ = false;
+  };
+
+  // Latches the first .slog whose body failed to load during a batch. A worker
+  // that finds its file unreadable records the path here and returns, leaving
+  // its rows untouched, so load_batch turns the failure into a clean error on
+  // the caller's thread rather than every party blocking forever on a load
+  // that cannot complete.
+  class LoadFailureLatch {
+   public:
+    void reset();
+    void record(const std::string& path);
+    bool failed() const;
+    std::string path() const;
+
+   private:
+    mutable std::mutex mutex_;
+    bool failed_ = false;
+    std::string path_;
   };
 
   // A batch of rows to decode from one file.
@@ -289,8 +314,8 @@ class DataLoader {
   // A persistent thread that decodes WorkUnits using a BlockDecoder.
   class WorkerThread {
    public:
-    WorkerThread(FileManager* file_manager, ThreadTable* table, int id,
-                 const InputEncodingSpec& spec, DecodeTask task);
+    WorkerThread(FileManager* file_manager, ThreadTable* table, LoadFailureLatch* load_failure,
+                 int id, const InputEncodingSpec& spec, DecodeTask task);
     ~WorkerThread();
 
     void quit();
@@ -302,6 +327,7 @@ class DataLoader {
 
     FileManager* file_manager_;
     ThreadTable* table_;
+    LoadFailureLatch* load_failure_;
     int id_;
 
     mutable std::mutex mutex_;
@@ -319,8 +345,8 @@ class DataLoader {
   // Distributes WorkUnits to a pool of WorkerThreads.
   class WorkManager {
    public:
-    WorkManager(FileManager* file_manager, int num_threads, const InputEncodingSpec& spec,
-                DecodeTask task);
+    WorkManager(FileManager* file_manager, LoadFailureLatch* load_failure, int num_threads,
+                const InputEncodingSpec& spec, DecodeTask task);
     ~WorkManager();
 
     // Blocks until every unit is complete.
@@ -371,6 +397,10 @@ class DataLoader {
  private:
   Params params_;
   FileManager file_manager_;
+  // Declared before work_manager_ so it outlives the worker threads that write
+  // to it (members destruct in reverse order: work_manager_ joins its workers
+  // first).
+  LoadFailureLatch load_failure_;
   WorkManager work_manager_;
   SamplingManager sampling_manager_;
 

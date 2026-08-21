@@ -9,6 +9,7 @@ then exercise:
 """
 
 import subprocess
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -167,6 +168,50 @@ class TestStreamingDataset:
         for b1, b2 in zip(batches, batches2, strict=True):
             for key in b1:
                 np.testing.assert_array_equal(b1[key].numpy(), b2[key].numpy())
+
+
+class TestUnreadableFile:
+    def test_deleted_file_raises_not_hangs(self, tmp_path):
+        """A registered .slog that vanishes before its body is read must raise a
+        clean error, not wedge forever.
+
+        Regression guard for the deadlock where a failed body load left
+        DataFile::buffer() waiting on `buffer_ != nullptr` forever, hanging the
+        decode worker (and load_batch) indefinitely. On a live generational tag
+        a window file can be evicted or rewritten between when SlogDataset reads
+        the headers and when the loader lazily loads the bodies, so this is a
+        real path, not a contrived one. The iteration runs on a watchdog thread
+        so a regressed hang fails the test instead of blocking the suite.
+        """
+        slogs = generate_test_slogs(tmp_path)
+        assert len(slogs) >= 2
+
+        ds = SlogDataset(
+            tmp_path, post_move=True, apply_symmetry=True, memory_budget=256 * 1024 * 1024
+        )
+        # Remove one registered file out from under the loader before iterating;
+        # its header (and thus its rows) were already registered at construction.
+        slogs[0].unlink()
+
+        result: dict[str, object] = {}
+
+        def drain():
+            try:
+                # turns_per_game=0 touches every game of every file, so the
+                # deleted file is certainly demanded.
+                for _ in ds.iter_batches(batch_size=4, seed=1, turns_per_game=0):
+                    pass
+                result["ok"] = True
+            except Exception as e:  # noqa: BLE001 -- the test asserts on the type
+                result["error"] = e
+
+        worker = threading.Thread(target=drain, daemon=True)
+        worker.start()
+        worker.join(timeout=60)
+
+        assert not worker.is_alive(), "load_batch hung on an unreadable file (deadlock regressed)"
+        assert "ok" not in result, "iteration unexpectedly succeeded over a deleted file"
+        assert isinstance(result.get("error"), OSError)
 
 
 def test_slice_row_batch_matches_dataset():

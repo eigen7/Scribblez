@@ -1036,10 +1036,21 @@ class NativeDataLoader:
         )
 
     def load_batch(self) -> np.ndarray | None:
-        """Load the next batch. Returns None when epoch is exhausted."""
+        """Load the next batch. Returns None when epoch is exhausted.
+
+        Raises OSError if a registered .slog became unreadable mid-epoch (the
+        native loader reports -1 rather than blocking forever on a load that
+        can never complete -- e.g. a window file deleted or truncated under the
+        reader); the specific file is named on stderr.
+        """
         buf = np.empty((self._batch_size, self._row_floats), dtype=np.float32)
         ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
         n = self._lib.scribblez_dl_load_batch(self._handle, ptr)
+        if n < 0:
+            raise OSError(
+                "DataLoader.load_batch failed: a registered .slog became unreadable "
+                "(deleted or truncated under the reader); see stderr for the file"
+            )
         if n == 0:
             return None
         if n < self._batch_size:
