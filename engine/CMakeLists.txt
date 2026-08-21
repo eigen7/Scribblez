@@ -60,6 +60,7 @@ add_library(scribblez_core STATIC
   src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
   src/agent/sim_agent.cpp
+  src/agent/weird_bot.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
   src/training/trajectory_position.cpp
@@ -375,6 +376,18 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_mset_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_mset_sim_agent)
+
+  # WeirdBotAgent: the diagnostic leave-forcing self-play bot. Checks the
+  # forcing path (T lands on its best cross-check square), the fallback path
+  # (no legal forcing placement -> HastyBot's argmax), own-leave tracking across
+  # two moves, and the first-move (no leave) fallback. Gated on the NWL23 leaves
+  # the equity ranking and fallback both read; skips gracefully when absent.
+  add_executable(test_weird_bot tests/test_weird_bot.cpp)
+  target_link_libraries(test_weird_bot PRIVATE
+    scribblez_core Boost::program_options GTest::gtest_main)
+  target_compile_definitions(test_weird_bot PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+  gtest_discover_tests(test_weird_bot)
 
   # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
   # --results-file per-game JSON stream. Builds real agents through

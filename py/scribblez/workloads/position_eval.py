@@ -52,6 +52,12 @@ class PositionEvalParams:
         "play the face-up-leaves variant (docs/roadmap.md) in self-play generation AND "
         "match eval, so the model trains and is measured under one information condition",
     )
+    weirdbot_generation: bool = param(
+        False,
+        "generate the diagnostic WeirdBot corpus: put the leave-forcing WeirdBot on both "
+        "self-play seats instead of HastyBot, making the opponent-leave-letter x cross-check "
+        "conjunction the dominant training signal; off leaves generation unchanged",
+    )
     # Match eval (the match_eval role; docs/roadmap.md A1).
     match_every_generations: int = param(
         5, "match-eval cadence: play a match for every Nth exported generation; 0 disables"

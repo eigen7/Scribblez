@@ -9,6 +9,7 @@
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
 #include "agent/sim_agent.h"
+#include "agent/weird_bot.h"
 #include "util/exception.h"
 
 #include <boost/algorithm/string.hpp>
@@ -41,7 +42,7 @@ po::options_description universal_player_options(std::string& type_str, std::str
   desc.add_options()                                         //
     ("type", po::value<std::string>(&type_str)->required(),  //
      "player type: greedy | human | hastybot | hastybot-endgame | mset-sim | neural | "
-     "neural-sim | sim")                     //
+     "neural-sim | sim | weirdbot")          //
     ("name", po::value<std::string>(&name),  //
      "display name shown in the UI");
   return desc;
@@ -76,10 +77,10 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   out.type = boost::to_lower_copy(type_str);
   if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
       out.type != "hastybot-endgame" && out.type != "mset-sim" && out.type != "neural" &&
-      out.type != "neural-sim" && out.type != "sim") {
+      out.type != "neural-sim" && out.type != "sim" && out.type != "weirdbot") {
     throw util::CleanException(
       "bad --player spec \"{}\": unknown type '{}' (expected greedy, human, hastybot, "
-      "hastybot-endgame, mset-sim, neural, neural-sim, or sim)",
+      "hastybot-endgame, mset-sim, neural, neural-sim, sim, or weirdbot)",
       spec, type_str);
   }
   return out;
@@ -110,6 +111,9 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
   if (spec.type == "sim") {
     return SimAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
+  if (spec.type == "weirdbot") {
+    return WeirdBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
+  }
   if (spec.type == "human") {
     return HumanWebAgent::from_spec(spec.remaining_tokens, thread_id, name, opp_name);
   }
@@ -128,6 +132,7 @@ std::string PlayerSpec::display_name() const {
   if (type == "neural") return "Neural";
   if (type == "neural-sim") return "NeuralSim";
   if (type == "sim") return "SimBot";
+  if (type == "weirdbot") return "WeirdBot";
   return type;  // unknown types: fall back to the literal type string
 }
 
@@ -168,6 +173,7 @@ std::string PlayerFactory::all_player_types_help() {
   o << "--player \"--type=neural [options]\"\n" << NeuralAgent::options_help() << "\n";
   o << "--player \"--type=neural-sim [options]\"\n" << NeuralSimAgent::options_help() << "\n";
   o << "--player \"--type=sim [options]\"\n" << SimAgent::options_help() << "\n";
+  o << "--player \"--type=weirdbot [options]\"\n" << WeirdBotAgent::options_help() << "\n";
   o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
   std::string type_str, name;  // scratch binding targets; never read here
   o << "Universal --player options (parsed by the factory before dispatch):\n"
