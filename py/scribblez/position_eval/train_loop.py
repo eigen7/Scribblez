@@ -41,6 +41,7 @@ class LossConfig:
     lambda_win_placement: float
     huber_delta_mean: float
     huber_delta_std: float
+    placement_pos_weight: float
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -51,6 +52,7 @@ class LossConfig:
             args.lambda_win_placement,
             args.huber_delta_mean,
             args.huber_delta_std,
+            args.placement_pos_weight,
         )
 
 
@@ -131,6 +133,7 @@ def run_epoch(
             lambda_win_placement=loss_cfg.lambda_win_placement,
             huber_delta_mean=loss_cfg.huber_delta_mean,
             huber_delta_std=loss_cfg.huber_delta_std,
+            placement_pos_weight=loss_cfg.placement_pos_weight,
         )
         optimizer.zero_grad()
         losses["total"].backward()
