@@ -25,6 +25,9 @@ from scribblez.sim_evidence.sobs import (
 # This checkout's own binaries and data, not the primary checkout's -- see the
 # note in test_move_set_eval_targets.py.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+# Frozen .gcg fixtures. Live position sets under positions/ are regenerated
+# and renamed; a test must never read one.
+TEST_DATA = _REPO_ROOT / "engine" / "tests" / "data"
 SIM_OBS_TOOL = _REPO_ROOT / "target" / "engine" / "sim_obs_tool"
 SLOG_WRITER = _REPO_ROOT / "target" / "engine" / "test_slog_writer"
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
@@ -146,9 +149,7 @@ def test_gcg_sim_evidence_on_dataset_position():
         pytest.skip("HastyBot leave values not installed")
     from scribblez.ffi import gcg_sim_evidence
 
-    gcg = _REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset" / "pos-6.gcg"
-    if not gcg.exists():
-        pytest.skip("position-eval test dataset not present")
+    gcg = TEST_DATA / "postbingo-gave.gcg"
     records, played_rank = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, threads=4, seed=3)
     assert 1 <= len(records) <= 4
     assert -1 <= played_rank < len(records)

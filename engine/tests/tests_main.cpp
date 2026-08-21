@@ -5327,8 +5327,9 @@ TEST(MaxMovePerLane, TaskRow) {
 }
 
 // The trajectory pane's decision-point reading of a position-set .gcg
-// (training/trajectory_position.h): the exhibit position parses to the seat,
-// rack and known leave its README states, the board row is the open-leaves
+// (training/trajectory_position.h): the exhibit position (a frozen copy of
+// positions/NWL23/face-up-trajectory-set/egotize-lane.gcg) parses to the seat,
+// rack and known leave that set's README states, the board row is the open-leaves
 // arm's, the score differential is the mover's, and every legal move --
 // among them the recorded HastyBot play, E11 GAVE (through the A of INCASED,
 // so "E11 G.VE") -- carries a notation in the bundle. Requires the NWL23 KWG +
@@ -5338,8 +5339,7 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   using namespace scribblez;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-  const std::string gcg_path =
-    std::string(SCRIBBLEZ_POSITIONS_DIR) + "/NWL23/face-up-trajectory-set/egotize-lane.gcg";
+  const std::string gcg_path = std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/egotize-lane.gcg";
   if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
   Dictionary dict = Dictionary::load_kwg(kwg);
   HastyEquity::init(leaves, HastyEquity::default_peg_path());
