@@ -28,6 +28,7 @@ reader expects, not a property of the directory.
 | `egotize-lane.gcg` | decision point (`read_gcg_position`) | The same game one move earlier -- Hasty_1 to move with AEEGSTV, 440-387 -- as the trajectory pane reads it. |
 | `ole.gcg`, `violets.gcg` | post-move | Two unremarkable midgame positions; the trajectory generator's two-position `.gcg` set. |
 | `boreal.gcg` | post-move | Carries no `#RackN` pragma, which is what makes it the "a position set needs the mover's rack" rejection case. |
+| `pos09-gnu.gcg` | decision point (`read_gcg_position`) | Copied from `positions/NWL23/position-eval-test-dataset` pos-09: the opponent holds G and forcing G onto M7 forms GNU with the existing NU. `WeirdBot.ForcesGAtM7OnPos09` reads it to pin the forcing behaviour end to end on the real board. |
 | `masked-racks.gcg` | post-move | Carries partially-known `#Rack1`/`#Rack2` pragmas (`_CE__MR`); the position-eval encoder's arm round-trip. |
 
 All but `FOE.gcg` are frozen copies of positions that were live under
