@@ -66,14 +66,21 @@ class PositionEvalModel(nn.Module):
         num_blocks: int = 10,
         board_size: int = 15,
         lexicon_module: nn.Module | None = None,
+        use_film: bool = False,
     ):
         super().__init__()
         self.board_size = board_size
 
         # Shared conv trunk: stem + scalar injection + residual tower. An optional
         # compiled-lexicon tool is fused per-cell inside the trunk (both orientations).
+        # use_film makes the scalar/global-context injection multiplicative (FiLM).
         self.trunk = SpatialTrunk(
-            spatial_planes, scalar_size, trunk_channels, num_blocks, lexicon_module=lexicon_module
+            spatial_planes,
+            scalar_size,
+            trunk_channels,
+            num_blocks,
+            lexicon_module=lexicon_module,
+            use_film=use_film,
         )
 
         # --- Heads ---

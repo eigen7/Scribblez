@@ -35,6 +35,29 @@ Symbols used throughout:
 per-cell residual after the stem. That experiment is deprecated and is left out
 of the diagram.
 
+### FiLM conditioning (`use_film`)
+
+By default every route from the non-spatial (scalar / board-global) features to
+the board features is an **addition** — the stem injection (`x + s`) and each
+global-pooling block's per-channel bias. Addition can only *shift* a cell's
+features by a scalar-derived amount; it cannot *gate* one feature on another. So
+the trunk has no way to say "the opponent holds letter L, so attend to L's
+cross-check plane" — the multiplicative conjunction of a scalar and a board
+feature is not in its vocabulary. Measured consequence: the face-up-leaves model
+reads cross-check masks through a fixed tile-frequency prior and ignores the
+opponent's leave (see `py/scripts/position_eval/probe_crosscheck_binding.py`).
+
+`use_film` adds the missing multiplicative half at both injection sites
+([FiLM](https://arxiv.org/abs/1709.07871)): alongside the additive term `β` the
+scalars emit a per-channel gain `γ`, applied as `(1 + γ) · x + β`. The `γ`
+projections are **zero-initialised**, so a FiLM trunk starts numerically
+identical to the additive one and is a strict superset of it — training departs
+from the additive solution only as the multiplicative capacity earns its way in.
+The returned scalar projection `s` is the `β` half, unchanged for the heads.
+
+`use_film` is off by default and currently wired only through
+`PositionEvalModel`; the diagram shows the additive (default) form.
+
 ### Tower blocks
 
 ![ResBlock and GlobalPoolingResBlock internals](images/arch_tower_blocks.svg)
