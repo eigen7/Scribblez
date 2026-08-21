@@ -677,7 +677,15 @@ int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move,
 
 int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
   if (!h || !output) return 0;
-  return h->loader.load_batch(output);
+  // load_batch throws when a window file becomes unreadable mid-epoch rather
+  // than blocking forever. Translate that into a negative sentinel the Python
+  // wrapper raises on.
+  try {
+    return h->loader.load_batch(output);
+  } catch (const std::exception& e) {
+    std::cerr << "scribblez_dl_load_batch: " << e.what() << "\n";
+    return -1;
+  }
 }
 
 int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
