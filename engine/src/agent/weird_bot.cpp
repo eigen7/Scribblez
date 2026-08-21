@@ -62,9 +62,9 @@ struct ForcingTarget {
 // lowest (r, c) then orientation, achieved by iterating (r, c, transposed) in
 // ascending order and replacing only on a strictly higher score.
 //
-// Cross-checks are read from the board's movegen cache (ensure_movegen_caches
-// must have run); the private per-square cross_check_at() the cache is built
-// from is not callable here, but the cached array holds the identical values.
+// Cross-checks are read straight from Board::cross_check_at(), which computes a
+// square's cross-check on demand from the live board; ensure_movegen_caches()
+// must have run first to bind the dictionary it reads.
 ForcingTarget best_cross_check_square(const Board& board, Tile t) {
   ForcingTarget best;
   int best_score = 0;
@@ -76,7 +76,7 @@ ForcingTarget best_cross_check_square(const Board& board, Tile t) {
         // View coordinates: transposed swaps row and column (see Board).
         const int vr = transposed ? c : r;
         const int vc = transposed ? r : c;
-        const CrossCheck& cc = board.cross_checks(transposed)[vr * BOARD_SIZE + vc];
+        const CrossCheck cc = board.cross_check_at(transposed, vr, vc);
         if (!cc.has_neighbor) continue;
         if ((cc.mask & (1u << t.index())) == 0) continue;
         const int score = cross_word_score(board, r, c, cc, t.value());
