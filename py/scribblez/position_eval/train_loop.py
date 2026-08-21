@@ -35,6 +35,7 @@ LOSS_KEYS = (
 class LossConfig:
     """Weights and Huber transition points for the combined post-move loss."""
 
+    lambda_wld: float
     lambda_sd: float
     lambda_next_placement: float
     lambda_win_placement: float
@@ -44,6 +45,7 @@ class LossConfig:
     @classmethod
     def from_args(cls, args) -> LossConfig:
         return cls(
+            args.lambda_wld,
             args.lambda_sd,
             args.lambda_next_placement,
             args.lambda_win_placement,
@@ -123,6 +125,7 @@ def run_epoch(
         losses = compute_loss(
             outputs,
             targets,
+            lambda_wld=loss_cfg.lambda_wld,
             lambda_sd=loss_cfg.lambda_sd,
             lambda_next_placement=loss_cfg.lambda_next_placement,
             lambda_win_placement=loss_cfg.lambda_win_placement,

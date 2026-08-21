@@ -172,6 +172,7 @@ class PositionEvalModel(nn.Module):
 def compute_loss(
     outputs: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
+    lambda_wld: float = 1.0,
     lambda_sd: float = 1.0,
     lambda_next_placement: float = 0.5,
     lambda_win_placement: float = 0.5,
@@ -187,6 +188,9 @@ def compute_loss(
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
                  final differential, and a (B,15,15) binary mask per
                  MASK_HEAD_NAMES entry.
+        lambda_wld: weight applied to the WLD (value) loss. 1.0 in normal
+                 training; drop it to isolate the other heads (a diagnostic that
+                 leaves the value head untrained).
         lambda_next_placement: weight applied to each of the two marginal
                  placement losses (opp and self).
         lambda_win_placement: weight applied to each of the two win-placement
@@ -223,7 +227,7 @@ def compute_loss(
     }
 
     total = (
-        loss_wld
+        lambda_wld * loss_wld
         + lambda_sd * loss_sd
         + lambda_next_placement
         * (mask_losses["opp_next_placement"] + mask_losses["self_next_placement"])

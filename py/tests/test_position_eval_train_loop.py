@@ -6,10 +6,11 @@ handling without the real trunk or the C++ data layout.
 """
 
 import torch
-from scribblez.position_eval.model import MASK_HEAD_NAMES
+from scribblez.position_eval.model import MASK_HEAD_NAMES, compute_loss
 from scribblez.position_eval.train_loop import EpochResult, LossConfig, run_epoch
 
 _LOSS_CFG = LossConfig(
+    lambda_wld=1.0,
     lambda_sd=0.004,
     lambda_next_placement=0.5,
     lambda_win_placement=0.5,
@@ -96,3 +97,18 @@ def test_run_epoch_leaves_lr_untouched_without_lr_fn():
     opt = torch.optim.SGD(model.parameters(), lr=0.123)
     run_epoch(model, opt, [_batch()], _CPU, _LOSS_CFG)
     assert opt.param_groups[0]["lr"] == 0.123
+
+
+def test_lambda_wld_scales_the_wld_term_out_of_the_total():
+    """lambda_wld weights the WLD loss in the total (the diagnostic that isolates
+    the other heads sets it to 0): total(lambda_wld=0) == total(lambda_wld=1)
+    minus exactly the wld term, and the per-head wld loss itself is unweighted."""
+    torch.manual_seed(0)
+    model = _StubModel()
+    batch = _batch()
+    out = model(batch["input_spatial"], batch["input_scalar"])
+    targets = {k: batch[k] for k in ["wld", "score_diff", *MASK_HEAD_NAMES]}
+    on = compute_loss(out, targets, lambda_wld=1.0)
+    off = compute_loss(out, targets, lambda_wld=0.0)
+    assert torch.isclose(off["total"], on["total"] - on["wld"])
+    assert torch.equal(off["wld"], on["wld"])  # the reported head loss is unweighted

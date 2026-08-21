@@ -359,7 +359,7 @@ def run(ctx: WorkerContext) -> int:
     db.write_loss_weights(
         conn,
         {
-            "loss_wld": 1.0,
+            "loss_wld": params.lambda_wld,
             "loss_score_diff": params.lambda_sd,
             "loss_opp_next_placement": params.lambda_next_placement,
             "loss_self_next_placement": params.lambda_next_placement,
