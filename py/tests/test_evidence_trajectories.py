@@ -374,9 +374,9 @@ def test_sobs_flag_rejects_full_sweep():
 
 # --- the .gcg front-end (position sets) ---
 
-POSITION_EVAL_SET = (
-    Path(__file__).resolve().parents[2] / "positions" / "NWL23" / "position-eval-test-dataset"
-)
+# Frozen .gcg fixtures. Live position sets under positions/ are regenerated and
+# renamed; a test must never read one.
+TEST_DATA = Path(__file__).resolve().parents[2] / "engine" / "tests" / "data"
 
 
 def _as_position(src: Path, dst: Path) -> int:
@@ -400,8 +400,8 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
     as the .slog path, and existing outputs skipped on a rerun."""
     set_dir = tmp_path / "set"
     set_dir.mkdir()
-    names = ("pos-1", "pos-2")
-    turns = {n: _as_position(POSITION_EVAL_SET / f"{n}.gcg", set_dir / f"{n}.gcg") for n in names}
+    names = ("ole", "violets")
+    turns = {n: _as_position(TEST_DATA / f"{n}.gcg", set_dir / f"{n}.gcg") for n in names}
     out = tmp_path / "sobs"
     cmd = [
         str(TRAJECTORY_GENERATOR),
@@ -436,7 +436,7 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
     r = subprocess.run(cmd + [f"--slog-dir={traj_corpus.dir}"], capture_output=True, text=True)
     assert r.returncode != 0 and "not both" in r.stderr
     # A file without the mover's rack pragma is refused by name, before any sim.
-    (set_dir / "norack.gcg").write_text((POSITION_EVAL_SET / "pos-3.gcg").read_text())
+    (set_dir / "norack.gcg").write_text((TEST_DATA / "boreal.gcg").read_text())
     r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode != 0 and "norack.gcg" in r.stderr and "#Rack" in r.stderr
 
@@ -487,7 +487,6 @@ def test_position_set_cache_regenerates_only_stale_or_missing(tmp_path, monkeypa
 
 # --- the trajectory pane's model side (scribblez.evidence.trajectory_view) ---
 
-TRAJECTORY_SET = POSITION_EVAL_SET.parent / "face-up-trajectory-set"
 KWG = Path("/workspace/mount/lexica/NWL23.kwg")
 
 
@@ -500,7 +499,7 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
         pytest.skip("NWL23 lexicon / leaves not installed")
     from scribblez.ffi import gcg_position_board_json, gcg_position_inputs
 
-    text = (TRAJECTORY_SET / "egotize-lane.gcg").read_text()
+    text = (TEST_DATA / "egotize-lane.gcg").read_text()
     inputs = gcg_position_inputs(
         text, contingent_features=False, opp_leave_input=True, spatial_planes=85, scalar_size=163
     )
@@ -553,8 +552,8 @@ def gcg_set(traj_corpus, tmp_path_factory) -> SimpleNamespace:
     """A two-position .gcg set with trajectory sidecars from the fixture
     student (gcg mode, 8 rollouts)."""
     set_dir = tmp_path_factory.mktemp("gcgset")
-    for name in ("pos-1", "pos-2"):
-        _as_position(POSITION_EVAL_SET / f"{name}.gcg", set_dir / f"{name}.gcg")
+    for name in ("ole", "violets"):
+        _as_position(TEST_DATA / f"{name}.gcg", set_dir / f"{name}.gcg")
     out = tmp_path_factory.mktemp("gcgset_sobs")
     r = subprocess.run(
         [

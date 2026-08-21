@@ -7,6 +7,8 @@ The dashboard serves models of every arm from one session, so encoding under
 the session's arm and slicing was how a face-up-leaves model came to read
 contingent scalars in its opponent-leave block."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from scribblez.ffi import (
@@ -19,14 +21,14 @@ from scribblez.ffi import (
 )
 from scribblez.position_eval import analysis
 
-_GCG = analysis.DEFAULT_DATASET / "pos-8.gcg"
+# A frozen .gcg fixture. Live position sets under positions/ are regenerated
+# and renamed; a test must never read one.
+_GCG = Path(__file__).resolve().parents[2] / "engine" / "tests" / "data" / "masked-racks.gcg"
 
 
 def _text() -> str:
-    """The position's GCG, or a skip when the dataset or the lexicon (which the
-    session needs) is unavailable."""
-    if not _GCG.exists():
-        pytest.skip("position-evaluation dataset unavailable")
+    """The position's GCG, or a skip when the lexicon (which the session needs)
+    is unavailable."""
     try:
         session_input_arm()
     except OSError:

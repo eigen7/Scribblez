@@ -276,10 +276,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
   # Point the tests at the container's lexicon mount (populated by
   # setup_wizard.py) so they cross-validate against the real GADDAG when it is
-  # installed (the .kwg is not committed; the tests skip gracefully if absent).
+  # installed (the .kwg is not committed; the tests skip gracefully if absent),
+  # and at tests/data -- the frozen fixture corpus every data-reading test uses.
   target_compile_definitions(scribblez_tests PRIVATE
     SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_POSITIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../positions")
+    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(scribblez_tests)
 
   # GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction
@@ -289,12 +290,13 @@ if(SCRIBBLEZ_BUILD_TESTS)
   gtest_discover_tests(test_gcg_reader)
 
   # Monte-Carlo ground truth under the two leave conditions (hidden vs
-  # face-up); gated on the lexicon mount like scribblez_tests.
+  # face-up); reads its position from tests/data and is gated on the lexicon
+  # mount like scribblez_tests.
   add_executable(test_monte_carlo_sim tests/test_monte_carlo_sim.cpp)
   target_link_libraries(test_monte_carlo_sim PRIVATE scribblez_core Boost::json GTest::gtest_main)
   target_compile_definitions(test_monte_carlo_sim PRIVATE
     SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_POSITIONS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../positions")
+    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_monte_carlo_sim)
 
   # Endgame solver tests: Board make/unmake round-trips and EndgameSolver
