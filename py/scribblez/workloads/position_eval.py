@@ -121,6 +121,11 @@ class PositionEvalParams:
     lambda_sd: float = param(0.0002, "score-diff loss weight")
     lambda_next_placement: float = param(0.5, "marginal placement loss weight (opp and self)")
     lambda_win_placement: float = param(0.5, "win-placement conjunction loss weight (opp and self)")
+    placement_pos_weight: float = param(
+        1.0,
+        "BCE pos_weight for the placement heads; >1 up-weights the sparse occupied "
+        "cells (a diagnostic that trades calibration for magnitude)",
+    )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 

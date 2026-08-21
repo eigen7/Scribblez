@@ -16,6 +16,7 @@ _LOSS_CFG = LossConfig(
     lambda_win_placement=0.5,
     huber_delta_mean=10.0,
     huber_delta_std=10.0,
+    placement_pos_weight=1.0,
 )
 _CPU = torch.device("cpu")
 
@@ -97,6 +98,25 @@ def test_run_epoch_leaves_lr_untouched_without_lr_fn():
     opt = torch.optim.SGD(model.parameters(), lr=0.123)
     run_epoch(model, opt, [_batch()], _CPU, _LOSS_CFG)
     assert opt.param_groups[0]["lr"] == 0.123
+
+
+def test_placement_pos_weight_upweights_occupied_cells():
+    """placement_pos_weight > 1 raises each placement head's loss when the target
+    has occupied (1) cells and leaves an all-zero-target head untouched -- pinning
+    that it acts as a BCE pos_weight on the target-1 cells only."""
+    torch.manual_seed(0)
+    model = _StubModel()
+    batch = _batch()
+    out = model(batch["input_spatial"], batch["input_scalar"])
+    targets = {k: batch[k] for k in ["wld", "score_diff", *MASK_HEAD_NAMES]}
+    plain = compute_loss(out, targets, placement_pos_weight=1.0)
+    weighted = compute_loss(out, targets, placement_pos_weight=5.0)
+    for name in MASK_HEAD_NAMES:
+        has_pos = targets[name].sum() > 0
+        if has_pos:
+            assert weighted[name] > plain[name], f"{name} should grow with pos_weight"
+        else:
+            assert torch.isclose(weighted[name], plain[name]), f"{name} has no positives"
 
 
 def test_lambda_wld_scales_the_wld_term_out_of_the_total():

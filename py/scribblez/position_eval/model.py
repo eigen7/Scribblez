@@ -178,6 +178,7 @@ def compute_loss(
     lambda_win_placement: float = 0.5,
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
+    placement_pos_weight: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
@@ -197,6 +198,11 @@ def compute_loss(
                  conjunction losses (opp and self).
         huber_delta_mean: Huber transition point (points) for the mean.
         huber_delta_std: Huber transition point (points) for the std.
+        placement_pos_weight: BCE pos_weight for the placement-mask heads. 1.0 is
+                 the ordinary (calibrated) loss; >1 up-weights the sparse
+                 target-1 cells so a rare high-value square is not drowned by the
+                 ~98% empty cells -- at the cost of calibration, so it is a
+                 diagnostic knob, not a deployable default.
 
     Returns:
         Dict with "total" plus one entry per head loss.
@@ -220,9 +226,18 @@ def compute_loss(
 
     # Placement-mask heads: binary cross-entropy per cell, the marginals
     # weighted by lambda_next_placement and the conjunctions by
-    # lambda_win_placement.
+    # lambda_win_placement. placement_pos_weight optionally up-weights the
+    # target-1 cells (a scalar tensor on the logits' device broadcasts over the
+    # board); None leaves BCE calibrated.
+    pos_weight = (
+        torch.tensor(placement_pos_weight, device=outputs[MASK_HEAD_NAMES[0]].device)
+        if placement_pos_weight != 1.0
+        else None
+    )
     mask_losses = {
-        name: F.binary_cross_entropy_with_logits(outputs[name], targets[name])
+        name: F.binary_cross_entropy_with_logits(
+            outputs[name], targets[name], pos_weight=pos_weight
+        )
         for name in MASK_HEAD_NAMES
     }
 
