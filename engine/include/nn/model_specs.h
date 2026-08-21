@@ -200,8 +200,7 @@ struct VersionRequirement {
 };
 
 // Both families consume board rows, so both gate on the board-row encoding
-// version. Absent reads as 0, the version at the entry's introduction, so
-// existing checkpoints load.
+// version. Absent reads as 0.
 inline constexpr VersionRequirement kInputEncodingRequirement = {"input_encoding_version",
                                                                  kInputEncodingVersion, 0};
 

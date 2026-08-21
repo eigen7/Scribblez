@@ -19,8 +19,8 @@
 //     kOppPlacement   the same for the opponent, so the two together encode the
 //                     last two plies.
 //     kCrossChecks    horizontal then vertical: plane L marks empty squares
-//                     where placing L fuses with a neighbor along that axis and
-//                     satisfies the lexicon's cross-check mask.
+//                     where placing L satisfies the lexicon's cross-check mask
+//                     along that axis.
 //     kContingent     the contingent-draw potential maps -- best /
 //                     draw-weighted / rack-alone next-turn plays painted onto
 //                     their placed cells (see contingent_map.h).
@@ -49,6 +49,8 @@
 //
 // The board is invariant under the diagonal flip (r,c) -> (c,r), so
 // `apply_flip` transposes every spatial plane and leaves the scalars alone.
+// The flip also exchanges the axes, so the kCrossChecks halves swap as they
+// transpose -- the only block whose contents name an axis.
 
 namespace scribblez {
 
@@ -78,7 +80,9 @@ struct InputEncodingSpec {
 // where the engine-side loader rejects a stale model instead of silently
 // feeding it off-distribution rows. Absent in exports predating the entry,
 // which read as version 0 -- the version at the entry's introduction.
-inline constexpr int kInputEncodingVersion = 0;
+//
+//   1: cross-check planes bug fixes
+inline constexpr int kInputEncodingVersion = 1;
 
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
