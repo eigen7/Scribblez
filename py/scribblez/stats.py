@@ -12,11 +12,6 @@ cancels out of the pair score. The unit of observation is therefore the pair,
 and the pentanomial pair-score distribution -- not the per-game trinomial --
 is what the variance estimate must come from, because the two games of a pair
 are correlated.
-
-Matches are a fixed number of pairs. An earlier version stopped early on a
-sequential test (SPRT) once the pairs settled a hypothesis; the games it saved
-were not worth what optional stopping did to the readout, since a match that
-stops on crossing a boundary reports a win rate biased away from the null.
 """
 
 import math

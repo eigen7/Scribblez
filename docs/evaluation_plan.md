@@ -28,11 +28,8 @@ against a fixed baseline.
 ([harness.py](../py/scribblez/match_eval/harness.py) over the engine's
 `--paired` mode, `scribblez/stats.py`): paired seeds and racks across arms — the
 CRN idea at the match level — and a fixed pair count per match, so experiments
-do not reinvent it. Matches are deliberately not stopped early on a sequential
-test: the games that saves are cheap, and a match that stops on crossing a
-decision boundary reports a win rate biased away from the null, which is the
-one number the readout exists to show. The `match_arms` workload runs N named player-0 specs against one
-fixed opponent under a shared base seed.
+do not reinvent it. The `match_arms` workload runs N named player-0 specs
+against one fixed opponent under a shared base seed.
 
 Two known gaps in that machinery, both worth closing before the final readouts:
 

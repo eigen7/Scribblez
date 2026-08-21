@@ -294,9 +294,8 @@ def _dashed_hline(fig, location: float, color: str = "#888888"):
 
 def match_eval_grid(conn):
     """The Match tab: the win-rate curve against the fixed opponent -- mean
-    pair score with its CI band, the 0.5 line dashed. Every generation's match
-    is the same fixed number of pairs, so the points are directly comparable.
-    None when no match has been recorded."""
+    pair score with its CI band, the 0.5 line dashed. None when no match has
+    been recorded."""
     rows = db.read_all_match_eval(conn)
     if not rows:
         return None

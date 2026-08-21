@@ -150,8 +150,6 @@ _MODEL = Path("/models/model_epoch_0003.onnx")
 
 
 def test_play_match_plays_the_whole_fixed_budget(monkeypatch):
-    # One round of match_pairs off the tag's base seed, whatever the result:
-    # a sweep for the model gets the same number of games as a close match.
     calls = []
 
     def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):

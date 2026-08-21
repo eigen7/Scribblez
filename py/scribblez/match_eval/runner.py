@@ -67,9 +67,8 @@ class MatchOutcome:
 
 
 def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
-    """Play one generation's match: match_pairs mirrored pairs, every one of
-    them, so the readout is a fixed-length measurement rather than one whose
-    length depends on the result it found."""
+    """Play one generation's match: match_pairs mirrored pairs off the tag's
+    base seed."""
     p = ctx.params
     result = harness.play_round(
         _model_player_spec(model),
