@@ -81,8 +81,6 @@ CREATE TABLE IF NOT EXISTS match_eval (
   pair_counts TEXT,             -- JSON [5]: pentanomial pair-score counts
   score REAL,                   -- mean pair score (win rate, draws at 0.5)
   ci_half_width REAL,           -- pointwise CI half-width around score
-  llr REAL, llr_lower REAL, llr_upper REAL,
-  decision TEXT,                -- 'H0' | 'H1' | 'continue' (= budget-capped)
   elapsed_s REAL
 );
 CREATE TABLE IF NOT EXISTS match_arm (
@@ -338,14 +336,13 @@ def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
     conn.execute(
         "INSERT INTO match_eval "
         "(epoch, positions, opponent, games, wins, draws, losses, pair_counts, "
-        "score, ci_half_width, llr, llr_lower, llr_upper, decision, elapsed_s) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "score, ci_half_width, elapsed_s) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(epoch) DO UPDATE SET positions=excluded.positions, "
         "opponent=excluded.opponent, games=excluded.games, wins=excluded.wins, "
         "draws=excluded.draws, losses=excluded.losses, pair_counts=excluded.pair_counts, "
-        "score=excluded.score, ci_half_width=excluded.ci_half_width, llr=excluded.llr, "
-        "llr_lower=excluded.llr_lower, llr_upper=excluded.llr_upper, "
-        "decision=excluded.decision, elapsed_s=excluded.elapsed_s",
+        "score=excluded.score, ci_half_width=excluded.ci_half_width, "
+        "elapsed_s=excluded.elapsed_s",
         (
             epoch,
             int(record["positions"]),
@@ -357,10 +354,6 @@ def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
             json.dumps(record["pair_counts"]),
             float(record["score"]),
             float(record["ci_half_width"]),
-            float(record["llr"]),
-            float(record["llr_lower"]),
-            float(record["llr_upper"]),
-            record["decision"],
             float(record["elapsed_s"]),
         ),
     )

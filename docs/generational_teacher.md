@@ -82,7 +82,7 @@ comes first and automation comes later:
   tag's match_eval and eval curves that the dashboard already shows.
 - **Later: a policy.** Auto-promotion is a controller-side caller of the
   same function — e.g. a scheduler-tick policy "promote every Nth export
-  whose match_eval sequential test passed," with its knobs as params or
+  whose match_eval win rate clears a threshold," with its knobs as params or
   live controls. Nothing in the promotion path may assume a human is
   behind it: validation must be complete (no "the operator surely
   checked"), the function idempotent under retry (epoch bump guarded by

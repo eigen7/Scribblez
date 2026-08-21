@@ -21,15 +21,15 @@ catches:
 | Match play | Downstream utility | Calibrated but not *useful* for move selection |
 
 All four are built and render on the dashboard. Match play is the `match_eval`
-worker, which plays sequential-test-checked paired matches for each exported
-checkpoint against a fixed baseline.
+worker, which plays a fixed-length paired match for each exported checkpoint
+against a fixed baseline.
 
 **Match discipline** (A1/E2) lives in the harness
 ([harness.py](../py/scribblez/match_eval/harness.py) over the engine's
 `--paired` mode, `scribblez/stats.py`): paired seeds and racks across arms — the
-CRN idea at the match level — and sequential stopping, so experiments do not
-reinvent it. The `match_arms` workload runs N named player-0 specs against one
-fixed opponent under a shared base seed.
+CRN idea at the match level — and a fixed pair count per match, so experiments
+do not reinvent it. The `match_arms` workload runs N named player-0 specs
+against one fixed opponent under a shared base seed.
 
 Two known gaps in that machinery, both worth closing before the final readouts:
 
