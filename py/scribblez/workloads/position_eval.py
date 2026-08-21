@@ -59,14 +59,9 @@ class PositionEvalParams:
     match_opponent: str = param(
         "--type=hastybot-endgame", "the fixed opponent's --player spec, e.g. --type=sim"
     )
-    match_round_pairs: int = param(
-        25, "mirrored game pairs per play_game invocation, between sequential-test checks"
+    match_pairs: int = param(
+        200, "mirrored game pairs per generation's match; every match plays all of them"
     )
-    match_max_pairs: int = param(
-        200, "pair budget per generation's match when the sequential test does not decide"
-    )
-    match_p0: float = param(0.50, "sequential test H0: expected pair score (win rate) vs opponent")
-    match_p1: float = param(0.55, "sequential test H1: expected pair score (win rate) vs opponent")
     match_seed: int = param(
         1,
         "base game seed for matches; fixed per tag so every generation faces identical deals "

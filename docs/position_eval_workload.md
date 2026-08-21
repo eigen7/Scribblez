@@ -46,7 +46,7 @@ pairs to the tag's data store.
 |---|---|---|---|---|
 | `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
 | `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, write dashboard.db |
-| `match_eval` | singleton | local + ssh (needs a GPU) | — | play sequential-test-checked paired matches for the checkpoint the controller assigns it, against a fixed opponent (position_eval only; docs/roadmap.md A1) |
+| `match_eval` | singleton | local + ssh (needs a GPU) | — | play a fixed-length paired match for the checkpoint the controller assigns it, against a fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only
 consumes exported ONNX checkpoints, so the training loop is never blocked. A
@@ -138,7 +138,7 @@ controller picks the newest export with no match row
         ▼  put in the slot's inbox (symlink locally, a push over ssh)
 data/match_inbox/<worker_id>/model_epoch_NNNN.onnx
         │
-        ▼  worker plays it: SPRT-checked paired rounds, then marks it .done
+        ▼  worker plays it: match_pairs paired games, then marks it .done
 data/match_results/gen_NNNNNN-<worker_id>.json
         │
         ▼  controller ingest: a match_eval row + match_* metrics, keyed by generation

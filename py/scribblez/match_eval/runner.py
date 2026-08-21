@@ -3,9 +3,9 @@
 A worker beside the trainer -- on this machine or on another one over ssh --
 that turns exported checkpoints into match-play readouts without blocking the
 training loop. Each cycle plays the model its inbox holds against the
-configured opponent through the match harness, letting the sequential test
-(scribblez.stats.sprt) stop the match as soon as the pairs settle it, or the
-pair budget cap it, and delivers the outcome as one small JSON.
+configured opponent through the match harness, over the same fixed number of
+mirrored pairs for every generation, and delivers the outcome as one small
+JSON.
 
 What to play and what the result means are the controller's business, not the
 worker's (match_eval/dispatch.py): it puts the model in the inbox and turns
@@ -27,7 +27,6 @@ from pathlib import Path
 from scribblez import stats
 from scribblez.match_eval import harness
 from scribblez.paths import DONE_SUFFIX, MATCH_RESULTS_DIR, ONNX_PREFIX, TagPaths
-from scribblez.stats import SprtResult
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
@@ -52,63 +51,37 @@ def _model_player_spec(onnx_path: Path) -> str:
     return f"--type=neural --model={onnx_path} --name=model"
 
 
-def _storable_llr(result: SprtResult) -> float:
-    """The LLR clamped to twice the decision bounds: a degenerate sweep has an
-    infinite LLR, which SQLite stores but JSON cannot carry to the dashboard,
-    and anything beyond the bounds means only 'decided' anyway."""
-    return max(min(result.llr, 2.0 * result.upper), 2.0 * result.lower)
-
-
 @dataclass(frozen=True)
 class MatchOutcome:
-    """One generation's finished match: the accumulated pentanomial pair
-    counts, the per-game W/D/L behind them, and the sequential test's state."""
+    """One generation's finished match: the pentanomial pair counts and the
+    per-game W/D/L behind them."""
 
     pair_counts: list[int]
     wins: int
     draws: int
     losses: int
-    sprt: SprtResult
 
     @property
     def games(self) -> int:
         return self.wins + self.draws + self.losses
 
 
-def _play_match(ctx: WorkerContext, gen: int, model: Path) -> MatchOutcome:
-    """Play one generation's match in SPRT-checked rounds."""
+def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
+    """Play one generation's match: match_pairs mirrored pairs, every one of
+    them, so the readout is a fixed-length measurement rather than one whose
+    length depends on the result it found."""
     p = ctx.params
-    results_file = ctx.tag_paths().work_dir(ctx.worker_id) / "match_results.jsonl"
-    counts = [0] * 5
-    wins = draws = losses = 0
-    pairs_done = 0
-    result = stats.sprt(counts, p.match_p0, p.match_p1)
-    while pairs_done < p.match_max_pairs:
-        num_pairs = min(p.match_round_pairs, p.match_max_pairs - pairs_done)
-        round_result = harness.play_round(
-            _model_player_spec(model),
-            p.match_opponent,
-            num_pairs=num_pairs,
-            threads=ctx.threads,
-            seed=p.match_seed + pairs_done,
-            results_file=results_file,
-            face_up_leaves=p.face_up_leaves,
-        )
-        for i, c in enumerate(stats.pair_score_counts(round_result.pair_scores)):
-            counts[i] += c
-        wins += round_result.wins
-        draws += round_result.draws
-        losses += round_result.losses
-        pairs_done += num_pairs
-        result = stats.sprt(counts, p.match_p0, p.match_p1)
-        mean, _ = stats.mean_and_variance(counts)
-        print(
-            f"[gen {gen}] {pairs_done} pairs: score={mean:.3f} "
-            f"llr={result.llr:+.2f} ({result.decision})"
-        )
-        if result.decision != "continue":
-            break
-    return MatchOutcome(counts, wins, draws, losses, result)
+    result = harness.play_round(
+        _model_player_spec(model),
+        p.match_opponent,
+        num_pairs=p.match_pairs,
+        threads=ctx.threads,
+        seed=p.match_seed,
+        results_file=ctx.tag_paths().work_dir(ctx.worker_id) / "match_results.jsonl",
+        face_up_leaves=p.face_up_leaves,
+    )
+    counts = stats.pair_score_counts(result.pair_scores)
+    return MatchOutcome(counts, result.wins, result.draws, result.losses)
 
 
 def match_record(ctx: WorkerContext, gen: int, outcome: MatchOutcome, elapsed: float) -> dict:
@@ -126,10 +99,6 @@ def match_record(ctx: WorkerContext, gen: int, outcome: MatchOutcome, elapsed: f
         "pair_counts": outcome.pair_counts,
         "score": mean,
         "ci_half_width": ci,
-        "llr": _storable_llr(outcome.sprt),
-        "llr_lower": outcome.sprt.lower,
-        "llr_upper": outcome.sprt.upper,
-        "decision": outcome.sprt.decision,
         "elapsed_s": elapsed,
     }
 
@@ -166,7 +135,7 @@ def run(ctx: WorkerContext) -> int:
             gen = paths.onnx_epoch(model)
             cycles += 1
             t0 = time.monotonic()
-            outcome = _play_match(ctx, gen, model)
+            outcome = _play_match(ctx, model)
             record = match_record(ctx, gen, outcome, time.monotonic() - t0)
             nbytes = _deliver(ctx, record)
             # Marked, not removed: the controller reads the inbox to decide
@@ -180,8 +149,8 @@ def run(ctx: WorkerContext) -> int:
             )
             print(
                 f"[gen {gen}] done: {outcome.wins}/{outcome.draws}/{outcome.losses} W/D/L, "
-                f"score={record['score']:.3f}+-{record['ci_half_width']:.3f}, "
-                f"decision={outcome.sprt.decision} in {record['elapsed_s']:.0f}s"
+                f"score={record['score']:.3f}+-{record['ci_half_width']:.3f} "
+                f"in {record['elapsed_s']:.0f}s"
             )
     except WorkerStopped:
         print("SIGTERM: exiting (an in-flight match is discarded and replayed on next start)")

@@ -54,10 +54,6 @@ RESULT_FIELDS = (
     "pair_counts",
     "score",
     "ci_half_width",
-    "llr",
-    "llr_lower",
-    "llr_upper",
-    "decision",
     "elapsed_s",
 )
 
@@ -111,7 +107,6 @@ def _ingest_result(conn, path: Path) -> int:
         gen,
         {
             "match_score": record["score"],
-            "match_llr": record["llr"],
             "match_games": record["games"],
         },
     )

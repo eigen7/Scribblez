@@ -41,10 +41,6 @@ def _result(epoch: int, **overrides) -> dict:
         "pair_counts": [5, 10, 15, 12, 8],
         "score": 0.56,
         "ci_half_width": 0.04,
-        "llr": 1.2,
-        "llr_lower": -2.94,
-        "llr_upper": 2.94,
-        "decision": "continue",
         "elapsed_s": 60.0,
     }
     record.update(overrides)
@@ -81,7 +77,7 @@ def test_ingest_writes_rows_and_metrics(tmp_path):
     paths = _paths(tmp_path)
     conn = db.connect(paths.dashboard_db)
     db.write_metrics(conn, 10, {"positions": 250_000})
-    delivered = _deliver(paths, _result(10, score=0.61, decision="H1"))
+    delivered = _deliver(paths, _result(10, score=0.61))
 
     assert dispatch.ingest(paths, conn) == [10]
     rows = db.read_all_match_eval(conn)

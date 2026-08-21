@@ -104,10 +104,6 @@ def _match_record(**overrides):
         "pair_counts": [5, 10, 15, 12, 8],
         "score": 0.56,
         "ci_half_width": 0.04,
-        "llr": 1.2,
-        "llr_lower": -2.94,
-        "llr_upper": 2.94,
-        "decision": "continue",
         "elapsed_s": 60.0,
     }
     record.update(overrides)
@@ -117,21 +113,21 @@ def _match_record(**overrides):
 def test_match_eval_db_roundtrip(tmp_path):
     conn = db.connect(tmp_path / "dashboard.db")
     db.write_match_eval(conn, 5, _match_record())
-    db.write_match_eval(conn, 10, _match_record(decision="H1", llr=3.1))
+    db.write_match_eval(conn, 10, _match_record(score=0.61))
     # Replaying a generation's match replaces its row.
     db.write_match_eval(conn, 5, _match_record(score=0.5))
     rows = db.read_all_match_eval(conn)
     assert [r["epoch"] for r in rows] == [5, 10]
     assert rows[0]["score"] == 0.5
     assert rows[0]["pair_counts"] == [5, 10, 15, 12, 8]
-    assert rows[1]["decision"] == "H1"
+    assert rows[1]["score"] == 0.61
 
 
 def test_match_eval_figure_is_serializable(tmp_path):
     conn = db.connect(tmp_path / "dashboard.db")
     assert api.build_figure_item(conn, "match_eval", {}, str(tmp_path)) is None
     db.write_match_eval(conn, 5, _match_record())
-    db.write_match_eval(conn, 10, _match_record(decision="H1", llr=3.2))
+    db.write_match_eval(conn, 10, _match_record(score=0.61))
     item = api.build_figure_item(conn, "match_eval", {}, str(tmp_path))
     assert item is not None
     assert {"doc", "root_id", "target_id"} <= set(item)
@@ -153,35 +149,21 @@ def _ctx(sink=None, **param_overrides) -> WorkerContext:
 _MODEL = Path("/models/model_epoch_0003.onnx")
 
 
-def test_play_match_accumulates_rounds_until_the_budget(monkeypatch):
-    # Every pair splits 0.5/0.5, so the SPRT never decides and the loop must
-    # run to match_max_pairs, advancing the seed by the pairs already played.
-    seeds = []
-
-    def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
-        seeds.append(seed)
-        return RoundResult([0.5] * num_pairs, wins=num_pairs, draws=0, losses=num_pairs)
-
-    monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(match_round_pairs=2, match_max_pairs=5), 3, _MODEL)
-    assert seeds == [1, 3, 5]
-    assert outcome.pair_counts == [0, 0, 5, 0, 0]
-    assert (outcome.wins, outcome.draws, outcome.losses) == (5, 0, 5)
-    assert outcome.sprt.decision == "continue"
-
-
-def test_play_match_stops_on_a_decision(monkeypatch):
+def test_play_match_plays_the_whole_fixed_budget(monkeypatch):
+    # One round of match_pairs off the tag's base seed, whatever the result:
+    # a sweep for the model gets the same number of games as a close match.
     calls = []
 
     def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
-        calls.append(num_pairs)
+        calls.append((num_pairs, seed))
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(match_round_pairs=4, match_max_pairs=100), 3, _MODEL)
-    assert calls == [4]
-    assert outcome.sprt.decision == "H1"
-    assert outcome.games == 8
+    outcome = runner._play_match(_ctx(match_pairs=5, match_seed=7), _MODEL)
+    assert calls == [(5, 7)]
+    assert outcome.pair_counts == [0, 0, 0, 0, 5]
+    assert (outcome.wins, outcome.draws, outcome.losses) == (10, 0, 0)
+    assert outcome.games == 10
 
 
 def test_assigned_model_reads_the_inbox(tmp_path):
@@ -217,7 +199,7 @@ def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatc
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    ctx = _ctx(sink=LocalSink(paths.root), match_round_pairs=4, match_max_pairs=8)
+    ctx = _ctx(sink=LocalSink(paths.root), match_pairs=4)
     assert runner.run(ctx) == 0
 
     assert str(model) in played[0]  # the assigned model is what was played
@@ -229,6 +211,5 @@ def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatc
     assert [p.name for p in delivered] == ["gen_000020-w0.json"]
     record = json.loads(delivered[0].read_text())
     assert record["epoch"] == 20
-    assert record["decision"] == "H1"
     assert record["games"] == 8
     assert "positions" not in record  # the controller's column, not the worker's
