@@ -34,6 +34,12 @@ GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_
 
 
 def player_spec(params) -> str:
+    # WeirdBot self-play (a diagnostic corpus) puts the leave-forcing bot on both
+    # seats; every other run uses HastyBot. The flag lives only on the
+    # position_eval params, so read it defensively for workloads that share this
+    # generate role without it.
+    if getattr(params, "weirdbot_generation", False):
+        return "--type=weirdbot"
     return hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True)
 
 

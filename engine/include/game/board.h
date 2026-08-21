@@ -140,13 +140,19 @@ class Board {
     return ganchor_[transposed ? 1 : 0];
   }
 
+  // The cross-check of a single empty square, computed on demand from the live
+  // board in view coordinates (`transposed` swaps row and column). Requires a
+  // prior ensure_movegen_caches() to have bound the dictionary it reads; the
+  // value equals cross_checks(transposed)[r * BOARD_SIZE + c], the cache entry
+  // built from this same computation.
+  CrossCheck cross_check_at(bool transposed, int r, int c) const;
+
   static const std::array<Premium, BOARD_SIZE * BOARD_SIZE> PREMIUM;
 
  private:
   Glyph oriented_at(int r, int c, bool transposed) const;
 
-  // Per-square cache computations (view coordinates; `dict_` must be set).
-  CrossCheck cross_check_at(bool transposed, int r, int c) const;
+  // Per-square anchor computation (view coordinates).
   bool gaddag_anchor_at(bool transposed, int r, int c) const;
 
   // Inclusive [top, bot] row extent of the maximal filled perpendicular run
