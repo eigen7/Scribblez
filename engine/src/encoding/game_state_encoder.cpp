@@ -75,8 +75,7 @@ int encode_placement_plane(const Move& m, bool flip, float* out) {
 }
 
 // Set `cc`'s legal letters at `cell` across a 26-plane block. A square with no
-// perpendicular run constrains nothing, and says so by staying zero rather
-// than by setting all 26 of its planes.
+// perpendicular run constrains nothing, and stays zero rather than set all 26.
 void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
   if (!cc.has_neighbor) return;
   for (int l = 0; l < 26; ++l) {
@@ -84,29 +83,18 @@ void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
   }
 }
 
-// The kCrossCheckPlanes cross-check planes at `out`: the letters a HORIZONTAL
-// word may place on each empty square (A..Z), then the same for a VERTICAL
-// word.
-//
-// A word running along one axis places exactly one tile in each lane of the
-// other, so the letters it may put on an empty square are exactly that
-// square's PERPENDICULAR cross-check set -- the letters completing a valid
-// word with the tiles the square abuts across the word's direction. That holds
-// at every word length, which is what makes it a per-square fact worth a
-// plane. The word's own validity is not such a fact: it depends on the whole
-// play, so intersecting it in here would deny letters that a longer word
-// legitimately places (an `A` on a square reading `_XI` is illegal alone and
-// legal in AXIOM) while collapsing both blocks onto one-tile legality.
+// The kCrossCheckPlanes cross-check planes at `out`: horizontal A..Z, then
+// vertical A..Z. A word along one axis places one tile per lane of the other,
+// so its legal letters on a square are that square's perpendicular cross-check
+// set, at any word length. The word's own validity depends on the whole play,
+// so it is not a per-square fact and is not folded in.
 int encode_cross_check_planes(const Board& board, bool flip, float* out) {
   float* h_planes = out;
   float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
-  // The flip exchanges the two axes, so a set constraining horizontal play
-  // constrains vertical play once flipped: the blocks swap, on top of each
-  // plane transposing. This is the only spatial block whose contents name an
-  // axis, and so the only one for which transposing alone is not the flip.
+  // The flip exchanges the axes, so the blocks swap as well as transposing.
   if (flip) std::swap(h_planes, v_planes);
-  // A horizontal word's cross words run down the columns, which is what the
-  // non-transposed cache holds; a vertical word's run along the rows.
+  // A horizontal word's cross words run down the columns, which is the
+  // non-transposed cache; a vertical word's run along the rows.
   const auto& horizontal_play_cross = board.cross_checks(/*transposed=*/false);
   const auto& vertical_play_cross = board.cross_checks(/*transposed=*/true);
 

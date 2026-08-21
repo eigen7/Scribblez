@@ -635,8 +635,7 @@ TEST(Encoder, FlipSymmetry) {
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
     ASSERT_EQ(normal[i], flipped[i]);
   }
-  // The cross-check halves must actually differ here, or the swap below would
-  // hold for the wrong reason.
+  // The halves must differ, or the swap below would hold for the wrong reason.
   bool halves_differ = false;
   for (int i = 0; i < kHorizontalCrossCheckPlanes * 225 && !halves_differ; ++i) {
     halves_differ =
@@ -645,9 +644,7 @@ TEST(Encoder, FlipSymmetry) {
   ASSERT_TRUE(halves_differ);
 
   // Every spatial plane (including both placement planes) is transposed under
-  // the flip. The cross-check halves also exchange: their contents name an
-  // axis, and the flip exchanges the axes, so a plane of letters a horizontal
-  // word may place becomes one of letters a vertical word may place.
+  // the flip, and the cross-check halves also exchange.
   for (int p = 0; p < kSpatialPlanes; ++p) {
     int src = p;
     if (p >= kHorizontalCrossCheckPlane0 && p < kVerticalCrossCheckPlane0) {
@@ -691,12 +688,9 @@ TEST(Movegen, SingleTileVerticalHooks) {
   ASSERT_EQ(dawg.size(), plays.size());
 }
 
-// A square's cross-check set constrains the axis PERPENDICULAR to the run it
-// abuts: a square under the Q of QI limits what a HORIZONTAL word may place
-// there (its cross word runs down through the Q), and a square beside the I
-// limits what a VERTICAL word may place there. So the hooks above and below
-// QI belong to the horizontal block and the hooks left and right of it to the
-// vertical block.
+// A square's cross-check set constrains the axis perpendicular to the run it
+// abuts, so the hooks above and below QI belong to the horizontal block and
+// those left and right of it to the vertical block.
 TEST(Encoder, CrossCheckPlanesQi) {
   using namespace scribblez::binlog;
 
@@ -744,19 +738,16 @@ TEST(Encoder, CrossCheckPlanesQi) {
     }
   };
 
-  // Squares left and right of QI: their cross word runs across, through the
-  // QI, so they constrain a VERTICAL word placing a tile there.
+  // Left and right of QI, the cross word runs across through the QI:
   //   - right of I: QIS -> only 'S'
   //   - left of Q: none in this fixture dictionary
   assert_vertical_set(7, 9, {'S'});
   assert_vertical_set(7, 6, {});
-  // Nothing runs down through either square, so a horizontal word there is
-  // unconstrained by cross-checks and the block stays zero.
+  // Nothing runs down through either square, so the horizontal block is zero.
   assert_horizontal_set(7, 9, {});
   assert_horizontal_set(7, 6, {});
 
-  // Squares above and below QI: their cross word runs down, so they constrain
-  // a HORIZONTAL word placing a tile there.
+  // Above and below QI, the cross word runs down:
   //   - below Q: QI -> only 'I'
   //   - above I: AI BI GI HI KI LI MI OI PI QI SI TI XI
   //   - below I: ID IF IN IS IT
@@ -783,14 +774,10 @@ TEST(Encoder, CrossCheckPlanesQi) {
   ASSERT_EQ(v_cross_check(z, 14, 14), 0.0f);
 }
 
-// The cross-check set must NOT be intersected with the main word's own
-// validity. A square's legal letters are those completing its perpendicular
-// word, and the word running through the square may be longer than the run it
-// abuts -- so a letter illegal as a lone tile can be legal inside a longer
-// word. Here (7,8) reads `_XI` across and `_VOW` down: no word is `_XI`, so no
-// vertical word may place anything there, while AVOW lets a horizontal word
-// place an `A` (AXIOM does exactly that). Intersecting the two would report
-// the square as taking no letter at all, in either direction.
+// A letter illegal as a lone tile can be legal inside a longer word, so the
+// cross-check set must not be intersected with the main word's validity. (7,8)
+// reads `_XI` across and `_VOW` down: no word is `_XI`, but AXIOM places an `A`
+// there. Intersecting reports the square as taking no letter, either way.
 TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
   Dictionary d = Dictionary::build_from_words({"AVOW", "AXIOM", "VOW", "XI"});
 

@@ -18,13 +18,9 @@
 //     kSelfPlacement  squares the POV player covered on their most recent turn.
 //     kOppPlacement   the same for the opponent, so the two together encode the
 //                     last two plies.
-//     kCrossChecks    horizontal then vertical: plane L marks the empty squares
-//                     a word running along that axis may place L on -- the
-//                     square's cross-check set perpendicular to that axis,
-//                     which constrains a word of any length through it. A
-//                     square with no perpendicular run constrains nothing and
-//                     stays zero; the board planes already show it has no
-//                     neighbor there.
+//     kCrossChecks    horizontal then vertical: plane L marks empty squares
+//                     where placing L satisfies the lexicon's cross-check mask
+//                     along that axis.
 //     kContingent     the contingent-draw potential maps -- best /
 //                     draw-weighted / rack-alone next-turn plays painted onto
 //                     their placed cells (see contingent_map.h).
@@ -53,8 +49,8 @@
 //
 // The board is invariant under the diagonal flip (r,c) -> (c,r), so
 // `apply_flip` transposes every spatial plane and leaves the scalars alone.
-// The flip also exchanges the two axes, so the kCrossChecks halves -- the only
-// block whose contents name an axis -- swap with each other as they transpose.
+// The flip also exchanges the axes, so the kCrossChecks halves swap as they
+// transpose -- the only block whose contents name an axis.
 
 namespace scribblez {
 
@@ -85,9 +81,7 @@ struct InputEncodingSpec {
 // feeding it off-distribution rows. Absent in exports predating the entry,
 // which read as version 0 -- the version at the entry's introduction.
 //
-//   1: cross-check planes hold the square's perpendicular cross-check set
-//      rather than its one-tile-placement legality, and the diagonal flip
-//      swaps the two halves along with transposing them.
+//   1: cross-check planes bug fixes
 inline constexpr int kInputEncodingVersion = 1;
 
 inline constexpr int kBoardSide = 15;
