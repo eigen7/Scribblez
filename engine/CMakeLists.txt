@@ -386,7 +386,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_weird_bot PRIVATE
     scribblez_core Boost::program_options GTest::gtest_main)
   target_compile_definitions(test_weird_bot PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_weird_bot)
 
   # GameRunner match-eval plumbing: --paired seat/seed mirroring and the

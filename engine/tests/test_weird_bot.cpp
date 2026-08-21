@@ -15,6 +15,7 @@
 
 #include "agent/macondo_bot.h"
 #include "agent/weird_bot.h"
+#include "data/gcg_reader.h"
 #include "endgame_positions.h"
 #include "game/board.h"
 #include "game/glyph.h"
@@ -23,6 +24,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "util/io.h"
 
 #include <gtest/gtest.h>
 
@@ -223,4 +225,41 @@ TEST(WeirdBot, FromSpecParsing) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   EXPECT_NE(WeirdBotAgent::from_spec({}, 0, "WeirdBot"), nullptr);
   EXPECT_THROW(WeirdBotAgent::from_spec({"--bogus-option=1"}, 0, "X"), std::runtime_error);
+}
+
+// pos-09 (the motivating position), read from the frozen fixture: the opponent
+// holds G, and placing G at M7 = (row 6, col 12) forms GNU with the existing
+// "NU" to its right. The WeirdBot experiment needs high opp-placement mass on
+// M7, which requires WeirdBot to actually force G there -- this pins that end to
+// end on the real NWL23 board, and would catch a cross-check orientation
+// regression the hand-built fixtures cannot. Skipped only when the (uncommitted)
+// lexicon mount is absent; the fixture itself is committed, so a missing one
+// throws.
+TEST(WeirdBot, ForcesGAtM7OnPos09) {
+  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(kwg).good()) GTEST_SKIP() << "no NWL23 kwg at " << kwg;
+  const Dictionary dict = Dictionary::load_kwg(kwg);
+
+  ParsedGcgPosition pos;
+  std::string error;
+  const std::string gcg = util::read_file(std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/pos09-gnu.gcg");
+  ASSERT_TRUE(read_gcg_position(gcg, /*open_leaves=*/true, &pos, &error)) << error;
+
+  WeirdBotAgent wb(0, "WeirdBot");
+  wb.begin_game({});
+  const Rack opp;
+
+  // Seed the tracked leave with {G}: a lone G on an empty board can neither open
+  // nor exchange (bag 0), so WeirdBot passes and retains it as its leave.
+  Board seed;
+  const Rack g = rack_of("G");
+  const MoveRequest seed_req{seed, dict, g, opp, 0, 0, /*bag_size=*/0};
+  ASSERT_EQ(wb.make_move(seed_req).move.type(), MoveType::PASS);
+
+  const MoveRequest req{pos.board, dict, g, opp, 359, 312, /*bag_size=*/6};
+  const Move m = wb.make_move(req).move;
+
+  EXPECT_EQ(m.type(), MoveType::PLAY);
+  EXPECT_TRUE(places_letter_at(m, 6, 12, 'G')) << "expected G forced onto M7 (6,12)";
 }
