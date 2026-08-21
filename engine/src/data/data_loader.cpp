@@ -153,8 +153,9 @@ int64_t DataLoader::DataFile::unload() {
 
 const char* DataLoader::DataFile::buffer() const {
   std::unique_lock<std::mutex> lock(mutex_);
-  // Wait for the load to resolve either way; a failed load leaves buffer_ null
-  // but sets load_failed_, so the waiter returns nullptr instead of hanging.
+  // Resolve either way: a load that failed sets load_failed_ (see header), so
+  // the predicate wakes and returns null rather than waiting on a body that
+  // will never arrive.
   cv_.wait(lock, [this] { return buffer_ != nullptr || load_failed_; });
   return buffer_;
 }
