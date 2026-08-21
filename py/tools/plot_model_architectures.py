@@ -248,6 +248,7 @@ def spatial_trunk() -> Diagram:
     d.edge((right, proj.top + proj.h), (right, out_s.top))
     d.edge((right, 240), (left + 11, 240))
     d.note(right - 18, 226, "broadcast-add over 15 × 15", ha="right")
+    d.note(right - 18, 214, "(1+γ)·x + s with use_film", ha="right")
     d.note(right + 14, 400, "s  (B, C)")
     return d
 
@@ -295,7 +296,7 @@ def _gpool_block(d: Diagram, cx: float, spatial_x: float, pool_x: float, skip_x:
     plus = d.merge(spatial_x, 320)
     d.edge(spatial.bottom, plus.head)
     d.edge(pool.bottom, (pool_x, 320), (spatial_x + 11, 320))
-    d.note(pool_x - 14, 306, "per-channel bias, broadcast", ha="right")
+    d.note(pool_x - 14, 306, "per-channel bias β (+ gain γ with use_film)", ha="right")
 
     b2 = d.box(spatial_x, 356, [title("BatchNorm → ReLU"), sub("conv 3×3   Cs → C")], "op")
     d.edge(plus.bottom, b2.head)

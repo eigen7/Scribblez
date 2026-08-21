@@ -51,24 +51,33 @@ class GlobalPoolingResBlock(nn.Module):
 
     The first conv's output is split into a spatial branch and a pooling branch.
     The pooling branch is mean+max pooled over the whole board and projected to a
-    per-channel bias that is broadcast-added to the spatial branch before the
-    second conv. This lets the block re-read global state (tiles remaining,
-    overall board openness, and -- for the post-move model -- the score
-    differential) instead of relying on it surviving unchanged from the stem
-    injection through every preceding conv.
+    per-channel modulation of the spatial branch before the second conv. This lets
+    the block re-read global state (tiles remaining, overall board openness, and --
+    for the post-move model -- the score differential) instead of relying on it
+    surviving unchanged from the stem injection through every preceding conv. With
+    use_film the projection is FiLM (gain and bias); without it, a bias alone.
     """
 
-    def __init__(self, channels: int, pool_channels: int | None = None):
+    def __init__(self, channels: int, pool_channels: int | None = None, use_film: bool = False):
         super().__init__()
         if pool_channels is None:
             pool_channels = channels // 2
         self.pool_channels = pool_channels
         self.spatial_channels = channels - pool_channels
+        self.use_film = use_film
 
         self.bn1 = nn.BatchNorm2d(channels)
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
-        # mean + max over the pooling branch -> per-(spatial-channel) bias.
-        self.pool_fc = nn.Linear(2 * pool_channels, self.spatial_channels)
+        # mean + max over the pooling branch -> per-(spatial-channel) modulation of
+        # the spatial branch. Without FiLM this is a bias (beta) alone; with FiLM the
+        # projection also emits a per-channel gain (gamma), so the second half of the
+        # output is zero-initialised to make (1 + gamma) start at 1 -- a strict
+        # superset of the additive block (see SpatialTrunk).
+        out_features = (2 * self.spatial_channels) if use_film else self.spatial_channels
+        self.pool_fc = nn.Linear(2 * pool_channels, out_features)
+        if use_film:
+            nn.init.zeros_(self.pool_fc.weight[self.spatial_channels :])
+            nn.init.zeros_(self.pool_fc.bias[self.spatial_channels :])
         self.bn2 = nn.BatchNorm2d(self.spatial_channels)
         self.conv2 = nn.Conv2d(self.spatial_channels, channels, 3, padding=1, bias=False)
 
@@ -77,17 +86,24 @@ class GlobalPoolingResBlock(nn.Module):
         out = self.conv1(F.relu(self.bn1(x)))
         spatial = out[:, : self.spatial_channels]
         pool = out[:, self.spatial_channels :]
-        bias = self.pool_fc(mean_max_pool(pool))  # (B, spatial_channels)
-        spatial = spatial + bias[:, :, None, None]
+        proj = self.pool_fc(mean_max_pool(pool))
+        if self.use_film:
+            beta, gamma = proj[:, : self.spatial_channels], proj[:, self.spatial_channels :]
+            spatial = (1 + gamma[:, :, None, None]) * spatial + beta[:, :, None, None]
+        else:
+            spatial = spatial + proj[:, :, None, None]  # beta (per-channel bias)
         out = self.conv2(F.relu(self.bn2(spatial)))
         return out + residual
 
 
-def make_block(channels: int, index: int) -> nn.Module:
+def make_block(channels: int, index: int, use_film: bool = False) -> nn.Module:
     """Every third block is a global-pooling block; the rest are plain residual
     blocks. Interleaving keeps the cost modest while periodically re-broadcasting
-    global context through the tower."""
-    return GlobalPoolingResBlock(channels) if index % 3 == 2 else ResBlock(channels)
+    global context through the tower. use_film only affects the global-pooling
+    blocks (plain residual blocks carry no scalar/global injection to modulate)."""
+    if index % 3 == 2:
+        return GlobalPoolingResBlock(channels, use_film=use_film)
+    return ResBlock(channels)
 
 
 class SpatialTrunk(nn.Module):
@@ -97,6 +113,16 @@ class SpatialTrunk(nn.Module):
     C-dimensional projection of the scalar input. The projection is broadcast-
     added at the stem and also returned so a model's heads can read the scalar
     features directly (the position evaluation heads do).
+
+    use_film upgrades the two scalar/global-context injection sites (the stem
+    injection here and each global-pooling block) from additive to FiLM: alongside
+    the additive term (beta) the scalars emit a per-channel gain (gamma), applied
+    as (1 + gamma) * x + beta. The gamma projections are zero-initialised, so a
+    FiLM trunk starts numerically identical to the additive one and is a strict
+    superset of it -- the multiplicative half is what lets a scalar (e.g. an
+    opponent-leave letter) gate a board feature (e.g. that letter's cross-check
+    plane) rather than only shift it. The returned scalar projection is the beta
+    half, unchanged for the heads.
     """
 
     def __init__(
@@ -106,8 +132,10 @@ class SpatialTrunk(nn.Module):
         trunk_channels: int,
         num_blocks: int,
         lexicon_module: nn.Module | None = None,
+        use_film: bool = False,
     ):
         super().__init__()
+        self.use_film = use_film
         self.stem = nn.Sequential(
             nn.Conv2d(spatial_planes, trunk_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(trunk_channels),
@@ -118,12 +146,21 @@ class SpatialTrunk(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, trunk_channels),
         )
+        # FiLM gain for the stem injection: scalars -> per-channel gamma, zero-
+        # initialised so (1 + gamma) starts at 1 and the stem injection starts as
+        # the pure broadcast-add it was without FiLM.
+        if use_film:
+            self.stem_gamma = nn.Linear(scalar_size, trunk_channels)
+            nn.init.zeros_(self.stem_gamma.weight)
+            nn.init.zeros_(self.stem_gamma.bias)
         # Optional compiled-lexicon tool (see scribblez.lexical_tool.modules).
         # It is a per-lane DAWG walker, so it is queried once per row and once per column
         # and its per-cell residual is summed into the board feature map after the stem,
         # giving the tower per-cell word-legality signal in both orientations.
         self.lexicon_module = lexicon_module
-        self.blocks = nn.Sequential(*[make_block(trunk_channels, i) for i in range(num_blocks)])
+        self.blocks = nn.Sequential(
+            *[make_block(trunk_channels, i, use_film=use_film) for i in range(num_blocks)]
+        )
         self.trunk_bn = nn.BatchNorm2d(trunk_channels)
 
     def _lexicon_residual(self, x: torch.Tensor, letters: torch.Tensor) -> torch.Tensor:
@@ -151,7 +188,11 @@ class SpatialTrunk(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.stem(input_spatial)
         s = self.scalar_proj(input_scalar)  # (B, C)
-        x = x + s[:, :, None, None]  # broadcast-add over spatial dims
+        if self.use_film:
+            gamma = self.stem_gamma(input_scalar)  # (B, C), zero-init -> starts at 0
+            x = (1 + gamma[:, :, None, None]) * x + s[:, :, None, None]
+        else:
+            x = x + s[:, :, None, None]  # broadcast-add over spatial dims
         if self.lexicon_module is not None:
             x = x + self._lexicon_residual(x, input_spatial[:, :N_LETTERS])
         x = self.blocks(x)

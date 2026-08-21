@@ -104,6 +104,12 @@ class PositionEvalParams:
     # Model.
     num_blocks: int = param(10, "residual blocks")
     trunk_channels: int = param(192, "trunk width")
+    use_film: bool = param(
+        False,
+        "FiLM-style multiplicative conditioning at the trunk's scalar/global-context "
+        "injection sites (scalars emit a per-channel gain alongside the additive bias); "
+        "off is the additive-injection baseline",
+    )
     contingent_features: bool = param(
         False,
         "encode the full input layout including the contingent-draw potential features; "

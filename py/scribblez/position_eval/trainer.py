@@ -348,6 +348,7 @@ def run(ctx: WorkerContext) -> int:
         scalar_size=scalar_size,
         num_blocks=params.num_blocks,
         trunk_channels=params.trunk_channels,
+        use_film=params.use_film,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
