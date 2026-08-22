@@ -8,7 +8,7 @@ import BokehFigure from './BokehFigure';
 // token) or a control changes.
 
 // A segmented single-select control (connected buttons, exactly one active) --
-// the Loss tab's Absolute/% and Linear/Log selectors.
+// the Loss tab's Absolute/% and Linear x/Log x selectors.
 export function RadioButtonGroup({ options, value, onChange }: {
   options: readonly string[]; value: number; onChange: (i: number) => void;
 }) {
@@ -97,8 +97,8 @@ export function FigureTab({
   return <div className="card"><FigureBody item={item} emptyText={emptyText} /></div>;
 }
 
-// The Loss tab: the loss/accuracy figure on top (with Absolute/% and Linear/Log
-// x-axis selectors), then the value-quality figure below, with the controls that
+// The Loss tab: the loss/accuracy figure on top (with Absolute/% and Linear x/
+// Log x selectors), then the value-quality figure below, with the controls that
 // govern it -- Smooth and a Secondary tag to overlay -- sitting between the two.
 // The two figures are fetched separately so those controls can live between them.
 const LOSS_VERSION = ['metrics', 'control_event'];
@@ -133,7 +133,7 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
           onChange={(i) => setNormalized(i === 1)}
         />
         <RadioButtonGroup
-          options={['Linear', 'Log']}
+          options={['Linear x', 'Log x']}
           value={logX ? 1 : 0}
           onChange={(i) => setLogX(i === 1)}
         />

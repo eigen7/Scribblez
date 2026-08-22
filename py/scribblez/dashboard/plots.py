@@ -67,8 +67,7 @@ def _padded_range(values, log):
     """An explicit padded Range1d over `values`, so a (near-)constant series is
     not drawn against Bokeh's degenerate default (which spans roughly value +/- 1,
     burying e.g. a flat 1e-3 learning rate in a [-1, 1] band). Log axes pad
-    multiplicatively and clamp to positive data (so a log positions axis is not
-    pinned to the run's positions=0 first checkpoint); linear axes pad additively.
+    multiplicatively and clamp to positive data; linear axes pad additively.
     None when no finite (log: positive) value exists."""
     finite = values[np.isfinite(values)]
     if log:

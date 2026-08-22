@@ -54,18 +54,28 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert np.allclose(bands[0][1], 0.75) and np.allclose(bands[1][1], 0.25)
 
 
+def _assert_log_positions_axis(grid):
+    """Every panel of `grid` is on a logarithmic positions axis with an explicit
+    positive range covering the seeded 100..10000 points."""
+    figs = list(grid.select({"type": Plot}))
+    assert len(figs) == 2  # loss + accuracy panels
+    assert all(isinstance(f.x_scale, LogScale) for f in figs)
+    assert all(0.0 < f.x_range.start < 100 and f.x_range.end > 10000 for f in figs)
+
+
 def test_metrics_loss_grid_log_x_axis(tmp_path):
     """`log_x` puts every panel on a logarithmic positions axis with an explicit
-    positive range, so the positions=0 first checkpoint does not pin the range."""
+    positive range, so the positions=0 first checkpoint does not pin the range --
+    on both the overlaid-lines and the weighted-stack loss panels."""
     conn = db.connect(tmp_path / "d.db")
     for epoch, pos in enumerate([0, 100, 1000, 10000]):
-        db.write_metrics(conn, epoch, {"positions": pos, "loss": 1.0, "top1_acc": 0.5})
+        db.write_metrics(
+            conn, epoch, {"positions": pos, "loss": 1.0, "loss_a": 0.6, "top1_acc": 0.5}
+        )
 
     linear = plots.metrics_loss_grid(conn)
     assert all(isinstance(f.x_scale, LinearScale) for f in linear.select({"type": Plot}))
 
-    log = plots.metrics_loss_grid(conn, log_x=True)
-    figs = list(log.select({"type": Plot}))
-    assert len(figs) == 2  # loss + accuracy panels
-    assert all(isinstance(f.x_scale, LogScale) for f in figs)
-    assert all(0.0 < f.x_range.start < 100 and f.x_range.end > 10000 for f in figs)
+    _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # lines
+    db.write_loss_weights(conn, {"loss_a": 1.0})
+    _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # stack
