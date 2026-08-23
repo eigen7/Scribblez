@@ -97,10 +97,11 @@ export function FigureTab({
   return <div className="card"><FigureBody item={item} emptyText={emptyText} /></div>;
 }
 
-// The Loss tab: the loss/accuracy figure on top (with Absolute/% and Linear x/
-// Log x selectors), then the value-quality figure below, with the controls that
-// govern it -- Smooth and a Secondary tag to overlay -- sitting between the two.
-// The two figures are fetched separately so those controls can live between them.
+// The Loss tab: the loss/accuracy figure on top (with an Absolute/% selector and
+// the Linear x/Log x selector that governs the x-axis of BOTH figures), then the
+// value-quality figure below, with the controls specific to it -- Smooth and a
+// Secondary tag to overlay -- sitting between the two. The two figures are
+// fetched separately so those controls can live between them.
 const LOSS_VERSION = ['metrics', 'control_event'];
 const QUALITY_VERSION = ['metrics'];
 
@@ -120,7 +121,8 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   );
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
-    `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
+    `&smooth=${smoothed ? 1 : 0}&log_x=${logX ? 1 : 0}`
+      + (secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''),
   );
   const otherTags = tags.filter((t) => t !== tag);
 

@@ -83,13 +83,17 @@ def _loss(conn, params, mount_root):
 def _eval_quality(conn, params, mount_root):
     """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves. `smooth`
     overlays an EMA trend; `secondary`, a second tag, overlays that tag's curves
-    dashed for comparison."""
+    for comparison; `log_x` draws the epoch axis logarithmically."""
     secondary_tag = params.get("secondary") or None
     sec_conn = _open(mount_root, params.get("task"), secondary_tag) if secondary_tag else None
     try:
         secondary = (sec_conn, secondary_tag) if sec_conn is not None else None
         return plots.eval_quality_grid(
-            conn, params.get("tag"), smooth=_truthy(params.get("smooth")), secondary=secondary
+            conn,
+            params.get("tag"),
+            smooth=_truthy(params.get("smooth")),
+            secondary=secondary,
+            log_x=_truthy(params.get("log_x")),
         )
     finally:
         if sec_conn is not None:

@@ -1,4 +1,5 @@
-"""Tests for the per-epoch loss view and its control-change markers."""
+"""Tests for the Loss tab's figures: the per-epoch loss view with its
+control-change markers, and the value-quality grid."""
 
 import numpy as np
 from bokeh.models import Label, LinearScale, LogScale, Plot, Span
@@ -79,3 +80,19 @@ def test_metrics_loss_grid_log_x_axis(tmp_path):
     _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # lines
     db.write_loss_weights(conn, {"loss_a": 1.0})
     _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # stack
+
+
+def test_eval_quality_grid_log_x_axis(tmp_path):
+    """`log_x` puts every value-quality panel on a logarithmic epoch axis with an
+    explicit positive range, so an epoch-0 checkpoint does not pin the range."""
+    conn = db.connect(tmp_path / "d.db")
+    for epoch in [0, 1, 10, 100]:
+        db.write_metrics(conn, epoch, {"eval_win_mae": 0.1, "eval_sd_mean_mae": 5.0})
+
+    linear = plots.eval_quality_grid(conn, "t")
+    assert all(isinstance(f.x_scale, LinearScale) for f in linear.select({"type": Plot}))
+
+    figs = list(plots.eval_quality_grid(conn, "t", log_x=True).select({"type": Plot}))
+    assert len(figs) == 2  # WLD + score-diff panels
+    assert all(isinstance(f.x_scale, LogScale) for f in figs)
+    assert all(0.0 < f.x_range.start < 1 and f.x_range.end > 100 for f in figs)

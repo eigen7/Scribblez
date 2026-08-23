@@ -88,26 +88,43 @@ def _padded_range(values, log):
     return Range1d(lo, hi)
 
 
+def _set_padded_range(fig, axis: str, values, log):
+    """Give `fig`'s `axis` ('x' | 'y') the explicit padded range of `values` (see
+    `_padded_range`); leave Bokeh's auto-range when there is nothing to fit."""
+    rng = _padded_range(np.asarray(values, dtype=np.float64), log)
+    if rng is not None:
+        setattr(fig, f"{axis}_range", rng)
+
+
 def _series_figure(
-    sources, title: str, names: list[str], *, log: bool = False, smooth: bool = False
+    sources,
+    title: str,
+    names: list[str],
+    *,
+    log: bool = False,
+    smooth: bool = False,
+    log_x: bool = False,
 ):
     """A square learning-curve figure of the metric `names`, each drawn once per
     entry in `sources` -- a list of (conn, label_suffix). Every (source, metric)
     pair gets its own color, and the legend suffix (e.g. ' [tagB]') names the
     source, so a second tag's curves overlay the first as distinctly colored,
-    distinctly labeled lines for comparison. None when no source has any of the
+    distinctly labeled lines for comparison. `log` / `log_x` draw the y / epoch
+    axis logarithmically (a log epoch axis gets an explicit positive range, so an
+    epoch-0 checkpoint does not pin it). None when no source has any of the
     metrics."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
         title=title,
         x_axis_label="epoch",
+        x_axis_type="log" if log_x else "linear",
         y_axis_type="log" if log else "linear",
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
     fig.add_tools(HoverTool(tooltips=[("epoch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
-    all_values = []
+    all_epochs, all_values = [], []
     for s, (conn, suffix) in enumerate(sources):
         for i, name in enumerate(names):
             epochs, values = db.read_metric_series(conn, name)
@@ -115,12 +132,13 @@ def _series_figure(
                 continue
             color = palette[(s * len(names) + i) % len(palette)]
             _plot_series(fig, epochs, values, color, name + suffix, smooth)
+            all_epochs.append(epochs)
             all_values.append(values)
     if not all_values:
         return None
-    y_range = _padded_range(np.concatenate(all_values), log)
-    if y_range is not None:
-        fig.y_range = y_range
+    _set_padded_range(fig, "y", np.concatenate(all_values), log)
+    if log_x:
+        _set_padded_range(fig, "x", np.concatenate(all_epochs), log=True)
     fig.legend.label_text_font_size = "8pt"
     fig.legend.location = "top_left"
     fig.legend.click_policy = "hide"
@@ -242,13 +260,14 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
-def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
+def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None, log_x: bool = False):
     """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, or None
     when the primary tag has recorded no quality metric yet (so the Loss tab can
     omit the panel rather than show an empty placeholder). `smooth` overlays an EMA
     trend on each curve (they are noisy checkpoint-to-checkpoint). `secondary`, when
     given as (conn, tag), overlays that tag's curves in their own colors for
-    comparison; the legend labels are then suffixed with each tag."""
+    comparison; the legend labels are then suffixed with each tag. `log_x` draws
+    the epoch axis logarithmically, matching the Loss tab's x-axis switcher."""
     names = [name for _title, group in POST_MOVE_QUALITY for name in group]
     if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
         return None
@@ -260,7 +279,7 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
     figs = [
         f
         for title, group in POST_MOVE_QUALITY
-        if (f := _series_figure(sources, title, group, smooth=smooth))
+        if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
     ]
     return column(row(*figs)) if figs else None
 
@@ -387,9 +406,7 @@ def _positions_figure(title: str, x, y_label: str, log_x: bool):
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
     if log_x:
-        x_range = _padded_range(np.asarray(x, dtype=np.float64), log=True)
-        if x_range is not None:
-            fig.x_range = x_range
+        _set_padded_range(fig, "x", x, log=True)
     return fig
 
 
