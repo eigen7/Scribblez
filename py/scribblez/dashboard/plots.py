@@ -3,6 +3,8 @@ epochs (square figures, server-rendered)."""
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 from bokeh.layouts import column, row
 from bokeh.models import (
@@ -260,14 +262,42 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
-def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None, log_x: bool = False):
-    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, or None
-    when the primary tag has recorded no quality metric yet (so the Loss tab can
-    omit the panel rather than show an empty placeholder). `smooth` overlays an EMA
-    trend on each curve (they are noisy checkpoint-to-checkpoint). `secondary`, when
-    given as (conn, tag), overlays that tag's curves in their own colors for
-    comparison; the legend labels are then suffixed with each tag. `log_x` draws
-    the epoch axis logarithmically, matching the Loss tab's x-axis switcher."""
+# The Loss tab's figures carry BOTH x-axis variants, stacked as two rows named
+# X_AXIS_LINEAR / X_AXIS_LOG, so the tab's Linear x/Log x knob flips the rows'
+# visibility inside the embedded BokehJS document -- no round trip to this API,
+# no re-embed. The web client (TrainingTabs.tsx) addresses the rows by these
+# names; change them in both places.
+X_AXIS_LINEAR = "x_linear"
+X_AXIS_LOG = "x_log"
+
+
+def _x_axis_variants(build_row):
+    """Both x-axis variants of a Loss-tab figure row -- `build_row(log_x)` builds
+    one -- stacked as rows named X_AXIS_LINEAR / X_AXIS_LOG (see those)."""
+    linear, log = build_row(False), build_row(True)
+    linear.name, log.name = X_AXIS_LINEAR, X_AXIS_LOG
+    return column(linear, log)
+
+
+def _quality_row(sources, smooth, log_x):
+    """One x-axis variant of the value-quality row: a figure per POST_MOVE_QUALITY
+    group that any source has data for."""
+    figs = [
+        f
+        for title, group in POST_MOVE_QUALITY
+        if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
+    ]
+    return row(*figs)
+
+
+def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
+    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, in both
+    x-axis variants (`_x_axis_variants`), or None when the primary tag has recorded
+    no quality metric yet (so the Loss tab can omit the panel rather than show an
+    empty placeholder). `smooth` overlays an EMA trend on each curve (they are noisy
+    checkpoint-to-checkpoint). `secondary`, when given as (conn, tag), overlays that
+    tag's curves in their own colors for comparison; the legend labels are then
+    suffixed with each tag."""
     names = [name for _title, group in POST_MOVE_QUALITY for name in group]
     if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
         return None
@@ -276,12 +306,7 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None, log_
         sources = [(conn, f" [{tag}]"), (sec_conn, f" [{sec_tag}]")]
     else:
         sources = [(conn, "")]
-    figs = [
-        f
-        for title, group in POST_MOVE_QUALITY
-        if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
-    ]
-    return column(row(*figs)) if figs else None
+    return _x_axis_variants(partial(_quality_row, sources, smooth))
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +500,7 @@ def _loss_bands(series, weights, normalized):
     return bands
 
 
-def _loss_accuracy_grid(x, series, weights, normalized, log_x, conn):
+def _loss_accuracy_row(x, series, weights, normalized, conn, log_x):
     """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
     and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
     heights show each term's share of the optimized total, and `normalized`
@@ -506,7 +531,7 @@ def _loss_accuracy_grid(x, series, weights, normalized, log_x, conn):
         figs.append(
             _step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy", log_x)
         )
-    return column(row(*figs))
+    return row(*figs)
 
 
 def add_control_markers(fig, conn):
@@ -556,12 +581,14 @@ def _metrics_series(conn):
     return x, series
 
 
-def metrics_loss_grid(conn, normalized: bool = False, log_x: bool = False):
+def metrics_loss_grid(conn, normalized: bool = False):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained (`log_x` -> logarithmic positions axis):
-    stacked weighted per-component losses (`normalized` -> per-column fractions),
-    an accuracy panel, control-change markers. None when no loss metric exists."""
+    `metrics` table vs positions trained, in both x-axis variants
+    (`_x_axis_variants`): stacked weighted per-component losses (`normalized` ->
+    per-column fractions), an accuracy panel, control-change markers. None when no
+    loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
-    return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, log_x, conn)
+    weights = db.read_loss_weights(conn)
+    return _x_axis_variants(partial(_loss_accuracy_row, x, series, weights, normalized, conn))

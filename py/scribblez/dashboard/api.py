@@ -70,30 +70,23 @@ VERSION_TABLES = (
 def _loss(conn, params, mount_root):
     """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
     metrics table, with control-change markers; `normalized` stacks the loss as
-    per-column shares, `log_x` draws the positions axis logarithmically. The
-    value-quality curves are a separate figure (`eval_quality`), so the client
-    can place its own controls between the two."""
-    return plots.metrics_loss_grid(
-        conn,
-        normalized=_truthy(params.get("normalized")),
-        log_x=_truthy(params.get("log_x")),
-    )
+    per-column shares. Both x-axis variants ride along (plots.X_AXIS_LINEAR /
+    X_AXIS_LOG) for the client to flip between. The value-quality curves are a
+    separate figure (`eval_quality`), so the client can place its own controls
+    between the two."""
+    return plots.metrics_loss_grid(conn, normalized=_truthy(params.get("normalized")))
 
 
 def _eval_quality(conn, params, mount_root):
-    """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves. `smooth`
-    overlays an EMA trend; `secondary`, a second tag, overlays that tag's curves
-    for comparison; `log_x` draws the epoch axis logarithmically."""
+    """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves, in both
+    x-axis variants like `_loss`. `smooth` overlays an EMA trend; `secondary`, a
+    second tag, overlays that tag's curves for comparison."""
     secondary_tag = params.get("secondary") or None
     sec_conn = _open(mount_root, params.get("task"), secondary_tag) if secondary_tag else None
     try:
         secondary = (sec_conn, secondary_tag) if sec_conn is not None else None
         return plots.eval_quality_grid(
-            conn,
-            params.get("tag"),
-            smooth=_truthy(params.get("smooth")),
-            secondary=secondary,
-            log_x=_truthy(params.get("log_x")),
+            conn, params.get("tag"), smooth=_truthy(params.get("smooth")), secondary=secondary
         )
     finally:
         if sec_conn is not None:
