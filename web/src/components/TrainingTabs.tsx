@@ -8,7 +8,7 @@ import BokehFigure from './BokehFigure';
 // token) or a control changes.
 
 // A segmented single-select control (connected buttons, exactly one active) --
-// the Loss tab's Absolute/% selector.
+// the Loss tab's Absolute/% and Linear x/Log x selectors.
 export function RadioButtonGroup({ options, value, onChange }: {
   options: readonly string[]; value: number; onChange: (i: number) => void;
 }) {
@@ -97,15 +97,16 @@ export function FigureTab({
   return <div className="card"><FigureBody item={item} emptyText={emptyText} /></div>;
 }
 
-// The Loss tab: the loss/accuracy figure on top (with an Absolute/% selector), then
-// the value-quality figure below, with the controls that govern it -- Smooth and a
-// Secondary tag to overlay -- sitting between the two. The two figures are fetched
-// separately so those controls can live between them.
+// The Loss tab: the loss/accuracy figure on top (with Absolute/% and Linear x/
+// Log x selectors), then the value-quality figure below, with the controls that
+// govern it -- Smooth and a Secondary tag to overlay -- sitting between the two.
+// The two figures are fetched separately so those controls can live between them.
 const LOSS_VERSION = ['metrics', 'control_event'];
 const QUALITY_VERSION = ['metrics'];
 
 export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   const [normalized, setNormalized] = useState(false);
+  const [logX, setLogX] = useState(false);
   const [smoothed, setSmoothed] = useState(true); // smoothing on by default
   const [secondary, setSecondary] = useState(''); // '' = none
   const [tags, setTags] = useState<string[]>([]); // secondary-overlay choices
@@ -115,7 +116,7 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   }, [task]);
 
   const stepItem = useFigureItem(
-    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
+    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}&log_x=${logX ? 1 : 0}`,
   );
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
@@ -125,11 +126,16 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
 
   return (
     <div className="card">
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
         <RadioButtonGroup
           options={['Absolute', '%']}
           value={normalized ? 1 : 0}
           onChange={(i) => setNormalized(i === 1)}
+        />
+        <RadioButtonGroup
+          options={['Linear x', 'Log x']}
+          value={logX ? 1 : 0}
+          onChange={(i) => setLogX(i === 1)}
         />
       </div>
       <FigureBody item={stepItem} emptyText="No loss / accuracy metrics recorded yet." />

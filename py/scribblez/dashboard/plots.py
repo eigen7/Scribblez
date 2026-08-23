@@ -63,16 +63,17 @@ def _plot_series(fig, x, y, color, label, smooth):
         fig.scatter("x", "y", source=src, color=color, size=4)
 
 
-def _set_y_range(fig, values, log):
-    """Give the figure an explicit padded y-range, so a (near-)constant series is
+def _padded_range(values, log):
+    """An explicit padded Range1d over `values`, so a (near-)constant series is
     not drawn against Bokeh's degenerate default (which spans roughly value +/- 1,
     burying e.g. a flat 1e-3 learning rate in a [-1, 1] band). Log axes pad
-    multiplicatively and clamp to positive data; linear axes pad additively."""
+    multiplicatively and clamp to positive data; linear axes pad additively.
+    None when no finite (log: positive) value exists."""
     finite = values[np.isfinite(values)]
     if log:
         finite = finite[finite > 0.0]
     if len(finite) == 0:
-        return
+        return None
     lo, hi = float(finite.min()), float(finite.max())
     if log:
         lo, hi = (
@@ -84,7 +85,7 @@ def _set_y_range(fig, values, log):
     else:
         pad = 0.08 * (hi - lo)
         lo, hi = lo - pad, hi + pad
-    fig.y_range = Range1d(lo, hi)
+    return Range1d(lo, hi)
 
 
 def _series_figure(
@@ -117,7 +118,9 @@ def _series_figure(
             all_values.append(values)
     if not all_values:
         return None
-    _set_y_range(fig, np.concatenate(all_values), log)
+    y_range = _padded_range(np.concatenate(all_values), log)
+    if y_range is not None:
+        fig.y_range = y_range
     fig.legend.label_text_font_size = "8pt"
     fig.legend.location = "top_left"
     fig.legend.click_policy = "hide"
@@ -370,16 +373,29 @@ def match_arms_grid(conn):
 # ---------------------------------------------------------------------------
 
 
-def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"):
+def _positions_figure(title: str, x, y_label: str, log_x: bool):
+    """The Loss tab's square figure shell over the positions-trained x-axis `x`:
+    `log_x` draws that axis logarithmically, with an explicit positive range so
+    the auto-range does not degrade on a positions=0 first checkpoint."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
         title=title,
-        x_axis_label=x_label,
+        x_axis_label="positions",
         y_axis_label=y_label,
+        x_axis_type="log" if log_x else "linear",
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
-    fig.add_tools(HoverTool(tooltips=[(x_label, "@x"), ("value", "@y{0.0000}")], mode="vline"))
+    if log_x:
+        x_range = _padded_range(np.asarray(x, dtype=np.float64), log=True)
+        if x_range is not None:
+            fig.x_range = x_range
+    return fig
+
+
+def _step_figure(title: str, x, series, y_label: str, log_x: bool = False):
+    fig = _positions_figure(title, x, y_label, log_x)
+    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
@@ -397,18 +413,11 @@ def _step_figure(title: str, x, series, y_label: str, x_label: str = "positions"
     return fig
 
 
-def _stacked_loss_figure(x, bands, title="Train loss (stacked, weighted)", y_label="loss"):
+def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
     """Stacked area of per-component losses, `bands` = (label, y) bottom-to-top.
     Click a legend entry to hide it -- hide all but one to read a single
     component's own curve (from zero)."""
-    fig = figure(
-        width=SERIES_SIZE,
-        height=SERIES_SIZE,
-        title=title,
-        x_axis_label="positions",
-        y_axis_label=y_label,
-        tools="pan,box_zoom,wheel_zoom,reset,save",
-    )
+    fig = _positions_figure(title, x, y_label, log_x)
     palette = Category10[10]
     xs = list(x)
     cum = np.zeros(len(xs), dtype=np.float64)
@@ -449,13 +458,14 @@ def _loss_bands(series, weights, normalized):
     return bands
 
 
-def _loss_accuracy_grid(x, series, weights, normalized, conn):
+def _loss_accuracy_grid(x, series, weights, normalized, log_x, conn):
     """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
     and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
     heights show each term's share of the optimized total, and `normalized`
     rescales every column to sum to 1 -- when loss coefficients (`weights`) were
     recorded, else overlaid loss lines; plus an Accuracy panel for every '<x>_acc'
-    series. LR-change markers overlay the loss panel."""
+    series. Both panels share the positions x-axis, logarithmic when `log_x`.
+    LR-change markers overlay the loss panel."""
     if weights:
         title, y_label = (
             ("Train loss (stacked, % of total)", "fraction of total loss")
@@ -463,18 +473,22 @@ def _loss_accuracy_grid(x, series, weights, normalized, conn):
             else ("Train loss (stacked, weighted)", "loss")
         )
         loss_fig = _stacked_loss_figure(
-            x, _loss_bands(series, weights, normalized), title=title, y_label=y_label
+            x, _loss_bands(series, weights, normalized), title, y_label, log_x
         )
     else:
         loss_names = [k for k in ("loss",) if k in series] + sorted(
             k for k in series if k.startswith("loss_")
         )
-        loss_fig = _step_figure("Train loss", x, [(series[k], k) for k in loss_names], "loss")
+        loss_fig = _step_figure(
+            "Train loss", x, [(series[k], k) for k in loss_names], "loss", log_x
+        )
     add_control_markers(loss_fig, conn)
     figs = [loss_fig]
     acc_names = sorted(k for k in series if k.endswith("_acc"))
     if acc_names:
-        figs.append(_step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy"))
+        figs.append(
+            _step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy", log_x)
+        )
     return column(row(*figs))
 
 
@@ -525,12 +539,12 @@ def _metrics_series(conn):
     return x, series
 
 
-def metrics_loss_grid(conn, normalized: bool = False):
+def metrics_loss_grid(conn, normalized: bool = False, log_x: bool = False):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained: stacked weighted per-component losses
-    (`normalized` -> per-column fractions), an accuracy panel, control-change
-    markers. None when no loss metric exists."""
+    `metrics` table vs positions trained (`log_x` -> logarithmic positions axis):
+    stacked weighted per-component losses (`normalized` -> per-column fractions),
+    an accuracy panel, control-change markers. None when no loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
-    return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, conn)
+    return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, log_x, conn)
