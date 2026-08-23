@@ -201,7 +201,6 @@ def _assign(paths: TagPaths, conn, every: int, slot):
             slot.put(sidecar, f"{inbox}/{sidecar.name}")
     model = paths.onnx_path(gen)
     slot.put(model, f"{inbox}/{model.name}")
-    print(f"match eval: assigned generation {gen} to {slot.worker_id}")
 
 
 def tick(spec, tag: str, params, slots):
