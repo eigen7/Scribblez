@@ -51,13 +51,10 @@ inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajec
 // SimObsPositionHeader::flags bits.
 inline constexpr uint32_t kSimObsPosFlagUniformTail = 1u;  // last record is the uniform draw
 
-// Hex content hash of the proposer model, in SimObsFileHeader. All-zero bytes
-// mean no model drove the candidate selection (the equity-top-K proposer).
-inline constexpr size_t kSimObsProposerHashSize = 64;
-
-// Hex content hash of the leaf evaluator that scored the rollout horizons, in
-// SimObsFileHeader. All-zero bytes mean terminal rollouts (no leaf model).
-inline constexpr size_t kSimObsLeafHashSize = 64;
+// Size of SimObsFileHeader's hex model-content-hash fields (the candidate
+// proposer, and the truncation leaf evaluator). All-zero bytes mean no such
+// model was involved: the equity-top-K proposer, or terminal rollouts.
+inline constexpr size_t kSimObsModelHashSize = 64;
 
 #pragma pack(push, 1)
 
@@ -67,8 +64,8 @@ struct SimObsFileHeader {
   uint16_t horizon_plies;  // rollout truncation horizon; 0 = terminal rollouts
   uint32_t num_positions;
   uint32_t flags;  // kSimObsFlag* bits; consumers must match on them
-  char proposer_hash[kSimObsProposerHashSize];
-  char leaf_model_hash[kSimObsLeafHashSize];  // all-zero iff horizon_plies == 0
+  char proposer_hash[kSimObsModelHashSize];
+  char leaf_model_hash[kSimObsModelHashSize];  // all-zero iff horizon_plies == 0
 };
 static_assert(sizeof(SimObsFileHeader) == 144, "SimObsFileHeader must be 144 bytes");
 

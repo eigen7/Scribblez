@@ -58,24 +58,6 @@ AppliedCandidate apply_candidate(const SimPosition& pos, const Move& m) {
   return a;
 }
 
-// What one rollout contributes to a SimObservation, root-mover POV: the two
-// moves the placement maps read (a missing move is a default Move -- PASS --
-// which places nothing), plus the outcome distribution. A terminal rollout
-// contributes its exact result ({0,1} probabilities, integer delta, delta_sq
-// = delta^2); a truncated one the leaf model's outcome probabilities and its
-// Gaussian's moments -- delta_sq = mean^2 + sigma^2, so the leaf's own
-// predictive uncertainty ("win by 103 +/- 39", not "win by exactly 103")
-// reaches the aggregated delta moments.
-struct RolloutResult {
-  Move opp_reply{};
-  Move self_next{};
-  double p_win = 0;
-  double p_draw = 0;
-  double p_loss = 0;
-  double delta = 0;     // (predicted) mean of the final delta
-  double delta_sq = 0;  // (predicted) second moment of the final delta
-};
-
 void set_terminal_outcome(int delta, RolloutResult* r) {
   r->p_win = delta > 0 ? 1.0 : 0.0;
   r->p_draw = delta == 0 ? 1.0 : 0.0;
@@ -83,90 +65,6 @@ void set_terminal_outcome(int delta, RolloutResult* r) {
   r->delta = delta;
   r->delta_sq = double(delta) * delta;
 }
-
-// One worker's staging for horizon leaf evaluations: encoded rows are
-// buffered, flushed through the (shared, serialized) service in chunks, and
-// the decoded scoring heads written back into the pending slots' results,
-// flipped to the root mover's POV. Buffering amortizes the service round
-// trip while holding at most kRows encoded rows (~80 KB each).
-class LeafBatcher {
- public:
-  static constexpr int kRows = 64;
-
-  LeafBatcher(nn::PositionEvalService* service, const InputEncodingSpec& spec,
-              std::vector<RolloutResult>* results)
-      : service_(service),
-        results_(results),
-        row_floats_(input_floats(spec)),
-        rows_(size_t(kRows) * row_floats_),
-        wld_(size_t(kRows) * nn::WldOutput::kRowElems),
-        sd_(size_t(kRows) * nn::ScoreDiffOutput::kRowElems) {}
-
-  // The destination for the next pending leaf's row; add() commits it.
-  float* next_row() { return rows_.data() + pending_.size() * row_floats_; }
-
-  // `root_pov`: whether the horizon state was encoded from the root mover's
-  // own POV (the horizon ply was theirs) rather than the opponent's.
-  void add(size_t slot, bool root_pov) {
-    pending_.push_back({slot, root_pov});
-    if (int(pending_.size()) == kRows) flush();
-  }
-
-  void flush() {
-    if (pending_.empty()) return;
-    const nn::PositionEvaluationSpec::Batch batch{rows_.data(), int(pending_.size())};
-    const std::array<float*, 2> heads = {wld_.data(), sd_.data()};
-    service_->evaluate(batch, heads);
-    for (size_t j = 0; j < pending_.size(); ++j) {
-      const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
-      const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
-      // A NaN readout would flow silently into training data and decisions
-      // (NaN comparisons all read false), so it is a hard error. Legitimate
-      // rows can produce one under FP16 -- current checkpoints overflow on
-      // extreme-advantage states rollouts routinely reach -- which is why
-      // every leaf loader defaults to FP32.
-      // A NaN readout would flow silently into training data and decisions
-      // (NaN comparisons all read false), so it is a hard error. Legitimate
-      // rows can produce one under FP16 -- current checkpoints overflow on
-      // extreme-advantage states rollouts routinely reach -- which is why
-      // every leaf loader defaults to FP32.
-      if (std::isnan(wld[0]) || std::isnan(sd[0])) {
-        throw util::Exception(
-          "sim runner: the leaf model returned NaN at a rollout horizon (FP16 overflow? "
-          "serve the leaf model in FP32)");
-      }
-      RolloutResult& r = (*results_)[pending_[j].slot];
-      if (pending_[j].root_pov) {
-        r.p_win = wld[0];
-        r.p_draw = wld[1];
-        r.p_loss = wld[2];
-        r.delta = sd[0];
-      } else {
-        r.p_win = wld[2];
-        r.p_draw = wld[1];
-        r.p_loss = wld[0];
-        r.delta = -sd[0];
-      }
-      // The second moment is sign-invariant, so no POV branch.
-      r.delta_sq = double(sd[0]) * sd[0] + double(sd[1]) * sd[1];
-    }
-    pending_.clear();
-  }
-
- private:
-  struct Pending {
-    size_t slot;
-    bool root_pov;
-  };
-
-  nn::PositionEvalService* service_;
-  std::vector<RolloutResult>* results_;
-  size_t row_floats_;
-  std::vector<float> rows_;
-  std::vector<float> wld_;
-  std::vector<float> sd_;
-  std::vector<Pending> pending_;
-};
 
 // Plays one rollout of candidate `a` -- to a natural end, or to horizon_plies
 // when truncating -- and fills `out`'s moves plus, for a finished game, its
@@ -279,6 +177,47 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
 }
 
 }  // namespace
+
+void LeafBatcher::add(size_t slot, bool root_pov) {
+  pending_.push_back({slot, root_pov});
+  if (int(pending_.size()) == kRows) flush();
+}
+
+void LeafBatcher::flush() {
+  if (pending_.empty()) return;
+  const nn::PositionEvaluationSpec::Batch batch{rows_.data(), int(pending_.size())};
+  const std::array<float*, 2> heads = {wld_.data(), sd_.data()};
+  service_->evaluate(batch, heads);
+  for (size_t j = 0; j < pending_.size(); ++j) {
+    const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
+    const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
+    // A NaN readout would flow silently into training data and decisions
+    // (NaN comparisons all read false), so it is a hard error. Legitimate
+    // rows can produce one under FP16 -- current checkpoints overflow on
+    // extreme-advantage states rollouts routinely reach -- which is why
+    // every leaf loader serves FP32.
+    if (std::isnan(wld[0]) || std::isnan(sd[0])) {
+      throw util::Exception(
+        "sim runner: the leaf model returned NaN at a rollout horizon (FP16 overflow? "
+        "serve the leaf model in FP32)");
+    }
+    RolloutResult& r = (*results_)[pending_[j].slot];
+    if (pending_[j].root_pov) {
+      r.p_win = wld[0];
+      r.p_draw = wld[1];
+      r.p_loss = wld[2];
+      r.delta = sd[0];
+    } else {
+      r.p_win = wld[2];
+      r.p_draw = wld[1];
+      r.p_loss = wld[0];
+      r.delta = -sd[0];
+    }
+    // The second moment is sign-invariant, so no POV branch.
+    r.delta_sq = double(sd[0]) * sd[0] + double(sd[1]) * sd[1];
+  }
+  pending_.clear();
+}
 
 double sim_objective_value(const SimObservation& o, SimObjective objective) {
   if (o.n == 0) return 0.0;
