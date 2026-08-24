@@ -2363,6 +2363,55 @@ TEST(Game, PlayFrom) {
   ASSERT_EQ(logs[0].end_reason, logs[1].end_reason);
 }
 
+// Game::set_max_plies (a value-truncated rollout's horizon): play stops after
+// exactly the cap, truncated() reports it, no end-of-game score adjustment is
+// applied, and leave() exposes the last mover's post-move pre-draw rack.
+TEST(Game, MaxPliesTruncation) {
+  const Dictionary d = medium_dict();
+  const Board board;
+  const Rack leave = rack_from("ING");
+  const std::array<Rack, 2> known = {leave, Rack{}};
+  const std::array<int, 2> scores = {120, 95};
+  constexpr int kPlies = 3;
+
+  const uint64_t seed = 7;
+  Bag pool(seed);
+  for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
+  TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+  TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+  scribblez::Game g(a0, a1, d, seed);
+  g.set_max_plies(kPlies);
+  g.play_from(board, scores, known, pool, /*to_move=*/1);
+
+  ASSERT_TRUE(g.truncated());
+  const GameLog log = g.log();
+  ASSERT_EQ(log.num_records, kPlies);
+  ASSERT_STREQ(log.end_reason, "truncated");
+  // Truncation applies no out/stalemate adjustment: the final scores are the
+  // running scores, the initial scores plus each player's move scores.
+  std::array<int, 2> expected = scores;
+  for (int i = 0; i < log.num_records; ++i)
+    expected[log.records[i].player] += log.records[i].score_delta;
+  ASSERT_EQ(log.final_scores, expected);
+  // leave(): the last mover's record's rack_before minus the tiles the move
+  // surrendered -- their post-move pre-draw rack.
+  const TurnRecord& last = log.records[kPlies - 1];
+  Rack expected_leave = last.rack_before;
+  for (int i = 0; i < last.move.num_glyphs(); ++i)
+    ASSERT_TRUE(expected_leave.remove(last.move.glyph(i).rack_tile()));
+  ASSERT_EQ(g.leave(last.player).to_string(), expected_leave.to_string());
+
+  // A game reaching its natural end under a generous cap is not truncated.
+  TestAgent b0(0, "B0", seed ^ 0x1111111111111111ULL);
+  TestAgent b1(0, "B1", seed ^ 0x2222222222222222ULL);
+  Bag pool2(seed);
+  for (int i = 0; i < leave.size(); ++i) pool2.remove(leave.tiles()[i]);
+  scribblez::Game g2(b0, b1, d, seed);
+  g2.set_max_plies(399);
+  g2.play_from(board, scores, known, pool2, /*to_move=*/1);
+  ASSERT_FALSE(g2.truncated());
+}
+
 // ===========================================================================
 // LabelEncoder
 // ===========================================================================

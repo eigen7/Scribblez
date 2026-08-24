@@ -40,6 +40,12 @@ void Game::set_face_up_leaves(bool on) {
   face_up_leaves_ = on;
 }
 
+void Game::set_max_plies(int plies) {
+  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
+  RELEASE_ASSERT(plies >= 1);
+  max_plies_ = plies;
+}
+
 const Rack& Game::visible_opp_rack(int mover) const {
   static const Rack kHidden;
   const int opp = 1 - mover;
@@ -200,6 +206,12 @@ void Game::play_loop(int start_player) {
       // Stalemate: each player subtracts their remaining tile values.
       for (int p = 0; p < 2; ++p) scores_[p] -= racks_[p].point_value();
       log_.end_reason = "stalemate";
+      break;
+    }
+    // Checked after the natural ends, so a game that finishes exactly at the
+    // cap counts as finished, with its score adjustments applied.
+    if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_) {
+      log_.end_reason = "truncated";
       break;
     }
     cur = 1 - cur;
