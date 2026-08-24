@@ -158,8 +158,7 @@ In rough order of what each answers.
    whether the plane-carrying `.mset` record (~950 B against v1's 36 B) earns
    its size.
 5. **Rollout-ladder rungs**, each behind its `.sobs` flag: value truncation
-   against terminal rollouts (with the anchor fraction giving a free read on the
-   value model's bias), then self-model plies, then the endgame solver on a
+   against terminal rollouts, then self-model plies, then the endgame solver on a
    bag-≤-N slice.
 6. **Whether the student can replace exact evaluation.** The distilled filter
    against per-candidate exact evaluation at equal rollout budget. Note this is

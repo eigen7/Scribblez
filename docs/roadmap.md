@@ -187,10 +187,16 @@ Promoted from the rollout-policy ladder to the head of the queue: truncation
 is now a **data prerequisite**, not just an agent speedup.
 
 Rollouts sim a few plies, then read the position evaluation model's value at
-the horizon. An **anchor fraction** of terminal rollouts per candidate stays
-as a ground-truth tether — and as the instrument that measures both what the
-leaf model hides and the truncation bias in the CRN duplicate cancellation
-([sim_residual_feedback.md](sim_residual_feedback.md)).
+the horizon. Everything past the horizon is the leaf model's word, and
+trusting it there is a **design axiom**, not something the pipeline keeps
+re-measuring: the sim exists to cover the model's near-root lexical
+blindness, the horizon is set structurally (below), and the match harness
+arbitrates the stack. There is deliberately no standing "anchor fraction" of
+terminal rollouts riding along as a bias instrument — its would-be consumers
+(empirical horizon tuning, leaf-bias correction) are cut as inconsistent
+with that axiom. If a truncated-vs-terminal question ever needs asking, it
+is a one-off offline study; terminal rollouts remain an ordinary sim
+configuration, not a per-record tax.
 
 - **Why first**: the deployment budget is ~1,000 rollouts per candidate, and
   the trajectory corpus must carry deployment-quality evidence — the count
@@ -393,6 +399,9 @@ the one above it.
   post-move state — under face-up leaves the sim samples the same draw
   distribution the game did, so it is the same target as the game outcome at
   a fraction of the variance. Positions with sims train on both streams.
+  Constraint if adopted after D1: this stream must come from
+  terminal-configuration sims — a truncated sim value embeds the PE model's
+  own leaf readouts, and the model must not train on its own outputs.
 - **Predicts**: WLD, score-differential Gaussian, four placement masks.
 - **Roles**: teacher for the student's distillation and, once item 2 lands,
   the rollout leaf evaluator — which is what puts it inside the generational
