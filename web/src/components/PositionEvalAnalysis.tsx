@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
+import { TabActiveContext } from './TabActiveContext';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
@@ -234,6 +235,7 @@ function ScoreDeltaChart({ mc, model }: { mc: MC; model: Model | null }) {
 }
 
 export default function PositionEvalAnalysis({ task, tag }: { task: string; tag: string | null }) {
+  const tabActive = useContext(TabActiveContext);
   const [positions, setPositions] = useState<string[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [posIdx, setPosIdx] = useState(0);
@@ -252,7 +254,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
   // The dataset's positions (fixed). Retry until they load: at startup the data API
   // can take ~10s to bind (it imports torch + the engine FFI).
   useEffect(() => {
-    if (positions.length > 0) return;
+    if (positions.length > 0 || !tabActive) return;
     let cancelled = false;
     const tryFetch = () =>
       getJSON('/api/position_eval/positions')
@@ -266,10 +268,10 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
       cancelled = true;
       clearInterval(id);
     };
-  }, [positions.length]);
+  }, [positions.length, tabActive]);
 
   useEffect(() => {
-    if (!tag) return;
+    if (!tag || !tabActive) return;
     const refresh = () =>
       getJSON(`/api/position_eval/generations?task=${task}&tag=${tag}`)
         .then((d: { generations: Generation[] }) =>
@@ -287,7 +289,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     refresh();
     const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
-  }, [task, tag]);
+  }, [task, tag, tabActive]);
 
   const genCount = generations.length;
 

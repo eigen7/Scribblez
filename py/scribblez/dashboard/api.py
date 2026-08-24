@@ -69,12 +69,11 @@ VERSION_TABLES = (
 
 def _loss(conn, params, mount_root):
     """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
-    metrics table, with control-change markers; `normalized` stacks the loss as
-    per-column shares. Both x-axis variants ride along (plots.X_AXIS_LINEAR /
-    X_AXIS_LOG) for the client to flip between. The value-quality curves are a
-    separate figure (`eval_quality`), so the client can place its own controls
-    between the two."""
-    return plots.metrics_loss_grid(conn, normalized=_truthy(params.get("normalized")))
+    metrics table, with control-change markers. Every knob variant rides along as
+    a named row (see plots._variant_rows) for the client to flip between. The
+    value-quality curves are a separate figure (`eval_quality`), so the client
+    can place its own controls between the two."""
+    return plots.metrics_loss_grid(conn)
 
 
 def _eval_quality(conn, params, mount_root):

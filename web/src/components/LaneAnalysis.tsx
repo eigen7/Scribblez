@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
+import { TabActiveContext } from './TabActiveContext';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
@@ -139,6 +140,7 @@ function ScoreHistogram({ lane }: { lane: Lane }) {
 }
 
 export default function LaneAnalysis({ task, tag }: { task: string; tag: string | null }) {
+  const tabActive = useContext(TabActiveContext);
   const [positions, setPositions] = useState<string[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [posIdx, setPosIdx] = useState(0);
@@ -153,7 +155,7 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
   // API can take ~10s to bind (it imports torch + the engine FFI), so the first
   // fetch may fail; without a retry the tab would stay empty permanently.
   useEffect(() => {
-    if (positions.length > 0) return;
+    if (positions.length > 0 || !tabActive) return;
     let cancelled = false;
     const tryFetch = () =>
       getJSON('/api/lane/positions')
@@ -167,10 +169,10 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
       cancelled = true;
       clearInterval(id);
     };
-  }, [positions.length]);
+  }, [positions.length, tabActive]);
 
   useEffect(() => {
-    if (!tag) return;
+    if (!tag || !tabActive) return;
     const refresh = () =>
       getJSON(`/api/lane/generations?task=${task}&tag=${tag}`)
         .then((d: { generations: Generation[] }) =>
@@ -188,7 +190,7 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
     refresh();
     const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
-  }, [task, tag]);
+  }, [task, tag, tabActive]);
 
   const genCount = generations.length;
 
