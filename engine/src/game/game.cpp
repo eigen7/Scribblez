@@ -212,7 +212,8 @@ void Game::play_loop(int start_player) {
     // cap counts as finished, with its score adjustments applied. Once the
     // bag has emptied the cap stops applying and the game plays out -- see
     // set_max_plies for why the endgame is never truncated.
-    if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_ && bag_.size() > 0) {
+    if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_ &&
+        log_.turns.back().bag_size_before > 0) {
       log_.end_reason = "truncated";
       break;
     }

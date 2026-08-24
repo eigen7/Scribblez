@@ -196,28 +196,27 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
     return;
   }
 
-  // Encode the horizon leaf: the PRE-move state of the next decision point
-  // -- the player on move after the horizon ply, holding their refilled
-  // rack. Pre-move is the sample kind the position evaluation model trains
-  // on at every eligible turn whatever the move type, where post-move
-  // samples exist only for PLAY turns -- a post-EXCHANGE or post-PASS
-  // horizon would be off-distribution (in practice far enough off to
-  // overflow FP16). The seeded encoder's unknown last-move slots are
-  // overwritten by the candidate and the >= kMinHorizonPlies rollout plies
-  // before anything reads them.
+  // Encode the horizon leaf: the post-move pre-draw state of the horizon
+  // ply's mover, from their POV -- the exact sample kind the position
+  // evaluation model trains on. The trainer loads post-move rows
+  // (position_eval/trainer.py, post_move=True) of eligible turns of EVERY
+  // move type: replay_to_sampled applies the sampled PLAY, EXCHANGE, or
+  // PASS before encoding, so all three horizon kinds are in-distribution.
+  // The seeded encoder's unknown last-move slots are overwritten by the
+  // candidate and the >= kMinHorizonPlies rollout plies before anything
+  // reads them.
   GameStateEncoder enc(*leaf_spec, pos.board, pos.scores, pos.mover);
   enc.apply_move(candidate);
   for (int i = 0; i < log.num_records; ++i) enc.apply_move(log.records[i].move);
-  const int on_move = 1 - log.records[log.num_records - 1].player;
-  DEBUG_ASSERT(on_move == enc.active_player());
+  const int horizon_mover = log.records[log.num_records - 1].player;
   float* row = batcher->next_row();
   if (leaf_spec->opp_leave_input) {
-    enc.encode_input(on_move, game.rack(on_move), game.leave(1 - on_move),
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover),
                      /*apply_flip=*/false, row);
   } else {
-    enc.encode_input(on_move, game.rack(on_move), /*apply_flip=*/false, row);
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), /*apply_flip=*/false, row);
   }
-  batcher->add(slot, on_move == pos.mover);
+  batcher->add(slot, horizon_mover == pos.mover);
 }
 
 // Fold one rollout into the candidate's observation. Terminal rollouts

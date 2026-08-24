@@ -32,12 +32,16 @@ class Dictionary;
 // and the opponent's rack. Indexed by tile kind (A..Z, then blank).
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// Which of a PLAY turn's two samples a position is.
+// The two encodable samples of a turn. The position evaluation model's
+// training loader encodes the POST-move state of every sampled turn,
+// whatever its move type (replay_to_sampled applies the PLAY, EXCHANGE, or
+// PASS before encoding); this tag is used by the encoder cross-check
+// harness, whose reference snapshots take the post-move kind for PLAY turns
+// only.
 enum class PositionKind : uint8_t {
-  kPreMove = 0,   // active player is about to play
-  kPostMove = 1,  // active player just played; refill has not happened yet
-                  // (unseen-pool composition unchanged from pre-move).
-                  // Only emitted for PLAY turns.
+  kPreMove = 0,   // active player is about to move
+  kPostMove = 1,  // active player just moved; refill has not happened yet
+                  // (unseen-pool composition unchanged from pre-move)
 };
 
 class GameStateEncoder {

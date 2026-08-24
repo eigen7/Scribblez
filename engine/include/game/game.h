@@ -47,13 +47,12 @@ class Game {
   // ends naturally at or before the cap is not truncated, and end-of-game
   // score adjustments apply only on a natural end.
   //
-  // The cap applies only while the bag is still non-empty after the capped
-  // move's refill: once the endgame starts the game plays out however many
-  // plies that takes. Truncation exists to hand the position evaluation
-  // model the next decision point as a leaf, and that model's training
-  // domain is the pre-endgame prefix (binary_log.h's eligible span) -- an
-  // endgame leaf would be scored by a model that has never seen one. Must
-  // be called before play().
+  // The cap applies only while the capped move's pre-move bag was non-empty
+  // -- the training-eligibility bound (binary_log.h's eligible span): once
+  // the endgame starts the game plays out however many plies that takes.
+  // Truncation exists to hand the position evaluation model the capped
+  // ply's post-move state as a leaf, and an endgame leaf would be scored by
+  // a model that has never seen one. Must be called before play().
   void set_max_plies(int plies);
 
   void play();
@@ -84,9 +83,10 @@ class Game {
   bool truncated() const { return log_.end_reason == "truncated"; }
 
   // The tiles `player` retained from their most recent move, before any draw
-  // -- the public leave a value-truncated rollout's leaf encode reads as the
-  // opponent-leave input at the horizon. play_from seeds it with the
-  // caller's known_racks entry until the player first moves.
+  // -- their post-move pre-draw rack, which a value-truncated rollout's leaf
+  // encode reads at the horizon (and, for the other seat, as the
+  // opponent-leave input). play_from seeds it with the caller's known_racks
+  // entry until the player first moves.
   const Rack& leave(int player) const { return leaves_[player]; }
 
  private:

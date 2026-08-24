@@ -2474,9 +2474,9 @@ TEST(Game, MaxPliesSparesTheEndgame) {
 
   const GameLog log = g.log();
   if (g.truncated()) {
-    // Truncation is only legitimate while the bag survives the capped ply's
-    // refill: the pre-move leaf state must be pre-endgame.
-    ASSERT_GT(g.bag_size(), 0);
+    // Truncation is only legitimate at a training-eligible capped ply: its
+    // pre-move bag must have been non-empty.
+    ASSERT_GT(log.records[log.num_records - 1].bag_size_before, 0);
   } else {
     // The expected path with a 2-tile bag: the cap passed inside the endgame
     // and was ignored, so the game reached a natural end beyond it.
@@ -4452,12 +4452,13 @@ TEST(SimRunner, TruncatedPovParity) {
     params.leaf_service = &leaf;
     const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
     ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
-    // The leaf is the pre-move state AFTER the horizon plies (opp moves
-    // first), so at horizon 4 the opponent is on move -- win/loss and the
-    // delta sign flip to the root POV -- and at horizon 3 the root mover is.
-    const double p_win = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
-    const double p_loss = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
-    const double delta = horizon % 2 == 0 ? -100.0 : 100.0;
+    // The leaf is the horizon ply's post-move state from ITS mover's POV.
+    // The opponent moves first, so horizon 4's last ply is the root mover's
+    // own (opp, self, opp, self) and the readout carries over; horizon 3's
+    // is the opponent's, so win/loss and the delta sign flip.
+    const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
+    const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
+    const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
     for (const SimObservation& o : obs) {
       ASSERT_EQ(int(o.n), params.rollouts);
       ASSERT_DOUBLE_EQ(o.wins, o.n * p_win);
