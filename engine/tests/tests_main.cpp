@@ -4465,7 +4465,9 @@ TEST(SimRunner, TruncatedPovParity) {
       ASSERT_DOUBLE_EQ(o.draws, o.n * double(0.1f));
       ASSERT_DOUBLE_EQ(o.losses, o.n * p_loss);
       ASSERT_DOUBLE_EQ(o.delta_sum, o.n * delta);
-      ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * 100.0 * 100.0);
+      // The stub predicts sigma = 5, so the second moment carries mean^2 +
+      // sigma^2 whichever POV the mean was flipped from.
+      ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * (100.0 * 100.0 + 5.0 * 5.0));
       // The win-conjoined planes carry the leaf probabilities per placement.
       for (int i = 0; i < SimObservation::kCells; ++i) {
         ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);

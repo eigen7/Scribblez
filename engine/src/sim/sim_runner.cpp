@@ -60,16 +60,20 @@ AppliedCandidate apply_candidate(const SimPosition& pos, const Move& m) {
 
 // What one rollout contributes to a SimObservation, root-mover POV: the two
 // moves the placement maps read (a missing move is a default Move -- PASS --
-// which places nothing), plus the outcome. p_win/p_draw/p_loss are {0,1} and
-// delta an exact integer for a rollout that reached a game end; a truncated
-// rollout carries the leaf model's probabilities and predicted final delta.
+// which places nothing), plus the outcome distribution. A terminal rollout
+// contributes its exact result ({0,1} probabilities, integer delta, delta_sq
+// = delta^2); a truncated one the leaf model's outcome probabilities and its
+// Gaussian's moments -- delta_sq = mean^2 + sigma^2, so the leaf's own
+// predictive uncertainty ("win by 103 +/- 39", not "win by exactly 103")
+// reaches the aggregated delta moments.
 struct RolloutResult {
   Move opp_reply{};
   Move self_next{};
   double p_win = 0;
   double p_draw = 0;
   double p_loss = 0;
-  double delta = 0;
+  double delta = 0;     // (predicted) mean of the final delta
+  double delta_sq = 0;  // (predicted) second moment of the final delta
 };
 
 void set_terminal_outcome(int delta, RolloutResult* r) {
@@ -77,6 +81,7 @@ void set_terminal_outcome(int delta, RolloutResult* r) {
   r->p_draw = delta == 0 ? 1.0 : 0.0;
   r->p_loss = delta < 0 ? 1.0 : 0.0;
   r->delta = delta;
+  r->delta_sq = double(delta) * delta;
 }
 
 // One worker's staging for horizon leaf evaluations: encoded rows are
@@ -142,6 +147,8 @@ class LeafBatcher {
         r.p_loss = wld[0];
         r.delta = -sd[0];
       }
+      // The second moment is sign-invariant, so no POV branch.
+      r.delta_sq = double(sd[0]) * sd[0] + double(sd[1]) * sd[1];
     }
     pending_.clear();
   }
@@ -228,7 +235,7 @@ void accumulate(const RolloutResult& o, SimObservation* obs) {
   obs->draws += o.p_draw;
   obs->losses += o.p_loss;
   obs->delta_sum += o.delta;
-  obs->delta_sq_sum += o.delta * o.delta;
+  obs->delta_sq_sum += o.delta_sq;
 
   visit_placed_squares(o.opp_reply, [&](int r, int c) {
     const int cell = r * BOARD_SIZE + c;

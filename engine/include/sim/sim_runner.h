@@ -22,7 +22,8 @@
 // mover, the sample kind the model trains on -- stands for everything
 // after: the rollout contributes the model's outcome probabilities and
 // predicted final delta (root-mover POV) instead of a terminal {0,1}
-// outcome. A rollout whose game ends before the horizon, or whose horizon
+// outcome, with the leaf Gaussian's variance folded into the delta second
+// moment. A rollout whose game ends before the horizon, or whose horizon
 // ply falls inside the endgame (the model's domain is the pre-endgame
 // prefix), contributes its exact terminal outcome instead. Identical
 // candidates reach identical horizon states under CRN, so their
@@ -80,9 +81,15 @@ struct SimObservation {
   double wins = 0;  // outcome weight for the mover winning (draws are neither)
   double draws = 0;
   double losses = 0;
-  double delta_sum = 0;     // sum over rollouts of (mover final - opp final)
-  double delta_sq_sum = 0;  // sum of squared deltas (yields the delta std)
-  uint32_t n = 0;           // rollouts
+  double delta_sum = 0;  // sum over rollouts of (mover final - opp final)
+  // Sum over rollouts of the final delta's second moment: delta^2 for a
+  // terminal rollout, mean^2 + sigma^2 of the leaf Gaussian for a truncated
+  // one. The recovered variance is therefore PREDICTIVE in both
+  // configurations (law of total variance: across-rollout spread of the
+  // means plus the mean leaf variance), distinguishing "win by 103 exactly"
+  // from "win by 103 +/- 39".
+  double delta_sq_sum = 0;
+  uint32_t n = 0;  // rollouts
 
   std::array<uint16_t, kCells> opp_next_count{};
   std::array<uint16_t, kCells> self_next_count{};
