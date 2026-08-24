@@ -423,7 +423,7 @@ def move_encoder() -> Diagram:
     )
     letters = d.box(let_col, 26, [title("move_letters"), mono("(M, T)")], "input")
     blanks = d.box(blank_col, 26, [title("move_blanks"), mono("(M, T)")], "input")
-    scalars = d.box(sc_col, 26, [title("move_scalars"), mono("(M, 3)")], "input")
+    scalars = d.box(sc_col, 26, [title("move_scalars"), mono("(M, S_mv)")], "input")
 
     gather = d.box(
         sq_col,

@@ -146,10 +146,14 @@ void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int
 // never silently run against an encoder whose rows it was not trained on.
 int32_t scribblez_move_set_encoding_version(void);
 
-// Where the board input's score-differential scalar sits, so the move set
-// dataset can read a position's pre-move differential straight out of the
+// Where the board input's raw score-differential scalar sits -- the first
+// float of the kScoreDiff block, whose remaining floats are the differential's
+// basis (score_diff_features.h) and carry no extra information. So the move
+// set dataset can read a position's pre-move differential straight out of the
 // encoded row instead of recomputing it: points =
-// input_scalar[scalar_index] * scale.
+// input_scalar[scalar_index] * scale. Reading only; writing the differential
+// into a row means rewriting the whole block, which is GameStateEncoder's
+// overwrite_score_diff.
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale);
 
 // An ASCII description of a sampled position (POV, scores, leave, last moves,

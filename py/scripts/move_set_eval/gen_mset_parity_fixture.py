@@ -103,7 +103,11 @@ def random_candidates(num_moves: int, seed: int) -> dict[str, np.ndarray]:
         tile_mask[m, :n] = 1
         if is_play:
             squares[m, :n] = rng.integers(0, cells, n)
-        scalars[m] = [rng.standard_normal(), n / tiles, is_play]
+        # The three named scalars, then the resultant differential's basis --
+        # arbitrary values, since parity only asks that both sides see the same
+        # array through the same layout.
+        scalars[m, :3] = [rng.standard_normal(), n / tiles, is_play]
+        scalars[m, 3:] = rng.random(num_scalars - 3)
 
     return {
         "move_letters": letters,

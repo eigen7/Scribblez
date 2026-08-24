@@ -556,9 +556,14 @@ def move_encoding_version() -> int:
 
 
 def score_diff_input_layout() -> tuple[int, float]:
-    """(scalar_index, scale) locating the board input's score-diff scalar for
-    this session's arm, so a caller can read a position's pre-move differential
-    in points as input_scalar[scalar_index] * scale."""
+    """(scalar_index, scale) locating the board input's RAW score-diff scalar
+    for this session's arm, so a caller can read a position's pre-move
+    differential in points as input_scalar[scalar_index] * scale.
+
+    Reading only. The scalar is the head of a wider block whose tail is the
+    differential's nonlinear basis (score_diff_features.h), so writing a new
+    differential into a row means rewriting the whole block -- the engine's
+    encoder does that, no Python caller does."""
     index = ctypes.c_int32()
     scale = ctypes.c_float()
     _lib().scribblez_score_diff_input_layout(_session(), ctypes.byref(index), ctypes.byref(scale))

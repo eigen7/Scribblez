@@ -130,29 +130,6 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   return kUnseenPoolThermoFloats;
 }
 
-// Score differential as a single signed scalar (kScoreDiffInputFloats floats):
-// (score_active - score_opp) / kScoreDiffInputScale, not clipped.
-//
-// ANALYSIS TODO (score-diff resolution near the endgame): as the bag empties
-// the win/draw/loss boundary in score differential becomes sharp and
-// phase-conditional -- a two-point swing (e.g. +15 vs +17) can flip the likely
-// outcome, whereas mid-game it is nearly flat. A single scalar can express this
-// (the first projection can amplify small differences), but its smoothness bias
-// makes a steep, phase-gated transition something the trunk must spend capacity
-// to learn, exactly where true-endgame training positions are sparsest. Measure
-// it: slice held-out WLD calibration/Brier by (tiles-remaining, score-diff) and
-// look at the near-empty-bag, small-|diff| cells for under-sharpening (win prob
-// flattened across the flip point). If it shows, prefer a compact nonlinear
-// featurization (a handful of RBF/bins, denser near 0) over widening back to a
-// full thermometer, and apply the same basis to the move set evaluation
-// model's resultant-diff move feature (move_set_encoder) so the two stay on
-// one representation. The principled answer for the decisive endgame is the
-// negamax solver (docs/roadmap.md, D3), not finer value-net input resolution.
-int encode_score_diff_scalar(int score_diff, float* out) {
-  out[0] = float(score_diff) / kScoreDiffInputScale;
-  return kScoreDiffInputFloats;
-}
-
 // Last-2-move metadata (kMoveMetaFloats floats): for the POV player's and then
 // the opponent's most recent move, a move-type one-hot (indexed by MoveType)
 // followed by num_glyphs.
@@ -194,7 +171,9 @@ int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
     case ScalarBlockId::kUnseenPool:
       return encode_unseen_pool_thermometer(ctx.unseen, out);
     case ScalarBlockId::kScoreDiff:
-      return encode_score_diff_scalar(ctx.score_diff, out);
+      // The raw normalized scalar plus its nonlinear basis (score_diff_features.h).
+      encode_score_diff_features(ctx.score_diff, out);
+      return kScoreDiffInputFloats;
     case ScalarBlockId::kMoveMeta:
       return encode_move_meta(ctx.self_move, ctx.opp_move, out);
     case ScalarBlockId::kContingent:
@@ -303,7 +282,7 @@ void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_r
 void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) const {
   float* block =
     input_row + spatial_floats(spec_) + scalar_block_offset(spec_, ScalarBlockId::kScoreDiff);
-  encode_score_diff_scalar(score_diff, block);
+  encode_score_diff_features(score_diff, block);
 }
 
 void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my_rack,

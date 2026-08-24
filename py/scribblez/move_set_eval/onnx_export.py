@@ -131,7 +131,7 @@ class MoveSetEvalExportModel(nn.Module):
         move_blanks: torch.Tensor,  # (M, T) u8
         move_squares: torch.Tensor,  # (M, T) i32
         move_tile_mask: torch.Tensor,  # (M, T) u8
-        move_scalars: torch.Tensor,  # (M, 3) f32
+        move_scalars: torch.Tensor,  # (M, num_scalars) f32
     ) -> tuple[torch.Tensor, torch.Tensor]:
         letters = move_letters.long()
         squares = move_squares.long()
@@ -181,7 +181,7 @@ def export_onnx(
     # wrapper's own materialized sub-Linears, which construct on the CPU.
     wrapper = MoveSetEvalExportModel(model).to(device)
     wrapper.eval()
-    t, _, _, _ = move_encoding_dims()
+    t, num_scalars, _, _ = move_encoding_dims()
 
     dummy_m = 5  # any M > 1; the parity tests assert other Ms against it
     dummies = (
@@ -191,7 +191,7 @@ def export_onnx(
         torch.zeros(dummy_m, t, dtype=torch.uint8, device=device),
         torch.zeros(dummy_m, t, dtype=torch.int32, device=device),
         torch.zeros(dummy_m, t, dtype=torch.uint8, device=device),
-        torch.zeros(dummy_m, 3, device=device),
+        torch.zeros(dummy_m, num_scalars, device=device),
     )
     input_names = ["input_spatial", "input_scalar", *MOVE_INPUT_NAMES]
 

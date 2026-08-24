@@ -157,6 +157,7 @@ def test_deliver_pairs_carries_the_sobs_sidecar(tmp_path):
 
 
 def _write_student_onnx(path: Path, shapes: dict) -> None:
+    from scribblez.ffi import move_encoding_version
     from scribblez.move_set_eval.model import MoveSetEvalModel
     from scribblez.move_set_eval.onnx_export import export_onnx
 
@@ -177,7 +178,7 @@ def _write_student_onnx(path: Path, shapes: dict) -> None:
         scalar_size=shapes["input_scalar"][0],
         contingent_features=True,
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
     )
 
 
@@ -501,9 +502,9 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
 
     text = (TEST_DATA / "egotize-lane.gcg").read_text()
     inputs = gcg_position_inputs(
-        text, contingent_features=False, opp_leave_input=True, spatial_planes=85, scalar_size=163
+        text, contingent_features=False, opp_leave_input=True, spatial_planes=85, scalar_size=178
     )
-    assert inputs.input_spatial.shape == (85, 15, 15) and inputs.input_scalar.shape == (163,)
+    assert inputs.input_spatial.shape == (85, 15, 15) and inputs.input_scalar.shape == (178,)
     assert inputs.score_diff == 440 - 387
     bundle = gcg_position_board_json(text, open_leaves=True)
     assert len(bundle["moves"]) == len(inputs.moves) > 100
@@ -513,7 +514,7 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
     # A width the arm does not encode is refused, naming the mismatch.
     with pytest.raises(ValueError, match="floats"):
         gcg_position_inputs(
-            text, contingent_features=True, opp_leave_input=True, spatial_planes=85, scalar_size=163
+            text, contingent_features=True, opp_leave_input=True, spatial_planes=85, scalar_size=178
         )
 
 

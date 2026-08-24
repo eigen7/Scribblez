@@ -1,7 +1,5 @@
 #include "training/move_set_encoder.h"
 
-#include "encoding/input_encoder.h"  // kScoreDiffInputScale
-
 #include <algorithm>
 
 namespace scribblez {
@@ -42,11 +40,15 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
   }
 
   // Resultant post-move differential (mover POV): the mover's score advantage
-  // plus this move's score, on the board trunk's score-diff scale.
+  // plus this move's score, in the board trunk's score-diff representation --
+  // the raw normalized scalar here, its basis at the tail.
   const int resultant_diff = pre_move_score_diff + int(m.score());
-  scalars[0] = float(resultant_diff) / kScoreDiffInputScale;
+  float diff_features[kScoreDiffFeatureFloats];
+  encode_score_diff_features(resultant_diff, diff_features);
+  scalars[0] = diff_features[0];
   scalars[1] = float(m.num_glyphs()) / float(kMoveMaxPlaced);
   scalars[2] = m.type() == MoveType::PLAY ? 1.0f : 0.0f;
+  std::copy_n(diff_features + 1, kScoreDiffBasisFloats, scalars + kMoveScalarsNamed);
 }
 
 void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_diffs,

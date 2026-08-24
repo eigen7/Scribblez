@@ -30,8 +30,9 @@
 //     kRackCounts     the POV rack's raw per-tile counts (A..Z, blank).
 //     kUnseenPool     thermometer, one slot per physical tile, grouped per
 //                     letter (TILE_COUNTS regions).
-//     kScoreDiff      (score_active - score_opp) / kScoreDiffInputScale, signed
-//                     and unclipped.
+//     kScoreDiff      the score differential (score_active - score_opp): the
+//                     raw normalized scalar followed by its nonlinear basis,
+//                     per score_diff_features.h.
 //     kMoveMeta       per last move, self then opponent: a 3-way
 //                     PLAY/EXCHANGE/PASS one-hot plus num_glyphs.
 //     kContingent     per drawable tile kind the best contingent score over all
@@ -51,6 +52,8 @@
 // `apply_flip` transposes every spatial plane and leaves the scalars alone.
 // The flip also exchanges the axes, so the kCrossChecks halves swap as they
 // transpose -- the only block whose contents name an axis.
+
+#include "encoding/score_diff_features.h"
 
 namespace scribblez {
 
@@ -82,7 +85,8 @@ struct InputEncodingSpec {
 // which read as version 0 -- the version at the entry's introduction.
 //
 //   1: cross-check planes bug fixes
-inline constexpr int kInputEncodingVersion = 1;
+//   2: the kScoreDiff block gained its nonlinear basis
+inline constexpr int kInputEncodingVersion = 2;
 
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225
@@ -96,10 +100,10 @@ inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
 // The move set evaluation model's resultant-diff move feature shares this
-// representation, so a post-move differential is the pre-move differential plus
-// the move score, a plain sum.
-inline constexpr int kScoreDiffInputFloats = 1;
-inline constexpr float kScoreDiffInputScale = 100.0f;
+// representation (score_diff_features.h owns it), so the two describe a
+// differential identically -- a candidate's resultant value is directly
+// comparable to the board trunk's current one.
+inline constexpr int kScoreDiffInputFloats = kScoreDiffFeatureFloats;
 inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
@@ -159,7 +163,7 @@ inline bool scalar_block_included(const ScalarBlockDef& def, const InputEncoding
 // ---- Layout queries (walk the registry under `spec`) ------------------------
 
 int spatial_planes(const InputEncodingSpec& spec);  // 88 full / 85 base
-int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base; +27 open-leaves
+int scalar_floats(const InputEncodingSpec& spec);   // 207 full / 151 base; +27 open-leaves
 int spatial_floats(const InputEncodingSpec& spec);  // spatial_planes * kBoardCells
 int input_floats(const InputEncodingSpec& spec);    // spatial + scalar
 

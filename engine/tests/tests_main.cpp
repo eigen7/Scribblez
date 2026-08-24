@@ -873,8 +873,59 @@ TEST(Encoder, ForcedScoreDiffIsolation) {
     ASSERT_EQ(normal[i], forced[i]);
   }
 
-  // Forced block must represent score_diff=123 as the normalized scalar.
-  ASSERT_EQ(forced[score_lo], 123.0f / kScoreDiffInputScale);
+  // Forced block must carry score_diff=123's whole representation, raw scalar
+  // and basis alike -- an in-place rewrite that updated only the scalar would
+  // leave the basis describing the position's original differential.
+  float expected[kScoreDiffFeatureFloats];
+  encode_score_diff_features(123, expected);
+  for (int i = 0; i < kScoreDiffInputFloats; ++i) ASSERT_EQ(forced[score_lo + i], expected[i]);
+}
+
+// The score differential's shared representation (score_diff_features.h): the
+// raw scalar, then a basis whose resolution is deliberately uneven -- fine
+// near a close game, coarse out where a lead is decided.
+TEST(Encoder, ScoreDiffFeatureBasis) {
+  const auto basis = [](int d) {
+    std::vector<float> f(kScoreDiffFeatureFloats);
+    encode_score_diff_features(d, f.data());
+    return f;
+  };
+  // Distance between two differentials' basis vectors -- how far apart the
+  // representation holds them.
+  const auto separation = [&](int a, int b) {
+    const std::vector<float> fa = basis(a), fb = basis(b);
+    float sum = 0.0f;
+    for (int i = 1; i < kScoreDiffFeatureFloats; ++i) sum += (fa[i] - fb[i]) * (fa[i] - fb[i]);
+    return std::sqrt(sum);
+  };
+
+  // The raw scalar leads the block, so a consumer can still read the
+  // differential straight back off a row (scribblez_score_diff_input_layout).
+  ASSERT_EQ(basis(0)[0], 0.0f);
+  ASSERT_EQ(basis(-47)[0], -47.0f / kScoreDiffInputScale);
+
+  // Every bump is a bounded activation, and a tied score sits exactly on the
+  // middle one.
+  const std::vector<float> tied = basis(0);
+  for (int i = 1; i < kScoreDiffFeatureFloats; ++i) ASSERT_TRUE(tied[i] > 0.0f && tied[i] <= 1.0f);
+  ASSERT_FLOAT_EQ(tied[1 + kScoreDiffBasisFloats / 2], 1.0f);
+
+  // The basis is odd in the differential: leading by d and trailing by d are
+  // mirror images, so neither seat is privileged by the representation. An
+  // absolute bound, not ULPs: the far-tail bumps are denormal-small, where
+  // mirrored centers round differently by relatively a lot and absolutely
+  // nothing.
+  const std::vector<float> ahead = basis(37), behind = basis(-37);
+  for (int i = 0; i < kScoreDiffBasisFloats; ++i) {
+    ASSERT_NEAR(ahead[1 + i], behind[kScoreDiffFeatureFloats - 1 - i], 1e-6f);
+  }
+
+  // The point of the basis: a five-point swing near a tied score moves the
+  // representation far more than the same swing out where the game is decided.
+  ASSERT_GT(separation(0, 5), 10.0f * separation(200, 205));
+  // ... and nothing is a dead zone -- adjacent differentials stay distinct
+  // everywhere, the raw scalar aside.
+  ASSERT_GT(separation(200, 201), 0.0f);
 }
 
 TEST(Encoder, NonplayLastMoveMetadata) {
@@ -4851,6 +4902,46 @@ TEST(MoveSetEncoder, Basic) {
   ASSERT_LT(std::abs(scalars[2 * mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
   ASSERT_EQ(scalars[2 * mset::kMoveScalars + 1], 0.0f);
   ASSERT_EQ(scalars[2 * mset::kMoveScalars + 2], 0.0f);
+
+  // The named scalars are followed by the resultant differential's basis, in
+  // the board input's representation: the PLAY's tail describes +34 and the
+  // EXCHANGE's the carried-through -5.
+  float play_diff[kScoreDiffFeatureFloats], exch_diff[kScoreDiffFeatureFloats];
+  encode_score_diff_features(34, play_diff);
+  encode_score_diff_features(-5, exch_diff);
+  for (int i = 0; i < kScoreDiffBasisFloats; ++i) {
+    ASSERT_FLOAT_EQ(scalars[mset::kMoveScalarsNamed + i], play_diff[1 + i]);
+    ASSERT_FLOAT_EQ(scalars[mset::kMoveScalars + mset::kMoveScalarsNamed + i], exch_diff[1 + i]);
+  }
+}
+
+// A candidate's resultant differential and the board trunk's current one are
+// the same quantity in the same representation -- what makes the two directly
+// comparable, and the reason one component owns the encoding. A move played
+// from a position must describe the post-move differential exactly as the
+// board input describes it once the move is on the board.
+TEST(MoveSetEncoder, SharesTheBoardInputsDifferentialRepresentation) {
+  namespace mset = move_set;
+  const Move play =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 26, {Glyph::of(Tile::from_char('A'))});
+  const int pre_move_diff = -11;
+
+  int32_t letters[mset::kMoveMaxPlaced], squares[mset::kMoveMaxPlaced];
+  uint8_t blanks[mset::kMoveMaxPlaced], tile_mask[mset::kMoveMaxPlaced];
+  float scalars[mset::kMoveScalars];
+  mset::encode_move(play, pre_move_diff, letters, blanks, squares, tile_mask, scalars);
+
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  std::vector<float> row(kInputFloats, 0.0f);
+  enc.encode_input_with_score_diff(enc.active_player(), Rack{}, pre_move_diff + int(play.score()),
+                                   /*apply_flip=*/false, row.data());
+
+  const float* board_block = row.data() + kSpatialFloats + kScoreDiffOffset;
+  ASSERT_FLOAT_EQ(scalars[0], board_block[0]);
+  for (int i = 0; i < kScoreDiffBasisFloats; ++i) {
+    ASSERT_FLOAT_EQ(scalars[mset::kMoveScalarsNamed + i], board_block[1 + i]);
+  }
 }
 
 TEST(SimObservationLog, Roundtrip) {

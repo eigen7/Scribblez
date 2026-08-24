@@ -12,9 +12,10 @@
 //
 // The score differential feeds in as the resultant post-move value rather than
 // the raw move score: that is the quantity the position evaluation model
-// evaluates, on the same scale as the board trunk's score-diff input, so the
-// two compare directly. The leave is deliberately absent, being recoverable
-// from the mover's rack (which the trunk sees) minus the placed tiles.
+// evaluates, in the same representation as the board trunk's score-diff input
+// (score_diff_features.h), so the two compare directly. The leave is
+// deliberately absent, being recoverable from the mover's rack (which the
+// trunk sees) minus the placed tiles.
 //
 // EXCHANGE moves have no placed squares, but their surrendered tiles fill the
 // same letter/blank/tile_mask slots (squares stay 0, masked spatially
@@ -24,6 +25,7 @@
 // exchange surrenders undesignated blanks -- encodes as letters=0/blanks=1,
 // represented by the blank flag alone. PASS stays all-zero.
 
+#include "encoding/score_diff_features.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/tile.h"
@@ -36,21 +38,25 @@ namespace move_set {
 
 // Tiles per move slot: a full-rack bingo.
 inline constexpr int kMoveMaxPlaced = RACK_SIZE;
-// [resultant_score_diff, tiles/7, is_play].
-inline constexpr int kMoveScalars = 3;
+// [resultant_score_diff, tiles/7, is_play] followed by the resultant
+// differential's nonlinear basis, which sits at the tail so the three named
+// scalars keep their indices.
+inline constexpr int kMoveScalarsNamed = 3;
+inline constexpr int kMoveScalars = kMoveScalarsNamed + kScoreDiffBasisFloats;
 // 0 is the empty/pad slot, 1..26 the letters A..Z.
 inline constexpr int kMoveLetterVocab = 27;
 // One embedding index per board cell.
 inline constexpr int kMoveCells = BOARD_SIZE * BOARD_SIZE;
 
 // The move-feature SEMANTICS version: bumped whenever encode_move changes what
-// the same Move encodes to (v1: exchanges carry their surrendered tiles). A
+// the same Move encodes to (v1: exchanges carry their surrendered tiles;
+// v2: the resultant differential gained its nonlinear basis). A
 // checkpoint is only valid with the encoder version its training rows used, and
 // nothing structural detects a mismatch -- the tensor shapes are unchanged --
 // so the version rides the checkpoint config and the exported ONNX metadata,
 // where the engine-side loader rejects a stale model instead of silently
 // feeding it off-distribution rows.
-inline constexpr int kMoveEncodingVersion = 1;
+inline constexpr int kMoveEncodingVersion = 2;
 
 // `pre_move_score_diff` is the mover's score advantage in points before the
 // move, from which the resultant post-move differential is formed.

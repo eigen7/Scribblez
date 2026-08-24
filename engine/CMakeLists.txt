@@ -14,6 +14,7 @@ add_library(scribblez_core STATIC
   src/training/lane_analysis.cpp
   src/encoding/contingent_map.cpp
   src/encoding/input_encoder.cpp
+  src/encoding/score_diff_features.cpp
   src/encoding/board_planes.cpp
   src/training/max_move_per_lane_input_encoder.cpp
   src/training/max_move_per_lane_task.cpp
