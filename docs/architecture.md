@@ -34,7 +34,7 @@ generate_data.py ─▶ play_game ─▶ GameRunner ─▶ Game ─▶ GameLog
 | On-disk format | [binary_log.h](../engine/include/data/binary_log.h) | **Authoritative** layout (see below). |
 | Load + replay | [BlockDecoder](../engine/src/data/block_decoder.cpp) | Replays a game forward to a given turn and emits one populated tensor row (the loader emits one per eligible turn). |
 | State tracking + encoding | [GameStateEncoder](../engine/src/encoding/game_state_encoder.cpp) | Maintains board/scores/last-moves during replay and writes the model input. |
-| Input layout | [input_encoder.h](../engine/include/encoding/input_encoder.h) | The `InputEncodingSpec` + block registry: block order/sizes and layout queries (full layout 88 planes + 992 scalars; base layout 85 + 936). |
+| Input layout | [input_encoder.h](../engine/include/encoding/input_encoder.h) | The `InputEncodingSpec` + block registry: block order/sizes and layout queries (full layout 88 planes + 207 scalars; base layout 85 + 151). |
 | Label layout | [training_targets.h](../engine/include/training/training_targets.h) | The `AllTargets` registry — single source of truth for the label heads. |
 | Stream to Python | [scribblez_ffi.cpp](../engine/src/serve/scribblez_ffi.cpp) → [py/scribblez/ffi.py](../py/scribblez/ffi.py) → [dataset.py](../py/scribblez/dataset.py) | C ABI over the `DataLoader`; epoch-based batch streaming. |
 | Train | [py/scripts/position_eval/train.py](../py/scripts/position_eval/train.py), [py/scribblez/position_eval/model.py](../py/scribblez/position_eval/model.py) | Generational generate→train loop (see [docs/generational_training.md](generational_training.md)); ResNet trunk + the heads in `AllTargets`. |

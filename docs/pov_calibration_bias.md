@@ -7,11 +7,13 @@ better for the POV player than the realized outcomes. The bias decomposes
 into a **structural margin-expansion slope** (+0.21 pts of over-prediction
 per point of current score lead — identical across checkpoints and training
 ages) and a **training-drifting constant offset**. The slope component is
-the one the `ANALYSIS TODO` in
-[game_state_encoder.cpp](../engine/src/encoding/game_state_encoder.cpp)
-(`encode_score_diff_scalar`) predicted: the single score-diff scalar is too
-smooth a representation for the correction from current lead to final
-outcome.
+the one the encoder's `ANALYSIS TODO` predicted: the single score-diff
+scalar is too smooth a representation for the correction from current lead
+to final outcome. That TODO is discharged — the basis it prescribed is the
+encoding now, in
+[score_diff_features.h](../engine/include/encoding/score_diff_features.h)
+(Phase 2 below) — but every number here comes from a teacher trained before
+it, and only a retrain on the new encoding can move them.
 
 This document is self-contained: the full evidence chain, what is ruled
 out, reproduction recipes with expected numbers, and a phased fix plan with
@@ -115,12 +117,11 @@ differential to predicted final outcome sits ~0.21 pts/pt too close to the
 identity: it under-regresses current leads toward realized finals. This
 surfaces as *POV* bias only because post-move POV states carry the +20-pt
 tempo asymmetry; it is really a *lead-conditional* miscalibration
-(slope × mean POV lead ≈ the aggregate). It is exactly the failure mode the
-`ANALYSIS TODO` in
-[game_state_encoder.cpp](../engine/src/encoding/game_state_encoder.cpp)
-anticipates for the single smooth scalar, and the phase gradient (worst
-late, where the win/diff structure over score-diff is sharpest) matches
-that TODO's predicted failure zone.
+(slope × mean POV lead ≈ the aggregate). It is exactly the failure mode the encoder's
+`ANALYSIS TODO` anticipated for the single smooth scalar, and the phase
+gradient (worst late, where the win/diff structure over score-diff is
+sharpest) matches that TODO's predicted failure zone. Phase 2 below is that
+TODO's prescription, now implemented.
 
 Note there is no explicit side-to-move input, and none is needed: the
 teacher trains **exclusively on post-move rows**
@@ -199,34 +200,38 @@ These make both components visible per-epoch (when does the offset drift
 start?) and gate teacher promotion under
 [generational_teacher.md](generational_teacher.md).
 
-**Phase 2 — structural fix: richer score-diff featurization** (the
-`ANALYSIS TODO`'s prescription, now with its evidence). Replace/augment the
-single `kScoreDiff` scalar with a compact nonlinear basis — a handful of
-RBF/bins over the differential, denser near 0 — so the sharp,
-phase-conditional lead→outcome structure is linearly expressible instead
-of a smoothness-fighting learn. Touchpoints:
+**Phase 2 — structural fix: richer score-diff featurization** — **the
+encoding change is LANDED; the retrain is not.** The differential's
+representation now lives in one component,
+[score_diff_features.h](../engine/include/encoding/score_diff_features.h):
+the raw normalized scalar (unchanged, still first in its block, so anything
+reading the differential back off a row still works) followed by 15 Gaussian
+bumps spaced uniformly over the squashed coordinate
+`u(d) = d / (|d| + 30)`. Uniform in `u` is dense in points near a close game
+and sparse out in the decided tail — centers near 0, ±5, ±12, ±23, ±40, ±75,
+±180 — which is the resolution profile the differential actually needs, and
+adjacent overlapping bumps let a linear readout build a steep ramp anywhere
+in range. Both consumers moved together:
+[input_encoder.h](../engine/include/encoding/input_encoder.h)'s `kScoreDiff`
+block (`kInputEncodingVersion` → 2) and the move set model's resultant-diff
+move feature in
+[move_set_encoder.h](../engine/include/training/move_set_encoder.h)
+(`kMoveScalars` 3 → 18, `kMoveEncodingVersion` → 2), whose basis sits at the
+scalar tail so the three named scalars keep their indices. The in-place
+rewrite paths (`overwrite_score_diff`, `encode_input_with_score_diff`, and
+the FFI score-diff sweep) rewrite the whole block, which a test pins — a
+rewrite that touched only the raw scalar would leave the basis describing
+the position's original differential.
 
-- [input_encoder.h](../engine/include/encoding/input_encoder.h): the
-  `kScoreDiff` block's width in the scalar registry; bump
-  `kInputEncodingVersion` (the ONNX gate makes stale checkpoints fail
-  loudly). Prefer keeping the raw scalar and adding the basis as a tail
-  block, per the registry's prefix-property convention.
-- [game_state_encoder.cpp](../engine/src/encoding/game_state_encoder.cpp):
-  `encode_score_diff_scalar`, and the in-place rewrite paths that must
-  stay consistent with it — `overwrite_score_diff`,
-  `encode_input_with_score_diff`, and the FFI score-diff sweep used by the
-  monotonicity probes.
-- The move set model's **resultant-diff move feature** shares this
-  representation deliberately (see the comment at `kScoreDiffInputFloats`);
-  apply the same basis in
-  [move_set_encoder.h](../engine/include/training/move_set_encoder.h) so
-  the two stay on one representation (its version gate bumps too).
-- Retrain the teacher on the new encoding; downstream (student, corpora)
-  regenerates on the normal generational cadence — the encoding-version
-  gates sequence this safely.
+What remains: **retrain the teacher on the new encoding**, then regenerate
+downstream (student, corpora) on the normal generational cadence — the
+encoding-version gates sequence this safely, and every existing checkpoint
+is now rejected loudly by them. Nothing about the bias is fixed until that
+retrain happens; the change only makes the structure expressible.
 
 Success = `lead_slope` ~0 on the new teacher with no eval_win_mae or
-match-strength regression.
+match-strength regression. (Phase 1's metrics are not implemented, so for
+now that is measured with the reproduction script below.)
 
 **Phase 3 — attribute and fix the offset drift.**
 
@@ -339,6 +344,11 @@ Measure (aggregate, phase slices, slope):
           % (slopes.mean(), slopes.std(ddof=1) / np.sqrt(len(slopes))))
     EOF
 
+The script's `85 * 225 + 127` offset is the raw score-diff scalar, which
+Phase 2 left in place as the first float of its block, so this reads the same
+on either encoding — but ep4414 itself is a v1 checkpoint, so measuring it
+needs an engine from before the version bump.
+
 Expected on ep4414 (400 games, seed 12): aggregate dv ≈ +0.0080 ± 0.0009,
 dd ≈ +2.59 ± 0.18, phase dd ≈ +0.9 / +2.3 / +4.8, lead_slope ≈
 +0.21 ± 0.04. On fixed5 ep0047: aggregate ≈ 0, same slope — that pair of
@@ -359,9 +369,9 @@ FP32 leaf default).
 
 - [PR #106](https://github.com/eigen7/Scribblez/pull/106) — value-truncated
   rollouts, plus the bias-validation comment thread this doc consolidates.
-- [game_state_encoder.cpp](../engine/src/encoding/game_state_encoder.cpp) —
-  the `ANALYSIS TODO` at `encode_score_diff_scalar` (the structural fix's
-  design sketch predates this measurement).
+- [score_diff_features.h](../engine/include/encoding/score_diff_features.h) —
+  the differential's representation, which Phase 2 replaced the bare scalar
+  with; it carries the rationale the encoder's `ANALYSIS TODO` used to.
 - [position_eval/trainer.py](../py/scribblez/position_eval/trainer.py) —
   `post_move=True`: the teacher's post-move-only training regime.
 - [generational_teacher.md](generational_teacher.md) — where the Phase-1

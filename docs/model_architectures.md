@@ -17,7 +17,8 @@ Symbols used throughout:
 |--------|---------|---------|
 | `C` | `trunk_channels` | 192 |
 | `N` | `num_blocks` in the residual tower | 10 |
-| `P_in` / `S_in` | spatial planes / scalar width of the board input | 88 / 992 (full layout), 85 / 936 (base) |
+| `P_in` / `S_in` | spatial planes / scalar width of the board input | 88 / 207 (full layout), 85 / 151 (base) |
+| `S_mv` | scalar width of a move feature (`kMoveScalars`) | 18 |
 | `B` | batch of board positions (`P` in move-set code) | — |
 | `M` | candidate moves in a batch, flattened across positions | — |
 | `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |
@@ -119,9 +120,12 @@ FFI-served `PLANE_NAMES`), matching the teacher masks quantized into the
 
 ![MoveEncoder: tile embeddings fused with the move's scalars into one query vector](images/arch_move_encoder.svg)
 
-`move_scalars = [resultant_score_diff, tiles/7, is_play]`; letters are A..Z with
-a separate blank flag, so a natural tile and its blank twin share letter
-semantics. Layout owned by
+`move_scalars = [resultant_score_diff, tiles/7, is_play]` followed by the
+resultant differential's nonlinear basis (the board input's score-diff
+representation, shared so the two are comparable —
+[score_diff_features.h](../engine/include/encoding/score_diff_features.h));
+letters are A..Z with a separate blank flag, so a natural tile and its blank
+twin share letter semantics. Layout owned by
 [move_set_encoder.h](../engine/include/training/move_set_encoder.h).
 
 ### Losses (distillation from the position-eval teacher)
