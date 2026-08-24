@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useContext, useCallback, useEffect, useState } from 'react';
+import { TabActiveContext } from './TabActiveContext';
 import { getJSON, postJSON } from '../lib/api';
 
 // The Controls tab: live operator knobs read from and written to the per-tag
@@ -91,6 +92,7 @@ function NumControl({
 
 export default function ControlsTab({ task, tag }: { task: string; tag: string | null }) {
   const [data, setData] = useState<ControlsData | null>(null);
+  const tabActive = useContext(TabActiveContext);
   const [loaded, setLoaded] = useState(false);
 
   const url = tag ? `/api/controls?task=${task}&tag=${encodeURIComponent(tag)}` : null;
@@ -116,9 +118,10 @@ export default function ControlsTab({ task, tag }: { task: string; tag: string |
     refetch().catch(() => {});
   }, [refetch]);
   useEffect(() => {
+    if (!tabActive) return;
     const id = setInterval(() => refetch().catch(() => {}), 5000);
     return () => clearInterval(id);
-  }, [refetch]);
+  }, [refetch, tabActive]);
 
   if (!tag || !url) {
     return (

@@ -1,8 +1,9 @@
-import { Component, ReactNode, useCallback, useEffect, useState } from 'react';
+import { useContext, Component, ReactNode, useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import { WORKLOAD_TABS } from '../../workloads';
 import { Button, Role, Workload } from './MasterApp';
 import StatsTab from './StatsTab';
+import { TabActiveContext } from '../TabActiveContext';
 
 // One task's view in the master dashboard: an Overview tab (frozen params,
 // progress counters, the worker slots with per-role add/pause/start/remove
@@ -149,14 +150,20 @@ const money = (v: number | null | undefined, digits = 3) => (v != null ? `$${v.t
 const clampInt = (raw: number, lo: number, hi: number) =>
   Number.isNaN(raw) ? lo : Math.min(hi, Math.max(lo, raw));
 
-// Contains a render error to the active tab: a crashing tab shows an inline
-// message instead of unmounting (blanking) the whole dashboard. Reset by
-// remounting on a `key` change (tab switch), so navigating away and back
-// retries the tab.
-class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+// Contains a render error to its tab: a crashing tab shows an inline message
+// instead of unmounting (blanking) the whole dashboard. Tabs stay mounted when
+// hidden, so instead of resetting by remount, the error clears when the tab is
+// re-activated -- navigating away and back retries the tab.
+class TabErrorBoundary extends Component<
+  { active: boolean; children: ReactNode },
+  { error: Error | null }
+> {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+  componentDidUpdate(prev: { active: boolean }) {
+    if (this.state.error && this.props.active && !prev.active) this.setState({ error: null });
   }
   render() {
     if (this.state.error) {
@@ -635,6 +642,7 @@ function WorkersTable({ workers, taskBundle, onAction }: {
 }
 
 function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
+  const tabActive = useContext(TabActiveContext);
   const [info, setInfo] = useState<TaskInfo | null>(null);
   const [error, setError] = useState('');
   // A redeploy builds every arch before it pushes; on a cold tree that is
@@ -647,10 +655,11 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
       .catch((e) => setError(String(e)));
   }, [workload, tag]);
   useEffect(() => {
+    if (!tabActive) return;
     refresh();
     const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, tabActive]);
 
   if (!info) return <div className="card">Loading…</div>;
 
@@ -764,6 +773,10 @@ export default function TaskView({ workload, tag }: { workload: Workload; tag: s
   const hasStats = workload.roles.some((r) => r.stats);
   const tabs = ['Overview', ...(hasStats ? ['Stats'] : []), ...workloadTabs.map((t) => t.name)];
   const [tab, setTab] = useState(0);
+  // Tabs render lazily on first visit but then stay mounted behind display:none:
+  // switching back is instant (embedded figures and fetched state survive), and
+  // TabActiveContext lets a hidden tab pause its background polling.
+  const [visited, setVisited] = useState<Set<string>>(() => new Set([tabs[0]]));
 
   const renderTab = (name: string): ReactNode => {
     if (name === 'Overview') return <OverviewTab workload={workload} tag={tag} />;
@@ -777,7 +790,10 @@ export default function TaskView({ workload, tag }: { workload: Workload; tag: s
         {tabs.map((name, i) => (
           <span
             key={name}
-            onClick={() => setTab(i)}
+            onClick={() => {
+              setTab(i);
+              setVisited((v) => (v.has(name) ? v : new Set(v).add(name)));
+            }}
             style={{
               padding: '5px 14px', cursor: 'pointer', borderRadius: '6px 6px 0 0', fontSize: 14,
               background: i === tab ? '#1f77b4' : '#dde6ef', color: i === tab ? 'white' : '#2c3540',
@@ -787,7 +803,16 @@ export default function TaskView({ workload, tag }: { workload: Workload; tag: s
           </span>
         ))}
       </div>
-      <TabErrorBoundary key={tabs[tab]}>{renderTab(tabs[tab])}</TabErrorBoundary>
+      {tabs.filter((name) => visited.has(name)).map((name) => {
+        const active = name === tabs[tab];
+        return (
+          <div key={name} style={{ display: active ? undefined : 'none' }}>
+            <TabActiveContext.Provider value={active}>
+              <TabErrorBoundary active={active}>{renderTab(name)}</TabErrorBoundary>
+            </TabActiveContext.Provider>
+          </div>
+        );
+      })}
     </>
   );
 }

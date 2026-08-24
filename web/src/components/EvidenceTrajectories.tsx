@@ -10,7 +10,8 @@
 // among the unsimmed) marked. The conditioned pass is a correction on the
 // plain student's: at prefix 0 the two coincide, and at generation 0 the
 // fusion is the identity (no gain column).
-import { useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
+import { TabActiveContext } from './TabActiveContext';
 import Board from './Board';
 import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
@@ -213,10 +214,13 @@ function MoveTable({ moves, trained, selectedIndex, onSelect }: {
 // Retry a fixed list until it loads (the data API can take ~10s to bind at
 // startup: it imports torch + the engine FFI).
 function usePolledList<T>(url: string | null, key: string, deps: unknown[]): T[] {
+  const tabActive = useContext(TabActiveContext);
   const [items, setItems] = useState<T[]>([]);
+  // Clear only when the target changes -- not on tab re-activation, so a
+  // kept-alive tab shows its old list instantly while the poll refreshes it.
+  useEffect(() => setItems([]), [url]);
   useEffect(() => {
-    setItems([]);
-    if (!url) return;
+    if (!url || !tabActive) return;
     let cancelled = false;
     const tryFetch = () =>
       getJSON(url)
@@ -230,7 +234,8 @@ function usePolledList<T>(url: string | null, key: string, deps: unknown[]): T[]
       cancelled = true;
       clearInterval(id);
     };
-  }, deps);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, tabActive, ...deps]);
   return items;
 }
 
@@ -246,6 +251,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
   const [loading, setLoading] = useState(false);
   const [headSel, setHeadSel] = useState<HeadSelection>(NONE_HEAD);
   const [overlayMode, setOverlayMode] = useState<OverlayMode>('residual');
+  const tabActive = useContext(TabActiveContext);
   const [generations, setGenerations] = useState<Generation[]>([]);
 
   const sets = usePolledList<string>('/api/evidence_trajectories/sets', 'sets', []);
@@ -259,7 +265,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
   );
 
   useEffect(() => {
-    if (!tag) return;
+    if (!tag || !tabActive) return;
     const refresh = () =>
       getJSON(`/api/evidence_trajectories/generations?task=${task}&tag=${tag}`)
         .then((d: { generations: Generation[] }) =>
@@ -275,7 +281,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
     refresh();
     const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
-  }, [task, tag]);
+  }, [task, tag, tabActive]);
 
   const genCount = generations.length;
   useEffect(() => {
