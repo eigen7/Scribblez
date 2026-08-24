@@ -1,4 +1,4 @@
-"""Tests for the evidence fusion stage (roadmap item 2): the exactness
+"""Tests for the evidence fusion stage (roadmap item 5): the exactness
 guarantees the deployment loop rests on -- empty evidence degrades to the
 plain one-pass model bit-for-bit, padding is inert, and the staged
 (cached-per-round) path reproduces the monolithic forward -- plus the .sobs ->

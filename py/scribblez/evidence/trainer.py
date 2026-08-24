@@ -24,7 +24,7 @@ sides (a stem is train or held-out on both), spend the epoch budget only on
 passes over a finished corpus (pair_store.CorpusClock), record metrics to the
 dashboard DB, checkpoint. Every pass also writes its own checkpoint under
 checkpoints/model_epoch_NNNN.pt (model weights + config): the evidence path
-has no ONNX export yet (roadmap item 5), so the torch checkpoint is what the
+has no ONNX export yet (roadmap item 3), so the torch checkpoint is what the
 dashboard's trajectory pane loads per generation.
 """
 
@@ -315,7 +315,7 @@ def export_student(paths, model, epoch: int, student_cfg: dict):
     """The unfrozen mode's per-pass plain-student ONNX (models/
     model_epoch_NNNN.onnx), stamped with the student's arm and version as the
     mset trainer stamps its own. The export covers the plain path only (the
-    evidence path's ONNX is roadmap item 5)."""
+    evidence path's ONNX is roadmap item 3)."""
     export_onnx(
         model,
         paths.onnx_path(epoch),

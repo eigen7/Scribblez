@@ -74,8 +74,9 @@
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
   rollout evidence back into the value models for evidence-conditioned
   re-evaluation, and picking the next candidate to sim via a learned
-  proves-best probability. Steps 1–3 of its implementation roadmap are done
-  (the kill-test passed).
+  expected-gain (proves-best) head. Steps 1–4 of its implementation roadmap
+  are done (the kill-test passed; the fusion stage is built), and the gen-1
+  frozen trial is recorded as the floor the move proposal model replaces.
 - **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
   kill-test's numbers, controls, and conclusions.
 - **[lexical_features_for_value.md](lexical_features_for_value.md)** — giving

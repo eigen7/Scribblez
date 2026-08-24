@@ -201,9 +201,12 @@ sensitive to the first batch's composition.
   near-duplicates of the current best, so an acquisition mechanism
   ([candidate selection](#candidate-selection)) is load-bearing at small
   `B`.
-- Training must cover every evidence-prefix size (including zero), so data
-  generation records the trajectory that produced each set. A sequential
-  trajectory supplies rows at every prefix size.
+- Training must cover every evidence-set size (including zero). The
+  evidence set is order-free — the fusion stage is permutation-invariant and
+  the gain label is a max over the set — so the unit of training data is a
+  *subset* of a position's simmed pool, not a recorded chain; one pool
+  supplies combinatorially many evidence sets
+  ([trajectory generation](#evidence-trajectory-generation)).
 
 Wall-clock barely distinguishes the schedules at the intended sim budgets:
 rollouts parallelize *within* a candidate, and at hundreds-to-thousands of
@@ -334,9 +337,9 @@ Details to be worked out with Option 2:
   novelty penalty supplies within-batch diversity. At `B` = 1 the issue
   vanishes.
 - **Training rows.** From the simmed candidates a position already has
-  (`.sobs`), any evidence prefix plus a held-out simmed candidate is a
-  labeled row — combinatorially many (correlated) rows per position, no new
-  generation machinery.
+  (`.sobs`), any evidence subset plus a held-out simmed candidate is a
+  labeled row (the set is order-free) — combinatorially many (correlated)
+  rows per position, no new generation machinery.
 - **Scope.** The head only picks the next candidate to sim; the stopping rule
   and the final pick between simmed contenders still ride on the paired
   (CRN) sim estimates.
@@ -363,90 +366,112 @@ conjunction heads). Rows train at multiple evidence-prefix sizes including
 **zero** — the zero-evidence rows keep the evidence-free pass from degrading
 and are free.
 
-### The move set evaluation model with evidence
+### The move proposal model
 
-Distillation from the evidence-conditioned position evaluation model, as in
-Phase 4, with the evidence set present on both sides through the shared
-fusion stage; the label-a-subset/mask-the-loss strategy applies unchanged.
-The proves-best head is the one output trained directly on sim outcomes
-(see [candidate selection](#candidate-selection)); the value heads train by
-distillation alone.
+The deployed evidence consumer is a separate model: a **copy** of the move
+set evaluation student — trunk, move encoder, heads, fusion stage — plus the
+proves-best head. The student itself stays a pure distillation model (and,
+under D2, the rollout policy); the copy is what trains on evidence. Three
+loss components ([roadmap.md](roadmap.md) item 5 is the spec):
 
-The [per-move placement planes](#per-move-placement-planes) distill the same
-way, from the teacher's four masks at each labeled candidate's post-move
-state, and on the same labeled subset. Once they exist the proposer supplies
-its own evidence tokens' predictions, and the position evaluation model's
-extra per-candidate forwards are needed only for its own training rows.
+- **The proves-best gain** (primary): Huber against the CRN-paired gain of a
+  held-out simmed candidate over its evidence set's best
+  ([candidate selection](#candidate-selection)).
+- **Conditioned value heads** (auxiliary): the conditioned WLD / score-diff
+  against the held-out candidate's own sim outcome. The gain is a thin
+  transform of the conditioned value, so these rows feed the head at no
+  extra sim cost — and the targets are sim outcomes, never the plain
+  teacher, whose board-only readout would train the fusion stage to ignore
+  evidence.
+- **A self-distillation anchor** (stabilizer, small coefficient): the plain
+  pass pressured toward the frozen student's outputs, recomputed on the fly
+  by a frozen-student forward on the same batch — no stored labels — over
+  **all** legal candidates of each position (extendable to sim-less
+  positions if drift shows up). The anchor is what keeps the gain argmax
+  safe over the thousands of candidates that never receive a sim label: the
+  backbone must not drift off the dense teacher-shaped ranking on the
+  strength of a handful of sim rows. It applies to the plain
+  (empty-evidence) pass only; pressuring conditioned outputs toward a
+  board-only function is the ignore-the-evidence failure again.
+
+Distillation from an evidence-conditioned position evaluation model (the
+section above) remains the deferred richer variant: dense conditioned labels
+over the full move set, at the cost of first training that conditioned
+teacher on real outcomes.
 
 ### Evidence-trajectory generation
 
-The evidence sets in training data come from running the deployment
-schedule itself (anchor slot, then sequential proposal) at labeled
-positions, with exploration noise: the proposer samples from a
-temperature-softmax over its proposal scores rather than taking the argmax,
-and the trajectory length is randomized to spread coverage across prefix
-sizes and best-so-far levels. Uniform-random candidates are poor
-exploration *as the primary mechanism* — with thousands of legal moves
-nearly all terrible, a uniform sim spends its rollouts on evidence about
-moves no proposer will ever propose; the region needing coverage is the
-plausible-but-not-top tail that temperature sampling reaches. Generation 0,
-with no trained proposer, uses the hasty-equity top-`K`
-([sim_obs_tool](../engine/apps/sim_obs_tool.cpp)); trajectory generations
-([evidence_trajectory_generator](../engine/apps/evidence_trajectory_generator.cpp))
-propose with the current student.
+The training pools come from running sims at ordinary self-play positions;
+the concrete recipe — the greedy anchor, `A` on-policy picks, `B` stratified
+off-policy draws, all at the deployment rollout configuration — is
+[roadmap.md](roadmap.md) item 4. Two structural facts shape it.
 
-**One uniform-random sim per position rides behind the proposals** — a
-bounded floor, not a primary mechanism, and the answer to the echo chamber
-the softmax alone would leave: a move (or systematic move class) the model
+**Exploration is cheap in exactly the way AlphaZero's is not.** Which
+candidates get simmed never alters the played move or the game outcome —
+evidence labeling is a side-computation on positions from ordinary self-play
+— and a junk sim's label is its true CRN-paired gain: correct data, not
+target pollution. The only cost of an off-policy sim is its rollouts. So the
+off-policy floor can be generous, and it must exist: a move class the model
 rates near zero is otherwise never simmed, never labeled, and never
-corrected — a blind spot that persists precisely when the teacher shares
-it, which is the lexical case this whole loop exists for. The floor also
-pins the proves-best head down over the deep tail in *both* directions:
-most floor sims confirm "terrible, gain ≈ 0", a correct label in a region
-that otherwise has none, and what stops the head from hallucinating gain
-out there and spending deployment sims on it. Exploration here is cheap in
-exactly the way AlphaZero's is not: a junk sim's label is its true
-CRN-paired gain (correct data, not target pollution), so the only cost is
-its rollouts.
+corrected — a blind spot that persists precisely when the teacher shares it,
+which is the lexical case this whole loop exists for. Most floor sims
+confirm "terrible, gain ≈ 0", a correct label in a region that otherwise has
+none, and what stops the head from hallucinating gain out there and spending
+deployment sims on it. Uniform draws alone are a poor floor over thousands
+of legal moves — they almost never land on the interesting different move —
+hence the stratified draws (low-score/high-leave, setups, exchanges) beside
+the uniform one.
 
-**The uniform draw sits in the last trajectory slot.** Training rows pair
-an evidence *prefix* with a held-out simmed candidate, so a last-slot sim
-yields proves-best labels at every prefix size while never entering an
-evidence set — full label value at zero input-distribution cost, since the
-deployed loop's evidence contains only proposer picks. Placing it at a
-random slot instead would let the same position's later proposals react to
-a surprising draw; that buys nothing at generation time (the trajectory
-never affects the played game), and a surprise still enters the system
-through its labels, re-emerging next generation as a genuine,
-on-distribution proposal. The slot is a trivial generator parameter if this
-trade-off is ever revisited.
+**The evidence set is order-free, so rows are assembled, not replayed.** The
+fusion stage is permutation-invariant and the gain label is a max over the
+set, so any subset of the anchor-plus-on-policy sims is a valid evidence
+set, and every simmed candidate outside it is a labeled held-out row. One
+pool yields combinatorially many rows — the right response to sims that cost
+~1,000 rollouts each. Three constraints keep the assembled distribution on
+deployment's: every set contains the anchor (every deployed set does); set
+sizes stop at the deployment sim budget (larger sets are states the agent
+never visits); and the off-policy draws never enter a set (deployed evidence
+holds only the anchor and proposer picks) — they are labels-only, their
+coverage bought at zero input-distribution cost.
 
-This exploration is bias-free with respect to outcome targets: evidence
-labeling is a side-computation on positions from ordinary self-play, so the
-choice of which candidates to sim never alters the played move or the game
-outcome — unlike move-sampling diversification, which changes the
-trajectory itself. The self-play games themselves stay HastyBot's: playing
-the best simmed move instead would couple exploration randomness and sim
-noise into every outcome-derived target, and could only apply at the
-sparse labeled turns anyway; search-improved self-play is the generational
-pipeline's job — once the sequential agent exists, a later generation
-regenerates whole games with it as the playing policy. The only cost is
-sim compute spent on less informative evidence. Coverage matters most for
-the proves-best head, whose labels exist only for simmed candidates;
-temperature exploration is what puts labels on the "not the top pick, but
-proved best" rows that head exists to predict, and the uniform floor is
-what keeps a blind spot from ever being structurally unreachable.
+Why the on-policy side must be on-policy — selected by the conditioned loop
+itself rather than by a static ranking — is threefold, and none of it is the
+AlphaZero pollution argument. An off-policy selector wastes the budget
+re-simming near-twins of the incumbent: their gain labels are ~0 — correct,
+and worthless — where an on-policy selector spends those rollouts on
+informative candidates. Only proposals from the current model put labels on
+the conditionally-strong candidates the head exists to find. And the
+evidence *sets* the model trains under should look like the sets the
+deployed loop walks; sets built by a value-softmax are bags of near-twins —
+correct labels over an input distribution deployment never produces.
+Generation 0, with no trained gain head, selects this side by a temperature
+softmax over the plain student's values on the full candidate set; later
+generations run the conditioned loop.
+
+The self-play games themselves stay HastyBot's for now: playing the best
+simmed move instead would couple exploration randomness and sim noise into
+every outcome-derived target, and could only apply at the sparse labeled
+turns anyway; search-improved self-play is the generational pipeline's job —
+once the sequential agent exists, a later generation regenerates whole games
+with it as the playing policy, which is also what moves the corpus's
+*positions* onto the distribution the agent actually faces.
 
 ### The cost elephant
 
 Evidence-carrying rows require running the sims at data-generation time —
-thousands of rollout-games per labeled position, a ~10³–10⁴× slowdown over
-plain generation. Mitigations, all compatible: label a sparse subset of
-positions (the rest train with empty evidence, needed anyway); cheap sims
-(small `S` is a soft degradation — the counts tell the network the noise
-level); and the generational pipeline
+at the deployment configuration a pool of ~20 candidates × ~1,000 rollouts
+per labeled position, a ~10³–10⁴× slowdown over plain generation.
+Mitigations, all compatible: **value truncation** (roadmap item 2 — the
+reason D1 now precedes regeneration; cheaper per rollout *and* cleaner
+evidence, per the kill-test's phase gradient); **subset assembly**
+(combinatorially many rows per pool, so every rollout feeds many training
+rows); labeling a sparse subset of positions (the rest train with empty
+evidence, needed anyway); and the generational pipeline
 ([generational_training.md](generational_training.md)), which exists for
-exactly this reuse pattern.
+exactly this reuse pattern. Deliberately no longer on the list: small `S`.
+The counts input makes mixed-`S` corpora degrade softly, but the corpus must
+include deployment-quality maps — a head trained only on noisy evidence has
+never seen the maps it will be asked to trust.
 
 ## Limitations and caveats
 
@@ -538,16 +563,27 @@ the condition, so mixing modes within a tag fails loudly.
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/sim/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
-| 4 | Evidence encoder + fusion stage in the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps (extra evidence-free forwards, no new head); multi-prefix-size training; evidence labeling integrated into generational data generation at a sparse position fraction. | 3 | — |
-| 5 | The move set evaluation model inherits the heads and the fusion stage, and gains per-move placement planes (spatial readout against the board tokens) so it predicts its own evidence tokens' half; distillation from the evidence-conditioned position evaluation model. | 4, roadmap track A | **Stage and interim trainer built** — the per-move planes (roadmap item 1) and the fusion stage with its exactness tests ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)) are on the student. Gen-1 trains the stage (and the proves-best head of step 6) directly on sim outcomes over a frozen student ([roadmap.md](roadmap.md) item 2 has the reasoning); distillation from a conditioned teacher waits on that trial's result, not just on the corpus. |
+| 4 | Evidence encoder + fusion stage reading the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps; multi-size evidence-set training. | 3 | **Built on the student side** — the fusion stage and its exactness tests ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)) plus the multi-prefix trainer (`py/scribblez/evidence/`). The position evaluation model's own evidence training stays deferred with the conditioned-teacher variant. |
+| 5 | The **move proposal model** ([above](#the-move-proposal-model)): the student copy with the proves-best head, trained gain-first with the sim-outcome auxiliaries and the self-distillation anchor, on subset-assembled rows from the hybrid pools. | 4, roadmap items 2–4 | **Regime settled; training waits on the deployment-quality corpus.** The gen-1 frozen-backbone trial over the 200-rollout v1 corpus is the recorded floor: conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 vs the plain value's 0.61. |
 | 6 | The sequential agent (the decision procedure above at `B = 1, R = K`) and the proves-best acquisition head that drives it; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way ([roadmap.md](roadmap.md)). | 5 | — |
 
 ## Open questions
 
 - **Budget split** — whether later sims should use smaller `S`, and the
   early-stopping threshold for the sequential schedule.
-- **Proves-best head details** — the bulleted list under
-  [candidate selection](#candidate-selection).
+- **Fusion refinements for the move proposal build** — two identified, both
+  cheap, neither validated. (a) Evidence reaches the global summary by mean
+  pooling, but best-so-far — the one statistic the gain head must know — is
+  a max: mean+max (the trunk's own pooling convention) or attention pooling
+  with a learned query. (b) A direct move-query → evidence-token
+  cross-attention (`O(N·K)`), so a candidate compares itself to each simmed
+  move by encoding rather than only through shared board squares — a
+  leave-twin with a different footprint is currently visible only through
+  the move scalars and the pooled summary.
+- **A/B/T of the pool recipe** — A ≈ 15 / B ≈ 5 with evidence-set sizes up
+  to the deployment budget are starting points; on-policy depth per position
+  trades against position count once sim throughput binds, and the stopping
+  rule's statistics will say where the marginal sim is worth more.
 - **Whether the spatial machinery pays at all.** Settled against the cheap
   option so far: the kill-test's `full` arm matched its `scalar` arm to
   ±0.0003, so at a root-WLD readout the planes are inert
@@ -562,13 +598,5 @@ the condition, so mixing modes within a tag fails loudly.
   evidence tokens with and without the model's predicted planes, read at
   promotion rather than at root WLD; a null there sends the loop back to the
   scalar rung, not just back a step.
-- **The cost of per-move placement targets.** A `.mset` record is 5 floats
-  today; four 15×15 planes add 900. The format is head-extensible by design
-  (`record_floats` in
-  [move_set_eval_target_log.h](../engine/include/training/move_set_eval_target_log.h)),
-  so this is a size question, not a format one — but a 180× record blow-up
-  wants a decision on quantization (probabilities fit a byte), sparsity
-  (only the hot squares carry signal — reply footprints are ~2–7 of 225), or
-  labeling the planes on a narrower subset than the value heads use.
 - **Sim reuse across rounds** — candidates retained across rounds keep their
   rollouts; whether to top up counts as the evidence set grows.
