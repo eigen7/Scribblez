@@ -318,15 +318,6 @@ Details to be worked out with Option 2:
   model's bias is systematic enough to be learnable — consistently preferring
   one blank designation, say — which is a leaf-model calibration problem, not
   an acquisition-target one.
-
-  There is deliberately no standing "anchor fraction" of terminal rollouts
-  policing this. Trusting the leaf model at the horizon is a design axiom —
-  the sim exists to cover near-root lexical blindness, the horizon is set by
-  the contingency-resolution argument, and the match harness arbitrates the
-  stack — so a permanent truncated-vs-terminal instrument has no consumer.
-  If the question ever needs asking (terminal CRN rollouts cancel exactly on
-  duplicates, so the comparison isolates the spurious term), it is a one-off
-  offline study; terminal rollouts remain an ordinary sim configuration.
 - **Winner's curse.** The best-so-far is a max of noisy sim estimates and is
   biased upward, and near-ties make the label a coin flip driven by rollout
   noise. The rollout-count inputs exist for exactly this; the head is

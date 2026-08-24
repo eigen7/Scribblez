@@ -187,16 +187,10 @@ Promoted from the rollout-policy ladder to the head of the queue: truncation
 is now a **data prerequisite**, not just an agent speedup.
 
 Rollouts sim a few plies, then read the position evaluation model's value at
-the horizon. Everything past the horizon is the leaf model's word, and
-trusting it there is a **design axiom**, not something the pipeline keeps
-re-measuring: the sim exists to cover the model's near-root lexical
-blindness, the horizon is set structurally (below), and the match harness
-arbitrates the stack. There is deliberately no standing "anchor fraction" of
-terminal rollouts riding along as a bias instrument — its would-be consumers
-(empirical horizon tuning, leaf-bias correction) are cut as inconsistent
-with that axiom. If a truncated-vs-terminal question ever needs asking, it
-is a one-off offline study; terminal rollouts remain an ordinary sim
-configuration, not a per-record tax.
+the horizon. The division of labor: the plies before the horizon supply what
+the model cannot — the near-root lexical facts sims exist to observe — and
+the leaf value stands for everything after. The horizon is set structurally
+(below); the match harness judges the stack end to end.
 
 - **Why first**: the deployment budget is ~1,000 rollouts per candidate, and
   the trajectory corpus must carry deployment-quality evidence — the count

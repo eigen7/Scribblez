@@ -114,9 +114,7 @@ the binding limiter. A phase-controlled cross-tab would settle it.
    every phase, and cheaper per rollout besides. Costs to accept: evidence
    artifacts stop being model-independent (`.sobs` becomes
    generation-scoped), and everything past the horizon is scored by the
-   value model itself — trusting that readout is a deliberate design axiom
-   ([roadmap.md](roadmap.md) item 2), with terminal rollouts kept only as an
-   ordinary sim configuration for one-off comparisons.
+   value model itself ([roadmap.md](roadmap.md) item 2).
 3. **Root-value CE is saturating — the next *experiment* should change
    readout, not polish this one.** The loop's actual payoff is re-ranking
    (promotion of moves the first pass misjudged), which root CE cannot
