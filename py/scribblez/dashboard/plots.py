@@ -279,21 +279,28 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
-# The Loss tab's figures carry BOTH x-axis variants, stacked as two rows named
-# X_AXIS_LINEAR / X_AXIS_LOG, so the tab's Linear x/Log x knob flips the rows'
+# The Loss tab's figures carry EVERY knob variant as pre-built named rows, so the
+# tab's knobs (Linear x/Log x; the loss figure's Absolute/%) flip the rows'
 # visibility inside the embedded BokehJS document -- no round trip to this API,
-# no re-embed. The web client (TrainingTabs.tsx) addresses the rows by these
-# names; change them in both places.
+# no re-embed. The value-quality figure has the two x-axis rows; the loss figure
+# crosses them with the normalization variants as "<x axis>|<norm>". The web
+# client (TrainingTabs.tsx) addresses the rows by these names; change them in
+# both places.
 X_AXIS_LINEAR = "x_linear"
 X_AXIS_LOG = "x_log"
+NORM_ABSOLUTE = "abs"
+NORM_PERCENT = "pct"
 
 
-def _x_axis_variants(build_row):
-    """Both x-axis variants of a Loss-tab figure row -- `build_row(log_x)` builds
-    one -- stacked as rows named X_AXIS_LINEAR / X_AXIS_LOG (see those)."""
-    linear, log = build_row(False), build_row(True)
-    linear.name, log.name = X_AXIS_LINEAR, X_AXIS_LOG
-    return column(linear, log)
+def _variant_rows(builders):
+    """The named knob-variant rows of a Loss-tab figure, stacked: `builders` maps
+    each row name (see the constants above) to its zero-arg row builder."""
+    rows = []
+    for name, build in builders.items():
+        r = build()
+        r.name = name
+        rows.append(r)
+    return column(*rows)
 
 
 def _quality_row(sources, smooth, log_x):
@@ -323,7 +330,12 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
         sources = [(conn, f" [{tag}]"), (sec_conn, f" [{sec_tag}]")]
     else:
         sources = [(conn, "")]
-    return _x_axis_variants(partial(_quality_row, sources, smooth))
+    return _variant_rows(
+        {
+            X_AXIS_LINEAR: partial(_quality_row, sources, smooth, False),
+            X_AXIS_LOG: partial(_quality_row, sources, smooth, True),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -600,14 +612,22 @@ def _metrics_series(conn):
     return x, series
 
 
-def metrics_loss_grid(conn, normalized: bool = False):
+def metrics_loss_grid(conn):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained, in both x-axis variants
-    (`_x_axis_variants`): stacked weighted per-component losses (`normalized` ->
-    per-column fractions), an accuracy panel, control-change markers. None when no
-    loss metric exists."""
+    `metrics` table vs positions trained, in all four knob variants
+    ("<x axis>|<norm>", see `_variant_rows`): stacked weighted per-component
+    losses (the percent variants -> per-column fractions), an accuracy panel,
+    control-change markers. None when no loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
     weights = db.read_loss_weights(conn)
-    return _x_axis_variants(partial(_loss_accuracy_row, x, series, weights, normalized, conn))
+    return _variant_rows(
+        {
+            f"{x_name}|{norm}": partial(
+                _loss_accuracy_row, x, series, weights, norm == NORM_PERCENT, conn, log_x
+            )
+            for norm in (NORM_ABSOLUTE, NORM_PERCENT)
+            for x_name, log_x in ((X_AXIS_LINEAR, False), (X_AXIS_LOG, True))
+        }
+    )

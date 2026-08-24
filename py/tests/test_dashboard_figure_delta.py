@@ -72,11 +72,17 @@ def test_append_is_exact_under_smoothing(tmp_path):
 def test_ranges_cover_explicit_axes_only(tmp_path):
     state, model, _ = _grown(tmp_path, plots.metrics_loss_grid)
     ranges = figure_delta.delta_response(model, state)["ranges"]
-    assert set(ranges) == {plots.X_AXIS_LINEAR, plots.X_AXIS_LOG}
-    for panel in ranges[plots.X_AXIS_LOG]:
-        assert panel["x"] is not None and 0.0 < panel["x"][0] < panel["x"][1]
-    for panel in ranges[plots.X_AXIS_LINEAR]:
-        assert panel["x"] is None  # auto -- BokehJS follows the streamed data
+    assert set(ranges) == {
+        f"{x}|{n}"
+        for x in (plots.X_AXIS_LINEAR, plots.X_AXIS_LOG)
+        for n in (plots.NORM_ABSOLUTE, plots.NORM_PERCENT)
+    }
+    for name, panels in ranges.items():
+        for panel in panels:
+            if name.startswith(plots.X_AXIS_LOG):
+                assert panel["x"] is not None and 0.0 < panel["x"][0] < panel["x"][1]
+            else:
+                assert panel["x"] is None  # auto -- BokehJS follows the streamed data
 
 
 def test_new_series_forces_refetch(tmp_path):
