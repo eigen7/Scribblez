@@ -64,7 +64,6 @@ struct Options {
   int rollouts = 200;
   int horizon = 0;         // value truncation; 0 = terminal rollouts
   std::string leaf_model;  // required with, and only with, --horizon
-  std::string leaf_precision = "FP32";
   int top_k = 10;
   int positions_per_game = 1;
   int threads = util::default_thread_count();
@@ -235,12 +234,8 @@ int main(int argc, char** argv) {
       "horizon; 0 rolls out to a natural game end")(
       "leaf-model", po::value<std::string>(&opt.leaf_model),
       "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
-      "with, --horizon")(
-      "leaf-precision", po::value<std::string>(&opt.leaf_precision)->default_value("FP32"),
-      "TensorRT precision for the leaf model. FP32 by default: FP16 overflows to NaN on the "
-      "extreme-advantage states rollouts routinely reach")(
-      "top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
-      "candidates simmed per position (HastyBot-equity ranked)")(
+      "with, --horizon")("top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
+                         "candidates simmed per position (HastyBot-equity ranked)")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game")(
@@ -282,7 +277,12 @@ int main(int argc, char** argv) {
     if (!opt.leaf_model.empty()) {
       nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
       leaf_params.onnx_path = opt.leaf_model;
-      leaf_params.precision = nn::parse_precision(opt.leaf_precision);
+      // FP32 unconditionally: current checkpoints overflow FP16 inside the
+      // engine on legitimate extreme-advantage states rollouts routinely
+      // reach, yielding NaN in every head before any decode this code
+      // controls -- there is no host-side fix. SimRunner hard-errors on a
+      // NaN readout either way.
+      leaf_params.precision = nn::Precision::kFP32;
       leaf_eval_service = nn::make_loaded_service(leaf_params);
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
     }
