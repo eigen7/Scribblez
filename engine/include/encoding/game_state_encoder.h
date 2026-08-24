@@ -48,6 +48,16 @@ class GameStateEncoder {
   GameStateEncoder(const InputEncodingSpec& spec, std::array<int, 2> initial_scores)
       : spec_(spec), scores_(initial_scores) {}
 
+  // Seed at a mid-game state -- a Monte-Carlo rollout's decision point --
+  // where no move history is available: `board`, `scores`, and the player
+  // about to move, both last-move slots unknown (PASS, which encodes as
+  // placing nothing). Encode only after apply_move has supplied both
+  // players' most recent moves -- the placement planes and move-meta
+  // scalars read them -- which two applied plies guarantee.
+  GameStateEncoder(const InputEncodingSpec& spec, const Board& board, std::array<int, 2> scores,
+                   int active)
+      : spec_(spec), board_(board), scores_(scores), active_(active) {}
+
   // Advance one turn: the *current* active player made `move`. It deliberately
   // takes no draw information, an outside observer seeing none.
   void apply_move(const Move& move);

@@ -573,6 +573,42 @@ TEST(Encoder, BasicLayout) {
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);  // opp num_glyphs
 }
 
+// The mid-game seeding constructor (a rollout's decision point): once two
+// applied plies have supplied both last-move slots, a seeded encoder's row is
+// byte-identical to a full-history encoder's.
+TEST(Encoder, MidGameSeedMatchesFullHistory) {
+  using namespace scribblez::binlog;
+  const Move m1 =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 50, {Glyph::of(Tile::from_char('C'))});
+  const Move m2 = make_play_full(3, 3, /*horizontal=*/true, 0b1, 30,
+                                 {Glyph::played(Tile::from_char('D'), /*is_blank=*/true)});
+  const Move m3 =
+    make_play_full(9, 5, /*horizontal=*/false, 0b1, 12, {Glyph::of(Tile::from_char('E'))});
+  const Move m4 =
+    make_play_full(11, 2, /*horizontal=*/true, 0b1, 8, {Glyph::of(Tile::from_char('F'))});
+
+  Dictionary d = medium_dict();
+  const InputEncodingSpec spec{&d, true};
+  GameStateEncoder full{spec};
+  full.apply_move(m1);
+  full.apply_move(m2);
+  // The seed point: the state after m1/m2, with no history handed over.
+  GameStateEncoder seeded{spec, full.board(), {full.score(0), full.score(1)}, full.active_player()};
+  full.apply_move(m3);
+  full.apply_move(m4);
+  seeded.apply_move(m3);
+  seeded.apply_move(m4);
+  ASSERT_EQ(seeded.active_player(), full.active_player());
+
+  Rack active_rack;
+  active_rack.add(Tile::from_char('Q'));
+  std::vector<float> full_row(kInputFloats, -1.0f);
+  std::vector<float> seeded_row(kInputFloats, -2.0f);
+  full.encode_input(full.active_player(), active_rack, /*apply_flip=*/false, full_row.data());
+  seeded.encode_input(seeded.active_player(), active_rack, /*apply_flip=*/false, seeded_row.data());
+  ASSERT_EQ(0, std::memcmp(full_row.data(), seeded_row.data(), sizeof(float) * kInputFloats));
+}
+
 TEST(Encoder, LastOppPlaneMask) {
   using namespace scribblez::binlog;
 
