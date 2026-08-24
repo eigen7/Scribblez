@@ -52,7 +52,8 @@ The plane head did not tax the value heads: `loss_wld` finished at 0.4937
 against v1's 0.4939, and every ranking metric moved the right way. Whether
 the improvement is multi-task regularization from the plane targets or partly
 a fresh-corpus draw cannot be separated from one run; the direction is what
-matters, and it is the safe one — the readouts item 2 depends on came at no
+matters, and it is the safe one — the readouts the evidence path (roadmap
+item 5) depends on came at no
 value cost.
 
 ## The plane head

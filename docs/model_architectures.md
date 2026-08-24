@@ -141,7 +141,7 @@ holdout.
 Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to
 student softmax and teacher probabilities.
 
-### The evidence fusion stage (roadmap item 2)
+### The evidence fusion stage (roadmap item 5)
 
 An optional late-fusion stage ([evidence_fusion.py](../py/scribblez/evidence_fusion.py))
 conditioning the scoring on the sims run so far at a decision point. Each
@@ -181,16 +181,25 @@ divergence guards in `scribblez.evidence.train_loop` / `trainer`). Training data
 from evidence trajectories (`.sobs` observations paired with live-recomputed
 first-pass predictions, roadmap item 4).
 
-### The proves-best head (roadmap item 3)
+### The proves-best head (roadmap item 5)
 
 `proves_best`: `Linear(4C, C) → ReLU → Linear(C, 1) → softplus`, off the same
 fused per-move vector as `head` and `plane_proj`, output `gain` (M,) ≥ 0 —
 the expected improvement `E[max(0, v − best-so-far)]` a sim of that candidate
 would contribute over the best simmed so far. Meaningful only under evidence
 (at the empty set it collapses to the value itself); absent from the ONNX
-export until the evidence path lands (roadmap item 5).
+export until the evidence path lands (roadmap item 3).
 
 ### Training the evidence path (`scribblez.evidence`)
+
+> **Plan status.** The modes below are what the code implements today. The
+> gen-1 frozen-mode trial over the 200-rollout trajectory corpus is the
+> recorded floor (conditioned − plain soft-CE −0.0008; acquisition hit rate
+> 0.57 vs the plain value's 0.61), and the plan has moved to a separate
+> **move proposal model** — a student copy trained gain-first, with an
+> on-the-fly self-distillation anchor to the frozen student in place of the
+> `.mset` stream — over a deployment-rollout-count corpus of
+> subset-assembled evidence sets ([roadmap.md](roadmap.md) items 2–5).
 
 The fusion stage and the proves-best head train over the student. In the
 default **frozen** mode (`freeze_backbone`: everything outside
@@ -198,7 +207,7 @@ default **frozen** mode (`freeze_backbone`: everything outside
 mode, so the trunk's BatchNorm keeps its student statistics) they are all
 that learns. Rows are (position, evidence prefix, held-out simmed candidate)
 from trajectory `.sobs`; the targets are the held-out candidate's sim
-outcomes, not teacher readouts (docs/roadmap.md item 2 explains why):
+outcomes, not teacher readouts (docs/roadmap.md item 5 explains why):
 
 | Head | Target | Loss | Weight |
 |------|--------|------|--------|

@@ -159,7 +159,7 @@ TRAINING = [
 # move, then equity head) regret@1 as the flat reference line. The
 # recall/Spearman curves and their baselines ride the Loss tab's Accuracy
 # panel instead.
-# The evidence trainer's go/no-go read (docs/roadmap.md item 2): the
+# The evidence trainer's go/no-go read (docs/roadmap.md item 5): the
 # conditioned pass against the plain one on the same held-out rows, overall
 # and on the evidence-bearing (prefix > 0) rows, plus the proves-best head's
 # gain error. The gain hit rates ride the Loss tab's Accuracy panel. An

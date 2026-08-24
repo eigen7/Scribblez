@@ -8,7 +8,7 @@ observations. A training row is (position, evidence prefix, held-out simmed
 candidate): the prefix is what the model conditions on, and the held-out
 candidate's own sim outcome is the target -- its win value for the value
 heads, and its CRN-paired gain over the prefix's best-so-far for the
-proves-best head. No teacher label is read here -- docs/roadmap.md item 2
+proves-best head. No teacher label is read here -- docs/roadmap.md item 5
 says why sim outcomes and not the teacher; the trainer's unfrozen mode reads
 the same games' .mset sidecars through MsetDataset, as distillation rows for
 the plain pass, never as targets for these.

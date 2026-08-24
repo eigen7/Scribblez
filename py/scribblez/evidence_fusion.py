@@ -1,4 +1,4 @@
-"""Evidence-set fusion stage (docs/sim_residual_feedback.md, roadmap item 2).
+"""Evidence-set fusion stage (docs/sim_residual_feedback.md, roadmap item 5).
 
 Conditions a model's board token map on the sims run so far at a decision
 point. Each simmed candidate contributes one evidence token built from three

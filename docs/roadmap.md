@@ -228,10 +228,12 @@ corpus can be made.
 
 The data for item 5. **Machinery built, recipe revised** — the v1 chain
 (self-play → trajectories → labeling as the `evidence_trajectories`
-workload's generate role, trajectory `.sobs` v2, `--sobs` force-inclusion in
-the `.mset` labeling) is implemented end to end and produced the 200-rollout
-corpus the frozen trial consumed. The recipe below replaces v1's
-softmax-over-a-64-candidate-pool with one uniform tail sim; regeneration
+workload's generate role:
+[evidence_trajectory_generator](../engine/apps/evidence_trajectory_generator.cpp)
+writing trajectory `.sobs` v2, `--sobs` force-inclusion in the `.mset`
+labeling) is implemented end to end and produced the 200-rollout corpus the
+frozen trial consumed. The recipe below replaces v1's — a temperature
+softmax over the student's top 64 plus one uniform tail sim; regeneration
 waits on items 2–3.
 
 Per labeled position, one simmed **pool**, every sim at the deployment

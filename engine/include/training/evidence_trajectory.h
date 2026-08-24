@@ -12,7 +12,7 @@
 // All of a position's candidates are simmed in one SimRunner call, so the
 // trajectory order is pure record bookkeeping: every prefix of a position's
 // record array is a valid evidence set. The proposer cannot yet condition on
-// evidence mid-trajectory (roadmap item 5 lands the fusion runtime), so the
+// evidence mid-trajectory (roadmap item 3 lands the fusion runtime), so the
 // proposal distribution is computed once per position and sampled without
 // replacement -- the roadmap's bootstrap proposer.
 //
