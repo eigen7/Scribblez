@@ -137,9 +137,10 @@ the separate reasons under [D2](#7-self-model-plies-and-the-endgame-solver-d2-d3
   turn's whole candidate set in one pass and sims the model's top K. This is the
   destination agent minus the evidence loop.
 - **Sim machinery** — [sim_runner.h](../engine/include/sim/sim_runner.h) runs
-  common-random-number rollouts;
+  common-random-number rollouts, terminal or value-truncated
+  ([item 2](#2-value-truncated-rollouts-d1));
   [sim_observation_log.h](../engine/include/data/sim_observation_log.h) stores
-  them in `.sobs` sidecars.
+  them in `.sobs` sidecars, leaf-model-versioned when truncated.
 - **Evidence machinery** — the fusion stage and its exactness tests
   ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)), the proves-best
   head, the trajectory generator and `evidence_trajectories` workload, and the
@@ -182,6 +183,15 @@ everything below.
   is required, which is why the format decision comes first.
 
 ### 2. Value-truncated rollouts (D1)
+
+**Done** — `SimRunner` truncates at a configurable horizon and reads the
+position evaluation model there (the post-move pre-draw state of the last
+ply's mover, the state the model is trained on); games ending earlier keep
+their exact terminal result. Exposed as `--sim-horizon` (+ `--leaf-model`)
+on the sim, neural-sim, and mset-sim agents and as `--horizon`/`--leaf-model`
+on sim_obs_tool and the trajectory generator; `.sobs` v3 stamps the leaf
+model's content hash and the horizon, and observations carry fractional
+(probability-weighted) outcomes. The costs below are paid.
 
 Promoted from the rollout-policy ladder to the head of the queue: truncation
 is now a **data prerequisite**, not just an agent speedup.
