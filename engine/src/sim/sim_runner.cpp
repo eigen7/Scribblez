@@ -11,6 +11,7 @@
 #include "util/exception.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <numeric>
 #include <optional>
@@ -114,6 +115,21 @@ class LeafBatcher {
     for (size_t j = 0; j < pending_.size(); ++j) {
       const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
       const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
+      // A NaN readout would flow silently into training data and decisions
+      // (NaN comparisons all read false), so it is a hard error. Legitimate
+      // rows can produce one under FP16 -- current checkpoints overflow on
+      // extreme-advantage states rollouts routinely reach -- which is why
+      // every leaf loader defaults to FP32.
+      // A NaN readout would flow silently into training data and decisions
+      // (NaN comparisons all read false), so it is a hard error. Legitimate
+      // rows can produce one under FP16 -- current checkpoints overflow on
+      // extreme-advantage states rollouts routinely reach -- which is why
+      // every leaf loader defaults to FP32.
+      if (std::isnan(wld[0]) || std::isnan(sd[0])) {
+        throw util::Exception(
+          "sim runner: the leaf model returned NaN at a rollout horizon (FP16 overflow? "
+          "serve the leaf model in FP32)");
+      }
       RolloutResult& r = (*results_)[pending_[j].slot];
       if (pending_[j].root_pov) {
         r.p_win = wld[0];
@@ -180,23 +196,28 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
     return;
   }
 
-  // Encode the horizon leaf: the post-move pre-draw state of the last ply's
-  // mover, from their POV -- exactly the state the position evaluation model
-  // is trained on. The seeded encoder's unknown last-move slots are
+  // Encode the horizon leaf: the PRE-move state of the next decision point
+  // -- the player on move after the horizon ply, holding their refilled
+  // rack. Pre-move is the sample kind the position evaluation model trains
+  // on at every eligible turn whatever the move type, where post-move
+  // samples exist only for PLAY turns -- a post-EXCHANGE or post-PASS
+  // horizon would be off-distribution (in practice far enough off to
+  // overflow FP16). The seeded encoder's unknown last-move slots are
   // overwritten by the candidate and the >= kMinHorizonPlies rollout plies
   // before anything reads them.
   GameStateEncoder enc(*leaf_spec, pos.board, pos.scores, pos.mover);
   enc.apply_move(candidate);
   for (int i = 0; i < log.num_records; ++i) enc.apply_move(log.records[i].move);
-  const int horizon_mover = log.records[log.num_records - 1].player;
+  const int on_move = 1 - log.records[log.num_records - 1].player;
+  DEBUG_ASSERT(on_move == enc.active_player());
   float* row = batcher->next_row();
   if (leaf_spec->opp_leave_input) {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover),
+    enc.encode_input(on_move, game.rack(on_move), game.leave(1 - on_move),
                      /*apply_flip=*/false, row);
   } else {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), /*apply_flip=*/false, row);
+    enc.encode_input(on_move, game.rack(on_move), /*apply_flip=*/false, row);
   }
-  batcher->add(slot, horizon_mover == pos.mover);
+  batcher->add(slot, on_move == pos.mover);
 }
 
 // Fold one rollout into the candidate's observation. Terminal rollouts

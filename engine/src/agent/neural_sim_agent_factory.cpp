@@ -68,7 +68,9 @@ po::options_description make_options_description(NeuralSimOptions& o) {
      "already running games in parallel")  //
     ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
      "value truncation: rollouts stop after this many plies and this agent's own model scores "
-     "the horizon; 0 rolls out to a natural game end")  //
+     "the horizon; 0 rolls out to a natural game end. The one net serves ranking and leaves "
+     "alike, so pair this with --precision=FP32: FP16 overflows to NaN on the "
+     "extreme-advantage states rollouts routinely reach (a hard error)")  //
     ("seed,s", po::value<uint64_t>(&o.seed),
      "PRNG seed for the rollouts and drop decisions (default: derived from SeedProducer)");
   o.endgame.add_options(desc, "endgame-");

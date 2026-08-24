@@ -209,8 +209,10 @@ void Game::play_loop(int start_player) {
       break;
     }
     // Checked after the natural ends, so a game that finishes exactly at the
-    // cap counts as finished, with its score adjustments applied.
-    if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_) {
+    // cap counts as finished, with its score adjustments applied. Once the
+    // bag has emptied the cap stops applying and the game plays out -- see
+    // set_max_plies for why the endgame is never truncated.
+    if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_ && bag_.size() > 0) {
       log_.end_reason = "truncated";
       break;
     }

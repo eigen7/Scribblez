@@ -2448,6 +2448,43 @@ TEST(Game, MaxPliesTruncation) {
   ASSERT_FALSE(g2.truncated());
 }
 
+// The cap never truncates an endgame: once the bag empties the game plays out
+// to a natural end, however many plies past the cap that takes -- the leaf
+// model's training domain is the pre-endgame prefix, so there is no valid
+// leaf to hand it there (see Game::set_max_plies).
+TEST(Game, MaxPliesSparesTheEndgame) {
+  const Dictionary d = medium_dict();
+  const Board board;
+  // Both racks fully known and a nearly-empty pool, so the bag empties within
+  // the first couple of plies while play continues.
+  const std::array<Rack, 2> known = {rack_from("CATSEIQ"), rack_from("RATESIN")};
+  const uint64_t seed = 7;
+  Bag pool(seed);
+  {
+    // Reduce the pool to exactly 2 tiles beyond the known racks.
+    Bag two(seed);
+    while (two.size() > 2) two.draw();
+    pool = two;
+  }
+  TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+  TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+  scribblez::Game g(a0, a1, d, seed);
+  g.set_max_plies(3);
+  g.play_from(board, {0, 0}, known, pool, /*to_move=*/0);
+
+  const GameLog log = g.log();
+  if (g.truncated()) {
+    // Truncation is only legitimate while the bag survives the capped ply's
+    // refill: the pre-move leaf state must be pre-endgame.
+    ASSERT_GT(g.bag_size(), 0);
+  } else {
+    // The expected path with a 2-tile bag: the cap passed inside the endgame
+    // and was ignored, so the game reached a natural end beyond it.
+    ASSERT_GE(log.num_records, 3);
+    ASSERT_TRUE(std::string(log.end_reason) == "out" || std::string(log.end_reason) == "stalemate");
+  }
+}
+
 // ===========================================================================
 // LabelEncoder
 // ===========================================================================
@@ -4415,11 +4452,12 @@ TEST(SimRunner, TruncatedPovParity) {
     params.leaf_service = &leaf;
     const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
     ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
-    // Horizon 4's last ply is the root mover's own (opp, self, opp, self);
-    // horizon 3's is the opponent's, so win/loss and the delta sign swap.
-    const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
-    const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
-    const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
+    // The leaf is the pre-move state AFTER the horizon plies (opp moves
+    // first), so at horizon 4 the opponent is on move -- win/loss and the
+    // delta sign flip to the root POV -- and at horizon 3 the root mover is.
+    const double p_win = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
+    const double p_loss = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
+    const double delta = horizon % 2 == 0 ? -100.0 : 100.0;
     for (const SimObservation& o : obs) {
       ASSERT_EQ(int(o.n), params.rollouts);
       ASSERT_DOUBLE_EQ(o.wins, o.n * p_win);

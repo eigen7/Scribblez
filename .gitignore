@@ -20,3 +20,6 @@ compile_commands.json
 # Personal Claude Code settings (permissions etc.) -- keep out of version control.
 .claude/settings.local.json
 .claude/settings.json
+
+# Core dumps (crashed engine runs drop them in the cwd)
+core.*

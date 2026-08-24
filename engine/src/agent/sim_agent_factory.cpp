@@ -10,6 +10,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/trt_eval_service.h"
+#include "nn/trt_util.h"
 #include "util/exception.h"
 #include "util/seed_producer.h"
 
@@ -32,6 +33,7 @@ struct SimOptions {
   int sim_threads = 1;
   int sim_horizon = 0;
   std::string leaf_model;
+  std::string leaf_precision = "FP32";
   std::string objective = "winrate";
   uint64_t seed = 0;
   EndgameSolver::Params endgame;
@@ -54,6 +56,9 @@ po::options_description make_options_description(SimOptions& o) {
     ("leaf-model", po::value<std::string>(&o.leaf_model),
      "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
      "with, --sim-horizon")  //
+    ("leaf-precision", po::value<std::string>(&o.leaf_precision)->default_value("FP32"),
+     "TensorRT precision for the leaf model. FP32 by default: FP16 overflows to NaN on the "
+     "extreme-advantage states rollouts routinely reach")  //
     ("objective", po::value<std::string>(&o.objective)->default_value(o.objective),
      "what the rollouts are scored on: 'winrate' or 'spread'")  //
     ("seed", po::value<uint64_t>(&o.seed),
@@ -100,6 +105,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   if (!opts.leaf_model.empty()) {
     nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
     leaf_params.onnx_path = opts.leaf_model;
+    leaf_params.precision = nn::parse_precision(opts.leaf_precision);
     leaf = nn::make_loaded_service(leaf_params);
   }
   return std::make_unique<SimAgent>(params, std::move(leaf));

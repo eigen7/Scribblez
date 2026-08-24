@@ -18,13 +18,15 @@
 //
 // Value truncation (docs/roadmap.md item 2): with horizon_plies set, a
 // rollout plays that many plies and the position evaluation model's readout
-// at the horizon -- the post-move pre-draw state of the horizon ply's mover
-// -- stands for everything after: the rollout contributes the model's
-// outcome probabilities and predicted final delta (root-mover POV) instead
-// of a terminal {0,1} outcome. A rollout whose game ends before the horizon
-// contributes its exact terminal outcome. Identical candidates reach
-// identical horizon states under CRN, so their observations still cancel
-// exactly in differences.
+// at the horizon -- the pre-move state of the next decision point, the
+// sample kind the model trains on at every eligible turn -- stands for
+// everything after: the rollout contributes the model's outcome
+// probabilities and predicted final delta (root-mover POV) instead of a
+// terminal {0,1} outcome. A rollout whose game ends before the horizon, or
+// whose bag empties by it (the model's domain is the pre-endgame prefix),
+// contributes its exact terminal outcome instead. Identical candidates
+// reach identical horizon states under CRN, so their observations still
+// cancel exactly in differences.
 
 #include "game/bag.h"
 #include "game/board.h"
