@@ -318,12 +318,6 @@ Details to be worked out with Option 2:
   model's bias is systematic enough to be learnable — consistently preferring
   one blank designation, say — which is a leaf-model calibration problem, not
   an acquisition-target one.
-
-  Detection is already free. D1 keeps an anchor fraction of terminal rollouts
-  per candidate, and those cancel exactly under CRN; the gap between a
-  near-duplicate pair's measured gain on the terminal subset and on the
-  truncated estimate isolates the spurious component directly. This is one of
-  the things the anchor fraction is for.
 - **Winner's curse.** The best-so-far is a max of noisy sim estimates and is
   biased upward, and near-ties make the label a coin flip driven by rollout
   noise. The rollout-count inputs exist for exactly this; the head is

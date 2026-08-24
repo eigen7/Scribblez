@@ -187,10 +187,10 @@ Promoted from the rollout-policy ladder to the head of the queue: truncation
 is now a **data prerequisite**, not just an agent speedup.
 
 Rollouts sim a few plies, then read the position evaluation model's value at
-the horizon. An **anchor fraction** of terminal rollouts per candidate stays
-as a ground-truth tether — and as the instrument that measures both what the
-leaf model hides and the truncation bias in the CRN duplicate cancellation
-([sim_residual_feedback.md](sim_residual_feedback.md)).
+the horizon. The division of labor: the plies before the horizon supply what
+the model cannot — the near-root lexical facts sims exist to observe — and
+the leaf value stands for everything after. The horizon is set structurally
+(below); the match harness judges the stack end to end.
 
 - **Why first**: the deployment budget is ~1,000 rollouts per candidate, and
   the trajectory corpus must carry deployment-quality evidence — the count
@@ -393,6 +393,9 @@ the one above it.
   post-move state — under face-up leaves the sim samples the same draw
   distribution the game did, so it is the same target as the game outcome at
   a fraction of the variance. Positions with sims train on both streams.
+  Constraint if adopted after D1: this stream must come from
+  terminal-configuration sims — a truncated sim value embeds the PE model's
+  own leaf readouts, and the model must not train on its own outputs.
 - **Predicts**: WLD, score-differential Gaussian, four placement masks.
 - **Roles**: teacher for the student's distillation and, once item 2 lands,
   the rollout leaf evaluator — which is what puts it inside the generational
