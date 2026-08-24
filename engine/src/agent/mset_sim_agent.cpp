@@ -25,9 +25,19 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
+// The runner params `params` describe, over the serialized leaf evaluator
+// (null for terminal rollouts).
+SimRunner::Params runner_params(const MsetSimAgent::Params& params, nn::PositionEvalService* leaf) {
+  SimRunner::Params p = params.sim;
+  p.horizon_plies = params.sim_horizon;
+  p.leaf_service = leaf;
+  return p;
+}
+
 }  // namespace
 
-MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service)
+MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
+                           std::unique_ptr<nn::PositionEvalService> leaf_service)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),
       sim_top_k_(params.sim_top_k),
@@ -37,7 +47,11 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
       service_(std::move(service)),
       spec_(derive_input_spec(require_dict(params.dict), *service_, "mset-sim agent")),
       encoder_(spec_),
-      runner_(*params.dict, params.sim),
+      leaf_service_(std::move(leaf_service)),
+      leaf_(leaf_service_ ? std::make_unique<nn::SerializedEvalService<nn::PositionEvaluationSpec>>(
+                              *leaf_service_)
+                          : nullptr),
+      runner_(*params.dict, runner_params(params, leaf_.get())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
   board_row_.resize(size_t(input_floats(spec_)));
@@ -48,6 +62,12 @@ void MsetSimAgent::validate(const Params& params) {
     throw util::CleanException("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw util::CleanException("mset-sim agent: --sim-top-k must be >= 1");
   SimRunner::validate(params.sim);
+  if (params.sim_horizon != 0 && params.sim_horizon < SimRunner::kMinHorizonPlies) {
+    throw util::CleanException(
+      "mset-sim agent: --sim-horizon must be 0 (terminal rollouts) or "
+      ">= {}",
+      SimRunner::kMinHorizonPlies);
+  }
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {

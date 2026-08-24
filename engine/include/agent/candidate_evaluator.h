@@ -62,6 +62,10 @@ class CandidateEvaluator {
   // is deciding a turn.
   int active_player() const { return encoder_.active_player(); }
 
+  // The owned service, for an agent that reuses its model elsewhere -- e.g.
+  // as the value-truncated rollout leaf evaluator (SimRunner::Params).
+  nn::PositionEvalService& service() { return *service_; }
+
   // Evaluate candidates[idx[0..k)]'s post-move rows from the mover's POV,
   // chunked to max_batch rows per service call; the decoded scoring-head rows
   // then land at wld_row()/score_diff_row() [0..k) in the same order.

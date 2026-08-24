@@ -55,8 +55,14 @@ class NeuralSimAgent : public Agent {
     double drop_best_prob = 0.0;
     // Rollouts per candidate, and their threading; see SimAgent::Params for
     // why 400. Sharing SimAgent's default keeps the equal-budget comparison
-    // against it the configuration-free default.
+    // against it the configuration-free default. Leave the truncation fields
+    // untouched here -- sim_horizon below is the one knob, and the agent's
+    // own served model is the leaf evaluator.
     SimRunner::Params sim = {400, 1};
+    // Value truncation (docs/roadmap.md item 2): 0 rolls out to a natural
+    // end; otherwise rollouts stop after this many plies and the agent's own
+    // position evaluation model scores the horizon.
+    int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
@@ -112,6 +118,8 @@ class NeuralSimAgent : public Agent {
   double drop_best_prob_;
   uint64_t seed_;
   CandidateEvaluator evaluator_;
+  // The agent's own model, serialized for the runner's sim threads.
+  nn::SerializedEvalService<nn::PositionEvaluationSpec> leaf_;
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

@@ -28,6 +28,16 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
+// The runner params `params` describe: under a truncation horizon the
+// agent's own served model -- already serialized -- is the leaf evaluator.
+SimRunner::Params runner_params(const NeuralSimAgent::Params& params,
+                                nn::PositionEvalService* leaf) {
+  SimRunner::Params p = params.sim;
+  p.horizon_plies = params.sim_horizon;
+  p.leaf_service = params.sim_horizon > 0 ? leaf : nullptr;
+  return p;
+}
+
 }  // namespace
 
 NeuralSimAgent::NeuralSimAgent(const Params& params,
@@ -40,7 +50,8 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
       drop_best_prob_(params.drop_best_prob),
       seed_(params.seed),
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
-      runner_(*params.dict, params.sim),
+      leaf_(evaluator_.service()),
+      runner_(*params.dict, runner_params(params, &leaf_)),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
 }
@@ -53,6 +64,12 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw util::CleanException("neural-sim agent: --drop-best-prob must be in [0, 1]");
   SimRunner::validate(params.sim);
+  if (params.sim_horizon != 0 && params.sim_horizon < SimRunner::kMinHorizonPlies) {
+    throw util::CleanException(
+      "neural-sim agent: --sim-horizon must be 0 (terminal rollouts) or "
+      ">= {}",
+      SimRunner::kMinHorizonPlies);
+  }
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {

@@ -173,6 +173,7 @@ target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobu
 # unit-test binaries instead compile the selection TUs directly, factories
 # excluded (see their comments below).
 add_library(scribblez_neural_agents STATIC
+  src/agent/sim_agent_factory.cpp
   src/agent/mset_sim_agent.cpp
   src/agent/mset_sim_agent_factory.cpp
   src/agent/neural_agent.cpp
