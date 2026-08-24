@@ -85,6 +85,16 @@ class EvidenceTrajectoriesParams:
     )
     # The trajectory recipe.
     rollouts: int = param(200, "Monte-Carlo rollouts per trajectory candidate")
+    horizon: int = param(
+        0,
+        "value truncation (roadmap item 2): rollouts stop after this many plies and "
+        "leaf_model scores the horizon; 0 rolls out to a natural game end",
+    )
+    leaf_model: str = param(
+        "",
+        "absolute path to the position-eval ONNX scoring rollout horizons; required with, "
+        "and only with, horizon, and frozen like proposer_model",
+    )
     proposals_min: int = param(2, "least model proposals per trajectory")
     proposals_max: int = param(8, "most model proposals per trajectory")
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
@@ -216,6 +226,11 @@ def run_trajectory_generator(
         *[f"--slog-file={p}" for p in pending],
         f"--model={params.proposer_model}",
         f"--rollouts={params.rollouts}",
+        *(
+            [f"--horizon={params.horizon}", f"--leaf-model={params.leaf_model}"]
+            if params.horizon
+            else []
+        ),
         f"--positions-per-game={params.positions_per_game}",
         f"--proposals-min={params.proposals_min}",
         f"--proposals-max={params.proposals_max}",
@@ -286,6 +301,8 @@ def run_generate(ctx: WorkerContext) -> int:
     p = ctx.params
     ok = mset_targets.require_model_file(p.proposer_model, "proposer_model")
     ok = mset_targets.require_model_file(p.teacher_model, "teacher_model") and ok
+    if p.horizon:
+        ok = mset_targets.require_model_file(p.leaf_model, "leaf_model") and ok
     if not ok:
         return 1
     return pair_store.run_pair_generate(

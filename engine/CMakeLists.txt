@@ -253,6 +253,7 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
 add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
 target_link_libraries(sim_obs_tool PRIVATE
   scribblez_core
+  scribblez_nn
   Boost::program_options
   Boost::json
   Boost::filesystem

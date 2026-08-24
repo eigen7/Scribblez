@@ -44,6 +44,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -69,6 +71,7 @@ struct Options {
   std::vector<std::string> gcg_files;
   std::string out_dir;  // gcg mode: where the .sobs go
   bool open_leaves = false;
+  std::string leaf_model;  // value truncation; required with, and only with, --horizon
   evidence::TrajectoryOptions traj;
   int positions_per_game = 1;
   int threads = util::default_thread_count();
@@ -84,6 +87,9 @@ struct Options {
 // reason as sim_obs_tool: an empty .sobs would stand in for real evidence.
 void validate(const Options& opt) {
   evidence::validate(opt.traj);
+  if ((opt.traj.horizon > 0) != !opt.leaf_model.empty()) {
+    throw util::CleanException("--horizon and --leaf-model come together");
+  }
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   const bool slog_mode = !opt.slog_dir.empty() || !opt.slog_files.empty();
   if (slog_mode == opt.gcg_mode()) {
@@ -100,13 +106,16 @@ uint32_t file_flags(const Options& opt) {
   return kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
 }
 
-// What every worker shares: the lexicon and encoding, the options, and the
-// scorer over the loaded model.
+// What every worker shares: the lexicon and encoding, the options, the
+// scorer over the loaded proposer model, and -- under --horizon -- the
+// serialized truncation leaf service and its content hash.
 struct Shared {
   const Dictionary& dict;
   const InputEncodingSpec& spec;
   const Options& opt;
   StudentScorer* scorer;
+  nn::PositionEvalService* leaf;  // null = terminal rollouts
+  const std::string& leaf_hash;
 };
 
 void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uint32_t turn_idx,
@@ -126,7 +135,7 @@ template <typename Front>
 void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
                    util::ProgressMeter* meter) {
   typename Front::Worker worker(front);
-  TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer);
+  TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf);
   const std::vector<typename Front::Item>& work = front.work;
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     worker.run(i, work[i], runner);
@@ -217,7 +226,8 @@ void process_slog(const Shared& sh, const std::vector<char>& buf, const fs::path
   results.resize(front.work.size());
   run_positions(sh, front, meter);
 
-  SimObsWriter writer(sobs_path.string(), file_flags(opt), proposer_hash);
+  SimObsWriter writer(sobs_path.string(), file_flags(opt), proposer_hash, sh.leaf_hash,
+                      opt.traj.horizon);
   for (size_t i = 0; i < front.work.size(); ++i) {
     add_result(&writer, opt, front.work[i].game_idx, front.work[i].turn_idx, results[i].base_seed,
                results[i].traj);
@@ -226,7 +236,8 @@ void process_slog(const Shared& sh, const std::vector<char>& buf, const fs::path
 }
 
 void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
-                   StudentService* service, const std::string& proposer_hash) {
+                   StudentService* service, const std::string& proposer_hash,
+                   nn::PositionEvalService* leaf, const std::string& leaf_hash) {
   // Games played face up must be simmed face up (see sim_obs_tool for why
   // the reverse pairing is allowed).
   const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
@@ -245,7 +256,7 @@ void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const 
   util::ProgressMeter meter(total_positions, "positions");
   for (const binlog::PendingSlog& p : pending) {
     StudentScorer scorer(service);
-    const Shared sh{dict, spec, opt, &scorer};
+    const Shared sh{dict, spec, opt, &scorer, leaf, leaf_hash};
     process_slog(sh, p.bytes, p.sidecar(".sobs"), proposer_hash, &meter);
   }
   meter.finish("evidence trajectories");
@@ -349,7 +360,8 @@ std::vector<GcgWork> load_pending_gcgs(const Options& opt) {
 }
 
 void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
-                  StudentService* service, const std::string& proposer_hash) {
+                  StudentService* service, const std::string& proposer_hash,
+                  nn::PositionEvalService* leaf, const std::string& leaf_hash) {
   std::vector<GcgResult> results;
   GcgFront front{spec, opt, load_pending_gcgs(opt), &results};
   if (front.work.empty()) return;
@@ -362,13 +374,14 @@ void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const O
 
   util::ProgressMeter meter(front.work.size(), "positions");
   StudentScorer scorer(service);
-  const Shared sh{dict, spec, opt, &scorer};
+  const Shared sh{dict, spec, opt, &scorer, leaf, leaf_hash};
   run_positions(sh, front, &meter);
   meter.finish("evidence trajectories");
 
   for (size_t i = 0; i < front.work.size(); ++i) {
     const GcgWork& w = front.work[i];
-    SimObsWriter writer(gcg_sobs_path(opt, w.path).string(), file_flags(opt), proposer_hash);
+    SimObsWriter writer(gcg_sobs_path(opt, w.path).string(), file_flags(opt), proposer_hash,
+                        leaf_hash, opt.traj.horizon);
     add_result(&writer, opt, 0, uint32_t(w.position.turns), results[i].base_seed, results[i].traj);
     writer.close();
   }
@@ -399,6 +412,12 @@ int main(int argc, char** argv) {
       "games, and must match the model's input arm")(
       "rollouts", po::value<int>(&traj.rollouts)->default_value(traj.rollouts),
       "Monte-Carlo rollouts per candidate")(
+      "horizon", po::value<int>(&traj.horizon)->default_value(traj.horizon),
+      "value truncation: rollouts stop after this many plies and --leaf-model scores the "
+      "horizon; 0 rolls out to a natural game end")(
+      "leaf-model", po::value<std::string>(&opt.leaf_model),
+      "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
+      "with, --horizon")(
       "proposals-min", po::value<int>(&traj.proposals_min)->default_value(traj.proposals_min),
       "least model proposals per trajectory (the randomized length's lower bound)")(
       "proposals-max", po::value<int>(&traj.proposals_max)->default_value(traj.proposals_max),
@@ -435,10 +454,26 @@ int main(int argc, char** argv) {
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
+    // The truncation leaf service, shared by every position worker through
+    // the serializing wrapper (the runners are single-threaded, but many run
+    // at once).
+    std::unique_ptr<nn::PositionEvalService> leaf_net;
+    std::optional<nn::SerializedEvalService<nn::PositionEvaluationSpec>> leaf;
+    std::string leaf_hash;
+    if (!opt.leaf_model.empty()) {
+      nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
+      leaf_params.onnx_path = opt.leaf_model;
+      leaf_params.cuda_device_id = params.cuda_device_id;
+      leaf_params.precision = params.precision;
+      leaf_net = nn::make_loaded_service(leaf_params);
+      leaf.emplace(*leaf_net);
+      leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+    }
+
     if (opt.gcg_mode()) {
-      run_gcg_mode(dict, spec, opt, &service, proposer_hash);
+      run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf ? &*leaf : nullptr, leaf_hash);
     } else {
-      run_slog_mode(dict, spec, opt, &service, proposer_hash);
+      run_slog_mode(dict, spec, opt, &service, proposer_hash, leaf ? &*leaf : nullptr, leaf_hash);
     }
     return 0;
   } catch (...) {

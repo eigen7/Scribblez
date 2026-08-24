@@ -26,6 +26,8 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "nn/trt_eval_service.h"
+#include "nn/trt_util.h"
 #include "sim/sim_runner.h"
 #include "util/exception.h"
 #include "util/math.h"
@@ -41,7 +43,9 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -59,6 +63,8 @@ struct Options {
   std::vector<std::string> slog_files;
   bool open_leaves = false;
   int rollouts = 200;
+  int horizon = 0;         // value truncation; 0 = terminal rollouts
+  std::string leaf_model;  // required with, and only with, --horizon
   int top_k = 10;
   int positions_per_game = 1;
   int threads = util::default_thread_count();
@@ -66,13 +72,16 @@ struct Options {
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
 };
 
-// The SimRunner params every worker builds from `opt`. Parallelism here is
-// across positions rather than within one, so each worker's runner is
-// single-threaded (see position_worker).
-SimRunner::Params sim_params(const Options& opt) {
+// The SimRunner params every worker builds from `opt`, over the shared
+// (serialized) truncation leaf service -- null for terminal rollouts.
+// Parallelism here is across positions rather than within one, so each
+// worker's runner is single-threaded (see position_worker).
+SimRunner::Params sim_params(const Options& opt, nn::PositionEvalService* leaf) {
   SimRunner::Params p;
   p.rollouts = opt.rollouts;
   p.threads = 1;
+  p.horizon_plies = opt.horizon;
+  p.leaf_service = leaf;
   return p;
 }
 
@@ -87,7 +96,16 @@ SimRunner::Params sim_params(const Options& opt) {
 // .slog -- so the empty output would silently stand in for the real evidence
 // until someone noticed the corpus was hollow.
 void validate(const Options& opt) {
-  SimRunner::validate(sim_params(opt));
+  if ((opt.horizon > 0) != !opt.leaf_model.empty()) {
+    throw util::CleanException("--horizon and --leaf-model come together");
+  }
+  if (opt.horizon != 0 && opt.horizon < SimRunner::kMinHorizonPlies) {
+    throw util::CleanException("--horizon must be 0 (terminal rollouts) or >= {}",
+                               SimRunner::kMinHorizonPlies);
+  }
+  Options terminal = opt;  // the leaf service does not exist yet
+  terminal.horizon = 0;
+  SimRunner::validate(sim_params(terminal, nullptr));
   if (opt.top_k < 1) throw util::CleanException("--top-k must be >= 1");
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
 }
@@ -109,11 +127,12 @@ struct PositionResult {
 // threading and keeps every position's sims deterministic regardless of the
 // worker count).
 void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
-                     const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
-                     std::vector<PositionResult>* results, util::ProgressMeter* meter) {
+                     nn::PositionEvalService* leaf, const std::vector<GamePositionIndex>& work,
+                     std::atomic<size_t>* next, std::vector<PositionResult>* results,
+                     util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict, false});
-  const SimRunner runner(dict, sim_params(opt));
+  const SimRunner runner(dict, sim_params(opt, leaf));
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
@@ -159,7 +178,8 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
 
 // Generate the .sobs sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
-                  const Options& opt, util::ProgressMeter* meter) {
+                  const Options& opt, nn::PositionEvalService* leaf, const std::string& leaf_hash,
+                  util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
     reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
@@ -176,14 +196,15 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   std::vector<std::thread> workers;
   const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
   for (int t = 0; t < threads; ++t)
-    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
+    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt), leaf,
                          std::cref(work), &next, &results, meter);
   for (auto& w : workers) w.join();
 
   // The work list is sorted by (game, turn) and results are indexed by work
   // slot, so the output is canonically ordered and byte-stable across thread
   // counts.
-  SimObsWriter writer(sobs_path.string(), opt.open_leaves ? kSimObsFlagOpenLeaves : 0);
+  SimObsWriter writer(sobs_path.string(), opt.open_leaves ? kSimObsFlagOpenLeaves : 0,
+                      /*proposer_hash=*/{}, leaf_hash, opt.horizon);
   for (const PositionResult& r : results) {
     writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates, r.observations,
                         uint32_t(opt.rollouts), r.base_seed, r.num_legal_moves);
@@ -208,8 +229,13 @@ int main(int argc, char** argv) {
       "hidden and sampled) -- the open-leaves information condition; recorded in the "
       ".sobs header flags")("rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
                             "Monte-Carlo rollouts per candidate")(
-      "top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
-      "candidates simmed per position (HastyBot-equity ranked)")(
+      "horizon", po::value<int>(&opt.horizon)->default_value(opt.horizon),
+      "value truncation: rollouts stop after this many plies and --leaf-model scores the "
+      "horizon; 0 rolls out to a natural game end")(
+      "leaf-model", po::value<std::string>(&opt.leaf_model),
+      "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
+      "with, --horizon")("top-k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
+                         "candidates simmed per position (HastyBot-equity ranked)")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game")(
@@ -243,9 +269,24 @@ int main(int argc, char** argv) {
               << opt.top_k << " candidates x " << opt.rollouts << " rollouts, " << opt.threads
               << " threads\n";
 
+    // The truncation leaf service, shared by every position worker through
+    // the serializing wrapper (the runners are single-threaded, but many run
+    // at once).
+    std::unique_ptr<nn::PositionEvalService> leaf_net;
+    std::optional<nn::SerializedEvalService<nn::PositionEvaluationSpec>> leaf;
+    std::string leaf_hash;
+    if (!opt.leaf_model.empty()) {
+      nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
+      leaf_params.onnx_path = opt.leaf_model;
+      leaf_net = nn::make_loaded_service(leaf_params);
+      leaf.emplace(*leaf_net);
+      leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+    }
+
     util::ProgressMeter meter(total_positions, "positions");
     for (const binlog::PendingSlog& p : pending) {
-      process_file(p.bytes, p.sidecar(".sobs"), dict, opt, &meter);
+      process_file(p.bytes, p.sidecar(".sobs"), dict, opt, leaf ? &*leaf : nullptr, leaf_hash,
+                   &meter);
     }
     meter.finish("sim-obs");
     return 0;
