@@ -49,22 +49,31 @@ struct SimPosition {
 // the square, and how often it did so in a rollout that player went on to win
 // -- as row-major COUNTS rather than frequencies, so a consumer can weigh them
 // by sample size. SimObsWriter/SimObsReader serialize the layout verbatim.
+//
+// A terminal rollout contributes a {0,1} outcome and an integer delta; a
+// value-truncated rollout (docs/roadmap.md item 2) contributes the leaf
+// model's outcome probabilities and predicted final delta, so the outcome
+// accumulators and the win-conjoined planes are fractional. The next-move
+// planes stay integer counts: the plies they read are always simmed, never
+// predicted. Every consumer normalizes by `n` -- the rollout count, integral
+// in both configurations -- so the frequency semantics are unchanged.
 struct SimObservation {
   static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
 
-  uint32_t n = 0;
-  uint32_t wins = 0;  // rollouts the mover won (draws are neither win nor loss)
-  uint32_t draws = 0;
-  uint32_t losses = 0;
-  int64_t delta_sum = 0;     // sum over rollouts of (mover final - opp final)
-  int64_t delta_sq_sum = 0;  // sum of squared deltas (yields the delta std)
+  // Doubles first, so the layout carries no alignment padding to serialize.
+  double wins = 0;  // outcome weight for the mover winning (draws are neither)
+  double draws = 0;
+  double losses = 0;
+  double delta_sum = 0;     // sum over rollouts of (mover final - opp final)
+  double delta_sq_sum = 0;  // sum of squared deltas (yields the delta std)
+  uint32_t n = 0;           // rollouts
 
   std::array<uint16_t, kCells> opp_next_count{};
   std::array<uint16_t, kCells> self_next_count{};
-  std::array<uint16_t, kCells> opp_win_count{};
-  std::array<uint16_t, kCells> self_win_count{};
+  std::array<float, kCells> opp_win_count{};
+  std::array<float, kCells> self_win_count{};
 };
-static_assert(sizeof(SimObservation) == 32 + 4 * 2 * SimObservation::kCells,
+static_assert(sizeof(SimObservation) == 44 + (2 + 2 + 4 + 4) * SimObservation::kCells,
               "SimObservation is serialized verbatim; its layout must stay packed");
 
 // Which simulated quantity ranks a candidate set: how often the rollouts were

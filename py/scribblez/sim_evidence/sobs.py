@@ -95,15 +95,23 @@ class SobsPosition:
         return range((k - 1 if self.has_uniform_tail else k) + 1)
 
 
-def read_sobs_flags(path: str | Path) -> int:
-    """The .sobs header's flags word (SOBS_FLAG_* bits) -- e.g. whether the
-    sims were generated under the open-leaves information condition. Reads
-    only the header."""
+def _read_header(path: str | Path) -> np.void:
+    """The .sobs file header, magic- and version-checked (a stale file must
+    fail loudly even on a header-only read)."""
     with open(path, "rb") as f:
         hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]
     if hdr["magic"] != SOBS_MAGIC:
         raise ValueError(f"bad .sobs magic in {path}")
-    return int(hdr["flags"])
+    if hdr["version"] != SOBS_VERSION:
+        raise ValueError(f".sobs version mismatch in {path}: file={hdr['version']}")
+    return hdr
+
+
+def read_sobs_flags(path: str | Path) -> int:
+    """The .sobs header's flags word (SOBS_FLAG_* bits) -- e.g. whether the
+    sims were generated under the open-leaves information condition. Reads
+    only the header."""
+    return int(_read_header(path)["flags"])
 
 
 def read_sobs_proposer_hash(path: str | Path) -> str:
@@ -111,11 +119,16 @@ def read_sobs_proposer_hash(path: str | Path) -> str:
     "" for the equity-top-K proposer. Reads only the header. Trajectory
     corpora are proposer-versioned the way .mset corpora are teacher-versioned:
     a consumer should refuse to mix hashes."""
-    with open(path, "rb") as f:
-        hdr = np.frombuffer(f.read(_FILE_HEADER.itemsize), dtype=_FILE_HEADER)[0]
-    if hdr["magic"] != SOBS_MAGIC:
-        raise ValueError(f"bad .sobs magic in {path}")
-    return bytes(hdr["proposer_hash"]).rstrip(b"\x00").decode()
+    return bytes(_read_header(path)["proposer_hash"]).rstrip(b"\x00").decode()
+
+
+def read_sobs_leaf(path: str | Path) -> tuple[str, int]:
+    """The (leaf model hash, horizon plies) of the file's value-truncated
+    sims, ("", 0) for terminal rollouts. Reads only the header. Truncated
+    observations embed the leaf model's horizon readouts, so a consumer
+    should refuse to mix files that disagree on either."""
+    hdr = _read_header(path)
+    return bytes(hdr["leaf_model_hash"]).rstrip(b"\x00").decode(), int(hdr["horizon_plies"])
 
 
 def read_sobs(path: str | Path) -> list[SobsPosition]:

@@ -4498,16 +4498,28 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   EXPECT_EQ(rec_fields.at(0).at("name").as_string(), "move");
   EXPECT_EQ(rec_fields.at(0).at("dtype").at("struct").as_string(), "Move");
 
-  // A subarray field carries its element code and shape.
+  // A subarray field carries its element code and shape. The next-move
+  // planes are integer counts; the win-conjoined planes and the outcome
+  // accumulators are fractional under value truncation.
   const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
-  bool found_counts = false;
+  bool found_counts = false, found_win = false, found_wins = false;
   for (const bj::value& f : obs_fields) {
-    if (f.at("name").as_string() != "opp_next_count") continue;
-    found_counts = true;
-    EXPECT_EQ(f.at("dtype").as_string(), "<u2");
-    EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    if (f.at("name").as_string() == "opp_next_count") {
+      found_counts = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<u2");
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    } else if (f.at("name").as_string() == "opp_win_count") {
+      found_win = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<f4");
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    } else if (f.at("name").as_string() == "wins") {
+      found_wins = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<f8");
+    }
   }
   EXPECT_TRUE(found_counts);
+  EXPECT_TRUE(found_win);
+  EXPECT_TRUE(found_wins);
 
   const bj::object& c = doc.at("constants").as_object();
   EXPECT_EQ(c.at("mset").at("magic").to_number<uint32_t>(), move_set_eval::kTargetMagic);
@@ -4948,15 +4960,15 @@ TEST(SimObservationLog, Roundtrip) {
   // mixup cannot round-trip cleanly.
   SimObservation o1{};
   o1.n = 16;
-  o1.wins = 9;
-  o1.draws = 1;
-  o1.losses = 6;
-  o1.delta_sum = 123;
-  o1.delta_sq_sum = 4567;
+  o1.wins = 9.25;  // fractional, as value-truncated rollouts accumulate
+  o1.draws = 1.5;
+  o1.losses = 5.25;
+  o1.delta_sum = 123.5;
+  o1.delta_sq_sum = 4567.25;
   o1.opp_next_count[7 * 15 + 7] = 12;
-  o1.opp_win_count[7 * 15 + 7] = 5;
+  o1.opp_win_count[7 * 15 + 7] = 5.5f;
   o1.self_next_count[3] = 2;
-  o1.self_win_count[3] = 1;
+  o1.self_win_count[3] = 1.25f;
   SimObservation o2{};
   o2.n = 16;
   o2.draws = 16;
@@ -4969,7 +4981,7 @@ TEST(SimObservationLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
 
   {
-    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234");
+    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234", "beef5678", /*horizon_plies=*/4);
     w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
                    kSimObsPosFlagUniformTail);
     w.add_position(4, 0, {m2}, {o2}, 16, 1000);
@@ -4980,6 +4992,8 @@ TEST(SimObservationLog, Roundtrip) {
   ASSERT_EQ(r.num_positions(), 2);
   ASSERT_EQ(r.flags(), kSimObsFlagTrajectory);
   ASSERT_EQ(r.proposer_hash(), "cafe1234");
+  ASSERT_EQ(r.leaf_model_hash(), "beef5678");
+  ASSERT_EQ(r.horizon_plies(), 4);
   const SimObsReader::Position p0 = r.position(0);
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);

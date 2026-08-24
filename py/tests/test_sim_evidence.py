@@ -167,10 +167,15 @@ def test_gcg_sim_evidence_on_dataset_position():
 def test_open_leaves_sobs_and_input_arm(sobs_dir, tmp_path):
     import sys
 
-    from scribblez.sim_evidence.sobs import SOBS_FLAG_OPEN_LEAVES, read_sobs_flags
+    from scribblez.sim_evidence.sobs import (
+        SOBS_FLAG_OPEN_LEAVES,
+        read_sobs_flags,
+        read_sobs_leaf,
+    )
 
-    # Hidden-mode sidecars carry no flags.
+    # Hidden-mode sidecars carry no flags, and terminal sims no leaf model.
     assert read_sobs_flags(sorted(sobs_dir.glob("*.sobs"))[0]) == 0
+    assert read_sobs_leaf(sorted(sobs_dir.glob("*.sobs"))[0]) == ("", 0)
 
     # Regenerate one sidecar open-leaves: the flag is recorded and the sims
     # still satisfy the observation invariants.

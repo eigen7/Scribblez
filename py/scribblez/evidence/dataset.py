@@ -47,6 +47,7 @@ from scribblez.sim_evidence.sobs import (
     SobsPosition,
     read_sobs,
     read_sobs_flags,
+    read_sobs_leaf,
     read_sobs_proposer_hash,
 )
 from scribblez.workloads import pair_store
@@ -122,6 +123,7 @@ class TrajectoryDataset:
         self._positions: list[_TrajPosition] = []
         self.proposer_hash: str | None = None
         self._flags: int | None = None
+        self._leaf: tuple[str, int] | None = None
         self.absorb(sobs_files)
         input_shapes, _ = row_layout()
         self._spatial_shape = tuple(input_shapes[0].dims)
@@ -144,14 +146,17 @@ class TrajectoryDataset:
         before = len(self._positions)
         for path in (Path(f) for f in sobs_files):
             flags, proposer = read_sobs_flags(path), read_sobs_proposer_hash(path)
+            leaf = read_sobs_leaf(path)
             if not flags & SOBS_FLAG_TRAJECTORY:
                 raise ValueError(f"{path} is not a trajectory .sobs")
             if self.proposer_hash is None:
-                self.proposer_hash, self._flags = proposer, flags
+                self.proposer_hash, self._flags, self._leaf = proposer, flags, leaf
             if proposer != self.proposer_hash:
                 raise ValueError(f"corpus mixes proposers: {self.proposer_hash}, {proposer}")
             if flags != self._flags:
                 raise ValueError(f"corpus mixes header flags: {self._flags}, {flags}")
+            if leaf != self._leaf:
+                raise ValueError(f"corpus mixes leaf models/horizons: {self._leaf}, {leaf}")
             file_id = len(self._slogs)
             self._files.append(path)
             self._slogs.append(path.with_suffix(".slog"))
