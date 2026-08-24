@@ -4323,6 +4323,240 @@ TEST(SimRunner, Basic) {
   fs::remove_all(tmp);
 }
 
+// Constant-output leaf stub for value-truncation tests: every horizon row
+// reads WLD (0.7, 0.1, 0.2) and predicted final delta +100 from the horizon
+// MOVER's POV, so the root-POV flip at odd horizons is exactly checkable.
+// Declares the contingent, no-opponent-leave input arm like the agent stubs.
+class ConstantLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  int rows_seen = 0;
+  bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    for (int i = 0; i < batch.count; ++i) {
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = 0.7f;
+      wld[1] = 0.1f;
+      wld[2] = 0.2f;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = 100.0f;
+      sd[1] = 5.0f;
+    }
+    rows_seen += batch.count;
+  }
+};
+
+// Row-dependent leaf stub: outputs are a deterministic function of the
+// encoded row's score-diff scalar, so rollouts get distinct fractional
+// contributions -- which makes reduction-order determinism and CRN
+// cancellation real assertions rather than vacuous ones.
+class RowLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  int rows_seen = 0;
+  bool contingent_features() const override { return true; }
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    const scribblez::InputEncodingSpec spec{nullptr, true};
+    const size_t row_floats = scribblez::input_floats(spec);
+    const size_t sd_off =
+      scribblez::spatial_floats(spec) +
+      scribblez::scalar_block_offset(spec, scribblez::ScalarBlockId::kScoreDiff);
+    for (int i = 0; i < batch.count; ++i) {
+      const float s = batch.rows[size_t(i) * row_floats + sd_off];
+      const float w = 0.5f + 0.4f * std::tanh(s);
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = w;
+      wld[1] = 0.1f;
+      wld[2] = 0.9f - w;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = s * scribblez::kScoreDiffInputScale;  // "the current diff holds up"
+      sd[1] = 5.0f;
+    }
+    rows_seen += batch.count;
+  }
+};
+
+// Value truncation with a constant leaf: every rollout of every candidate is
+// cut at the horizon (a mid-game position cannot end within 4 plies), so the
+// observations are exact multiples of the stub's outputs -- from the root
+// mover's POV, which flips at an odd horizon.
+TEST(SimRunner, TruncatedPovParity) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_pov";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  for (const int horizon : {4, 3}) {
+    ConstantLeafService leaf;
+    SimRunner::Params params;
+    params.rollouts = 16;
+    params.threads = 2;
+    params.horizon_plies = horizon;
+    params.leaf_service = &leaf;
+    const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
+    ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
+    // Horizon 4's last ply is the root mover's own (opp, self, opp, self);
+    // horizon 3's is the opponent's, so win/loss and the delta sign swap.
+    const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
+    const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
+    const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
+    for (const SimObservation& o : obs) {
+      ASSERT_EQ(int(o.n), params.rollouts);
+      ASSERT_DOUBLE_EQ(o.wins, o.n * p_win);
+      ASSERT_DOUBLE_EQ(o.draws, o.n * double(0.1f));
+      ASSERT_DOUBLE_EQ(o.losses, o.n * p_loss);
+      ASSERT_DOUBLE_EQ(o.delta_sum, o.n * delta);
+      ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * 100.0 * 100.0);
+      // The win-conjoined planes carry the leaf probabilities per placement.
+      for (int i = 0; i < SimObservation::kCells; ++i) {
+        ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);
+        ASSERT_NEAR(o.self_win_count[i], p_win * o.self_next_count[i], 1e-3);
+      }
+    }
+  }
+  fs::remove_all(tmp);
+}
+
+// Truncated observations stay deterministic across thread counts (the fixed
+// reduction order), CRN-cancel exactly on duplicate candidates, and are
+// independent of which other candidates were simmed -- all through the
+// SerializedEvalService wrapper the multi-worker configuration requires.
+TEST(SimRunner, TruncatedDeterminismAndCrn) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_crn";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  // The same play twice: a CRN duplicate whose observations must be equal.
+  const std::vector<Move> candidates = {plays.front(), plays.front(), plays[plays.size() / 2]};
+
+  RowLeafService leaf;
+  scribblez::nn::SerializedEvalService<scribblez::nn::PositionEvaluationSpec> shared(leaf);
+  SimRunner::Params params;
+  params.rollouts = 16;
+  params.threads = 3;
+  params.horizon_plies = 4;
+  params.leaf_service = &shared;
+  const uint64_t base_seed = 400;
+  const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, base_seed);
+
+  for (const SimObservation& o : obs) {
+    ASSERT_EQ(int(o.n), params.rollouts);
+    ASSERT_NEAR(o.wins + o.draws + o.losses, double(o.n), 1e-5);
+  }
+  // Exact CRN cancellation: the duplicate's observation is byte-identical.
+  ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(SimObservation)), 0);
+
+  // Thread-count independence, exactly (fractional contributions reduce in a
+  // fixed order).
+  {
+    SimRunner::Params p1 = params;
+    p1.threads = 1;
+    const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    for (size_t c = 0; c < obs.size(); ++c)
+      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
+  }
+  // CRN across candidate-set membership.
+  {
+    const std::vector<SimObservation> alone =
+      SimRunner(d, params).run(pos, {candidates[2]}, base_seed);
+    ASSERT_EQ(std::memcmp(&alone[0], &obs[2], sizeof(SimObservation)), 0);
+  }
+  fs::remove_all(tmp);
+}
+
+// A horizon past every game's natural end changes nothing: each rollout
+// finishes before the cap, contributes its exact terminal outcome, and the
+// leaf service is never consulted -- so the observations are byte-identical
+// to a terminal runner's.
+TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_term";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 1);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  SimRunner::Params terminal;
+  terminal.rollouts = 8;
+  const std::vector<SimObservation> obs_terminal = SimRunner(d, terminal).run(pos, candidates, 400);
+
+  RowLeafService leaf;
+  SimRunner::Params truncated = terminal;
+  truncated.horizon_plies = 350;  // beyond any natural game length
+  truncated.leaf_service = &leaf;
+  const std::vector<SimObservation> obs_truncated =
+    SimRunner(d, truncated).run(pos, candidates, 400);
+
+  ASSERT_EQ(leaf.rows_seen, 0);
+  for (size_t c = 0; c < obs_terminal.size(); ++c)
+    ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(SimObservation)), 0);
+  fs::remove_all(tmp);
+}
+
+// The horizon/service pairing and the minimum horizon are validated.
+TEST(SimRunner, ValidatesTruncationParams) {
+  SimRunner::Params p;
+  p.horizon_plies = 4;  // horizon without a service
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  ConstantLeafService leaf;
+  p.leaf_service = &leaf;
+  p.horizon_plies = 0;  // service without a horizon
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.horizon_plies = SimRunner::kMinHorizonPlies - 1;  // below the minimum
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.horizon_plies = SimRunner::kMinHorizonPlies;
+  SimRunner::validate(p);
+}
+
 // A full 7-tile known leave degenerates to a completely known opponent rack:
 // under a greedy (deterministic) rollout policy the opponent's first reply to
 // each candidate is then the same in every rollout, so the reply-placement

@@ -2,6 +2,7 @@
 
 #include "nn/model_specs.h"
 
+#include <mutex>
 #include <span>
 
 namespace scribblez {
@@ -42,6 +43,34 @@ class EvalService : public ServedModelInputs {
 
 using PositionEvalService = EvalService<PositionEvaluationSpec>;
 using MoveSetEvalService = EvalService<MoveSetEvaluationSpec>;
+
+// Makes a single-caller service safely shareable by serializing evaluate()
+// under a mutex: SimRunner's rollout workers, or many single-threaded runners
+// in a position-parallel generator, all funnel through one wrapper around one
+// loaded net. Sound for TrtEvalService because the underlying contract is
+// one call at a time, not thread affinity (neural_net.h); the wrapper never
+// interleaves calls. Non-owning: the wrapped service must outlive it.
+template <typename Spec>
+class SerializedEvalService : public EvalService<Spec> {
+ public:
+  using SpecBatch = Spec::Batch;
+
+  explicit SerializedEvalService(EvalService<Spec>& inner) : inner_(inner) {}
+
+  bool contingent_features() const override { return inner_.contingent_features(); }
+  bool opp_leave_input() const override { return inner_.opp_leave_input(); }
+  int spatial_planes() const override { return inner_.spatial_planes(); }
+  int scalar_floats() const override { return inner_.scalar_floats(); }
+
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    inner_.evaluate(batch, head_out);
+  }
+
+ private:
+  EvalService<Spec>& inner_;
+  std::mutex mutex_;
+};
 
 }  // namespace nn
 }  // namespace scribblez

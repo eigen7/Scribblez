@@ -17,8 +17,12 @@ class options_description;
 // A thin, synchronous wrapper around a TensorRT engine, specialized to a model
 // family by its spec (model_specs.h).
 //
-// One net drives one engine from one thread: predict() blocks until the
-// outputs are back, with no cross-thread batching and no async pipeline.
+// One net drives one engine from one thread AT A TIME: predict() blocks until
+// the outputs are back, with no cross-thread batching and no async pipeline,
+// and calls must never overlap. Serialized calls from different threads are
+// fine -- the CUDA stream and buffers carry their device -- which is what
+// both nn::SerializedEvalService and the generators' scorer-thread pattern
+// rely on.
 
 namespace scribblez {
 namespace nn {

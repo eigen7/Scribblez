@@ -11,12 +11,26 @@
 // identical across candidates. Shared rack luck then cancels in candidate
 // differences, sharpening comparisons far beyond independent sampling and
 // making the observations a valid source of pairwise covariance estimates.
-// Results are deterministic and independent of the thread count.
+// Results are deterministic and independent of the thread count (per-rollout
+// results are reduced in a fixed order; under value truncation this also
+// leans on the eval service's contract that a row's outputs do not depend on
+// its batch, trt_eval_service.h).
+//
+// Value truncation (docs/roadmap.md item 2): with horizon_plies set, a
+// rollout plays that many plies and the position evaluation model's readout
+// at the horizon -- the post-move pre-draw state of the horizon ply's mover
+// -- stands for everything after: the rollout contributes the model's
+// outcome probabilities and predicted final delta (root-mover POV) instead
+// of a terminal {0,1} outcome. A rollout whose game ends before the horizon
+// contributes its exact terminal outcome. Identical candidates reach
+// identical horizon states under CRN, so their observations still cancel
+// exactly in differences.
 
 #include "game/bag.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "nn/eval_service.h"
 
 #include <array>
 #include <cstdint>
@@ -96,9 +110,26 @@ class SimRunner {
   // Rollouts per candidate are counted in u16 planes, so this bounds them.
   static constexpr int kMaxRollouts = 65535;
 
+  // Below this horizon the last two input plies at a leaf encode could
+  // predate the rollout, and -- the real bound -- a contingent draw has not
+  // had its draw-then-play plies to resolve, leaving the sim nothing to
+  // observe that the leaf model did not already know (docs/roadmap.md
+  // item 2).
+  static constexpr int kMinHorizonPlies = 3;
+
   struct Params {
     int rollouts = 300;  // per candidate; at most kMaxRollouts
     int threads = 1;
+    // Value truncation: 0 rolls every rollout to a natural game end (no
+    // leaf service); otherwise rollouts stop after this many plies (at
+    // least kMinHorizonPlies) and `leaf_service` -- a served position
+    // evaluation model -- scores the horizon. The service must tolerate
+    // concurrent evaluate() calls whenever it can be reached by more than
+    // one thread (workers here, or position-parallel runners sharing it):
+    // wrap it in nn::SerializedEvalService. Non-owning; must outlive the
+    // runner.
+    int horizon_plies = 0;
+    nn::PositionEvalService* leaf_service = nullptr;
   };
 
   // Throws util::CleanException on params no SimRunner can honour. The
@@ -109,15 +140,19 @@ class SimRunner {
   SimRunner(const Dictionary& dict, const Params& params);
 
   // Rollout i of every candidate is seeded by `base_seed + i` (the scheme
-  // above), and rollouts are HastyBot-vs-HastyBot to a natural game end.
-  // Requires a non-empty bag at the decision point -- the
-  // training-eligibility rule -- so no candidate can end the game outright.
+  // above), and rollouts are HastyBot-vs-HastyBot to a natural game end --
+  // or to the truncation horizon, when the params set one. Requires a
+  // non-empty bag at the decision point -- the training-eligibility rule --
+  // so no candidate can end the game outright.
   std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
                                   uint64_t base_seed) const;
 
  private:
   const Dictionary& dict_;
   Params params_;
+  // The leaf model's input encoding, derived from the service's declared arm
+  // at construction; meaningful only under truncation.
+  InputEncodingSpec leaf_spec_{};
 };
 
 // A full bag, its draw RNG seeded by `seed`, minus the tiles on the board and
