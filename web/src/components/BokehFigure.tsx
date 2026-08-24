@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as Bokeh from '@bokeh/bokehjs';
+import { applyVisibility, Visibility } from '../lib/bokehVisibility';
 
 // A Bokeh figure built server-side (bokeh.embed.json_item) and rendered here with
 // BokehJS. This is how the React dashboard hosts the existing Bokeh plots without
@@ -17,6 +18,12 @@ import * as Bokeh from '@bokeh/bokehjs';
 // ranges and, if the user had zoomed away from the auto extent, re-apply them to the
 // matching plot in the new figure. A range still at the auto extent (never touched,
 // or reset via the toolbar) is left to keep following the incoming data.
+//
+// Named-model visibility: `visibility` maps model names inside the item (set
+// server-side via Bokeh's `name`) to whether they are displayed. It is applied
+// right after the embed resolves -- before the browser paints, so no flash -- and
+// re-applied in place when it changes, so a control can flip between pre-built
+// variants of a figure without a refetch or re-embed.
 //
 // Scroll preservation: the same teardown/re-embed would also momentarily collapse
 // the page (the embed is async), making the browser clamp the scroll position to
@@ -88,8 +95,17 @@ function isZoomed(cur: PlotRange, auto: PlotRange): boolean {
   return axisZoomed(cur.x, auto.x) || axisZoomed(cur.y, auto.y);
 }
 
-export default function BokehFigure({ item }: { item: unknown | null }) {
+// The document an embed's views render, for named-model lookups.
+function documentOf(views: AnyModel): AnyModel {
+  return views?.roots?.[0]?.model?.document ?? null;
+}
+
+export default function BokehFigure({ item, visibility }: {
+  item: unknown | null; visibility?: Visibility;
+}) {
   const ref = useRef<HTMLDivElement>(null);
+  const viewsRef = useRef<AnyModel>(null); // the live embed, for in-place updates
+  const visibilityRef = useRef<Visibility | undefined>(visibility); // latest, for the embed
   const plotsRef = useRef<AnyModel[]>([]); // the current figure's plots, in order
   const autoRef = useRef<(PlotRange | null)[]>([]); // their auto extents at embed time
   const pinnedRef = useRef<(PlotRange | null)[]>([]); // user-zoomed ranges to restore
@@ -115,6 +131,8 @@ export default function BokehFigure({ item }: { item: unknown | null }) {
           return;
         }
         views = v;
+        viewsRef.current = v;
+        if (visibilityRef.current) applyVisibility(documentOf(v), visibilityRef.current);
         const plots = plotsOf(v);
         plotsRef.current = plots;
         // After the layout has computed its auto ranges, snapshot them and re-apply
@@ -158,9 +176,17 @@ export default function BokehFigure({ item }: { item: unknown | null }) {
       } catch {
         /* already torn down */
       }
+      viewsRef.current = null;
       el.replaceChildren();
     };
   }, [item]);
+
+  // Keep the latest map for an embed still in flight, and apply it in place to
+  // the live one.
+  useEffect(() => {
+    visibilityRef.current = visibility;
+    if (visibility) applyVisibility(documentOf(viewsRef.current), visibility);
+  }, [visibility]);
 
   return <div ref={ref} />;
 }

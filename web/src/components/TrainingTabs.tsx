@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getJSON } from '../lib/api';
+import { Visibility } from '../lib/bokehVisibility';
 import BokehFigure from './BokehFigure';
 
 // The embedded-Bokeh training tabs (Loss, Training) shared by the training
@@ -79,9 +80,12 @@ export function useFigureItem(
 }
 
 // The embedded figure, or an italic placeholder when the API has no data for it.
-export function FigureBody({ item, emptyText }: { item: unknown | null; emptyText: string }) {
+// `visibility` drives named models inside it (see BokehFigure).
+export function FigureBody({ item, emptyText, visibility }: {
+  item: unknown | null; emptyText: string; visibility?: Visibility;
+}) {
   return item ? (
-    <BokehFigure item={item} />
+    <BokehFigure item={item} visibility={visibility} />
   ) : (
     <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
   );
@@ -97,12 +101,19 @@ export function FigureTab({
   return <div className="card"><FigureBody item={item} emptyText={emptyText} /></div>;
 }
 
-// The Loss tab: the loss/accuracy figure on top (with Absolute/% and Linear x/
-// Log x selectors), then the value-quality figure below, with the controls that
-// govern it -- Smooth and a Secondary tag to overlay -- sitting between the two.
-// The two figures are fetched separately so those controls can live between them.
+// The Loss tab: the loss/accuracy figure on top (with an Absolute/% selector and
+// the Linear x/Log x selector that governs the x-axis of BOTH figures), then the
+// value-quality figure below, with the controls specific to it -- Smooth and a
+// Secondary tag to overlay -- sitting between the two. The two figures are
+// fetched separately so those controls can live between them.
+//
+// Linear x/Log x never talks to the API: each figure arrives with both x-axis
+// variants as two named rows (plots.py's X_AXIS_LINEAR / X_AXIS_LOG -- change the
+// names in both places), and the knob flips their visibility in place.
 const LOSS_VERSION = ['metrics', 'control_event'];
 const QUALITY_VERSION = ['metrics'];
+const X_AXIS_LINEAR = 'x_linear';
+const X_AXIS_LOG = 'x_log';
 
 export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   const [normalized, setNormalized] = useState(false);
@@ -116,13 +127,16 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   }, [task]);
 
   const stepItem = useFigureItem(
-    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}&log_x=${logX ? 1 : 0}`,
+    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
   );
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
     `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
   );
   const otherTags = tags.filter((t) => t !== tag);
+  const xAxisRows = useMemo<Visibility>(
+    () => ({ [X_AXIS_LINEAR]: !logX, [X_AXIS_LOG]: logX }), [logX],
+  );
 
   return (
     <div className="card">
@@ -138,7 +152,9 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
           onChange={(i) => setLogX(i === 1)}
         />
       </div>
-      <FigureBody item={stepItem} emptyText="No loss / accuracy metrics recorded yet." />
+      <FigureBody
+        item={stepItem} emptyText="No loss / accuracy metrics recorded yet." visibility={xAxisRows}
+      />
 
       {/* Controls + figure appear only once value-quality curves exist (they are
           absent for tasks/runs without a Monte-Carlo quality eval). */}
@@ -159,7 +175,7 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
               </select>
             </label>
           </div>
-          <FigureBody item={qualityItem} emptyText="" />
+          <FigureBody item={qualityItem} emptyText="" visibility={xAxisRows} />
         </>
       )}
     </div>

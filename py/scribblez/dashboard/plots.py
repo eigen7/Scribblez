@@ -3,6 +3,8 @@ epochs (square figures, server-rendered)."""
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 from bokeh.layouts import column, row
 from bokeh.models import (
@@ -88,26 +90,43 @@ def _padded_range(values, log):
     return Range1d(lo, hi)
 
 
+def _set_padded_range(fig, axis: str, values, log):
+    """Give `fig`'s `axis` ('x' | 'y') the explicit padded range of `values` (see
+    `_padded_range`); leave Bokeh's auto-range when there is nothing to fit."""
+    rng = _padded_range(np.asarray(values, dtype=np.float64), log)
+    if rng is not None:
+        setattr(fig, f"{axis}_range", rng)
+
+
 def _series_figure(
-    sources, title: str, names: list[str], *, log: bool = False, smooth: bool = False
+    sources,
+    title: str,
+    names: list[str],
+    *,
+    log: bool = False,
+    smooth: bool = False,
+    log_x: bool = False,
 ):
     """A square learning-curve figure of the metric `names`, each drawn once per
     entry in `sources` -- a list of (conn, label_suffix). Every (source, metric)
     pair gets its own color, and the legend suffix (e.g. ' [tagB]') names the
     source, so a second tag's curves overlay the first as distinctly colored,
-    distinctly labeled lines for comparison. None when no source has any of the
+    distinctly labeled lines for comparison. `log` / `log_x` draw the y / epoch
+    axis logarithmically (a log epoch axis gets an explicit positive range, so an
+    epoch-0 checkpoint does not pin it). None when no source has any of the
     metrics."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
         title=title,
         x_axis_label="epoch",
+        x_axis_type="log" if log_x else "linear",
         y_axis_type="log" if log else "linear",
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
     fig.add_tools(HoverTool(tooltips=[("epoch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
-    all_values = []
+    all_epochs, all_values = [], []
     for s, (conn, suffix) in enumerate(sources):
         for i, name in enumerate(names):
             epochs, values = db.read_metric_series(conn, name)
@@ -115,12 +134,13 @@ def _series_figure(
                 continue
             color = palette[(s * len(names) + i) % len(palette)]
             _plot_series(fig, epochs, values, color, name + suffix, smooth)
+            all_epochs.append(epochs)
             all_values.append(values)
     if not all_values:
         return None
-    y_range = _padded_range(np.concatenate(all_values), log)
-    if y_range is not None:
-        fig.y_range = y_range
+    _set_padded_range(fig, "y", np.concatenate(all_values), log)
+    if log_x:
+        _set_padded_range(fig, "x", np.concatenate(all_epochs), log=True)
     fig.legend.label_text_font_size = "8pt"
     fig.legend.location = "top_left"
     fig.legend.click_policy = "hide"
@@ -242,13 +262,42 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
+# The Loss tab's figures carry BOTH x-axis variants, stacked as two rows named
+# X_AXIS_LINEAR / X_AXIS_LOG, so the tab's Linear x/Log x knob flips the rows'
+# visibility inside the embedded BokehJS document -- no round trip to this API,
+# no re-embed. The web client (TrainingTabs.tsx) addresses the rows by these
+# names; change them in both places.
+X_AXIS_LINEAR = "x_linear"
+X_AXIS_LOG = "x_log"
+
+
+def _x_axis_variants(build_row):
+    """Both x-axis variants of a Loss-tab figure row -- `build_row(log_x)` builds
+    one -- stacked as rows named X_AXIS_LINEAR / X_AXIS_LOG (see those)."""
+    linear, log = build_row(False), build_row(True)
+    linear.name, log.name = X_AXIS_LINEAR, X_AXIS_LOG
+    return column(linear, log)
+
+
+def _quality_row(sources, smooth, log_x):
+    """One x-axis variant of the value-quality row: a figure per POST_MOVE_QUALITY
+    group that any source has data for."""
+    figs = [
+        f
+        for title, group in POST_MOVE_QUALITY
+        if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
+    ]
+    return row(*figs)
+
+
 def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
-    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, or None
-    when the primary tag has recorded no quality metric yet (so the Loss tab can
-    omit the panel rather than show an empty placeholder). `smooth` overlays an EMA
-    trend on each curve (they are noisy checkpoint-to-checkpoint). `secondary`, when
-    given as (conn, tag), overlays that tag's curves in their own colors for
-    comparison; the legend labels are then suffixed with each tag."""
+    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, in both
+    x-axis variants (`_x_axis_variants`), or None when the primary tag has recorded
+    no quality metric yet (so the Loss tab can omit the panel rather than show an
+    empty placeholder). `smooth` overlays an EMA trend on each curve (they are noisy
+    checkpoint-to-checkpoint). `secondary`, when given as (conn, tag), overlays that
+    tag's curves in their own colors for comparison; the legend labels are then
+    suffixed with each tag."""
     names = [name for _title, group in POST_MOVE_QUALITY for name in group]
     if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
         return None
@@ -257,12 +306,7 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
         sources = [(conn, f" [{tag}]"), (sec_conn, f" [{sec_tag}]")]
     else:
         sources = [(conn, "")]
-    figs = [
-        f
-        for title, group in POST_MOVE_QUALITY
-        if (f := _series_figure(sources, title, group, smooth=smooth))
-    ]
-    return column(row(*figs)) if figs else None
+    return _x_axis_variants(partial(_quality_row, sources, smooth))
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +431,7 @@ def _positions_figure(title: str, x, y_label: str, log_x: bool):
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
     if log_x:
-        x_range = _padded_range(np.asarray(x, dtype=np.float64), log=True)
-        if x_range is not None:
-            fig.x_range = x_range
+        _set_padded_range(fig, "x", x, log=True)
     return fig
 
 
@@ -458,7 +500,7 @@ def _loss_bands(series, weights, normalized):
     return bands
 
 
-def _loss_accuracy_grid(x, series, weights, normalized, log_x, conn):
+def _loss_accuracy_row(x, series, weights, normalized, conn, log_x):
     """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
     and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
     heights show each term's share of the optimized total, and `normalized`
@@ -489,7 +531,7 @@ def _loss_accuracy_grid(x, series, weights, normalized, log_x, conn):
         figs.append(
             _step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy", log_x)
         )
-    return column(row(*figs))
+    return row(*figs)
 
 
 def add_control_markers(fig, conn):
@@ -539,12 +581,14 @@ def _metrics_series(conn):
     return x, series
 
 
-def metrics_loss_grid(conn, normalized: bool = False, log_x: bool = False):
+def metrics_loss_grid(conn, normalized: bool = False):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained (`log_x` -> logarithmic positions axis):
-    stacked weighted per-component losses (`normalized` -> per-column fractions),
-    an accuracy panel, control-change markers. None when no loss metric exists."""
+    `metrics` table vs positions trained, in both x-axis variants
+    (`_x_axis_variants`): stacked weighted per-component losses (`normalized` ->
+    per-column fractions), an accuracy panel, control-change markers. None when no
+    loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
-    return _loss_accuracy_grid(x, series, db.read_loss_weights(conn), normalized, log_x, conn)
+    weights = db.read_loss_weights(conn)
+    return _x_axis_variants(partial(_loss_accuracy_row, x, series, weights, normalized, conn))

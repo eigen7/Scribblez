@@ -1,4 +1,5 @@
-"""Tests for the per-epoch loss view and its control-change markers."""
+"""Tests for the Loss tab's figures: the per-epoch loss view with its
+control-change markers, and the value-quality grid."""
 
 import numpy as np
 from bokeh.models import Label, LinearScale, LogScale, Plot, Span
@@ -23,12 +24,13 @@ def test_metrics_loss_grid_adds_control_markers(tmp_path):
 
     grid = plots.metrics_loss_grid(conn)
     assert grid is not None
-    # The grid is a column(row(loss_fig, ...)); the markers live on the nested loss
-    # figure, so select recursively across the layout.
-    spans = list(grid.select({"type": Span}))
-    labels = list(grid.select({"type": Label}))
-    assert {int(s.location) for s in spans} == {150, 250}
-    assert len(labels) == 2
+    # The grid stacks both x-axis rows; each row's loss figure carries its own
+    # markers, so select recursively within a row.
+    for axis_row in _x_axis_rows(grid).values():
+        spans = list(axis_row.select({"type": Span}))
+        labels = list(axis_row.select({"type": Label}))
+        assert {int(s.location) for s in spans} == {150, 250}
+        assert len(labels) == 2
 
 
 def test_db_loss_weights_drive_stacked_plot(tmp_path):
@@ -54,28 +56,44 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert np.allclose(bands[0][1], 0.75) and np.allclose(bands[1][1], 0.25)
 
 
-def _assert_log_positions_axis(grid):
-    """Every panel of `grid` is on a logarithmic positions axis with an explicit
-    positive range covering the seeded 100..10000 points."""
-    figs = list(grid.select({"type": Plot}))
-    assert len(figs) == 2  # loss + accuracy panels
-    assert all(isinstance(f.x_scale, LogScale) for f in figs)
-    assert all(0.0 < f.x_range.start < 100 and f.x_range.end > 10000 for f in figs)
+def _x_axis_rows(grid):
+    """The grid's two x-axis variant rows, {name: row}."""
+    rows = {
+        name: list(grid.select({"name": name})) for name in (plots.X_AXIS_LINEAR, plots.X_AXIS_LOG)
+    }
+    assert all(len(found) == 1 for found in rows.values())
+    return {name: found[0] for name, found in rows.items()}
 
 
-def test_metrics_loss_grid_log_x_axis(tmp_path):
-    """`log_x` puts every panel on a logarithmic positions axis with an explicit
-    positive range, so the positions=0 first checkpoint does not pin the range --
-    on both the overlaid-lines and the weighted-stack loss panels."""
+def _assert_x_axis_variants(grid, n_panels, lo, hi):
+    """`grid` carries a linear row and a log row of `n_panels` figures each; the log
+    row's figures have an explicit positive x-range covering the data `lo..hi`
+    (so an x=0 checkpoint does not pin it), the linear row's are auto-ranged."""
+    rows = _x_axis_rows(grid)
+    linear = list(rows[plots.X_AXIS_LINEAR].select({"type": Plot}))
+    log = list(rows[plots.X_AXIS_LOG].select({"type": Plot}))
+    assert len(linear) == len(log) == n_panels
+    assert all(isinstance(f.x_scale, LinearScale) for f in linear)
+    assert all(isinstance(f.x_scale, LogScale) for f in log)
+    assert all(0.0 < f.x_range.start < lo and f.x_range.end > hi for f in log)
+
+
+def test_metrics_loss_grid_x_axis_variants(tmp_path):
+    """Both x-axis variants ride along in one grid, on both the overlaid-lines and
+    the weighted-stack loss panels, so the client flips them without a refetch."""
     conn = db.connect(tmp_path / "d.db")
     for epoch, pos in enumerate([0, 100, 1000, 10000]):
         db.write_metrics(
             conn, epoch, {"positions": pos, "loss": 1.0, "loss_a": 0.6, "top1_acc": 0.5}
         )
-
-    linear = plots.metrics_loss_grid(conn)
-    assert all(isinstance(f.x_scale, LinearScale) for f in linear.select({"type": Plot}))
-
-    _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # lines
+    _assert_x_axis_variants(plots.metrics_loss_grid(conn), 2, 100, 10000)  # lines
     db.write_loss_weights(conn, {"loss_a": 1.0})
-    _assert_log_positions_axis(plots.metrics_loss_grid(conn, log_x=True))  # stack
+    _assert_x_axis_variants(plots.metrics_loss_grid(conn), 2, 100, 10000)  # stack
+
+
+def test_eval_quality_grid_x_axis_variants(tmp_path):
+    """The value-quality grid carries both epoch-axis variants too."""
+    conn = db.connect(tmp_path / "d.db")
+    for epoch in [0, 1, 10, 100]:
+        db.write_metrics(conn, epoch, {"eval_win_mae": 0.1, "eval_sd_mean_mae": 5.0})
+    _assert_x_axis_variants(plots.eval_quality_grid(conn, "t"), 2, 1, 100)
