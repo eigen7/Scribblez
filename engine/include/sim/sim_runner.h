@@ -132,11 +132,9 @@ class SimRunner {
     // Value truncation: 0 rolls every rollout to a natural game end (no
     // leaf service); otherwise rollouts stop after this many plies (at
     // least kMinHorizonPlies) and `leaf_service` -- a served position
-    // evaluation model -- scores the horizon. The service must tolerate
-    // concurrent evaluate() calls whenever it can be reached by more than
-    // one thread (workers here, or position-parallel runners sharing it):
-    // wrap it in nn::SerializedEvalService. Non-owning; must outlive the
-    // runner.
+    // evaluation model -- scores the horizon. May be shared freely across
+    // workers and runners: EvalService serializes concurrent evaluate()
+    // calls itself. Non-owning; must outlive the runner.
     int horizon_plies = 0;
     nn::PositionEvalService* leaf_service = nullptr;
   };

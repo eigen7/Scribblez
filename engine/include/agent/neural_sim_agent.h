@@ -118,8 +118,6 @@ class NeuralSimAgent : public Agent {
   double drop_best_prob_;
   uint64_t seed_;
   CandidateEvaluator evaluator_;
-  // The agent's own model, serialized for the runner's sim threads.
-  nn::SerializedEvalService<nn::PositionEvaluationSpec> leaf_;
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

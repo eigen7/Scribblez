@@ -45,7 +45,6 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -74,15 +73,16 @@ struct Options {
 };
 
 // The SimRunner params every worker builds from `opt`, over the shared
-// (serialized) truncation leaf service -- null for terminal rollouts.
-// Parallelism here is across positions rather than within one, so each
-// worker's runner is single-threaded (see position_worker).
-SimRunner::Params sim_params(const Options& opt, nn::PositionEvalService* leaf) {
+// truncation leaf service (EvalService serializes its callers) -- null for
+// terminal rollouts. Parallelism here is across positions rather than
+// within one, so each worker's runner is single-threaded (see
+// position_worker).
+SimRunner::Params sim_params(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
   SimRunner::Params p;
   p.rollouts = opt.rollouts;
   p.threads = 1;
   p.horizon_plies = opt.horizon;
-  p.leaf_service = leaf;
+  p.leaf_service = leaf_eval_service;
   return p;
 }
 
@@ -128,12 +128,12 @@ struct PositionResult {
 // threading and keeps every position's sims deterministic regardless of the
 // worker count).
 void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
-                     nn::PositionEvalService* leaf, const std::vector<GamePositionIndex>& work,
-                     std::atomic<size_t>* next, std::vector<PositionResult>* results,
-                     util::ProgressMeter* meter) {
+                     nn::PositionEvalService* leaf_eval_service,
+                     const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
+                     std::vector<PositionResult>* results, util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict, false});
-  const SimRunner runner(dict, sim_params(opt, leaf));
+  const SimRunner runner(dict, sim_params(opt, leaf_eval_service));
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     const GamePositionIndex& w = work[i];
@@ -179,8 +179,8 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
 
 // Generate the .sobs sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
-                  const Options& opt, nn::PositionEvalService* leaf, const std::string& leaf_hash,
-                  util::ProgressMeter* meter) {
+                  const Options& opt, nn::PositionEvalService* leaf_eval_service,
+                  const std::string& leaf_hash, util::ProgressMeter* meter) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   const GameMetadata* metas =
     reinterpret_cast<const GameMetadata*>(buf.data() + sizeof(FileHeader));
@@ -197,8 +197,8 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   std::vector<std::thread> workers;
   const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
   for (int t = 0; t < threads; ++t)
-    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt), leaf,
-                         std::cref(work), &next, &results, meter);
+    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
+                         leaf_eval_service, std::cref(work), &next, &results, meter);
   for (auto& w : workers) w.join();
 
   // The work list is sorted by (game, turn) and results are indexed by work
@@ -274,24 +274,22 @@ int main(int argc, char** argv) {
               << opt.top_k << " candidates x " << opt.rollouts << " rollouts, " << opt.threads
               << " threads\n";
 
-    // The truncation leaf service, shared by every position worker through
-    // the serializing wrapper (the runners are single-threaded, but many run
-    // at once).
-    std::unique_ptr<nn::PositionEvalService> leaf_net;
-    std::optional<nn::SerializedEvalService<nn::PositionEvaluationSpec>> leaf;
+    // The truncation leaf service, shared by every position worker (the
+    // runners are single-threaded, but many run at once; EvalService
+    // serializes their calls).
+    std::unique_ptr<nn::PositionEvalService> leaf_eval_service;
     std::string leaf_hash;
     if (!opt.leaf_model.empty()) {
       nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
       leaf_params.onnx_path = opt.leaf_model;
       leaf_params.precision = nn::parse_precision(opt.leaf_precision);
-      leaf_net = nn::make_loaded_service(leaf_params);
-      leaf.emplace(*leaf_net);
+      leaf_eval_service = nn::make_loaded_service(leaf_params);
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
     }
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const binlog::PendingSlog& p : pending) {
-      process_file(p.bytes, p.sidecar(".sobs"), dict, opt, leaf ? &*leaf : nullptr, leaf_hash,
+      process_file(p.bytes, p.sidecar(".sobs"), dict, opt, leaf_eval_service.get(), leaf_hash,
                    &meter);
     }
     meter.finish("sim-obs");

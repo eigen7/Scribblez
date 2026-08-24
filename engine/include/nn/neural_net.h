@@ -21,8 +21,8 @@ class options_description;
 // the outputs are back, with no cross-thread batching and no async pipeline,
 // and calls must never overlap. Serialized calls from different threads are
 // fine -- the CUDA stream and buffers carry their device -- which is what
-// both nn::SerializedEvalService and the generators' scorer-thread pattern
-// rely on.
+// both nn::EvalService's internal serialization and the generators'
+// scorer-thread pattern rely on.
 
 namespace scribblez {
 namespace nn {

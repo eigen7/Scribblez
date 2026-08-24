@@ -29,6 +29,14 @@ class ServedModelInputs {
 //
 // Carries no CUDA/TensorRT dependency: agents and their unit tests depend on
 // this template and inject either TrtEvalService<Spec> or a scripted stub.
+//
+// evaluate() serializes concurrent callers under a base-class mutex, so one
+// loaded service is freely shareable -- SimRunner's rollout workers, or many
+// single-threaded runners in a position-parallel generator, all call the
+// same instance. Implementations override do_evaluate() and need no locking
+// of their own; the serialization is sound for the TensorRT service because
+// the underlying contract is one call at a time, not thread affinity
+// (neural_net.h).
 template <typename Spec>
 class EvalService : public ServedModelInputs {
  public:
@@ -38,39 +46,24 @@ class EvalService : public ServedModelInputs {
   // One destination per Outputs entry, in list order: head_out[i] receives
   // batch-rows x that head's kRowElems floats, decoded per the head's
   // RowDecode.
-  virtual void evaluate(const SpecBatch& batch, std::span<float* const> head_out) = 0;
+  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    do_evaluate(batch, head_out);
+  }
+
+ protected:
+  virtual void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) = 0;
+
+  // For an implementation's own extra entry points (e.g. the TensorRT
+  // service's aux-output overload), which must share the same serialization.
+  std::mutex& eval_mutex() { return mutex_; }
+
+ private:
+  std::mutex mutex_;
 };
 
 using PositionEvalService = EvalService<PositionEvaluationSpec>;
 using MoveSetEvalService = EvalService<MoveSetEvaluationSpec>;
-
-// Makes a single-caller service safely shareable by serializing evaluate()
-// under a mutex: SimRunner's rollout workers, or many single-threaded runners
-// in a position-parallel generator, all funnel through one wrapper around one
-// loaded net. Sound for TrtEvalService because the underlying contract is
-// one call at a time, not thread affinity (neural_net.h); the wrapper never
-// interleaves calls. Non-owning: the wrapped service must outlive it.
-template <typename Spec>
-class SerializedEvalService : public EvalService<Spec> {
- public:
-  using SpecBatch = Spec::Batch;
-
-  explicit SerializedEvalService(EvalService<Spec>& inner) : inner_(inner) {}
-
-  bool contingent_features() const override { return inner_.contingent_features(); }
-  bool opp_leave_input() const override { return inner_.opp_leave_input(); }
-  int spatial_planes() const override { return inner_.spatial_planes(); }
-  int scalar_floats() const override { return inner_.scalar_floats(); }
-
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    inner_.evaluate(batch, head_out);
-  }
-
- private:
-  EvalService<Spec>& inner_;
-  std::mutex mutex_;
-};
 
 }  // namespace nn
 }  // namespace scribblez

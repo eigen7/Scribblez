@@ -29,7 +29,8 @@ const Dictionary& require_dict(const Dictionary* dict) {
 }
 
 // The runner params `params` describe: under a truncation horizon the
-// agent's own served model -- already serialized -- is the leaf evaluator.
+// agent's own served model is the leaf evaluator (EvalService serializes
+// the sim threads' calls itself).
 SimRunner::Params runner_params(const NeuralSimAgent::Params& params,
                                 nn::PositionEvalService* leaf) {
   SimRunner::Params p = params.sim;
@@ -50,8 +51,7 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
       drop_best_prob_(params.drop_best_prob),
       seed_(params.seed),
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
-      leaf_(evaluator_.service()),
-      runner_(*params.dict, runner_params(params, &leaf_)),
+      runner_(*params.dict, runner_params(params, &evaluator_.service())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
 }

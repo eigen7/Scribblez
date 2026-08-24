@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 namespace scribblez {
 namespace nn {
@@ -145,7 +146,7 @@ void TrtEvalService<Spec>::evaluate_batch(const SpecBatch& batch, std::span<floa
 }
 
 template <typename Spec>
-void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, std::span<float* const> head_out) {
+void TrtEvalService<Spec>::do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) {
   evaluate_batch(batch, head_out, nullptr);
 }
 
@@ -154,6 +155,7 @@ void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, std::span<float* con
                                     float* aux_out)
   requires(AuxOutputs::size > 0)
 {
+  std::lock_guard<std::mutex> lock(this->eval_mutex());
   evaluate_batch(batch, head_out, aux_out);
 }
 

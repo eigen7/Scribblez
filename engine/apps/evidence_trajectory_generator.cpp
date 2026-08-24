@@ -45,7 +45,6 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -109,13 +108,14 @@ uint32_t file_flags(const Options& opt) {
 
 // What every worker shares: the lexicon and encoding, the options, the
 // scorer over the loaded proposer model, and -- under --horizon -- the
-// serialized truncation leaf service and its content hash.
+// truncation leaf service (shared freely: EvalService serializes its
+// callers) and its content hash.
 struct Shared {
   const Dictionary& dict;
   const InputEncodingSpec& spec;
   const Options& opt;
   StudentScorer* scorer;
-  nn::PositionEvalService* leaf;  // null = terminal rollouts
+  nn::PositionEvalService* leaf_eval_service;  // null = terminal rollouts
   const std::string& leaf_hash;
 };
 
@@ -136,7 +136,7 @@ template <typename Front>
 void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
                    util::ProgressMeter* meter) {
   typename Front::Worker worker(front);
-  TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf);
+  TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf_eval_service);
   const std::vector<typename Front::Item>& work = front.work;
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
     worker.run(i, work[i], runner);
@@ -238,7 +238,7 @@ void process_slog(const Shared& sh, const std::vector<char>& buf, const fs::path
 
 void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
                    StudentService* service, const std::string& proposer_hash,
-                   nn::PositionEvalService* leaf, const std::string& leaf_hash) {
+                   nn::PositionEvalService* leaf_eval_service, const std::string& leaf_hash) {
   // Games played face up must be simmed face up (see sim_obs_tool for why
   // the reverse pairing is allowed).
   const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
@@ -257,7 +257,7 @@ void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const 
   util::ProgressMeter meter(total_positions, "positions");
   for (const binlog::PendingSlog& p : pending) {
     StudentScorer scorer(service);
-    const Shared sh{dict, spec, opt, &scorer, leaf, leaf_hash};
+    const Shared sh{dict, spec, opt, &scorer, leaf_eval_service, leaf_hash};
     process_slog(sh, p.bytes, p.sidecar(".sobs"), proposer_hash, &meter);
   }
   meter.finish("evidence trajectories");
@@ -362,7 +362,7 @@ std::vector<GcgWork> load_pending_gcgs(const Options& opt) {
 
 void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const Options& opt,
                   StudentService* service, const std::string& proposer_hash,
-                  nn::PositionEvalService* leaf, const std::string& leaf_hash) {
+                  nn::PositionEvalService* leaf_eval_service, const std::string& leaf_hash) {
   std::vector<GcgResult> results;
   GcgFront front{spec, opt, load_pending_gcgs(opt), &results};
   if (front.work.empty()) return;
@@ -375,7 +375,7 @@ void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const O
 
   util::ProgressMeter meter(front.work.size(), "positions");
   StudentScorer scorer(service);
-  const Shared sh{dict, spec, opt, &scorer, leaf, leaf_hash};
+  const Shared sh{dict, spec, opt, &scorer, leaf_eval_service, leaf_hash};
   run_positions(sh, front, &meter);
   meter.finish("evidence trajectories");
 
@@ -458,26 +458,24 @@ int main(int argc, char** argv) {
     const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
     const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
-    // The truncation leaf service, shared by every position worker through
-    // the serializing wrapper (the runners are single-threaded, but many run
-    // at once).
-    std::unique_ptr<nn::PositionEvalService> leaf_net;
-    std::optional<nn::SerializedEvalService<nn::PositionEvaluationSpec>> leaf;
+    // The truncation leaf service, shared by every position worker (the
+    // runners are single-threaded, but many run at once; EvalService
+    // serializes their calls).
+    std::unique_ptr<nn::PositionEvalService> leaf_eval_service;
     std::string leaf_hash;
     if (!opt.leaf_model.empty()) {
       nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
       leaf_params.onnx_path = opt.leaf_model;
       leaf_params.cuda_device_id = params.cuda_device_id;
       leaf_params.precision = nn::parse_precision(opt.leaf_precision);
-      leaf_net = nn::make_loaded_service(leaf_params);
-      leaf.emplace(*leaf_net);
+      leaf_eval_service = nn::make_loaded_service(leaf_params);
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
     }
 
     if (opt.gcg_mode()) {
-      run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf ? &*leaf : nullptr, leaf_hash);
+      run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);
     } else {
-      run_slog_mode(dict, spec, opt, &service, proposer_hash, leaf ? &*leaf : nullptr, leaf_hash);
+      run_slog_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);
     }
     return 0;
   } catch (...) {

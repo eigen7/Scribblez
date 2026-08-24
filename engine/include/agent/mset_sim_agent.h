@@ -124,8 +124,6 @@ class MsetSimAgent : public Agent {
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;  // mirrors the live game, both seats' moves
   std::unique_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
-  // The leaf service serialized for the runner's sim threads.
-  std::unique_ptr<nn::SerializedEvalService<nn::PositionEvaluationSpec>> leaf_;
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

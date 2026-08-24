@@ -4371,7 +4371,7 @@ class ConstantLeafService : public scribblez::nn::PositionEvalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
       float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
       wld[0] = 0.7f;
@@ -4396,7 +4396,7 @@ class RowLeafService : public scribblez::nn::PositionEvalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     const scribblez::InputEncodingSpec spec{nullptr, true};
     const size_t row_floats = scribblez::input_floats(spec);
     const size_t sd_off =
@@ -4480,8 +4480,8 @@ TEST(SimRunner, TruncatedPovParity) {
 
 // Truncated observations stay deterministic across thread counts (the fixed
 // reduction order), CRN-cancel exactly on duplicate candidates, and are
-// independent of which other candidates were simmed -- all through the
-// SerializedEvalService wrapper the multi-worker configuration requires.
+// independent of which other candidates were simmed -- with the workers
+// sharing one stub service through EvalService's own serialization.
 TEST(SimRunner, TruncatedDeterminismAndCrn) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_crn";
@@ -4506,12 +4506,11 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   const std::vector<Move> candidates = {plays.front(), plays.front(), plays[plays.size() / 2]};
 
   RowLeafService leaf;
-  scribblez::nn::SerializedEvalService<scribblez::nn::PositionEvaluationSpec> shared(leaf);
   SimRunner::Params params;
   params.rollouts = 16;
   params.threads = 3;
   params.horizon_plies = 4;
-  params.leaf_service = &shared;
+  params.leaf_service = &leaf;
   const uint64_t base_seed = 400;
   const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, base_seed);
 

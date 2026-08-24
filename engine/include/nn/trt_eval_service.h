@@ -38,17 +38,22 @@ class TrtEvalService : public EvalService<Spec> {
   int spatial_planes() const override { return net_.spatial_planes(); }
   int scalar_floats() const override { return net_.scalar_floats(); }
 
-  // Blocks until inference completes. A batch larger than the engine's
-  // max_rows is split into chunks, which changes no result: rows are scored
-  // independently given their staged context.
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override;
+  // The base's serialized entry point; unhidden here because the aux
+  // overload below would otherwise shadow it for concrete-typed callers.
+  using EvalService<Spec>::evaluate;
 
   // Additionally receives each row's aux outputs, batch_rows x AuxOutputs
   // floats in head order, each head decoded per its declared RowDecode.
   // Requires the service was constructed with params.copy_aux; aux_out may be
-  // null.
+  // null. Serialized under the same base-class mutex as evaluate().
   void evaluate(const SpecBatch& batch, std::span<float* const> head_out, float* aux_out)
     requires(AuxOutputs::size > 0);
+
+ protected:
+  // Blocks until inference completes. A batch larger than the engine's
+  // max_rows is split into chunks, which changes no result: rows are scored
+  // independently given their staged context.
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override;
 
  private:
   // The shared driver: per-call staging, then chunked stage/predict/decode;

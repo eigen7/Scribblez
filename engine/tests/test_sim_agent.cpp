@@ -99,7 +99,7 @@ class LeafStub : public nn::PositionEvalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     const InputEncodingSpec spec{nullptr, true};
     const size_t row_floats = input_floats(spec);
     const size_t sd_off =
