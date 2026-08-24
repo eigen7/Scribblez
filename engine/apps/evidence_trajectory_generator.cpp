@@ -463,12 +463,6 @@ int main(int argc, char** argv) {
       nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
       leaf_params.onnx_path = opt.leaf_model;
       leaf_params.cuda_device_id = params.cuda_device_id;
-      // FP32 unconditionally: current checkpoints overflow FP16 inside the
-      // engine on legitimate extreme-advantage states rollouts routinely
-      // reach, yielding NaN in every head before any decode this code
-      // controls -- there is no host-side fix. SimRunner hard-errors on a
-      // NaN readout either way.
-      leaf_params.precision = nn::Precision::kFP32;
       leaf_eval_service = nn::make_loaded_service(leaf_params);
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
     }

@@ -192,14 +192,14 @@ void LeafBatcher::flush() {
     const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
     const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
     // A NaN readout would flow silently into training data and decisions
-    // (NaN comparisons all read false), so it is a hard error. Legitimate
-    // rows can produce one under FP16 -- current checkpoints overflow on
-    // extreme-advantage states rollouts routinely reach -- which is why
-    // every leaf loader serves FP32.
+    // (NaN comparisons all read false), so it is a hard error. It should not
+    // happen: the position family's FP16 builds pin the measured
+    // overflow-prone trunk region to FP32 (model_specs.h), so a trip here
+    // means a new overflow site or an off-distribution input.
     if (std::isnan(wld[0]) || std::isnan(sd[0])) {
       throw util::Exception(
-        "sim runner: the leaf model returned NaN at a rollout horizon (FP16 overflow? "
-        "serve the leaf model in FP32)");
+        "sim runner: the leaf model returned NaN at a rollout horizon (new FP16 overflow "
+        "site, or off-distribution input)");
     }
     RolloutResult& r = (*results_)[pending_[j].slot];
     if (pending_[j].root_pov) {

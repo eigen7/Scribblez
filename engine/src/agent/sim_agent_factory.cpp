@@ -101,12 +101,6 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   if (!opts.leaf_model.empty()) {
     nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
     leaf_params.onnx_path = opts.leaf_model;
-    // FP32 unconditionally: current checkpoints overflow FP16 inside the
-    // engine on legitimate extreme-advantage states rollouts routinely
-    // reach, yielding NaN in every head before any decode this code
-    // controls -- there is no host-side fix. SimRunner hard-errors on a
-    // NaN readout either way.
-    leaf_params.precision = nn::Precision::kFP32;
     leaf = nn::make_loaded_service(leaf_params);
   }
   return std::make_unique<SimAgent>(params, std::move(leaf));

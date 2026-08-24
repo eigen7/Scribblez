@@ -10,10 +10,14 @@
 #include <NvInferRuntime.h>
 #include <NvOnnxParser.h>
 #include <algorithm>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <set>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -245,6 +249,69 @@ void NeuralNetBase::Impl::deserialize_engine(const std::vector<char>& plan) {
   if (!engine) throw util::Exception("Failed to deserialize TensorRT engine");
 }
 
+namespace {
+
+// Pin the spec's overflow-prone region to FP32 for an FP16 build: every
+// layer whose name contains one of `substrings`, then downstream through
+// consumers (the shuffles and adds carrying the too-large values) up to and
+// including the first re-normalizing layer, whose output is back in FP16
+// range. Constants are skipped (shape data has no float precision), and
+// non-terminal pinned layers also force FP32 output storage -- a 72k value
+// downcast between layers would overflow just the same. Returns the pinned
+// layer count; throws if the walk runs away, which means the substring list
+// no longer matches the exported architecture.
+int pin_fp32_region(nvinfer1::INetworkDefinition& network,
+                    std::span<const char* const> substrings) {
+  std::unordered_map<nvinfer1::ITensor*, std::vector<nvinfer1::ILayer*>> consumers;
+  for (int i = 0; i < network.getNbLayers(); ++i) {
+    nvinfer1::ILayer* layer = network.getLayer(i);
+    for (int j = 0; j < layer->getNbInputs(); ++j) consumers[layer->getInput(j)].push_back(layer);
+  }
+
+  std::set<nvinfer1::ILayer*> pinned;
+  std::deque<nvinfer1::ITensor*> frontier;
+  const auto pin = [&](nvinfer1::ILayer* layer, bool terminal) {
+    if (!pinned.insert(layer).second) return;
+    layer->setPrecision(nvinfer1::DataType::kFLOAT);
+    if (terminal) return;
+    for (int j = 0; j < layer->getNbOutputs(); ++j) {
+      layer->setOutputType(j, nvinfer1::DataType::kFLOAT);
+      frontier.push_back(layer->getOutput(j));
+    }
+  };
+
+  for (int i = 0; i < network.getNbLayers(); ++i) {
+    nvinfer1::ILayer* layer = network.getLayer(i);
+    if (layer->getType() == nvinfer1::LayerType::kCONSTANT) continue;
+    const std::string_view name = layer->getName();
+    for (const char* sub : substrings) {
+      if (name.find(sub) != std::string_view::npos) {
+        pin(layer, /*terminal=*/false);
+        break;
+      }
+    }
+  }
+  while (!frontier.empty()) {
+    nvinfer1::ITensor* tensor = frontier.front();
+    frontier.pop_front();
+    for (nvinfer1::ILayer* c : consumers[tensor]) {
+      if (c->getType() == nvinfer1::LayerType::kCONSTANT) continue;
+      const bool terminal = c->getType() == nvinfer1::LayerType::kSCALE ||
+                            c->getType() == nvinfer1::LayerType::kNORMALIZATION;
+      pin(c, terminal);
+    }
+    if (pinned.size() > 64) {
+      throw util::Exception(
+        "FP32 pinning walked {} layers without renormalizing; the spec's substrings no longer "
+        "match the exported architecture",
+        pinned.size());
+    }
+  }
+  return int(pinned.size());
+}
+
+}  // namespace
+
 std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_bytes) {
   std::cerr << "[TRT] Building " << spec.graph
             << " engine from ONNX (one-time; cached per architecture afterward)...\n";
@@ -271,7 +338,14 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
 
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
-  if (params.precision == Precision::kFP16) config->setFlag(nvinfer1::BuilderFlag::kFP16);
+  if (params.precision == Precision::kFP16) {
+    config->setFlag(nvinfer1::BuilderFlag::kFP16);
+    if (!spec.fp32_layer_substrings.empty()) {
+      const int pinned = pin_fp32_region(*network, spec.fp32_layer_substrings);
+      config->setFlag(nvinfer1::BuilderFlag::kOBEY_PRECISION_CONSTRAINTS);
+      std::cerr << "[TRT] Pinned " << pinned << " overflow-prone layers to FP32\n";
+    }
+  }
   // The cache is keyed on model architecture, so a cached plan generally holds
   // a different same-architecture checkpoint's weights; every plan must be
   // refittable so a cache hit can swap in the loaded model's weights.
@@ -421,10 +495,13 @@ void NeuralNetBase::load() {
   m.contingent_features = meta.contingent_features;
   m.opp_leave_input = meta.opp_leave_input;
 
-  std::string cache_path =
-    engine_plan_cache_path(meta.architecture_signature, m.params.precision,
-                           std::format("{}_{}", m.spec.axis_tag, m.params.max_rows),
-                           m.params.fast_build, m.params.mount_root);
+  std::string cache_path = engine_plan_cache_path(
+    meta.architecture_signature, m.params.precision,
+    std::format("{}_{}{}", m.spec.axis_tag, m.params.max_rows,
+                m.params.precision == Precision::kFP16 && !m.spec.fp32_layer_substrings.empty()
+                  ? "_fp32pin"
+                  : ""),
+    m.params.fast_build, m.params.mount_root);
 
   // The cache is keyed on the model's architecture signature, so a hit yields
   // a plan with the right structure but (in general) another checkpoint's
