@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getJSON } from '../lib/api';
+import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getJSON, postJSON } from '../lib/api';
+import { FigureHandle } from '../lib/bokehDoc';
 import { Visibility } from '../lib/bokehVisibility';
 import BokehFigure from './BokehFigure';
 
@@ -32,26 +33,54 @@ export function RadioButtonGroup({ options, value, onChange }: {
   );
 }
 
-// Fetch one Bokeh figure (a json_item) for the given tag and re-fetch it whenever
-// the run advances (polling a cheap version token) or `query` changes (a control
-// was toggled). `query` is extra query string appended to the figure request.
+// Fetch one Bokeh figure (a json_item) for the given tag and keep it current as
+// the run advances (polling a cheap version token). A full re-fetch happens on
+// mount and whenever `query` changes (a control was toggled); a version bump is
+// instead applied incrementally when `handleRef` exposes an embedded document --
+// the appended rows are streamed into it in place (lib/bokehDoc.ts,
+// figure_delta.py) -- falling back to the full fetch whenever the delta endpoint
+// asks for it or fails.
 export function useFigureItem(
   task: string, tag: string | null, figure: string,
   versionKey: string | string[], query: string,
+  handleRef?: MutableRefObject<FigureHandle | null>,
 ): unknown | null {
   const [item, setItem] = useState<unknown | null>(null);
   const lastVersion = useRef<number>(-1);
+  const structureRef = useRef<string | null>(null); // the embedded doc's structure key
 
   const refetch = useCallback(async () => {
     if (!tag) {
       setItem(null);
+      structureRef.current = null;
       return;
     }
     const d = await getJSON(
       `/api/figure/${figure}?task=${task}&tag=${encodeURIComponent(tag)}${query}`,
     );
+    structureRef.current = d.structure ?? null;
     setItem(d.item ?? null);
   }, [task, tag, figure, query]);
+
+  const advance = useCallback(async () => {
+    const handle = handleRef?.current;
+    const sources = handle && structureRef.current ? handle.sourceStates() : null;
+    if (handle && sources) {
+      try {
+        const d = await postJSON(
+          `/api/figure_delta/${figure}?task=${task}&tag=${encodeURIComponent(tag ?? '')}${query}`,
+          { structure: structureRef.current, sources },
+        );
+        if (!d.refetch) {
+          handle.applyDelta(d);
+          return;
+        }
+      } catch {
+        /* fall through to the full fetch */
+      }
+    }
+    await refetch();
+  }, [task, tag, figure, query, handleRef, refetch]);
 
   useEffect(() => {
     lastVersion.current = -1;
@@ -67,25 +96,27 @@ export function useFigureItem(
         const combined = keys.reduce((sum, k) => sum + (v[k] ?? 0), 0);
         if (combined !== lastVersion.current) {
           lastVersion.current = combined;
-          refetch().catch(() => {});
+          advance().catch(() => {});
         }
       } catch {
         /* the API may still be starting (heavy torch import); the poll retries */
       }
     }, 3000);
     return () => clearInterval(id);
-  }, [task, tag, versionKey, refetch]);
+  }, [task, tag, versionKey, advance]);
 
   return item;
 }
 
 // The embedded figure, or an italic placeholder when the API has no data for it.
-// `visibility` drives named models inside it (see BokehFigure).
-export function FigureBody({ item, emptyText, visibility }: {
+// `visibility` drives named models inside it; `handleRef` exposes it to the
+// incremental-refresh path (see BokehFigure).
+export function FigureBody({ item, emptyText, visibility, handleRef }: {
   item: unknown | null; emptyText: string; visibility?: Visibility;
+  handleRef?: MutableRefObject<FigureHandle | null>;
 }) {
   return item ? (
-    <BokehFigure item={item} visibility={visibility} />
+    <BokehFigure item={item} visibility={visibility} handleRef={handleRef} />
   ) : (
     <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
   );
@@ -117,6 +148,8 @@ const X_AXIS_LOG = 'x_log';
 
 export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   const [normalized, setNormalized] = useState(false);
+  const lossHandle = useRef<FigureHandle | null>(null);
+  const qualityHandle = useRef<FigureHandle | null>(null);
   const [logX, setLogX] = useState(false);
   const [smoothed, setSmoothed] = useState(true); // smoothing on by default
   const [secondary, setSecondary] = useState(''); // '' = none
@@ -127,11 +160,12 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   }, [task]);
 
   const stepItem = useFigureItem(
-    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
+    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`, lossHandle,
   );
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
     `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
+    qualityHandle,
   );
   const otherTags = tags.filter((t) => t !== tag);
   const xAxisRows = useMemo<Visibility>(
@@ -154,6 +188,7 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
       </div>
       <FigureBody
         item={stepItem} emptyText="No loss / accuracy metrics recorded yet." visibility={xAxisRows}
+        handleRef={lossHandle}
       />
 
       {/* Controls + figure appear only once value-quality curves exist (they are
@@ -175,7 +210,9 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
               </select>
             </label>
           </div>
-          <FigureBody item={qualityItem} emptyText="" visibility={xAxisRows} />
+          <FigureBody
+            item={qualityItem} emptyText="" visibility={xAxisRows} handleRef={qualityHandle}
+          />
         </>
       )}
     </div>

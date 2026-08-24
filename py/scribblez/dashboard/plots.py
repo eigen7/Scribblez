@@ -50,19 +50,28 @@ def _ema(values, weight: float = 0.85):
     return out
 
 
-def _plot_series(fig, x, y, color, label, smooth):
-    """Draw one metric series. With smoothing (once the series has at least
-    `_SMOOTH_MIN_POINTS` points) the plotted line is a debiased exponential moving
-    average, so the trend reads clearly; without it, the raw points are drawn as a
-    line plus markers. A single line is drawn either way -- no faint raw underlay --
-    so a smoothed curve reads as unambiguously smooth."""
+def _plot_series(fig, x, y, color, label, smooth, name=None):
+    """Draw one metric series, its data source named `name` (see `_source_name`).
+    With smoothing (once the series has at least `_SMOOTH_MIN_POINTS` points) the
+    plotted line is a debiased exponential moving average, so the trend reads
+    clearly; without it, the raw points are drawn as a line plus markers. A single
+    line is drawn either way -- no faint raw underlay -- so a smoothed curve reads
+    as unambiguously smooth."""
     if smooth and len(y) >= _SMOOTH_MIN_POINTS:
-        src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))))
+        src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))), name=name)
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
     else:
-        src = ColumnDataSource(dict(x=x, y=y))
+        src = ColumnDataSource(dict(x=x, y=y), name=name)
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
         fig.scatter("x", "y", source=src, color=color, size=4)
+
+
+def _source_name(title: str, label: str) -> str:
+    """The stable name of one series' data source: "<figure title>|<legend label>",
+    unique within a figure row. The linear and log x-axis rows deliberately share
+    names -- their sources hold identical data, so one incremental update (see
+    figure_delta.py) feeds both."""
+    return f"{title}|{label}"
 
 
 def _padded_range(values, log):
@@ -133,7 +142,15 @@ def _series_figure(
             if len(epochs) == 0:
                 continue
             color = palette[(s * len(names) + i) % len(palette)]
-            _plot_series(fig, epochs, values, color, name + suffix, smooth)
+            _plot_series(
+                fig,
+                epochs,
+                values,
+                color,
+                name + suffix,
+                smooth,
+                name=_source_name(title, name + suffix),
+            )
             all_epochs.append(epochs)
             all_values.append(values)
     if not all_values:
@@ -441,7 +458,7 @@ def _step_figure(title: str, x, series, y_label: str, log_x: bool = False):
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
-        src = ColumnDataSource(dict(x=xs, y=list(y)))
+        src = ColumnDataSource(dict(x=xs, y=list(y)), name=_source_name(title, label))
         fig.line(
             "x",
             "y",
@@ -465,7 +482,9 @@ def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
     cum = np.zeros(len(xs), dtype=np.float64)
     for i, (label, y) in enumerate(bands):
         lo, hi = cum, cum + np.asarray(y, dtype=np.float64)
-        src = ColumnDataSource(dict(x=xs, y1=list(lo), y2=list(hi)))
+        src = ColumnDataSource(
+            dict(x=xs, y1=list(lo), y2=list(hi)), name=_source_name(title, label)
+        )
         fig.varea(
             x="x",
             y1="y1",

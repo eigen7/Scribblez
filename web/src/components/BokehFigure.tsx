@@ -1,5 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { MutableRefObject, useEffect, useRef } from 'react';
 import * as Bokeh from '@bokeh/bokehjs';
+import {
+  AnyModel, applyRanges, applySourceTails, FigureDelta, FigureHandle, plotsOf, rowsOf,
+  sourceStates,
+} from '../lib/bokehDoc';
 import { applyVisibility, Visibility } from '../lib/bokehVisibility';
 
 // A Bokeh figure built server-side (bokeh.embed.json_item) and rendered here with
@@ -19,6 +23,14 @@ import { applyVisibility, Visibility } from '../lib/bokehVisibility';
 // matching plot in the new figure. A range still at the auto extent (never touched,
 // or reset via the toolbar) is left to keep following the incoming data.
 //
+// Incremental refresh: `handleRef`, when given, is filled with a FigureHandle
+// exposing the embedded document to the streaming path (lib/bokehDoc.ts): read
+// the per-source cursors, and apply a figure delta in place -- appended rows are
+// streamed into every copy of each named source, and the explicit axis ranges
+// are moved to the server's extents on panels the user has not zoomed. A range
+// snapshot is refreshed after each apply, so the zoom preservation below keeps
+// telling data-driven range growth apart from the user's own zooming.
+//
 // Named-model visibility: `visibility` maps model names inside the item (set
 // server-side via Bokeh's `name`) to whether they are displayed. It is applied
 // right after the embed resolves -- before the browser paints, so no flash -- and
@@ -30,40 +42,10 @@ import { applyVisibility, Visibility } from '../lib/bokehVisibility';
 // the shorter document. The container is pinned at its old height across the gap
 // via min-height, released once the new figure has laid out.
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyModel = any;
 type AxisRange = [number | null, number | null];
 interface PlotRange {
   x: AxisRange;
   y: AxisRange;
-}
-
-// Collect Plot models (those carrying x/y ranges) from a ViewManager's roots in
-// layout order. The figure is rebuilt identically each refresh, so plot i before a
-// refresh corresponds to plot i after it.
-function collectPlots(model: AnyModel, out: AnyModel[]) {
-  if (!model || typeof model !== 'object') return;
-  if (model.x_range && model.y_range) {
-    out.push(model);
-    return;
-  }
-  if (Array.isArray(model.children)) {
-    for (const k of model.children) collectPlots(Array.isArray(k) ? k[0] : k, out);
-  } else if (Array.isArray(model.tabs)) {
-    for (const t of model.tabs) collectPlots(t?.child, out);
-  } else if (model.child) {
-    collectPlots(model.child, out);
-  }
-}
-
-function plotsOf(views: AnyModel): AnyModel[] {
-  const out: AnyModel[] = [];
-  try {
-    for (const rootView of views?.roots ?? []) collectPlots(rootView.model, out);
-  } catch {
-    /* unexpected shape -> just skip preservation */
-  }
-  return out;
 }
 
 function readRange(p: AnyModel): PlotRange | null {
@@ -100,8 +82,8 @@ function documentOf(views: AnyModel): AnyModel {
   return views?.roots?.[0]?.model?.document ?? null;
 }
 
-export default function BokehFigure({ item, visibility }: {
-  item: unknown | null; visibility?: Visibility;
+export default function BokehFigure({ item, visibility, handleRef }: {
+  item: unknown | null; visibility?: Visibility; handleRef?: MutableRefObject<FigureHandle | null>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const viewsRef = useRef<AnyModel>(null); // the live embed, for in-place updates
@@ -135,6 +117,7 @@ export default function BokehFigure({ item, visibility }: {
         if (visibilityRef.current) applyVisibility(documentOf(v), visibilityRef.current);
         const plots = plotsOf(v);
         plotsRef.current = plots;
+        if (handleRef) handleRef.current = makeHandle();
         // After the layout has computed its auto ranges, snapshot them and re-apply
         // whatever the user had zoomed to before this refresh.
         requestAnimationFrame(() => {
@@ -177,8 +160,10 @@ export default function BokehFigure({ item, visibility }: {
         /* already torn down */
       }
       viewsRef.current = null;
+      if (handleRef) handleRef.current = null;
       el.replaceChildren();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item]);
 
   // Keep the latest map for an embed still in flight, and apply it in place to
@@ -187,6 +172,39 @@ export default function BokehFigure({ item, visibility }: {
     visibilityRef.current = visibility;
     if (visibility) applyVisibility(documentOf(viewsRef.current), visibility);
   }, [visibility]);
+
+  // The streaming handle over the current embed (see the header comment).
+  function makeHandle(): FigureHandle {
+    return {
+      sourceStates: () => (viewsRef.current ? sourceStates(plotsRef.current) : null),
+      applyDelta: (delta: FigureDelta) => {
+        const views = viewsRef.current;
+        if (!views) return;
+        const plots = plotsRef.current;
+        // Panels the user has zoomed (view differs from the auto snapshot) keep
+        // their view; everything else follows the server's ranges.
+        const zoomedNow = plots.map((p, i) => {
+          const cur = readRange(p);
+          const auto = autoRef.current[i];
+          return !!(cur && auto && isZoomed(cur, auto));
+        });
+        if (delta.sources) applySourceTails(plots, delta.sources);
+        if (delta.ranges) {
+          applyRanges(rowsOf(views), delta.ranges, (p) => {
+            const i = plots.indexOf(p);
+            return i < 0 || !zoomedNow[i];
+          });
+        }
+        // Auto ranges recompute from the streamed data; re-snapshot them (for
+        // panels the user left alone) once that has happened.
+        requestAnimationFrame(() => {
+          plots.forEach((p, i) => {
+            if (!zoomedNow[i]) autoRef.current[i] = readRange(p);
+          });
+        });
+      },
+    };
+  }
 
   return <div ref={ref} />;
 }

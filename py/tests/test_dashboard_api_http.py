@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import tornado.testing
+from bokeh.models import ColumnDataSource
 from scribblez.dashboard import api, db
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 
@@ -92,8 +93,38 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_figure_returns_embeddable_item(self):
         r = self.fetch(f"/api/figure/loss?task={MAX_MOVE_PER_LANE}&tag=run1")
         assert r.code == 200
-        item = json.loads(r.body)["item"]
-        assert {"doc", "root_id", "target_id"} <= set(item)
+        body = json.loads(r.body)
+        assert {"doc", "root_id", "target_id"} <= set(body["item"])
+        assert isinstance(body["structure"], str) and body["structure"]
+
+    def test_figure_delta_appends_then_refetches(self):
+        q = f"?task={MAX_MOVE_PER_LANE}&tag=run1"
+        structure = json.loads(self.fetch("/api/figure/loss" + q).body)["structure"]
+        # Client cursors as an embed of the current figure would hold them.
+        conn = db.connect(TagPaths("run1", MAX_MOVE_PER_LANE, self.mount_root).dashboard_db)
+        model = api.FIGURES["loss"](conn, {}, str(self.mount_root))
+        sources = {
+            cds.name: {"n": len(cds.data["x"]), "last_x": float(list(cds.data["x"])[-1])}
+            for cds in model.select({"type": ColumnDataSource})
+            if cds.name
+        }
+        body = {"structure": structure, "sources": sources}
+        db.write_metrics(conn, 4, {"positions": 40, "loss": 0.2, "loss_score_pdf": 0.2})
+        conn.close()
+        r = json.loads(
+            self.fetch("/api/figure_delta/loss" + q, method="POST", body=json.dumps(body)).body
+        )
+        assert "refetch" not in r
+        assert all(len(tail["x"]) == 1 for tail in r["sources"].values())
+        stale = {"structure": "not-the-structure", "sources": sources}
+        r = json.loads(
+            self.fetch("/api/figure_delta/loss" + q, method="POST", body=json.dumps(stale)).body
+        )
+        assert r == {"refetch": True}
+
+    def test_figure_delta_bad_body_400(self):
+        q = f"?task={MAX_MOVE_PER_LANE}&tag=run1"
+        assert self.fetch("/api/figure_delta/loss" + q, method="POST", body="{").code == 400
 
     def test_figure_unknown_name_404(self):
         assert self.fetch(f"/api/figure/bogus?task={MAX_MOVE_PER_LANE}&tag=run1").code == 404
