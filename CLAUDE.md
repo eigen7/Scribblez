@@ -42,6 +42,11 @@ Scribblez specifics for that workflow:
 - For C++ work, run py/build.py in the worktree before trusting IDE diagnostics:
   .clangd resolves the compile database at the checkout's own target/, so clangd
   flags every include as missing in a worktree that has never been built.
+- For Python work, `export PYTHONPATH=<worktree>/py` before running Python or
+  tests: the Docker image makes py/ importable via a site-packages .pth file
+  baked with the absolute path /workspace/repo/py (see "Python code" below),
+  and that path doesn't follow you into a worktree -- without the override,
+  Python silently imports the main checkout's py/ instead of the worktree's.
 - Before opening a PR: the engine must build, the affected suites must pass
   (py/run_tests.py --cpp-only for C++ changes, --python-only for Python), and
   changed files must be clang-format/ruff clean. Say what was run in the PR body.
@@ -110,7 +115,11 @@ If you are asked questions regarding Macondo, please look there.
 
 # Python code
 
-Note that the Docker image adds `/workspace/repo/py/` to `PYTHONPATH`.
+Note that the Docker image makes `py/` importable by baking the absolute
+path `/workspace/repo/py` into a site-packages `.pth` file at build time (not
+a `PYTHONPATH` env var, which would conflict with pytest's rootdir
+resolution). That path is fixed to the main checkout, so it does not follow
+you into a worktree -- see "Worktrees and PR review" above.
 
 Do not add `import` statements inside of functions without good reason. By default, they should go
 atop the file.
