@@ -280,15 +280,24 @@ int pin_fp32_region(nvinfer1::INetworkDefinition& network,
     }
   };
 
-  for (int i = 0; i < network.getNbLayers(); ++i) {
-    nvinfer1::ILayer* layer = network.getLayer(i);
-    if (layer->getType() == nvinfer1::LayerType::kCONSTANT) continue;
-    const std::string_view name = layer->getName();
-    for (const char* sub : substrings) {
-      if (name.find(sub) != std::string_view::npos) {
+  for (const char* sub : substrings) {
+    bool matched = false;
+    for (int i = 0; i < network.getNbLayers(); ++i) {
+      nvinfer1::ILayer* layer = network.getLayer(i);
+      if (layer->getType() == nvinfer1::LayerType::kCONSTANT) continue;
+      if (std::string_view(layer->getName()).find(sub) != std::string_view::npos) {
         pin(layer, /*terminal=*/false);
-        break;
+        matched = true;
       }
+    }
+    // A substring that matches nothing means the exported architecture
+    // renamed the region the spec believes is overflow-prone: pinning would
+    // silently vanish and the NaNs would return. Fail the build instead.
+    if (!matched) {
+      throw util::Exception(
+        "FP32 pinning: no layer name contains \"{}\"; the exported architecture and the "
+        "spec's overflow-prone-layer list (model_specs.h) have drifted apart",
+        sub);
     }
   }
   while (!frontier.empty()) {
