@@ -128,6 +128,11 @@ class PositionEvalParams:
     )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
+    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md).
+    lambda_wld_z: float = param(1e-4, "z-loss weight on the WLD logits (squared logsumexp)")
+    lambda_pool_act: float = param(
+        1e-6, "mean-square penalty weight on the trunk's pooled-FC pre-activations"
+    )
 
 
 SPEC = WorkloadSpec(

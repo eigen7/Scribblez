@@ -21,13 +21,38 @@ Usage:
 
 import argparse
 import sys
+from pathlib import Path
 
 import torch
 from scribblez import paths as paths_mod
+from scribblez.ffi import set_contingent_features
+from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.onnx_export import export_onnx, legacy_checkpoint_condition
+from scribblez.move_set_eval.onnx_export import (
+    FP16_PROBE_POSITIONS,
+    export_onnx,
+    fp16_probe_feeds_from_batch,
+    legacy_checkpoint_condition,
+)
 from scribblez.paths import TagPaths
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
+
+
+def probe_feeds(paths: TagPaths, config: dict) -> list[dict]:
+    """The FP16 gate's probe feeds, from a deterministic batch over the tag's
+    own corpus (the arm adopted exactly as the trainer adopted it). A finished
+    tag keeps its corpus, so its absence means the wrong tag, not an optional
+    gate."""
+    set_contingent_features(config["contingent_features"])
+    mset_files = sorted(Path(paths.data_dir).glob("slogs/*.mset"))
+    if not mset_files:
+        sys.exit(
+            f"error: the FP16 export gate needs the tag's .mset corpus, and "
+            f"{Path(paths.data_dir) / 'slogs'} holds none"
+        )
+    adopt_information_condition(mset_files)
+    ds = MsetDataset(mset_files=mset_files[:1])
+    return fp16_probe_feeds_from_batch(next(ds.iter_batches(FP16_PROBE_POSITIONS, seed=0)))
 
 
 def main() -> int:
@@ -64,7 +89,7 @@ def main() -> int:
     # the trainer named that same pass's own export.
     last_pass = ckpt["generation_index"] - 1
     out = args.out or paths.onnx_path(last_pass)
-    export_onnx(
+    peak = export_onnx(
         model,
         out,
         config["spatial_planes"],
@@ -72,12 +97,14 @@ def main() -> int:
         contingent_features=config["contingent_features"],
         opp_leave_input=config["open_leaves"],
         move_encoding_version=config["move_encoding_version"],
+        probe_feeds=probe_feeds(paths, config),
     )
     print(
         f"exported {ckpt_path} (pass {last_pass}, "
         f"{ckpt['rows_trained']} rows) -> {out}\n"
         f"  open_leaves={config['open_leaves']} "
-        f"move_encoding_version={config['move_encoding_version']}"
+        f"move_encoding_version={config['move_encoding_version']} "
+        f"fp16_probe_peak={peak:.0f}"
     )
     return 0
 

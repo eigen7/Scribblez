@@ -64,6 +64,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--lambda-planes", type=float, default=1.0, help="Placement-plane BCE weight.")
     p.add_argument("--huber-delta-mean", type=float, default=10.0, help="Huber delta, mean head.")
     p.add_argument("--huber-delta-std", type=float, default=10.0, help="Huber delta, std head.")
+    p.add_argument(
+        "--lambda-wld-z", type=float, default=1e-4, help="Z-loss weight on the WLD logits."
+    )
+    p.add_argument(
+        "--lambda-pool-act",
+        type=float,
+        default=1e-6,
+        help="Mean-square penalty weight on the pooled-FC pre-activations.",
+    )
     p.add_argument("--seed", type=int, default=0, help="Shuffle/init seed.")
     p.add_argument("--out", default=None, help="Optional path to save the model state_dict.")
     return p
