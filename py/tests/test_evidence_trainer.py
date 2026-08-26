@@ -176,8 +176,12 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
 
 
 def _unfrozen_model(train, device):
+    # num_blocks=3 so the trunk holds a real GlobalPoolingResBlock (make_block
+    # emits one at every index % 3 == 2): the joint step's pooled-FC penalty
+    # then collects real activations, so its wiring is exercised, not just
+    # tolerated.
     torch.manual_seed(0)
-    return MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
+    return MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 3, 2).to(device)
 
 
 def _unfrozen_params(**kw):
@@ -235,6 +239,10 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     result = _joint_epoch(model, opt, train, mset_train, device, lr_fn=lambda rows: 1e-2)
     assert result.rows > 0 and np.isfinite(result.losses["total"])
     assert {"sim", "distill", "distill_wld", "distill_planes"} <= set(result.losses)
+    # The pooled-FC penalty engages through run_epoch's own recorder wiring
+    # (a broken hookup would report exactly 0.0); its weighted term also
+    # rides in the total, inside the approx tolerance below.
+    assert result.losses["pool_act"] > 0.0
     assert result.losses["total"] == pytest.approx(
         result.losses["distill"] + result.losses["sim"], rel=1e-4
     )

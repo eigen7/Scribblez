@@ -315,11 +315,12 @@ def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
 
 
-def export_student(paths, model, epoch: int, student_cfg: dict, probe_feeds: list[dict]):
+def export_student(paths, model, epoch: int, student_cfg: dict, probe_feeds: list[dict]) -> float:
     """The unfrozen mode's per-pass plain-student ONNX (models/
     model_epoch_NNNN.onnx), stamped with the student's arm and version as the
     mset trainer stamps its own, and FP16-gated the same way. The export covers
-    the plain path only (the evidence path's ONNX is roadmap item 3)."""
+    the plain path only (the evidence path's ONNX is roadmap item 3). Returns
+    the gate's peak |activation| for the pass's metrics row."""
     peak = export_onnx(
         model,
         paths.onnx_path(epoch),
@@ -331,6 +332,7 @@ def export_student(paths, model, epoch: int, student_cfg: dict, probe_feeds: lis
         probe_feeds=probe_feeds,
     )
     timed_print(f"  fp16 probe: peak |activation| {peak:.0f}")
+    return peak
 
 
 # Skipped (non-finite) batches tolerated per pass before the run is stopped:
@@ -475,8 +477,12 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
     if params.unfreeze_backbone:
         # Frozen, the plain model is the student byte for byte; only an
-        # unfrozen pass has a new plain student to export.
-        export_student(paths, model, epoch, ctx["config"]["student"], ctx["fp16_probe"])
+        # unfrozen pass has a new plain student to export. The pass's metrics
+        # row is already written, so the gate's peak is upserted onto it
+        # (write_metrics upserts by (epoch, name)) -- without this the
+        # dashboard's FP16 panel would silently stay empty for this trainer.
+        peak = export_student(paths, model, epoch, ctx["config"]["student"], ctx["fp16_probe"])
+        db.write_metrics(conn, epoch, {"fp16_probe_peak": peak})
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,

@@ -21,7 +21,7 @@ from scribblez.move_set_eval.onnx_export import fp16_probe_feeds_from_batch
 from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.model import compute_loss as position_compute_loss
 from scribblez.position_eval.onnx_export import export_onnx, fp16_probe_feeds
-from scribblez.position_eval.trainer import load_fp16_probe
+from scribblez.position_eval.trainer import FP16_PROBE_LARGE_ROWS, load_fp16_probe
 from scribblez.spatial_trunk import PoolFcPenalty, SpatialTrunk, apply_pool_penalty
 
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
@@ -195,9 +195,16 @@ def test_mset_probe_feeds_from_batch():
     assert len(feeds) == 2 * 2  # 2 positions x (as-encoded + 1 lead)
 
     sd_index, sd_scale = score_diff_input_layout()
+    others = np.arange(SCALAR_SIZE) != sd_index
     for p, (plain, stamped) in enumerate([feeds[0:2], feeds[2:4]]):
         np.testing.assert_array_equal(plain["input_scalar"][0], batch["input_scalar"][p].numpy())
         assert stamped["input_scalar"][0, sd_index] == pytest.approx(100 / sd_scale)
+        # The stamp touches exactly the score-diff scalar: everything else in
+        # the stamped feed is the row as encoded.
+        np.testing.assert_array_equal(
+            stamped["input_scalar"][0, others], plain["input_scalar"][0, others]
+        )
+        np.testing.assert_array_equal(stamped["input_spatial"], plain["input_spatial"])
         np.testing.assert_array_equal(plain["input_spatial"][0], batch["input_spatial"][p].numpy())
         # Each feed carries only its own position's move rows, in the export
         # graph's dtypes.
@@ -211,9 +218,20 @@ def test_mset_probe_feeds_from_batch():
 def test_load_fp16_probe_sources():
     rng = np.random.default_rng(4)
     cells = BOARD_SIZE * BOARD_SIZE
-    flat = rng.standard_normal((3, SPATIAL_PLANES * cells + SCALAR_SIZE), dtype=np.float32)
-    feeds = load_fp16_probe({"inputs": flat}, None, SPATIAL_PLANES)
-    assert sum(f["input_spatial"].shape[0] for f in feeds) == 3 * (1 + len(PROBE_LEADS))
+    variants = 1 + len(PROBE_LEADS)
+
+    def rows(n):
+        return rng.standard_normal((n, SPATIAL_PLANES * cells + SCALAR_SIZE), dtype=np.float32)
+
+    def probe_rows(feeds):
+        return sum(f["input_spatial"].shape[0] for f in feeds)
+
+    frozen, quality = {"inputs": rows(3)}, {"inputs": rows(FP16_PROBE_LARGE_ROWS + 16)}
+    sliced = FP16_PROBE_LARGE_ROWS
+    assert probe_rows(load_fp16_probe(frozen, None, SPATIAL_PLANES)) == 3 * variants
+    # The quality set contributes only its FP16_PROBE_LARGE_ROWS slice.
+    assert probe_rows(load_fp16_probe(None, quality, SPATIAL_PLANES)) == sliced * variants
+    assert probe_rows(load_fp16_probe(frozen, quality, SPATIAL_PLANES)) == (3 + sliced) * variants
     assert load_fp16_probe(None, None, SPATIAL_PLANES) is None
 
 

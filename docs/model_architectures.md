@@ -142,8 +142,11 @@ semantics. Layout owned by
 | trunk `pool_fc` outputs | 0 | mean square | `lambda_pool_act` = 1e-6 |
 
 The last two rows are the same activation-magnitude restoring forces as the
-position-eval model's (see its Losses table); the evidence trainer's joint
-(unfrozen) mode applies both through its distillation half.
+position-eval model's (see its Losses table). This model's own train loop
+(move_set_eval/train_loop.py) applies both directly every step -- the z-loss
+inside its `compute_loss` call, the pooled-FC penalty via its `PoolFcPenalty`
+recorder; the evidence trainer's joint (unfrozen) mode reuses the same
+machinery through its distillation half.
 
 Plane targets exist only in stratified (training) records; the full-sweep
 evaluation slice is plane-less, so its metrics stay value-based and the
