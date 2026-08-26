@@ -93,9 +93,15 @@ def atomic_output(path: Path):
     """Yield the temp path an export (and its in-place transforms) should land
     on, renaming it onto `path` with a single os.replace on success. A reader
     that sees `path` exist therefore always sees a complete file -- never a
-    partially written or partially transformed one."""
+    partially written or partially transformed one. On failure the temp file
+    is removed too: a rejected export (the FP16 gate's designed outcome)
+    leaves nothing beside the served models."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
-    yield tmp_path
+    try:
+        yield tmp_path
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     os.replace(tmp_path, path)

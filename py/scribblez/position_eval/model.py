@@ -39,7 +39,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
-from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool, wld_z_loss
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
 # absolute residual would otherwise converge to ~0.8*sigma; this rescales the
@@ -204,10 +204,8 @@ def compute_loss(
                  target-1 cells so a rare high-value square is not drowned by the
                  ~98% empty cells -- at the cost of calibration, so it is a
                  diagnostic knob, not a deployable default.
-        lambda_wld_z: weight of the z-loss on the WLD logits (mean squared
-                 logsumexp, the standard form) -- the restoring force of
-                 docs/fp16_safe_serving.md against unbounded logit growth,
-                 which cross-entropy, being shift-invariant, never opposes.
+        lambda_wld_z: weight of the z-loss on the WLD logits (see
+                 spatial_trunk.wld_z_loss for the rationale).
 
     Returns:
         Dict with "total" plus one entry per head loss.
@@ -215,7 +213,7 @@ def compute_loss(
     # WLD: cross-entropy against one-hot target, plus the z-loss.
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
-    loss_wld_z = torch.logsumexp(outputs["wld"], dim=1).square().mean()
+    loss_wld_z = wld_z_loss(outputs["wld"])
 
     # Score-diff: two Huber regressions in score points. The mean regresses the
     # observed differential. The std regresses the absolute residual of the mean

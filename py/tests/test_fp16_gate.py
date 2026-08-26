@@ -9,13 +9,20 @@ import onnx
 import pytest
 import torch
 from onnx import TensorProto, helper, numpy_helper
-from scribblez.ffi import get_input_shapes
-from scribblez.fp16_gate import Fp16HeadroomError, check_fp16_headroom, intermediate_peaks
+from scribblez.ffi import get_input_shapes, score_diff_input_layout
+from scribblez.fp16_gate import (
+    PROBE_LEADS,
+    Fp16HeadroomError,
+    check_fp16_headroom,
+    intermediate_peaks,
+)
 from scribblez.move_set_eval.model import compute_loss as mset_compute_loss
+from scribblez.move_set_eval.onnx_export import fp16_probe_feeds_from_batch
 from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.model import compute_loss as position_compute_loss
-from scribblez.position_eval.onnx_export import export_onnx
-from scribblez.spatial_trunk import PoolFcPenalty, SpatialTrunk
+from scribblez.position_eval.onnx_export import export_onnx, fp16_probe_feeds
+from scribblez.position_eval.trainer import load_fp16_probe
+from scribblez.spatial_trunk import PoolFcPenalty, SpatialTrunk, apply_pool_penalty
 
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _ = _input_shapes["input_spatial"]
@@ -133,6 +140,81 @@ def test_export_gate_blocks_overflowing_checkpoint(tmp_path):
     with pytest.raises(Fp16HeadroomError):
         _export(model, path, _random_feeds())
     assert not path.exists(), "a failed gate must not land an ONNX file"
+    tmp = path.with_name(path.name + ".tmp")
+    assert not tmp.exists(), "a failed gate must clean up its temp file"
+
+
+# ---------------------------------------------------------------------------
+# The probe-feed builders
+# ---------------------------------------------------------------------------
+
+
+def test_position_probe_feeds_stamping_and_pairing():
+    rng = np.random.default_rng(2)
+    n, cells = 5, BOARD_SIZE * BOARD_SIZE
+    flat = rng.standard_normal((n, SPATIAL_PLANES * cells + SCALAR_SIZE), dtype=np.float32)
+    leads = (-200, 150)
+    feeds = fp16_probe_feeds(flat, SPATIAL_PLANES, leads=leads, rows_per_feed=4)
+
+    spatial = np.concatenate([f["input_spatial"] for f in feeds])
+    scalar = np.concatenate([f["input_scalar"] for f in feeds])
+    assert spatial.shape[0] == scalar.shape[0] == n * (1 + len(leads))
+
+    orig_spatial = flat[:, : SPATIAL_PLANES * cells].reshape(n, SPATIAL_PLANES, 15, 15)
+    orig_scalar = flat[:, SPATIAL_PLANES * cells :]
+    sd_index, sd_scale = score_diff_input_layout()
+    others = np.arange(SCALAR_SIZE) != sd_index
+
+    # Block 0 is the rows as encoded; block b >= 1 is the rows with the
+    # score-diff scalar stamped to leads[b-1], everything else untouched, and
+    # the spatial half still paired with its own row.
+    np.testing.assert_array_equal(scalar[:n], orig_scalar)
+    for b, lead in enumerate(leads, start=1):
+        block = scalar[b * n : (b + 1) * n]
+        np.testing.assert_allclose(block[:, sd_index], np.float32(lead / sd_scale))
+        np.testing.assert_array_equal(block[:, others], orig_scalar[:, others])
+        np.testing.assert_array_equal(spatial[b * n : (b + 1) * n], orig_spatial)
+
+
+def test_mset_probe_feeds_from_batch():
+    rng = np.random.default_rng(3)
+    t = 7
+    batch = {
+        "input_spatial": torch.from_numpy(
+            rng.standard_normal((2, SPATIAL_PLANES, 15, 15), dtype=np.float32)
+        ),
+        "input_scalar": torch.from_numpy(rng.standard_normal((2, SCALAR_SIZE), dtype=np.float32)),
+        "move_letters": torch.randint(0, 26, (3, t)),
+        "move_blanks": torch.zeros(3, t, dtype=torch.bool),
+        "move_squares": torch.randint(0, 225, (3, t)),
+        "move_tile_mask": torch.ones(3, t, dtype=torch.bool),
+        "move_scalars": torch.randn(3, 3),
+        "move_pos_id": torch.tensor([0, 0, 1]),
+    }
+    feeds = fp16_probe_feeds_from_batch(batch, leads=(100,))
+    assert len(feeds) == 2 * 2  # 2 positions x (as-encoded + 1 lead)
+
+    sd_index, sd_scale = score_diff_input_layout()
+    for p, (plain, stamped) in enumerate([feeds[0:2], feeds[2:4]]):
+        np.testing.assert_array_equal(plain["input_scalar"][0], batch["input_scalar"][p].numpy())
+        assert stamped["input_scalar"][0, sd_index] == pytest.approx(100 / sd_scale)
+        np.testing.assert_array_equal(plain["input_spatial"][0], batch["input_spatial"][p].numpy())
+        # Each feed carries only its own position's move rows, in the export
+        # graph's dtypes.
+        expected_moves = int((batch["move_pos_id"] == p).sum())
+        assert plain["move_letters"].shape[0] == expected_moves
+        assert plain["move_letters"].dtype == np.int32
+        assert plain["move_blanks"].dtype == np.uint8
+        assert plain["move_scalars"].dtype == np.float32
+
+
+def test_load_fp16_probe_sources():
+    rng = np.random.default_rng(4)
+    cells = BOARD_SIZE * BOARD_SIZE
+    flat = rng.standard_normal((3, SPATIAL_PLANES * cells + SCALAR_SIZE), dtype=np.float32)
+    feeds = load_fp16_probe({"inputs": flat}, None, SPATIAL_PLANES)
+    assert sum(f["input_spatial"].shape[0] for f in feeds) == 3 * (1 + len(PROBE_LEADS))
+    assert load_fp16_probe(None, None, SPATIAL_PLANES) is None
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +237,25 @@ def test_pool_fc_penalty_records_and_closes():
     recorder.close()
     trunk(spatial, scalar)
     assert recorder.penalty() is None, "a closed recorder must not collect"
+
+
+def test_apply_pool_penalty_weights_total():
+    torch.manual_seed(0)
+    trunk = SpatialTrunk(spatial_planes=4, scalar_size=3, trunk_channels=8, num_blocks=3)
+    recorder = PoolFcPenalty(trunk)
+    trunk(torch.randn(2, 4, 15, 15), torch.randn(2, 3))
+    losses = {"total": torch.tensor(1.5)}
+    apply_pool_penalty(losses, recorder, 0.25)
+    assert losses["pool_act"].item() > 0.0
+    assert losses["total"].item() == pytest.approx(1.5 + 0.25 * losses["pool_act"].item())
+    recorder.close()
+
+    # A model without pooled blocks contributes a constant zero.
+    losses = {"total": torch.tensor(1.5)}
+    recorder = PoolFcPenalty(torch.nn.Linear(3, 3))
+    apply_pool_penalty(losses, recorder, 0.25)
+    assert losses["pool_act"].item() == 0.0 and losses["total"].item() == pytest.approx(1.5)
+    recorder.close()
 
 
 def _position_loss_args(wld_scale: float):

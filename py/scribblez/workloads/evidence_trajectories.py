@@ -172,8 +172,11 @@ class EvidenceTrajectoriesParams:
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head (points)")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head (points)")
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
-    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md), read
-    # through move_set_eval's LossConfig for the distillation half of the step.
+    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md),
+    # read through move_set_eval's LossConfig. Both engage only in the joint
+    # (unfrozen) mode -- the only one that trains the shared trunk: the
+    # z-loss inside the distillation batch's compute_loss, the pooled-FC
+    # penalty via the joint step's PoolFcPenalty recorder (train_loop.py).
     lambda_wld_z: float = param(1e-4, "z-loss weight on the WLD logits (squared logsumexp)")
     lambda_pool_act: float = param(
         1e-6, "mean-square penalty weight on the trunk's pooled-FC pre-activations"

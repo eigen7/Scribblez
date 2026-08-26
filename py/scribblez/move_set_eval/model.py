@@ -47,7 +47,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs
-from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool, wld_z_loss
 
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
@@ -388,15 +388,14 @@ def compute_loss(
     batch without plane targets contributes a zero plane term (the plane head
     simply gets no gradient from it).
 
-    lambda_wld_z weights a z-loss on the WLD logits (mean squared logsumexp)
-    -- the restoring force of docs/fp16_safe_serving.md against unbounded
-    logit growth, which the shift-invariant cross-entropy never opposes (and
-    which a saturated teacher distribution actively drives).
+    lambda_wld_z weights a z-loss on the WLD logits (spatial_trunk.wld_z_loss
+    has the rationale; here a saturated teacher distribution actively drives
+    the growth the z-loss restrains).
     """
     # Soft cross-entropy: -sum(teacher_prob * log_softmax(pred)).
     log_pred = F.log_softmax(outputs["wld"], dim=1)
     loss_wld = -(targets["target_wld"] * log_pred).sum(dim=1).mean()
-    loss_wld_z = torch.logsumexp(outputs["wld"], dim=1).square().mean()
+    loss_wld_z = wld_z_loss(outputs["wld"])
 
     sd_mean = outputs["score_diff"][:, 0]
     sd_std = outputs["score_diff"][:, 1]

@@ -135,6 +135,15 @@ class PoolFcPenalty:
             handle.remove()
 
 
+def wld_z_loss(logits: torch.Tensor) -> torch.Tensor:
+    """z-loss on a head's logits (mean squared logsumexp, the standard form):
+    the second restoring force of docs/fp16_safe_serving.md. Cross-entropy --
+    hard-target or distillation -- is invariant to a uniform logit shift, so
+    nothing else opposes unbounded logit growth; both families' WLD heads
+    weight this by their lambda_wld_z."""
+    return torch.logsumexp(logits, dim=1).square().mean()
+
+
 def apply_pool_penalty(losses: dict, recorder: PoolFcPenalty, lambda_pool_act: float):
     """Fold the recorder's collected penalty into a training step's losses dict
     (both family train loops share this): sets losses["pool_act"] and adds the

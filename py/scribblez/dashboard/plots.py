@@ -190,6 +190,11 @@ TRAINING = [
     ("Learning rate", ["lr"], {"log": True}),
     ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
     ("Epoch time (s)", ["elapsed_s"]),
+    # The FP16 export gate's per-export peak |activation|
+    # (docs/fp16_safe_serving.md): the growth curve the gate exists to watch
+    # -- healthy runs plateau, the incident lineage doubled per ~1000 epochs,
+    # hence the log axis. Absent for runs whose exports are not probed.
+    ("FP16 probe peak |activation|", ["fp16_probe_peak"], {"log": True}),
 ]
 # Move-set-eval distillation quality: the teacher win-equity the student's
 # top-K forfeits (lower is better), with the incumbent ranking's (played
