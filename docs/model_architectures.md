@@ -17,7 +17,7 @@ Symbols used throughout:
 |--------|---------|---------|
 | `C` | `trunk_channels` | 192 |
 | `N` | `num_blocks` in the residual tower | 10 |
-| `P_in` / `S_in` | spatial planes / scalar width of the board input | 88 / 992 (full layout), 85 / 936 (base) |
+| `P_in` / `S_in` | spatial planes / scalar width of the board input | 85 / 936; 85 / 963 under the open-leaves arm |
 | `B` | batch of board positions (`P` in move-set code) | — |
 | `M` | candidate moves in a batch, flattened across positions | — |
 | `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |
@@ -87,9 +87,15 @@ never the trunk, never the mean.
 | `score_diff[:,1]` | `MAD_TO_STD · \|mean − target\|`, detached | Huber (δ=10) | `lambda_sd` = 1 |
 | `*_next_placement` | binary per-cell mask | BCE-with-logits | `lambda_next_placement` = 0.5 each |
 | `*_win_placement` | binary per-cell mask | BCE-with-logits | `lambda_win_placement` = 0.5 each |
+| `wld` (z-loss) | 0 | mean squared `logsumexp` | `lambda_wld_z` = 1e-4 |
+| trunk `pool_fc` outputs | 0 | mean square | `lambda_pool_act` = 1e-6 |
 
 `MAD_TO_STD = sqrt(π/2)` rescales the absolute-residual target so its optimum is
-a Gaussian σ.
+a Gaussian σ. The last two rows are the activation-magnitude restoring forces
+of [fp16_safe_serving.md](fp16_safe_serving.md): the z-loss lives in
+`compute_loss` (`spatial_trunk.wld_z_loss`), the pooled-FC penalty is applied
+by the train loop via `spatial_trunk.PoolFcPenalty` hooks on every
+global-pooling block.
 
 ---
 
@@ -132,6 +138,15 @@ semantics. Layout owned by
 | `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `planes` | teacher masks, dequantized (M, 4, 225) | BCE-with-logits | `lambda_planes` = 1 |
+| `wld` (z-loss) | 0 | mean squared `logsumexp` | `lambda_wld_z` = 1e-4 |
+| trunk `pool_fc` outputs | 0 | mean square | `lambda_pool_act` = 1e-6 |
+
+The last two rows are the same activation-magnitude restoring forces as the
+position-eval model's (see its Losses table). This model's own train loop
+(move_set_eval/train_loop.py) applies both directly every step -- the z-loss
+inside its `compute_loss` call, the pooled-FC penalty via its `PoolFcPenalty`
+recorder; the evidence trainer's joint (unfrozen) mode reuses the same
+machinery through its distillation half.
 
 Plane targets exist only in stratified (training) records; the full-sweep
 evaluation slice is plane-less, so its metrics stay value-based and the

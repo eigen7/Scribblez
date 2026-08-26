@@ -22,13 +22,12 @@ EvalObjective parse_eval_objective(const std::string& name, const std::string& f
 
 InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedModelInputs& model,
                                     const std::string& who) {
-  const InputEncodingSpec spec{&dict, model.contingent_features(), model.opp_leave_input()};
-  if (model.spatial_planes() != spatial_planes(spec) ||
-      model.scalar_floats() != scalar_floats(spec)) {
+  const InputEncodingSpec spec{&dict, model.opp_leave_input()};
+  if (model.spatial_planes() != spatial_planes() || model.scalar_floats() != scalar_floats(spec)) {
     throw util::Exception(
-      "{}: the model declares an input arm (contingent={}, opp_leave={}) whose layout does not "
-      "match the input widths it accepts",
-      who, model.contingent_features(), model.opp_leave_input());
+      "{}: the model declares an input arm (opp_leave={}) whose layout does not match the input "
+      "widths it accepts",
+      who, model.opp_leave_input());
   }
   return spec;
 }

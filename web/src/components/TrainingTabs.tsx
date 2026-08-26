@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getJSON } from '../lib/api';
+import {
+  MutableRefObject, useCallback, useContext, useEffect, useMemo, useRef, useState,
+} from 'react';
+import { getJSON, postJSON } from '../lib/api';
+import { FigureHandle } from '../lib/bokehDoc';
 import { Visibility } from '../lib/bokehVisibility';
 import BokehFigure from './BokehFigure';
+import { TabActiveContext } from './TabActiveContext';
 
 // The embedded-Bokeh training tabs (Loss, Training) shared by the training
 // workloads' task views: each fetches a figure as a json_item from the Python
@@ -32,26 +36,58 @@ export function RadioButtonGroup({ options, value, onChange }: {
   );
 }
 
-// Fetch one Bokeh figure (a json_item) for the given tag and re-fetch it whenever
-// the run advances (polling a cheap version token) or `query` changes (a control
-// was toggled). `query` is extra query string appended to the figure request.
+// Fetch one Bokeh figure (a json_item) for the given tag and keep it current as
+// the run advances (polling a cheap version token). A full re-fetch happens on
+// mount and whenever `query` changes (a control was toggled); a version bump is
+// instead applied incrementally when `handleRef` exposes an embedded document --
+// the appended rows are streamed into it in place (lib/bokehDoc.ts,
+// figure_delta.py) -- falling back to the full fetch whenever the delta endpoint
+// asks for it or fails. The first version check only baselines the token (the
+// mount fetch just rendered that state), and polling pauses entirely while the
+// surrounding tab is hidden (TabActiveContext) -- re-activation checks at once,
+// so a hidden tab catches up with one delta instead of polling unseen.
 export function useFigureItem(
   task: string, tag: string | null, figure: string,
   versionKey: string | string[], query: string,
+  handleRef?: MutableRefObject<FigureHandle | null>,
 ): unknown | null {
+  const active = useContext(TabActiveContext);
   const [item, setItem] = useState<unknown | null>(null);
   const lastVersion = useRef<number>(-1);
+  const structureRef = useRef<string | null>(null); // the embedded doc's structure key
 
   const refetch = useCallback(async () => {
     if (!tag) {
       setItem(null);
+      structureRef.current = null;
       return;
     }
     const d = await getJSON(
       `/api/figure/${figure}?task=${task}&tag=${encodeURIComponent(tag)}${query}`,
     );
+    structureRef.current = d.structure ?? null;
     setItem(d.item ?? null);
   }, [task, tag, figure, query]);
+
+  const advance = useCallback(async () => {
+    const handle = handleRef?.current;
+    const sources = handle && structureRef.current ? handle.sourceStates() : null;
+    if (handle && sources) {
+      try {
+        const d = await postJSON(
+          `/api/figure_delta/${figure}?task=${task}&tag=${encodeURIComponent(tag ?? '')}${query}`,
+          { structure: structureRef.current, sources },
+        );
+        if (!d.refetch) {
+          handle.applyDelta(d);
+          return;
+        }
+      } catch {
+        /* fall through to the full fetch */
+      }
+    }
+    await refetch();
+  }, [task, tag, figure, query, handleRef, refetch]);
 
   useEffect(() => {
     lastVersion.current = -1;
@@ -59,33 +95,38 @@ export function useFigureItem(
   }, [refetch]);
 
   useEffect(() => {
-    if (!tag) return;
-    const id = setInterval(async () => {
+    if (!tag || !active) return;
+    const check = async () => {
       try {
         const v = await getJSON(`/api/version?task=${task}&tag=${encodeURIComponent(tag)}`);
         const keys = Array.isArray(versionKey) ? versionKey : [versionKey];
         const combined = keys.reduce((sum, k) => sum + (v[k] ?? 0), 0);
+        const baselining = lastVersion.current === -1;
         if (combined !== lastVersion.current) {
           lastVersion.current = combined;
-          refetch().catch(() => {});
+          if (!baselining) advance().catch(() => {});
         }
       } catch {
         /* the API may still be starting (heavy torch import); the poll retries */
       }
-    }, 3000);
+    };
+    check();
+    const id = setInterval(check, 3000);
     return () => clearInterval(id);
-  }, [task, tag, versionKey, refetch]);
+  }, [task, tag, versionKey, advance, active]);
 
   return item;
 }
 
 // The embedded figure, or an italic placeholder when the API has no data for it.
-// `visibility` drives named models inside it (see BokehFigure).
-export function FigureBody({ item, emptyText, visibility }: {
+// `visibility` drives named models inside it; `handleRef` exposes it to the
+// incremental-refresh path (see BokehFigure).
+export function FigureBody({ item, emptyText, visibility, handleRef }: {
   item: unknown | null; emptyText: string; visibility?: Visibility;
+  handleRef?: MutableRefObject<FigureHandle | null>;
 }) {
   return item ? (
-    <BokehFigure item={item} visibility={visibility} />
+    <BokehFigure item={item} visibility={visibility} handleRef={handleRef} />
   ) : (
     <div style={{ color: '#556070', fontStyle: 'italic', padding: 20 }}>{emptyText}</div>
   );
@@ -107,16 +148,22 @@ export function FigureTab({
 // Secondary tag to overlay -- sitting between the two. The two figures are
 // fetched separately so those controls can live between them.
 //
-// Linear x/Log x never talks to the API: each figure arrives with both x-axis
-// variants as two named rows (plots.py's X_AXIS_LINEAR / X_AXIS_LOG -- change the
-// names in both places), and the knob flips their visibility in place.
+// The Linear x/Log x and Absolute/% knobs never talk to the API: each figure
+// arrives with every knob variant as pre-built named rows -- the quality figure
+// has the two x-axis rows, the loss figure crosses them with the normalization
+// variants as "<x axis>|<norm>" (plots.py's X_AXIS_* / NORM_* constants; change
+// the names in both places) -- and the knobs flip row visibility in place.
 const LOSS_VERSION = ['metrics', 'control_event'];
 const QUALITY_VERSION = ['metrics'];
 const X_AXIS_LINEAR = 'x_linear';
 const X_AXIS_LOG = 'x_log';
+const NORM_ABSOLUTE = 'abs';
+const NORM_PERCENT = 'pct';
 
 export function LossTab({ task, tag }: { task: string; tag: string | null }) {
   const [normalized, setNormalized] = useState(false);
+  const lossHandle = useRef<FigureHandle | null>(null);
+  const qualityHandle = useRef<FigureHandle | null>(null);
   const [logX, setLogX] = useState(false);
   const [smoothed, setSmoothed] = useState(true); // smoothing on by default
   const [secondary, setSecondary] = useState(''); // '' = none
@@ -126,17 +173,26 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
     getJSON(`/api/tags?task=${task}`).then((d) => setTags(d.tags)).catch(() => {});
   }, [task]);
 
-  const stepItem = useFigureItem(
-    task, tag, 'loss', LOSS_VERSION, `&normalized=${normalized ? 1 : 0}`,
-  );
+  const stepItem = useFigureItem(task, tag, 'loss', LOSS_VERSION, '', lossHandle);
   const qualityItem = useFigureItem(
     task, tag, 'eval_quality', QUALITY_VERSION,
     `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
+    qualityHandle,
   );
   const otherTags = tags.filter((t) => t !== tag);
   const xAxisRows = useMemo<Visibility>(
     () => ({ [X_AXIS_LINEAR]: !logX, [X_AXIS_LOG]: logX }), [logX],
   );
+  const lossRows = useMemo<Visibility>(() => {
+    const out: Visibility = {};
+    for (const x of [X_AXIS_LINEAR, X_AXIS_LOG]) {
+      for (const n of [NORM_ABSOLUTE, NORM_PERCENT]) {
+        out[`${x}|${n}`] = x === (logX ? X_AXIS_LOG : X_AXIS_LINEAR)
+          && n === (normalized ? NORM_PERCENT : NORM_ABSOLUTE);
+      }
+    }
+    return out;
+  }, [logX, normalized]);
 
   return (
     <div className="card">
@@ -153,7 +209,8 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
         />
       </div>
       <FigureBody
-        item={stepItem} emptyText="No loss / accuracy metrics recorded yet." visibility={xAxisRows}
+        item={stepItem} emptyText="No loss / accuracy metrics recorded yet." visibility={lossRows}
+        handleRef={lossHandle}
       />
 
       {/* Controls + figure appear only once value-quality curves exist (they are
@@ -175,7 +232,9 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
               </select>
             </label>
           </div>
-          <FigureBody item={qualityItem} emptyText="" visibility={xAxisRows} />
+          <FigureBody
+            item={qualityItem} emptyText="" visibility={xAxisRows} handleRef={qualityHandle}
+          />
         </>
       )}
     </div>

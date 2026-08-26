@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { useContext, ReactNode, useEffect, useRef, useState } from 'react';
+import { TabActiveContext } from '../TabActiveContext';
 import { getJSON } from '../../lib/api';
 import BokehFigure from '../BokehFigure';
 import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
@@ -224,11 +225,13 @@ function RoleSection({ workload, tag, role, stats, workers, version }: {
 }
 
 export default function StatsTab({ workload, tag }: { workload: string; tag: string }) {
+  const tabActive = useContext(TabActiveContext);
   const [data, setData] = useState<StatsPayload | null>(null);
   const [version, setVersion] = useState(0);
   const lastUpdate = useRef(0);
 
   useEffect(() => {
+    if (!tabActive) return;
     let live = true;
     const refresh = async () => {
       try {
@@ -246,7 +249,7 @@ export default function StatsTab({ workload, tag }: { workload: string; tag: str
     refresh();
     const id = setInterval(refresh, 5000);
     return () => { live = false; clearInterval(id); };
-  }, [workload, tag]);
+  }, [workload, tag, tabActive]);
 
   if (!data || data.workers.length === 0) {
     return (

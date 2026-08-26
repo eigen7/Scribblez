@@ -17,10 +17,14 @@ export type Role = {
   gpu: boolean;
   stats: { unit: string; phases: Record<string, string> } | null;
 };
-export type Workload = { name: string; title: string; params: ParamField[]; roles: Role[] };
+export type Workload = {
+  name: string; title: string; params: ParamField[]; roles: Role[];
+  primary_params: string[];  // shown up front by the new-tag form; the rest are advanced
+};
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
-  workers: number; progress: [string, string | number][]; last_active: number;
+  workers: number; active_workers: number;
+  progress: [string, string | number][]; last_active: number;
 };
 
 export function relTime(epochSeconds: number | null): string {
@@ -69,7 +73,6 @@ function ParamInput({ p, value, bad, onChange }: {
   if (p.choices) {
     return (
       <select style={style} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— choose —</option>
         {p.choices.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
     );
@@ -79,32 +82,82 @@ function ParamInput({ p, value, bad, onChange }: {
   );
 }
 
+const paramRowStyle = {
+  display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end',
+} as const;
+
+// One labelled control per field, hovering its help text.
+function ParamFields({ params, values, bad, onChange }: {
+  params: ParamField[];
+  values: Record<string, string | boolean>;
+  bad: ParamField[];
+  onChange: (name: string, v: string | boolean) => void;
+}) {
+  return (
+    <>
+      {params.map((p) => (
+        <label key={p.name} style={{ fontSize: 13 }} title={p.help}>
+          {p.name}<br />
+          <ParamInput
+            p={p}
+            value={values[p.name] ?? ''}
+            bad={bad.some((b) => b.name === p.name)}
+            onChange={(v) => onChange(p.name, v)}
+          />
+        </label>
+      ))}
+    </>
+  );
+}
+
+// The fields the workload names as its up-front ones, in the order it names
+// them, and everything else. A workload naming none shows all of them up front.
+function splitParams(workload: Workload): [ParamField[], ParamField[]] {
+  const byName = new Map(workload.params.map((p) => [p.name, p]));
+  const primary = workload.primary_params.flatMap((n) => {
+    const p = byName.get(n);
+    return p ? [p] : [];
+  });
+  if (primary.length === 0) return [workload.params, []];
+  const upFront = new Set(primary.map((p) => p.name));
+  return [primary, workload.params.filter((p) => !upFront.has(p.name))];
+}
+
 // The new-tag section: a tag-name input plus one control per schema field,
-// validated client-side (ints must parse, closed fields must be chosen) and
-// server-side (the create endpoint re-validates and reports errors verbatim).
+// validated client-side (numbers must parse) and server-side (the create
+// endpoint re-validates and reports errors verbatim).
 //
-// A closed field starts unchosen rather than defaulted, so the arm a run is
-// built on has to be picked rather than inherited by not looking.
+// Only the workload's up-front fields — the handful that decide what a run
+// is — are shown; the long tail sits behind the "Advanced" disclosure at its
+// schema defaults. A field left invalid inside the collapsed section forces it
+// open, so Create is never disabled by something the operator cannot see.
 export function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
   const [tag, setTag] = useState('');
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
     setValues(Object.fromEntries(workload.params.map(
-      (p) => [p.name, p.kind === 'bool' ? false : p.choices ? '' : String(p.default)],
+      (p) => [p.name, p.kind === 'bool' ? Boolean(p.default) : String(p.default)],
     )));
   }, [workload]);
 
+  const [primary, advanced] = splitParams(workload);
   const numberOk = (p: ParamField, raw: string) =>
     p.kind === 'int' ? /^-?\d+$/.test(raw) : !Number.isNaN(parseFloat(raw));
   const tagOk = /^[A-Za-z0-9._-]+$/.test(tag);
   const badNumbers = workload.params.filter(
     (p) => (p.kind === 'int' || p.kind === 'float') && !numberOk(p, String(values[p.name] ?? '')),
   );
-  const unchosen = workload.params.filter((p) => p.choices && !values[p.name]);
-  const canCreate = tagOk && badNumbers.length === 0 && unchosen.length === 0 && !busy;
+  const canCreate = tagOk && badNumbers.length === 0 && !busy;
+  const showAdvanced = advancedOpen || advanced.some(
+    (p) => badNumbers.some((b) => b.name === p.name),
+  );
+
+  const setValue = (name: string, v: string | boolean) =>
+    setValues((s) => ({ ...s, [name]: v }));
 
   const coerce = (p: ParamField) => {
     const raw = values[p.name];
@@ -131,7 +184,7 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <b style={{ fontSize: 15 }}>New tag</b>
-      <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
+      <div style={{ ...paramRowStyle, marginTop: 10 }}>
         <label style={{ fontSize: 13 }}>
           Tag name<br />
           <input
@@ -141,19 +194,24 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
             placeholder="e.g. exp42"
           />
         </label>
-        {workload.params.map((p) => (
-          <label key={p.name} style={{ fontSize: 13 }} title={p.help}>
-            {p.name}<br />
-            <ParamInput
-              p={p}
-              value={values[p.name] ?? ''}
-              bad={[...badNumbers, ...unchosen].some((b) => b.name === p.name)}
-              onChange={(v) => setValues((s) => ({ ...s, [p.name]: v }))}
-            />
-          </label>
-        ))}
+        <ParamFields params={primary} values={values} bad={badNumbers} onChange={setValue} />
         <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
       </div>
+      {advanced.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <span
+            onClick={() => setAdvancedOpen(!showAdvanced)}
+            style={{ fontSize: 13, color: '#1f77b4', cursor: 'pointer', userSelect: 'none' }}
+          >
+            {showAdvanced ? '▾' : '▸'} Advanced: {advanced.length} more settings
+          </span>
+          {showAdvanced && (
+            <div style={{ ...paramRowStyle, marginTop: 10 }}>
+              <ParamFields params={advanced} values={values} bad={badNumbers} onChange={setValue} />
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ fontSize: 12, color: '#556070', marginTop: 8 }}>
         Parameters are frozen at creation: every worker on a tag generates with identical settings.
         Hover a field for its meaning.
@@ -163,7 +221,7 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   );
 }
 
-function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
+export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
   const [rows, setRows] = useState<TagRow[]>([]);
   const [sortBy, setSortBy] = useState<'name' | 'last-ran'>('last-ran');
   const [error, setError] = useState('');
@@ -180,9 +238,14 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
   }, [refresh]);
 
   // Deleting a tag deletes its local data dir (the bucket archive, if any, is
-  // kept); the server refuses while the tag still has workers.
-  const deleteTag = async (tag: string) => {
-    if (!window.confirm(`Delete tag '${tag}' and its local data?`)) return;
+  // kept) along with its idle worker slots; the server refuses while any of
+  // them is running.
+  const deleteTag = async (tag: string, workers: number) => {
+    const slots = workers === 1 ? 'its idle worker slot' : `its ${workers} idle worker slots`;
+    const message = workers === 0
+      ? `Delete tag '${tag}' and its local data?`
+      : `Delete tag '${tag}', its local data, and ${slots}?`;
+    if (!window.confirm(message)) return;
     setError('');
     try {
       await postJSON('/api/task/delete', { workload: workload.name, tag });
@@ -240,10 +303,10 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
                     {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
                   </td>
                   <td style={{ padding: '6px 0' }} onClick={(e) => e.stopPropagation()}>
-                    <span title={r.workers > 0 ? 'remove the tag’s workers first' : undefined}>
+                    <span title={r.active_workers > 0 ? 'pause the tag’s workers first' : undefined}>
                       <Button
-                        label="Delete" tone="danger" disabled={r.workers > 0}
-                        onClick={() => deleteTag(r.tag)}
+                        label="Delete" tone="danger" disabled={r.active_workers > 0}
+                        onClick={() => deleteTag(r.tag, r.workers)}
                       />
                     </span>
                   </td>

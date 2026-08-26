@@ -131,7 +131,7 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
                      const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
                      std::vector<PositionResult>* results, util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
-  binlog::PositionEncoder encoder(InputEncodingSpec{&dict, false});
+  binlog::PositionEncoder encoder(InputEncodingSpec{&dict});
   const SimRunner runner(dict, sim_params(opt, leaf_eval_service));
 
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {

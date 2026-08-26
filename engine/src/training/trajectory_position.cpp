@@ -36,7 +36,7 @@ void encode_trajectory_decision(const TrajectoryDecision& d, const InputEncoding
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : p.game.turns) enc.apply_move(t.record.move);
   RELEASE_ASSERT(enc.active_player() == p.mover);
-  // The contingent planes read the board's move-generation caches.
+  // The cross-check planes read the board's move-generation caches.
   enc.board().ensure_movegen_caches(*spec.dict);
   if (spec.opp_leave_input) {
     enc.encode_input(p.mover, p.rack, p.opp_leave, /*apply_flip=*/false, out);

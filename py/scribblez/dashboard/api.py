@@ -31,7 +31,7 @@ from bokeh.embed import json_item
 
 from scribblez import lane_analysis, workloads
 from scribblez import params as params_mod
-from scribblez.dashboard import db, master_api, plots, tasks, trajectories_api
+from scribblez.dashboard import db, figure_delta, master_api, plots, tasks, trajectories_api
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     InputArm,
@@ -69,12 +69,11 @@ VERSION_TABLES = (
 
 def _loss(conn, params, mount_root):
     """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
-    metrics table, with control-change markers; `normalized` stacks the loss as
-    per-column shares. Both x-axis variants ride along (plots.X_AXIS_LINEAR /
-    X_AXIS_LOG) for the client to flip between. The value-quality curves are a
-    separate figure (`eval_quality`), so the client can place its own controls
-    between the two."""
-    return plots.metrics_loss_grid(conn, normalized=_truthy(params.get("normalized")))
+    metrics table, with control-change markers. Every knob variant rides along as
+    a named row (see plots._variant_rows) for the client to flip between. The
+    value-quality curves are a separate figure (`eval_quality`), so the client
+    can place its own controls between the two."""
+    return plots.metrics_loss_grid(conn)
 
 
 def _eval_quality(conn, params, mount_root):
@@ -151,13 +150,17 @@ def version_token(conn: sqlite3.Connection) -> dict:
 
 
 def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, mount_root: str):
-    """The Bokeh ``json_item`` dict for figure `name`, or None when there's no data
-    (or no such figure). The handler turns None into ``{"item": null}``."""
+    """(json_item dict, structure key) for figure `name`, or (None, None) when
+    there's no data (or no such figure). The handler turns None into
+    ``{"item": null}``. The structure key is echoed back by the client's
+    incremental-update requests (see figure_delta.py)."""
     builder = FIGURES.get(name)
     if builder is None:
-        return None
+        return None, None
     model = builder(conn, params, mount_root)
-    return json_item(model) if model is not None else None
+    if model is None:
+        return None, None
+    return json_item(model), figure_delta.structure_key(model)
 
 
 def _open(mount_root: str, task: str, tag: str) -> sqlite3.Connection | None:
@@ -410,7 +413,6 @@ def _position_eval_model_arm(sess) -> InputArm:
     meta = sess.get_modelmeta().custom_metadata_map
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
     return InputArm(
-        contingent_features=meta.get("contingent_features") == "true",
         opp_leave_input=meta.get("opp_leave_input") == "true",
         spatial_planes=int(model_inputs["input_spatial"][1]),
         scalar_size=int(model_inputs["input_scalar"][1]),
@@ -608,8 +610,37 @@ class FigureHandler(_Base):
             self.write({"error": "unknown tag"})
             return
         try:
-            item = build_figure_item(conn, name, self._params(), self.mount_root)
-            self.write({"item": item})
+            item, structure = build_figure_item(conn, name, self._params(), self.mount_root)
+            self.write({"item": item, "structure": structure})
+        finally:
+            conn.close()
+
+
+class FigureDeltaHandler(_Base):
+    """Incremental update for an embedded figure: the client POSTs its document's
+    structure key and per-source cursors, and gets back just the appended rows and
+    current explicit ranges -- or ``{"refetch": true}`` when the document must be
+    rebuilt (see figure_delta.py)."""
+
+    def post(self, name: str):
+        if name not in FIGURES:
+            self.set_status(404)
+            self.write({"error": f"unknown figure {name!r}"})
+            return
+        try:
+            client = json.loads(self.request.body)
+        except ValueError:
+            self.set_status(400)
+            self.write({"error": "invalid JSON body"})
+            return
+        conn = self._open_conn()
+        if conn is None:
+            self.set_status(404)
+            self.write({"error": "unknown tag"})
+            return
+        try:
+            model = FIGURES[name](conn, self._params(), self.mount_root)
+            self.write(figure_delta.delta_response(model, client))
         finally:
             conn.close()
 
@@ -803,6 +834,7 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
             (r"/api/meta", MetaHandler),
             (r"/api/controls", ControlsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
+            (r"/api/figure_delta/([a-z_]+)", FigureDeltaHandler),
             (r"/api/lane/positions", LanePositionsHandler),
             (r"/api/lane/generations", LaneGenerationsHandler),
             (r"/api/lane/position", LanePositionHandler),

@@ -76,11 +76,8 @@ def test_load_student_tolerates_only_the_evidence_modules_missing():
 
 @pytest.fixture(scope="module")
 def traj_datasets(traj_corpus):  # noqa: F811
-    from scribblez.ffi import set_contingent_features
-
     files = ED.complete_pairs(traj_corpus.dir)
     assert len(files) >= 2
-    set_contingent_features(True)
     ED.adopt_information_condition(files)
     return ED.TrajectoryDataset(files[:-1]), ED.TrajectoryDataset(files[-1:])
 
@@ -176,8 +173,12 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
 
 
 def _unfrozen_model(train, device):
+    # num_blocks=3 so the trunk holds a real GlobalPoolingResBlock (make_block
+    # emits one at every index % 3 == 2): the joint step's pooled-FC penalty
+    # then collects real activations, so its wiring is exercised, not just
+    # tolerated.
     torch.manual_seed(0)
-    return MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
+    return MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 3, 2).to(device)
 
 
 def _unfrozen_params(**kw):
@@ -235,6 +236,10 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     result = _joint_epoch(model, opt, train, mset_train, device, lr_fn=lambda rows: 1e-2)
     assert result.rows > 0 and np.isfinite(result.losses["total"])
     assert {"sim", "distill", "distill_wld", "distill_planes"} <= set(result.losses)
+    # The pooled-FC penalty engages through run_epoch's own recorder wiring
+    # (a broken hookup would report exactly 0.0); its weighted term also
+    # rides in the total, inside the approx tolerance below.
+    assert result.losses["pool_act"] > 0.0
     assert result.losses["total"] == pytest.approx(
         result.losses["distill"] + result.losses["sim"], rel=1e-4
     )
@@ -457,7 +462,6 @@ def _student_checkpoint(path, train, *, open_leaves: bool, version=None):
                 "trunk_channels": 8,
                 "num_blocks": 1,
                 "num_heads": 2,
-                "contingent_features": True,
                 "open_leaves": open_leaves,
                 "move_encoding_version": version
                 if version is not None
@@ -648,7 +652,6 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
             e.key: e.value for e in onnx.load(str(scratch_u.paths.onnx_path(epoch))).metadata_props
         }
         assert meta["graph"] == "move_set_eval", meta
-        assert meta["contingent_features"] == "true", meta
         assert meta["opp_leave_input"] == "false", meta
         assert meta["move_encoding_version"] == str(move_encoding_version()), meta
     conn = sqlite3.connect(scratch_u.paths.dashboard_db)

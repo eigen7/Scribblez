@@ -115,7 +115,6 @@ class NeuralNetBase {
   // The model's input-encoding arm, from the ONNX metadata_props the exporter
   // stamps. Valid after load(); consumers cross-check it against the input
   // widths through input_encoder.h's registry.
-  bool contingent_features() const;
   bool opp_leave_input() const;
 
   // Blocks until the outputs are back. Requires 1 <= num_rows <= max_rows().

@@ -56,15 +56,13 @@ int scribblez_max_move_per_lane_input_floats(void);
 // There is deliberately no failure signaling past that point: nothing useful
 // can be done without a dictionary, so a live session pointer is proof the
 // lexicon is loaded.
-// `contingent_features` selects the process's experiment arm: nonzero encodes
-// the full layout including the contingent-draw potential blocks; zero skips
-// their move generation entirely and encodes the smaller base layout. The
-// session's shape/size queries below report whichever layout it encodes, so
-// callers never branch on the arm.
+// `opp_leave_input` selects the process's experiment arm: nonzero encodes the
+// open-leaves layout, whose extra block carries what the opponent kept from
+// their last move. The session's shape/size queries below report whichever
+// layout it encodes, so callers never branch on the arm.
 typedef struct ScribblezSession ScribblezSession;
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features,
-                                        int opp_leave_input);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int opp_leave_input);
 void scribblez_session_delete(ScribblezSession* s);
 
 // The session's input tensor shapes (see scribblez_target_shapes for the
@@ -182,17 +180,16 @@ int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg
 // encode-time rack; the opponent-leave arm also reads what the opponent's last
 // move retained). The encoding replays the recorded moves, so it is
 // byte-identical to a training row's input for the same position. Encodes
-// under an explicit arm (contingent_features, opp_leave_input) rather than
-// the session's, so one dashboard process serves models of every arm (the
-// session contributes only its dictionary); `input_cap` must equal the arm's
+// under an explicit arm (opp_leave_input) rather than the session's, so one
+// dashboard process serves models of every arm (the session contributes only
+// its dictionary); `input_cap` must equal the arm's
 // input_floats, else -1 (the caller's model disagrees with the engine layout).
 // Returns the floats written on success, or -1 with a reason in `out_err`
 // (NUL-terminated, truncated to err_cap): a parse error, a non-PLAY final
 // move, or the width mismatch.
 int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                        int contingent_features, int opp_leave_input,
-                                        float* out_input, int input_cap, char* out_err,
-                                        int err_cap);
+                                        int opp_leave_input, float* out_input, int input_cap,
+                                        char* out_err, int err_cap);
 
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
@@ -210,17 +207,16 @@ int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int
 // violation is one more -1-with-reason, phrased for a person.
 int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* gcg_text,
                                                const char* leave_str, const char* opp_leave_str,
-                                               int contingent_features, int opp_leave_input,
-                                               float* out_input, int input_cap, char* out_err,
-                                               int err_cap);
+                                               int opp_leave_input, float* out_input, int input_cap,
+                                               char* out_err, int err_cap);
 
 // A position-set .gcg's decision point (read_gcg_position: final recorded
 // state, side to move next, rack from its #RackN pragma) as the move set
 // evaluation model's inputs -- what the dashboard's trajectory pane re-scores
 // under a torch checkpoint (training/trajectory_position.h). Encodes under an
-// explicit arm (contingent_features, opp_leave_input) rather than the
-// session's, so one dashboard process serves models of every arm; the session
-// contributes only its dictionary. opp_leave_input doubles as the information
+// explicit arm (opp_leave_input) rather than the session's, so one dashboard
+// process serves models of every arm; the session contributes only its
+// dictionary. opp_leave_input doubles as the information
 // condition the position's sidecars were simmed under.
 //   out_input      the mover's pre-move board row; `input_cap` must equal the
 //                  arm's input_floats, else -1 (the caller's model config
@@ -231,10 +227,9 @@ int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* 
 // Returns the legal move count (which may exceed moves_cap -- retry with a
 // larger buffer; the row and differential are written either way), or -1 with
 // a reason in `out_err` (NUL-terminated, truncated to err_cap).
-int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text,
-                                  int contingent_features, int opp_leave_input, float* out_input,
-                                  int input_cap, int32_t* out_score_diff, void* out_moves,
-                                  int moves_cap, char* out_err, int err_cap);
+int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text, int opp_leave_input,
+                                  float* out_input, int input_cap, int32_t* out_score_diff,
+                                  void* out_moves, int moves_cap, char* out_err, int err_cap);
 
 // The pane's web-render bundle for the same decision point: the mover's-POV
 // GameState JSON plus "mover", "opp_leave", "last_move", and "moves" -- every

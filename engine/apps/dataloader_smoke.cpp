@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   const std::string dir = argv[1];
   int n_samples = 64;
   DataLoader::Params params;
-  params.spec = {&scribblez::load_dictionary_or_throw(), true};
+  params.spec = {&scribblez::load_dictionary_or_throw()};
   bool post_move = false;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];

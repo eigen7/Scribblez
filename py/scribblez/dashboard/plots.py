@@ -50,19 +50,28 @@ def _ema(values, weight: float = 0.85):
     return out
 
 
-def _plot_series(fig, x, y, color, label, smooth):
-    """Draw one metric series. With smoothing (once the series has at least
-    `_SMOOTH_MIN_POINTS` points) the plotted line is a debiased exponential moving
-    average, so the trend reads clearly; without it, the raw points are drawn as a
-    line plus markers. A single line is drawn either way -- no faint raw underlay --
-    so a smoothed curve reads as unambiguously smooth."""
+def _plot_series(fig, x, y, color, label, smooth, name=None):
+    """Draw one metric series, its data source named `name` (see `_source_name`).
+    With smoothing (once the series has at least `_SMOOTH_MIN_POINTS` points) the
+    plotted line is a debiased exponential moving average, so the trend reads
+    clearly; without it, the raw points are drawn as a line plus markers. A single
+    line is drawn either way -- no faint raw underlay -- so a smoothed curve reads
+    as unambiguously smooth."""
     if smooth and len(y) >= _SMOOTH_MIN_POINTS:
-        src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))))
+        src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))), name=name)
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
     else:
-        src = ColumnDataSource(dict(x=x, y=y))
+        src = ColumnDataSource(dict(x=x, y=y), name=name)
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
         fig.scatter("x", "y", source=src, color=color, size=4)
+
+
+def _source_name(title: str, label: str) -> str:
+    """The stable name of one series' data source: "<figure title>|<legend label>",
+    unique within a figure row. The linear and log x-axis rows deliberately share
+    names -- their sources hold identical data, so one incremental update (see
+    figure_delta.py) feeds both."""
+    return f"{title}|{label}"
 
 
 def _padded_range(values, log):
@@ -133,7 +142,15 @@ def _series_figure(
             if len(epochs) == 0:
                 continue
             color = palette[(s * len(names) + i) % len(palette)]
-            _plot_series(fig, epochs, values, color, name + suffix, smooth)
+            _plot_series(
+                fig,
+                epochs,
+                values,
+                color,
+                name + suffix,
+                smooth,
+                name=_source_name(title, name + suffix),
+            )
             all_epochs.append(epochs)
             all_values.append(values)
     if not all_values:
@@ -173,6 +190,11 @@ TRAINING = [
     ("Learning rate", ["lr"], {"log": True}),
     ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
     ("Epoch time (s)", ["elapsed_s"]),
+    # The FP16 export gate's per-export peak |activation|
+    # (docs/fp16_safe_serving.md): the growth curve the gate exists to watch
+    # -- healthy runs plateau, the incident lineage doubled per ~1000 epochs,
+    # hence the log axis. Absent for runs whose exports are not probed.
+    ("FP16 probe peak |activation|", ["fp16_probe_peak"], {"log": True}),
 ]
 # Move-set-eval distillation quality: the teacher win-equity the student's
 # top-K forfeits (lower is better), with the incumbent ranking's (played
@@ -262,21 +284,28 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
-# The Loss tab's figures carry BOTH x-axis variants, stacked as two rows named
-# X_AXIS_LINEAR / X_AXIS_LOG, so the tab's Linear x/Log x knob flips the rows'
+# The Loss tab's figures carry EVERY knob variant as pre-built named rows, so the
+# tab's knobs (Linear x/Log x; the loss figure's Absolute/%) flip the rows'
 # visibility inside the embedded BokehJS document -- no round trip to this API,
-# no re-embed. The web client (TrainingTabs.tsx) addresses the rows by these
-# names; change them in both places.
+# no re-embed. The value-quality figure has the two x-axis rows; the loss figure
+# crosses them with the normalization variants as "<x axis>|<norm>". The web
+# client (TrainingTabs.tsx) addresses the rows by these names; change them in
+# both places.
 X_AXIS_LINEAR = "x_linear"
 X_AXIS_LOG = "x_log"
+NORM_ABSOLUTE = "abs"
+NORM_PERCENT = "pct"
 
 
-def _x_axis_variants(build_row):
-    """Both x-axis variants of a Loss-tab figure row -- `build_row(log_x)` builds
-    one -- stacked as rows named X_AXIS_LINEAR / X_AXIS_LOG (see those)."""
-    linear, log = build_row(False), build_row(True)
-    linear.name, log.name = X_AXIS_LINEAR, X_AXIS_LOG
-    return column(linear, log)
+def _variant_rows(builders):
+    """The named knob-variant rows of a Loss-tab figure, stacked: `builders` maps
+    each row name (see the constants above) to its zero-arg row builder."""
+    rows = []
+    for name, build in builders.items():
+        r = build()
+        r.name = name
+        rows.append(r)
+    return column(*rows)
 
 
 def _quality_row(sources, smooth, log_x):
@@ -306,7 +335,12 @@ def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
         sources = [(conn, f" [{tag}]"), (sec_conn, f" [{sec_tag}]")]
     else:
         sources = [(conn, "")]
-    return _x_axis_variants(partial(_quality_row, sources, smooth))
+    return _variant_rows(
+        {
+            X_AXIS_LINEAR: partial(_quality_row, sources, smooth, False),
+            X_AXIS_LOG: partial(_quality_row, sources, smooth, True),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +475,7 @@ def _step_figure(title: str, x, series, y_label: str, log_x: bool = False):
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
-        src = ColumnDataSource(dict(x=xs, y=list(y)))
+        src = ColumnDataSource(dict(x=xs, y=list(y)), name=_source_name(title, label))
         fig.line(
             "x",
             "y",
@@ -465,7 +499,9 @@ def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
     cum = np.zeros(len(xs), dtype=np.float64)
     for i, (label, y) in enumerate(bands):
         lo, hi = cum, cum + np.asarray(y, dtype=np.float64)
-        src = ColumnDataSource(dict(x=xs, y1=list(lo), y2=list(hi)))
+        src = ColumnDataSource(
+            dict(x=xs, y1=list(lo), y2=list(hi)), name=_source_name(title, label)
+        )
         fig.varea(
             x="x",
             y1="y1",
@@ -581,14 +617,22 @@ def _metrics_series(conn):
     return x, series
 
 
-def metrics_loss_grid(conn, normalized: bool = False):
+def metrics_loss_grid(conn):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained, in both x-axis variants
-    (`_x_axis_variants`): stacked weighted per-component losses (`normalized` ->
-    per-column fractions), an accuracy panel, control-change markers. None when no
-    loss metric exists."""
+    `metrics` table vs positions trained, in all four knob variants
+    ("<x axis>|<norm>", see `_variant_rows`): stacked weighted per-component
+    losses (the percent variants -> per-column fractions), an accuracy panel,
+    control-change markers. None when no loss metric exists."""
     x, series = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
     weights = db.read_loss_weights(conn)
-    return _x_axis_variants(partial(_loss_accuracy_row, x, series, weights, normalized, conn))
+    return _variant_rows(
+        {
+            f"{x_name}|{norm}": partial(
+                _loss_accuracy_row, x, series, weights, norm == NORM_PERCENT, conn, log_x
+            )
+            for norm in (NORM_ABSOLUTE, NORM_PERCENT)
+            for x_name, log_x in ((X_AXIS_LINEAR, False), (X_AXIS_LOG, True))
+        }
+    )

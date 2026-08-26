@@ -14,13 +14,18 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from scribblez.spatial_trunk import PoolFcPenalty, apply_pool_penalty
+
 from .model import compute_loss
 
-# Per-head loss keys accumulated each epoch. compute_loss returns all of these;
-# "total" is the optimized objective.
+# Per-head loss keys accumulated each epoch ("total" is the optimized
+# objective). compute_loss returns all but "pool_act", which this loop adds
+# from the trunk's PoolFcPenalty recorder.
 LOSS_KEYS = (
     "total",
     "wld",
+    "wld_z",
+    "pool_act",
     "score_diff",
     "score_diff_mean",
     "score_diff_std",
@@ -42,6 +47,10 @@ class LossConfig:
     huber_delta_mean: float
     huber_delta_std: float
     placement_pos_weight: float
+    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md);
+    # defaults mirror PositionEvalParams.
+    lambda_wld_z: float = 1e-4
+    lambda_pool_act: float = 1e-6
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -53,6 +62,8 @@ class LossConfig:
             args.huber_delta_mean,
             args.huber_delta_std,
             args.placement_pos_weight,
+            args.lambda_wld_z,
+            args.lambda_pool_act,
         )
 
 
@@ -116,40 +127,48 @@ def run_epoch(
     t0 = time.time()
     last_progress = 0.0
 
-    for batch in batches:
-        (input_spatial, input_scalar), targets = _to_device(batch, device)
-        if lr_fn is not None:
-            lr = lr_fn(rows_trained)
-            for group in optimizer.param_groups:
-                group["lr"] = lr
+    # The pooled-FC magnitude penalty's recorder lives exactly as long as this
+    # epoch, so its hooks never see an eval or export forward.
+    recorder = PoolFcPenalty(model)
+    try:
+        for batch in batches:
+            (input_spatial, input_scalar), targets = _to_device(batch, device)
+            if lr_fn is not None:
+                lr = lr_fn(rows_trained)
+                for group in optimizer.param_groups:
+                    group["lr"] = lr
 
-        outputs = model(input_spatial, input_scalar)
-        losses = compute_loss(
-            outputs,
-            targets,
-            lambda_wld=loss_cfg.lambda_wld,
-            lambda_sd=loss_cfg.lambda_sd,
-            lambda_next_placement=loss_cfg.lambda_next_placement,
-            lambda_win_placement=loss_cfg.lambda_win_placement,
-            huber_delta_mean=loss_cfg.huber_delta_mean,
-            huber_delta_std=loss_cfg.huber_delta_std,
-            placement_pos_weight=loss_cfg.placement_pos_weight,
-        )
-        optimizer.zero_grad()
-        losses["total"].backward()
-        optimizer.step()
+            outputs = model(input_spatial, input_scalar)
+            losses = compute_loss(
+                outputs,
+                targets,
+                lambda_wld=loss_cfg.lambda_wld,
+                lambda_sd=loss_cfg.lambda_sd,
+                lambda_next_placement=loss_cfg.lambda_next_placement,
+                lambda_win_placement=loss_cfg.lambda_win_placement,
+                huber_delta_mean=loss_cfg.huber_delta_mean,
+                huber_delta_std=loss_cfg.huber_delta_std,
+                placement_pos_weight=loss_cfg.placement_pos_weight,
+                lambda_wld_z=loss_cfg.lambda_wld_z,
+            )
+            apply_pool_penalty(losses, recorder, loss_cfg.lambda_pool_act)
+            optimizer.zero_grad()
+            losses["total"].backward()
+            optimizer.step()
 
-        bs = input_spatial.shape[0]
-        n_batches += 1
-        samples += bs
-        rows_trained += bs
-        for k in sums:
-            sums[k] += losses[k].item()
-        correct += (outputs["wld"].argmax(1) == targets["wld"].argmax(1)).sum().item()
+            bs = input_spatial.shape[0]
+            n_batches += 1
+            samples += bs
+            rows_trained += bs
+            for k in sums:
+                sums[k] += losses[k].item()
+            correct += (outputs["wld"].argmax(1) == targets["wld"].argmax(1)).sum().item()
 
-        if on_batch is not None and time.time() - last_progress > 1.0:
-            on_batch(n_batches, samples, time.time() - t0, rows_trained)
-            last_progress = time.time()
+            if on_batch is not None and time.time() - last_progress > 1.0:
+                on_batch(n_batches, samples, time.time() - t0, rows_trained)
+                last_progress = time.time()
+    finally:
+        recorder.close()
 
     return EpochResult(
         losses={k: v / max(n_batches, 1) for k, v in sums.items()},

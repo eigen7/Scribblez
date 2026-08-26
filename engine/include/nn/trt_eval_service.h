@@ -33,7 +33,6 @@ class TrtEvalService : public EvalService<Spec> {
   void load() { net_.load(); }
 
   // Valid after load().
-  bool contingent_features() const override { return net_.contingent_features(); }
   bool opp_leave_input() const override { return net_.opp_leave_input(); }
   int spatial_planes() const override { return net_.spatial_planes(); }
   int scalar_floats() const override { return net_.scalar_floats(); }

@@ -24,7 +24,7 @@ resources (threads/vcpus) live on the worker slots.
 
 from dataclasses import dataclass
 
-from scribblez.generational.optimizer_arms import OPTIMIZER_WSD, OPTIMIZERS
+from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
@@ -80,7 +80,7 @@ class PositionEvalParams:
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     optimizer: str = param(
-        OPTIMIZER_WSD,
+        OPTIMIZER_SCHEDULE_FREE,
         "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
         "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
         "no horizon to pick, every generation's export deployable",
@@ -111,11 +111,6 @@ class PositionEvalParams:
         "injection sites (scalars emit a per-channel gain alongside the additive bias); "
         "off is the additive-injection baseline",
     )
-    contingent_features: bool = param(
-        False,
-        "encode the full input layout including the contingent-draw potential features; "
-        "off trains the smaller ablation baseline",
-    )
     # Loss.
     lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")
@@ -128,6 +123,11 @@ class PositionEvalParams:
     )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
+    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md).
+    lambda_wld_z: float = param(1e-4, "z-loss weight on the WLD logits (squared logsumexp)")
+    lambda_pool_act: float = param(
+        1e-6, "mean-square penalty weight on the trunk's pooled-FC pre-activations"
+    )
 
 
 SPEC = WorkloadSpec(
@@ -168,4 +168,11 @@ SPEC = WorkloadSpec(
     progress="scribblez.generational.scheduler:progress",
     sync_data_dirs=(STAGING_DIR,),
     local_data_dirs=(MATCH_RESULTS_DIR,),
+    primary_params=(
+        "face_up_leaves",
+        "games_per_generation",
+        "random_opening_mean",
+        "match_every_generations",
+        "optimizer",
+    ),
 )

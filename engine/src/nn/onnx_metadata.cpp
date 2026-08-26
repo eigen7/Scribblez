@@ -21,9 +21,7 @@ OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   OnnxMetadata meta;
   for (int i = 0; i < model.metadata_props_size(); ++i) {
     const auto& kv = model.metadata_props(i);
-    if (kv.key() == "contingent_features") {
-      meta.contingent_features = kv.value() == "true";
-    } else if (kv.key() == "opp_leave_input") {
+    if (kv.key() == "opp_leave_input") {
       meta.opp_leave_input = kv.value() == "true";
     } else if (kv.key() == "model-architecture-signature") {
       meta.architecture_signature = kv.value();

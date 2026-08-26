@@ -57,8 +57,8 @@ using scribblez::testing::StubMoveSetEvalService;
 
 namespace {
 
-// The full contingent-features input layout the stub declares.
-const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
+// The base input layout the stub declares.
+const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
 
 class MsetSimAgentTest : public ::testing::Test {
  protected:
@@ -418,7 +418,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   // Training path: decode the PRE-move sampled row (no symmetry flip). The same
   // dictionary drives both paths' cross-check planes.
   Dictionary dict = opening_dict();
-  binlog::BlockDecoder dec(InputEncodingSpec{&dict, true});
+  binlog::BlockDecoder dec(InputEncodingSpec{&dict});
   const uint8_t flips[1] = {0};
   std::vector<float> dec_row(size_t(kInputFloats + kLabelFloats), 0.0f);
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/false,

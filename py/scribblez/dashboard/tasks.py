@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from scribblez import params as params_mod
+from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.workloads import WorkloadSpec, resolve
 
 
@@ -123,9 +124,14 @@ def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
 
 
 def delete_tag(spec: WorkloadSpec, tag: str):
-    """Delete a tag's local dir (task record, data, stats, logs). Only
-    workerless tags may be deleted. Any cloud archive of the tag in the results
-    bucket is deliberately untouched -- purge it manually if truly done with it.
+    """Delete a tag's local dir (task record, data, stats, logs). Any cloud
+    archive of the tag in the results bucket is deliberately untouched --
+    purge it manually if truly done with it.
+
+    The tag must have no worker slots left: this deletes the task record that
+    tracks their pods and containers, so deleting past one would orphan the
+    thing it was renting. Callers go through WorkerManager.delete_task, which
+    tears the slots down first.
     """
     task = load_task(spec, tag)
     assert task is None or not task.workers, "remove the tag's workers first"
@@ -142,17 +148,33 @@ def progress(spec: WorkloadSpec, tag: str) -> list:
 
 
 def _last_active(tag_dir: Path) -> float:
-    """The tag's most recent activity: worker stats records update every cycle,
-    and the data subdir mtimes bump whenever files land."""
-    stamps = [tag_dir.stat().st_mtime]
-    stats = tag_dir / "stats"
-    if stats.is_dir():
-        stamps += [p.stat().st_mtime for p in stats.iterdir()]
+    """The tag's most recent real activity: the latest cycle any worker has
+    published, plus the data subdirs' mtimes.
+
+    Stats are read for their own `updated_at`, not the stats file's mtime: an
+    ssh slot's records are re-copied from its container on every 5s reconcile
+    pass regardless of whether the worker actually completed a cycle since
+    the last one, so the file's mtime tracks the poll, not the work -- a
+    stalled worker's container that is still reachable would otherwise read
+    as active forever.
+
+    The data scan goes two levels under `data/`, not one: a flat workload's
+    files land directly in a `data/` subdir (e.g. `data/slogs/`), whose own
+    mtime already bumps on arrival, but a generational workload nests one
+    deeper (`data/generations/gen_NNNNNN/`), and a new file landing inside an
+    existing generation dir only bumps *that* dir's mtime, not its parent's.
+
+    Returns 0 for a tag nothing has happened in yet, rather than the tag
+    dir's own creation time.
+    """
+    stamps = [r["updated_at"] for r in read_stats(tag_dir / "stats")]
     data = tag_dir / "data"
     if data.is_dir():
-        stamps.append(data.stat().st_mtime)
-        stamps += [p.stat().st_mtime for p in data.iterdir()]
-    return max(stamps)
+        for p in data.iterdir():
+            stamps.append(p.stat().st_mtime)
+            if p.is_dir():
+                stamps += [c.stat().st_mtime for c in p.iterdir()]
+    return max(stamps, default=0)
 
 
 def list_tags(spec: WorkloadSpec) -> list[dict]:
@@ -165,12 +187,18 @@ def list_tags(spec: WorkloadSpec) -> list[dict]:
         if not tag_dir.is_dir():
             continue
         task = load_task(spec, tag_dir.name)
+        workers = task.workers if task else []
         out.append(
             {
                 "tag": tag_dir.name,
                 "has_task": task is not None,
                 "created_at": task.created_at if task else None,
-                "workers": len(task.workers) if task else 0,
+                "workers": len(workers),
+                # Slots the operator has running, a gated one included: the
+                # scheduler resumes that one on its own. Read off desired
+                # state rather than observed, so listing every tag stays free
+                # of ssh and cloud round trips.
+                "active_workers": sum(w.desired_state == "running" for w in workers),
                 "progress": progress(spec, tag_dir.name),
                 "last_active": _last_active(tag_dir),
             }

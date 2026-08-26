@@ -95,15 +95,13 @@ class SimAgentTest : public ::testing::Test {
 // distinct values and an identically-configured replay reproduces them.
 class LeafStub : public nn::PositionEvalService {
  public:
-  bool contingent_features() const override { return true; }
   bool opp_leave_input() const override { return false; }
-  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
   void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
-    const InputEncodingSpec spec{nullptr, true};
+    const InputEncodingSpec spec{nullptr};
     const size_t row_floats = input_floats(spec);
-    const size_t sd_off =
-      spatial_floats(spec) + scalar_block_offset(spec, ScalarBlockId::kScoreDiff);
+    const size_t sd_off = spatial_floats() + scalar_block_offset(spec, ScalarBlockId::kScoreDiff);
     for (int i = 0; i < batch.count; ++i) {
       const float sd = batch.rows[size_t(i) * row_floats + sd_off];
       const float w = 0.5f + 0.4f * std::tanh(sd);

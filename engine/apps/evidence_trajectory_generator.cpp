@@ -451,7 +451,7 @@ int main(int argc, char** argv) {
         "proposer would score moves under an information condition the sims do not share",
         service.opp_leave_input(), opt.open_leaves);
     }
-    const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
+    const InputEncodingSpec spec{&dict, service.opp_leave_input()};
     const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
     // The truncation leaf service, shared by every position worker (the

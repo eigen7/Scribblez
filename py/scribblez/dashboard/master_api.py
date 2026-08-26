@@ -123,6 +123,7 @@ class WorkloadsHandler(_MasterBase):
                         "name": spec.name,
                         "title": spec.title,
                         "params": params_mod.public_schema(spec.params_cls),
+                        "primary_params": list(spec.primary_params),
                         "roles": [_role_payload(r) for r in spec.roles],
                     }
                     for spec in workloads.WORKLOADS.values()
@@ -175,14 +176,18 @@ class TaskHandler(_MasterBase):
 
 
 class TaskDeleteHandler(_MasterBase):
-    def post(self):
+    """Delete a tag and its local data. The tag's idle worker slots go with
+    it -- tearing their containers and pods down is seconds of ssh and cloud
+    work, hence the offload."""
+
+    async def post(self):
         body = self.body()
 
         def delete():
-            tasks.delete_tag(self.spec(body), body["tag"])
+            self.manager.delete_task(self.spec(body), body["tag"])
             return {"ok": True}
 
-        self.guarded(delete)
+        await self.guarded_offload(delete)
 
 
 class TaskDeployHandler(_MasterBase):

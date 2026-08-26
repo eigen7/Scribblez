@@ -174,7 +174,6 @@ def corpus_dir(tmp_path_factory) -> Path:
         onnx_path,
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
-        contingent_features=True,
         opp_leave_input=False,
     )
     result = subprocess.run(

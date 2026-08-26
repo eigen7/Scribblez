@@ -197,9 +197,9 @@ def test_match_arm_db_roundtrip(tmp_path):
 
 def test_match_arms_figure_is_serializable(tmp_path):
     conn = db.connect(tmp_path / "dashboard.db")
-    assert api.build_figure_item(conn, "match_arms", {}, str(tmp_path)) is None
+    assert api.build_figure_item(conn, "match_arms", {}, str(tmp_path)) == (None, None)
     db.write_match_arm(conn, "k5", _arm_record())
     db.write_match_arm(conn, "k10", _arm_record(score=0.61))
-    item = api.build_figure_item(conn, "match_arms", {}, str(tmp_path))
+    item, _structure = api.build_figure_item(conn, "match_arms", {}, str(tmp_path))
     assert item is not None
     assert {"doc", "root_id", "target_id"} <= set(item)

@@ -1,5 +1,13 @@
 # Lexical foresight via engineered features (for the value models)
 
+> **Status.** The contingent-draw potential map described here was built as an
+> optional input-encoding arm and has since been removed: no run adopted it,
+> and carrying an unused arm through the encoder, the FFI, the ONNX metadata,
+> and every model config cost more than it bought. The row layout is now the
+> single base layout. The design rationale below stands, and the cross-check
+> delta is unbuilt either way; anyone reviving the map starts from this doc and
+> the deleted `engine/{include,src}/encoding/contingent_map.*`.
+
 ## Purpose
 
 The value models need **board-conditional leave evaluation with lexical
@@ -109,14 +117,15 @@ the shared board encoding, the delta to the per-move half.
 
 ## Pointers
 
-- [contingent_map.h](../engine/include/encoding/contingent_map.h) — the
-  implemented potential map on the position evaluation model, where the
-  ladder collapses: the input state is already post-move (rack = leave, board
-  includes the move), so one generation per position yields the
+- `engine/include/encoding/contingent_map.h` (deleted; see the status note) —
+  the potential map as it was implemented on the position evaluation model,
+  where the ladder collapses: the input state is already post-move (rack =
+  leave, board includes the move), so one generation per position yields the
   tier-3-correct feature, and the 27 per-tile passes collapse into a single
   generation over `rack ∪ {blank}` (a play consuming the extra blank
   designated `L`, rescored at `L`'s face value, is the "drew `L`" play).
-  Encoding in [input_encoder.h](../engine/include/encoding/input_encoder.h).
+  [input_encoder.h](../engine/include/encoding/input_encoder.h) owns the row
+  layout it was encoded into.
 - [roadmap.md](roadmap.md) — the value models and the candidate-selection
   pipeline; [architecture.md](architecture.md) — the data pipeline where
   precomputed features are stored.

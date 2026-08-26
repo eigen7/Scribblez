@@ -34,8 +34,8 @@ from scribblez import ffi
 from scribblez.paths import REPO_ROOT
 from scribblez.position_eval import analysis as A
 
-# Base face-up-leaves arm (contingent_features off, opp_leave_input on): 85 planes,
-# 163 scalars. Cross-check blocks and the opp-leave scalar block within that layout.
+# The face-up-leaves arm (opp_leave_input on): 85 planes, 163 scalars.
+# Cross-check blocks and the opp-leave scalar block within that layout.
 N_PLANES = 85
 HCC0, VCC0, CC_END = 33, 59, 85  # horizontal / vertical cross-check plane ranges
 OPP_LEAVE0 = 136  # opp-leave scalar block: OPP_LEAVE0 + (letter index 0..25)
@@ -107,10 +107,11 @@ def probe_letter_selectivity(model: Model, arm, square: str, focus: str):
     print("    ranking: " + "  ".join(f"{ltr}{p:.3f}" for ltr, p in scores))
     rank = [ltr for ltr, _ in scores].index(focus) + 1
     hi, lo = scores[0][1], scores[-1][1]
-    print(f"    focus letter {focus!r} (opponent holds it): "
-          f"rank {rank}/26, Pr={dict(scores)[focus]:.4f}")
-    print(f"    max/min selectivity = {hi / max(lo, 1e-9):.1f} "
-          f"({scores[0][0]} vs {scores[-1][0]})")
+    print(
+        f"    focus letter {focus!r} (opponent holds it): "
+        f"rank {rank}/26, Pr={dict(scores)[focus]:.4f}"
+    )
+    print(f"    max/min selectivity = {hi / max(lo, 1e-9):.1f} ({scores[0][0]} vs {scores[-1][0]})")
     print("    READ: a frequency prior ranks E/A/S high and the held letter low;")
     print("          binding ranks the held letter near the top.")
 
@@ -151,7 +152,7 @@ def probe_tail_percentiles(model: Model, arm, limit: int):
         if truth.std() == 0 or pred.std() == 0:
             continue
         cors.append(np.corrcoef(pred.ravel(), truth.ravel())[0, 1])
-        bits = (sp[HCC0:CC_END].sum(axis=0) > 0)  # cells carrying any cross-check bit
+        bits = sp[HCC0:CC_END].sum(axis=0) > 0  # cells carrying any cross-check bit
         err = np.abs(pred - truth)
         has_bits.append(err[bits].mean() if bits.any() else np.nan)
         no_bits.append(err[~bits].mean() if (~bits).any() else np.nan)
@@ -159,8 +160,10 @@ def probe_tail_percentiles(model: Model, arm, limit: int):
     for q in (1, 5, 10, 25, 50):
         print(f"    p{q:<3d} corr = {np.percentile(cors, q):.3f}")
     print(f"    mean corr = {cors.mean():.3f}")
-    print(f"    mean |pred-truth|  cross-check cells = {np.nanmean(has_bits):.4f}"
-          f"   other cells = {np.nanmean(no_bits):.4f}")
+    print(
+        f"    mean |pred-truth|  cross-check cells = {np.nanmean(has_bits):.4f}"
+        f"   other cells = {np.nanmean(no_bits):.4f}"
+    )
     print("    READ: the failure is in the low percentiles and the cross-check-cell error;")
     print("          the mean is dominated by the easy majority and stays blind to it.")
 
@@ -176,7 +179,6 @@ def main():
     ap.add_argument("--skip-tail", action="store_true", help="skip probe 3 (the slow one)")
     args = ap.parse_args()
 
-    ffi.set_contingent_features(False)
     ffi.set_opp_leave_input(True)
     arm = ffi.session_input_arm()
     path = args.model or latest_checkpoint(args.tag)

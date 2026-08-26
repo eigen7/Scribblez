@@ -65,8 +65,7 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_session_new.argtypes = [
         ctypes.c_char_p,
         ctypes.c_int,
-        ctypes.c_int,
-    ]  # lexicon, contingent, opp-rack input
+    ]  # lexicon, opp-rack input
 
     lib.scribblez_session_delete.restype = None
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
@@ -106,7 +105,6 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_position_eval_analyze_gcg.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg_text
-        ctypes.c_int,  # contingent_features
         ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
         ctypes.c_int,  # input_cap
@@ -127,7 +125,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_char_p,  # gcg_text
         ctypes.c_char_p,  # leave_str
         ctypes.c_char_p,  # opp_leave_str (NULL keeps the recorded one)
-        ctypes.c_int,  # contingent_features
         ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
         ctypes.c_int,  # input_cap
@@ -285,7 +282,6 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_gcg_position_inputs.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # gcg text
-        ctypes.c_int,  # contingent_features
         ctypes.c_int,  # opp_leave_input
         ctypes.POINTER(ctypes.c_float),  # out_input
         ctypes.c_int,  # input_cap
@@ -366,23 +362,7 @@ def struct_dtype(name: str) -> np.dtype:
 DEFAULT_LEXICON = "NWL23"
 
 _SESSION_HANDLE = None
-_CONTINGENT_FEATURES = True
 _OPP_LEAVE_INPUT = False
-
-
-def set_contingent_features(enabled: bool):
-    """Choose the process's experiment arm before any dictionary-dependent FFI
-    call: whether the engine encodes the full input layout including the
-    contingent-draw potential features (True), or skips their move generation
-    and encodes the smaller base layout (False). The session's shape/size
-    queries report whichever layout it encodes, so no downstream code branches
-    on this. The flag is baked into the process-wide session at creation, so
-    flipping it afterwards is an error.
-    """
-    global _CONTINGENT_FEATURES
-    if _SESSION_HANDLE is not None and _CONTINGENT_FEATURES != enabled:
-        raise RuntimeError("set_contingent_features called after the FFI session was created")
-    _CONTINGENT_FEATURES = enabled
 
 
 def set_opp_leave_input(enabled: bool):
@@ -390,8 +370,9 @@ def set_opp_leave_input(enabled: bool):
     FFI call: whether the input layout includes the opponent-leave counts
     block (the open-leaves information condition of
     docs/sim_residual_feedback.md -- the opponent's retained leave is public,
-    their replenishment draws stay hidden). Like set_contingent_features, the
-    flag is baked into the process-wide session at creation, so flipping it
+    their replenishment draws stay hidden). The session's shape/size queries
+    report whichever layout it encodes, so no downstream code branches on this.
+    The flag is baked into the process-wide session at creation, so flipping it
     afterwards is an error.
     """
     global _OPP_LEAVE_INPUT
@@ -410,7 +391,7 @@ def _session() -> int:
     global _SESSION_HANDLE
     if _SESSION_HANDLE is None:
         _SESSION_HANDLE = _lib().scribblez_session_new(
-            DEFAULT_LEXICON.encode("utf-8"), int(_CONTINGENT_FEATURES), int(_OPP_LEAVE_INPUT)
+            DEFAULT_LEXICON.encode("utf-8"), int(_OPP_LEAVE_INPUT)
         )
     return _SESSION_HANDLE
 
@@ -711,7 +692,6 @@ class InputArm:
     process-wide session's own; a served ONNX model's comes from its metadata
     and declared input shapes."""
 
-    contingent_features: bool
     opp_leave_input: bool
     spatial_planes: int
     scalar_size: int
@@ -730,7 +710,6 @@ def session_input_arm() -> InputArm:
     """The arm the process-wide session encodes under, with its widths."""
     shapes = {s.name: s.dims for s in get_input_shapes()}
     return InputArm(
-        _CONTINGENT_FEATURES,
         _OPP_LEAVE_INPUT,
         shapes["input_spatial"][0],
         shapes["input_scalar"][0],
@@ -756,7 +735,6 @@ def analyze_position_eval_gcg(gcg_text: str, arm: InputArm) -> np.ndarray:
     n = lib.scribblez_position_eval_analyze_gcg(
         _session(),
         gcg_text.encode("utf-8"),
-        int(arm.contingent_features),
         int(arm.opp_leave_input),
         inp_ptr,
         len(inp),
@@ -799,7 +777,6 @@ def analyze_position_eval_gcg_leaves(
         gcg_text.encode("utf-8"),
         leave.encode("utf-8"),
         None if opp_leave is None else opp_leave.encode("utf-8"),
-        int(arm.contingent_features),
         int(arm.opp_leave_input),
         inp_ptr,
         len(inp),
@@ -855,7 +832,6 @@ _GCG_MOVES_FIRST_CAP = 4096
 def gcg_position_inputs(
     gcg_text: str,
     *,
-    contingent_features: bool,
     opp_leave_input: bool,
     spatial_planes: int,
     scalar_size: int,
@@ -882,7 +858,6 @@ def gcg_position_inputs(
         n = lib.scribblez_gcg_position_inputs(
             _session(),
             gcg_text.encode("utf-8"),
-            int(contingent_features),
             int(opp_leave_input),
             inp_ptr,
             len(inp),

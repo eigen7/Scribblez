@@ -1,8 +1,8 @@
 #pragma once
 
 // Scripted nn::EvalService stubs for agent unit tests -- no ONNX, no TensorRT,
-// no GPU. Both declare the full contingent-features input layout (no
-// opponent-leave block) and ignore the input rows entirely.
+// no GPU. Both declare the base input layout (no opponent-leave block) and
+// ignore the input rows entirely.
 
 #include "encoding/input_encoder.h"
 #include "nn/eval_service.h"
@@ -37,10 +37,9 @@ inline void write_scripted(const ScriptedEval& e, int row, std::span<float* cons
 class StubEvalService : public nn::PositionEvalService {
  public:
   std::vector<ScriptedEval> scripted;
-  bool contingent_features() const override { return true; }
   bool opp_leave_input() const override { return false; }
-  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
   void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
       write_scripted((i < int(scripted.size())) ? scripted[i] : ScriptedEval{}, i, head_out);
@@ -55,10 +54,9 @@ class StubEvalService : public nn::PositionEvalService {
 class CountingStubEvalService : public nn::PositionEvalService {
  public:
   std::vector<ScriptedEval> scripted;
-  bool contingent_features() const override { return true; }
   bool opp_leave_input() const override { return false; }
-  int spatial_planes() const override { return scribblez::spatial_planes({nullptr, true}); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, true}); }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
   int total_rows = 0;
   int max_chunk = 0;
   int calls = 0;

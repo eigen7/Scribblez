@@ -17,7 +17,6 @@ class ServedModelInputs {
  public:
   virtual ~ServedModelInputs() = default;
 
-  virtual bool contingent_features() const = 0;
   virtual bool opp_leave_input() const = 0;
   virtual int spatial_planes() const = 0;
   virtual int scalar_floats() const = 0;

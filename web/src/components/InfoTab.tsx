@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useContext, useCallback, useEffect, useState } from 'react';
+import { TabActiveContext } from './TabActiveContext';
 import { getJSON } from '../lib/api';
 
 // The Info tab: a run's recorded configuration (the training args), model size,
@@ -39,6 +40,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 export default function InfoTab({ task, tag }: { task: string; tag: string | null }) {
   const [meta, setMeta] = useState<Meta | null>(null);
+  const tabActive = useContext(TabActiveContext);
   const [loaded, setLoaded] = useState(false);
 
   const refetch = useCallback(async () => {
@@ -62,9 +64,10 @@ export default function InfoTab({ task, tag }: { task: string; tag: string | nul
   }, [refetch]);
 
   useEffect(() => {
+    if (!tabActive) return;
     const id = setInterval(() => refetch().catch(() => {}), 5000);
     return () => clearInterval(id);
-  }, [refetch]);
+  }, [refetch, tabActive]);
 
   if (!tag) return <div className="card"><div style={EMPTY}>Select a run.</div></div>;
   if (!loaded) return <div className="card"><div style={EMPTY}>Loading…</div></div>;

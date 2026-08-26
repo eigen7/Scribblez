@@ -96,6 +96,66 @@ class GlobalPoolingResBlock(nn.Module):
         return out + residual
 
 
+class PoolFcPenalty:
+    """The trunk's activation-magnitude restoring force (docs/fp16_safe_serving.md).
+
+    The pooled-FC branch is the trunk's measured FP16-overflow site: its Gemm
+    output re-enters FP16 range only at the block's following BatchNorm, and
+    nothing in the task losses opposes its growth. This collects each
+    GlobalPoolingResBlock's pool_fc output via forward hooks so the training
+    loop can add a small mean-square penalty on it -- negligible at healthy
+    magnitudes, growing linearly with the activations it restrains.
+
+    Scoped to the training loop: create it around an epoch and close() it
+    before anything else (eval, ONNX export) runs forwards, or the hooks would
+    pin those forwards' activations in memory.
+    """
+
+    def __init__(self, model: nn.Module):
+        self._outputs: list[torch.Tensor] = []
+        self._handles = [
+            m.pool_fc.register_forward_hook(self._record)
+            for m in model.modules()
+            if isinstance(m, GlobalPoolingResBlock)
+        ]
+
+    def _record(self, module, args, output):
+        self._outputs.append(output)
+
+    def penalty(self) -> torch.Tensor | None:
+        """Mean square of the pool_fc outputs collected since the last call,
+        averaged over blocks -- or None if no pooled block ran."""
+        outputs, self._outputs = self._outputs, []
+        if not outputs:
+            return None
+        return torch.stack([out.square().mean() for out in outputs]).mean()
+
+    def close(self):
+        for handle in self._handles:
+            handle.remove()
+
+
+def wld_z_loss(logits: torch.Tensor) -> torch.Tensor:
+    """z-loss on a head's logits (mean squared logsumexp, the standard form):
+    the second restoring force of docs/fp16_safe_serving.md. Cross-entropy --
+    hard-target or distillation -- is invariant to a uniform logit shift, so
+    nothing else opposes unbounded logit growth; both families' WLD heads
+    weight this by their lambda_wld_z."""
+    return torch.logsumexp(logits, dim=1).square().mean()
+
+
+def apply_pool_penalty(losses: dict, recorder: PoolFcPenalty, lambda_pool_act: float):
+    """Fold the recorder's collected penalty into a training step's losses dict
+    (both family train loops share this): sets losses["pool_act"] and adds the
+    weighted term to losses["total"]. A model without pooled blocks contributes
+    a constant zero."""
+    pool_act = recorder.penalty()
+    if pool_act is None:
+        pool_act = losses["total"].new_zeros(())
+    losses["pool_act"] = pool_act
+    losses["total"] = losses["total"] + lambda_pool_act * pool_act
+
+
 def make_block(channels: int, index: int, use_film: bool = False) -> nn.Module:
     """Every third block is a global-pooling block; the rest are plain residual
     blocks. Interleaving keeps the cost modest while periodically re-broadcasting

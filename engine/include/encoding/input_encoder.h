@@ -21,9 +21,6 @@
 //     kCrossChecks    horizontal then vertical: plane L marks empty squares
 //                     where placing L satisfies the lexicon's cross-check mask
 //                     along that axis.
-//     kContingent     the contingent-draw potential maps -- best /
-//                     draw-weighted / rack-alone next-turn plays painted onto
-//                     their placed cells (see contingent_map.h).
 //
 //   Scalar blocks (POV-visible information only, normalized to [0, 1] but for
 //   the signed kScoreDiff)
@@ -34,18 +31,15 @@
 //                     and unclipped.
 //     kMoveMeta       per last move, self then opponent: a 3-way
 //                     PLAY/EXCHANGE/PASS one-hot plus num_glyphs.
-//     kContingent     per drawable tile kind the best contingent score over all
-//                     lanes, the same draw-weighted, then the expected best and
-//                     the rack-alone best.
 //     kOppLeaveCounts per-tile counts of the tiles the opponent kept from their
 //                     last move, their hidden replenishment draws excluded. The
 //                     one exception to POV visibility, and all zeros when the
 //                     opponent has not acted or bingoed.
 //
-// The conditional blocks sit at the TAILS of their sections, so a smaller arm's
-// row is a larger arm's row with the tails spliced out. Consumers serving
-// several arms (e.g. a dashboard running a base model on full-layout rows) rely
-// on that prefix property.
+// The conditional block sits at the TAIL of its section, so a smaller arm's row
+// is a larger arm's row with the tail spliced out. Consumers serving several
+// arms (e.g. a dashboard running a base model on open-leaves rows) rely on that
+// prefix property.
 //
 // The board is invariant under the diagonal flip (r,c) -> (c,r), so
 // `apply_flip` transposes every spatial plane and leaves the scalars alone.
@@ -57,8 +51,8 @@ namespace scribblez {
 class Dictionary;
 
 // Per-run input-encoding configuration, chosen once per process (baked into
-// the FFI session) and carried by every encoder. A model's contingent arm is
-// recorded in its ONNX metadata_props so serving consumers can recover it.
+// the FFI session) and carried by every encoder. A model's arm is recorded in
+// its ONNX metadata_props so serving consumers can recover it.
 //
 // "Open leaves" is an experiment-only information condition in which the tiles
 // a player KEPT from their last move are public while their replenishment draws
@@ -68,7 +62,6 @@ class Dictionary;
 // never exported for serving.
 struct InputEncodingSpec {
   const Dictionary* dict;
-  bool contingent_features;
   bool opp_leave_input = false;
 };
 
@@ -92,7 +85,6 @@ inline constexpr int kBoardBlockPlanes = 31;  // == BoardPlanes::kPlanes (assert
 inline constexpr int kHorizontalCrossCheckPlanes = 26;
 inline constexpr int kVerticalCrossCheckPlanes = 26;
 inline constexpr int kCrossCheckPlanes = kHorizontalCrossCheckPlanes + kVerticalCrossCheckPlanes;
-inline constexpr int kContingentPlanes = 3;  // max / draw-weighted / rack-alone potential
 inline constexpr int kRackCountFloats = 27;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
 // The move set evaluation model's resultant-diff move feature shares this
@@ -103,69 +95,63 @@ inline constexpr float kScoreDiffInputScale = 100.0f;
 inline constexpr int kMoveMetaTypeFloats = 3;  // PLAY / EXCHANGE / PASS one-hot
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;  // + num_glyphs
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;      // self + opp = 8
-// Per-kind best + per-kind draw-weighted best, then expected best + rack-alone best.
-inline constexpr int kContingentScalarFloats = 27 + 27 + 2;  // 56
-inline constexpr int kOppLeaveCountFloats = 27;              // open-leaves arm only
+inline constexpr int kOppLeaveCountFloats = 27;                         // open-leaves arm only
 
 // ---- Block registry ---------------------------------------------------------
 
-enum class SpatialBlockId { kBoard, kSelfPlacement, kOppPlacement, kCrossChecks, kContingent };
-enum class ScalarBlockId {
-  kRackCounts,
-  kUnseenPool,
-  kScoreDiff,
-  kMoveMeta,
-  kContingent,
-  kOppLeaveCounts
-};
+enum class SpatialBlockId { kBoard, kSelfPlacement, kOppPlacement, kCrossChecks };
+enum class ScalarBlockId { kRackCounts, kUnseenPool, kScoreDiff, kMoveMeta, kOppLeaveCounts };
 
 struct SpatialBlockDef {
   SpatialBlockId id;
   int planes;
-  bool contingent_only;  // included iff spec.contingent_features
 };
 struct ScalarBlockDef {
   ScalarBlockId id;
   int floats;
-  bool contingent_only;
   bool opp_leave_only = false;  // included iff spec.opp_leave_input
 };
 
 // The row's blocks in encode order. GameStateEncoder writes by walking these
 // tables, so a block's offset is definitionally where the walk puts it.
 inline constexpr SpatialBlockDef kSpatialBlocks[] = {
-  {SpatialBlockId::kBoard, kBoardBlockPlanes, false},
-  {SpatialBlockId::kSelfPlacement, 1, false},
-  {SpatialBlockId::kOppPlacement, 1, false},
-  {SpatialBlockId::kCrossChecks, kCrossCheckPlanes, false},
-  {SpatialBlockId::kContingent, kContingentPlanes, true},
+  {SpatialBlockId::kBoard, kBoardBlockPlanes},
+  {SpatialBlockId::kSelfPlacement, 1},
+  {SpatialBlockId::kOppPlacement, 1},
+  {SpatialBlockId::kCrossChecks, kCrossCheckPlanes},
 };
 inline constexpr ScalarBlockDef kScalarBlocks[] = {
-  {ScalarBlockId::kRackCounts, kRackCountFloats, false},
-  {ScalarBlockId::kUnseenPool, kUnseenPoolThermoFloats, false},
-  {ScalarBlockId::kScoreDiff, kScoreDiffInputFloats, false},
-  {ScalarBlockId::kMoveMeta, kMoveMetaFloats, false},
-  {ScalarBlockId::kContingent, kContingentScalarFloats, true},
-  {ScalarBlockId::kOppLeaveCounts, kOppLeaveCountFloats, false, true},
+  {ScalarBlockId::kRackCounts, kRackCountFloats},
+  {ScalarBlockId::kUnseenPool, kUnseenPoolThermoFloats},
+  {ScalarBlockId::kScoreDiff, kScoreDiffInputFloats},
+  {ScalarBlockId::kMoveMeta, kMoveMetaFloats},
+  {ScalarBlockId::kOppLeaveCounts, kOppLeaveCountFloats, true},
 };
 
 // The single predicate every walk over kScalarBlocks shares -- sizing, offsets,
 // and the encoder itself.
 inline bool scalar_block_included(const ScalarBlockDef& def, const InputEncodingSpec& spec) {
-  return (!def.contingent_only || spec.contingent_features) &&
-         (!def.opp_leave_only || spec.opp_leave_input);
+  return !def.opp_leave_only || spec.opp_leave_input;
 }
 
-// ---- Layout queries (walk the registry under `spec`) ------------------------
+// ---- Layout queries (walk the registry) -------------------------------------
+//
+// The spatial section has no conditional block, so its widths and offsets are
+// constants of the registry; only the scalar section reads the spec.
 
-int spatial_planes(const InputEncodingSpec& spec);  // 88 full / 85 base
-int scalar_floats(const InputEncodingSpec& spec);   // 992 full / 936 base; +27 open-leaves
-int spatial_floats(const InputEncodingSpec& spec);  // spatial_planes * kBoardCells
-int input_floats(const InputEncodingSpec& spec);    // spatial + scalar
+inline constexpr int spatial_planes() {  // 85
+  int planes = 0;
+  for (const SpatialBlockDef& def : kSpatialBlocks) planes += def.planes;
+  return planes;
+}
+inline constexpr int spatial_floats() { return spatial_planes() * kBoardCells; }
+int spatial_block_plane0(SpatialBlockId id);  // first plane of a block
 
-// First plane / first scalar offset of a block under `spec`. The block must be
-// included by the spec (asking for an excluded block aborts).
-int spatial_block_plane0(const InputEncodingSpec& spec, SpatialBlockId id);
+int scalar_floats(const InputEncodingSpec& spec);  // 936; +27 under open leaves
+int input_floats(const InputEncodingSpec& spec);   // spatial + scalar
+
+// First scalar offset of a block under `spec`. The block must be included by
+// the spec (asking for an excluded block aborts).
 int scalar_block_offset(const InputEncodingSpec& spec, ScalarBlockId id);
 
 }  // namespace scribblez

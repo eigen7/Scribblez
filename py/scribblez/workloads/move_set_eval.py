@@ -164,15 +164,15 @@ class MoveSetEvalParams:
     num_blocks: int = param(10, "board-trunk residual blocks")
     trunk_channels: int = param(192, "board-trunk width")
     num_heads: int = param(4, "cross-attention heads")
-    contingent_features: bool = param(
-        False,
-        "encode the student's board input with the contingent-draw potential features; "
-        "independent of the teacher's input arm",
-    )
     lambda_sd: float = param(0.004, "score-diff loss weight")
     lambda_planes: float = param(1.0, "placement-plane BCE weight (roadmap item 1 readouts)")
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
+    # Activation-magnitude restoring forces (docs/fp16_safe_serving.md).
+    lambda_wld_z: float = param(1e-4, "z-loss weight on the WLD logits (squared logsumexp)")
+    lambda_pool_act: float = param(
+        1e-6, "mean-square penalty weight on the trunk's pooled-FC pre-activations"
+    )
 
 
 @dataclass(frozen=True)

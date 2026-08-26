@@ -75,13 +75,12 @@ def write_metadata(path: Path, entries: dict[str, str]):
     onnx.save(m, str(path))
 
 
-def common_metadata(contingent_features: bool, opp_leave_input: bool) -> dict[str, str]:
+def common_metadata(opp_leave_input: bool) -> dict[str, str]:
     """The metadata entries every exporter stamps -- the input-encoding arm,
     the board-row encoding version (the engine's loader rejects a checkpoint
     trained under a different one), and the lexicon -- for the exporter to
     extend with its graph-specific keys."""
     return {
-        "contingent_features": "true" if contingent_features else "false",
         "opp_leave_input": "true" if opp_leave_input else "false",
         "input_encoding_version": str(format_layout()["constants"]["input_encoding_version"]),
         "lexicon": DEFAULT_LEXICON,
@@ -93,9 +92,15 @@ def atomic_output(path: Path):
     """Yield the temp path an export (and its in-place transforms) should land
     on, renaming it onto `path` with a single os.replace on success. A reader
     that sees `path` exist therefore always sees a complete file -- never a
-    partially written or partially transformed one."""
+    partially written or partially transformed one. On failure the temp file
+    is removed too: a rejected export (the FP16 gate's designed outcome)
+    leaves nothing beside the served models."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
-    yield tmp_path
+    try:
+        yield tmp_path
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     os.replace(tmp_path, path)

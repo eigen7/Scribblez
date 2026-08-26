@@ -21,11 +21,11 @@ moves are concatenated, and a `move_pos_id` array maps each move back to its
 position row (0..P-1) so the model can attend each move to its own board and the
 loss can be taken per move.
 
-The board-input encoding arm (contingent features, opponent-leave block) is a
-property of the process-wide FFI session; the caller must configure it (via
-scribblez.ffi.set_contingent_features / set_opp_leave_input) to match the model
-being trained before iterating. The .mset open-leaves flag is surfaced as
-`open_leaves` so the caller can honor it.
+The board-input encoding arm (the opponent-leave block) is a property of the
+process-wide FFI session; the caller must configure it (via
+scribblez.ffi.set_opp_leave_input) to match the model being trained before
+iterating. The .mset open-leaves flag is surfaced as `open_leaves` so the
+caller can honor it.
 
 A dataset is stratified or full-sweep throughout, after the .mset header flag
 (`full_sweep`); mixing the two is refused. Swept positions are the held-out

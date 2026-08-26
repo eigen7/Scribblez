@@ -218,7 +218,6 @@ struct NeuralNetBase::Impl {
   // model's own ONNX metadata_props.
   int spatial_planes = 0;
   int scalar_floats = 0;
-  bool contingent_features = false;
   bool opp_leave_input = false;
 
   int last_rows = -1;
@@ -501,7 +500,6 @@ void NeuralNetBase::load() {
   OnnxMetadata meta = parse_onnx_metadata(onnx_bytes);
   check_graph(m.spec, meta, m.params.onnx_path);
   check_versions(m.spec, meta, m.params.onnx_path);
-  m.contingent_features = meta.contingent_features;
   m.opp_leave_input = meta.opp_leave_input;
 
   std::string cache_path = engine_plan_cache_path(
@@ -534,7 +532,6 @@ void NeuralNetBase::load() {
 int NeuralNetBase::max_rows() const { return impl_->params.max_rows; }
 int NeuralNetBase::spatial_planes() const { return impl_->spatial_planes; }
 int NeuralNetBase::scalar_floats() const { return impl_->scalar_floats; }
-bool NeuralNetBase::contingent_features() const { return impl_->contingent_features; }
 bool NeuralNetBase::opp_leave_input() const { return impl_->opp_leave_input; }
 
 void* NeuralNetBase::host_ptr(const char* name) const { return impl_->binding(name).host; }

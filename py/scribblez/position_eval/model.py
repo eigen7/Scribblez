@@ -23,10 +23,9 @@ Architecture:
       there".
 
 The two model input widths come from the engine session's input-encoding spec
-(full layout 88 planes / 992 scalars with contingent features, base layout
-85 / 936 without) and, with the six head output shapes, are fixed by the
-training pipeline and the C++ inference contract; the trunk between them is
-free to change.
+(85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
+the six head output shapes, are fixed by the training pipeline and the C++
+inference contract; the trunk between them is free to change.
 
 docs/model_architectures.md diagrams this network; any change to the
 architecture belongs in the same commit as the corresponding change there.
@@ -39,7 +38,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
-from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool, wld_z_loss
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
 # absolute residual would otherwise converge to ~0.8*sigma; this rescales the
@@ -179,6 +178,7 @@ def compute_loss(
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
     placement_pos_weight: float = 1.0,
+    lambda_wld_z: float = 1e-4,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
@@ -203,13 +203,16 @@ def compute_loss(
                  target-1 cells so a rare high-value square is not drowned by the
                  ~98% empty cells -- at the cost of calibration, so it is a
                  diagnostic knob, not a deployable default.
+        lambda_wld_z: weight of the z-loss on the WLD logits (see
+                 spatial_trunk.wld_z_loss for the rationale).
 
     Returns:
         Dict with "total" plus one entry per head loss.
     """
-    # WLD: cross-entropy against one-hot target.
+    # WLD: cross-entropy against one-hot target, plus the z-loss.
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
+    loss_wld_z = wld_z_loss(outputs["wld"])
 
     # Score-diff: two Huber regressions in score points. The mean regresses the
     # observed differential. The std regresses the absolute residual of the mean
@@ -243,6 +246,7 @@ def compute_loss(
 
     total = (
         lambda_wld * loss_wld
+        + lambda_wld_z * loss_wld_z
         + lambda_sd * loss_sd
         + lambda_next_placement
         * (mask_losses["opp_next_placement"] + mask_losses["self_next_placement"])
@@ -253,6 +257,7 @@ def compute_loss(
     return {
         "total": total,
         "wld": loss_wld,
+        "wld_z": loss_wld_z,
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,
