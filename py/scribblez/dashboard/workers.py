@@ -715,6 +715,29 @@ class WorkerManager:
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
 
+    def delete_task(self, spec, tag: str):
+        """Delete a tag: tear its worker slots down, then delete its local dir.
+
+        Idle slots are removed on the operator's behalf rather than refused --
+        they are how a pod or container gets released, and the task record
+        about to be deleted is the only thing tracking it. A slot that is
+        still running refuses, so a fleet at work is never deleted out from
+        under itself.
+
+        Slots go one at a time, so a refusal partway through leaves the
+        earlier ones removed. Hence the intent check up front: the ordinary
+        refusal -- an operator who has not paused the fleet -- costs nothing,
+        and what is left to discover slot by slot is the paused one whose
+        backing process turns out to be alive after all.
+        """
+        task = tasks.load_task(spec, tag)
+        if task is not None:
+            running = [w.worker_id for w in task.workers if w.desired_state == "running"]
+            assert not running, f"pause {', '.join(running)} first"
+            for w in list(task.workers):
+                self.remove_worker(spec, task, w.worker_id)
+        tasks.delete_tag(spec, tag)
+
     # ---- observation -----------------------------------------------------
 
     def _pod_index(self, observe: bool) -> dict:

@@ -124,9 +124,14 @@ def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
 
 
 def delete_tag(spec: WorkloadSpec, tag: str):
-    """Delete a tag's local dir (task record, data, stats, logs). Only
-    workerless tags may be deleted. Any cloud archive of the tag in the results
-    bucket is deliberately untouched -- purge it manually if truly done with it.
+    """Delete a tag's local dir (task record, data, stats, logs). Any cloud
+    archive of the tag in the results bucket is deliberately untouched --
+    purge it manually if truly done with it.
+
+    The tag must have no worker slots left: this deletes the task record that
+    tracks their pods and containers, so deleting past one would orphan the
+    thing it was renting. Callers go through WorkerManager.delete_task, which
+    tears the slots down first.
     """
     task = load_task(spec, tag)
     assert task is None or not task.workers, "remove the tag's workers first"
@@ -182,12 +187,18 @@ def list_tags(spec: WorkloadSpec) -> list[dict]:
         if not tag_dir.is_dir():
             continue
         task = load_task(spec, tag_dir.name)
+        workers = task.workers if task else []
         out.append(
             {
                 "tag": tag_dir.name,
                 "has_task": task is not None,
                 "created_at": task.created_at if task else None,
-                "workers": len(task.workers) if task else 0,
+                "workers": len(workers),
+                # Slots the operator has running, a gated one included: the
+                # scheduler resumes that one on its own. Read off desired
+                # state rather than observed, so listing every tag stays free
+                # of ssh and cloud round trips.
+                "active_workers": sum(w.desired_state == "running" for w in workers),
                 "progress": progress(spec, tag_dir.name),
                 "last_active": _last_active(tag_dir),
             }

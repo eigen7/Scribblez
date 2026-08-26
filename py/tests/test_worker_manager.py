@@ -8,6 +8,7 @@ fail, so a regression back toward launch-on-add breaks loudly.
 
 import asyncio
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +31,9 @@ from scripts.cloud_fleet import CpuResources, GpuResources
 # The fixture below replaces the launch paths with _fail; a test that wants to
 # exercise one for real puts this back.
 _REAL_RUN_SSH_CONTAINER = WorkerManager._run_ssh_container
+# ... and redirects task.json out of the tag dir; the deletion tests, which
+# care where the record lives, put this back too.
+_REAL_TASK_PATH = tasks.task_path
 
 
 def _fail(*args, **kwargs):
@@ -53,6 +57,16 @@ def manager(tmp_path, monkeypatch) -> WorkerManager:
     for name in ("_spawn_local", "_run_ssh_container", "_create_pod", "_cloud"):
         monkeypatch.setattr(WorkerManager, name, _fail)
     return WorkerManager()
+
+
+@pytest.fixture
+def tags_root(manager, tmp_path, monkeypatch) -> Path:
+    """Point the workload's tag dirs at tmp_path, with task.json back inside
+    them: deleting a tag removes that tree for real."""
+    root = tmp_path / "tags"
+    monkeypatch.setattr(workloads.WorkloadSpec, "data_dir", lambda self, tag: root / tag)
+    monkeypatch.setattr(tasks, "task_path", _REAL_TASK_PATH)
+    return root
 
 
 def _add_cloud(manager, spec, task, count=1):
@@ -595,6 +609,39 @@ def test_an_unreachable_machine_is_not_acted_on(manager, spec, task, monkeypatch
             spec, task, w, workers_mod.RUN, {"observed_running": False, "ssh_probe": probe}
         )
     assert _RecordingSshMachine.ops == []
+
+
+def test_deleting_a_tag_takes_its_idle_slots_with_it(manager, spec, task, tags_root):
+    """The task record is what tracks a slot's pod; releasing the slots is
+    part of deleting the tag, not a chore to be done first."""
+    _add_cloud(manager, spec, task, count=2)
+    assert (tags_root / "t" / "task.json").is_file()
+
+    manager.delete_task(spec, "t")
+    assert not (tags_root / "t").exists()
+
+
+def test_deleting_a_tag_releases_its_ssh_container(manager, spec, task, tags_root, monkeypatch):
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+
+    name = _container_name(spec, "t", task.workers[0].worker_id)
+    manager.delete_task(spec, "t")
+    assert _RecordingSshMachine.ops == [("remove", name)]
+
+
+def test_deleting_a_tag_refuses_while_a_worker_is_meant_to_run(manager, spec, task, tags_root):
+    """Including a gated one: the scheduler resumes it on its own, so it is
+    the operator's intent that decides, not whether it happens to be parked."""
+    (w,) = _add_cloud(manager, spec, task)
+    w.desired_state = "running"
+    task.gates = {"generate": "waiting for data"}
+    tasks.save_task(spec, task)
+
+    with pytest.raises(AssertionError, match=f"pause {w.worker_id} first"):
+        manager.delete_task(spec, "t")
+    assert tasks.load_task(spec, "t").workers  # the tag survives intact
 
 
 def test_a_reused_worker_id_does_not_inherit_a_backlog(manager, spec, task, monkeypatch):

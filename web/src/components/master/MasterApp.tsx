@@ -23,7 +23,8 @@ export type Workload = {
 };
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
-  workers: number; progress: [string, string | number][]; last_active: number;
+  workers: number; active_workers: number;
+  progress: [string, string | number][]; last_active: number;
 };
 
 export function relTime(epochSeconds: number | null): string {
@@ -220,7 +221,7 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   );
 }
 
-function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
+export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
   const [rows, setRows] = useState<TagRow[]>([]);
   const [sortBy, setSortBy] = useState<'name' | 'last-ran'>('last-ran');
   const [error, setError] = useState('');
@@ -237,9 +238,14 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
   }, [refresh]);
 
   // Deleting a tag deletes its local data dir (the bucket archive, if any, is
-  // kept); the server refuses while the tag still has workers.
-  const deleteTag = async (tag: string) => {
-    if (!window.confirm(`Delete tag '${tag}' and its local data?`)) return;
+  // kept) along with its idle worker slots; the server refuses while any of
+  // them is running.
+  const deleteTag = async (tag: string, workers: number) => {
+    const slots = workers === 1 ? 'its idle worker slot' : `its ${workers} idle worker slots`;
+    const message = workers === 0
+      ? `Delete tag '${tag}' and its local data?`
+      : `Delete tag '${tag}', its local data, and ${slots}?`;
+    if (!window.confirm(message)) return;
     setError('');
     try {
       await postJSON('/api/task/delete', { workload: workload.name, tag });
@@ -297,10 +303,10 @@ function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: stri
                     {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
                   </td>
                   <td style={{ padding: '6px 0' }} onClick={(e) => e.stopPropagation()}>
-                    <span title={r.workers > 0 ? 'remove the tag’s workers first' : undefined}>
+                    <span title={r.active_workers > 0 ? 'pause the tag’s workers first' : undefined}>
                       <Button
-                        label="Delete" tone="danger" disabled={r.workers > 0}
-                        onClick={() => deleteTag(r.tag)}
+                        label="Delete" tone="danger" disabled={r.active_workers > 0}
+                        onClick={() => deleteTag(r.tag, r.workers)}
                       />
                     </span>
                   </td>
