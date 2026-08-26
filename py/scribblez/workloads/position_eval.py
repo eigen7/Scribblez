@@ -24,7 +24,7 @@ resources (threads/vcpus) live on the worker slots.
 
 from dataclasses import dataclass
 
-from scribblez.generational.optimizer_arms import OPTIMIZER_WSD, OPTIMIZERS
+from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
@@ -80,7 +80,7 @@ class PositionEvalParams:
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     optimizer: str = param(
-        OPTIMIZER_WSD,
+        OPTIMIZER_SCHEDULE_FREE,
         "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
         "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
         "no horizon to pick, every generation's export deployable",
@@ -173,4 +173,11 @@ SPEC = WorkloadSpec(
     progress="scribblez.generational.scheduler:progress",
     sync_data_dirs=(STAGING_DIR,),
     local_data_dirs=(MATCH_RESULTS_DIR,),
+    primary_params=(
+        "face_up_leaves",
+        "games_per_generation",
+        "random_opening_mean",
+        "match_every_generations",
+        "optimizer",
+    ),
 )

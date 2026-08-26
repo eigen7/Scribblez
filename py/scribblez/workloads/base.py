@@ -92,6 +92,19 @@ class WorkloadSpec:
     # exist in the bucket, so asking cloud_sync for them would be one rclone
     # per watcher cycle against a prefix nothing can ever write.
     local_data_dirs: tuple[str, ...] = ()
+    # The parameters the dashboard's new-tag form shows up front, in this
+    # order; the rest are folded into its collapsed "Advanced" section. The
+    # ordering is the form's, not the dataclass's, which groups fields by
+    # subject instead. Empty means every parameter is shown up front.
+    primary_params: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        names = {f.name for f in params_mod.schema(self.params_cls)}
+        unknown = [n for n in self.primary_params if n not in names]
+        assert not unknown, f"workload '{self.name}': primary_params names no such param {unknown}"
+        assert len(set(self.primary_params)) == len(self.primary_params), (
+            f"workload '{self.name}': duplicate primary_params"
+        )
 
     @property
     def collected_dirs(self) -> tuple[str, ...]:

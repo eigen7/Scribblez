@@ -123,6 +123,7 @@ class WorkloadsHandler(_MasterBase):
                         "name": spec.name,
                         "title": spec.title,
                         "params": params_mod.public_schema(spec.params_cls),
+                        "primary_params": list(spec.primary_params),
                         "roles": [_role_payload(r) for r in spec.roles],
                     }
                     for spec in workloads.WORKLOADS.values()
