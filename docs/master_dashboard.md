@@ -13,8 +13,10 @@ and workload-specific analysis — all from the browser.
   params dataclass is the single source of truth for parameters — its fields
   generate both the web form (with validation) and the CLI flags, so the CLI
   and dashboard cannot drift. A field declaring `choices` closes its value set:
-  validation and the CLI both enforce it, and the form renders a selector that
-  starts unchosen, so a run cannot inherit a choice nobody made.
+  validation and the CLI both enforce it, and the form renders a selector
+  rather than a text box. A spec may also name `primary_params` — the handful
+  of fields that decide what a run is, in the order the form shows them; the
+  rest sit behind the form's collapsed **Advanced** section at their defaults.
 - **Task** — one (workload, tag) pair with a fixed parameter set, recorded in
   `task.json` at the tag's root (`<mount>/tags/<workload>/<tag>/`). Parameters
   freeze at task creation because every worker on a tag must run identical
@@ -67,7 +69,8 @@ and workload-specific analysis — all from the browser.
 ## The web flow
 
 Home page: workload selector → tag list with progress counters and
-running-worker counts; **New tag** opens the schema-generated params form.
+running-worker counts; **New tag** opens the schema-generated params form
+(the workload's `primary_params` up front, everything else under **Advanced**).
 Selecting a tag opens its task view, with tabs:
 
 - **Overview** — the frozen params, progress, live cloud $/hr, the workers
