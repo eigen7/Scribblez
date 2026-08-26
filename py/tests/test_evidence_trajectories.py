@@ -168,14 +168,13 @@ def _write_student_onnx(path: Path, shapes: dict) -> None:
         num_blocks=2,
         num_heads=2,
     ).eval()
-    # contingent_features matches the session arm get_input_shapes reported
-    # under, so the exported width is the width the generator re-derives.
+    # The export takes the widths get_input_shapes reported, so the exported
+    # width is the width the generator re-derives.
     export_onnx(
         student,
         path,
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
-        contingent_features=True,
         opp_leave_input=False,
         move_encoding_version=1,
     )
@@ -197,7 +196,6 @@ def _write_teacher_onnx(path: Path, shapes: dict) -> None:
         path,
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
-        contingent_features=True,
         opp_leave_input=False,
     )
 
@@ -500,9 +498,7 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
     from scribblez.ffi import gcg_position_board_json, gcg_position_inputs
 
     text = (TEST_DATA / "egotize-lane.gcg").read_text()
-    inputs = gcg_position_inputs(
-        text, contingent_features=False, opp_leave_input=True, spatial_planes=85, scalar_size=163
-    )
+    inputs = gcg_position_inputs(text, opp_leave_input=True, spatial_planes=85, scalar_size=163)
     assert inputs.input_spatial.shape == (85, 15, 15) and inputs.input_scalar.shape == (163,)
     assert inputs.score_diff == 440 - 387
     bundle = gcg_position_board_json(text, open_leaves=True)
@@ -510,11 +506,10 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
     assert "E11 G.VE" in bundle["moves"]
     assert bundle["mover"] == 0 and bundle["scores"] == [440, 387]
     assert [t["letter"] for t in bundle["rack"]] == list("AEEGSTV")
-    # A width the arm does not encode is refused, naming the mismatch.
+    # A width the arm does not encode is refused, naming the mismatch: the
+    # hidden-leaves arm has no opponent-leave block, so it is 27 scalars short.
     with pytest.raises(ValueError, match="floats"):
-        gcg_position_inputs(
-            text, contingent_features=True, opp_leave_input=True, spatial_planes=85, scalar_size=163
-        )
+        gcg_position_inputs(text, opp_leave_input=False, spatial_planes=85, scalar_size=163)
 
 
 def _tiny_evidence_checkpoint(trained: bool):
@@ -541,7 +536,6 @@ def _tiny_evidence_checkpoint(trained: bool):
     cfg = {
         "spatial_planes": shapes["input_spatial"][0],
         "scalar_size": shapes["input_scalar"][0],
-        "contingent_features": True,
         "open_leaves": False,
     }
     return EvidenceCheckpoint(model.eval(), cfg, trained=trained)

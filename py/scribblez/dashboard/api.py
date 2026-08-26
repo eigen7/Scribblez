@@ -413,7 +413,6 @@ def _position_eval_model_arm(sess) -> InputArm:
     meta = sess.get_modelmeta().custom_metadata_map
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
     return InputArm(
-        contingent_features=meta.get("contingent_features") == "true",
         opp_leave_input=meta.get("opp_leave_input") == "true",
         spatial_planes=int(model_inputs["input_spatial"][1]),
         scalar_size=int(model_inputs["input_scalar"][1]),

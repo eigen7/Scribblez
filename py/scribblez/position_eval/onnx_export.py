@@ -85,7 +85,6 @@ def export_onnx(
     spatial_planes: int,
     scalar_size: int,
     *,
-    contingent_features: bool,
     opp_leave_input: bool,
     board_size: int = 15,
     opset: int = 17,
@@ -141,7 +140,7 @@ def export_onnx(
         write_metadata(
             tmp_path,
             {
-                **common_metadata(contingent_features, opp_leave_input),
+                **common_metadata(opp_leave_input),
                 "model-architecture-signature": architecture_signature(model, opset),
                 "graph": "position_eval",
             },

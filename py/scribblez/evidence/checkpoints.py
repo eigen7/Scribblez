@@ -21,7 +21,6 @@ STUDENT_CONFIG_KEYS = (
     "trunk_channels",
     "num_blocks",
     "num_heads",
-    "contingent_features",
     "open_leaves",
     "move_encoding_version",
 )

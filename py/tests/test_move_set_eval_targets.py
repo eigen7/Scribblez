@@ -61,7 +61,6 @@ def _export_tiny_teacher(onnx_path: Path):
         onnx_path,
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
-        contingent_features=True,
         opp_leave_input=False,
     )
 
@@ -285,7 +284,7 @@ def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
         f"export_onnx(model, {str(onnx_path)!r},\n"
         "            spatial_planes=shapes['input_spatial'][0],\n"
         "            scalar_size=shapes['input_scalar'][0],\n"
-        "            contingent_features=True, opp_leave_input=True)\n"
+        "            opp_leave_input=True)\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr

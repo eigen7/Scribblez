@@ -25,7 +25,6 @@ from pathlib import Path
 
 import torch
 from scribblez import paths as paths_mod
-from scribblez.ffi import set_contingent_features
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.onnx_export import (
@@ -43,7 +42,6 @@ def probe_feeds(paths: TagPaths, config: dict) -> list[dict]:
     own corpus (the arm adopted exactly as the trainer adopted it). A finished
     tag keeps its corpus, so its absence means the wrong tag, not an optional
     gate."""
-    set_contingent_features(config["contingent_features"])
     mset_files = sorted(Path(paths.data_dir).glob("slogs/*.mset"))
     if not mset_files:
         sys.exit(
@@ -70,7 +68,7 @@ def main() -> int:
 
     if "move_encoding_version" not in config:
         try:
-            config.update(legacy_checkpoint_condition(paths, config))
+            config.update(legacy_checkpoint_condition(paths))
         except FileNotFoundError as e:
             sys.exit(f"error: {e}")
 
@@ -94,7 +92,6 @@ def main() -> int:
         out,
         config["spatial_planes"],
         config["scalar_size"],
-        contingent_features=config["contingent_features"],
         opp_leave_input=config["open_leaves"],
         move_encoding_version=config["move_encoding_version"],
         probe_feeds=probe_feeds(paths, config),

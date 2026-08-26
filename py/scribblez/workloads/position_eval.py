@@ -111,11 +111,6 @@ class PositionEvalParams:
         "injection sites (scalars emit a per-channel gain alongside the additive bias); "
         "off is the additive-injection baseline",
     )
-    contingent_features: bool = param(
-        False,
-        "encode the full input layout including the contingent-draw potential features; "
-        "off trains the smaller ablation baseline",
-    )
     # Loss.
     lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")

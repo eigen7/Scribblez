@@ -157,8 +157,8 @@ using scribblez::testing::CountingStubEvalService;
 using scribblez::testing::ScriptedEval;
 using scribblez::testing::StubEvalService;
 
-// Layout shorthands for the full input layout these tests encode.
-static const int kInputFloats = input_floats(InputEncodingSpec{nullptr, true});
+// Layout shorthands for the base input layout these tests encode.
+static const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
 static const int kRowFloats = kInputFloats + kLabelFloats;
 
 static ScriptedEval eval_with(float score_diff_mean, float win_prob) {
@@ -341,7 +341,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   agent.observe_move(move_a);
   agent.observe_move(move_b);
 
-  GameStateEncoder ref{InputEncodingSpec{&dict, true}};
+  GameStateEncoder ref{InputEncodingSpec{&dict}};
   ref.apply_move(move_a);
   ref.apply_move(move_b);
   const int my_seat = ref.active_player();
@@ -399,7 +399,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
   // Training path: decode the post-move sampled row (no symmetry flip). The
   // same dictionary drives both paths' cross-check planes.
   Dictionary dict = medium_dict();
-  binlog::BlockDecoder dec(InputEncodingSpec{&dict, true});
+  binlog::BlockDecoder dec(InputEncodingSpec{&dict});
   const uint8_t flips[1] = {0};
   std::vector<float> dec_row(kRowFloats, 0.0f);
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,

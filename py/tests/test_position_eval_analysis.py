@@ -4,8 +4,8 @@ the process-wide session's), and a width the arm does not encode is refused
 rather than filled.
 
 The dashboard serves models of every arm from one session, so encoding under
-the session's arm and slicing was how a face-up-leaves model came to read
-contingent scalars in its opponent-leave block."""
+the session's arm and slicing is how a model of one arm comes to read another
+arm's scalars."""
 
 from pathlib import Path
 
@@ -36,16 +36,15 @@ def _text() -> str:
     return _GCG.read_text()
 
 
-def _arm(contingent: bool, opp_leave: bool) -> InputArm:
-    """An arm's widths, derived from the session's by the registry's block sizes
-    (the opp-leave block is 27 scalars, the contingent tail 3 planes + 56)."""
+def _arm(opp_leave: bool) -> InputArm:
+    """An arm's widths, derived from the session's by the registry's block size
+    (the opp-leave block is 27 scalars)."""
     base = session_input_arm()
-    assert base.contingent_features and not base.opp_leave_input
+    assert not base.opp_leave_input
     return InputArm(
-        contingent,
         opp_leave,
-        base.spatial_planes - (0 if contingent else 3),
-        base.scalar_size - (0 if contingent else 56) + (27 if opp_leave else 0),
+        base.spatial_planes,
+        base.scalar_size + (27 if opp_leave else 0),
     )
 
 
@@ -59,27 +58,29 @@ def test_the_session_arm_round_trips():
     assert scalar.shape == (arm.scalar_size,)
 
 
-def test_another_arm_is_encoded_as_itself_not_sliced():
-    """A face-up-leaves (opp-leave, non-contingent) row is not a prefix of the
-    session's full row: its tail is the opponent-leave block -- all zeros here,
-    the opponent having bingoed -- where a prefix slice would carry contingent
-    scalars. The shared prefix (board planes, rack, pool, ...) does agree."""
+def test_another_arm_is_encoded_as_itself():
+    """A face-up-leaves row is encoded under the arm the caller named, not the
+    session's: it is 27 scalars longer than the session's row, agrees with it
+    on every shared block, and carries the opponent-leave block as its tail --
+    all zeros here, the opponent having bingoed."""
     text = _text()
-    full = analyze_position_eval_gcg(text, session_input_arm())
-    face_up = analyze_position_eval_gcg(text, _arm(contingent=False, opp_leave=True))
-    planes = _arm(False, True).spatial_planes
-    np.testing.assert_array_equal(face_up[: planes * BOARD_CELLS], full[: planes * BOARD_CELLS])
-    scalar_full = session_input_arm().split(full)[1]
-    scalar_face_up = _arm(False, True).split(face_up)[1]
-    np.testing.assert_array_equal(scalar_face_up[:-27], scalar_full[: len(scalar_face_up) - 27])
+    arm = _arm(opp_leave=True)
+    base_arm = session_input_arm()
+    base = analyze_position_eval_gcg(text, base_arm)
+    face_up = analyze_position_eval_gcg(text, arm)
+    assert face_up.shape == (base.size + 27,)
+    planes = arm.spatial_planes
+    np.testing.assert_array_equal(face_up[: planes * BOARD_CELLS], base[: planes * BOARD_CELLS])
+    scalar_base = base_arm.split(base)[1]
+    scalar_face_up = arm.split(face_up)[1]
+    np.testing.assert_array_equal(scalar_face_up[:-27], scalar_base)
     assert not scalar_face_up[-27:].any()  # the opponent kept nothing
-    assert scalar_full[len(scalar_face_up) - 27 : len(scalar_face_up)].any()  # what a slice fed
 
 
 def test_a_width_the_arm_does_not_encode_is_refused():
     text = _text()
     arm = session_input_arm()
-    stale = InputArm(arm.contingent_features, arm.opp_leave_input, arm.spatial_planes, 1)
+    stale = InputArm(arm.opp_leave_input, arm.spatial_planes, 1)
     with pytest.raises(ValueError, match="the arm encodes"):
         analyze_position_eval_gcg(text, stale)
     with pytest.raises(ValueError, match="the arm encodes"):
@@ -103,7 +104,7 @@ def test_alternate_leaves_reproduce_the_recorded_encoding():
     alternate opponent leave must match the recorded one's size (empty here:
     the opponent bingoed), and the POV leave may not spend tiles twice."""
     text = _text()
-    arm = _arm(contingent=False, opp_leave=True)
+    arm = _arm(opp_leave=True)
     bundle = position_eval_board_json(text)
     leave = "".join(t["letter"] for t in bundle["rack"])  # a blank renders as "?"
     assert bundle["opp_leave"] == ""

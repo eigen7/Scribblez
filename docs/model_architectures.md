@@ -17,7 +17,7 @@ Symbols used throughout:
 |--------|---------|---------|
 | `C` | `trunk_channels` | 192 |
 | `N` | `num_blocks` in the residual tower | 10 |
-| `P_in` / `S_in` | spatial planes / scalar width of the board input | 88 / 992 (full layout), 85 / 936 (base) |
+| `P_in` / `S_in` | spatial planes / scalar width of the board input | 85 / 936; 85 / 963 under the open-leaves arm |
 | `B` | batch of board positions (`P` in move-set code) | — |
 | `M` | candidate moves in a batch, flattened across positions | — |
 | `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |

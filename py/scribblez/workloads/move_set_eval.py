@@ -164,11 +164,6 @@ class MoveSetEvalParams:
     num_blocks: int = param(10, "board-trunk residual blocks")
     trunk_channels: int = param(192, "board-trunk width")
     num_heads: int = param(4, "cross-attention heads")
-    contingent_features: bool = param(
-        False,
-        "encode the student's board input with the contingent-draw potential features; "
-        "independent of the teacher's input arm",
-    )
     lambda_sd: float = param(0.004, "score-diff loss weight")
     lambda_planes: float = param(1.0, "placement-plane BCE weight (roadmap item 1 readouts)")
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")

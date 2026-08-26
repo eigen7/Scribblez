@@ -34,8 +34,8 @@ from scribblez import ffi
 from scribblez.paths import REPO_ROOT
 from scribblez.position_eval import analysis as A
 
-# Base face-up-leaves arm (contingent_features off, opp_leave_input on): 85 planes,
-# 163 scalars. Cross-check blocks and the opp-leave scalar block within that layout.
+# The face-up-leaves arm (opp_leave_input on): 85 planes, 163 scalars.
+# Cross-check blocks and the opp-leave scalar block within that layout.
 N_PLANES = 85
 HCC0, VCC0, CC_END = 33, 59, 85  # horizontal / vertical cross-check plane ranges
 OPP_LEAVE0 = 136  # opp-leave scalar block: OPP_LEAVE0 + (letter index 0..25)
@@ -179,7 +179,6 @@ def main():
     ap.add_argument("--skip-tail", action="store_true", help="skip probe 3 (the slow one)")
     args = ap.parse_args()
 
-    ffi.set_contingent_features(False)
     ffi.set_opp_leave_input(True)
     arm = ffi.session_input_arm()
     path = args.model or latest_checkpoint(args.tag)

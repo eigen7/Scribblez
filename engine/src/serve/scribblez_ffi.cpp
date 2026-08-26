@@ -45,13 +45,13 @@ using scribblez::binlog::kMagic;
 using scribblez::binlog::kVersion;
 
 // The session behind the C ABI (see scribblez_ffi.h). Owns the process's
-// InputEncodingSpec -- the loaded Dictionary plus the feature-block choice --
+// InputEncodingSpec -- the loaded Dictionary plus the arm's block choice --
 // that every encoding / analysis / loader entry point derives from, and the
 // spec's input tensor shapes, which the shape/size queries report. A
 // constructed session is proof the lexicon is loaded, so the methods do no
 // load-failure checking.
 struct ScribblezSession {
-  ScribblezSession(const char* lexicon_name, bool contingent_features, bool opp_leave_input);
+  ScribblezSession(const char* lexicon_name, bool opp_leave_input);
 
   const ScribblezShape* input_shapes() const { return input_shapes_; }
   int input_floats() const { return scribblez::input_floats(spec); }
@@ -69,16 +69,15 @@ struct ScribblezSession {
                          int out_cap) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
-  int position_eval_analyze_gcg(const char* gcg_text, bool contingent_features,
-                                bool opp_leave_input, float* out_input, int input_cap,
-                                char* out_err, int err_cap) const;
+  int position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input, float* out_input,
+                                int input_cap, char* out_err, int err_cap) const;
   int position_eval_analyze_gcg_leaves(const char* gcg_text, const char* leave_str,
-                                       const char* opp_leave_str, bool contingent_features,
-                                       bool opp_leave_input, float* out_input, int input_cap,
-                                       char* out_err, int err_cap) const;
-  int gcg_position_inputs(const char* gcg_text, bool contingent_features, bool opp_leave_input,
-                          float* out_input, int input_cap, int32_t* out_score_diff, void* out_moves,
-                          int moves_cap, char* out_err, int err_cap) const;
+                                       const char* opp_leave_str, bool opp_leave_input,
+                                       float* out_input, int input_cap, char* out_err,
+                                       int err_cap) const;
+  int gcg_position_inputs(const char* gcg_text, bool opp_leave_input, float* out_input,
+                          int input_cap, int32_t* out_score_diff, void* out_moves, int moves_cap,
+                          char* out_err, int err_cap) const;
   int gcg_position_board_json(const char* gcg_text, bool open_leaves, char* out_json,
                               int out_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
@@ -94,8 +93,7 @@ struct ScribblezSession {
   scribblez::InputEncodingSpec spec;
 
  private:
-  std::optional<scribblez::InputEncodingSpec> analysis_arm(bool contingent_features,
-                                                           bool opp_leave_input, int input_cap,
+  std::optional<scribblez::InputEncodingSpec> analysis_arm(bool opp_leave_input, int input_cap,
                                                            char* out_err, int err_cap) const;
 
   // The spec's input tensor shapes, advertised through input_shapes(). The dim
@@ -117,18 +115,16 @@ const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
 
 }  // namespace
 
-ScribblezSession::ScribblezSession(const char* lexicon_name, bool contingent_features,
-                                   bool opp_leave_input)
-    : spec{&load_session_dictionary(lexicon_name), contingent_features, opp_leave_input},
-      spatial_dims_{scribblez::spatial_planes(spec), scribblez::kBoardSide, scribblez::kBoardSide},
+ScribblezSession::ScribblezSession(const char* lexicon_name, bool opp_leave_input)
+    : spec{&load_session_dictionary(lexicon_name), opp_leave_input},
+      spatial_dims_{scribblez::spatial_planes(), scribblez::kBoardSide, scribblez::kBoardSide},
       scalar_dims_{scribblez::scalar_floats(spec)},
       input_shapes_{{"input_spatial", spatial_dims_, 3, -1},
                     {"input_scalar", scalar_dims_, 1, -1},
                     {nullptr, nullptr, 0, 0}} {}
 
-ScribblezSession* scribblez_session_new(const char* lexicon_name, int contingent_features,
-                                        int opp_leave_input) {
-  return new ScribblezSession(lexicon_name, contingent_features != 0, opp_leave_input != 0);
+ScribblezSession* scribblez_session_new(const char* lexicon_name, int opp_leave_input) {
+  return new ScribblezSession(lexicon_name, opp_leave_input != 0);
 }
 
 void scribblez_session_delete(ScribblezSession* s) { delete s; }
@@ -446,9 +442,11 @@ int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg
 // The explicit arm an analysis entry point encodes under, or nullopt with the
 // width mismatch reported in `out_err`: the caller's buffer is sized for its
 // model, and a model from another encoding era cannot be fed today's rows.
-std::optional<scribblez::InputEncodingSpec> ScribblezSession::analysis_arm(
-  bool contingent_features, bool opp_leave_input, int input_cap, char* out_err, int err_cap) const {
-  const scribblez::InputEncodingSpec arm{spec.dict, contingent_features, opp_leave_input};
+std::optional<scribblez::InputEncodingSpec> ScribblezSession::analysis_arm(bool opp_leave_input,
+                                                                           int input_cap,
+                                                                           char* out_err,
+                                                                           int err_cap) const {
+  const scribblez::InputEncodingSpec arm{spec.dict, opp_leave_input};
   if (scribblez::input_floats(arm) != input_cap) {
     emit_string(std::format("input buffer holds {} floats but the arm encodes {}", input_cap,
                             scribblez::input_floats(arm)),
@@ -458,14 +456,13 @@ std::optional<scribblez::InputEncodingSpec> ScribblezSession::analysis_arm(
   return arm;
 }
 
-int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, bool contingent_features,
-                                                bool opp_leave_input, float* out_input,
-                                                int input_cap, char* out_err, int err_cap) const {
+int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input,
+                                                float* out_input, int input_cap, char* out_err,
+                                                int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !out_input) return -1;
   try {
-    const auto arm =
-      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    const auto arm = analysis_arm(opp_leave_input, input_cap, out_err, err_cap);
     if (!arm) return -1;
     std::string error;
     if (!scribblez::encode_position_eval_analysis_input(gcg_text, *arm, out_input, &error)) {
@@ -480,11 +477,10 @@ int ScribblezSession::position_eval_analyze_gcg(const char* gcg_text, bool conti
 }
 
 int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                        int contingent_features, int opp_leave_input,
-                                        float* out_input, int input_cap, char* out_err,
-                                        int err_cap) {
-  return s->position_eval_analyze_gcg(gcg_text, contingent_features != 0, opp_leave_input != 0,
-                                      out_input, input_cap, out_err, err_cap);
+                                        int opp_leave_input, float* out_input, int input_cap,
+                                        char* out_err, int err_cap) {
+  return s->position_eval_analyze_gcg(gcg_text, opp_leave_input != 0, out_input, input_cap, out_err,
+                                      err_cap);
 }
 
 int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap) {
@@ -499,14 +495,15 @@ int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int
   }
 }
 
-int ScribblezSession::position_eval_analyze_gcg_leaves(
-  const char* gcg_text, const char* leave_str, const char* opp_leave_str, bool contingent_features,
-  bool opp_leave_input, float* out_input, int input_cap, char* out_err, int err_cap) const {
+int ScribblezSession::position_eval_analyze_gcg_leaves(const char* gcg_text, const char* leave_str,
+                                                       const char* opp_leave_str,
+                                                       bool opp_leave_input, float* out_input,
+                                                       int input_cap, char* out_err,
+                                                       int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !leave_str || !out_input) return -1;
   try {
-    const auto arm =
-      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    const auto arm = analysis_arm(opp_leave_input, input_cap, out_err, err_cap);
     if (!arm) return -1;
     std::string error;
     const std::optional<std::string> opp_leave =
@@ -525,23 +522,21 @@ int ScribblezSession::position_eval_analyze_gcg_leaves(
 
 int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* gcg_text,
                                                const char* leave_str, const char* opp_leave_str,
-                                               int contingent_features, int opp_leave_input,
-                                               float* out_input, int input_cap, char* out_err,
-                                               int err_cap) {
+                                               int opp_leave_input, float* out_input, int input_cap,
+                                               char* out_err, int err_cap) {
   return s->position_eval_analyze_gcg_leaves(gcg_text, leave_str, opp_leave_str,
-                                             contingent_features != 0, opp_leave_input != 0,
-                                             out_input, input_cap, out_err, err_cap);
+                                             opp_leave_input != 0, out_input, input_cap, out_err,
+                                             err_cap);
 }
 
-int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_features,
-                                          bool opp_leave_input, float* out_input, int input_cap,
-                                          int32_t* out_score_diff, void* out_moves, int moves_cap,
-                                          char* out_err, int err_cap) const {
+int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool opp_leave_input,
+                                          float* out_input, int input_cap, int32_t* out_score_diff,
+                                          void* out_moves, int moves_cap, char* out_err,
+                                          int err_cap) const {
   if (out_err && err_cap > 0) out_err[0] = '\0';
   if (!gcg_text || !out_input || !out_score_diff || (!out_moves && moves_cap > 0)) return -1;
   try {
-    const auto arm =
-      analysis_arm(contingent_features, opp_leave_input, input_cap, out_err, err_cap);
+    const auto arm = analysis_arm(opp_leave_input, input_cap, out_err, err_cap);
     if (!arm) return -1;
     scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
     scribblez::TrajectoryDecision d;
@@ -565,12 +560,11 @@ int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool contingent_
   }
 }
 
-int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text,
-                                  int contingent_features, int opp_leave_input, float* out_input,
-                                  int input_cap, int32_t* out_score_diff, void* out_moves,
-                                  int moves_cap, char* out_err, int err_cap) {
-  return s->gcg_position_inputs(gcg_text, contingent_features != 0, opp_leave_input != 0, out_input,
-                                input_cap, out_score_diff, out_moves, moves_cap, out_err, err_cap);
+int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text, int opp_leave_input,
+                                  float* out_input, int input_cap, int32_t* out_score_diff,
+                                  void* out_moves, int moves_cap, char* out_err, int err_cap) {
+  return s->gcg_position_inputs(gcg_text, opp_leave_input != 0, out_input, input_cap,
+                                out_score_diff, out_moves, moves_cap, out_err, err_cap);
 }
 
 int ScribblezSession::gcg_position_board_json(const char* gcg_text, bool open_leaves,

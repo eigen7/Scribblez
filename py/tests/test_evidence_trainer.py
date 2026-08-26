@@ -76,11 +76,8 @@ def test_load_student_tolerates_only_the_evidence_modules_missing():
 
 @pytest.fixture(scope="module")
 def traj_datasets(traj_corpus):  # noqa: F811
-    from scribblez.ffi import set_contingent_features
-
     files = ED.complete_pairs(traj_corpus.dir)
     assert len(files) >= 2
-    set_contingent_features(True)
     ED.adopt_information_condition(files)
     return ED.TrajectoryDataset(files[:-1]), ED.TrajectoryDataset(files[-1:])
 
@@ -465,7 +462,6 @@ def _student_checkpoint(path, train, *, open_leaves: bool, version=None):
                 "trunk_channels": 8,
                 "num_blocks": 1,
                 "num_heads": 2,
-                "contingent_features": True,
                 "open_leaves": open_leaves,
                 "move_encoding_version": version
                 if version is not None
@@ -656,7 +652,6 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
             e.key: e.value for e in onnx.load(str(scratch_u.paths.onnx_path(epoch))).metadata_props
         }
         assert meta["graph"] == "move_set_eval", meta
-        assert meta["contingent_features"] == "true", meta
         assert meta["opp_leave_input"] == "false", meta
         assert meta["move_encoding_version"] == str(move_encoding_version()), meta
     conn = sqlite3.connect(scratch_u.paths.dashboard_db)

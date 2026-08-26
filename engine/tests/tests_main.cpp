@@ -12,7 +12,6 @@
 #include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/board_planes.h"
-#include "encoding/contingent_map.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
@@ -71,25 +70,22 @@ using namespace scribblez;
 // layout math). Blocks the registry does not name individually (the board
 // sub-planes, the two cross-check families, the per-move metadata halves) are
 // located relative to their block starts.
-static const InputEncodingSpec kFullLayout{nullptr, true};
-static const int kInputFloats = input_floats(kFullLayout);
-static const int kSpatialFloats = spatial_floats(kFullLayout);
-static const int kSpatialPlanes = spatial_planes(kFullLayout);
+static const InputEncodingSpec kBaseLayout{nullptr};
+static const int kInputFloats = input_floats(kBaseLayout);
+static const int kSpatialFloats = spatial_floats();
+static const int kSpatialPlanes = spatial_planes();
 static const int kRowFloats = kInputFloats + kLabelFloats;
 static const int kBlankMarkerPlane = BoardPlanes::kBlankMarkerPlane;
 static const int kPremiumPlane0 = BoardPlanes::kPremiumPlane0;
-static const int kSelfPlacementPlane =
-  spatial_block_plane0(kFullLayout, SpatialBlockId::kSelfPlacement);
-static const int kOppPlacementPlane =
-  spatial_block_plane0(kFullLayout, SpatialBlockId::kOppPlacement);
-static const int kHorizontalCrossCheckPlane0 =
-  spatial_block_plane0(kFullLayout, SpatialBlockId::kCrossChecks);
+static const int kSelfPlacementPlane = spatial_block_plane0(SpatialBlockId::kSelfPlacement);
+static const int kOppPlacementPlane = spatial_block_plane0(SpatialBlockId::kOppPlacement);
+static const int kHorizontalCrossCheckPlane0 = spatial_block_plane0(SpatialBlockId::kCrossChecks);
 static const int kVerticalCrossCheckPlane0 =
   kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;
-static const int kRackCountOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kRackCounts);
-static const int kUnseenPoolOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kUnseenPool);
-static const int kScoreDiffOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kScoreDiff);
-static const int kMoveMetaOffset = scalar_block_offset(kFullLayout, ScalarBlockId::kMoveMeta);
+static const int kRackCountOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kRackCounts);
+static const int kUnseenPoolOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kUnseenPool);
+static const int kScoreDiffOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kScoreDiff);
+static const int kMoveMetaOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kMoveMeta);
 
 static Dictionary tiny_dict() {
   return Dictionary::build_from_words({"CAT", "CATS", "AT",     "AS",     "BAT", "BATS", "HE",
@@ -489,7 +485,7 @@ TEST(Encoder, BasicLayout) {
                                 {Glyph::played(Tile::from_char('D'), /*is_blank=*/true)});
 
   Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(p0_play);
   enc.apply_move(p1_play);
 
@@ -587,7 +583,7 @@ TEST(Encoder, LastOppPlaneMask) {
                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('T'))});
 
   Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(p0_play);
   enc.apply_move(opp_play);
 
@@ -619,7 +615,7 @@ TEST(Encoder, FlipSymmetry) {
                    {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))});
 
   Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(p0_play);
   enc.apply_move(opp_play);
 
@@ -702,7 +698,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
   Move qi_play = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
                                 {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
 
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(qi_play);
 
   Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
@@ -788,7 +784,7 @@ TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
   Move vow = make_play_full(8, 8, /*horizontal=*/false, 0b111, 9,
                             {Glyph::of(Tile::from_char('V')), Glyph::of(Tile::from_char('O')),
                              Glyph::of(Tile::from_char('W'))});
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(xi);
   enc.apply_move(vow);
 
@@ -825,7 +821,7 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
                             {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
   storage.turns.push_back(rec);
 
-  PositionEncoder enc(InputEncodingSpec{&d, true});
+  PositionEncoder enc(InputEncodingSpec{&d});
   std::vector<float> row(kRowFloats, 0.0f);
   enc.encode_row<PositionEvalTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
                                    /*flip=*/false, row.data());
@@ -850,7 +846,7 @@ TEST(Encoder, ForcedScoreDiffIsolation) {
     make_play_full(7, 8, /*horizontal=*/true, 0b1, 9, {Glyph::of(Tile::from_char('T'))});
 
   Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(p0_play);
   enc.apply_move(p1_play);
 
@@ -887,7 +883,7 @@ TEST(Encoder, NonplayLastMoveMetadata) {
   Move p1_exchange = Move::exchange(ex_tiles);
 
   Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d, true}};
+  GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(p0_pass);
   enc.apply_move(p1_exchange);
 
@@ -1089,150 +1085,13 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
 }
 }  // anonymous namespace
 
-// Count of `letter` placed as a natural tile (not a designated blank) by `m`.
-static int natural_letter_count(const Move& m, int letter_index) {
-  int n = 0;
-  for (int i = 0; i < m.num_glyphs(); ++i) {
-    const Glyph g = m.glyph(i);
-    if (!g.is_blank() && g.letter().index() == letter_index) ++n;
-  }
-  return n;
-}
-
-// The ContingentMap's single phantom-blank generation must reproduce, per
-// (drawn letter, lane), the best score a real generation over rack ∪ {letter}
-// finds among plays that consume the added copy -- including the rescoring of
-// the phantom at the letter's face value -- and, for the rack-alone lanes, the
-// plain lane-target reduction.
-TEST(ContingentMap, MatchesPerTileGeneration) {
-  Dictionary dict = medium_dict();
-
-  int leave_positions = 0, full_positions = 0;
-  long columns = 0;
-  for (uint64_t seed : std::vector<uint64_t>{11, 77}) {
-    GameLogStorage log = play_test_game(dict, seed);
-    Board board;
-    for (size_t t = 0; t < log.turns.size(); ++t) {
-      const TurnRecord& rec = log.turns[t];
-
-      // The full pre-move rack: no replenishment draw is possible, so every
-      // contingent column must be empty while the rack-alone lanes still
-      // match the plain lane-target reduction.
-      if (rec.rack_before.size() == RACK_SIZE && t % 4 == 0 && !board.empty_board()) {
-        uint8_t unseen[27];
-        compute_unseen_pool(unseen, board, rec.rack_before);
-        const ContingentMap cm = ContingentMap::compute(board, rec.rack_before, unseen, dict);
-        const LaneTargets lt = compute_lane_targets(board, rec.rack_before, dict);
-        for (int lane = 0; lane < kNumLanes; ++lane) {
-          const LaneBest& ref =
-            lane < kLanesPerAxis ? lt.rows[lane] : lt.cols[lane - kLanesPerAxis];
-          ASSERT_EQ(cm.rack_best(lane).score, (ref.has_move ? ref.max_score : -1));
-          for (int kind = 0; kind < kLaneTileKinds; ++kind) {
-            ASSERT_EQ(cm.best(kind, lane).score, -1);
-          }
-        }
-        ++full_positions;
-      }
-
-      if (rec.move.type() != MoveType::PLAY) continue;
-      board.apply(rec.move);
-
-      // The post-move snapshot -- the training case: rack = the mover's leave,
-      // board = after the move.
-      Rack leave = rec.rack_before;
-      for (int i = 0; i < rec.move.num_glyphs(); ++i) leave.remove(rec.move.glyph(i).rack_tile());
-      uint8_t unseen[27];
-      compute_unseen_pool(unseen, board, leave);
-      const ContingentMap cm = ContingentMap::compute(board, leave, unseen, dict);
-
-      // Rack-alone lanes == the lane-target reduction of a plain generation.
-      const LaneTargets lt = compute_lane_targets(board, leave, dict);
-      for (int lane = 0; lane < kNumLanes; ++lane) {
-        const LaneBest& ref = lane < kLanesPerAxis ? lt.rows[lane] : lt.cols[lane - kLanesPerAxis];
-        ASSERT_EQ(cm.rack_best(lane).score, (ref.has_move ? ref.max_score : -1));
-      }
-
-      // Every drawable letter column == a real generation over leave ∪ {L},
-      // restricted to plays that consume the added copy.
-      for (int L = 0; L < 26; ++L) {
-        if (unseen[L] == 0) continue;
-        Rack aug = leave;
-        aug.add(Tile::of(L));
-        MoveGenerator gen(board, dict);
-        const std::vector<Move> moves = gen.generate(aug);
-        std::array<int, kNumLanes> ref;
-        ref.fill(-1);
-        PlacedTile placed[RACK_SIZE];
-        for (const Move& m : moves) {
-          if (natural_letter_count(m, L) <= leave.count(Tile::of(L))) continue;
-          const int p = decode_placements(m, placed);
-          const LaneAssignments la = compute_lane_assignments(board, m, placed, p);
-          for (int i = 0; i < la.count; ++i) {
-            const int lane = (la.items[i].horizontal ? 0 : kLanesPerAxis) + la.items[i].lane_index;
-            ref[lane] = std::max(ref[lane], int(m.score()));
-          }
-        }
-        for (int lane = 0; lane < kNumLanes; ++lane) {
-          ASSERT_EQ(int(cm.best(L, lane).score), ref[lane]);
-        }
-        ++columns;
-      }
-      ++leave_positions;
-    }
-  }
-  std::cout << "  contingent map parity OK (" << leave_positions << " leaves, " << full_positions
-            << " full racks, " << columns << " letter columns)\n";
-}
-
-// The base layout is the full layout with the contingent tails spliced out of
-// both sections: encoding the same position under both specs must agree
-// float-for-float on every shared block. Serving consumers rely on this prefix
-// property when running a base-layout model against full-layout rows.
-TEST(InputLayout, BaseIsFullMinusContingentTails) {
-  Dictionary d = medium_dict();
-  const InputEncodingSpec full{&d, true};
-  const InputEncodingSpec base{&d, false};
-
-  Move cat = make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
-                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
-                             Glyph::of(Tile::from_char('T'))});
-  GameStateEncoder full_enc{full};
-  GameStateEncoder base_enc{base};
-  full_enc.apply_move(cat);
-  base_enc.apply_move(cat);
-  Rack rack = rack_from("RSE");
-
-  std::vector<float> full_row(input_floats(full), -1.0f);
-  std::vector<float> base_row(input_floats(base), -1.0f);
-  full_enc.encode_input(full_enc.active_player(), rack, /*apply_flip=*/false, full_row.data());
-  base_enc.encode_input(base_enc.active_player(), rack, /*apply_flip=*/false, base_row.data());
-
-  // Shared spatial prefix, then shared scalar prefix (the full row's scalar
-  // block starts after its extra contingent planes).
-  ASSERT_EQ(
-    std::memcmp(base_row.data(), full_row.data(), sizeof(float) * size_t(spatial_floats(base))), 0);
-  ASSERT_EQ(
-    std::memcmp(base_row.data() + spatial_floats(base), full_row.data() + spatial_floats(full),
-                sizeof(float) * size_t(scalar_floats(base))),
-    0);
-
-  // The splice is not vacuous: the full row's contingent tails carry content.
-  float tail_sum = 0.0f;
-  for (int i = spatial_floats(base); i < spatial_floats(full); ++i)
-    tail_sum += std::abs(full_row[i]);
-  for (int i = spatial_floats(full) + scalar_floats(base); i < input_floats(full); ++i)
-    tail_sum += std::abs(full_row[i]);
-  ASSERT_GT(tail_sum, 0.0f);
-}
-
 // Open-leaves arm: the row is the base row plus the opponent-leave counts
 // block at the scalar tail, holding exactly the known leave's per-tile
 // counts.
 TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   Dictionary d = medium_dict();
-  const InputEncodingSpec base{&d, false};
-  const InputEncodingSpec open{&d, false, /*opp_leave_input=*/true};
-  ASSERT_EQ(spatial_planes(open), spatial_planes(base));
+  const InputEncodingSpec base{&d};
+  const InputEncodingSpec open{&d, /*opp_leave_input=*/true};
   ASSERT_EQ(scalar_floats(open), scalar_floats(base) + kOppLeaveCountFloats);
   ASSERT_EQ(scalar_block_offset(open, ScalarBlockId::kOppLeaveCounts), scalar_floats(base));
 
@@ -1264,59 +1123,6 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   ASSERT_EQ(tail_total, 5.0f);
 }
 
-// A hand-checked position: horizontal CAT at (7,7..9), rack {R}. Verifies the
-// specific contingent entries, the phantom-blank rescoring, and the encoded
-// planes' footprint painting and flip symmetry.
-TEST(ContingentMap, CatBoard) {
-  Dictionary dict = medium_dict();
-  Board board;
-  board.apply(make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
-                             {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
-                              Glyph::of(Tile::from_char('T'))}));
-  Rack rack;
-  rack.add(Tile::from_char('R'));
-  uint8_t unseen[27];
-  compute_unseen_pool(unseen, board, rack);
-  const ContingentMap cm = ContingentMap::compute(board, rack, unseen, dict);
-
-  const int kS = Tile::from_char('S').index();
-  const int kE = Tile::from_char('E').index();
-  const int row7 = 7;                  // row lane 7
-  const int col8 = kLanesPerAxis + 8;  // column lane 8
-
-  // Drew S -> CATS along row 7: S placed at (7,10), a plain square, so the
-  // score is the four face values (C3 A1 T1 S1).
-  ASSERT_EQ(cm.best(kS, row7).score, 6);
-  ASSERT_EQ(cm.best(kS, row7).placed_mask, (1u << 10));
-  // Drew a blank -> CATER along row 7 (blank designated E at (7,10), rack R
-  // on the (7,11) DLS): 3 + 1 + 1 + 0 + 2.
-  ASSERT_EQ(cm.best(kLaneBlankKind, row7).score, 7);
-  // Drew a real E -> the same CATER with the E's face value restored: 8.
-  ASSERT_EQ(cm.best(kE, row7).score, 8);
-  // Drew E -> EAR down column 8 (E at (6,8) DLS, board A, rack R at (8,8)
-  // DLS): 2 + 1 + 2, with the phantom-E rescoring supplying the doubled E.
-  ASSERT_EQ(cm.best(kE, col8).score, 5);
-  ASSERT_EQ(cm.best(kE, col8).placed_mask, ((1u << 6) | (1u << 8)));
-  // Rack alone -> the one-tile vertical hook AR below the A (R at (8,8) DLS):
-  // 1 + 2.
-  ASSERT_EQ(cm.rack_best(col8).score, 3);
-  ASSERT_EQ(cm.rack_best(row7).score, -1);
-
-  // Painted planes: the max plane's value at (7,10) is the best entry through
-  // that cell -- the drew-E CATER (8); a flip moves it to (10,7). Every value
-  // stays in [0,1].
-  std::vector<float> planes(kContingentPlanes * kBoardCells, 0.0f);
-  cm.encode_planes(/*flip=*/false, planes.data());
-  ASSERT_EQ(planes[7 * BOARD_SIZE + 10], 8.0f / kContingentScoreClip);
-  std::vector<float> flipped(kContingentPlanes * kBoardCells, 0.0f);
-  cm.encode_planes(/*flip=*/true, flipped.data());
-  ASSERT_EQ(flipped[10 * BOARD_SIZE + 7], 8.0f / kContingentScoreClip);
-  std::vector<float> scalars(kContingentScalarFloats, -1.0f);
-  cm.encode_scalars(scalars.data());
-  for (float v : scalars) ASSERT_TRUE(v >= 0.0f && v <= 1.0f);
-  ASSERT_EQ(scalars[kS], 6.0f / kContingentScoreClip);
-}
-
 // GameStateEncoder, replayed against a live in-memory replay, faithfully
 // reproduces every eligible position -- proven by running movegen on both and
 // demanding identical legal-play sets at the pre-move snapshot of each turn.
@@ -1334,7 +1140,7 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
 
     auto live_snaps = live_replay_all_snapshots(log);
 
-    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict, true}};
+    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict}};
     // The encoder tracks no racks (an outside observer cannot see opponent
     // draws), but the test has full information, so it maintains a parallel
     // rack pair alongside the encoder.
@@ -1463,7 +1269,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   // Register with DataLoader and drain rows via epoch_start/load_batch
   // for both pre-move and post-move phases.
   scribblez::binlog::DataLoader::Params dl_params;
-  dl_params.spec = {&dict, true};
+  dl_params.spec = {&dict};
   dl_params.num_worker_threads = 2;
   dl_params.num_prefetch_threads = 1;
   scribblez::binlog::DataLoader loader(dl_params);
@@ -1551,7 +1357,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     ASSERT_TRUE(racks_equal(r1_init, logs[gi].initial_racks[1]));
 
     auto live_snaps = live_replay_all_snapshots(logs[gi]);
-    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict, true}};
+    scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict}};
     std::array<scribblez::Rack, 2> racks = {r0_init, r1_init};
 
     size_t snap_idx = 0;
@@ -1727,7 +1533,7 @@ TEST(BinaryLog, RandomOpeningRegion) {
   ASSERT_EQ(int64_t(hdr->num_sample_positions), expected_rows);
 
   scribblez::binlog::DataLoader::Params dl_params;
-  dl_params.spec = {&dict, true};
+  dl_params.spec = {&dict};
   dl_params.num_worker_threads = 1;
   dl_params.num_prefetch_threads = 1;
   scribblez::binlog::DataLoader loader(dl_params);
@@ -2673,7 +2479,7 @@ TEST(DataLoader, PerRowSymmetry) {
     // Apply the q_play so the encoder lands in the turn-0 post-move state:
     // board has Q at (3,5), p0 (the mover) scored 42, last_move_by_p0 = q_play.
     // The POV is the mover (p0), encoded with its post-play leave (6 As).
-    GameStateEncoder ref_enc{InputEncodingSpec{&dict, true}};
+    GameStateEncoder ref_enc{InputEncodingSpec{&dict}};
     ref_enc.apply_move(fix.self_move);
     ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
                          ref_normal.data());
@@ -2694,7 +2500,7 @@ TEST(DataLoader, PerRowSymmetry) {
     ref_labels);
 
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2826,7 +2632,7 @@ TEST(DataLoader, EligibleBeginOffset) {
   // its post-play leave (6 As).
   std::vector<float> ref_row(kInputFloats, 0.0f);
   {
-    GameStateEncoder ref_enc{InputEncodingSpec{&dict, true}};
+    GameStateEncoder ref_enc{InputEncodingSpec{&dict}};
     ref_enc.apply_move(q_play);
     ref_enc.apply_move(c_play);
     Rack leave;
@@ -2840,7 +2646,7 @@ TEST(DataLoader, EligibleBeginOffset) {
                      ref_labels);
 
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -2911,7 +2717,7 @@ TEST(DataLoader, EpochDeterminism) {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
 
@@ -3008,7 +2814,7 @@ TEST(DataLoader, EpochCoverage) {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -3106,7 +2912,7 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
   // Budget = just one file (largest). This forces eviction on every file switch.
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.memory_budget = max_fsize + 1;  // allow exactly one file at a time
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
@@ -3177,7 +2983,7 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
 
   Dictionary dict = medium_dict();
   DataLoader::Params params;
-  params.spec = {&dict, true};
+  params.spec = {&dict};
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -3503,12 +3309,12 @@ TEST(Streaming, DiskEncodeEquivalence) {
     for (bool post_move : {false, true}) {
       const uint8_t flip = 0;
       std::vector<float> row_disk(row_floats, 0.0f);
-      BlockDecoder decoder(InputEncodingSpec{&dict, true});
+      BlockDecoder decoder(InputEncodingSpec{&dict});
       decoder.decode(raw.data(), "eq", /*local_start=*/0, /*n_rows=*/1, &flip, post_move,
                      /*output_row_start=*/0, row_disk.data());
 
       std::vector<float> row_stream(row_floats, 0.0f);
-      PositionEncoder enc(InputEncodingSpec{&dict, true});
+      PositionEncoder enc(InputEncodingSpec{&dict});
       enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*flip=*/false,
                                        row_stream.data());
 
@@ -4756,8 +4562,8 @@ TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
   const int turn = 4;
   ASSERT_LT(turn, g.num_records);
 
-  const InputEncodingSpec base{&dict, false};
-  const InputEncodingSpec open{&dict, false, /*opp_leave_input=*/true};
+  const InputEncodingSpec base{&dict};
+  const InputEncodingSpec open{&dict, /*opp_leave_input=*/true};
   binlog::PositionEncoder base_enc(base);
   binlog::PositionEncoder open_enc(open);
   const int mover = base_enc.replay_to_sampled(g, turn, /*post_move=*/false);
@@ -4967,7 +4773,7 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   std::vector<float> output(kRowFloats, 0.0f);
   uint8_t flip = 0;
   Dictionary dict = medium_dict();
-  BlockDecoder dec(InputEncodingSpec{&dict, true});
+  BlockDecoder dec(InputEncodingSpec{&dict});
   dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
              /*post_move=*/false, /*output_row_start=*/0, output.data());
 
@@ -5297,7 +5103,7 @@ TEST(MaxMovePerLane, TaskRow) {
   const Dictionary d = tiny_dict();
 
   // CAT on the board (the context exposes the board via its GameStateEncoder).
-  GameStateEncoder gse{InputEncodingSpec{&d, true}};
+  GameStateEncoder gse{InputEncodingSpec{&d}};
   gse.apply_move(make_play(CENTER, CENTER, /*horizontal=*/true,
                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                             Glyph::of(Tile::from_char('T'))}));
@@ -5308,7 +5114,7 @@ TEST(MaxMovePerLane, TaskRow) {
     ctx.enc = &gse;
     ctx.pov_rack = &rack;
     ctx.apply_flip = flip;
-    ctx.spec = {&d, true};
+    ctx.spec = {&d};
 
     std::vector<float> row(MaxMovePerLaneTask::kRowFloats, -1.0f);
     MaxMovePerLaneTask::encode_row(ctx, row.data());
@@ -5366,13 +5172,13 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   EXPECT_EQ(bundle.at("scores").as_array()[0].as_int64(), 440);
   EXPECT_EQ(bundle.at("rack").as_array().size(), 7u);
 
-  const InputEncodingSpec arm{&dict, /*contingent_features=*/false, /*opp_leave_input=*/true};
+  const InputEncodingSpec arm{&dict, /*opp_leave_input=*/true};
   std::vector<float> row(size_t(input_floats(arm)));
   int score_diff = 0;
   encode_trajectory_decision(d, arm, row.data(), &score_diff);
   EXPECT_EQ(score_diff, 440 - 387);
   // The hidden arm's row is a prefix-shaped sibling: same spatial block,
   // fewer scalars.
-  const InputEncodingSpec hidden{&dict, false, false};
+  const InputEncodingSpec hidden{&dict, false};
   EXPECT_EQ(input_floats(arm), input_floats(hidden) + kOppLeaveCountFloats);
 }

@@ -18,7 +18,6 @@ import argparse
 import sys
 
 import torch
-from scribblez.ffi import set_contingent_features
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -53,13 +52,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--num-blocks", type=int, default=10, help="Trunk residual blocks.")
     p.add_argument("--trunk-channels", type=int, default=192, help="Trunk width.")
     p.add_argument("--num-heads", type=int, default=4, help="Cross-attention heads.")
-    p.add_argument(
-        "--contingent-features",
-        action="store_true",
-        help="Encode the full input layout (with contingent-draw features) for this model's "
-        "board trunk. Selects the process-wide engine session's input arm; must be consistent "
-        "across a run but is independent of the teacher's arm.",
-    )
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
     p.add_argument("--lambda-planes", type=float, default=1.0, help="Placement-plane BCE weight.")
     p.add_argument("--huber-delta-mean", type=float, default=10.0, help="Huber delta, mean head.")
@@ -80,7 +72,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    set_contingent_features(args.contingent_features)
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 

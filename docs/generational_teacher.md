@@ -90,14 +90,14 @@ comes first and automation comes later:
   (rows-clock-style event log) so plots can annotate teacher changes
   whether a click or a policy caused them.
 
-Promotion **validates all three compatibility axes** before accepting a
+Promotion **validates both compatibility axes** before accepting a
 checkpoint: weights and architecture may change freely, but
-`contingent_features`, `opp_leave_input` (the ONNX metadata arms the
-engine and FFI session adopt), and the tag's information condition
-(`face_up_leaves`) must not — the FFI input arm is process-wide and
-immutable per run, the student's input layout was fixed at task creation,
-and MsetDataset refuses mixed condition flags per tag (that check stays
-per-tag; only the teacher-hash check becomes per-generation).
+`opp_leave_input` (the ONNX metadata arm the engine and FFI session adopt)
+and the tag's information condition (`face_up_leaves`) must not — the FFI
+input arm is process-wide and immutable per run, the student's input layout
+was fixed at task creation, and MsetDataset refuses mixed condition flags
+per tag (that check stays per-tag; only the teacher-hash check becomes
+per-generation).
 
 Promotion **does not touch generation directories**. It writes the record;
 the generation scheduler — still the single writer of generation

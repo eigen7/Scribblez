@@ -130,7 +130,7 @@ const std::vector<float>& TrajectoryRunner::win_equities(const DecisionPoint& dp
   const GameStateEncoder& enc = *dp.enc;
   const int mover = dp.pos.mover;
   const int n = ranked.size();
-  // The contingent input planes read the board's move-generation caches;
+  // The cross-check input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate.
   enc.board().ensure_movegen_caches(*spec_.dict);
   if (spec_.opp_leave_input) {

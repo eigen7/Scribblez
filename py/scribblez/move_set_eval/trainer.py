@@ -32,7 +32,6 @@ from dataclasses import asdict, dataclass
 import torch
 
 from scribblez.dashboard import db
-from scribblez.ffi import set_contingent_features
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
@@ -279,7 +278,6 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         paths.onnx_path(epoch),
         cfg["spatial_planes"],
         cfg["scalar_size"],
-        contingent_features=cfg["contingent_features"],
         opp_leave_input=cfg["open_leaves"],
         move_encoding_version=cfg["move_encoding_version"],
         probe_feeds=ctx["fp16_probe"],
@@ -304,7 +302,6 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
-    set_contingent_features(params.contingent_features)
     wait_for_store(paths.data_dir / SLOGS_DIR, params)
     train_ds, holdout_ds = load_datasets(paths, params)
     print(
