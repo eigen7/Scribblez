@@ -370,6 +370,7 @@ def compute_loss(
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
     lambda_planes: float = 1.0,
+    lambda_wld_z: float = 1e-4,
 ) -> dict[str, torch.Tensor]:
     """Distillation loss over the flattened candidate set (mean over all moves).
 
@@ -386,10 +387,16 @@ def compute_loss(
     planes are per-cell BCE against the teacher's (soft) probabilities. A
     batch without plane targets contributes a zero plane term (the plane head
     simply gets no gradient from it).
+
+    lambda_wld_z weights a z-loss on the WLD logits (mean squared logsumexp)
+    -- the restoring force of docs/fp16_safe_serving.md against unbounded
+    logit growth, which the shift-invariant cross-entropy never opposes (and
+    which a saturated teacher distribution actively drives).
     """
     # Soft cross-entropy: -sum(teacher_prob * log_softmax(pred)).
     log_pred = F.log_softmax(outputs["wld"], dim=1)
     loss_wld = -(targets["target_wld"] * log_pred).sum(dim=1).mean()
+    loss_wld_z = torch.logsumexp(outputs["wld"], dim=1).square().mean()
 
     sd_mean = outputs["score_diff"][:, 0]
     sd_std = outputs["score_diff"][:, 1]
@@ -406,10 +413,11 @@ def compute_loss(
     else:
         loss_planes = outputs["wld"].new_zeros(())
 
-    total = loss_wld + lambda_sd * loss_sd + lambda_planes * loss_planes
+    total = loss_wld + lambda_wld_z * loss_wld_z + lambda_sd * loss_sd + lambda_planes * loss_planes
     return {
         "total": total,
         "wld": loss_wld,
+        "wld_z": loss_wld_z,
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,

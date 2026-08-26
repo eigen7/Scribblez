@@ -112,6 +112,16 @@ steady state:
 
 ## The proposal
 
+Steps 1 and 2 are implemented: the recipe terms are the `lambda_pool_act` /
+`lambda_wld_z` params of both trainers (`PoolFcPenalty` in
+[spatial_trunk.py](../py/scribblez/spatial_trunk.py), z-loss in each
+family's `compute_loss`), and the gate is `py/scribblez/fp16_gate.py`, run
+by every export path (both trainers, the evidence trainer's unfrozen-mode
+student export, the standalone mset exporter) with the per-export peak
+recorded as the `fp16_probe_peak` metric series. The standalone probe CLI
+is [fp16_probe.py](../py/scripts/position_eval/fp16_probe.py). Step 3
+awaits the first gated teacher.
+
 **1. Bound magnitudes in the training recipe.** Add a small activation
 penalty on the pooled-FC pre-activations and/or a z-loss-style penalty on
 the `wld` logits (`logsumexp`-squared, the standard form) so the objective

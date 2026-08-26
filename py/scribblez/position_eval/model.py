@@ -179,6 +179,7 @@ def compute_loss(
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
     placement_pos_weight: float = 1.0,
+    lambda_wld_z: float = 1e-4,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
@@ -203,13 +204,18 @@ def compute_loss(
                  target-1 cells so a rare high-value square is not drowned by the
                  ~98% empty cells -- at the cost of calibration, so it is a
                  diagnostic knob, not a deployable default.
+        lambda_wld_z: weight of the z-loss on the WLD logits (mean squared
+                 logsumexp, the standard form) -- the restoring force of
+                 docs/fp16_safe_serving.md against unbounded logit growth,
+                 which cross-entropy, being shift-invariant, never opposes.
 
     Returns:
         Dict with "total" plus one entry per head loss.
     """
-    # WLD: cross-entropy against one-hot target.
+    # WLD: cross-entropy against one-hot target, plus the z-loss.
     wld_target_idx = targets["wld"].argmax(dim=1)
     loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
+    loss_wld_z = torch.logsumexp(outputs["wld"], dim=1).square().mean()
 
     # Score-diff: two Huber regressions in score points. The mean regresses the
     # observed differential. The std regresses the absolute residual of the mean
@@ -243,6 +249,7 @@ def compute_loss(
 
     total = (
         lambda_wld * loss_wld
+        + lambda_wld_z * loss_wld_z
         + lambda_sd * loss_sd
         + lambda_next_placement
         * (mask_losses["opp_next_placement"] + mask_losses["self_next_placement"])
@@ -253,6 +260,7 @@ def compute_loss(
     return {
         "total": total,
         "wld": loss_wld,
+        "wld_z": loss_wld_z,
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,

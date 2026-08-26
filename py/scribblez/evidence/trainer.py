@@ -65,7 +65,11 @@ from scribblez.generational.controls import (
 from scribblez.move_set_eval import eval as mset_eval
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.dataset import MsetDataset
-from scribblez.move_set_eval.onnx_export import export_onnx
+from scribblez.move_set_eval.onnx_export import (
+    FP16_PROBE_POSITIONS,
+    export_onnx,
+    fp16_probe_feeds_from_batch,
+)
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
@@ -311,12 +315,12 @@ def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
 
 
-def export_student(paths, model, epoch: int, student_cfg: dict):
+def export_student(paths, model, epoch: int, student_cfg: dict, probe_feeds: list[dict]):
     """The unfrozen mode's per-pass plain-student ONNX (models/
     model_epoch_NNNN.onnx), stamped with the student's arm and version as the
-    mset trainer stamps its own. The export covers the plain path only (the
-    evidence path's ONNX is roadmap item 3)."""
-    export_onnx(
+    mset trainer stamps its own, and FP16-gated the same way. The export covers
+    the plain path only (the evidence path's ONNX is roadmap item 3)."""
+    peak = export_onnx(
         model,
         paths.onnx_path(epoch),
         student_cfg["spatial_planes"],
@@ -324,7 +328,9 @@ def export_student(paths, model, epoch: int, student_cfg: dict):
         contingent_features=student_cfg["contingent_features"],
         opp_leave_input=student_cfg["open_leaves"],
         move_encoding_version=student_cfg["move_encoding_version"],
+        probe_feeds=probe_feeds,
     )
+    timed_print(f"  fp16 probe: peak |activation| {peak:.0f}")
 
 
 # Skipped (non-finite) batches tolerated per pass before the run is stopped:
@@ -470,7 +476,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     if params.unfreeze_backbone:
         # Frozen, the plain model is the student byte for byte; only an
         # unfrozen pass has a new plain student to export.
-        export_student(paths, model, epoch, ctx["config"]["student"])
+        export_student(paths, model, epoch, ctx["config"]["student"], ctx["fp16_probe"])
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,
@@ -596,6 +602,12 @@ def run(ctx: WorkerContext) -> int:
         "max_e": max_e,
         "stats": WorkerStats(ctx),
         "posset": PositionSetProbe(params, student_cfg, threads=ctx.threads),
+        # The export gate's probe feeds (docs/fp16_safe_serving.md), built once
+        # from a deterministic holdout batch (the evidence batches carry the
+        # same board/move input keys the builder reads).
+        "fp16_probe": fp16_probe_feeds_from_batch(
+            next(holdout_ds.iter_batches(FP16_PROBE_POSITIONS, seed=0))
+        ),
         **_distill_ctx(store, params, device, max_e),
     }
 
