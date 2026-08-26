@@ -42,7 +42,7 @@ from pathlib import Path
 import numpy as np
 import onnx
 import torch
-from scribblez.ffi import get_input_shapes, set_contingent_features
+from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import move_encoding_dims, move_encoding_version
 from scribblez.move_set_eval.onnx_export import export_onnx
@@ -54,14 +54,11 @@ TRUNK_CHANNELS = 8
 NUM_BLOCKS = 3
 NUM_HEADS = 2
 
+
 # The board layout is owned by the C++ encoder and surfaced through the FFI, so
 # the fixture's row always matches the widths the C++ test reads back off the
 # loaded model.
-CONTINGENT_FEATURES = True
-
-
 def input_widths() -> tuple[int, int, int]:
-    set_contingent_features(CONTINGENT_FEATURES)
     dims = {s.name: s.dims for s in get_input_shapes()}
     planes, height, width = dims["input_spatial"]
     assert height == width, "the model assumes a square board"
@@ -206,7 +203,6 @@ def main() -> int:
             args.out_dir / name,
             spatial_planes,
             scalar_size,
-            contingent_features=CONTINGENT_FEATURES,
             opp_leave_input=False,
             move_encoding_version=encoding_version,
             board_size=board_size,

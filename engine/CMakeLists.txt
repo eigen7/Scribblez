@@ -12,7 +12,6 @@ add_library(scribblez_core STATIC
   src/endgame/path_move_lists.cpp
   src/training/lane_targets.cpp
   src/training/lane_analysis.cpp
-  src/encoding/contingent_map.cpp
   src/encoding/input_encoder.cpp
   src/encoding/board_planes.cpp
   src/training/max_move_per_lane_input_encoder.cpp

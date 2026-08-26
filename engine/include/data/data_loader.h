@@ -56,7 +56,7 @@ class DataLoader {
   struct Params {
     // spec.dict is required and must outlive the loader. `task` fixes both the
     // row decoded and which of a game's turns expand into rows.
-    InputEncodingSpec spec{nullptr, false};
+    InputEncodingSpec spec{nullptr};
     DecodeTask task = DecodeTask::kPositionEval;
     int64_t memory_budget = 256LL * 1024 * 1024;  // resident buffers
     int num_worker_threads = 4;                   // decoder pool size

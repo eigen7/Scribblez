@@ -149,7 +149,6 @@ def _export(tmp_path, model, move_encoding_version=1):
         path,
         SPATIAL_PLANES,
         SCALAR_SIZE,
-        contingent_features=True,
         opp_leave_input=False,
         move_encoding_version=move_encoding_version,
     )
@@ -199,7 +198,6 @@ def test_exported_file_contract(tmp_path):
     meta = {e.key: e.value for e in m.metadata_props}
     assert meta["graph"] == "move_set_eval"
     assert meta["move_encoding_version"] == "1"
-    assert meta["contingent_features"] == "true"
     assert meta["opp_leave_input"] == "false"
     assert "model-architecture-signature" in meta
 
@@ -251,9 +249,7 @@ hdr["record_floats"], hdr["flags"] = 5, flags
 hdr["model_hash"] = b"cafe"
 (store / "x.mset").write_bytes(hdr.tobytes())
 
-got = legacy_checkpoint_condition(
-    SimpleNamespace(data_dir=root), {"contingent_features": False}
-)
+got = legacy_checkpoint_condition(SimpleNamespace(data_dir=root))
 assert got["move_encoding_version"] == 0, got  # pre-fix rows, never the live constant
 assert got["open_leaves"] == bool(flags & T.MSET_FLAG_OPEN_LEAVES), got
 import json

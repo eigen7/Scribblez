@@ -14,15 +14,6 @@ namespace {
 
 }  // namespace
 
-int spatial_planes(const InputEncodingSpec& spec) {
-  int planes = 0;
-  for (const SpatialBlockDef& def : kSpatialBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
-    planes += def.planes;
-  }
-  return planes;
-}
-
 int scalar_floats(const InputEncodingSpec& spec) {
   int floats = 0;
   for (const ScalarBlockDef& def : kScalarBlocks) {
@@ -32,16 +23,11 @@ int scalar_floats(const InputEncodingSpec& spec) {
   return floats;
 }
 
-int spatial_floats(const InputEncodingSpec& spec) { return spatial_planes(spec) * kBoardCells; }
+int input_floats(const InputEncodingSpec& spec) { return spatial_floats() + scalar_floats(spec); }
 
-int input_floats(const InputEncodingSpec& spec) {
-  return spatial_floats(spec) + scalar_floats(spec);
-}
-
-int spatial_block_plane0(const InputEncodingSpec& spec, SpatialBlockId id) {
+int spatial_block_plane0(SpatialBlockId id) {
   int plane = 0;
   for (const SpatialBlockDef& def : kSpatialBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
     if (def.id == id) return plane;
     plane += def.planes;
   }

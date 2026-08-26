@@ -23,10 +23,10 @@
 // .slog's face-up-leaves flag).
 //
 // Threading: encoding a post-move row costs roughly a move generation (the
-// contingent-map block), so CPU encoding -- not GPU inference -- is the
-// bottleneck. Encoder workers produce encoded candidate slices into a bounded
-// queue; a single inference thread packs them into TensorRT batches and
-// scatters the readouts back.
+// cross-check planes need the board's move-generation caches), so CPU encoding
+// -- not GPU inference -- is the bottleneck. Encoder workers produce encoded
+// candidate slices into a bounded queue; a single inference thread packs them
+// into TensorRT batches and scatters the readouts back.
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -521,7 +521,7 @@ int main(int argc, char** argv) {
     params.copy_aux = !opt.full_sweep;
     TeacherService service(params);
     service.load();
-    const InputEncodingSpec spec{&dict, service.contingent_features(), service.opp_leave_input()};
+    const InputEncodingSpec spec{&dict, service.opp_leave_input()};
     const std::string model_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
     opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 

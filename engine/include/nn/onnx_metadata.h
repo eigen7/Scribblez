@@ -24,8 +24,7 @@ inline constexpr const char* kGraphPositionEval = "position_eval";
 inline constexpr const char* kGraphMoveSetEval = "move_set_eval";
 
 struct OnnxMetadata {
-  // The input-encoding arm: which optional blocks the board row carries.
-  bool contingent_features = false;
+  // The input-encoding arm: which optional block the board row carries.
   bool opp_leave_input = false;
 
   // Keys the engine-plan cache, so every checkpoint of one architecture shares

@@ -1,7 +1,6 @@
 #include "encoding/game_state_encoder.h"
 
 #include "encoding/board_planes.h"
-#include "encoding/contingent_map.h"
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
 #include "game/tile.h"
@@ -11,7 +10,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 #include <utility>
 
 namespace scribblez {
@@ -43,8 +41,8 @@ namespace {
 // Index into a single 15x15 plane: row-major if !flip, transposed if flip.
 inline int plane_idx(int r, int c, bool flip) { return util::plane_index(r, c, kBoardSide, flip); }
 
-// Everything the block writers read: the POV-visible position state plus the
-// spec and the (optional) precomputed contingent map, which two blocks share.
+// Everything the block writers read: the POV-visible position state, plus the
+// blocks the spec makes optional.
 struct PovCtx {
   const Board& board;
   const Rack& my_rack;
@@ -53,8 +51,7 @@ struct PovCtx {
   int score_diff;
   const uint8_t* unseen;  // 27 per-kind unseen-pool counts
   bool apply_flip;
-  const ContingentMap* contingent;  // null iff the spec excludes the blocks
-  const Rack* opp_leave;            // null iff the spec excludes the open-leaves block
+  const Rack* opp_leave;  // null iff the spec excludes the open-leaves block
 };
 
 // One plane at `out`, marking the squares `m` placed tiles on. EXCHANGE, PASS,
@@ -179,9 +176,6 @@ int encode_spatial_block(SpatialBlockId id, const PovCtx& ctx, float* out) {
       return encode_placement_plane(ctx.opp_move, ctx.apply_flip, out);
     case SpatialBlockId::kCrossChecks:
       return encode_cross_check_planes(ctx.board, ctx.apply_flip, out);
-    case SpatialBlockId::kContingent:
-      ctx.contingent->encode_planes(ctx.apply_flip, out);
-      return kContingentPlanes;
   }
   std::abort();  // unreachable: the switch covers every SpatialBlockId
 }
@@ -197,9 +191,6 @@ int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
       return encode_score_diff_scalar(ctx.score_diff, out);
     case ScalarBlockId::kMoveMeta:
       return encode_move_meta(ctx.self_move, ctx.opp_move, out);
-    case ScalarBlockId::kContingent:
-      ctx.contingent->encode_scalars(out);
-      return kContingentScalarFloats;
     case ScalarBlockId::kOppLeaveCounts:
       return encode_rack_counts(*ctx.opp_leave, out);
   }
@@ -226,34 +217,22 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   check_layout(!spec.opp_leave_input || opp_leave != nullptr,
                "an open-leaves spec encoded without the opponent leave");
   std::memset(out, 0, sizeof(float) * size_t(input_floats(spec)));
-  // The cross-check and contingent blocks read the board's move-generation
-  // caches; build them up front (a no-op when already valid) so they are
-  // lexicon-accurate regardless of the board's prior cache state.
+  // The cross-check planes read the board's move-generation caches; build them
+  // up front (a no-op when already valid) so they are lexicon-accurate
+  // regardless of the board's prior cache state.
   board.ensure_movegen_caches(*spec.dict);
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  std::optional<ContingentMap> contingent;
-  if (spec.contingent_features) {
-    contingent = ContingentMap::compute(board, my_rack, unseen, *spec.dict);
-  }
-  const PovCtx ctx{board,
-                   my_rack,
-                   self_move,
-                   opp_move,
-                   score_diff,
-                   unseen,
-                   apply_flip,
-                   contingent ? &*contingent : nullptr,
-                   spec.opp_leave_input ? opp_leave : nullptr};
+  const PovCtx ctx{board,      my_rack, self_move,  opp_move,
+                   score_diff, unseen,  apply_flip, spec.opp_leave_input ? opp_leave : nullptr};
 
   float* cursor = out;
   for (const SpatialBlockDef& def : kSpatialBlocks) {
-    if (def.contingent_only && !spec.contingent_features) continue;
     const int planes = encode_spatial_block(def.id, ctx, cursor);
     check_layout(planes == def.planes, "a spatial block's plane count");
     cursor += planes * kBoardCells;
   }
-  check_layout(cursor == out + spatial_floats(spec), "the spatial section's total");
+  check_layout(cursor == out + spatial_floats(), "the spatial section's total");
   for (const ScalarBlockDef& def : kScalarBlocks) {
     if (!scalar_block_included(def, spec)) continue;
     const int floats = encode_scalar_block(def.id, ctx, cursor);
@@ -302,7 +281,7 @@ void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_r
 
 void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) const {
   float* block =
-    input_row + spatial_floats(spec_) + scalar_block_offset(spec_, ScalarBlockId::kScoreDiff);
+    input_row + spatial_floats() + scalar_block_offset(spec_, ScalarBlockId::kScoreDiff);
   encode_score_diff_scalar(score_diff, block);
 }
 

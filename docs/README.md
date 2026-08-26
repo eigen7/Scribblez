@@ -92,7 +92,8 @@
 - **[lexical_features_for_value.md](lexical_features_for_value.md)** — giving
   the value models lexical foresight through engineered GADDAG-computed input
   features (the contingent-draw potential map, the cross-check delta) instead
-  of network-internal lexical knowledge.
+  of network-internal lexical knowledge. The potential map was built and has
+  since been removed; the doc keeps the rationale.
 
 ## The lexical-NN experiment track
 

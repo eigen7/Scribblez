@@ -43,7 +43,6 @@ from scribblez.dataset import SlogDataset
 from scribblez.ffi import (
     get_input_shapes,
     session_input_arm,
-    set_contingent_features,
     set_opp_leave_input,
 )
 from scribblez.generational import checkpoint, lifecycle
@@ -142,7 +141,6 @@ def _checkpoint_and_eval(
         paths.onnx_path(ci),
         ctx["spatial_planes"],
         ctx["scalar_size"],
-        contingent_features=params.contingent_features,
         opp_leave_input=params.face_up_leaves,
         probe_feeds=ctx["fp16_probe"],
     )
@@ -360,7 +358,6 @@ def run(ctx: WorkerContext) -> int:
     # model, the ONNX export, and the eval batches -- all follow them. A
     # face-up-leaves run trains on the opponent-leave input block, matching the
     # information condition its self-play games are generated under.
-    set_contingent_features(params.contingent_features)
     set_opp_leave_input(params.face_up_leaves)
 
     paths = ctx.tag_paths()

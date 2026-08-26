@@ -23,7 +23,7 @@ struct EncodeContext {
   int active_player = 0;
   bool apply_flip = false;  // transpose spatial planes/labels across the diagonal
 
-  InputEncodingSpec spec{nullptr, false};
+  InputEncodingSpec spec{nullptr};
 
   // Each player's next move from the sampled snapshot onward, and the game's
   // final scores. A move past the end of the game leaves its has_* flag false.

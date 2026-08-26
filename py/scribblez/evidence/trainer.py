@@ -53,7 +53,7 @@ from scribblez.evidence.train_loop import (
     run_epoch,
 )
 from scribblez.evidence.trajectory_view import DecisionAnalysis, position_set_metrics
-from scribblez.ffi import move_encoding_version, set_contingent_features
+from scribblez.ffi import move_encoding_version
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
@@ -326,7 +326,6 @@ def export_student(paths, model, epoch: int, student_cfg: dict, probe_feeds: lis
         paths.onnx_path(epoch),
         student_cfg["spatial_planes"],
         student_cfg["scalar_size"],
-        contingent_features=student_cfg["contingent_features"],
         opp_leave_input=student_cfg["open_leaves"],
         move_encoding_version=student_cfg["move_encoding_version"],
         probe_feeds=probe_feeds,
@@ -565,7 +564,6 @@ def run(ctx: WorkerContext) -> int:
             f"{move_encoding_version()}"
         )
         return 1
-    set_contingent_features(student_cfg["contingent_features"])
     store = paths.data_dir / SLOGS_DIR
     wait_for_store(store, params)
     train_ds, holdout_ds = load_datasets(store, params)

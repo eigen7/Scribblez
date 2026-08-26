@@ -33,7 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import score_diff_input_layout, set_contingent_features
+from scribblez.ffi import score_diff_input_layout
 from scribblez.fp16_gate import PROBE_LEADS, check_fp16_headroom
 from scribblez.onnx_export_util import (
     architecture_signature,
@@ -164,7 +164,6 @@ def export_onnx(
     spatial_planes: int,
     scalar_size: int,
     *,
-    contingent_features: bool,
     opp_leave_input: bool,
     move_encoding_version: int,
     board_size: int = 15,
@@ -223,7 +222,7 @@ def export_onnx(
         write_metadata(
             tmp_path,
             {
-                **common_metadata(contingent_features, opp_leave_input),
+                **common_metadata(opp_leave_input),
                 "model-architecture-signature": architecture_signature(wrapper, opset),
                 "graph": "move_set_eval",
                 "move_encoding_version": str(move_encoding_version),
@@ -279,7 +278,7 @@ def fp16_probe_feeds_from_batch(batch: dict, *, leads: tuple[int, ...] = PROBE_L
     return feeds
 
 
-def legacy_checkpoint_condition(paths, config: dict) -> dict:
+def legacy_checkpoint_condition(paths) -> dict:
     """Recover the self-describing config fields for a checkpoint that predates
     them: adopt the information-condition arm from the tag's .mset corpus (the
     trainer's own path), then read the input widths off the session layout.
@@ -293,7 +292,6 @@ def legacy_checkpoint_condition(paths, config: dict) -> dict:
             f"checkpoint config predates the self-describing fields and "
             f"{Path(paths.data_dir) / 'slogs'} holds no .mset to re-adopt the arm from"
         )
-    set_contingent_features(config["contingent_features"])
     adopt_information_condition(mset_files)
     input_shapes, _ = row_layout()
     dims = {s.name: s.dims for s in input_shapes}

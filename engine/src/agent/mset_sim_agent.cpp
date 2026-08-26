@@ -67,7 +67,7 @@ void MsetSimAgent::observe_move(const Move& move) {
 }
 
 void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
-  // The contingent input planes read the board's move-generation caches;
+  // The cross-check input planes read the board's move-generation caches;
   // building them here (a no-op once valid) keeps them lexicon-accurate.
   encoder_.board().ensure_movegen_caches(*spec_.dict);
   // The encoder's active player is this agent's own seat: it has observed every

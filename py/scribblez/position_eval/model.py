@@ -23,10 +23,9 @@ Architecture:
       there".
 
 The two model input widths come from the engine session's input-encoding spec
-(full layout 88 planes / 992 scalars with contingent features, base layout
-85 / 936 without) and, with the six head output shapes, are fixed by the
-training pipeline and the C++ inference contract; the trunk between them is
-free to change.
+(85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
+the six head output shapes, are fixed by the training pipeline and the C++
+inference contract; the trunk between them is free to change.
 
 docs/model_architectures.md diagrams this network; any change to the
 architecture belongs in the same commit as the corresponding change there.

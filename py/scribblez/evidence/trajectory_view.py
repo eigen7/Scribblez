@@ -132,7 +132,6 @@ class DecisionAnalysis:
         cfg = ckpt.student_cfg
         self.inputs: GcgPositionInputs = gcg_position_inputs(
             gcg_text,
-            contingent_features=cfg["contingent_features"],
             opp_leave_input=cfg["open_leaves"],
             spatial_planes=cfg["spatial_planes"],
             scalar_size=cfg["scalar_size"],

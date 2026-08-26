@@ -57,7 +57,6 @@ def _export_random(path: Path, seed: int, spatial_planes: int, scalar_size: int)
         path,
         spatial_planes,
         scalar_size,
-        contingent_features=False,
         opp_leave_input=False,
         move_encoding_version=1,
     )

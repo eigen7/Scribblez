@@ -24,7 +24,6 @@ import onnx
 from scribblez.ffi import (
     InputArm,
     session_input_arm,
-    set_contingent_features,
     set_opp_leave_input,
 )
 from scribblez.fp16_gate import FP16_MAX, GATE_THRESHOLD, intermediate_peaks
@@ -41,7 +40,6 @@ def model_arm(path: str) -> InputArm:
     meta = {p.key: p.value for p in m.metadata_props}
     dims = {i.name: [d.dim_value for d in i.type.tensor_type.shape.dim] for i in m.graph.input}
     return InputArm(
-        contingent_features=meta.get("contingent_features") == "true",
         opp_leave_input=meta.get("opp_leave_input") == "true",
         spatial_planes=dims["input_spatial"][1],
         scalar_size=dims["input_scalar"][1],
@@ -60,7 +58,6 @@ def main() -> int:
     # model's own arm, adopted into the session so the score-diff scalar
     # offset the sweep stamps is that arm's.
     arm = model_arm(args.models[0])
-    set_contingent_features(arm.contingent_features)
     set_opp_leave_input(arm.opp_leave_input)
     session_arm = session_input_arm()
     if (session_arm.spatial_planes, session_arm.scalar_size) != (

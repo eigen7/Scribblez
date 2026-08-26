@@ -91,7 +91,6 @@ def main() -> int:
         onnx_path,
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
-        contingent_features=True,
         opp_leave_input=False,
         board_size=BOARD_SIZE,
     )

@@ -75,13 +75,12 @@ def write_metadata(path: Path, entries: dict[str, str]):
     onnx.save(m, str(path))
 
 
-def common_metadata(contingent_features: bool, opp_leave_input: bool) -> dict[str, str]:
+def common_metadata(opp_leave_input: bool) -> dict[str, str]:
     """The metadata entries every exporter stamps -- the input-encoding arm,
     the board-row encoding version (the engine's loader rejects a checkpoint
     trained under a different one), and the lexicon -- for the exporter to
     extend with its graph-specific keys."""
     return {
-        "contingent_features": "true" if contingent_features else "false",
         "opp_leave_input": "true" if opp_leave_input else "false",
         "input_encoding_version": str(format_layout()["constants"]["input_encoding_version"]),
         "lexicon": DEFAULT_LEXICON,
