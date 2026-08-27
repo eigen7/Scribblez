@@ -1,6 +1,7 @@
 #include "nn/neural_net.h"
 
 #include "nn/cuda_util.h"
+#include "nn/fp32_pinning.h"
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
 
@@ -10,11 +11,9 @@
 #include <NvInferRuntime.h>
 #include <NvOnnxParser.h>
 #include <algorithm>
-#include <deque>
 #include <filesystem>
 #include <format>
 #include <iostream>
-#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -250,73 +249,53 @@ void NeuralNetBase::Impl::deserialize_engine(const std::vector<char>& plan) {
 
 namespace {
 
-// Pin the spec's overflow-prone region to FP32 for an FP16 build: every
-// layer whose name contains one of `substrings`, then downstream through
-// consumers (the shuffles and adds carrying the too-large values) up to and
-// including the first re-normalizing layer, whose output is back in FP16
-// range. Constants are skipped (shape data has no float precision), and
-// non-terminal pinned layers also force FP32 output storage -- a 72k value
-// downcast between layers would overflow just the same. Returns the pinned
-// layer count; throws if the walk runs away, which means the substring list
-// no longer matches the exported architecture.
-int pin_fp32_region(nvinfer1::INetworkDefinition& network,
-                    std::span<const char* const> substrings) {
-  std::unordered_map<nvinfer1::ITensor*, std::vector<nvinfer1::ILayer*>> consumers;
-  for (int i = 0; i < network.getNbLayers(); ++i) {
-    nvinfer1::ILayer* layer = network.getLayer(i);
-    for (int j = 0; j < layer->getNbInputs(); ++j) consumers[layer->getInput(j)].push_back(layer);
+// Maps a TensorRT INetworkDefinition onto the GPU-free Fp32PinGraph the pinning
+// walk runs over (nn/fp32_pinning.h). Tensor ids are assigned first-seen, so
+// they are stable and equal iff the ITensor pointers match, which is all the
+// walk needs.
+class TrtPinGraph : public nn::Fp32PinGraph {
+ public:
+  explicit TrtPinGraph(nvinfer1::INetworkDefinition& network) : network_(network) {}
+
+  int num_layers() const override { return network_.getNbLayers(); }
+  std::string_view layer_name(int layer) const override {
+    return network_.getLayer(layer)->getName();
+  }
+  int num_inputs(int layer) const override { return network_.getLayer(layer)->getNbInputs(); }
+  int num_outputs(int layer) const override { return network_.getLayer(layer)->getNbOutputs(); }
+  int input_tensor(int layer, int input) const override {
+    return tensor_id(network_.getLayer(layer)->getInput(input));
+  }
+  int output_tensor(int layer, int output) const override {
+    return tensor_id(network_.getLayer(layer)->getOutput(output));
+  }
+  void pin_layer_fp32(int layer) override {
+    network_.getLayer(layer)->setPrecision(nvinfer1::DataType::kFLOAT);
+  }
+  void pin_output_fp32(int layer, int output) override {
+    network_.getLayer(layer)->setOutputType(output, nvinfer1::DataType::kFLOAT);
   }
 
-  std::set<nvinfer1::ILayer*> pinned;
-  std::deque<nvinfer1::ITensor*> frontier;
-  const auto pin = [&](nvinfer1::ILayer* layer, bool terminal) {
-    if (!pinned.insert(layer).second) return;
-    layer->setPrecision(nvinfer1::DataType::kFLOAT);
-    if (terminal) return;
-    for (int j = 0; j < layer->getNbOutputs(); ++j) {
-      layer->setOutputType(j, nvinfer1::DataType::kFLOAT);
-      frontier.push_back(layer->getOutput(j));
+  nn::PinLayerKind layer_kind(int layer) const override {
+    switch (network_.getLayer(layer)->getType()) {
+      case nvinfer1::LayerType::kCONSTANT:
+        return nn::PinLayerKind::kConstant;
+      case nvinfer1::LayerType::kSCALE:
+      case nvinfer1::LayerType::kNORMALIZATION:
+        return nn::PinLayerKind::kRenormalizing;
+      default:
+        return nn::PinLayerKind::kOther;
     }
-  };
+  }
 
-  for (const char* sub : substrings) {
-    bool matched = false;
-    for (int i = 0; i < network.getNbLayers(); ++i) {
-      nvinfer1::ILayer* layer = network.getLayer(i);
-      if (layer->getType() == nvinfer1::LayerType::kCONSTANT) continue;
-      if (std::string_view(layer->getName()).find(sub) != std::string_view::npos) {
-        pin(layer, /*terminal=*/false);
-        matched = true;
-      }
-    }
-    // A substring that matches nothing means the exported architecture
-    // renamed the region the spec believes is overflow-prone: pinning would
-    // silently vanish and the NaNs would return. Fail the build instead.
-    if (!matched) {
-      throw util::Exception(
-        "FP32 pinning: no layer name contains \"{}\"; the exported architecture and the "
-        "spec's overflow-prone-layer list (model_specs.h) have drifted apart",
-        sub);
-    }
+ private:
+  int tensor_id(nvinfer1::ITensor* tensor) const {
+    return ids_.emplace(tensor, int(ids_.size())).first->second;
   }
-  while (!frontier.empty()) {
-    nvinfer1::ITensor* tensor = frontier.front();
-    frontier.pop_front();
-    for (nvinfer1::ILayer* c : consumers[tensor]) {
-      if (c->getType() == nvinfer1::LayerType::kCONSTANT) continue;
-      const bool terminal = c->getType() == nvinfer1::LayerType::kSCALE ||
-                            c->getType() == nvinfer1::LayerType::kNORMALIZATION;
-      pin(c, terminal);
-    }
-    if (pinned.size() > 64) {
-      throw util::Exception(
-        "FP32 pinning walked {} layers without renormalizing; the spec's substrings no longer "
-        "match the exported architecture",
-        pinned.size());
-    }
-  }
-  return int(pinned.size());
-}
+
+  nvinfer1::INetworkDefinition& network_;
+  mutable std::unordered_map<nvinfer1::ITensor*, int> ids_;
+};
 
 }  // namespace
 
@@ -349,7 +328,8 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
   if (params.precision == Precision::kFP16) {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
     if (!spec.fp32_layer_substrings.empty()) {
-      const int pinned = pin_fp32_region(*network, spec.fp32_layer_substrings);
+      TrtPinGraph graph(*network);
+      const int pinned = nn::pin_fp32_region(graph, spec.fp32_layer_substrings);
       config->setFlag(nvinfer1::BuilderFlag::kOBEY_PRECISION_CONSTRAINTS);
       std::cerr << "[TRT] Pinned " << pinned << " overflow-prone layers to FP32\n";
     }
