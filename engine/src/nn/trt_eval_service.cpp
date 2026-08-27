@@ -171,6 +171,15 @@ template std::unique_ptr<EvalService<PositionEvaluationSpec>> make_loaded_servic
 template std::unique_ptr<EvalService<MoveSetEvaluationSpec>> make_loaded_service(
   const NeuralNetParams<MoveSetEvaluationSpec>& params);
 
+std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
+                                                                int cuda_device_id) {
+  if (onnx_path.empty()) return nullptr;
+  NeuralNetParams<PositionEvaluationSpec> params;
+  params.onnx_path = onnx_path;
+  params.cuda_device_id = cuda_device_id;
+  return make_loaded_service(params);
+}
+
 template class TrtEvalService<PositionEvaluationSpec>;
 template class TrtEvalService<MoveSetEvaluationSpec>;
 

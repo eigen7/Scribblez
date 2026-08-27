@@ -46,10 +46,8 @@ class SimAgent : public Agent {
     // and the agent plays WORSE than the static equity it started from -- 35%
     // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
     SimRunner::Params sim = {400, 1};
-    // Value truncation (docs/roadmap.md item 2): 0 rolls out to a natural
-    // end; otherwise rollouts stop after this many plies and the leaf
-    // service handed to the constructor -- a position evaluation model --
-    // scores the horizon.
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The leaf service handed to the constructor scores the horizon.
     int sim_horizon = 0;
     SimObjective objective = SimObjective::kWinRate;
     uint64_t seed = 0;

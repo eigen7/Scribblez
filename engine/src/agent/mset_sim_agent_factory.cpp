@@ -120,18 +120,11 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   // engine.
   validate(params);
 
-  if ((opts.sim_horizon > 0) != !opts.leaf_model.empty()) {
-    throw util::CleanException("mset-sim agent: --sim-horizon and --leaf-model come together");
-  }
-  std::unique_ptr<nn::PositionEvalService> leaf;
-  if (!opts.leaf_model.empty()) {
-    // The leaf net shares the service's device; its per-call ceiling is the
-    // position family's own (the runner batches to it).
-    nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
-    leaf_params.onnx_path = opts.leaf_model;
-    leaf_params.cuda_device_id = opts.service.cuda_device;
-    leaf = nn::make_loaded_service(leaf_params);
-  }
+  SimRunner::validate_horizon("mset-sim agent", opts.sim_horizon, !opts.leaf_model.empty());
+  // The leaf net shares the service's device; its per-call ceiling is the
+  // position family's own (the runner batches to it).
+  std::unique_ptr<nn::PositionEvalService> leaf =
+    nn::load_leaf_position_service(opts.leaf_model, opts.service.cuda_device);
 
   // Raising the per-pass ceiling to the shortlist just lets the whole shortlist
   // be scored in one pass; the service chunks to the ceiling either way.

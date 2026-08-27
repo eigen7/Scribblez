@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -86,9 +87,8 @@ struct Options {
 // reason as sim_obs_tool: an empty .sobs would stand in for real evidence.
 void validate(const Options& opt) {
   evidence::validate(opt.traj);
-  if ((opt.traj.horizon > 0) != !opt.leaf_model.empty()) {
-    throw util::CleanException("--horizon and --leaf-model come together");
-  }
+  SimRunner::validate_horizon("evidence-trajectory-generator", opt.traj.horizon,
+                              !opt.leaf_model.empty());
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   const bool slog_mode = !opt.slog_dir.empty() || !opt.slog_files.empty();
   if (slog_mode == opt.gcg_mode()) {
@@ -132,8 +132,8 @@ void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uin
 // shared index. Results are written by index, so the output is canonically
 // ordered and byte-stable across thread counts.
 template <typename Front>
-void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
-                   util::ProgressMeter* meter) {
+void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
+                       util::ProgressMeter* meter) {
   typename Front::Worker worker(front);
   TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf_eval_service);
   const std::vector<typename Front::Item>& work = front.work;
@@ -143,18 +143,38 @@ void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* ne
   }
 }
 
+// Thread entry: runs the worker and captures any exception into *err for the
+// joining thread to rethrow. A non-finite leaf readout makes the runner throw
+// at runtime, and letting it escape a std::thread would terminate the process
+// instead of printing an error.
+template <typename Front>
+void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
+                   util::ProgressMeter* meter, std::exception_ptr* err) {
+  try {
+    run_worker_thread(sh, front, next, meter);
+  } catch (...) {
+    *err = std::current_exception();
+  }
+}
+
 template <typename Front>
 void run_positions(const Shared& sh, const Front& front, util::ProgressMeter* meter) {
   std::atomic<size_t> next{0};
   std::thread gpu(&StudentScorer::run, sh.scorer);
   std::vector<std::thread> workers;
   const int threads = std::clamp<int>(sh.opt.threads, 1, std::max<size_t>(1, front.work.size()));
+  std::vector<std::exception_ptr> errors(threads);
   for (int t = 0; t < threads; ++t) {
-    workers.emplace_back(worker_thread<Front>, std::cref(sh), std::cref(front), &next, meter);
+    workers.emplace_back(worker_thread<Front>, std::cref(sh), std::cref(front), &next, meter,
+                         &errors[t]);
   }
   for (auto& w : workers) w.join();
   sh.scorer->stop();
   gpu.join();
+  // Cleanup above runs unconditionally; only then surface the first worker
+  // failure on this thread rather than letting it terminate the process.
+  for (const std::exception_ptr& e : errors)
+    if (e) std::rethrow_exception(e);
 }
 
 // --- the .slog front-end ---
@@ -457,15 +477,11 @@ int main(int argc, char** argv) {
     // The truncation leaf service, shared by every position worker (the
     // runners are single-threaded, but many run at once; EvalService
     // serializes their calls).
-    std::unique_ptr<nn::PositionEvalService> leaf_eval_service;
+    std::unique_ptr<nn::PositionEvalService> leaf_eval_service =
+      nn::load_leaf_position_service(opt.leaf_model, params.cuda_device_id);
     std::string leaf_hash;
-    if (!opt.leaf_model.empty()) {
-      nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
-      leaf_params.onnx_path = opt.leaf_model;
-      leaf_params.cuda_device_id = params.cuda_device_id;
-      leaf_eval_service = nn::make_loaded_service(leaf_params);
+    if (!opt.leaf_model.empty())
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
-    }
 
     if (opt.gcg_mode()) {
       run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);

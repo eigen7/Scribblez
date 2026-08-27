@@ -28,17 +28,6 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
-// The runner params `params` describe: under a truncation horizon the
-// agent's own served model is the leaf evaluator (EvalService serializes
-// the sim threads' calls itself).
-SimRunner::Params runner_params(const NeuralSimAgent::Params& params,
-                                nn::PositionEvalService* leaf) {
-  SimRunner::Params p = params.sim;
-  p.horizon_plies = params.sim_horizon;
-  p.leaf_service = params.sim_horizon > 0 ? leaf : nullptr;
-  return p;
-}
-
 }  // namespace
 
 NeuralSimAgent::NeuralSimAgent(const Params& params,
@@ -51,7 +40,9 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
       drop_best_prob_(params.drop_best_prob),
       seed_(params.seed),
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
-      runner_(*params.dict, runner_params(params, &evaluator_.service())),
+      runner_(*params.dict,
+              make_runner_params(params.sim, params.sim_horizon,
+                                 params.sim_horizon > 0 ? &evaluator_.service() : nullptr)),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
 }
@@ -64,12 +55,10 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw util::CleanException("neural-sim agent: --drop-best-prob must be in [0, 1]");
   SimRunner::validate(params.sim);
-  if (params.sim_horizon != 0 && params.sim_horizon < SimRunner::kMinHorizonPlies) {
-    throw util::CleanException(
-      "neural-sim agent: --sim-horizon must be 0 (terminal rollouts) or "
-      ">= {}",
-      SimRunner::kMinHorizonPlies);
-  }
+  // The agent's own served model is always the leaf, so the pairing holds by
+  // construction; this checks the horizon lower bound early -- the factory
+  // calls validate() before loading that model.
+  SimRunner::validate_horizon("neural-sim agent", params.sim_horizon, params.sim_horizon > 0);
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {

@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -96,13 +97,7 @@ SimRunner::Params sim_params(const Options& opt, nn::PositionEvalService* leaf_e
 // .slog -- so the empty output would silently stand in for the real evidence
 // until someone noticed the corpus was hollow.
 void validate(const Options& opt) {
-  if ((opt.horizon > 0) != !opt.leaf_model.empty()) {
-    throw util::CleanException("--horizon and --leaf-model come together");
-  }
-  if (opt.horizon != 0 && opt.horizon < SimRunner::kMinHorizonPlies) {
-    throw util::CleanException("--horizon must be 0 (terminal rollouts) or >= {}",
-                               SimRunner::kMinHorizonPlies);
-  }
+  SimRunner::validate_horizon("sim-obs-tool", opt.horizon, !opt.leaf_model.empty());
   Options terminal = opt;  // the leaf service does not exist yet
   terminal.horizon = 0;
   SimRunner::validate(sim_params(terminal, nullptr));
@@ -126,10 +121,10 @@ struct PositionResult {
 // is across positions, which utilizes cores better than within-position
 // threading and keeps every position's sims deterministic regardless of the
 // worker count).
-void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
-                     nn::PositionEvalService* leaf_eval_service,
-                     const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
-                     std::vector<PositionResult>* results, util::ProgressMeter* meter) {
+void run_position_worker(const char* buf, const Dictionary& dict, const Options& opt,
+                         nn::PositionEvalService* leaf_eval_service,
+                         const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
+                         std::vector<PositionResult>* results, util::ProgressMeter* meter) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict});
   const SimRunner runner(dict, sim_params(opt, leaf_eval_service));
@@ -176,6 +171,22 @@ void position_worker(const char* buf, const Dictionary& dict, const Options& opt
   }
 }
 
+// Thread entry: runs the worker and captures any exception into *err for the
+// joining thread to rethrow. A non-finite leaf readout makes SimRunner::run
+// throw at runtime -- past the up-front validate() -- so letting it escape a
+// std::thread would terminate the process instead of printing an error.
+void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
+                     nn::PositionEvalService* leaf_eval_service,
+                     const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
+                     std::vector<PositionResult>* results, util::ProgressMeter* meter,
+                     std::exception_ptr* err) {
+  try {
+    run_position_worker(buf, dict, opt, leaf_eval_service, work, next, results, meter);
+  } catch (...) {
+    *err = std::current_exception();
+  }
+}
+
 // Generate the .sobs sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
                   const Options& opt, nn::PositionEvalService* leaf_eval_service,
@@ -195,10 +206,13 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   std::atomic<size_t> next{0};
   std::vector<std::thread> workers;
   const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
+  std::vector<std::exception_ptr> errors(threads);
   for (int t = 0; t < threads; ++t)
     workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
-                         leaf_eval_service, std::cref(work), &next, &results, meter);
+                         leaf_eval_service, std::cref(work), &next, &results, meter, &errors[t]);
   for (auto& w : workers) w.join();
+  for (const std::exception_ptr& e : errors)
+    if (e) std::rethrow_exception(e);
 
   // The work list is sorted by (game, turn) and results are indexed by work
   // slot, so the output is canonically ordered and byte-stable across thread
@@ -272,14 +286,11 @@ int main(int argc, char** argv) {
     // The truncation leaf service, shared by every position worker (the
     // runners are single-threaded, but many run at once; EvalService
     // serializes their calls).
-    std::unique_ptr<nn::PositionEvalService> leaf_eval_service;
+    std::unique_ptr<nn::PositionEvalService> leaf_eval_service =
+      nn::load_leaf_position_service(opt.leaf_model);
     std::string leaf_hash;
-    if (!opt.leaf_model.empty()) {
-      nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
-      leaf_params.onnx_path = opt.leaf_model;
-      leaf_eval_service = nn::make_loaded_service(leaf_params);
+    if (!opt.leaf_model.empty())
       leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
-    }
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const binlog::PendingSlog& p : pending) {

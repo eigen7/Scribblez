@@ -98,8 +98,7 @@ class Game {
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};
   GameLogStorage log_;
-  // What each player has publicly retained, empty until they first move. A
-  // move sets its mover's entry to the tiles left after it, before any draw.
+  // Backs leave(); see there for the semantics.
   std::array<Rack, 2> leaves_{};
   bool face_up_leaves_ = false;
   int max_plies_ = 0;  // 0 = no cap

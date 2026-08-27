@@ -92,7 +92,7 @@ class EvidenceTrajectoriesParams:
     )
     leaf_model: str = param(
         "",
-        "absolute path to the position-eval ONNX scoring rollout horizons; required with, "
+        "absolute path to the position-eval ONNX that scores rollout horizons; required with, "
         "and only with, horizon, and frozen like proposer_model",
     )
     proposals_min: int = param(2, "least model proposals per trajectory")

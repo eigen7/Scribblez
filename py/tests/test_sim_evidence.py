@@ -12,11 +12,16 @@ import numpy as np
 import pytest
 import torch
 from scribblez.dataset import row_layout
+from scribblez.evidence.dataset import TrajectoryDataset
 from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
 from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
+    _FILE_HEADER,
     MOVE_PLAY,
     NUM_EVIDENCE_SCALARS,
+    SOBS_FLAG_TRAJECTORY,
+    SOBS_MAGIC,
+    SOBS_VERSION,
     evidence_features,
     move_footprint,
     read_sobs,
@@ -314,3 +319,42 @@ def test_empty_evidence_is_finite():
         )
     for value in out.values():
         assert torch.isfinite(value).all()
+
+
+def _write_header_only_sobs(path: Path, *, proposer: str, leaf_hash: str, horizon: int) -> Path:
+    """A valid trajectory .sobs holding no positions -- enough to exercise
+    TrajectoryDataset.absorb's header-consistency checks without an engine
+    binary."""
+    hdr = np.zeros(1, dtype=_FILE_HEADER)
+    hdr["magic"] = SOBS_MAGIC
+    hdr["version"] = SOBS_VERSION
+    hdr["flags"] = SOBS_FLAG_TRAJECTORY
+    hdr["horizon_plies"] = horizon
+    hdr["num_positions"] = 0
+    hdr["proposer_hash"] = proposer.encode()
+    hdr["leaf_model_hash"] = leaf_hash.encode()
+    path.write_bytes(hdr.tobytes())
+    path.with_suffix(".slog").touch()  # absorb records the sibling; never read here
+    return path
+
+
+def test_absorb_refuses_mismatched_leaf_hash(tmp_path):
+    a = _write_header_only_sobs(tmp_path / "a.sobs", proposer="p", leaf_hash="cafe", horizon=4)
+    b = _write_header_only_sobs(tmp_path / "b.sobs", proposer="p", leaf_hash="beef", horizon=4)
+    with pytest.raises(ValueError, match="leaf models/horizons"):
+        TrajectoryDataset([a, b])
+
+
+def test_absorb_refuses_mismatched_horizon(tmp_path):
+    a = _write_header_only_sobs(tmp_path / "a.sobs", proposer="p", leaf_hash="cafe", horizon=4)
+    b = _write_header_only_sobs(tmp_path / "b.sobs", proposer="p", leaf_hash="cafe", horizon=6)
+    with pytest.raises(ValueError, match="leaf models/horizons"):
+        TrajectoryDataset([a, b])
+
+
+def test_absorb_accepts_matching_leaf(tmp_path):
+    a = _write_header_only_sobs(tmp_path / "a.sobs", proposer="p", leaf_hash="cafe", horizon=4)
+    b = _write_header_only_sobs(tmp_path / "b.sobs", proposer="p", leaf_hash="cafe", horizon=4)
+    ds = TrajectoryDataset([a, b])
+    assert ds.num_positions == 0
+    assert ds.files == [a, b]

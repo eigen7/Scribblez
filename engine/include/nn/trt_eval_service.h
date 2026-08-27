@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <span>
+#include <string>
 
 // The TensorRT-backed EvalService<Spec>: the production implementation of the
 // interface, kept out of eval_service.h so an agent or a stub-driven test
@@ -66,6 +67,14 @@ class TrtEvalService : public EvalService<Spec> {
 // factory needs to stand up production inference.
 template <typename Spec>
 std::unique_ptr<EvalService<Spec>> make_loaded_service(const NeuralNetParams<Spec>& params);
+
+// Loads a position-evaluation leaf service from an .onnx path for value
+// truncation, or returns null for an empty path. The one place the sim
+// agents and the offline generators stand up their leaf model, so they
+// cannot drift on how it is served (FP16 with the family's FP32 pins,
+// model_specs.h).
+std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
+                                                                int cuda_device_id = 0);
 
 extern template class TrtEvalService<PositionEvaluationSpec>;
 extern template class TrtEvalService<MoveSetEvaluationSpec>;

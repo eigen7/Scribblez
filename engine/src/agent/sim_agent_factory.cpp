@@ -79,9 +79,9 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   } catch (const std::exception& e) {
     throw util::CleanException("bad --type=sim options: {}", e.what());
   }
-  if ((opts.sim_horizon > 0) != !opts.leaf_model.empty()) {
-    throw util::CleanException("sim agent: --sim-horizon and --leaf-model come together");
-  }
+  // Validate the truncation flags before loading the leaf model, so a bad
+  // combination fails fast rather than after seconds of TensorRT engine build.
+  SimRunner::validate_horizon("sim agent", opts.sim_horizon, !opts.leaf_model.empty());
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
 
@@ -97,12 +97,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
 
-  std::unique_ptr<nn::PositionEvalService> leaf;
-  if (!opts.leaf_model.empty()) {
-    nn::NeuralNetParams<nn::PositionEvaluationSpec> leaf_params;
-    leaf_params.onnx_path = opts.leaf_model;
-    leaf = nn::make_loaded_service(leaf_params);
-  }
+  std::unique_ptr<nn::PositionEvalService> leaf = nn::load_leaf_position_service(opts.leaf_model);
   return std::make_unique<SimAgent>(params, std::move(leaf));
 }
 

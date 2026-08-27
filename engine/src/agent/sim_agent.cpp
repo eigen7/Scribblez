@@ -22,15 +22,6 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
-// The runner params `params` describe, over the leaf evaluator (null for
-// terminal rollouts; EvalService serializes the sim threads' calls itself).
-SimRunner::Params runner_params(const SimAgent::Params& params, nn::PositionEvalService* leaf) {
-  SimRunner::Params p = params.sim;
-  p.horizon_plies = params.sim_horizon;
-  p.leaf_service = leaf;
-  return p;
-}
-
 }  // namespace
 
 SimAgent::SimAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> leaf_service)
@@ -39,7 +30,8 @@ SimAgent::SimAgent(const Params& params, std::unique_ptr<nn::PositionEvalService
       objective_(params.objective),
       seed_(params.seed),
       leaf_service_(std::move(leaf_service)),
-      runner_(require_dict(params.dict), runner_params(params, leaf_service_.get())),
+      runner_(require_dict(params.dict),
+              make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
       endgame_(params.thread_id, params.endgame) {
   if (top_k_ < 1) throw util::CleanException("sim agent: --top-k must be >= 1");
 }

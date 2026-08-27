@@ -58,10 +58,8 @@ class MsetSimAgent : public Agent {
     // against it -- and against NeuralSimAgent -- the configuration-free
     // default.
     SimRunner::Params sim = {400, 1};
-    // Value truncation (docs/roadmap.md item 2): 0 rolls out to a natural
-    // end; otherwise rollouts stop after this many plies and the leaf
-    // service handed to the constructor -- a position evaluation model --
-    // scores the horizon.
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The leaf service handed to the constructor scores the horizon.
     int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults

@@ -32,6 +32,7 @@
 #include "lexicon/dictionary.h"
 #include "sim/sim_runner.h"
 #include "sim_agent_fixture.h"
+#include "stub_eval_service.h"
 #include "stub_move_set_eval_service.h"
 #include "synthetic_equity.h"
 #include "training/move_set_encoder.h"
@@ -119,6 +120,24 @@ TEST_F(MsetSimAgentTest, OutOfRangeScalarParamsAreRejected) {
   // The accepted boundaries, so the bounds cannot silently tighten.
   EXPECT_NO_THROW(build(0, 1, 1));
   EXPECT_NO_THROW(build(0, 1, SimRunner::kMaxRollouts));
+}
+
+// The agent forwards sim_horizon into its SimRunner: the runner validates the
+// horizon (pairing against the injected leaf, and the lower bound) at
+// construction, so a bad horizon is rejected. If the agent silently dropped
+// sim_horizon it would run terminal rollouts and none of these would throw.
+TEST_F(MsetSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
+  using scribblez::testing::StubEvalService;
+  MsetSimAgent::Params p = params();
+  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a horizon with no leaf service
+  EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>()), std::runtime_error);
+  p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum, even with a leaf
+  EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
+                            std::make_unique<StubEvalService>()),
+               std::runtime_error);
+  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon with a leaf
+  EXPECT_NO_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
+                               std::make_unique<StubEvalService>()));
 }
 
 TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {

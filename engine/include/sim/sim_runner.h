@@ -38,6 +38,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace scribblez {
@@ -204,6 +205,14 @@ class SimRunner {
   // before spending seconds loading a model.
   static void validate(const Params& params);
 
+  // Checks the truncation-flag pairing and the horizon lower bound for one
+  // CLI surface, throwing util::CleanException prefixed with `context` (the
+  // agent or tool name) on a bad combination. validate() re-checks these
+  // against the built Params; a surface calls this earlier -- before loading
+  // the leaf model -- so a bad flag fails fast rather than after seconds of
+  // model building.
+  static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf_service);
+
   SimRunner(const Dictionary& dict, const Params& params);
 
   // Rollout i of every candidate is seeded by `base_seed + i` (the scheme
@@ -221,6 +230,16 @@ class SimRunner {
   // at construction; meaningful only under truncation.
   InputEncodingSpec leaf_spec_{};
 };
+
+// Fills a SimRunner::Params from a simming agent's shared truncation knobs:
+// its base sim params, its horizon, and its leaf evaluator. The one place the
+// three simming agents translate their own Params into the runner's, so they
+// cannot drift on this mapping. `leaf` is passed through as given (validate()
+// then rejects a horizon/leaf mismatch); a caller whose leaf exists
+// regardless of truncation -- NeuralSimAgent's own served model -- passes null
+// itself when its horizon is 0.
+SimRunner::Params make_runner_params(SimRunner::Params sim, int horizon_plies,
+                                     nn::PositionEvalService* leaf);
 
 // A full bag, its draw RNG seeded by `seed`, minus the tiles on the board and
 // in the player's own rack.

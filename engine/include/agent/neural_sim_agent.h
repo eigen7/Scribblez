@@ -59,9 +59,9 @@ class NeuralSimAgent : public Agent {
     // untouched here -- sim_horizon below is the one knob, and the agent's
     // own served model is the leaf evaluator.
     SimRunner::Params sim = {400, 1};
-    // Value truncation (docs/roadmap.md item 2): 0 rolls out to a natural
-    // end; otherwise rollouts stop after this many plies and the agent's own
-    // position evaluation model scores the horizon.
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The agent's own served model is the leaf that scores the
+    // horizon.
     int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults

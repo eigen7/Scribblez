@@ -20,10 +20,9 @@ SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalServi
 }
 
 void validate(const TrajectoryOptions& opt) {
-  if (opt.horizon != 0 && opt.horizon < SimRunner::kMinHorizonPlies) {
-    throw util::CleanException("--horizon must be 0 (terminal rollouts) or >= {}",
-                               SimRunner::kMinHorizonPlies);
-  }
+  // The horizon lower bound; the flag pairing against --leaf-model is the
+  // caller's to check (only it knows whether a leaf path was given).
+  SimRunner::validate_horizon("evidence trajectory", opt.horizon, opt.horizon > 0);
   TrajectoryOptions terminal = opt;  // the leaf pairing is the caller's to check
   terminal.horizon = 0;
   SimRunner::validate(sim_params(terminal, nullptr));

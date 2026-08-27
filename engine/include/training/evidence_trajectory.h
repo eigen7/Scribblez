@@ -41,9 +41,8 @@ using StudentService = nn::TrtEvalService<nn::MoveSetEvaluationSpec>;
 
 struct TrajectoryOptions {
   int rollouts = 200;
-  // Value truncation (docs/roadmap.md item 2): 0 rolls out to a natural
-  // end; otherwise rollouts stop after this many plies and the leaf service
-  // handed to TrajectoryRunner scores the horizon.
+  // Value truncation; see SimRunner::Params::horizon_plies for the full
+  // semantics. The leaf service handed to TrajectoryRunner scores the horizon.
   int horizon = 0;
   int proposals_min = 2;
   int proposals_max = 8;

@@ -25,15 +25,6 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
-// The runner params `params` describe, over the leaf evaluator (null for
-// terminal rollouts; EvalService serializes the sim threads' calls itself).
-SimRunner::Params runner_params(const MsetSimAgent::Params& params, nn::PositionEvalService* leaf) {
-  SimRunner::Params p = params.sim;
-  p.horizon_plies = params.sim_horizon;
-  p.leaf_service = leaf;
-  return p;
-}
-
 }  // namespace
 
 MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
@@ -48,7 +39,8 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
       spec_(derive_input_spec(require_dict(params.dict), *service_, "mset-sim agent")),
       encoder_(spec_),
       leaf_service_(std::move(leaf_service)),
-      runner_(*params.dict, runner_params(params, leaf_service_.get())),
+      runner_(*params.dict,
+              make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
   board_row_.resize(size_t(input_floats(spec_)));
@@ -59,12 +51,10 @@ void MsetSimAgent::validate(const Params& params) {
     throw util::CleanException("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw util::CleanException("mset-sim agent: --sim-top-k must be >= 1");
   SimRunner::validate(params.sim);
-  if (params.sim_horizon != 0 && params.sim_horizon < SimRunner::kMinHorizonPlies) {
-    throw util::CleanException(
-      "mset-sim agent: --sim-horizon must be 0 (terminal rollouts) or "
-      ">= {}",
-      SimRunner::kMinHorizonPlies);
-  }
+  // The horizon lower bound, checked early (the factory calls validate()
+  // before loading the model). The flag pairing against --leaf-model is the
+  // factory's, which alone knows whether a leaf path was given.
+  SimRunner::validate_horizon("mset-sim agent", params.sim_horizon, params.sim_horizon > 0);
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {

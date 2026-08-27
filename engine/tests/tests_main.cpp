@@ -4221,6 +4221,37 @@ class RowLeafService : public scribblez::nn::PositionEvalService {
   }
 };
 
+// Poisons one output element of an otherwise-finite leaf readout, to exercise
+// the runner's hard-error guard.
+struct LeafPoison {
+  int head;   // 0 = WLD, 1 = score-diff
+  int index;  // element within the row
+  float value;
+};
+
+class NonFiniteLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  explicit NonFiniteLeafService(LeafPoison poison) : poison_(poison) {}
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    for (int i = 0; i < batch.count; ++i) {
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = 0.7f;
+      wld[1] = 0.1f;
+      wld[2] = 0.2f;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = 100.0f;
+      sd[1] = 5.0f;
+      (poison_.head == 0 ? wld : sd)[poison_.index] = poison_.value;
+    }
+  }
+
+ private:
+  LeafPoison poison_;
+};
+
 // Value truncation with a constant leaf: every rollout of every candidate is
 // cut at the horizon (a mid-game position cannot end within 4 plies), so the
 // observations are exact multiples of the stub's outputs -- from the root
@@ -4399,6 +4430,53 @@ TEST(SimRunner, ValidatesTruncationParams) {
   ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
   p.horizon_plies = SimRunner::kMinHorizonPlies;
   SimRunner::validate(p);
+}
+
+// A non-finite leaf readout is a hard error -- whether NaN or the +/-inf an
+// FP16 overflow reaches first, and in any consumed field (the score-diff std
+// feeds delta_sq and was not on the old NaN-only checklist). Because a rollout
+// runs on a worker thread, the guard's throw must surface on the calling
+// thread (threads > 1 here) rather than terminating the process.
+TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_nonfinite_leaf";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 1);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const LeafPoison cases[] = {
+    {1, 0, inf},  // score-diff mean overflows to +inf: isnan-false, was missed
+    {1, 1, inf},  // score-diff std -> inf: feeds delta_sq, was unchecked
+    {1, 1, nan},  // score-diff std -> NaN: likewise
+    {0, 2, nan},  // loss prob NaN while the checked win prob stays finite
+  };
+  for (const LeafPoison& c : cases) {
+    NonFiniteLeafService leaf(c);
+    SimRunner::Params params;
+    params.rollouts = 8;
+    params.threads = 2;
+    params.horizon_plies = 4;
+    params.leaf_service = &leaf;
+    EXPECT_THROW(SimRunner(d, params).run(pos, candidates, 400), std::runtime_error);
+  }
+  fs::remove_all(tmp);
 }
 
 // A full 7-tile known leave degenerates to a completely known opponent rack:

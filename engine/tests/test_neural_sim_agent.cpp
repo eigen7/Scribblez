@@ -85,6 +85,19 @@ class NeuralSimAgentTest : public ::testing::Test {
 
 }  // namespace
 
+// The agent forwards sim_horizon into its SimRunner, using its own served
+// model as the leaf: the runner validates the horizon lower bound at
+// construction, so a below-minimum horizon is rejected. If the agent silently
+// dropped sim_horizon it would run terminal rollouts and neither would throw.
+TEST_F(NeuralSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
+  NeuralSimAgent::Params p = params();
+  p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum
+  EXPECT_THROW(NeuralSimAgent(p, std::make_unique<StubEvalService>(), /*max_batch=*/1024),
+               std::runtime_error);
+  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon
+  EXPECT_NO_THROW(NeuralSimAgent(p, std::make_unique<StubEvalService>(), /*max_batch=*/1024));
+}
+
 TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const NeuralSimAgent::Params p = params();
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
