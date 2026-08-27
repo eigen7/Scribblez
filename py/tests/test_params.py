@@ -39,6 +39,21 @@ def test_args_roundtrip():
     assert params_mod.from_args(DemoParams, args) == DemoParams(9, 2.5, "zz", True)
 
 
+def test_bool_flag_defaulting_true_can_be_turned_off():
+    """A bool may default either way: BooleanOptionalAction gives both --flag and
+    --no-flag, so a True default is still overridable from the CLI."""
+
+    @dataclass(frozen=True)
+    class OnByDefault:
+        flag: bool = param(True, "a bool defaulting on")
+
+    parser = argparse.ArgumentParser()
+    params_mod.add_arguments(parser, OnByDefault)
+    assert params_mod.from_args(OnByDefault, parser.parse_args([])).flag is True
+    assert params_mod.from_args(OnByDefault, parser.parse_args(["--no-flag"])).flag is False
+    assert params_mod.from_args(OnByDefault, parser.parse_args(["--flag"])).flag is True
+
+
 def test_validate_coerces_and_reports():
     p = params_mod.validate(DemoParams, {"count": 2, "rate": 3, "name": "n", "flag": True})
     assert p == DemoParams(2, 3.0, "n", True)

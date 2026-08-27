@@ -10,8 +10,9 @@ that single declaration:
     auto-generated config form
   - validation of user-supplied values  (validate)
 
-Supported field kinds: int, float, str, and bool (bool fields must default to
-False so the argparse mapping to store_true flags stays faithful).
+Supported field kinds: int, float, str, and bool. A bool field may default
+either way: it maps to an argparse BooleanOptionalAction, so `--flag` and
+`--no-flag` both exist and the CLI can override whichever default it carries.
 
 A field may also declare `choices`, closing its value set. Validation then
 rejects anything outside it -- so a bad value is refused where it is entered
@@ -19,6 +20,7 @@ rather than surfacing later as a worker crash -- argparse enforces the same
 set, and the dashboard form renders a selector rather than a text box.
 """
 
+import argparse
 import dataclasses
 import os
 
@@ -55,8 +57,6 @@ def schema(params_cls: type) -> list[ParamField]:
     for f in dataclasses.fields(params_cls):
         kind = f.type if isinstance(f.type, str) else f.type.__name__
         assert kind in _KINDS, f"{params_cls.__name__}.{f.name}: unsupported kind {kind}"
-        if kind == "bool":
-            assert f.default is False, f"{f.name}: bool params must default to False"
         choices = f.metadata.get("choices")
         if choices is not None:
             assert kind != "bool", f"{f.name}: a bool field is already a closed set"
@@ -76,7 +76,9 @@ def add_arguments(parser, params_cls: type):
     for f in schema(params_cls):
         flag = "--" + f.name.replace("_", "-")
         if f.kind == "bool":
-            parser.add_argument(flag, action="store_true", help=f.help)
+            parser.add_argument(
+                flag, action=argparse.BooleanOptionalAction, default=f.default, help=f.help
+            )
         else:
             py_type = {"int": int, "float": float, "str": str}[f.kind]
             choices = list(f.choices) if f.choices else None
