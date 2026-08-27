@@ -2,6 +2,7 @@
 // encoders, binary logs, data loading, equity, and self-play components.
 
 #include "agent/agent.h"
+#include "agent/evidence_staging.h"
 #include "agent/macondo_bot.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
@@ -5630,4 +5631,116 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   // fewer scalars.
   const InputEncodingSpec hidden{&dict, false};
   EXPECT_EQ(input_floats(arm), input_floats(hidden) + kOppLeaveCountFloats);
+}
+
+// Evidence staging (agent/evidence_staging.h): the C++ port of evidence.py's
+// build_evidence_inputs. Hand-computed against a two-candidate evidence set over
+// three scored candidates, so a drift from the Python normalization -- a
+// missing /rollouts, an unscaled delta, a wrong softmax/sigmoid, a mis-gathered
+// move encoding, or a footprint on the wrong square -- is caught here rather
+// than only through the (heavier) engine parity test.
+TEST(EvidenceStaging, MatchesHandComputedNormalization) {
+  using namespace evidence;
+  constexpr int kChannels = 2;
+  constexpr int kScored = 3;
+  constexpr int kCells = kEvidencePlaneCells;
+
+  // Cache predictions for three scored candidates. move_enc is gathered by a
+  // candidate's scored index; wld/planes are decoded here.
+  std::vector<float> move_enc = {1.0f, 2.0f, 3.0f, 4.0f, 7.0f, 8.0f};  // rows 0,1,2
+  std::vector<float> wld_logits = {0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 2.0f, 0.0f, 0.0f};
+  std::vector<float> score_diff = {-50.0f, 10.0f, 0.0f, 0.0f, 30.0f, 5.0f};  // [mean,std] rows
+  std::vector<float> plane_logits(size_t(kScored) * kNumPredictedPlanes * kCells, 0.0f);
+  // Scored candidate 2, predicted plane 2, cell 7: a non-default logit.
+  plane_logits[(2 * kNumPredictedPlanes + 2) * kCells + 7] = 2.0f;
+  const CachePredictions pred{move_enc.data(), wld_logits.data(), score_diff.data(),
+                              plane_logits.data(), kChannels};
+
+  // Evidence candidate 0 == scored 2: a horizontal play at (7,7); observations
+  // with rollouts n=4.
+  SimObservation obs0;
+  obs0.n = 4;
+  obs0.wins = 3.0;
+  obs0.draws = 0.0;
+  obs0.losses = 1.0;
+  obs0.delta_sum = 40.0;      // mean 10
+  obs0.delta_sq_sum = 800.0;  // var = 800/4 - 100 = 100, std 10
+  obs0.opp_next_count[5] = 2;
+  obs0.self_next_count[10] = 4;
+  obs0.opp_win_count[5] = 1.0f;
+  obs0.self_win_count[10] = 2.0f;
+  const Glyph g = Glyph::of(Tile::from_char('A'));
+  const Move play = Move::play(/*horizontal=*/true, /*start=*/7, /*square_mask=*/uint16_t(1 << 7),
+                               /*score=*/20, &g, /*num_played=*/1);
+
+  // Evidence candidate 1 == scored 0: a PASS (empty footprint), n=2, all draws.
+  SimObservation obs1;
+  obs1.n = 2;
+  obs1.draws = 2.0;
+  obs1.delta_sum = -20.0;     // mean -10
+  obs1.delta_sq_sum = 200.0;  // var 0, std 0
+
+  const std::vector<Move> moves = {play, Move{}};
+  const std::vector<SimObservation> observations = {obs0, obs1};
+  const std::vector<int> scored_indices = {2, 0};
+
+  constexpr int kMaxE = 4;
+  std::vector<float> ev_move_enc(size_t(kMaxE) * kChannels);
+  std::vector<float> ev_planes(size_t(kMaxE) * kNumEvidencePlanes * kCells);
+  std::vector<float> ev_scalars(size_t(kMaxE) * kNumEvidenceScalars);
+  std::vector<uint8_t> ev_mask(kMaxE);
+  stage_evidence(moves, observations, scored_indices, pred, kMaxE, ev_move_enc.data(),
+                 ev_planes.data(), ev_scalars.data(), ev_mask.data());
+
+  EXPECT_EQ(ev_mask[0], 1);
+  EXPECT_EQ(ev_mask[1], 1);
+  EXPECT_EQ(ev_mask[2], 0);
+  EXPECT_EQ(ev_mask[3], 0);
+
+  // move_enc gathered by scored index (2 then 0), padding rows zeroed.
+  EXPECT_FLOAT_EQ(ev_move_enc[0], 7.0f);
+  EXPECT_FLOAT_EQ(ev_move_enc[1], 8.0f);
+  EXPECT_FLOAT_EQ(ev_move_enc[2], 1.0f);
+  EXPECT_FLOAT_EQ(ev_move_enc[3], 2.0f);
+  EXPECT_FLOAT_EQ(ev_move_enc[4], 0.0f);
+  EXPECT_FLOAT_EQ(ev_move_enc[7], 0.0f);
+
+  // Candidate 0 planes: observed counts / rollouts, predicted sigmoid, footprint.
+  const float* p0 = ev_planes.data();
+  EXPECT_FLOAT_EQ(p0[0 * kCells + 5], 0.5f);                             // opp_next 2/4
+  EXPECT_FLOAT_EQ(p0[1 * kCells + 10], 1.0f);                            // self_next 4/4
+  EXPECT_FLOAT_EQ(p0[2 * kCells + 5], 0.25f);                            // opp_win 1/4
+  EXPECT_FLOAT_EQ(p0[3 * kCells + 10], 0.5f);                            // self_win 2/4
+  EXPECT_FLOAT_EQ(p0[6 * kCells + 7], 1.0f / (1.0f + std::exp(-2.0f)));  // pred plane 2, cell 7
+  EXPECT_FLOAT_EQ(p0[4 * kCells + 0], 0.5f);  // pred plane 0, default logit 0 -> sigmoid 0.5
+  EXPECT_FLOAT_EQ(p0[8 * kCells + (7 * BOARD_SIZE + 7)], 1.0f);  // footprint at (7,7)
+  EXPECT_FLOAT_EQ(p0[8 * kCells + 0], 0.0f);
+
+  // Candidate 1 (PASS): observed planes empty, footprint empty.
+  const float* p1 = ev_planes.data() + size_t(kNumEvidencePlanes) * kCells;
+  EXPECT_FLOAT_EQ(p1[0 * kCells + 5], 0.0f);
+  EXPECT_FLOAT_EQ(p1[8 * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
+
+  // Candidate 0 scalars.
+  const float* s0 = ev_scalars.data();
+  EXPECT_FLOAT_EQ(s0[0], 0.75f);  // wins/n
+  EXPECT_FLOAT_EQ(s0[1], 0.0f);
+  EXPECT_FLOAT_EQ(s0[2], 0.25f);
+  EXPECT_FLOAT_EQ(s0[3], 0.1f);  // delta_mean 10 / 100
+  EXPECT_FLOAT_EQ(s0[4], 0.1f);  // delta_std 10 / 100
+  EXPECT_FLOAT_EQ(s0[5], float(std::log1p(4.0) / 8.0));
+  // Predicted: softmax([2,0,0]) then score_diff/100.
+  const float denom = std::exp(2.0f) + 2.0f;
+  EXPECT_FLOAT_EQ(s0[6], std::exp(2.0f) / denom);
+  EXPECT_FLOAT_EQ(s0[7], 1.0f / denom);
+  EXPECT_FLOAT_EQ(s0[8], 1.0f / denom);
+  EXPECT_FLOAT_EQ(s0[9], 0.3f);    // sd mean 30/100
+  EXPECT_FLOAT_EQ(s0[10], 0.05f);  // sd std 5/100
+
+  // Candidate 1 scalars: all draws, mean -10, std 0, uniform softmax.
+  const float* s1 = ev_scalars.data() + kNumEvidenceScalars;
+  EXPECT_FLOAT_EQ(s1[1], 1.0f);
+  EXPECT_FLOAT_EQ(s1[3], -0.1f);
+  EXPECT_FLOAT_EQ(s1[4], 0.0f);
+  EXPECT_FLOAT_EQ(s1[6], 1.0f / 3.0f);  // softmax of equal logits
 }
