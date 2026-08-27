@@ -44,11 +44,7 @@ from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condi
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import move_encoding_version
-from scribblez.move_set_eval.onnx_export import (
-    FP16_PROBE_POSITIONS,
-    export_onnx,
-    fp16_probe_feeds_from_batch,
-)
+from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
@@ -240,8 +236,6 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         "settled": int(settled),
         "loss": avg["total"],
         "loss_wld": avg["wld"],
-        "loss_wld_z": avg["wld_z"],
-        "loss_pool_act": avg["pool_act"],
         "loss_score_diff": avg["score_diff"],
         "loss_planes": avg["planes"],
         "spearman_acc": metrics["spearman"],
@@ -270,21 +264,16 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     # metrics record uses -- the artifact the engine runtime loads and any
     # match-eval consumer keys on. The config's recorded arm/version stamp the
     # metadata, so the export can never claim an encoding its rows didn't use.
-    # Exported (and FP16-gated) before the metrics write so the recorded pass
-    # always has its ONNX, and so the record carries the gate's peak.
+    # Exported before the metrics write so the recorded pass always has its ONNX.
     cfg = ctx["config"]
-    fp16_peak = export_onnx(
+    export_onnx(
         model,
         paths.onnx_path(epoch),
         cfg["spatial_planes"],
         cfg["scalar_size"],
         opp_leave_input=cfg["open_leaves"],
         move_encoding_version=cfg["move_encoding_version"],
-        probe_feeds=ctx["fp16_probe"],
     )
-    if fp16_peak is not None:
-        record["fp16_probe_peak"] = fp16_peak
-        timed_print(f"  fp16 probe: peak |activation| {fp16_peak:.0f}")
     db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     ctx["stats"].cycle_done(
@@ -334,8 +323,6 @@ def run(ctx: WorkerContext) -> int:
             "loss_wld": 1.0,
             "loss_score_diff": params.lambda_sd,
             "loss_planes": params.lambda_planes,
-            "loss_wld_z": params.lambda_wld_z,
-            "loss_pool_act": params.lambda_pool_act,
         },
     )
     init_controls(conn)
@@ -357,11 +344,6 @@ def run(ctx: WorkerContext) -> int:
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
         "stats": WorkerStats(ctx),
-        # The export gate's probe feeds (docs/fp16_safe_serving.md), built once
-        # from a deterministic holdout batch.
-        "fp16_probe": fp16_probe_feeds_from_batch(
-            next(holdout_ds.iter_batches(FP16_PROBE_POSITIONS, seed=0))
-        ),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)

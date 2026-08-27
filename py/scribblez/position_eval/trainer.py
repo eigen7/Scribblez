@@ -35,7 +35,6 @@ import sys
 import time
 from dataclasses import asdict
 
-import numpy as np
 import torch
 
 from scribblez.dashboard import db
@@ -52,7 +51,7 @@ from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PositionEvalModel
-from scribblez.position_eval.onnx_export import export_onnx, fp16_probe_feeds
+from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.position_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
@@ -110,8 +109,6 @@ def _checkpoint_and_eval(
         "positions": state.rows_trained,
         "loss": avg["total"],
         "loss_wld": avg["wld"],
-        "loss_wld_z": avg["wld_z"],
-        "loss_pool_act": avg["pool_act"],
         "loss_score_diff": avg["score_diff"],
         "loss_score_diff_mean": avg["score_diff_mean"],
         "loss_score_diff_std": avg["score_diff_std"],
@@ -136,17 +133,13 @@ def _checkpoint_and_eval(
             f"  quality: win_mae={record['eval_win_mae']:.4f} "
             f"sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
         )
-    fp16_peak = export_onnx(
+    export_onnx(
         model,
         paths.onnx_path(ci),
         ctx["spatial_planes"],
         ctx["scalar_size"],
         opp_leave_input=params.face_up_leaves,
-        probe_feeds=ctx["fp16_probe"],
     )
-    if fp16_peak is not None:
-        record["fp16_probe_peak"] = fp16_peak
-        timed_print(f"  fp16 probe: peak |activation| {fp16_peak:.0f}")
     db.write_metrics(conn, ci, record)
     if ctx["position_eval"] is not None:
         eval_position_eval(model, ctx["position_eval"], device, conn, ci, state.rows_trained)
@@ -323,27 +316,6 @@ def eval_position_eval_quality(model, quality_eval: dict, device) -> dict:
     return position_eval_analysis.quality_metrics(preds, quality_eval["gt"])
 
 
-# Rows the large quality set contributes to the FP16 gate probe as the
-# unstamped "random slice" beside the swept frozen positions.
-FP16_PROBE_LARGE_ROWS = 64
-
-
-def load_fp16_probe(position_eval: dict | None, quality: dict | None, spatial_planes: int):
-    """The export gate's probe feeds (docs/fp16_safe_serving.md): the frozen
-    eval positions plus a slice of the large quality set, each swept across
-    extreme current-score leads -- or None (gate disabled) when neither
-    dataset loaded, matching how the eval steps themselves degrade."""
-    inputs = []
-    if position_eval is not None:
-        inputs.append(position_eval["inputs"])
-    if quality is not None:
-        inputs.append(quality["inputs"][:FP16_PROBE_LARGE_ROWS])
-    if not inputs:
-        timed_print("fp16 export gate disabled: no probe dataset")
-        return None
-    return fp16_probe_feeds(np.concatenate(inputs), spatial_planes)
-
-
 # ---------------------------------------------------------------------------
 # The runner
 # ---------------------------------------------------------------------------
@@ -390,8 +362,6 @@ def run(ctx: WorkerContext) -> int:
             "loss_self_next_placement": params.lambda_next_placement,
             "loss_opp_win_placement": params.lambda_win_placement,
             "loss_self_win_placement": params.lambda_win_placement,
-            "loss_wld_z": params.lambda_wld_z,
-            "loss_pool_act": params.lambda_pool_act,
         },
     )
     init_controls(conn)
@@ -404,9 +374,6 @@ def run(ctx: WorkerContext) -> int:
         "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
         "stats": WorkerStats(ctx),
     }
-    run_ctx["fp16_probe"] = load_fp16_probe(
-        run_ctx["position_eval"], run_ctx["position_eval_quality"], spatial_planes
-    )
 
     state = checkpoint.resume(paths, model, optimizer, device)
     _publish_train_state(paths, state)

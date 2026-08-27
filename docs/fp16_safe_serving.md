@@ -1,24 +1,19 @@
-# FP16-safe serving — activation-magnitude control and the pin retirement plan
+# FP16 activation overflow — resolved by serving BF16
 
-Proposal: make FP16-safety a **property of the models** — activation
-magnitudes bounded in training, enforced by an export/promotion gate — and
-retire the runtime's FP32-pinning machinery once the first gated teacher
-lands. The engine then serves plain FP16 with no per-layer exceptions, full
-FP16 mantissa everywhere, and the fastest kernel path.
-
-The governing principle (per project direction): past runs and
-already-exported checkpoints are never a reason to keep accommodation
-machinery. The runtime should not carry permanent exception lists for
-defects the training recipe can simply stop producing. The measurement
-below shows this is not optional taste: the magnitudes grow monotonically
-with training, so **any fixed serving-side containment is a point-in-time
-patch that a longer run walks past**.
+**Status: resolved.** The position/move-set value model's activations grow
+past FP16's range during training and NaN when served in FP16. The durable
+fix is to **serve BF16**, whose exponent range is FP32's: the overflow cannot
+occur, at a mantissa cost far below the model's own error. The model-side
+containment program this document once proposed — activation-magnitude
+penalties, an export/promotion gate, and per-layer FP32 pins — has been
+**retired**; this record keeps the incident, the measurements, and why the
+serving-format switch won out.
 
 ## The incident
 
 Value-truncated rollouts
 ([PR #106](https://github.com/eigen7/Scribblez/pull/106)) evaluate the
-position evaluation model at rollout horizons, thousands of times per turn.
+position-evaluation model at rollout horizons, thousands of times per turn.
 Under FP16 the `face-up-official` teacher (epoch 4414) deterministically
 returned NaN in **every head** for certain legitimate inputs — post-bingo,
 +150..+190-lead states that rollouts reach routinely. FP32 on the same rows
@@ -29,18 +24,10 @@ destroyed).
 
 ## The measurements
 
-Method: run the ONNX graph in FP32 with every intermediate tensor exposed
-as an output (onnx `shape_inference` + appending `value_info` entries to
-`graph.output`, onnxruntime CPU) over ~320 post-move rows selected for
-extreme current-score leads plus a random slice; record peak absolute
-values against FP16's max normal, **65504**.
-
-**Where the overflow lives** (ep4414): the only violations are the trunk's
-pooled-FC branch, in each pooled block (`blocks.{2,5,8}`) —
-`pool_fc/Gemm` output peaks at ~72k at blocks.8, the broadcast `Add`
-carrying it back into the trunk at ~73k; blocks.2/5 sit at 38–48k. The
-values re-enter FP16 range only at the block's following `bn2`. Everything
-else peaks below 29k.
+Method: run the ONNX graph in FP32 with every intermediate tensor exposed as
+an output (onnx `shape_inference` + appended `value_info`, onnxruntime CPU)
+over ~320 post-move rows selected for extreme current-score leads plus a
+random slice; record peak absolute values against FP16's max normal, 65504.
 
 **The peaks grow monotonically with training** (same probe batch, peak
 |activation| per checkpoint):
@@ -52,124 +39,56 @@ else peaks below 29k.
 | face-up-official ep2000  |      26,458 |       5,870 |      1,808 |
 | face-up-official ep3000  |      45,251 |      12,773 |      5,723 |
 | face-up-official ep4414  |  **73,169** |      28,837 |     23,350 |
-| fixed5 ep47              |       1,315 |         827 |         15 |
-| fixed2 ep949             |      28,504 |      25,644 |        740 |
-| sd-mean-mse ep357        |       3,442 |       2,375 |         83 |
 
-Roughly a doubling per ~1000 epochs, with FP16 range crossed between
-ep3000 and ep4414 — and on this trajectory the **rest of the net**
-(~29k and climbing) crosses too in a continued run, which is why pinning
-the pool branch cannot be the durable answer. The growth is not unique to
-one lineage (fixed2 is at 28k/25k by ep949); nothing in the objective
-pushes back on it. The ±23k `wld` logits (a fully saturated softmax) are
-part of the same unbounded growth; whether they interact with the
-calibration drift of [pov_calibration_bias.md](pov_calibration_bias.md)
-is **not established** — that document's corrected diagnosis attributes
-its bias to an unpinned flat-direction walk and does not implicate
-magnitudes. Treat these as two separately measured defects of the same
-recipe.
+The overflow lives in the trunk's pooled-FC branch (`pool_fc/Gemm` output
+~72k at blocks.8, the broadcast `Add` carrying it into the trunk ~73k),
+values that re-enter FP16 range only at the block's following `bn2`. Nothing
+in the objective pushes back on the growth, so "fits today" is not a
+property any single-run patch could certify — a longer run walks past it.
 
-## The current containment (to be retired)
+## The resolution: serve BF16
 
-PR #106 serves FP16 by pinning exactly the measured overflow region to
-FP32 at engine-build time: the model family's spec declares overflow-prone
-layer-name substrings (`PositionEvaluationSpec::kFp32LayerSubstrings =
-{"/pool_fc/"}`, [model_specs.h](../engine/include/nn/model_specs.h)), and
-the build ([neural_net.cpp](../engine/src/nn/neural_net.cpp),
-`pin_fp32_region`) pins matched layers plus their downstream consumers
-through the first re-normalizing layer — with FP32 output storage in
-between, since a 72k value downcast mid-chain overflows just the same —
-under `kOBEY_PRECISION_CONSTRAINTS`. Pinned FP16 plans get their own
-engine-cache key; a substring matching no layer fails the build loudly;
-and `SimRunner` hard-errors on any NaN leaf readout.
+BF16 carries FP32's 8-bit exponent (range ~3.4e38) with an 8-bit mantissa.
+The overflow is a *range* problem, so BF16 removes it by construction: a 73k
+activation is nowhere near BF16's range, and no future growth reaches it
+either. The only cost is mantissa precision (~0.4% relative step vs FP16's
+~0.05%), and that cost is immaterial to outcomes.
 
-Validated at ep4414: zero NaNs on the workload that previously produced
-86; observations within FP16 rounding of the FP32 reference (max 3.6e-4
-win-prob / 0.09 pts); a 400-position sim run at 22s vs 41s with an FP32
-leaf. But per the growth table, this is a patch fitted to one checkpoint's
-overflow geography — ~120 lines of architecture-coupled exception
-machinery whose only long-term justification would be serving checkpoints
-we do not intend to keep.
+Measured on the real models (torch, FP32 reference vs FP16 and BF16 over the
+1000-position large eval set, the 12 frozen positions, and the gate's
+extreme-lead probe):
 
-## Why not bf16
+- **BF16 removes the overflow.** On the 73k-peak ep4414 model, full-cast BF16
+  stays numerically clean — score-diff rel_p95 ~1–4%, and win-MAE /
+  score-diff-MAE against Monte-Carlo truth **identical to FP32** (0.0526 /
+  13.55 vs 0.0526 / 13.54). Full-cast **FP16** on the same model is
+  catastrophically wrong: ~31-point score-diff error, rel_p95 ~253%, win-MAE
+  degraded 0.014 → 0.061.
+- **BF16's precision cost does not move any quality metric.** Across every
+  dataset, BF16 adds ~0.1–0.4 pt mean / ~1–2 pt worst-case score-diff noise
+  and ~5e-4–1.6e-3 win-probability noise — 20–50× below the model's own error
+  against ground truth. The aggregate quality metrics are unchanged to three
+  significant figures.
 
-bf16 (FP32's exponent range, 8-bit mantissa) would make serving
-indifferent to magnitude growth with one builder flag. Rejected as the
-steady state:
+This reverses the earlier decision to reject BF16 on precision grounds: the
+~0.4% relative step is real but demonstrably lost in the model's own
+Monte-Carlo error, and it buys the elimination of an entire class of
+serving-time failure with no per-run tuning, no growth policing, and no
+architecture-coupled pin machinery. The `nn_inference_parity` /
+`mset_inference_parity` engine tests run BF16 alongside FP16 against the
+PyTorch FP32 reference to keep the served path honest.
 
-- **Permanent mantissa loss everywhere**: ~0.4% relative step vs FP16's
-  ~0.05% — roughly ±0.8 pts per score-diff readout at ±200. It would
-  coarsen not just sim leaves but near-tie candidate ranking and the
-  teacher labels the student distills from (`.mset` generation serves the
-  teacher at the family default precision).
-- **It institutionalizes tolerance of unbounded growth**: the NaN
-  tripwire is how the growth was found at all. A recipe whose activations
-  double every thousand epochs has a defect worth an invariant, not a
-  wider dynamic range to grow into.
-- Decision rule for the future: if an architecture ever *legitimately*
-  needs dynamic range beyond FP16 by design, revisit the serving format
-  (bf16) then. Do not resurrect per-layer pins.
+## What changed
 
-## The proposal
-
-Steps 1 and 2 are implemented: the recipe terms are the `lambda_pool_act` /
-`lambda_wld_z` params of both trainers (`PoolFcPenalty` in
-[spatial_trunk.py](../py/scribblez/spatial_trunk.py), z-loss in each
-family's `compute_loss`), and the gate is `py/scribblez/fp16_gate.py`, run
-by every export path (both trainers, the evidence trainer's unfrozen-mode
-student export, the standalone mset exporter) with the per-export peak
-recorded as the `fp16_probe_peak` metric series. The standalone probe CLI
-is [fp16_probe.py](../py/scripts/position_eval/fp16_probe.py). Step 3
-awaits the first gated teacher.
-
-**1. Bound magnitudes in the training recipe.** Add a small activation
-penalty on the pooled-FC pre-activations and/or a z-loss-style penalty on
-the `wld` logits (`logsumexp`-squared, the standard form) so the objective
-actively opposes growth instead of ignoring it. The bar is low: fixed5 and
-sd-mean-mse sit 20–50x below FP16 range without any of this; the recipe
-merely needs a restoring force against a walk it currently doesn't feel —
-note the structural rhyme with the calibration drift's "add restoring
-force" requirement, without assuming the two share a mechanism. Verify by
-running the probe across the new run's checkpoints: peaks should plateau,
-not double per thousand epochs.
-
-**2. Gate it at export and promotion.** At ONNX export time (and at
-teacher promotion under
-[generational_teacher.md](generational_teacher.md)), run a probe batch —
-including extreme-lead states, where magnitudes peak — through the
-exported graph in FP32 with intermediates exposed (seconds on CPU), and
-**fail the export** if any intermediate exceeds FP16 range with 4x
-headroom (threshold 16384). Gate both families: the move-set student
-shares the pooled-FC trunk structure and serves FP16 today with no check
-at all. This can land **now**, before any recipe change — like the
-calibration gates, observability first — and its per-epoch series on the
-next run measures the growth spectrum for free.
-
-**3. Retire the pins.** When the first gated teacher lands: delete
-`kFp32LayerSubstrings` from both specs, `pin_fp32_region` and its
-build/cache-key hooks in `neural_net.cpp`, and the `RuntimeSpec` plumbing
-— one commit. The `SimRunner` NaN hard error stays permanently as the
-belt-and-suspenders tripwire.
-
-## Coordination
-
-Self-contained: a recipe term, an export-time check, and a deletion. No
-dependency on the calibration fix program in
-[pov_calibration_bias.md](pov_calibration_bias.md) — its interventions
-(loss shape, marginal-calibration terms, bounded averaging) and this
-proposal's magnitude penalty are orthogonal recipe changes that can share
-any future teacher run without gating each other. The gates from both
-documents belong in the same promotion-gate set.
-
-## Acceptance criteria
-
-- The export gate passes on the new teacher (and student) with >= 4x
-  FP16-range headroom across the run's checkpoints (plateau, not growth),
-  and demonstrably fails on `face-up-official` ep4414 (the known-bad
-  reference).
-- A plain-FP16 build with the pin machinery deleted runs the PR #106
-  validation workload (400 positions x 5 candidates x 200 truncated
-  rollouts) with zero NaNs and observations within FP16 rounding of an
-  FP32 reference.
-- No match-strength regression attributable to the magnitude penalties
-  (the match harness arbitrates, as always).
+- **Serving.** `Precision::kBF16` added to the engine; the value-truncation
+  leaf service (`load_leaf_position_service`) and the shared agent options
+  (`NeuralServiceOptions`, default `BF16`) serve BF16.
+- **Removed.** The FP32-pinning machinery (`kFp32LayerSubstrings`,
+  `pin_fp32_region`, the `RuntimeSpec` plumbing and pinned cache-key branch);
+  the FP16 export gate (`fp16_gate.py`, the probe builders, the per-export
+  `fp16_probe_peak` metric); and the activation-magnitude recipe terms
+  (`PoolFcPenalty`/`lambda_pool_act` and `wld_z_loss`/`lambda_wld_z`) in all
+  three trainer families.
+- **Kept.** `SimRunner`'s non-finite-leaf hard error stays permanently as the
+  belt-and-suspenders tripwire: under BF16 it should never fire, so a trip
+  now means an off-distribution input or a genuinely broken model.

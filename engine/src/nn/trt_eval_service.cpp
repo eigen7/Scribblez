@@ -177,6 +177,10 @@ std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::strin
   NeuralNetParams<PositionEvaluationSpec> params;
   params.onnx_path = onnx_path;
   params.cuda_device_id = cuda_device_id;
+  // BF16 serves this family's activation magnitudes without FP16's overflow at
+  // extreme-advantage rollout leaves (its exponent range is FP32's), at a
+  // mantissa cost far below the model's own error against Monte-Carlo truth.
+  params.precision = Precision::kBF16;
   return make_loaded_service(params);
 }
 

@@ -4,12 +4,21 @@
 // The fixture is a directory holding model.onnx, inputs.bin (N x kInputFloats
 // float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
 // score_diff_mean, score_diff_std, the PyTorch decode), produced by
-// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model through
-// TrtEvalService and evaluates the rows at FP16 -- the precision production
-// inference runs -- holding every field to a tight tolerance against the PyTorch
-// FP32 reference. FP16 is the coarser precision, so its deviation bounds FP32's;
-// passing it validates the engine build, host/device copies, output binding
-// order, and the softmax/mean decode. Fails if any field drifts beyond tolerance.
+// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model
+// through TrtEvalService and evaluates the rows at BF16 -- the precision
+// production inference runs -- and at FP16, holding every field to a
+// precision-appropriate tolerance against the PyTorch FP32 reference. Passing
+// validates the engine build, host/device copies, output binding order, and
+// the softmax/mean decode for each precision request.
+//
+// It does NOT prove that reduced-precision kernels execute: TensorRT may serve
+// a 16-bit request with FP32 tactics, and for a fixture this small it does so
+// for BF16 -- the BF16 run matches the FP32 reference to ~1e-5, tighter than
+// its own tolerance, even at full optimization. So the BF16 case is a
+// build/bind/decode smoke test, not a check of BF16 arithmetic; that is
+// validated on real models in docs/fp16_safe_serving.md, where the format's
+// exponent range and mantissa cost are what matter. Fails if any field drifts
+// beyond tolerance.
 //
 // Run it as a one-liner with no arguments:
 //   test_nn_inference_parity
@@ -45,13 +54,21 @@ const int kFixtureInputFloats = scribblez::input_floats(scribblez::InputEncoding
 // win_prob, p_win, p_draw, p_loss, score_diff_mean, score_diff_std
 constexpr int kFieldsPerRow = 6;
 
-// FP16 is compared against the PyTorch FP32 reference at this tight tolerance:
-// the tiny fixture model and the points-scale outputs leave little room for
-// genuine precision drift, so a real regression (a wrong head, a decode bug)
-// shows up well outside these bounds. The test prints the actual max deviations,
-// so tune here if a future model legitimately needs more slack.
-constexpr float kProbTol = 1e-3f;      // bounds the four probability fields
-constexpr float kScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
+// Each 16-bit format is compared against the PyTorch FP32 reference at a
+// tolerance sized to its mantissa: the tiny fixture model and points-scale
+// outputs leave little room for genuine drift, so a real regression (a wrong
+// head, a decode bug) shows up well outside these bounds. BF16 carries 8
+// mantissa bits to FP16's 10, so it gets ~4x the slack. The test prints the
+// actual max deviations, so tune here if a future model legitimately needs
+// more.
+constexpr float kFp16ProbTol = 1e-3f;      // bounds the four probability fields
+constexpr float kFp16ScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
+// BF16's bounds are sized for its 8-bit mantissa, but on this tiny fixture
+// TensorRT serves the BF16 request with FP32 tactics, so the run actually lands
+// far inside them (see the file header) -- these bound a real BF16 kernel only
+// if a future, larger fixture makes TensorRT choose one.
+constexpr float kBf16ProbTol = 5e-3f;
+constexpr float kBf16ScoreDiffTol = 0.8f;
 
 // Fixture directory given on the command line (first non-gtest argument);
 // empty means self-generate one.
@@ -87,8 +104,9 @@ static void pack(const float* wld, const float* sd, float* dst) {
 // kScoreDiffTol the score-diff mean and std. Prints the actual max deviations
 // so the tolerances can be tuned against a future model.
 static void check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
-                            const char* label, const std::vector<float>& inputs,
-                            const std::vector<float>& expected, int n) {
+                            const char* label, float prob_tol, float sd_tol,
+                            const std::vector<float>& inputs, const std::vector<float>& expected,
+                            int n) {
   using Spec = scribblez::nn::PositionEvaluationSpec;
   scribblez::nn::NeuralNetParams<Spec> params;
   params.onnx_path = onnx_path;
@@ -118,10 +136,10 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
     max_sd_err = std::max(max_sd_err, std::abs(got[5] - exp[5]));  // std
   }
 
-  std::cout << "  [" << label << "] max prob err = " << max_prob_err << " (tol " << kProbTol
-            << "), max score_diff_mean err = " << max_sd_err << " (tol " << kScoreDiffTol << ")\n";
-  EXPECT_LE(max_prob_err, kProbTol);
-  EXPECT_LE(max_sd_err, kScoreDiffTol);
+  std::cout << "  [" << label << "] max prob err = " << max_prob_err << " (tol " << prob_tol
+            << "), max score_diff_mean err = " << max_sd_err << " (tol " << sd_tol << ")\n";
+  EXPECT_LE(max_prob_err, prob_tol);
+  EXPECT_LE(max_sd_err, sd_tol);
 }
 
 #ifdef SCRIBBLEZ_PY_DIR
@@ -182,20 +200,36 @@ void NnInferenceParityTest::SetUp() {
 #endif
 }
 
-TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
-  const std::string onnx_path = dir_ + "/model.onnx";
-  std::vector<float> inputs = read_floats(dir_ + "/inputs.bin");
-  std::vector<float> expected = read_floats(dir_ + "/expected.bin");
-
-  ASSERT_EQ(inputs.size() % kFixtureInputFloats, 0u)
-    << "inputs.bin size " << inputs.size() << " not a multiple of the full input width "
+// Load the fixture rows and validate their shape. Returns the row count.
+static int load_fixture(const std::string& dir, std::vector<float>* inputs,
+                        std::vector<float>* expected) {
+  *inputs = read_floats(dir + "/inputs.bin");
+  *expected = read_floats(dir + "/expected.bin");
+  EXPECT_EQ(inputs->size() % kFixtureInputFloats, 0u)
+    << "inputs.bin size " << inputs->size() << " not a multiple of the full input width "
     << kFixtureInputFloats;
-  const int n = inputs.size() / kFixtureInputFloats;
-  ASSERT_GT(n, 0);
-  ASSERT_EQ(expected.size(), size_t(n) * kFieldsPerRow) << "(N=" << n << ")";
+  const int n = inputs->size() / kFixtureInputFloats;
+  EXPECT_GT(n, 0);
+  EXPECT_EQ(expected->size(), size_t(n) * kFieldsPerRow) << "(N=" << n << ")";
+  return n;
+}
 
+TEST_F(NnInferenceParityTest, Bf16MatchesPyTorchReference) {
+  std::vector<float> inputs, expected;
+  const int n = load_fixture(dir_, &inputs, &expected);
+  ASSERT_GT(n, 0);
   std::cout << "  " << n << " rows from " << dir_ << "\n";
-  check_precision(onnx_path, scribblez::nn::Precision::kFP16, "FP16", inputs, expected, n);
+  check_precision(dir_ + "/model.onnx", scribblez::nn::Precision::kBF16, "BF16", kBf16ProbTol,
+                  kBf16ScoreDiffTol, inputs, expected, n);
+}
+
+TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
+  std::vector<float> inputs, expected;
+  const int n = load_fixture(dir_, &inputs, &expected);
+  ASSERT_GT(n, 0);
+  std::cout << "  " << n << " rows from " << dir_ << "\n";
+  check_precision(dir_ + "/model.onnx", scribblez::nn::Precision::kFP16, "FP16", kFp16ProbTol,
+                  kFp16ScoreDiffTol, inputs, expected, n);
 }
 
 // Custom main (instead of gtest_main): InitGoogleTest strips the gtest flags,

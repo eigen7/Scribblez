@@ -37,11 +37,9 @@ from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.evidence import observed_planes, observed_scalars
 from scribblez.move_set_eval.model import win_equity
 from scribblez.sim_evidence.sobs import BOARD
-from scribblez.spatial_trunk import PoolFcPenalty, apply_pool_penalty
 
 # The sim-outcome loss terms every epoch reports; a joint (unfrozen) epoch adds
-# DISTILL_LOSS_KEYS (pool_act: the trunk trains only in that mode, so only it
-# carries the pooled-FC magnitude penalty).
+# DISTILL_LOSS_KEYS.
 LOSS_KEYS = ("total", "wld", "score_diff", "gain")
 DISTILL_LOSS_KEYS = (
     "sim",
@@ -49,7 +47,6 @@ DISTILL_LOSS_KEYS = (
     "distill_wld",
     "distill_score_diff",
     "distill_planes",
-    "pool_act",
 )
 
 _INPUT_KEYS = ("input_spatial", "input_scalar")
@@ -268,52 +265,42 @@ def run_epoch(
     sums = {k: 0.0 for k in keys}
     n_batches = rows = skipped = 0
     t0 = last_progress = time.time()
-    # The pooled-FC magnitude penalty engages only in the joint (unfrozen)
-    # mode -- the only one that trains the shared trunk. The recorder's hooks
-    # collect from both of a step's trunk forwards (the conditioned pass and
-    # the distillation batch) and live exactly as long as this epoch.
-    recorder = PoolFcPenalty(model) if distill is not None else None
-    try:
-        for batch in batches:
-            targets = _targets(batch, device)
-            m = int(targets["held_out"].sum())
-            if m == 0:
-                continue
-            if lr_fn is not None:
-                set_lr(optimizer, lr_fn(rows_trained))
-            _, cond = conditioned_forward(model, batch, device, max_e)
-            losses = compute_loss(cond, targets, cfg)
-            if distill is not None:
-                d = mset_train_loop.batch_loss(model, next(distill.batches), device, distill.cfg)
-                losses = joint_loss(losses, d, distill.lambda_sim)
-                apply_pool_penalty(losses, recorder, distill.cfg.lambda_pool_act)
-            # A non-finite loss must not reach the optimizer: one such step
-            # poisons Adam's moments and every weight after it. Skip the batch
-            # and count it; the pass reports the count and the trainer stops the
-            # run when it is anything but rare.
-            if not torch.isfinite(losses["total"]):
-                skipped += 1
-                continue
-            optimizer.zero_grad()
-            losses["total"].backward()
-            # Clip, and skip a step whose gradient is non-finite (an overflow in
-            # backward can leave inf/nan grads under a finite loss).
-            norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.grad_clip or float("inf"))
-            if not torch.isfinite(norm):
-                skipped += 1
-                continue
-            optimizer.step()
-            n_batches += 1
-            rows += m
-            rows_trained += m
-            for k in sums:
-                sums[k] += losses[k].item() * m
-            if on_batch is not None and time.time() - last_progress > 1.0:
-                on_batch(n_batches, rows, time.time() - t0, rows_trained)
-                last_progress = time.time()
-    finally:
-        if recorder is not None:
-            recorder.close()
+    for batch in batches:
+        targets = _targets(batch, device)
+        m = int(targets["held_out"].sum())
+        if m == 0:
+            continue
+        if lr_fn is not None:
+            set_lr(optimizer, lr_fn(rows_trained))
+        _, cond = conditioned_forward(model, batch, device, max_e)
+        losses = compute_loss(cond, targets, cfg)
+        if distill is not None:
+            d = mset_train_loop.batch_loss(model, next(distill.batches), device, distill.cfg)
+            losses = joint_loss(losses, d, distill.lambda_sim)
+        # A non-finite loss must not reach the optimizer: one such step
+        # poisons Adam's moments and every weight after it. Skip the batch
+        # and count it; the pass reports the count and the trainer stops the
+        # run when it is anything but rare.
+        if not torch.isfinite(losses["total"]):
+            skipped += 1
+            continue
+        optimizer.zero_grad()
+        losses["total"].backward()
+        # Clip, and skip a step whose gradient is non-finite (an overflow in
+        # backward can leave inf/nan grads under a finite loss).
+        norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.grad_clip or float("inf"))
+        if not torch.isfinite(norm):
+            skipped += 1
+            continue
+        optimizer.step()
+        n_batches += 1
+        rows += m
+        rows_trained += m
+        for k in sums:
+            sums[k] += losses[k].item() * m
+        if on_batch is not None and time.time() - last_progress > 1.0:
+            on_batch(n_batches, rows, time.time() - t0, rows_trained)
+            last_progress = time.time()
     losses = {k: v / max(rows, 1) for k, v in sums.items()}
     return EpochResult(losses, n_batches, rows, rows_trained, skipped)
 

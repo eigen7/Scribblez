@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <span>
 
 // What each served model family IS, declared as data: its graph identity, its
 // dynamic-axis sizing, the encoding versions it must match, and -- the one
@@ -236,16 +235,6 @@ class PositionEvaluationSpec {
 
   static constexpr VersionRequirement kVersions[] = {kInputEncodingRequirement};
 
-  // Layer-name substrings whose layers -- and their downstream consumers,
-  // up through the first re-normalizing layer -- are pinned to FP32 under
-  // an FP16 build (neural_net.cpp). The trunk's pooled-FC branch is the
-  // measured overflow site: on legitimate extreme-advantage states its Gemm
-  // output reaches ~72k (FP16 tops out at 65504), and the poisoned
-  // broadcast-add NaNs every head downstream. The pin costs a few tiny
-  // FC/add/scale layers per pooled block; the convolutional bulk keeps its
-  // FP16 throughput.
-  static constexpr const char* kFp32LayerSubstrings[] = {"/pool_fc/"};
-
   using Inputs = TensorList<SpatialInput, ScalarInput>;
   using MoveInputs = TensorList<>;
   using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
@@ -288,10 +277,6 @@ class MoveSetEvaluationSpec {
 
   static constexpr VersionRequirement kVersions[] = {kInputEncodingRequirement,
                                                      kMoveEncodingRequirement};
-
-  // No FP32 pins: this family's FP16 serving is long-verified NaN-free, and
-  // an empty list keeps its engine-plan cache keys unchanged.
-  static constexpr std::span<const char* const> kFp32LayerSubstrings{};
 
   using Inputs = TensorList<Static<SpatialInput>, Static<ScalarInput>, MoveLettersInput,
                             MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;

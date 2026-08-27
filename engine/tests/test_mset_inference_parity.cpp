@@ -80,6 +80,13 @@ struct Tolerance {
 // FP16 path alone rather than failing.
 constexpr Tolerance kFp32Tol{1e-4f, 0.01f};
 constexpr Tolerance kFp16Tol{5e-3f, 0.2f};
+// BF16 is the production serving precision; its 8-bit mantissa (FP16 has 10)
+// would earn wider slack -- but the builder caveat above bites harder for BF16
+// than FP16 here: TensorRT serves this fixture's BF16 request with FP32 tactics
+// (the BF16 run reproduces the FP32 run bit for bit, unlike FP16 at ~6e-05), so
+// this case is a build/bind/decode smoke test of the BF16 path, not a check of
+// BF16 arithmetic. That is validated on real models in docs/fp16_safe_serving.md.
+constexpr Tolerance kBf16Tol{1e-2f, 0.5f};
 
 // Fixture directory given on the command line (first non-gtest argument);
 // empty means self-generate one.
@@ -315,11 +322,13 @@ class MsetInferenceParityCachedTest : public MsetInferenceParityTest {
   bool owns_cache_root() const override { return false; }
 };
 
-TEST_F(MsetInferenceParityCachedTest, MatchesPyTorchReferenceAtBothPrecisions) {
+TEST_F(MsetInferenceParityCachedTest, MatchesPyTorchReferenceAtEveryPrecision) {
   expect_matches(run(model("model_a.onnx"), Precision::kFP32, moves_.count), expected_a_, "FP32",
                  kFp32Tol);
   expect_matches(run(model("model_a.onnx"), Precision::kFP16, moves_.count), expected_a_, "FP16",
                  kFp16Tol);
+  expect_matches(run(model("model_a.onnx"), Precision::kBF16, moves_.count), expected_a_, "BF16",
+                 kBf16Tol);
 }
 
 // A real move set runs to thousands of candidates, so the service splitting one

@@ -11,7 +11,7 @@
 namespace scribblez {
 namespace nn {
 
-enum class Precision : uint8_t { kFP32, kFP16 };
+enum class Precision : uint8_t { kFP32, kFP16, kBF16 };
 
 // Case-insensitive; throws util::CleanException on anything else.
 Precision parse_precision(const std::string& s);

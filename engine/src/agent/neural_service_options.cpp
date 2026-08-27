@@ -18,7 +18,7 @@ void NeuralServiceOptions::add_options(po::options_description& desc) {
       "max candidate rows scored in one GPU call")(
       "cuda-device,d", po::value<int>(&cuda_device)->default_value(cuda_device), "GPU index")(
       "precision,p", po::value<std::string>(&precision)->default_value(precision),
-      "TensorRT precision: FP16|FP32");
+      "TensorRT precision: BF16|FP16|FP32");
 }
 
 namespace {

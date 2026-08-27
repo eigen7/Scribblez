@@ -174,8 +174,8 @@ def atomic_output(path: Path):
     on, renaming it onto `path` with a single os.replace on success. A reader
     that sees `path` exist therefore always sees a complete file -- never a
     partially written or partially transformed one. On failure the temp file
-    is removed too: a rejected export (the FP16 gate's designed outcome)
-    leaves nothing beside the served models."""
+    is removed too, so a failed export leaves nothing beside the served
+    models."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
