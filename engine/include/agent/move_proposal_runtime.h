@@ -12,10 +12,10 @@
 //                                 the full-M board/g/move_enc handoff tensors and
 //                                 the raw per-candidate predictions, and returns
 //                                 the decoded evidence-free predictions.
-//   condition(evidence set)    -- stages the evidence (agent/evidence_staging.h,
-//                                 the PR2 port), copies the cached handoff tensors
-//                                 into the step graph's inputs, runs it, and
-//                                 returns the evidence-conditioned predictions.
+//   condition(evidence set)    -- stages the evidence (agent/evidence_staging.h),
+//                                 copies the cached handoff tensors into the step
+//                                 graph's inputs, runs it, and returns the
+//                                 evidence-conditioned predictions.
 //
 // The two nets are driven DIRECTLY (net.predict() + net.host<Tensor>()), not
 // through TrtEvalService: that service scales every output by the chunk row
@@ -28,8 +28,8 @@
 // the finished production surface. The sequential *playing* agent -- the loop
 // that alternates sims and condition() calls and reads the proves-best gain to
 // decide when to stop -- is roadmap item 6; this API is expected to be revisited
-// once item 6 defines that calling pattern (e.g. a device-resident handoff
-// avoiding the host round trip; see the plan's rejected rival). For now it holds
+// once item 6 defines that calling pattern (e.g. a device-resident handoff that
+// avoids the host round trip this class accepts for item 3). For now it holds
 // one position at a time: encode() replaces the retained cache, condition()
 // reads it.
 

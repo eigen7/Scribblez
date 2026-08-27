@@ -226,23 +226,24 @@ struct MoveEncHandoff {
 };
 
 // planes (M, 4, 225): the four placement-plane heads' per-cell logits, a raw
-// output of both graphs. Sigmoid'd by the orchestrator.
+// output of both graphs. No kDecode: unlike the mask/wld/score_diff descriptors,
+// these two are read only by the orchestrator (which sigmoids the planes and
+// reads the softplus'd gain as is), never by TrtEvalService's RowDecode path, so
+// a decode field here would be dead metadata.
 struct PlanesOutput {
   static constexpr const char* kName = "planes";
   using Elem = float;
   static constexpr int kRowElems = kNumPlacementPlanes * kBoardCells;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
 };
 
 // gain (M, 1): the proves-best expected gain, softplus'd in-graph (>= 0), so a
-// step output the orchestrator reads as is.
+// step output the orchestrator reads as is (no kDecode; see PlanesOutput).
 struct GainOutput {
   static constexpr const char* kName = "gain";
   using Elem = float;
   static constexpr int kRowElems = 1;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
 // The step graph's padded evidence width E and per-token layout. E is

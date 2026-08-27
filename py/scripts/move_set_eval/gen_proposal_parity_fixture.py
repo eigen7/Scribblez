@@ -16,16 +16,19 @@ test is handed. So the two sides see identical evidence and the comparison is a
 true engine-vs-PyTorch parity check, tolerance-bounded (independent TensorRT
 plans are not bit-identical to PyTorch).
 
-Key invariant (the plan's decision 5): every candidate is encoded with ONE
-pre-move differential, so the runtime's gather of move_enc[scored_index] equals
-the reference's re-encode of that evidence candidate. The evidence cases
-deliberately use scattered and duplicate indices so a gather/routing swap shows
-as a mismatch rather than aliasing away.
+Key invariant: every candidate is encoded with ONE pre-move differential, so the
+runtime's gather of move_enc[scored_index] equals the reference's re-encode of
+that evidence candidate. The evidence cases deliberately use scattered and
+duplicate indices so a gather/routing swap shows as a mismatch rather than
+aliasing away.
 
 Files written into --out-dir:
   * cache.onnx / step.onnx -- the split graphs of one randomly-initialized model
     (its evidence path perturbed off zero-init, so a populated set differs from
     the plain pass), exported at the current move-encoding version and E=MAX_E.
+  * step_mismatch.onnx -- a second model's step graph (same architecture,
+    different weights, so a different proposal_export_id), for the runtime's
+    cache/step pairing guard.
   * board.bin -- one position's encoder row (spatial then scalar floats), f32.
   * move_{letters,blanks,squares,tile_mask,scalars}.bin -- the M candidates in
     move_set_encoder.h's dtypes, encoded with the single pre-move differential.
@@ -71,7 +74,8 @@ NUM_HEADS = 2
 # layout check expects.
 MAX_E = DEFAULT_MAX_EVIDENCE
 
-# The single pre-move differential every candidate is encoded with (decision 5).
+# The single pre-move differential every candidate is encoded with (see the
+# gather==re-encode invariant in the module docstring).
 PRE_MOVE_DIFF = 30
 
 OBS_DTYPE = RECORD_DTYPE["obs"]
@@ -155,8 +159,8 @@ def synthetic_observations(num_moves: int, seed: int) -> np.ndarray:
 
 def evidence_indices(num_moves: int) -> list[tuple[str, list[int]]]:
     """The evidence cases: empty, a partial (k<E) set with scattered indices and
-    a duplicate, and a full (k==E) set -- the padding-boundary cases the plan
-    calls for."""
+    a duplicate, and a full (k==E) set -- exercising the padding boundary at both
+    ends plus the scattered/duplicate gather."""
     rng = np.random.default_rng(0)
     partial = rng.permutation(num_moves)[:5].tolist()
     partial[1] = partial[0]  # the same simmed candidate appearing twice
@@ -165,21 +169,9 @@ def evidence_indices(num_moves: int) -> list[tuple[str, list[int]]]:
 
 
 @torch.no_grad()
-def plain_forward(model, spatial, scalar, enc, num_moves: int) -> dict[str, torch.Tensor]:
-    return model(
-        spatial,
-        scalar,
-        torch.from_numpy(enc["letters"]).long(),
-        torch.from_numpy(enc["blanks"]).bool(),
-        torch.from_numpy(enc["squares"]).long(),
-        torch.from_numpy(enc["tile_mask"]).float(),
-        torch.from_numpy(enc["scalars"]),
-        torch.zeros(num_moves, dtype=torch.long),
-    )
-
-
-@torch.no_grad()
-def conditioned_forward(model, spatial, scalar, enc, num_moves, evidence):
+def forward(model, spatial, scalar, enc, num_moves: int, evidence=None) -> dict[str, torch.Tensor]:
+    """MoveSetEvalModel.forward over the encoded candidate set -- the plain pass
+    with `evidence` None, the conditioned pass with an EvidenceInputs."""
     return model(
         spatial,
         scalar,
@@ -237,6 +229,19 @@ def main() -> int:
         max_evidence=MAX_E,
         board_size=board_size,
     )
+    # A second model's step graph -- same architecture, different weights, hence
+    # a different proposal_export_id -- for the runtime's cache/step pairing
+    # guard (loading cache.onnx with this must be rejected).
+    alt = build_model(args.seed + 1, spatial_planes, scalar_size, board_size)
+    export_proposal_step(
+        alt,
+        args.out_dir / "step_mismatch.onnx",
+        opp_leave_input=False,
+        move_encoding_version=version,
+        proposal_export_id=proposal_export_id(alt),
+        max_evidence=MAX_E,
+        board_size=board_size,
+    )
 
     rng = np.random.default_rng(args.seed)
     board_row = rng.standard_normal(
@@ -262,7 +267,7 @@ def main() -> int:
         "move_scalars": enc["scalars"].astype(np.float32),
     }
 
-    first_pass = plain_forward(model, spatial, scalar, enc, args.num_moves)
+    first_pass = forward(model, spatial, scalar, enc, args.num_moves)
     fp = {k: first_pass[k] for k in ("wld", "score_diff", "planes")}
 
     (args.out_dir / "board.bin").write_bytes(board_row.tobytes())
@@ -287,7 +292,7 @@ def main() -> int:
             evidence = build_evidence_inputs(
                 moves[idx], obs[idx], PRE_MOVE_DIFF, {key: fp[key][idx] for key in fp}, max_e=MAX_E
             )
-        out = conditioned_forward(model, spatial, scalar, enc, args.num_moves, evidence)
+        out = forward(model, spatial, scalar, enc, args.num_moves, evidence)
         scalars, planes = decode(out)
         (args.out_dir / f"case_{name}_indices.bin").write_bytes(
             np.asarray(indices, dtype=np.int32).tobytes()

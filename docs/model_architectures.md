@@ -194,8 +194,8 @@ first-pass predictions, roadmap item 4).
 fused per-move vector as `head` and `plane_proj`, output `gain` (M,) ≥ 0 —
 the expected improvement `E[max(0, v − best-so-far)]` a sim of that candidate
 would contribute over the best simmed so far. Meaningful only under evidence
-(at the empty set it collapses to the value itself); absent from the ONNX
-export until the evidence path lands (roadmap item 3).
+(at the empty set it collapses to the value itself); exported by the
+`move_proposal_step` graph of the evidence path (roadmap item 3, §4 below).
 
 ### Training the evidence path (`scribblez.evidence`)
 

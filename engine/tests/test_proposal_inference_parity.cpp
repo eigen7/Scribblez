@@ -3,15 +3,16 @@
 // for the split evidence-path graphs.
 //
 // The runtime runs the cache graph once, then -- for each evidence set the
-// fixture describes -- stages the raw sim observations through the PR2 port
-// (agent/evidence_staging.h) and runs the step graph, and this test compares
+// fixture describes -- stages the raw sim observations through
+// agent/evidence_staging.h and runs the step graph, and this test compares
 // every candidate's conditioned prediction against MoveSetEvalModel.forward's.
 // More can go silently wrong here than in the single-graph runtimes: the
 // board/g/move_enc host handoff, the leading-1 evidence inputs, the move_enc
 // gather by scored index, and the empty-set fusion gate. Each changes the
 // numbers, and every case is a comparison against the PyTorch reference for the
 // same inputs. The verification is tolerance-bounded, not bit-identical:
-// independent TensorRT plans reorder float sums (docs, the plan's Verification).
+// independent TensorRT plans reorder float sums, so parity is held to a
+// tolerance (docs/roadmap.md item 3), as the sibling mset parity test is.
 //
 // The fixture (one model's cache/step pair, a candidate set, its raw Move /
 // SimObservation records, and several evidence cases -- empty, partial with
@@ -22,7 +23,6 @@
 // reuse one:
 //   test_proposal_inference_parity <fixture_dir>
 
-#include "agent/evidence_staging.h"
 #include "agent/move_proposal_runtime.h"
 #include "encoding/input_encoder.h"
 #include "game/move.h"
@@ -54,19 +54,22 @@ namespace {
 constexpr int kScalarFields = 6;
 constexpr int kPlaneFloats = scribblez::nn::kNumPlacementPlanes * scribblez::kBoardCells;
 
-// How far a TensorRT run may deviate from the PyTorch FP32 reference. The
-// mset parity check uses {prob 1e-4, score_diff 0.01}; the proposal path
-// compounds the cache graph, the evidence staging, and the step graph, and the
-// cache graph's own predictions feed the staging (where the reference uses
-// PyTorch's), so the bar is a little looser. Still orders of magnitude below any
-// real defect: a mis-bound handoff or a dropped gather moves outputs by
-// order-one amounts. The test prints the actual deviations.
+// How far a TensorRT run may deviate from the PyTorch FP32 reference. Set from
+// the measured noise floor plus headroom, not loosely: on this fixture the
+// observed worst deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell
+// sigmoid off a 225-token attention -- the jitteriest head), and ~5e-5
+// (score_diff / gain). The bounds sit a handful-of-x above those, so cross-GPU /
+// cross-build kernel jitter passes while a real defect -- a dropped ev_obs
+// field, a mis-strided evidence plane, a mis-bound handoff -- which perturbs an
+// output well past the floor, fails. The test prints the actual deviations, so
+// widen here if a future model legitimately needs it.
 struct Tolerance {
-  float prob;        // the three WLD probabilities and the sigmoid planes
+  float prob;        // the three WLD probabilities
+  float planes;      // the sigmoid placement planes (widest head)
   float score_diff;  // the score-diff mean/std, in points
   float gain;        // the proves-best gain, in points
 };
-constexpr Tolerance kFp32Tol{2e-3f, 0.05f, 0.05f};
+constexpr Tolerance kFp32Tol{5e-4f, 2e-3f, 5e-3f, 5e-3f};
 
 std::string g_fixture_dir;
 
@@ -237,10 +240,11 @@ void expect_case_matches(const scribblez::agent::MoveProposalPredictions& got,
     for (int i = 0; i < kPlaneFloats; ++i) track(worst.planes, pl[i], ref_pl[i], "planes", m);
   }
   std::cout << "  [" << c.name << "] max prob err = " << worst.prob << " (tol " << tol.prob
-            << "), planes " << worst.planes << ", score_diff " << worst.score_diff << " (tol "
-            << tol.score_diff << "), gain " << worst.gain << " (tol " << tol.gain << ")\n";
+            << "), planes " << worst.planes << " (tol " << tol.planes << "), score_diff "
+            << worst.score_diff << " (tol " << tol.score_diff << "), gain " << worst.gain
+            << " (tol " << tol.gain << ")\n";
   EXPECT_LE(worst.prob, tol.prob) << c.name;
-  EXPECT_LE(worst.planes, tol.prob) << c.name;
+  EXPECT_LE(worst.planes, tol.planes) << c.name;
   EXPECT_LE(worst.score_diff, tol.score_diff) << c.name;
   EXPECT_LE(worst.gain, tol.gain) << c.name;
 }
@@ -282,7 +286,7 @@ TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase)
       std::cout << "  [empty==plain] wld " << worst.prob << ", planes " << worst.planes << ", sd "
                 << worst.score_diff << "\n";
       EXPECT_LE(worst.prob, kFp32Tol.prob);
-      EXPECT_LE(worst.planes, kFp32Tol.prob);
+      EXPECT_LE(worst.planes, kFp32Tol.planes);
       EXPECT_LE(worst.score_diff, kFp32Tol.score_diff);
     }
   }
@@ -308,6 +312,33 @@ TEST_F(ProposalInferenceParityTest, ChunksACandidateSetLargerThanTheEngines) {
     }
     const auto& conditioned = runtime.condition(ev_moves, ev_obs, std::span<const int>(c.indices));
     expect_case_matches(conditioned, c, num_moves_, kFp32Tol);
+  }
+}
+
+// A cache and step graph exported from different checkpoints (same architecture,
+// so C and the layout checks agree, but different weights) share no
+// proposal_export_id -- load() must reject the pair loudly rather than serve
+// plausible-looking wrong numbers. step_mismatch.onnx is that second model's
+// step graph; the mismatch is caught only by the fingerprint, so this is the one
+// test of that guard.
+TEST_F(ProposalInferenceParityTest, RejectsACacheStepPairFromDifferentModels) {
+  MoveProposalRuntime::Params params;
+  params.cache_onnx_path = model("cache.onnx");
+  params.step_onnx_path = model("step_mismatch.onnx");
+  params.precision = scribblez::nn::Precision::kFP32;
+  params.max_rows = num_moves_;
+  params.mount_root = cache_root_.string();
+  params.fast_build = true;
+  MoveProposalRuntime runtime(params);
+  try {
+    runtime.load();
+    ADD_FAILURE() << "loading a cache/step pair from different models should have been rejected";
+  } catch (const std::runtime_error& e) {
+    // Matched against what it should object to, so a load that failed for some
+    // unrelated reason cannot pass for the guard doing its job.
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("different models"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("proposal_export_id"), std::string::npos) << msg;
   }
 }
 

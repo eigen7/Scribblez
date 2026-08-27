@@ -201,8 +201,8 @@ const MoveProposalPredictions& MoveProposalRuntime::condition(
   const int c = cache_net_.channels();
   const int max_rows = step_net_.max_rows();
 
-  // Stage the evidence directly into the step graph's input buffers (PR2). The
-  // cache predictions it gathers from are the retained full-M raw outputs.
+  // Stage the evidence directly into the step graph's input buffers. The cache
+  // predictions it gathers from are the retained full-M raw outputs.
   const evidence::CachePredictions predictions{cache_move_enc_.data(), cache_wld_.data(),
                                                cache_score_diff_.data(), cache_planes_.data(), c};
   const evidence::EvidenceStagingOutputs staged{
