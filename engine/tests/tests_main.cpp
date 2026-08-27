@@ -5689,13 +5689,25 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   std::vector<float> ev_planes(size_t(kMaxE) * kNumEvidencePlanes * kCells);
   std::vector<float> ev_scalars(size_t(kMaxE) * kNumEvidenceScalars);
   std::vector<uint8_t> ev_mask(kMaxE);
-  stage_evidence(moves, observations, scored_indices, pred, kMaxE, ev_move_enc.data(),
-                 ev_planes.data(), ev_scalars.data(), ev_mask.data());
+  const EvidenceStagingOutputs out{ev_move_enc.data(), ev_planes.data(), ev_scalars.data(),
+                                   ev_mask.data()};
+  stage_evidence(moves, observations, scored_indices, pred, kMaxE, out);
 
   EXPECT_EQ(ev_mask[0], 1);
   EXPECT_EQ(ev_mask[1], 1);
   EXPECT_EQ(ev_mask[2], 0);
   EXPECT_EQ(ev_mask[3], 0);
+
+  // Padding rows (2, 3) are fully zeroed in every buffer, not just move_enc: a
+  // dropped or mis-sized memset of planes/scalars would otherwise leak garbage.
+  for (int row = 2; row < kMaxE; ++row) {
+    const float* pad_planes = ev_planes.data() + size_t(row) * kNumEvidencePlanes * kCells;
+    const float* pad_scalars = ev_scalars.data() + size_t(row) * kNumEvidenceScalars;
+    EXPECT_FLOAT_EQ(pad_planes[6 * kCells + 7], 0.0f);  // a predicted-plane cell, else 0.5
+    EXPECT_FLOAT_EQ(pad_planes[0], 0.0f);
+    EXPECT_FLOAT_EQ(pad_scalars[0], 0.0f);
+    EXPECT_FLOAT_EQ(pad_scalars[kNumEvidenceScalars - 1], 0.0f);
+  }
 
   // move_enc gathered by scored index (2 then 0), padding rows zeroed.
   EXPECT_FLOAT_EQ(ev_move_enc[0], 7.0f);
@@ -5743,4 +5755,81 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(s1[3], -0.1f);
   EXPECT_FLOAT_EQ(s1[4], 0.0f);
   EXPECT_FLOAT_EQ(s1[6], 1.0f / 3.0f);  // softmax of equal logits
+}
+
+// An all-zero CachePredictions of `scored` rows -- enough to gather from; the
+// values are irrelevant to the guards these tests exercise.
+static scribblez::evidence::CachePredictions zero_predictions(int scored, int channels,
+                                                              std::vector<float>& storage) {
+  using namespace scribblez::evidence;
+  storage.assign(size_t(scored) * (channels + 3 + 2 + kNumPredictedPlanes * kEvidencePlaneCells),
+                 0.0f);
+  float* p = storage.data();
+  const CachePredictions pred{p, p + size_t(scored) * channels, p + size_t(scored) * (channels + 3),
+                              p + size_t(scored) * (channels + 5), channels};
+  return pred;
+}
+
+TEST(EvidenceStaging, RejectsOversizedSetAndAcceptsFullWidth) {
+  using namespace evidence;
+  constexpr int kMaxE = 3, kChannels = 1;
+  std::vector<float> storage;
+  const CachePredictions pred = zero_predictions(kMaxE + 1, kChannels, storage);
+
+  std::vector<float> me(size_t(kMaxE) * kChannels);
+  std::vector<float> pl(size_t(kMaxE) * kNumEvidencePlanes * kEvidencePlaneCells);
+  std::vector<float> sc(size_t(kMaxE) * kNumEvidenceScalars);
+  std::vector<uint8_t> mk(kMaxE);
+  const EvidenceStagingOutputs out{me.data(), pl.data(), sc.data(), mk.data()};
+
+  // One more candidate than the padded width -> throws (before any write).
+  const std::vector<Move> too_many(kMaxE + 1);
+  const std::vector<SimObservation> obs_many(kMaxE + 1);
+  const std::vector<int> idx_many(kMaxE + 1, 0);
+  EXPECT_THROW(stage_evidence(too_many, obs_many, idx_many, pred, kMaxE, out), std::runtime_error);
+  // Mismatched span lengths -> throws too.
+  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(1),
+                              std::vector<int>(2), pred, kMaxE, out),
+               std::runtime_error);
+
+  // Exactly the padded width is accepted and marks every row real.
+  stage_evidence(std::vector<Move>(kMaxE), std::vector<SimObservation>(kMaxE),
+                 std::vector<int>(kMaxE, 0), pred, kMaxE, out);
+  for (int j = 0; j < kMaxE; ++j) EXPECT_EQ(mk[j], 1);
+}
+
+TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
+  using namespace evidence;
+  constexpr int kMaxE = 2, kChannels = 1;
+  std::vector<float> storage;
+  const CachePredictions pred = zero_predictions(1, kChannels, storage);
+
+  std::vector<float> me(size_t(kMaxE) * kChannels);
+  std::vector<float> pl(size_t(kMaxE) * kNumEvidencePlanes * kEvidencePlaneCells);
+  std::vector<float> sc(size_t(kMaxE) * kNumEvidenceScalars);
+  std::vector<uint8_t> mk(kMaxE);
+  const EvidenceStagingOutputs out{me.data(), pl.data(), sc.data(), mk.data()};
+
+  // delta_sq_sum/n (75) below mean^2 (100): the sample variance is negative from
+  // these (deliberate) inputs; the std must clamp to exactly 0, never NaN.
+  SimObservation neg_var;
+  neg_var.n = 2;
+  neg_var.delta_sum = 20.0;      // mean 10
+  neg_var.delta_sq_sum = 150.0;  // 150/2 - 100 = -25
+  stage_evidence(std::vector<Move>(1), std::vector<SimObservation>{neg_var}, std::vector<int>{0},
+                 pred, kMaxE, out);
+  EXPECT_FLOAT_EQ(sc[4], 0.0f);  // delta_std, clamped
+  EXPECT_TRUE(std::isfinite(sc[4]));
+
+  // The empty set (the deployment loop's first pass) masks and zeroes every row.
+  std::fill(mk.begin(), mk.end(), uint8_t(9));
+  std::fill(sc.begin(), sc.end(), -1.0f);
+  const std::vector<Move> none;
+  const std::vector<SimObservation> no_obs;
+  const std::vector<int> no_idx;
+  stage_evidence(none, no_obs, no_idx, pred, kMaxE, out);
+  for (int j = 0; j < kMaxE; ++j) {
+    EXPECT_EQ(mk[j], 0);
+    EXPECT_FLOAT_EQ(sc[size_t(j) * kNumEvidenceScalars], 0.0f);
+  }
 }

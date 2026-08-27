@@ -75,8 +75,7 @@ void stage_scalars(const SimObservation& obs, const float* wld_logits, const flo
 
 void stage_evidence(std::span<const Move> moves, std::span<const SimObservation> observations,
                     std::span<const int> scored_indices, const CachePredictions& predictions,
-                    int max_evidence, float* ev_move_enc, float* ev_obs_planes,
-                    float* ev_obs_scalars, std::uint8_t* ev_mask) {
+                    int max_evidence, const EvidenceStagingOutputs& out) {
   const int num_evidence = int(moves.size());
   if (int(observations.size()) != num_evidence || int(scored_indices.size()) != num_evidence)
     throw util::Exception("evidence moves, observations, and indices must be parallel arrays");
@@ -88,22 +87,23 @@ void stage_evidence(std::span<const Move> moves, std::span<const SimObservation>
   // Padded rows carry nothing: zero everything, mark only the real rows, then
   // fill them (the fusion stage's mask gates the padding out regardless, but a
   // deterministic zero keeps the inputs reproducible).
-  std::memset(ev_move_enc, 0, sizeof(float) * size_t(max_evidence) * c);
-  std::memset(ev_obs_planes, 0, sizeof(float) * size_t(max_evidence) * kNumEvidencePlanes * kCells);
-  std::memset(ev_obs_scalars, 0, sizeof(float) * size_t(max_evidence) * kNumEvidenceScalars);
-  std::memset(ev_mask, 0, sizeof(std::uint8_t) * max_evidence);
+  std::memset(out.move_enc, 0, sizeof(float) * size_t(max_evidence) * c);
+  std::memset(out.obs_planes, 0,
+              sizeof(float) * size_t(max_evidence) * kNumEvidencePlanes * kCells);
+  std::memset(out.obs_scalars, 0, sizeof(float) * size_t(max_evidence) * kNumEvidenceScalars);
+  std::memset(out.mask, 0, sizeof(std::uint8_t) * max_evidence);
 
   for (int j = 0; j < num_evidence; ++j) {
     const int idx = scored_indices[j];
-    std::memcpy(ev_move_enc + size_t(j) * c, predictions.move_enc + size_t(idx) * c,
+    std::memcpy(out.move_enc + size_t(j) * c, predictions.move_enc + size_t(idx) * c,
                 sizeof(float) * c);
     stage_planes(observations[j], moves[j],
                  predictions.plane_logits + size_t(idx) * kNumPredictedPlanes * kCells,
-                 ev_obs_planes + size_t(j) * kNumEvidencePlanes * kCells);
+                 out.obs_planes + size_t(j) * kNumEvidencePlanes * kCells);
     stage_scalars(observations[j], predictions.wld_logits + size_t(idx) * 3,
                   predictions.score_diff + size_t(idx) * 2,
-                  ev_obs_scalars + size_t(j) * kNumEvidenceScalars);
-    ev_mask[j] = 1;
+                  out.obs_scalars + size_t(j) * kNumEvidenceScalars);
+    out.mask[j] = 1;
   }
 }
 
