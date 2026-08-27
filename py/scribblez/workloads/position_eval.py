@@ -48,7 +48,7 @@ class PositionEvalParams:
         "HastyBots take over, reaching off-policy states; 0 disables",
     )
     face_up_leaves: bool = param(
-        False,
+        True,
         "play the face-up-leaves variant (docs/roadmap.md) in self-play generation AND "
         "match eval, so the model trains and is measured under one information condition",
     )

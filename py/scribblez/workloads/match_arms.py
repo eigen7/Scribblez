@@ -76,7 +76,7 @@ class MatchArmsParams:
         1,
         "base game seed, shared across arms so every arm faces identical deals (must be nonzero)",
     )
-    face_up_leaves: bool = param(False, "play the face-up-leaves variant (docs/roadmap.md)")
+    face_up_leaves: bool = param(True, "play the face-up-leaves variant (docs/roadmap.md)")
 
     # Frozen params are validated where they are created (task creation, CLI,
     # worker env), so a bad experiment definition can never reach a runner.

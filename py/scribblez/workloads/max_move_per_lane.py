@@ -24,7 +24,7 @@ class MaxMovePerLaneParams:
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
     random_opening_mean: float = param(0.0, "random-opening plies per game (0 disables)")
     face_up_leaves: bool = param(
-        False, "play the face-up-leaves variant (docs/roadmap.md) in self-play generation"
+        True, "play the face-up-leaves variant (docs/roadmap.md) in self-play generation"
     )
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")

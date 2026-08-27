@@ -112,7 +112,7 @@ class MoveSetEvalParams:
         "before the last random ply are ineligible, so targets stay agent-play only",
     )
     face_up_leaves: bool = param(
-        False,
+        True,
         "play the face-up-leaves variant (docs/roadmap.md) in self-play generation; the "
         "teacher must then be an open-leaves model (the generator refuses the mismatch), "
         "and each .mset records the condition so the student trains under it too",

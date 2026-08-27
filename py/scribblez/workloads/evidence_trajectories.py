@@ -116,7 +116,7 @@ class EvidenceTrajectoriesParams:
         "before the last random ply are ineligible, so targets stay agent-play only",
     )
     face_up_leaves: bool = param(
-        False,
+        True,
         "play the face-up-leaves variant (docs/roadmap.md) in self-play generation and sim "
         "with the opponent's leave known; proposer and teacher must then be open-leaves "
         "models (the tools refuse the mismatch)",
