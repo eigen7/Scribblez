@@ -39,6 +39,9 @@ from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
     common_metadata,
+    cross_attention_2d,
+    split_concat_linear,
+    split_mha_qkv,
     undo_initializer_dedup,
     write_metadata,
 )
@@ -78,52 +81,30 @@ class MoveSetEvalExportModel(nn.Module):
         self.trunk = model.trunk
         self.board_pos_emb = model.board_pos_emb
         self.move_encoder = model.move_encoder
-        # The cross-attention is hand-rolled from the trained
-        # nn.MultiheadAttention's own weights, with q/k/v as this wrapper's own
-        # nn.Linear parameters (copied slices of the packed in_proj). Tracing
-        # nn.MultiheadAttention leaves an in_proj-derived tensor in the graph
-        # as a bare Constant with no initializer behind it, which the TensorRT
-        # parser-refitter cannot refit (the refit gate probe caught exactly
-        # this); three plain Linears export as plain named initializers.
+        # The cross-attention is re-expressed from the trained
+        # nn.MultiheadAttention as plain q/k/v Linears (split_mha_qkv): tracing
+        # the packed in_proj leaves a bare Constant with no initializer behind
+        # it, which the TensorRT parser-refitter cannot refit (the refit gate
+        # probe caught exactly this); three plain Linears export as plain named
+        # initializers. out_proj is already a plain Linear.
         mha = model.cross_attn
         c = mha.embed_dim
         self.num_heads = mha.num_heads
-        self.head_dim = c // mha.num_heads
-        self.q_proj = nn.Linear(c, c)
-        self.k_proj = nn.Linear(c, c)
-        self.v_proj = nn.Linear(c, c)
-        with torch.no_grad():
-            self.q_proj.weight.copy_(mha.in_proj_weight[:c])
-            self.q_proj.bias.copy_(mha.in_proj_bias[:c])
-            self.k_proj.weight.copy_(mha.in_proj_weight[c : 2 * c])
-            self.k_proj.bias.copy_(mha.in_proj_bias[c : 2 * c])
-            self.v_proj.weight.copy_(mha.in_proj_weight[2 * c :])
-            self.v_proj.bias.copy_(mha.in_proj_bias[2 * c :])
-        self.attn_out = mha.out_proj  # a plain Linear already
-        # Re-associate head[0] = Linear(cat([attended (C), g (3C)])): the
-        # attended block keeps the bias, the g block is bias-free, and both are
-        # this wrapper's own named parameters (copied slices) so they export as
-        # plain initializers.
-        first = model.head[0]
-        self.head_attended = nn.Linear(c, first.out_features)
-        self.head_g = nn.Linear(first.in_features - c, first.out_features, bias=False)
-        with torch.no_grad():
-            self.head_attended.weight.copy_(first.weight[:, :c])
-            self.head_attended.bias.copy_(first.bias)
-            self.head_g.weight.copy_(first.weight[:, c:])
+        self.q_proj, self.k_proj, self.v_proj = split_mha_qkv(mha)
+        self.attn_out = mha.out_proj
+        # Re-associate head[0] = Linear(cat([attended (C), g (3C)])) into an
+        # attended sub-Linear (keeps the bias) and a bias-free g sub-Linear, so
+        # both export as plain initializers and the per-move g never Expands.
+        self.head_attended, self.head_g = split_concat_linear(model.head[0], c)
         self.head_out = model.head[2]
 
     def _cross_attention(self, e: torch.Tensor, board0: torch.Tensor) -> torch.Tensor:
         """nn.MultiheadAttention's math (batch_first, no mask, eval mode) over
         M move queries (e, (M, C)) and one position's 225 board tokens
         (board0, (225, C)) -> (M, C)."""
-        h, d = self.num_heads, self.head_dim
-        q = self.q_proj(e).view(-1, h, d).transpose(0, 1)  # (H, M, d)
-        k = self.k_proj(board0).view(-1, h, d).transpose(0, 1)  # (H, 225, d)
-        v = self.v_proj(board0).view(-1, h, d).transpose(0, 1)
-        attn = torch.softmax(q @ k.transpose(1, 2) * d**-0.5, dim=-1)  # (H, M, 225)
-        ctx = (attn @ v).transpose(0, 1).reshape(-1, h * d)  # (M, C)
-        return self.attn_out(ctx)
+        return cross_attention_2d(
+            self.q_proj, self.k_proj, self.v_proj, self.attn_out, self.num_heads, e, board0
+        )
 
     def forward(
         self,

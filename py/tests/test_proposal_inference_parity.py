@@ -10,8 +10,9 @@ that split before any TensorRT runtime exists (PR3 covers the engine):
       heads reproduce the monolithic forward over empty, partial, and full
       evidence sets (allclose, not bitwise -- the re-associated heads and the
       re-expressed attentions reorder float sums). Evidence tokens gather the
-      cache's own move encodings for candidates that are in the scored set, so
-      the reference's evidence moves are the first k candidates.
+      cache's own move encodings by scored index (scattered, not the first k, so
+      a move_enc/ev_move_enc routing swap can't alias away), and the reference's
+      evidence moves are those same scored candidates.
   (b) Both graphs are truly dynamic in M: traced at one M, they reproduce the
       wrappers under ONNXRuntime at other Ms -- and the step graph's fixed-width
       E evidence block stays inert past its mask.
@@ -108,23 +109,46 @@ def _board_inputs(seed: int):
     return spatial, scalar
 
 
-def _evidence_inputs(moves, k: int, seed: int):
-    """A width-MAX_E evidence set whose k real tokens describe the first k
-    candidate moves (so the cache-move-encoding gather equals a re-encode), with
-    random observation planes/scalars. Returns (EvidenceInputs, ev_obs_planes,
-    ev_obs_scalars, ev_mask_uint8) -- the same observation arrays the step graph
-    is fed, so the reference and the graph see identical evidence."""
+def _evidence_indices(m: int, kind: str, seed: int) -> list[int]:
+    """Scored-candidate indices for an evidence set. Deliberately scattered
+    (not the first k) and, for the partial case, carrying a duplicate: an
+    evidence candidate is one of the scored candidates, so the runtime GATHERS
+    its move encoding from the cache's per-candidate output by this index --
+    scattered/duplicate indices make ev_move_enc differ from any contiguous
+    move_enc slice, so a move_enc/ev_move_enc routing swap shows up as a
+    mismatch rather than aliasing away."""
+    if kind == "empty":
+        return []
+    rng = np.random.default_rng(seed)
+    k = min(3 if kind == "partial" else MAX_E, m)
+    idx = rng.permutation(m)[:k].tolist()
+    if kind == "partial" and k >= 2:
+        idx[1] = idx[0]  # the same simmed candidate appearing twice
+    return idx
+
+
+def _evidence_inputs(moves, indices: list[int], seed: int):
+    """A width-MAX_E evidence set describing the candidate moves at `indices`,
+    with random observation planes/scalars. Returns (EvidenceInputs,
+    ev_obs_planes, ev_obs_scalars, ev_mask_uint8) -- the same observation arrays
+    the step graph is fed, so the reference and the graph see identical
+    evidence. The evidence move data is the scored candidate's own (moves[idx]),
+    so the reference's re-encode equals the runtime's gather of move_enc[idx]."""
     letters, blanks, squares, tile_mask, scalars = moves
+    k = len(indices)
     el = np.zeros((MAX_E, MAX_PLACED), np.int64)
     eb = np.zeros((MAX_E, MAX_PLACED), np.int64)
     es = np.zeros((MAX_E, MAX_PLACED), np.int64)
     et = np.zeros((MAX_E, MAX_PLACED), np.float32)
     esc = np.zeros((MAX_E, NUM_SCALARS), np.float32)
-    el[:k] = letters[:k]
-    eb[:k] = blanks[:k]
-    es[:k] = squares[:k]
-    et[:k] = tile_mask[:k]
-    esc[:k] = scalars[:k]
+    for j, idx in enumerate(indices):
+        el[j], eb[j], es[j], et[j], esc[j] = (
+            letters[idx],
+            blanks[idx],
+            squares[idx],
+            tile_mask[idx],
+            scalars[idx],
+        )
 
     rng = np.random.default_rng(seed)
     obs_planes = np.abs(
@@ -147,6 +171,15 @@ def _evidence_inputs(moves, k: int, seed: int):
     return ev, obs_planes, obs_scalars, mask.astype(np.uint8)
 
 
+def _gather_ev_move_enc(move_enc: np.ndarray, indices: list[int]) -> np.ndarray:
+    """(1, MAX_E, C) evidence move encodings gathered from the cache's per-
+    candidate move_enc (num_scored, C) by scored index, zero-padded past k."""
+    out = np.zeros((1, MAX_E, move_enc.shape[-1]), np.float32)
+    for j, idx in enumerate(indices):
+        out[0, j] = move_enc[idx]
+    return out
+
+
 def _reference(model, spatial, scalar, moves, ev):
     """MoveSetEvalModel.forward over one position's candidate set, optionally
     evidence-conditioned."""
@@ -166,8 +199,8 @@ def _reference(model, spatial, scalar, moves, ev):
         )
 
 
-@pytest.mark.parametrize("k", [0, 3, MAX_E])
-def test_wrappers_match_training_forward(k):
+@pytest.mark.parametrize("kind", ["empty", "partial", "full"])
+def test_wrappers_match_training_forward(kind):
     model = _random_model()
     cache = ProposalCacheExportModel(model).eval()
     step = ProposalStepExportModel(model).eval()
@@ -175,8 +208,11 @@ def test_wrappers_match_training_forward(k):
     spatial, scalar = _board_inputs(seed=3)
     m = 11
     moves = _random_moves(m, seed=40)
-    ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, k, seed=7)
-    ref = _reference(model, spatial, scalar, moves, ev if k else None)
+    indices = _evidence_indices(m, kind, seed=5)
+    ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, indices, seed=7)
+    # An empty set still runs the step wrapper (its all-empty-mask gate must
+    # reproduce the plain forward -- the deployment loop's first iteration).
+    ref = _reference(model, spatial, scalar, moves, ev)
 
     letters, blanks, squares, tile_mask, scalars = moves
     with torch.no_grad():
@@ -189,20 +225,24 @@ def test_wrappers_match_training_forward(k):
             torch.from_numpy(tile_mask),
             torch.from_numpy(scalars),
         )
-        if k == 0:  # empty evidence: the cache's plain heads ARE the forward
-            _assert_close({"wld": c_wld, "score_diff": c_sd, "planes": c_planes}, ref)
-            return
-        ev_move_enc = torch.cat([move_enc[:k], move_enc.new_zeros(MAX_E - k, CHANNELS)], 0)[None]
+        ev_move_enc = _gather_ev_move_enc(move_enc.numpy(), indices)
         s_wld, s_sd, s_planes, s_gain = step(
             board,
             g,
             move_enc,
-            ev_move_enc,
+            torch.from_numpy(ev_move_enc),
             torch.from_numpy(obs_planes),
             torch.from_numpy(obs_scalars),
             torch.from_numpy(mask),
         )
-    _assert_close({"wld": s_wld, "score_diff": s_sd, "planes": s_planes, "gain": s_gain}, ref)
+    outputs = {"wld": s_wld, "score_diff": s_sd, "planes": s_planes, "gain": s_gain}
+    _assert_close(outputs, ref)
+    if kind == "empty":  # and the empty step equals the cache's plain heads, finite
+        _assert_close(
+            {"wld": s_wld, "score_diff": s_sd, "planes": s_planes},
+            {"wld": c_wld, "score_diff": c_sd, "planes": c_planes},
+        )
+        assert all(torch.isfinite(v).all() for v in outputs.values())
 
 
 def _assert_close(got: dict, ref: dict):
@@ -236,8 +276,8 @@ def _export_pair(tmp_path, model):
     return cache_path, step_path
 
 
-@pytest.mark.parametrize("k", [0, 4, MAX_E])
-def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, k):
+@pytest.mark.parametrize("kind", ["empty", "partial", "full"])
+def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind):
     ort = pytest.importorskip("onnxruntime")
     model = _random_model()
     cache_path, step_path = _export_pair(tmp_path, model)  # both traced at M=5
@@ -247,8 +287,9 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, k):
     spatial, scalar = _board_inputs(seed=3)
     for m in (1, 23):  # neither is the traced M
         moves = _random_moves(m, seed=40 + m)
-        ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, min(k, m), seed=7 + m)
-        ref = _reference(model, spatial, scalar, moves, ev if k else None)
+        indices = _evidence_indices(m, kind, seed=5 + m)
+        ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, indices, seed=7 + m)
+        ref = _reference(model, spatial, scalar, moves, ev)
         letters, blanks, squares, tile_mask, scalars = moves
 
         cache_out = cache_sess.run(
@@ -264,22 +305,16 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, k):
             },
         )
         cache = dict(zip(CACHE_OUTPUT_NAMES, cache_out, strict=True))
-        if k == 0:
-            for name in ("wld", "score_diff", "planes"):
-                np.testing.assert_allclose(cache[name], ref[name].numpy(), atol=1e-5, rtol=1e-4)
-            continue
-
-        kk = min(k, m)
         move_enc = cache["move_enc"]
-        ev_move_enc = np.zeros((1, MAX_E, CHANNELS), np.float32)
-        ev_move_enc[0, :kk] = move_enc[:kk]
+        # Always run the step graph -- including the empty-mask case, which must
+        # reproduce the plain forward through the graph itself, not a shortcut.
         step_out = step_sess.run(
             list(STEP_OUTPUT_NAMES),
             {
                 "board": cache["board"],
                 "g": cache["g"],
                 "move_enc": move_enc,
-                "ev_move_enc": ev_move_enc,
+                "ev_move_enc": _gather_ev_move_enc(move_enc, indices),
                 "ev_obs_planes": obs_planes,
                 "ev_obs_scalars": obs_scalars,
                 "ev_mask": mask,
@@ -306,7 +341,8 @@ def test_exported_file_contract(tmp_path):
     assert cmeta["move_encoding_version"] == "1"
     assert cmeta["opp_leave_input"] == "false"
     assert "model-architecture-signature" in cmeta
-    # The shared fingerprint ties a cache graph to its step graph.
+    # Both graphs of one exported pair share the fingerprint (its discriminating
+    # power -- rejecting a mismatched pair -- is tested separately below).
     assert cmeta["proposal_export_id"] == smeta["proposal_export_id"]
 
     assert [o.name for o in cache.graph.output] == list(CACHE_OUTPUT_NAMES)
@@ -314,21 +350,35 @@ def test_exported_file_contract(tmp_path):
     assert {i.name for i in cache.graph.input} == set(CACHE_INPUT_NAMES)
     assert {i.name for i in step.graph.input} == set(STEP_INPUT_NAMES)
 
+    # The move inputs' dtypes match move_set_encoder.h so the engine feeds them
+    # zero-copy, and every move input (plus the M-riding outputs) rides "moves".
+    move_dtypes = {
+        "move_letters": onnx.TensorProto.INT32,
+        "move_blanks": onnx.TensorProto.UINT8,
+        "move_squares": onnx.TensorProto.INT32,
+        "move_tile_mask": onnx.TensorProto.UINT8,
+        "move_scalars": onnx.TensorProto.FLOAT,
+    }
     cin = {i.name: i for i in cache.graph.input}
-    assert cin["move_letters"].type.tensor_type.elem_type == onnx.TensorProto.INT32
-    assert cin["move_blanks"].type.tensor_type.elem_type == onnx.TensorProto.UINT8
-    assert cin["input_spatial"].type.tensor_type.shape.dim[0].dim_value == 1
-    for name in ("move_letters", "move_scalars"):
+    for name, dtype in move_dtypes.items():
+        assert cin[name].type.tensor_type.elem_type == dtype, name
         assert cin[name].type.tensor_type.shape.dim[0].dim_param == "moves", name
-    # The cache emits the handoff tensors as static (1, ...) outputs.
+    assert cin["input_spatial"].type.tensor_type.shape.dim[0].dim_value == 1
+    # The cache emits the handoff tensors as static (1, ...) outputs; wld /
+    # score_diff / planes / move_enc ride "moves".
     cout = {o.name: o for o in cache.graph.output}
     assert cout["board"].type.tensor_type.shape.dim[0].dim_value == 1
-    assert cout["move_enc"].type.tensor_type.shape.dim[0].dim_param == "moves"
+    assert cout["g"].type.tensor_type.shape.dim[0].dim_value == 1
+    for name in ("move_enc", "wld", "score_diff", "planes"):
+        assert cout[name].type.tensor_type.shape.dim[0].dim_param == "moves", name
 
     sin = {i.name: i for i in step.graph.input}
     assert sin["move_enc"].type.tensor_type.shape.dim[0].dim_param == "moves"
     assert sin["ev_mask"].type.tensor_type.elem_type == onnx.TensorProto.UINT8
     assert sin["ev_obs_planes"].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
+    sout = {o.name: o for o in step.graph.output}
+    for name in STEP_OUTPUT_NAMES:
+        assert sout[name].type.tensor_type.shape.dim[0].dim_param == "moves", name
     # The evidence inputs are fixed-width leading-1 batches (E folded into the
     # row, so M stays the only dynamic axis).
     for name in ("ev_move_enc", "ev_obs_planes", "ev_obs_scalars", "ev_mask"):
@@ -349,3 +399,21 @@ def test_exported_file_contract(tmp_path):
     step_inits = {i.name for i in step.graph.initializer}
     for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_g"):  # the fusion self-attn + gain
         assert any(stem in n for n in step_inits), stem
+
+
+def test_proposal_export_id_discriminates_models():
+    """The fingerprint tying a cache/step pair is deterministic for one model
+    and differs for another -- both a different checkpoint of the same
+    architecture (weight-sensitive) and a different architecture -- so a loader
+    can actually reject a mismatched pair, not just pass a tautology."""
+    m0 = _random_model(seed=0)
+    assert proposal_export_id(m0) == proposal_export_id(_random_model(seed=0))  # deterministic
+    assert proposal_export_id(m0) != proposal_export_id(_random_model(seed=1))  # weight-sensitive
+    other_arch = MoveSetEvalModel(
+        spatial_planes=SPATIAL_PLANES,
+        scalar_size=SCALAR_SIZE,
+        trunk_channels=CHANNELS,
+        num_blocks=4,  # a different architecture
+        num_heads=2,
+    )
+    assert proposal_export_id(m0) != proposal_export_id(other_arch)

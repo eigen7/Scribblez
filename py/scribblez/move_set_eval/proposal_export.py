@@ -19,23 +19,25 @@ score_moves vs. evidence_fusion + conditioned score_moves):
     inputs are fixed-width (leading-1 batch), so the graph keeps ONE dynamic
     axis exactly as the plain move-set graph does.
 
-Refitter discipline (shared with onnx_export.py's MoveSetEvalExportModel):
-`dynamo=False` and `do_constant_folding=False` keep every weight a plain named
-initializer for the TensorRT parser-refitter, and any nn.MultiheadAttention --
-whose packed in_proj traces as a bare Constant the refitter cannot map -- is
-re-expressed into plain q/k/v Linears plus explicit attention math. The scoring
-cross-attention (model.cross_attn) and BOTH fusion attentions get this
-treatment: the fusion's self-attention is an nn.TransformerEncoderLayer (packed
-MHA inside), and its cross-attention, though already built from plain Linears,
-is re-expressed here too so its padding mask becomes an additive float bias
-rather than a boolean masked_fill -- `exp(-1e9)` underflows to exactly 0, so
-this is bit-identical to the module's `-inf` fill while keeping boolean
-reductions (which the ONNX/TensorRT path handles poorly) out of the graph.
+Refitter discipline (shared with onnx_export.py's MoveSetEvalExportModel, via
+the helpers in onnx_export_util.py): `dynamo=False` and
+`do_constant_folding=False` keep every weight a plain named initializer for the
+TensorRT parser-refitter, any nn.MultiheadAttention (whose packed in_proj traces
+as a bare Constant the refitter cannot map) is re-expressed into plain q/k/v
+Linears plus explicit attention math (split_mha_qkv / cross_attention_2d), and a
+Linear over a concatenation is re-associated (split_concat_linear) so the
+per-move `g` never has to Expand across the dynamic M axis. The scoring
+cross-attention (model.cross_attn) and BOTH fusion attentions get the attention
+treatment; the fusion's own cross-attention, though already plain Linears, is
+re-expressed here so its padding mask becomes an additive float bias (NEG_BIAS)
+rather than a boolean masked_fill, keeping boolean reductions -- which the
+ONNX/TensorRT path handles poorly -- out of the graph.
 
-Concatenated (attended || g) Linears are re-associated into an attended
-sub-Linear plus a g sub-Linear so the per-move `g` never has to Expand across
-the dynamic M axis (the legacy tracer's shape-baking hazard) -- the same trick
-the plain exporter applies to its scoring head.
+The evidence tokens are re-encoded inside the step graph (encode_tokens is
+folded into ProposalStepExportModel rather than split into a third graph):
+re-encoding the <=E tokens each iteration is negligible beside the rollouts each
+step schedules, and the finer per-candidate-encode / device-resident split is
+deferred to the engine runtime (see docs/sim_residual_feedback.md).
 """
 
 import warnings
@@ -50,7 +52,11 @@ from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
     common_metadata,
+    cross_attention_2d,
+    split_concat_linear,
+    split_mha_qkv,
     undo_initializer_dedup,
+    weight_fingerprint,
     write_metadata,
 )
 from scribblez.spatial_trunk import mean_max_pool
@@ -99,23 +105,6 @@ STEP_INPUT_NAMES = (
 STEP_OUTPUT_NAMES = ("wld", "score_diff", "planes", "gain")
 
 
-def _split_concat_linear(linear: nn.Linear, split: int) -> tuple[nn.Linear, nn.Linear]:
-    """Re-associate a Linear over cat([attended (split), g (rest)]) into an
-    attended sub-Linear (carrying the bias) and a bias-free g sub-Linear, each
-    holding a copied weight slice as its own parameter. `attended_part(attended)
-    + g_part(g)` equals the original applied to the concatenation, but g stays
-    (1, ...) and broadcasts in the add rather than Expanding across the dynamic
-    move axis."""
-    out_features = linear.out_features
-    attended_part = nn.Linear(split, out_features)
-    g_part = nn.Linear(linear.in_features - split, out_features, bias=False)
-    with torch.no_grad():
-        attended_part.weight.copy_(linear.weight[:, :split])
-        attended_part.bias.copy_(linear.bias)
-        g_part.weight.copy_(linear.weight[:, split:])
-    return attended_part, g_part
-
-
 class _ScoringHeads(nn.Module):
     """The move proposal model's scoring machinery, refitter-re-expressed.
 
@@ -134,39 +123,25 @@ class _ScoringHeads(nn.Module):
         c = mha.embed_dim
         self.c = c
         self.num_heads = mha.num_heads
-        self.head_dim = c // mha.num_heads
-        self.q_proj = nn.Linear(c, c)
-        self.k_proj = nn.Linear(c, c)
-        self.v_proj = nn.Linear(c, c)
-        with torch.no_grad():
-            self.q_proj.weight.copy_(mha.in_proj_weight[:c])
-            self.q_proj.bias.copy_(mha.in_proj_bias[:c])
-            self.k_proj.weight.copy_(mha.in_proj_weight[c : 2 * c])
-            self.k_proj.bias.copy_(mha.in_proj_bias[c : 2 * c])
-            self.v_proj.weight.copy_(mha.in_proj_weight[2 * c :])
-            self.v_proj.bias.copy_(mha.in_proj_bias[2 * c :])
+        self.q_proj, self.k_proj, self.v_proj = split_mha_qkv(mha)
         self.attn_out = mha.out_proj  # a plain Linear already
 
         # Value head Linear(4C, C) over cat([attended, g]) -> attended/g split.
-        self.head_attended, self.head_g = _split_concat_linear(model.head[0], c)
+        self.head_attended, self.head_g = split_concat_linear(model.head[0], c)
         self.head_out = model.head[2]
         # Plane readout Linear(4C, num_planes*C) -> attended/g split.
         self.num_planes = len(PLANE_NAMES)
-        self.plane_attended, self.plane_g = _split_concat_linear(model.plane_proj, c)
+        self.plane_attended, self.plane_g = split_concat_linear(model.plane_proj, c)
         # Proves-best head Linear(4C, C) -> attended/g split, then Linear(C, 1).
-        self.pb_attended, self.pb_g = _split_concat_linear(model.proves_best[0], c)
+        self.pb_attended, self.pb_g = split_concat_linear(model.proves_best[0], c)
         self.pb_out = model.proves_best[2]
 
     def _cross_attention(self, e: torch.Tensor, board0: torch.Tensor) -> torch.Tensor:
         """model.cross_attn's math (eval mode, no mask) over M move queries
         (e, (M, C)) and one position's 225 board tokens (board0, (225, C))."""
-        h, d = self.num_heads, self.head_dim
-        q = self.q_proj(e).view(-1, h, d).transpose(0, 1)  # (H, M, d)
-        k = self.k_proj(board0).view(-1, h, d).transpose(0, 1)  # (H, 225, d)
-        v = self.v_proj(board0).view(-1, h, d).transpose(0, 1)
-        attn = torch.softmax(q @ k.transpose(1, 2) * d**-0.5, dim=-1)  # (H, M, 225)
-        ctx = (attn @ v).transpose(0, 1).reshape(-1, h * d)  # (M, C)
-        return self.attn_out(ctx)
+        return cross_attention_2d(
+            self.q_proj, self.k_proj, self.v_proj, self.attn_out, self.num_heads, e, board0
+        )
 
     def value(
         self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor
@@ -248,19 +223,9 @@ class ProposalStepExportModel(nn.Module):
         # Fusion self-attention: an nn.TransformerEncoderLayer whose inner MHA
         # carries the packed in_proj hazard -- split into plain q/k/v Linears.
         sa = self.fusion.self_attn.self_attn
-        c = sa.embed_dim
         self.sa_num_heads = sa.num_heads
-        self.sa_head_dim = c // sa.num_heads
-        self.sa_q = nn.Linear(c, c)
-        self.sa_k = nn.Linear(c, c)
-        self.sa_v = nn.Linear(c, c)
-        with torch.no_grad():
-            self.sa_q.weight.copy_(sa.in_proj_weight[:c])
-            self.sa_q.bias.copy_(sa.in_proj_bias[:c])
-            self.sa_k.weight.copy_(sa.in_proj_weight[c : 2 * c])
-            self.sa_k.bias.copy_(sa.in_proj_bias[c : 2 * c])
-            self.sa_v.weight.copy_(sa.in_proj_weight[2 * c :])
-            self.sa_v.bias.copy_(sa.in_proj_bias[2 * c :])
+        self.sa_head_dim = sa.embed_dim // sa.num_heads
+        self.sa_q, self.sa_k, self.sa_v = split_mha_qkv(sa)
         self.sa_out = sa.out_proj  # plain Linear
 
     def _self_attention(self, tokens: torch.Tensor, key_bias: torch.Tensor) -> torch.Tensor:
@@ -343,10 +308,6 @@ class ProposalStepExportModel(nn.Module):
         attended, wld, score_diff, planes = self.heads.value(board_c, g_c, move_enc)
         gain = self.heads.gain(attended, g_c)
         return wld, score_diff, planes, gain
-
-
-def _channels(model: MoveSetEvalModel) -> int:
-    return model.cross_attn.embed_dim
 
 
 def _export(
@@ -480,7 +441,7 @@ def export_proposal_step(
     device = next(model.parameters()).device
     wrapper = ProposalStepExportModel(model).to(device)
     wrapper.eval()
-    c = _channels(model)
+    c = model.cross_attn.embed_dim
     e = max_evidence
     cells = board_size * board_size
 
@@ -512,8 +473,11 @@ def export_proposal_step(
         model.train()
 
 
-def proposal_export_id(model: MoveSetEvalModel, opset: int = 17) -> str:
-    """The fingerprint tying a cache graph to its step graph: the underlying
-    model's architecture signature, identical for both wrappers exported from
-    one model, so a loader can reject a mismatched cache/step pair."""
-    return architecture_signature(model, opset)
+def proposal_export_id(model: MoveSetEvalModel) -> str:
+    """The fingerprint tying a cache graph to its step graph: a WEIGHT-sensitive
+    hash of the model (weight_fingerprint), identical for both wrappers exported
+    from one in-memory model and different for any other checkpoint -- so a
+    loader can reject a cache graph paired with a step graph from a different
+    model, not just an architecturally different one (which the per-graph
+    architecture signature already separates)."""
+    return weight_fingerprint(model)

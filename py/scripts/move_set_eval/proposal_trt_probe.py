@@ -39,6 +39,7 @@ from scribblez.move_set_eval.proposal_export import (
     export_proposal_step,
     proposal_export_id,
 )
+from scribblez.move_set_eval.targets import PLANE_NAMES
 
 MAX_MOVES = 4096
 OPT_MOVES = 512
@@ -258,7 +259,7 @@ def main() -> int:
             "move_enc": (m, channels),
             "wld": (m, 3),
             "score_diff": (m, 2),
-            "planes": (m, 4, BOARD * BOARD),
+            "planes": (m, len(PLANE_NAMES), BOARD * BOARD),
         },
         move_widths,
     )
@@ -284,7 +285,7 @@ def main() -> int:
         lambda m: {
             "wld": (m, 3),
             "score_diff": (m, 2),
-            "planes": (m, 4, BOARD * BOARD),
+            "planes": (m, len(PLANE_NAMES), BOARD * BOARD),
             "gain": (m,),
         },
         {"move_enc": channels},
