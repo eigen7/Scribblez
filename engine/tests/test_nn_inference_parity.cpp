@@ -4,13 +4,21 @@
 // The fixture is a directory holding model.onnx, inputs.bin (N x kInputFloats
 // float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
 // score_diff_mean, score_diff_std, the PyTorch decode), produced by
-// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model through
-// TrtEvalService and evaluates the rows at BF16 -- the precision production
-// inference runs -- and at FP16, holding every field to a precision-appropriate
-// tolerance against the PyTorch FP32 reference. Both 16-bit formats are coarser
-// than FP32, so their deviation bounds it; passing validates the engine build,
-// host/device copies, output binding order, and the softmax/mean decode. Fails
-// if any field drifts beyond tolerance.
+// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model
+// through TrtEvalService and evaluates the rows at BF16 -- the precision
+// production inference runs -- and at FP16, holding every field to a
+// precision-appropriate tolerance against the PyTorch FP32 reference. Passing
+// validates the engine build, host/device copies, output binding order, and
+// the softmax/mean decode for each precision request.
+//
+// It does NOT prove that reduced-precision kernels execute: TensorRT may serve
+// a 16-bit request with FP32 tactics, and for a fixture this small it does so
+// for BF16 -- the BF16 run matches the FP32 reference to ~1e-5, tighter than
+// its own tolerance, even at full optimization. So the BF16 case is a
+// build/bind/decode smoke test, not a check of BF16 arithmetic; that is
+// validated on real models in docs/fp16_safe_serving.md, where the format's
+// exponent range and mantissa cost are what matter. Fails if any field drifts
+// beyond tolerance.
 //
 // Run it as a one-liner with no arguments:
 //   test_nn_inference_parity
@@ -55,6 +63,10 @@ constexpr int kFieldsPerRow = 6;
 // more.
 constexpr float kFp16ProbTol = 1e-3f;      // bounds the four probability fields
 constexpr float kFp16ScoreDiffTol = 0.2f;  // bounds the score-diff mean and std (points)
+// BF16's bounds are sized for its 8-bit mantissa, but on this tiny fixture
+// TensorRT serves the BF16 request with FP32 tactics, so the run actually lands
+// far inside them (see the file header) -- these bound a real BF16 kernel only
+// if a future, larger fixture makes TensorRT choose one.
 constexpr float kBf16ProbTol = 5e-3f;
 constexpr float kBf16ScoreDiffTol = 0.8f;
 

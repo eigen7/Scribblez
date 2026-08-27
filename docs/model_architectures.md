@@ -135,15 +135,10 @@ semantics. Layout owned by
 | `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `planes` | teacher masks, dequantized (M, 4, 225) | BCE-with-logits | `lambda_planes` = 1 |
-| `wld` (z-loss) | 0 | mean squared `logsumexp` | `lambda_wld_z` = 1e-4 |
-| trunk `pool_fc` outputs | 0 | mean square | `lambda_pool_act` = 1e-6 |
 
-The last two rows are the same activation-magnitude restoring forces as the
-position-eval model's (see its Losses table). This model's own train loop
-(move_set_eval/train_loop.py) applies both directly every step -- the z-loss
-inside its `compute_loss` call, the pooled-FC penalty via its `PoolFcPenalty`
-recorder; the evidence trainer's joint (unfrozen) mode reuses the same
-machinery through its distillation half.
+Like the position-eval model, this recipe carries no activation-magnitude
+restoring forces: BF16 serving ([fp16_safe_serving.md](fp16_safe_serving.md))
+has FP32's exponent range, so nothing opposes the trunk's activation growth.
 
 Plane targets exist only in stratified (training) records; the full-sweep
 evaluation slice is plane-less, so its metrics stay value-based and the
