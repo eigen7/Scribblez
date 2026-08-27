@@ -20,13 +20,13 @@ void check(cudaError_t err, const char* what) {
   }
 }
 
-// "<major>.<minor>" compute capability of the current device.
-std::string query_sm_tag() {
+// The current device's properties (compute capability, name, limits).
+cudaDeviceProp current_device_props() {
   int device = 0;
   check(cudaGetDevice(&device), "cudaGetDevice");
   cudaDeviceProp prop;
   check(cudaGetDeviceProperties(&prop, device), "cudaGetDeviceProperties");
-  return std::format("{}.{}", prop.major, prop.minor);
+  return prop;
 }
 
 }  // namespace
@@ -34,9 +34,14 @@ std::string query_sm_tag() {
 const char* sm_tag() {
   // Function-local static: C++ guarantees the initializer runs exactly once,
   // even under concurrent first calls.
-  static const std::string tag = query_sm_tag();
+  static const std::string tag = [] {
+    const cudaDeviceProp prop = current_device_props();
+    return std::format("{}.{}", prop.major, prop.minor);
+  }();
   return tag.c_str();
 }
+
+int compute_capability_major() { return current_device_props().major; }
 
 void set_device(int device_id) { check(cudaSetDevice(device_id), "cudaSetDevice"); }
 

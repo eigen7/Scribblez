@@ -19,6 +19,10 @@ using stream_t = CUstream_st*;
 // for the compute capability it was built on.
 const char* sm_tag();
 
+// Compute-capability major version of the current device (8 for Ampere, 9 for
+// Hopper/Ada). BF16 tensor cores require >= 8.
+int compute_capability_major();
+
 void set_device(int device_id);
 
 stream_t create_stream();

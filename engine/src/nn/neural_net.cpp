@@ -276,6 +276,15 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
   if (params.precision == Precision::kFP16) {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
   } else if (params.precision == Precision::kBF16) {
+    // BF16 tensor cores are Ampere-and-newer (SM80+). On older hardware
+    // TensorRT would honor the flag but silently pick FP32 tactics, losing the
+    // acceleration with no signal -- fail loudly and name FP16 as the fallback.
+    if (compute_capability_major() < 8) {
+      throw util::CleanException(
+        "BF16 serving requires an Ampere-or-newer GPU (compute capability >= 8.0); this device is "
+        "SM {}. Re-run with --precision FP16.",
+        sm_tag());
+    }
     config->setFlag(nvinfer1::BuilderFlag::kBF16);
   }
   // The cache is keyed on model architecture, so a cached plan generally holds
