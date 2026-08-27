@@ -269,4 +269,21 @@ plain pass for drift.
 | Move-conditioning | none (board is post-move) | tile embeddings + cross-attention |
 | Heads | wld, score_diff, 4 placement masks | wld, score_diff, 4 placement planes, proves-best gain |
 | Supervision | game outcomes / observed spread | teacher readouts (`.mset` sidecar) |
-| ONNX outputs | `wld`, `score_diff`, 4 mask names | `wld`, `score_diff` (planes deferred to the evidence path) |
+| ONNX outputs | `wld`, `score_diff`, 4 mask names | plain graph: `wld`, `score_diff`; evidence-path split (below) adds `planes` and `gain` |
+
+The move set evaluation model has two ONNX export paths. The plain graph
+(`onnx_export.py`, `move_set_eval`) emits `wld` and `score_diff` for the
+one-pass agent. The evidence path (`proposal_export.py`, roadmap item 3) splits
+the move proposal model into two graphs the engine runs incrementally
+(docs/sim_residual_feedback.md), and these emit the placement `planes` and the
+proves-best `gain` that the plain graph omits:
+
+| graph | run | inputs | outputs |
+|-------|-----|--------|---------|
+| `move_proposal_cache` | once per turn | board + `M` candidates | `board (1,225,C)`, `g (1,3C)`, `move_enc (M,C)`, plain `wld`, `score_diff`, `planes` |
+| `move_proposal_step` | per evidence-loop iteration | the cache tensors + a padded width-`E` evidence set | evidence-conditioned `wld`, `score_diff`, `planes`, `gain` |
+
+The engine runtime for these graphs is `agent/move_proposal_runtime.h`
+(`NeuralNet<MoveProposalCacheSpec>` + `NeuralNet<MoveProposalStepSpec>`), served
+at FP32 for item 3 and verified against `MoveSetEvalModel.forward` by
+`test_proposal_inference_parity.cpp`.

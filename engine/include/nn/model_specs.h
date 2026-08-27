@@ -16,8 +16,11 @@
 // type lists of descriptors. nn::NeuralNet<Spec> turns a spec into a TensorRT
 // runtime and nn::TrtEvalService<Spec> into an evaluation service; neither
 // contains a family-specific branch, so adding a model family means writing a
-// spec here (plus its Batch staging overloads in trt_eval_service.cpp), not
-// another runtime.
+// spec here, not another runtime. A family served through TrtEvalService adds
+// its Batch staging overloads in trt_eval_service.cpp too; the move-proposal
+// specs skip that -- their handoff outputs do not fit the service's row-uniform
+// decode, so they are driven through NeuralNet directly by
+// agent/move_proposal_runtime.h.
 //
 // Carries no CUDA/TensorRT dependency: GPU-free consumers (agent interfaces,
 // test stubs) read specs freely.
@@ -173,6 +176,118 @@ struct SelfWinMaskOutput {
   static constexpr RowDecode kDecode = RowDecode::kSigmoid;
 };
 
+// The number of placement-plane heads (targets.PLANE_NAMES) -- the four
+// *MaskOutput descriptors above, and the width of the move-proposal graphs'
+// dense `planes` output.
+inline constexpr int kNumPlacementPlanes = 4;
+
+// ---------- move-proposal (evidence-path) tensors ------------------------
+//
+// The move proposal model (roadmap item 3) runs as two graphs: a per-turn
+// `cache` graph and a per-evidence-iteration `step` graph
+// (py/scribblez/move_set_eval/proposal_export.py). Three tensors pass between
+// them -- the board token map, the global summary, and the per-move encodings
+// -- and the step graph additionally reads a padded evidence set. NeuralNet
+// stages these raw: the orchestrator (agent/move_proposal_runtime.h) reads the
+// handoff tensors off the cache's host buffers, copies them into the step's
+// input buffers, and applies each head's activation itself, so these carry
+// their real (undecoded) layout, not a RowDecode the service would apply.
+
+// The trunk channel width C the model decided is the inner dimension of every
+// handoff tensor. Left model-decided (kRowElems 0), so the descriptors do not
+// restate an architecture constant; the loader reads C off a handoff binding
+// (NeuralNetBase::channels()) and the shared proposal_export_id fingerprint,
+// not the layout check, is what pins a cache/step pair to one C.
+
+// board (1, 225, C): the trunk token map, a cache output and a step input.
+struct BoardHandoff {
+  static constexpr const char* kName = "board";
+  using Elem = float;
+  static constexpr int kRowElems = 0;
+  static constexpr bool kDynamic = true;  // wrapped Static in both specs
+};
+
+// g (1, 3C): the global summary, a cache output and a step input.
+struct GHandoff {
+  static constexpr const char* kName = "g";
+  using Elem = float;
+  static constexpr int kRowElems = 0;
+  static constexpr bool kDynamic = true;  // wrapped Static in both specs
+};
+
+// move_enc (M, C): the per-move encodings, a cache output and a step input.
+// The only handoff tensor riding the dynamic "moves" axis; its per-row width C
+// is what channels() reads.
+struct MoveEncHandoff {
+  static constexpr const char* kName = "move_enc";
+  using Elem = float;
+  static constexpr int kRowElems = 0;
+  static constexpr bool kDynamic = true;
+};
+
+// planes (M, 4, 225): the four placement-plane heads' per-cell logits, a raw
+// output of both graphs. Sigmoid'd by the orchestrator.
+struct PlanesOutput {
+  static constexpr const char* kName = "planes";
+  using Elem = float;
+  static constexpr int kRowElems = kNumPlacementPlanes * kBoardCells;
+  static constexpr bool kDynamic = true;
+  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
+};
+
+// gain (M, 1): the proves-best expected gain, softplus'd in-graph (>= 0), so a
+// step output the orchestrator reads as is.
+struct GainOutput {
+  static constexpr const char* kName = "gain";
+  using Elem = float;
+  static constexpr int kRowElems = 1;
+  static constexpr bool kDynamic = true;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
+// The step graph's padded evidence width E and per-token layout. E is
+// proposal_export.py's DEFAULT_MAX_EVIDENCE; the plane/scalar counts mirror
+// agent/evidence_staging.h's kNumEvidencePlanes / kNumEvidenceScalars (and,
+// through it, evidence_fusion.py). Restated here -- as the graph-name strings
+// are -- so model_specs.h stays free of the heavy agent/sim headers;
+// move_proposal_runtime.cpp static_asserts the two agree, and the loader's
+// tensor-width check fails loudly on any drift against the exported graph.
+inline constexpr int kMaxEvidence = 64;
+inline constexpr int kEvidencePlanes = 9;
+inline constexpr int kEvidenceScalars = 11;
+
+// The evidence inputs are fixed-width leading-1 batches (1, E, ...): E folded
+// into the row keeps M the step graph's only dynamic axis. Each carries a
+// compile-time row width E * rest, except ev_move_enc, whose rest is the
+// model-decided C (kRowElems 0, like the handoff tensors).
+struct EvMoveEncInput {
+  static constexpr const char* kName = "ev_move_enc";
+  using Elem = float;
+  static constexpr int kRowElems = 0;     // E * C, C model-decided
+  static constexpr bool kDynamic = true;  // wrapped Static in the spec
+};
+
+struct EvObsPlanesInput {
+  static constexpr const char* kName = "ev_obs_planes";
+  using Elem = float;
+  static constexpr int kRowElems = kMaxEvidence * kEvidencePlanes * kBoardCells;
+  static constexpr bool kDynamic = true;  // wrapped Static in the spec
+};
+
+struct EvObsScalarsInput {
+  static constexpr const char* kName = "ev_obs_scalars";
+  using Elem = float;
+  static constexpr int kRowElems = kMaxEvidence * kEvidenceScalars;
+  static constexpr bool kDynamic = true;  // wrapped Static in the spec
+};
+
+struct EvMaskInput {
+  static constexpr const char* kName = "ev_mask";
+  using Elem = uint8_t;
+  static constexpr int kRowElems = kMaxEvidence;
+  static constexpr bool kDynamic = true;  // wrapped Static in the spec
+};
+
 // ---------- type list ----------------------------------------------------
 
 // The training_targets.h TargetList idiom over tensor descriptors.
@@ -229,6 +344,9 @@ class PositionEvaluationSpec {
   static constexpr const char* kAxisTag = "batch";
   static constexpr int kDefaultMaxRows = 256;
 
+  // No trunk-channel handoff tensor: only the move-proposal specs expose C.
+  static constexpr const char* kChannelsTensor = nullptr;
+
   // The row count the plan is optimized for, clamped to the params' max_rows:
   // agents fill whole batches, so OPT = MAX.
   static constexpr int kOptRows = std::numeric_limits<int>::max();
@@ -263,6 +381,9 @@ class MoveSetEvaluationSpec {
 
   static constexpr const char* kAxisTag = "moves";
 
+  // No trunk-channel handoff tensor: only the move-proposal specs expose C.
+  static constexpr const char* kChannelsTensor = nullptr;
+
   // Upper bound on the candidates one predict() scores. Sized to the realistic
   // move-set ceiling rather than trimmed: every chunk past the first re-pays a
   // full synchronous round trip and another board trunk pass -- the
@@ -294,6 +415,74 @@ class MoveSetEvaluationSpec {
     const float* board_row;
     const move_set::MoveFeatureArrays* moves;
   };
+};
+
+// ---------- the move-proposal (evidence-path) families -------------------
+//
+// The move proposal model's deployment loop (docs/sim_residual_feedback.md)
+// runs it incrementally as two graphs, so it is served as two specs, not one:
+// a per-turn `cache` graph and a per-evidence-iteration `step` graph, tied by
+// the shared proposal_export_id fingerprint the orchestrator validates. Both
+// are driven directly through NeuralNet<Spec> by agent/move_proposal_runtime.h
+// -- NOT through TrtEvalService, whose row-uniform decode loop cannot serve the
+// static (board/g) or raw (move_enc) handoff outputs -- so neither carries a
+// Batch struct or a TrtEvalService instantiation. Served at FP32 for item 3
+// (the runtime defaults its params so); the fusion graph's masked_fill / 4D
+// einsum make FP16 a later, separately gated optimization.
+
+// The cache graph: one position's board row plus M candidates -> the reusable
+// cache (board/g/move_enc) and the evidence-free predictions (wld/score_diff/
+// planes). M is the only dynamic axis; board inputs are the mset graph's, so a
+// cache call stages exactly as a move-set call does.
+class MoveProposalCacheSpec {
+ public:
+  static constexpr const char* kGraph = kGraphMoveProposalCache;
+  static constexpr bool kAcceptUntaggedGraph = false;
+  static constexpr const char* kAxisTag = "moves";
+  static constexpr int kDefaultMaxRows = 4096;
+  static constexpr int kOptRows = 512;
+
+  // The handoff tensor whose per-row width is the trunk channels C.
+  static constexpr const char* kChannelsTensor = MoveEncHandoff::kName;
+
+  static constexpr VersionRequirement kVersions[] = {kInputEncodingRequirement,
+                                                     kMoveEncodingRequirement};
+
+  using Inputs = TensorList<Static<SpatialInput>, Static<ScalarInput>, MoveLettersInput,
+                            MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;
+  using MoveInputs = TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput,
+                                MoveTileMaskInput, MoveScalarsInput>;
+  // board/g are leading-1 static; move_enc and the prediction heads ride the
+  // "moves" axis.
+  using Outputs = TensorList<Static<BoardHandoff>, Static<GHandoff>, MoveEncHandoff, WldOutput,
+                             ScoreDiffOutput, PlanesOutput>;
+  using AuxOutputs = TensorList<>;
+};
+
+// The step graph: the cache tensors plus a padded width-E evidence set -> the
+// evidence-conditioned wld/score_diff/planes and the proves-best gain. M
+// ("moves") is the only dynamic axis; board/g are static handoff inputs,
+// move_enc rides "moves", and the evidence inputs are fixed-width leading-1
+// batches.
+class MoveProposalStepSpec {
+ public:
+  static constexpr const char* kGraph = kGraphMoveProposalStep;
+  static constexpr bool kAcceptUntaggedGraph = false;
+  static constexpr const char* kAxisTag = "moves";
+  static constexpr int kDefaultMaxRows = 4096;
+  static constexpr int kOptRows = 512;
+
+  static constexpr const char* kChannelsTensor = MoveEncHandoff::kName;
+
+  static constexpr VersionRequirement kVersions[] = {kInputEncodingRequirement,
+                                                     kMoveEncodingRequirement};
+
+  using Inputs =
+    TensorList<Static<BoardHandoff>, Static<GHandoff>, MoveEncHandoff, Static<EvMoveEncInput>,
+               Static<EvObsPlanesInput>, Static<EvObsScalarsInput>, Static<EvMaskInput>>;
+  using MoveInputs = TensorList<>;
+  using Outputs = TensorList<WldOutput, ScoreDiffOutput, PlanesOutput, GainOutput>;
+  using AuxOutputs = TensorList<>;
 };
 
 // The position model's aux-output count, for consumers sizing mask planes

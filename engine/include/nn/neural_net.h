@@ -82,6 +82,10 @@ struct RuntimeSpec {
   const char* axis_tag;
   int opt_rows;
   std::span<const TensorSpec> tensors;
+  // The tensor whose per-row width is the trunk channel count C, read off after
+  // load() for channels(); null for a family with no such handoff tensor (the
+  // move-proposal specs set it, position/mset leave it null).
+  const char* channels_tensor;
 };
 
 // All machinery -- engine build, the architecture-keyed refitted plan cache,
@@ -105,9 +109,16 @@ class NeuralNetBase {
 
   int max_rows() const;
 
-  // Valid after load(): the board-row widths the served model consumes.
+  // Valid after load(): the board-row widths the served model consumes. Zero
+  // for a graph that takes no board inputs (the move-proposal step graph, whose
+  // board arrives pre-encoded as a handoff tensor).
   int spatial_planes() const;
   int scalar_floats() const;
+
+  // Valid after load() for a spec that names a channels_tensor: the trunk
+  // channel width C, read off that handoff tensor's per-row width. Zero for a
+  // family that exposes no such tensor.
+  int channels() const;
 
   // The model's input-encoding arm, from the ONNX metadata_props the exporter
   // stamps. Valid after load(); consumers cross-check it against the input
@@ -170,9 +181,9 @@ class NeuralNet : public NeuralNetBase {
   }
 
  private:
-  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph,    Spec::kAcceptUntaggedGraph,
-                                               Spec::kVersions, Spec::kAxisTag,
-                                               Spec::kOptRows,  detail::kTensorSpecs<Spec>};
+  static constexpr RuntimeSpec kRuntimeSpec = {
+    Spec::kGraph,   Spec::kAcceptUntaggedGraph, Spec::kVersions,      Spec::kAxisTag,
+    Spec::kOptRows, detail::kTensorSpecs<Spec>, Spec::kChannelsTensor};
 };
 
 }  // namespace nn

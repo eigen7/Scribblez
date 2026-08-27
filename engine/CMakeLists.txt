@@ -146,7 +146,12 @@ add_library(scribblez_nn STATIC
   src/nn/trt_util.cpp
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
-  src/nn/trt_eval_service.cpp)
+  src/nn/trt_eval_service.cpp
+  # The move-proposal two-graph runtime (roadmap item 3): drives the cache and
+  # step NeuralNet<Spec>s and marshals the handoff between them. Lives with the
+  # TensorRT layer (it drives two nets and stages evidence); scribblez_nn
+  # already links scribblez_core for the evidence staging + game types.
+  src/agent/move_proposal_runtime.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -443,7 +448,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_test(NAME parity_fixtures_cleanup
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PARITY_FIXTURE_ROOT}")
   set_tests_properties(parity_fixtures_cleanup PROPERTIES
-    FIXTURES_CLEANUP "nn_parity_fixture;mset_parity_fixture")
+    FIXTURES_CLEANUP "nn_parity_fixture;mset_parity_fixture;proposal_parity_fixture")
 
   # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Needs a GPU at run time.
   # A fixture directory may be passed as the first non-gtest argument to reuse one
@@ -475,6 +480,21 @@ if(SCRIBBLEZ_BUILD_TESTS)
     EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/mset"
     PROPERTIES FIXTURES_REQUIRED mset_parity_fixture)
 
+  # The move-proposal two-graph runtime (roadmap item 3): cache -> evidence
+  # staging -> step against the PyTorch model, over several evidence cases. Same
+  # shape as the parity tests above -- needs a GPU at run time, carries its own
+  # main() for the optional fixture-dir argument.
+  add_executable(test_proposal_inference_parity tests/test_proposal_inference_parity.cpp)
+  target_link_libraries(test_proposal_inference_parity PRIVATE
+    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
+  target_compile_definitions(test_proposal_inference_parity PRIVATE
+    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
+  add_parity_fixture(proposal_parity_fixture "${PARITY_FIXTURE_ROOT}/proposal"
+    scripts.move_set_eval.gen_proposal_parity_fixture)
+  gtest_discover_tests(test_proposal_inference_parity
+    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/proposal"
+    PROPERTIES FIXTURES_REQUIRED proposal_parity_fixture)
+
   # Test helper: writes .slog files using an in-memory dictionary for integration
   # testing (Python FFI tests, etc.).
   add_executable(test_slog_writer apps/test_slog_writer.cpp)
@@ -497,6 +517,12 @@ target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads
 # path on a real checkpoint without any game logic.
 add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
 target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
+
+# The move proposal model's two-graph evidence-path runtime (roadmap item 3):
+# load a cache/step ONNX pair, run cache -> one synthetic evidence set -> step,
+# print the plain and conditioned predictions. GPU liveness for the whole loop.
+add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp)
+target_link_libraries(proposal_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # Move set evaluation model distillation-target generator: stratified
 # candidate sampling + batched teacher (position evaluation model) inference
