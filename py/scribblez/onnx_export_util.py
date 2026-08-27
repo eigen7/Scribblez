@@ -16,6 +16,8 @@ from pathlib import Path
 
 import onnx
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from scribblez.ffi import DEFAULT_LEXICON, format_layout
 
@@ -59,6 +61,85 @@ def architecture_signature(model: torch.nn.Module, opset: int) -> str:
     (engine/include/nn/trt_util.h)."""
     components = [str(model), f"opset={opset}", torch.__version__, onnx.__version__]
     return hashlib.md5("\n".join(components).encode()).hexdigest()
+
+
+def weight_fingerprint(model: torch.nn.Module) -> str:
+    """sha256 over the model's parameters and buffers in a deterministic order
+    -- unlike architecture_signature, this changes with the WEIGHTS, so it
+    distinguishes any two differing checkpoints. Used to tie graphs that must
+    come from one in-memory model (the move-proposal cache/step pair) so a
+    loader can reject a graph paired with one exported from a different model."""
+    h = hashlib.sha256()
+    for name, tensor in sorted(model.state_dict().items()):
+        h.update(name.encode())
+        h.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+    return h.hexdigest()
+
+
+# --- refit-discipline re-expressions -------------------------------------
+#
+# The TensorRT parser-refitter maps refit weights by initializer name, so every
+# weight must trace as a plain named initializer. Two torch constructs defeat
+# that and are re-expressed here, shared by every exporter: an
+# nn.MultiheadAttention's packed in_proj (traces as a bare Constant with no
+# initializer behind it), and a Linear over a concatenation (whose per-move
+# broadcast Expands across the dynamic row axis, the legacy tracer's
+# shape-baking hazard).
+
+
+def split_mha_qkv(mha: nn.MultiheadAttention) -> tuple[nn.Linear, nn.Linear, nn.Linear]:
+    """Re-express a packed nn.MultiheadAttention's in_proj as three plain q/k/v
+    nn.Linears holding copied weight/bias slices as their own parameters, so
+    each exports as a plain named initializer. out_proj is already a plain
+    Linear -- read it off `mha` directly."""
+    c = mha.embed_dim
+    q, k, v = nn.Linear(c, c), nn.Linear(c, c), nn.Linear(c, c)
+    with torch.no_grad():
+        q.weight.copy_(mha.in_proj_weight[:c])
+        q.bias.copy_(mha.in_proj_bias[:c])
+        k.weight.copy_(mha.in_proj_weight[c : 2 * c])
+        k.bias.copy_(mha.in_proj_bias[c : 2 * c])
+        v.weight.copy_(mha.in_proj_weight[2 * c :])
+        v.bias.copy_(mha.in_proj_bias[2 * c :])
+    return q, k, v
+
+
+def split_concat_linear(linear: nn.Linear, split: int) -> tuple[nn.Linear, nn.Linear]:
+    """Re-associate a Linear over cat([a (split), b (rest)]) into an `a`
+    sub-Linear (carrying the bias) and a bias-free `b` sub-Linear, each holding a
+    copied weight slice. `a_part(a) + b_part(b)` equals the original applied to
+    the concatenation, but `b` stays (1, ...) and broadcasts in the add rather
+    than Expanding across the dynamic row axis."""
+    out_features = linear.out_features
+    a_part = nn.Linear(split, out_features)
+    b_part = nn.Linear(linear.in_features - split, out_features, bias=False)
+    with torch.no_grad():
+        a_part.weight.copy_(linear.weight[:, :split])
+        a_part.bias.copy_(linear.bias)
+        b_part.weight.copy_(linear.weight[:, split:])
+    return a_part, b_part
+
+
+def cross_attention_2d(
+    q_proj: nn.Linear,
+    k_proj: nn.Linear,
+    v_proj: nn.Linear,
+    out_proj: nn.Linear,
+    num_heads: int,
+    queries: torch.Tensor,
+    keys: torch.Tensor,
+) -> torch.Tensor:
+    """Batchless multi-head attention (the plain-Linear form of an eval-mode
+    nn.MultiheadAttention, no mask): q from `queries` (Nq, C), k/v from `keys`
+    (Nk, C) -> (Nq, C)."""
+    c = q_proj.out_features
+    d = c // num_heads
+    q = q_proj(queries).view(-1, num_heads, d).transpose(0, 1)  # (H, Nq, d)
+    k = k_proj(keys).view(-1, num_heads, d).transpose(0, 1)  # (H, Nk, d)
+    v = v_proj(keys).view(-1, num_heads, d).transpose(0, 1)
+    attn = F.softmax(q @ k.transpose(1, 2) * d**-0.5, dim=-1)  # (H, Nq, Nk)
+    ctx = (attn @ v).transpose(0, 1).reshape(-1, c)  # (Nq, C)
+    return out_proj(ctx)
 
 
 def write_metadata(path: Path, entries: dict[str, str]):
