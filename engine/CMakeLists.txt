@@ -54,6 +54,9 @@ add_library(scribblez_core STATIC
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
+  # GPU-free: the pinning walk over the Fp32PinGraph abstraction. The TensorRT
+  # adapter that feeds it a real network stays in scribblez_nn.
+  src/nn/fp32_pinning.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
   src/training/move_set_eval_target_log.cpp
@@ -153,6 +156,9 @@ target_include_directories(scribblez_nn
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
 target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen Boost::program_options)
+# The GPU-free FP32-pinning walk lives in scribblez_core (so it is unit-testable
+# there); neural_net.cpp's TensorRT adapter calls into it.
+target_link_libraries(scribblez_nn PUBLIC scribblez_core)
 # Reading the exported model's metadata_props (the input-encoding arm) parses
 # the ONNX protobuf directly. The system onnx package ships the ML variant of
 # the generated headers, selected via ONNX_ML.
@@ -292,6 +298,13 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
   target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_gcg_reader)
+
+  # FP32-pinning walk over an in-memory Fp32PinGraph -- match/propagate,
+  # renormalizing stop, constant skip, and the two drift guards (no-match,
+  # runaway). GPU-free: no TensorRT, no model fixture.
+  add_executable(test_fp32_pinning tests/test_fp32_pinning.cpp)
+  target_link_libraries(test_fp32_pinning PRIVATE scribblez_core GTest::gtest_main)
+  gtest_discover_tests(test_fp32_pinning)
 
   # Monte-Carlo ground truth under the two leave conditions (hidden vs
   # face-up); reads its position from tests/data and is gated on the lexicon
