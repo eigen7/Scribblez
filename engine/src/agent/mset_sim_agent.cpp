@@ -54,7 +54,7 @@ void MsetSimAgent::validate(const Params& params) {
   // The horizon lower bound, checked early (the factory calls validate()
   // before loading the model). The flag pairing against --leaf-model is the
   // factory's, which alone knows whether a leaf path was given.
-  SimRunner::validate_horizon("mset-sim agent", params.sim_horizon, params.sim_horizon > 0);
+  SimRunner::validate_min_horizon("mset-sim agent", params.sim_horizon);
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {

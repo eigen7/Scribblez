@@ -70,7 +70,8 @@ void set_terminal_outcome(int delta, RolloutResult* r) {
 // Encodes the horizon leaf of a truncated rollout -- the post-move pre-draw
 // state of the horizon ply's mover, from their POV, the exact sample kind the
 // position evaluation model trains on -- and stages the row in the batcher,
-// which completes `out` when it flushes. The trainer loads post-move rows
+// whose later flush writes the readout back to the pending slot's result. The
+// trainer loads post-move rows
 // (position_eval/trainer.py, post_move=True) of eligible turns of EVERY move
 // type: replay_to_sampled applies the sampled PLAY, EXCHANGE, or PASS before
 // encoding, so all three horizon kinds are in-distribution. The seeded
@@ -342,6 +343,10 @@ void SimRunner::validate_horizon(std::string_view context, int horizon_plies,
       "no model)",
       context);
   }
+  validate_min_horizon(context, horizon_plies);
+}
+
+void SimRunner::validate_min_horizon(std::string_view context, int horizon_plies) {
   if (horizon_plies != 0 && horizon_plies < kMinHorizonPlies) {
     throw util::CleanException("{}: the horizon must be 0 (terminal rollouts) or >= {}", context,
                                kMinHorizonPlies);

@@ -20,9 +20,7 @@ SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalServi
 }
 
 void validate(const TrajectoryOptions& opt) {
-  // The horizon lower bound; the flag pairing against --leaf-model is the
-  // caller's to check (only it knows whether a leaf path was given).
-  SimRunner::validate_horizon("evidence trajectory", opt.horizon, opt.horizon > 0);
+  SimRunner::validate_min_horizon("evidence trajectory", opt.horizon);
   TrajectoryOptions terminal = opt;  // the leaf pairing is the caller's to check
   terminal.horizon = 0;
   SimRunner::validate(sim_params(terminal, nullptr));

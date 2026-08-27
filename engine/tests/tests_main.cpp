@@ -4433,10 +4433,10 @@ TEST(SimRunner, ValidatesTruncationParams) {
 }
 
 // A non-finite leaf readout is a hard error -- whether NaN or the +/-inf an
-// FP16 overflow reaches first, and in any consumed field (the score-diff std
-// feeds delta_sq and was not on the old NaN-only checklist). Because a rollout
-// runs on a worker thread, the guard's throw must surface on the calling
-// thread (threads > 1 here) rather than terminating the process.
+// FP16 overflow reaches first, and in any consumed field, including the
+// score-diff std that feeds delta_sq. Because a rollout runs on a worker
+// thread, the guard's throw must surface on the calling thread (threads > 1
+// here) rather than terminating the process.
 TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_nonfinite_leaf";

@@ -58,7 +58,7 @@ void NeuralSimAgent::validate(const Params& params) {
   // The agent's own served model is always the leaf, so the pairing holds by
   // construction; this checks the horizon lower bound early -- the factory
   // calls validate() before loading that model.
-  SimRunner::validate_horizon("neural-sim agent", params.sim_horizon, params.sim_horizon > 0);
+  SimRunner::validate_min_horizon("neural-sim agent", params.sim_horizon);
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {

@@ -205,13 +205,19 @@ class SimRunner {
   // before spending seconds loading a model.
   static void validate(const Params& params);
 
-  // Checks the truncation-flag pairing and the horizon lower bound for one
-  // CLI surface, throwing util::CleanException prefixed with `context` (the
-  // agent or tool name) on a bad combination. validate() re-checks these
-  // against the built Params; a surface calls this earlier -- before loading
-  // the leaf model -- so a bad flag fails fast rather than after seconds of
-  // model building.
+  // Checks the truncation-flag pairing (a horizon iff a leaf) and the horizon
+  // lower bound for one CLI surface that knows both, throwing
+  // util::CleanException prefixed with `context` (the agent or tool name) on a
+  // bad combination. validate() re-checks these against the built Params; a
+  // surface calls this earlier -- before loading the leaf model -- so a bad
+  // flag fails fast rather than after seconds of model building.
   static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf_service);
+
+  // The horizon lower bound alone, for a surface whose leaf presence is
+  // decided (and whose pairing is thus checked) elsewhere -- an agent whose
+  // factory already ran validate_horizon, or a library whose caller owns the
+  // pairing. Still worth checking early, to fail before a model load.
+  static void validate_min_horizon(std::string_view context, int horizon_plies);
 
   SimRunner(const Dictionary& dict, const Params& params);
 
