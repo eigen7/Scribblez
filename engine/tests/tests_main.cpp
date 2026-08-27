@@ -5637,8 +5637,9 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
 // build_evidence_inputs. Hand-computed against a two-candidate evidence set over
 // three scored candidates, so a drift from the Python normalization -- a
 // missing /rollouts, an unscaled delta, a wrong softmax/sigmoid, a mis-gathered
-// move encoding, or a footprint on the wrong square -- is caught here rather
-// than only through the (heavier) engine parity test.
+// move encoding, or a footprint on the wrong square -- is caught here; no engine
+// test cross-checks this against the Python fusion stage yet (the runtime's
+// end-to-end parity test, item 3's next slice, will).
 TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   using namespace evidence;
   constexpr int kChannels = 2;
@@ -5685,10 +5686,13 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   const std::vector<int> scored_indices = {2, 0};
 
   constexpr int kMaxE = 4;
-  std::vector<float> ev_move_enc(size_t(kMaxE) * kChannels);
-  std::vector<float> ev_planes(size_t(kMaxE) * kNumEvidencePlanes * kCells);
-  std::vector<float> ev_scalars(size_t(kMaxE) * kNumEvidenceScalars);
-  std::vector<uint8_t> ev_mask(kMaxE);
+  // Pre-fill with a sentinel (buffers are reused turn-over-turn), so the
+  // padding-row zero checks below prove the memsets actually cleared it rather
+  // than passing vacuously on a fresh zero-initialized vector.
+  std::vector<float> ev_move_enc(size_t(kMaxE) * kChannels, -1.0f);
+  std::vector<float> ev_planes(size_t(kMaxE) * kNumEvidencePlanes * kCells, -1.0f);
+  std::vector<float> ev_scalars(size_t(kMaxE) * kNumEvidenceScalars, -1.0f);
+  std::vector<uint8_t> ev_mask(kMaxE, 9);
   const EvidenceStagingOutputs out{ev_move_enc.data(), ev_planes.data(), ev_scalars.data(),
                                    ev_mask.data()};
   stage_evidence(moves, observations, scored_indices, pred, kMaxE, out);
@@ -5762,11 +5766,16 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
 static scribblez::evidence::CachePredictions zero_predictions(int scored, int channels,
                                                               std::vector<float>& storage) {
   using namespace scribblez::evidence;
-  storage.assign(size_t(scored) * (channels + 3 + 2 + kNumPredictedPlanes * kEvidencePlaneCells),
-                 0.0f);
+  // Per-row widths of CachePredictions' four arrays, packed back-to-back into
+  // one buffer: move_enc (channels), wld_logits (3), score_diff (2), plane
+  // logits (kNumPredictedPlanes * cells).
+  constexpr int kWld = 3, kScoreDiff = 2;
+  const int planes = kNumPredictedPlanes * kEvidencePlaneCells;
+  storage.assign(size_t(scored) * (channels + kWld + kScoreDiff + planes), 0.0f);
   float* p = storage.data();
-  const CachePredictions pred{p, p + size_t(scored) * channels, p + size_t(scored) * (channels + 3),
-                              p + size_t(scored) * (channels + 5), channels};
+  const CachePredictions pred{p, p + size_t(scored) * channels,
+                              p + size_t(scored) * (channels + kWld),
+                              p + size_t(scored) * (channels + kWld + kScoreDiff), channels};
   return pred;
 }
 
@@ -5787,9 +5796,13 @@ TEST(EvidenceStaging, RejectsOversizedSetAndAcceptsFullWidth) {
   const std::vector<SimObservation> obs_many(kMaxE + 1);
   const std::vector<int> idx_many(kMaxE + 1, 0);
   EXPECT_THROW(stage_evidence(too_many, obs_many, idx_many, pred, kMaxE, out), std::runtime_error);
-  // Mismatched span lengths -> throws too.
+  // Mismatched span lengths -> throws too, on either the observations or the
+  // scored_indices disjunct of the length check.
   EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(1),
                               std::vector<int>(2), pred, kMaxE, out),
+               std::runtime_error);
+  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(2),
+                              std::vector<int>(1), pred, kMaxE, out),
                std::runtime_error);
 
   // Exactly the padded width is accepted and marks every row real.
@@ -5821,15 +5834,22 @@ TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
   EXPECT_FLOAT_EQ(sc[4], 0.0f);  // delta_std, clamped
   EXPECT_TRUE(std::isfinite(sc[4]));
 
-  // The empty set (the deployment loop's first pass) masks and zeroes every row.
+  // The empty set (the deployment loop's first pass) masks and zeroes every
+  // buffer. Sentinel-fill first (buffers are reused turn-over-turn), so each
+  // memset -- planes and move_enc included -- is verified to clear stale data,
+  // not just to leave a fresh zero buffer alone.
   std::fill(mk.begin(), mk.end(), uint8_t(9));
   std::fill(sc.begin(), sc.end(), -1.0f);
+  std::fill(pl.begin(), pl.end(), -1.0f);
+  std::fill(me.begin(), me.end(), -1.0f);
   const std::vector<Move> none;
   const std::vector<SimObservation> no_obs;
   const std::vector<int> no_idx;
   stage_evidence(none, no_obs, no_idx, pred, kMaxE, out);
   for (int j = 0; j < kMaxE; ++j) {
     EXPECT_EQ(mk[j], 0);
+    EXPECT_FLOAT_EQ(me[size_t(j) * kChannels], 0.0f);
+    EXPECT_FLOAT_EQ(pl[size_t(j) * kNumEvidencePlanes * kEvidencePlaneCells], 0.0f);
     EXPECT_FLOAT_EQ(sc[size_t(j) * kNumEvidenceScalars], 0.0f);
   }
 }
