@@ -420,29 +420,69 @@ if(SCRIBBLEZ_BUILD_TESTS)
     GTest::gtest_main)
   gtest_discover_tests(test_game_runner)
 
-  # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Run with no arguments:
-  # it self-generates a fixture by invoking the Python generator at SCRIBBLEZ_PY_DIR
-  # (skips cleanly if torch/onnx is absent) and needs a GPU at run time. A fixture
-  # directory may be passed as the first non-gtest argument to reuse one instead,
-  # so this binary carries its own main() and links GTest::gtest, not gtest_main.
+  # The two TensorRT-vs-PyTorch parity binaries below each generate their fixture
+  # by invoking a Python generator (torch import + ONNX export, ~1.7s). Because
+  # gtest_discover_tests runs every TEST() in its own process, letting each case
+  # self-generate would pay that cost once per case. Instead a ctest FIXTURES_SETUP
+  # step generates each fixture once per suite run into PARITY_FIXTURE_ROOT and
+  # every case is handed that directory (EXTRA_ARGS -> the binary's fixture-dir
+  # argument), so the generator runs a single time per binary. The fixtures are
+  # deterministic (fixed seed), so one shared copy serves every case; the binaries
+  # still self-generate when run directly with no directory argument.
+  #
+  # The setup command tolerates a torch/onnx-less environment: it probes for the
+  # imports and, when they are missing, leaves the directory empty rather than
+  # failing, and the tests skip on an empty directory just as they did when they
+  # self-generated. A real generator failure (imports present) still fails the
+  # setup and takes its dependents down with it, surfacing a broken fixture the
+  # old per-test skip would have masked.
+  set(PARITY_FIXTURE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/parity_fixtures")
+
+  function(add_parity_fixture fixture_name out_dir generator_module)
+    string(JOIN " " extra_args ${ARGN})  # generator flags, as one space-joined string
+    add_test(NAME ${fixture_name}_setup
+      COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_SOURCE_DIR}/py"
+        bash -c "if python3 -c 'import torch, onnx' 2>/dev/null; then exec python3 -m ${generator_module} --out-dir '${out_dir}' ${extra_args}; else echo 'torch/onnx unavailable; ${fixture_name} not generated (its cases will skip)'; fi")
+    set_tests_properties(${fixture_name}_setup PROPERTIES
+      FIXTURES_SETUP ${fixture_name}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/py")
+  endfunction()
+
+  # Removes the generated fixtures once every dependent case has finished.
+  add_test(NAME parity_fixtures_cleanup
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${PARITY_FIXTURE_ROOT}")
+  set_tests_properties(parity_fixtures_cleanup PROPERTIES
+    FIXTURES_CLEANUP "nn_parity_fixture;mset_parity_fixture")
+
+  # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Needs a GPU at run time.
+  # A fixture directory may be passed as the first non-gtest argument to reuse one
+  # (the FIXTURES_SETUP path below), so this binary carries its own main() and
+  # links GTest::gtest, not gtest_main.
   add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
   target_link_libraries(test_nn_inference_parity PRIVATE
     scribblez_nn scribblez_core Threads::Threads GTest::gtest)
   target_compile_definitions(test_nn_inference_parity PRIVATE
     SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-  gtest_discover_tests(test_nn_inference_parity)
+  add_parity_fixture(nn_parity_fixture "${PARITY_FIXTURE_ROOT}/nn"
+    scripts.position_eval.gen_parity_fixture --num-rows 8)
+  gtest_discover_tests(test_nn_inference_parity
+    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/nn"
+    PROPERTIES FIXTURES_REQUIRED nn_parity_fixture)
 
   # the move-set runtime against the PyTorch move set evaluation model, including the
   # plan-cache refit and the service's chunking. Same shape as the parity test
-  # above: self-generates its fixture through SCRIBBLEZ_PY_DIR (skipping cleanly
-  # if torch/onnx is absent), needs a GPU at run time, and takes an optional
-  # fixture directory as its first argument, so it carries its own main().
+  # above: needs a GPU at run time, and takes an optional fixture directory as its
+  # first argument, so it carries its own main().
   add_executable(test_mset_inference_parity tests/test_mset_inference_parity.cpp)
   target_link_libraries(test_mset_inference_parity PRIVATE
     scribblez_nn scribblez_core Threads::Threads GTest::gtest)
   target_compile_definitions(test_mset_inference_parity PRIVATE
     SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-  gtest_discover_tests(test_mset_inference_parity)
+  add_parity_fixture(mset_parity_fixture "${PARITY_FIXTURE_ROOT}/mset"
+    scripts.move_set_eval.gen_mset_parity_fixture)
+  gtest_discover_tests(test_mset_inference_parity
+    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/mset"
+    PROPERTIES FIXTURES_REQUIRED mset_parity_fixture)
 
   # Test helper: writes .slog files using an in-memory dictionary for integration
   # testing (Python FFI tests, etc.).

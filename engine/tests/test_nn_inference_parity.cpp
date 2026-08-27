@@ -163,6 +163,12 @@ class NnInferenceParityTest : public ::testing::Test {
 void NnInferenceParityTest::SetUp() {
   if (!g_fixture_dir.empty()) {
     dir_ = g_fixture_dir;
+    // A directory handed to us that the FIXTURES_SETUP step left empty means the
+    // generator's torch/onnx were unavailable; skip as a self-generating run
+    // would have.
+    if (!std::filesystem::exists(dir_ + "/model.onnx")) {
+      GTEST_SKIP() << "fixture directory " << dir_ << " is empty; is torch/onnx installed?";
+    }
     return;
   }
 #ifdef SCRIBBLEZ_PY_DIR

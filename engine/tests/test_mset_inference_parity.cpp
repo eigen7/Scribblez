@@ -190,6 +190,12 @@ void MsetInferenceParityTest::SetUp() {
   std::filesystem::create_directories(cache_root_);
   if (!g_fixture_dir.empty()) {
     dir_ = g_fixture_dir;
+    // A directory handed to us that the FIXTURES_SETUP step left empty means the
+    // generator's torch/onnx were unavailable; skip as a self-generating run
+    // would have.
+    if (!std::filesystem::exists(dir_ + "/model_a.onnx")) {
+      GTEST_SKIP() << "fixture directory " << dir_ << " is empty; is torch/onnx installed?";
+    }
   } else {
     generated_ = make_scratch_dir("scribblez_msetparity_");
     dir_ = generated_.string();
