@@ -18,6 +18,7 @@
 #include "agent/agent.h"
 #include "agent/endgame_turn_policy.h"
 #include "endgame/endgame_solver.h"
+#include "nn/eval_service.h"
 #include "sim/sim_runner.h"
 
 #include <cstdint>
@@ -45,12 +46,18 @@ class SimAgent : public Agent {
     // and the agent plays WORSE than the static equity it started from -- 35%
     // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
     SimRunner::Params sim = {400, 1};
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The leaf service handed to the constructor scores the horizon.
+    int sim_horizon = 0;
     SimObjective objective = SimObjective::kWinRate;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  explicit SimAgent(const Params& params);
+  // `leaf_service` is the value-truncation leaf evaluator (real or a
+  // scripted stub); give it iff params.sim_horizon is set.
+  explicit SimAgent(const Params& params,
+                    std::unique_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -72,6 +79,7 @@ class SimAgent : public Agent {
   int top_k_;
   SimObjective objective_;
   uint64_t seed_;
+  std::unique_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

@@ -17,8 +17,12 @@ class options_description;
 // A thin, synchronous wrapper around a TensorRT engine, specialized to a model
 // family by its spec (model_specs.h).
 //
-// One net drives one engine from one thread: predict() blocks until the
-// outputs are back, with no cross-thread batching and no async pipeline.
+// One net drives one engine from one thread AT A TIME: predict() blocks until
+// the outputs are back, with no cross-thread batching and no async pipeline,
+// and calls must never overlap. Serialized calls from different threads are
+// fine -- the CUDA stream and buffers carry their device -- which is what
+// both nn::EvalService's internal serialization and the generators'
+// scorer-thread pattern rely on.
 
 namespace scribblez {
 namespace nn {
@@ -78,6 +82,9 @@ struct RuntimeSpec {
   const char* axis_tag;
   int opt_rows;
   std::span<const TensorSpec> tensors;
+  // Overflow-prone layers pinned to FP32 under an FP16 build; see
+  // model_specs.h.
+  std::span<const char* const> fp32_layer_substrings;
 };
 
 // All machinery -- engine build, the architecture-keyed refitted plan cache,
@@ -166,9 +173,9 @@ class NeuralNet : public NeuralNetBase {
   }
 
  private:
-  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph,    Spec::kAcceptUntaggedGraph,
-                                               Spec::kVersions, Spec::kAxisTag,
-                                               Spec::kOptRows,  detail::kTensorSpecs<Spec>};
+  static constexpr RuntimeSpec kRuntimeSpec = {
+    Spec::kGraph,   Spec::kAcceptUntaggedGraph, Spec::kVersions,           Spec::kAxisTag,
+    Spec::kOptRows, detail::kTensorSpecs<Spec>, Spec::kFp32LayerSubstrings};
 };
 
 }  // namespace nn

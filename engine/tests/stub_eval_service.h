@@ -40,7 +40,7 @@ class StubEvalService : public nn::PositionEvalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes(); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     for (int i = 0; i < batch.count; ++i) {
       write_scripted((i < int(scripted.size())) ? scripted[i] : ScriptedEval{}, i, head_out);
     }
@@ -61,7 +61,7 @@ class CountingStubEvalService : public nn::PositionEvalService {
   int max_chunk = 0;
   int calls = 0;
 
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
     ++calls;
     max_chunk = std::max(max_chunk, batch.count);
     for (int i = 0; i < batch.count; ++i) {

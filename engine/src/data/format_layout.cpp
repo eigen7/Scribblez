@@ -54,6 +54,7 @@ consteval const char* scalar_code(std::meta::info t) {
   if (util::type_is<uint64_t>(t)) return "<u8";
   if (util::type_is<int64_t>(t)) return "<i8";
   if (util::type_is<float>(t)) return "<f4";
+  if (util::type_is<double>(t)) return "<f8";
   return nullptr;
 }
 

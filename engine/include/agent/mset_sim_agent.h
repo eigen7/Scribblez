@@ -58,6 +58,9 @@ class MsetSimAgent : public Agent {
     // against it -- and against NeuralSimAgent -- the configuration-free
     // default.
     SimRunner::Params sim = {400, 1};
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The leaf service handed to the constructor scores the horizon.
+    int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
@@ -66,9 +69,11 @@ class MsetSimAgent : public Agent {
 
   MsetSimAgent(const Params& params, const NetParams& net_params);
 
-  // Takes an already-loaded service (real or a scripted stub), loading no model
-  // and touching no GPU.
-  MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service);
+  // Takes already-loaded services (real or scripted stubs), loading no model
+  // and touching no GPU. `leaf_service` is the value-truncation leaf
+  // evaluator; give it iff params.sim_horizon is set.
+  MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
+               std::unique_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -116,6 +121,7 @@ class MsetSimAgent : public Agent {
   std::unique_ptr<nn::MoveSetEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;  // mirrors the live game, both seats' moves
+  std::unique_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

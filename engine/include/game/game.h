@@ -42,6 +42,19 @@ class Game {
   // and each reads it off MoveRequest::opp_rack. Must be called before play().
   void set_face_up_leaves(bool on);
 
+  // Stop after `plies` moves instead of playing to a natural end -- a
+  // value-truncated rollout's horizon (docs/roadmap.md item 2). A game that
+  // ends naturally at or before the cap is not truncated, and end-of-game
+  // score adjustments apply only on a natural end.
+  //
+  // The cap applies only while the capped move's pre-move bag was non-empty
+  // -- the training-eligibility bound (binary_log.h's eligible span): once
+  // the endgame starts the game plays out however many plies that takes.
+  // Truncation exists to hand the position evaluation model the capped
+  // ply's post-move state as a leaf, and an endgame leaf would be scored by
+  // a model that has never seen one. Must be called before play().
+  void set_max_plies(int plies);
+
   void play();
 
   // Play out from a mid-game position, e.g. a Monte-Carlo rollout. `board` and
@@ -66,6 +79,16 @@ class Game {
   const Rack& rack(int player) const { return racks_[player]; }
   int bag_size() const { return bag_.size(); }
 
+  // Whether play stopped at the set_max_plies cap rather than a natural end.
+  bool truncated() const { return log_.end_reason == "truncated"; }
+
+  // The tiles `player` retained from their most recent move, before any draw
+  // -- their post-move pre-draw rack, which a value-truncated rollout's leaf
+  // encode reads at the horizon (and, for the other seat, as the
+  // opponent-leave input). play_from seeds it with the caller's known_racks
+  // entry until the player first moves.
+  const Rack& leave(int player) const { return leaves_[player]; }
+
  private:
   Agent* players_[2];
   const Dictionary& dict_;
@@ -75,10 +98,10 @@ class Game {
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};
   GameLogStorage log_;
-  // What each player has publicly retained, empty until they first move. A
-  // move sets its mover's entry to the tiles left after it, before any draw.
+  // Backs leave(); see there for the semantics.
   std::array<Rack, 2> leaves_{};
   bool face_up_leaves_ = false;
+  int max_plies_ = 0;  // 0 = no cap
   int random_opening_plies_ = 0;
   std::mt19937_64 opening_rng_;
   bool respect_projections_ = false;

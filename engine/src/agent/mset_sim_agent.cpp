@@ -27,7 +27,8 @@ const Dictionary& require_dict(const Dictionary* dict) {
 
 }  // namespace
 
-MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service)
+MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
+                           std::unique_ptr<nn::PositionEvalService> leaf_service)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),
       sim_top_k_(params.sim_top_k),
@@ -37,7 +38,9 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEval
       service_(std::move(service)),
       spec_(derive_input_spec(require_dict(params.dict), *service_, "mset-sim agent")),
       encoder_(spec_),
-      runner_(*params.dict, params.sim),
+      leaf_service_(std::move(leaf_service)),
+      runner_(*params.dict,
+              make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
   board_row_.resize(size_t(input_floats(spec_)));
@@ -48,6 +51,10 @@ void MsetSimAgent::validate(const Params& params) {
     throw util::CleanException("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw util::CleanException("mset-sim agent: --sim-top-k must be >= 1");
   SimRunner::validate(params.sim);
+  // The horizon lower bound, checked early (the factory calls validate()
+  // before loading the model). The flag pairing against --leaf-model is the
+  // factory's, which alone knows whether a leaf path was given.
+  SimRunner::validate_min_horizon("mset-sim agent", params.sim_horizon);
 }
 
 uint64_t MsetSimAgent::sim_seed(int ply) const {

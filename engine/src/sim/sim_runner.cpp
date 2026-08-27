@@ -1,7 +1,9 @@
 #include "sim/sim_runner.h"
 
 #include "agent/agent.h"
+#include "agent/candidate_evaluator.h"
 #include "agent/macondo_bot.h"
+#include "encoding/game_state_encoder.h"
 #include "game/game.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
@@ -9,8 +11,11 @@
 #include "util/exception.h"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <functional>
 #include <numeric>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -54,18 +59,49 @@ AppliedCandidate apply_candidate(const SimPosition& pos, const Move& m) {
   return a;
 }
 
-// What one finished rollout contributes to a SimObservation: the final score
-// delta (mover POV) plus the two moves the placement maps read. A missing
-// move is represented by a default Move (PASS), which places no squares.
-struct RolloutOutcome {
-  int delta = 0;
-  Move opp_reply{};
-  Move self_next{};
-};
+void set_terminal_outcome(int delta, RolloutResult* r) {
+  r->p_win = delta > 0 ? 1.0 : 0.0;
+  r->p_draw = delta == 0 ? 1.0 : 0.0;
+  r->p_loss = delta < 0 ? 1.0 : 0.0;
+  r->delta = delta;
+  r->delta_sq = double(delta) * delta;
+}
 
-RolloutOutcome run_rollout(const SimPosition& pos, const AppliedCandidate& a,
-                           const Dictionary& dict, HastyBotAgent& a0, HastyBotAgent& a1,
-                           uint64_t seed) {
+// Encodes the horizon leaf of a truncated rollout -- the post-move pre-draw
+// state of the horizon ply's mover, from their POV, the exact sample kind the
+// position evaluation model trains on -- and stages the row in the batcher,
+// whose later flush writes the readout back to the pending slot's result. The
+// trainer loads post-move rows
+// (position_eval/trainer.py, post_move=True) of eligible turns of EVERY move
+// type: replay_to_sampled applies the sampled PLAY, EXCHANGE, or PASS before
+// encoding, so all three horizon kinds are in-distribution. The seeded
+// encoder's unknown last-move slots are overwritten by the candidate and the
+// >= kMinHorizonPlies rollout plies before anything reads them.
+void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const GameLog& log,
+                        const Game& game, const InputEncodingSpec& leaf_spec, LeafBatcher* batcher,
+                        size_t slot) {
+  GameStateEncoder enc(leaf_spec, pos.board, pos.scores, pos.mover);
+  enc.apply_move(candidate);
+  for (int i = 0; i < log.num_records; ++i) enc.apply_move(log.records[i].move);
+  const int horizon_mover = log.records[log.num_records - 1].player;
+  float* row = batcher->next_row();
+  if (leaf_spec.opp_leave_input) {
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover),
+                     /*apply_flip=*/false, row);
+  } else {
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), /*apply_flip=*/false, row);
+  }
+  batcher->add(slot, horizon_mover == pos.mover);
+}
+
+// Plays one rollout of candidate `a` -- to a natural end, or to horizon_plies
+// when truncating -- and fills `out`'s moves plus, for a finished game, its
+// exact outcome. A truncated game instead stages the horizon state's encoded
+// row in the batcher, which completes `out` when it flushes.
+void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& candidate,
+                 const Dictionary& dict, HastyBotAgent& a0, HastyBotAgent& a1, uint64_t seed,
+                 int horizon_plies, const InputEncodingSpec* leaf_spec, LeafBatcher* batcher,
+                 size_t slot, RolloutResult* out) {
   const int opponent = 1 - pos.mover;
   // Built from the PRE-move board and full rack so the pool -- and therefore
   // the opponent's sampled tiles -- is identical across candidates (CRN). A
@@ -80,47 +116,53 @@ RolloutOutcome run_rollout(const SimPosition& pos, const AppliedCandidate& a,
     for (int i = 0; i < pos.opp_leave.size(); ++i) pool.remove(pos.opp_leave.tiles()[i]);
   }
   Game game(a0, a1, dict, seed);
+  if (horizon_plies > 0) game.set_max_plies(horizon_plies);
   game.play_from(a.board, a.scores, known_racks, pool, /*to_move=*/opponent, a.returned_to_bag);
   const GameLog log = game.log();
 
-  RolloutOutcome o;
-  o.delta = log.final_scores[pos.mover] - log.final_scores[opponent];
-  if (log.num_records >= 1 && log.records[0].player == opponent) o.opp_reply = log.records[0].move;
-  if (log.num_records >= 2 && log.records[1].player == pos.mover) o.self_next = log.records[1].move;
-  return o;
+  if (log.num_records >= 1 && log.records[0].player == opponent)
+    out->opp_reply = log.records[0].move;
+  if (log.num_records >= 2 && log.records[1].player == pos.mover)
+    out->self_next = log.records[1].move;
+  if (!game.truncated()) {
+    set_terminal_outcome(log.final_scores[pos.mover] - log.final_scores[opponent], out);
+    return;
+  }
+  stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
 }
 
-void accumulate(const RolloutOutcome& o, SimObservation* obs) {
+// Fold one rollout into the candidate's observation. Terminal rollouts
+// contribute exact integers; truncated rollouts contribute fractional values,
+// which run() reduces in a fixed order (see there for why order matters).
+void accumulate(const RolloutResult& o, SimObservation* obs) {
   ++obs->n;
-  if (o.delta > 0)
-    ++obs->wins;
-  else if (o.delta < 0)
-    ++obs->losses;
-  else
-    ++obs->draws;
+  obs->wins += o.p_win;
+  obs->draws += o.p_draw;
+  obs->losses += o.p_loss;
   obs->delta_sum += o.delta;
-  obs->delta_sq_sum += int64_t(o.delta) * o.delta;
+  obs->delta_sq_sum += o.delta_sq;
 
-  const bool opp_won = o.delta < 0;
-  const bool self_won = o.delta > 0;
   visit_placed_squares(o.opp_reply, [&](int r, int c) {
     const int cell = r * BOARD_SIZE + c;
     ++obs->opp_next_count[cell];
-    if (opp_won) ++obs->opp_win_count[cell];
+    obs->opp_win_count[cell] += float(o.p_loss);
   });
   visit_placed_squares(o.self_next, [&](int r, int c) {
     const int cell = r * BOARD_SIZE + c;
     ++obs->self_next_count[cell];
-    if (self_won) ++obs->self_win_count[cell];
+    obs->self_win_count[cell] += float(o.p_win);
   });
 }
 
 // Worker t: plays rollout indices {t, t+threads, ...} of EVERY candidate (the
-// per-index seed is shared across candidates -- the CRN scheme) and
-// accumulates into its own per-candidate partials.
-void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
-                const Dictionary& dict, int rollouts, int threads, int t, uint64_t base_seed,
-                std::vector<SimObservation>* partial) {
+// per-index seed is shared across candidates -- the CRN scheme) into the flat
+// results array at slot = candidate * rollouts + index. Owns its rollout
+// agents and, under truncation, a LeafBatcher over the shared leaf service;
+// slots are disjoint across workers, so results need no synchronization.
+void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
+                    const std::vector<Move>& candidates, const Dictionary& dict,
+                    SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
+                    uint64_t base_seed, std::vector<RolloutResult>* results) {
   HastyBotAgent::Params p0;
   p0.thread_id = t;
   p0.name = "H0";
@@ -128,31 +170,82 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
   p1.thread_id = t;
   p1.name = "H1";
   HastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
-  for (int i = t; i < rollouts; i += threads) {
+  std::optional<LeafBatcher> batcher;
+  if (params.horizon_plies > 0) batcher.emplace(params.leaf_service, *leaf_spec, results);
+  for (int i = t; i < params.rollouts; i += params.threads) {
     const uint64_t seed = base_seed + uint64_t(i);
     for (size_t c = 0; c < applied.size(); ++c) {
-      const RolloutOutcome o = run_rollout(pos, applied[c], dict, a0, a1, seed);
-      accumulate(o, &(*partial)[c]);
+      const size_t slot = c * size_t(params.rollouts) + size_t(i);
+      run_rollout(pos, applied[c], candidates[c], dict, a0, a1, seed, params.horizon_plies,
+                  leaf_spec, batcher ? &*batcher : nullptr, slot, &(*results)[slot]);
     }
   }
+  if (batcher) batcher->flush();
 }
 
-void merge(const SimObservation& from, SimObservation* into) {
-  into->n += from.n;
-  into->wins += from.wins;
-  into->draws += from.draws;
-  into->losses += from.losses;
-  into->delta_sum += from.delta_sum;
-  into->delta_sq_sum += from.delta_sq_sum;
-  for (int i = 0; i < SimObservation::kCells; ++i) {
-    into->opp_next_count[i] += from.opp_next_count[i];
-    into->self_next_count[i] += from.self_next_count[i];
-    into->opp_win_count[i] += from.opp_win_count[i];
-    into->self_win_count[i] += from.self_win_count[i];
+// Thread entry: runs the worker and captures any exception into *err for the
+// joining thread to rethrow. A rollout's leaf guard (LeafBatcher::flush)
+// throws on a non-finite readout; letting that escape a std::thread would
+// call std::terminate and bypass the caller's clean error reporting.
+void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
+                const std::vector<Move>& candidates, const Dictionary& dict,
+                SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
+                uint64_t base_seed, std::vector<RolloutResult>* results, std::exception_ptr* err) {
+  try {
+    run_sim_worker(pos, applied, candidates, dict, params, leaf_spec, t, base_seed, results);
+  } catch (...) {
+    *err = std::current_exception();
   }
 }
 
 }  // namespace
+
+void LeafBatcher::add(size_t slot, bool root_pov) {
+  pending_.push_back({slot, root_pov});
+  if (int(pending_.size()) == kRows) flush();
+}
+
+void LeafBatcher::flush() {
+  if (pending_.empty()) return;
+  const nn::PositionEvaluationSpec::Batch batch{rows_.data(), int(pending_.size())};
+  const std::array<float*, 2> heads = {wld_.data(), sd_.data()};
+  service_->evaluate(batch, heads);
+  for (size_t j = 0; j < pending_.size(); ++j) {
+    const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
+    const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
+    // A non-finite readout would flow silently into training data and
+    // decisions -- a NaN compares false against everything, an inf poisons
+    // the running sums -- so it is a hard error. Every consumed field is
+    // checked with isfinite, not isnan: an FP16 overflow reaches +/-inf
+    // before any NaN, and the identity-decoded score-diff head applies no
+    // softmax that would fold that inf into a NaN (unlike the WLD head), so
+    // inf must be caught explicitly. It should not happen: the position
+    // family's FP16 builds pin the measured overflow-prone trunk region to
+    // FP32 (model_specs.h), so a trip here means a new overflow site or an
+    // off-distribution input.
+    if (!std::isfinite(wld[0]) || !std::isfinite(wld[1]) || !std::isfinite(wld[2]) ||
+        !std::isfinite(sd[0]) || !std::isfinite(sd[1])) {
+      throw util::Exception(
+        "sim runner: the leaf model returned a non-finite value at a rollout horizon (new FP16 "
+        "overflow site, or off-distribution input)");
+    }
+    RolloutResult& r = (*results_)[pending_[j].slot];
+    if (pending_[j].root_pov) {
+      r.p_win = wld[0];
+      r.p_draw = wld[1];
+      r.p_loss = wld[2];
+      r.delta = sd[0];
+    } else {
+      r.p_win = wld[2];
+      r.p_draw = wld[1];
+      r.p_loss = wld[0];
+      r.delta = -sd[0];
+    }
+    // The second moment is sign-invariant, so no POV branch.
+    r.delta_sq = double(sd[0]) * sd[0] + double(sd[1]) * sd[1];
+  }
+  pending_.clear();
+}
 
 double sim_objective_value(const SimObservation& o, SimObjective objective) {
   if (o.n == 0) return 0.0;
@@ -239,10 +332,39 @@ void SimRunner::validate(const Params& params) {
     throw util::CleanException("sim runner: rollouts must be in [1, {}]", kMaxRollouts);
   }
   if (params.threads < 1) throw util::CleanException("sim runner: threads must be >= 1");
+  validate_horizon("sim runner", params.horizon_plies, params.leaf_service != nullptr);
+}
+
+void SimRunner::validate_horizon(std::string_view context, int horizon_plies,
+                                 bool have_leaf_service) {
+  if ((horizon_plies > 0) != have_leaf_service) {
+    throw util::CleanException(
+      "{}: a truncation horizon and a leaf model come together (horizon 0 = terminal rollouts, "
+      "no model)",
+      context);
+  }
+  validate_min_horizon(context, horizon_plies);
+}
+
+void SimRunner::validate_min_horizon(std::string_view context, int horizon_plies) {
+  if (horizon_plies != 0 && horizon_plies < kMinHorizonPlies) {
+    throw util::CleanException("{}: the horizon must be 0 (terminal rollouts) or >= {}", context,
+                               kMinHorizonPlies);
+  }
+}
+
+SimRunner::Params make_runner_params(SimRunner::Params sim, int horizon_plies,
+                                     nn::PositionEvalService* leaf) {
+  sim.horizon_plies = horizon_plies;
+  sim.leaf_service = leaf;
+  return sim;
 }
 
 SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict), params_(params) {
   validate(params_);
+  if (params_.horizon_plies > 0) {
+    leaf_spec_ = derive_input_spec(dict_, *params_.leaf_service, "sim runner");
+  }
 }
 
 std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
@@ -259,18 +381,28 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   applied.reserve(candidates.size());
   for (const Move& m : candidates) applied.push_back(apply_candidate(pos, m));
 
-  const int threads = std::clamp(params_.threads, 1, std::max(1, params_.rollouts));
-  std::vector<std::vector<SimObservation>> partials(threads,
-                                                    std::vector<SimObservation>(candidates.size()));
+  Params params = params_;
+  params.threads = std::clamp(params_.threads, 1, std::max(1, params_.rollouts));
+  const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
+  std::vector<RolloutResult> results(candidates.size() * size_t(params.rollouts));
   std::vector<std::thread> workers;
-  for (int t = 0; t < threads; ++t)
-    workers.emplace_back(sim_worker, std::cref(pos), std::cref(applied), std::cref(dict_),
-                         params_.rollouts, threads, t, base_seed, &partials[t]);
+  std::vector<std::exception_ptr> errors(params.threads);
+  for (int t = 0; t < params.threads; ++t)
+    workers.emplace_back(sim_worker, std::cref(pos), std::cref(applied), std::cref(candidates),
+                         std::cref(dict_), params, leaf_spec, t, base_seed, &results, &errors[t]);
   for (auto& w : workers) w.join();
+  // A worker's leaf guard may have thrown; surface the first such failure on
+  // the calling thread instead of leaving it to terminate the process.
+  for (const std::exception_ptr& e : errors)
+    if (e) std::rethrow_exception(e);
 
+  // Reduce in fixed (candidate, rollout index) order, whatever the thread
+  // count -- with fractional contributions, a merge order that followed the
+  // work partition would not be.
   std::vector<SimObservation> out(candidates.size());
-  for (const auto& partial : partials)
-    for (size_t c = 0; c < out.size(); ++c) merge(partial[c], &out[c]);
+  for (size_t c = 0; c < out.size(); ++c)
+    for (int i = 0; i < params.rollouts; ++i)
+      accumulate(results[c * size_t(params.rollouts) + size_t(i)], &out[c]);
   return out;
 }
 

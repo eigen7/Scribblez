@@ -10,15 +10,20 @@
 
 namespace scribblez::evidence {
 
-SimRunner::Params sim_params(const TrajectoryOptions& opt) {
+SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalService* leaf) {
   SimRunner::Params p;
   p.rollouts = opt.rollouts;
   p.threads = 1;
+  p.horizon_plies = opt.horizon;
+  p.leaf_service = leaf;
   return p;
 }
 
 void validate(const TrajectoryOptions& opt) {
-  SimRunner::validate(sim_params(opt));
+  SimRunner::validate_min_horizon("evidence trajectory", opt.horizon);
+  TrajectoryOptions terminal = opt;  // the leaf pairing is the caller's to check
+  terminal.horizon = 0;
+  SimRunner::validate(sim_params(terminal, nullptr));
   if (opt.proposals_min < 0) throw util::CleanException("--proposals-min must be >= 0");
   if (opt.proposals_max < opt.proposals_min) {
     throw util::CleanException("--proposals-max must be >= --proposals-min");
@@ -116,12 +121,13 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
 // --- TrajectoryRunner ---
 
 TrajectoryRunner::TrajectoryRunner(const Dictionary& dict, const InputEncodingSpec& spec,
-                                   const TrajectoryOptions& opt, StudentScorer* scorer)
+                                   const TrajectoryOptions& opt, StudentScorer* scorer,
+                                   nn::PositionEvalService* leaf)
     : dict_(dict),
       spec_(spec),
       opt_(opt),
       scorer_(scorer),
-      runner_(dict, sim_params(opt)),
+      runner_(dict, sim_params(opt, leaf)),
       board_row_(size_t(input_floats(spec))) {}
 
 const std::vector<float>& TrajectoryRunner::win_equities(const DecisionPoint& dp,

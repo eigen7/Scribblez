@@ -6,14 +6,17 @@
 // candidate's SimObservation (sim_runner.h). Training reads these as the
 // sim-evidence inputs of docs/sim_residual_feedback.md; positions carry raw
 // observations (counts and moments, never model-relative residuals) so the
-// file stays valid as the model trains.
+// file stays valid as the proposer model trains. Value-truncated sims
+// (docs/roadmap.md item 2) ARE a function of one model -- the leaf evaluator
+// scoring every horizon -- so the header carries that model's content hash
+// and the horizon, and consumers must not mix files that disagree on them.
 //
 // File layout
 // -----------
-//   [SimObsFileHeader                        80 B]
+//   [SimObsFileHeader                       144 B]
 //   For each position p in [0, num_positions):
 //     [SimObsPositionHeader                  32 B]
-//     [SimObsRecord   num_candidates(p)    1848 B each]
+//     [SimObsRecord   num_candidates(p)    2760 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file. Records store the exact Move alongside its observation, the
@@ -37,7 +40,7 @@ namespace scribblez {
 
 // "SOBS" in little-endian (bytes 'S','O','B','S' on disk).
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
-inline constexpr uint16_t kSimObsVersion = 2;
+inline constexpr uint16_t kSimObsVersion = 3;
 
 // SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
 // the opponent's entire true rack, an information condition no consumer
@@ -48,21 +51,23 @@ inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajec
 // SimObsPositionHeader::flags bits.
 inline constexpr uint32_t kSimObsPosFlagUniformTail = 1u;  // last record is the uniform draw
 
-// Hex content hash of the proposer model, in SimObsFileHeader. All-zero bytes
-// mean no model drove the candidate selection (the equity-top-K proposer).
-inline constexpr size_t kSimObsProposerHashSize = 64;
+// Size of SimObsFileHeader's hex model-content-hash fields (the candidate
+// proposer, and the truncation leaf evaluator). All-zero bytes mean no such
+// model was involved: the equity-top-K proposer, or terminal rollouts.
+inline constexpr size_t kSimObsModelHashSize = 64;
 
 #pragma pack(push, 1)
 
 struct SimObsFileHeader {
-  uint32_t magic;    // kSimObsMagic
-  uint16_t version;  // kSimObsVersion
-  uint16_t reserved;
+  uint32_t magic;          // kSimObsMagic
+  uint16_t version;        // kSimObsVersion
+  uint16_t horizon_plies;  // rollout truncation horizon; 0 = terminal rollouts
   uint32_t num_positions;
   uint32_t flags;  // kSimObsFlag* bits; consumers must match on them
-  char proposer_hash[kSimObsProposerHashSize];
+  char proposer_hash[kSimObsModelHashSize];
+  char leaf_model_hash[kSimObsModelHashSize];  // all-zero iff horizon_plies == 0
 };
-static_assert(sizeof(SimObsFileHeader) == 80, "SimObsFileHeader must be 80 bytes");
+static_assert(sizeof(SimObsFileHeader) == 144, "SimObsFileHeader must be 144 bytes");
 
 struct SimObsPositionHeader {
   uint32_t game_index;       // game within the companion .slog file
@@ -89,10 +94,14 @@ static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
 class SimObsWriter {
  public:
   // `proposer_hash` is the hex content hash of the model that drove candidate
-  // selection; empty for the equity-top-K proposer. Longer hashes truncate to
-  // the header field, matching move_set_eval::TargetWriter.
+  // selection; empty for the equity-top-K proposer. `leaf_model_hash` is the
+  // hex content hash of the leaf evaluator behind value-truncated sims and
+  // `horizon_plies` their horizon; empty/0 for terminal rollouts (give both
+  // or neither). Longer hashes truncate to their header fields, matching
+  // move_set_eval::TargetWriter.
   explicit SimObsWriter(const std::string& path, uint32_t flags = 0,
-                        const std::string& proposer_hash = {});
+                        const std::string& proposer_hash = {},
+                        const std::string& leaf_model_hash = {}, int horizon_plies = 0);
   ~SimObsWriter();  // closes if close() was not called
 
   SimObsWriter(const SimObsWriter&) = delete;
@@ -132,6 +141,9 @@ class SimObsReader {
   uint32_t flags() const { return header().flags; }
   // Empty for the equity-top-K proposer.
   std::string proposer_hash() const;
+  // Empty / 0 for terminal rollouts.
+  std::string leaf_model_hash() const;
+  int horizon_plies() const { return header().horizon_plies; }
 
  private:
   const SimObsFileHeader& header() const {

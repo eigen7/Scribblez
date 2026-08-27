@@ -14,18 +14,23 @@
 
 #include "agent/agent.h"
 #include "agent/sim_agent.h"
+#include "encoding/input_encoder.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "nn/eval_service.h"
 #include "sim/sim_runner.h"
 #include "synthetic_equity.h"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <filesystem>
+#include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -83,6 +88,32 @@ class SimAgentTest : public ::testing::Test {
   Rack opp_leave_ = rack_from("AE");
   int bag_size_ = 86;
   std::filesystem::path tmp_;
+};
+
+// Deterministic leaf stub for the truncation test: outputs are a function of
+// the encoded row's score-diff scalar, so distinct horizon states get
+// distinct values and an identically-configured replay reproduces them.
+class LeafStub : public nn::PositionEvalService {
+ public:
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    const InputEncodingSpec spec{nullptr};
+    const size_t row_floats = input_floats(spec);
+    const size_t sd_off = spatial_floats() + scalar_block_offset(spec, ScalarBlockId::kScoreDiff);
+    for (int i = 0; i < batch.count; ++i) {
+      const float sd = batch.rows[size_t(i) * row_floats + sd_off];
+      const float w = 0.5f + 0.4f * std::tanh(sd);
+      float* wld = head_out[0] + size_t(i) * nn::WldOutput::kRowElems;
+      wld[0] = w;
+      wld[1] = 0.1f;
+      wld[2] = 0.9f - w;
+      float* out_sd = head_out[1] + size_t(i) * nn::ScoreDiffOutput::kRowElems;
+      out_sd[0] = sd * kScoreDiffInputScale;
+      out_sd[1] = 5.0f;
+    }
+  }
 };
 
 // The agent's own ranking rule, so the reproduction below breaks ties the way
@@ -202,6 +233,44 @@ TEST_F(SimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
                   /*opp_score=*/7, /*bag_size=*/0};
   const Move played = agent.make_move(req).move;
   EXPECT_TRUE(played == equity_top_k(req, params().top_k).front());
+}
+
+// Value truncation flows through the agent: with a horizon and an injected
+// leaf stub, the decision reproduces through an identically-configured
+// SimRunner replay -- pinning that the agent passes its horizon and leaf
+// service to the simulator unchanged.
+TEST_F(SimAgentTest, TruncatedRolloutsReproduceThroughSimRunner) {
+  SimAgent::Params p = params();
+  p.sim_horizon = 4;
+  SimAgent agent(p, std::make_unique<LeafStub>());
+  agent.begin_game({});
+  const Move played = agent.make_move(request()).move;
+
+  const std::vector<Move> candidates = equity_top_k(request(), p.top_k);
+  ASSERT_GT(candidates.size(), 1u);
+  SimPosition pos;
+  pos.board = board_;
+  pos.mover = 0;
+  pos.scores = {13, 7};
+  pos.rack = my_rack_;
+  pos.opp_leave = opp_leave_;
+  LeafStub replay_leaf;
+  SimRunner::Params sp = p.sim;
+  sp.horizon_plies = p.sim_horizon;
+  sp.leaf_service = &replay_leaf;
+  const std::vector<SimObservation> obs =
+    SimRunner(dict_, sp).run(pos, candidates, agent.sim_seed(0));
+  EXPECT_TRUE(played == candidates[size_t(best_of(obs, p.objective))]);
+}
+
+// A horizon without a leaf service (and the reverse) is rejected at
+// construction, before any turn could dereference the missing service.
+TEST_F(SimAgentTest, TruncationPairingIsValidated) {
+  SimAgent::Params p = params();
+  p.sim_horizon = 4;
+  EXPECT_THROW(SimAgent agent(p), std::runtime_error);
+  p.sim_horizon = 0;
+  EXPECT_THROW(SimAgent agent(p, std::make_unique<LeafStub>()), std::runtime_error);
 }
 
 TEST_F(SimAgentTest, AnUnusableRolloutCountIsRejected) {

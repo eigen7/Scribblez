@@ -39,6 +39,8 @@ struct MsetSimOptions {
   std::string sim_objective = "winrate";
   int rollouts = 400;
   int sim_threads = 1;
+  int sim_horizon = 0;
+  std::string leaf_model;
   uint64_t seed = 0;
   EndgameSolver::Params endgame;
 };
@@ -66,6 +68,12 @@ po::options_description make_options_description(MsetSimOptions& o) {
     ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
      "threads within one turn's simulation; leave at 1 when the game loop is "
      "already running games in parallel")  //
+    ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
+     "value truncation: rollouts stop after this many plies and --leaf-model scores the "
+     "horizon; 0 rolls out to a natural game end")  //
+    ("leaf-model", po::value<std::string>(&o.leaf_model),
+     "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
+     "with, --sim-horizon")  //
     ("seed,s", po::value<uint64_t>(&o.seed),
      "PRNG seed for the rollouts (default: derived from SeedProducer)");
   o.endgame.add_options(desc, "endgame-");
@@ -104,6 +112,7 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   params.sim_objective = parse_sim_objective(opts.sim_objective, "--sim-objective");
   params.sim.rollouts = opts.rollouts;
   params.sim.threads = opts.sim_threads;
+  params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
   // Fail on a bad scalar option now, before net_params() and the
@@ -111,11 +120,19 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   // engine.
   validate(params);
 
+  SimRunner::validate_horizon("mset-sim agent", opts.sim_horizon, !opts.leaf_model.empty());
+  // The leaf net shares the service's device; its per-call ceiling is the
+  // position family's own (the runner batches to it).
+  std::unique_ptr<nn::PositionEvalService> leaf =
+    nn::load_leaf_position_service(opts.leaf_model, opts.service.cuda_device);
+
   // Raising the per-pass ceiling to the shortlist just lets the whole shortlist
   // be scored in one pass; the service chunks to the ceiling either way.
   // shortlist == 0 (all moves) is chunked to batch_size.
   return std::make_unique<MsetSimAgent>(
-    params, opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist));
+    params,
+    nn::make_loaded_service(opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist)),
+    std::move(leaf));
 }
 
 std::string MsetSimAgent::options_help() {

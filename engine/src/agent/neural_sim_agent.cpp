@@ -40,7 +40,9 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
       drop_best_prob_(params.drop_best_prob),
       seed_(params.seed),
       evaluator_(require_dict(params.dict), std::move(service), max_batch),
-      runner_(*params.dict, params.sim),
+      runner_(*params.dict,
+              make_runner_params(params.sim, params.sim_horizon,
+                                 params.sim_horizon > 0 ? &evaluator_.service() : nullptr)),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
 }
@@ -53,6 +55,10 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw util::CleanException("neural-sim agent: --drop-best-prob must be in [0, 1]");
   SimRunner::validate(params.sim);
+  // The agent's own served model is always the leaf, so the pairing holds by
+  // construction; this checks the horizon lower bound early -- the factory
+  // calls validate() before loading that model.
+  SimRunner::validate_min_horizon("neural-sim agent", params.sim_horizon);
 }
 
 uint64_t NeuralSimAgent::sim_seed(int ply) const {

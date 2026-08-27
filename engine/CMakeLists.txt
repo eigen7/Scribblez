@@ -49,6 +49,7 @@ add_library(scribblez_core STATIC
   src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
+  src/agent/candidate_evaluator.cpp
   src/belief/leave_prior.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
@@ -160,16 +161,18 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent) and their
-# shared evaluation core -- the only agent sources not in scribblez_core, kept out so
-# the core game library carries no CUDA/TensorRT dependency. Every consumer
-# that builds --player specs (play_game, scribblez_ffi, test_game_runner)
-# links this; scribblez_nn supplies the TrtEvalService the agents drive.
-# Every other agent (HastyBot, human, greedy) and the runner come from
-# scribblez_core. The GPU-free unit-test binaries instead compile the
-# selection TUs directly, factories excluded (see their comments below).
+# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent) -- the
+# only agent sources not in scribblez_core, kept out so the core game library
+# carries no CUDA/TensorRT dependency. (Their shared CandidateEvaluator TU is
+# itself GPU-free and lives in scribblez_core: SimRunner's value-truncated
+# rollouts use derive_input_spec too.) Every consumer that builds --player
+# specs (play_game, scribblez_ffi, test_game_runner) links this; scribblez_nn
+# supplies the TrtEvalService the agents drive. Every other agent (HastyBot,
+# human, greedy) and the runner come from scribblez_core. The GPU-free
+# unit-test binaries instead compile the selection TUs directly, factories
+# excluded (see their comments below).
 add_library(scribblez_neural_agents STATIC
-  src/agent/candidate_evaluator.cpp
+  src/agent/sim_agent_factory.cpp
   src/agent/mset_sim_agent.cpp
   src/agent/mset_sim_agent_factory.cpp
   src/agent/neural_agent.cpp
@@ -249,6 +252,7 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
 add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
 target_link_libraries(sim_obs_tool PRIVATE
   scribblez_core
+  scribblez_nn
   Boost::program_options
   Boost::json
   Boost::filesystem
@@ -321,7 +325,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # constructor and never touch the GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
-    src/agent/candidate_evaluator.cpp
     src/agent/neural_agent.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
@@ -355,7 +358,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # CUDA/TensorRT: the tests inject a scripted EvalService stub.
   add_executable(test_neural_sim_agent
     tests/test_neural_sim_agent.cpp
-    src/agent/candidate_evaluator.cpp
     src/agent/neural_sim_agent.cpp)
   target_link_libraries(test_neural_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
@@ -370,7 +372,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # tests inject a scripted MoveSetEvalService stub.
   add_executable(test_mset_sim_agent
     tests/test_mset_sim_agent.cpp
-    src/agent/candidate_evaluator.cpp
     src/agent/mset_sim_agent.cpp)
   target_link_libraries(test_mset_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)

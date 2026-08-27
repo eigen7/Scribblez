@@ -32,12 +32,16 @@ class Dictionary;
 // and the opponent's rack. Indexed by tile kind (A..Z, then blank).
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// Which of a PLAY turn's two samples a position is.
+// The two encodable samples of a turn. The position evaluation model's
+// training loader encodes the POST-move state of every sampled turn,
+// whatever its move type (replay_to_sampled applies the PLAY, EXCHANGE, or
+// PASS before encoding); this tag is used by the encoder cross-check
+// harness, whose reference snapshots take the post-move kind for PLAY turns
+// only.
 enum class PositionKind : uint8_t {
-  kPreMove = 0,   // active player is about to play
-  kPostMove = 1,  // active player just played; refill has not happened yet
-                  // (unseen-pool composition unchanged from pre-move).
-                  // Only emitted for PLAY turns.
+  kPreMove = 0,   // active player is about to move
+  kPostMove = 1,  // active player just moved; refill has not happened yet
+                  // (unseen-pool composition unchanged from pre-move)
 };
 
 class GameStateEncoder {
@@ -47,6 +51,16 @@ class GameStateEncoder {
   // Additionally seed the score accumulator with a per-player handicap.
   GameStateEncoder(const InputEncodingSpec& spec, std::array<int, 2> initial_scores)
       : spec_(spec), scores_(initial_scores) {}
+
+  // Seed at a mid-game state -- a Monte-Carlo rollout's decision point --
+  // where no move history is available: `board`, `scores`, and the player
+  // about to move, both last-move slots unknown (PASS, which encodes as
+  // placing nothing). Encode only after apply_move has supplied both
+  // players' most recent moves -- the placement planes and move-meta
+  // scalars read them -- which two applied plies guarantee.
+  GameStateEncoder(const InputEncodingSpec& spec, const Board& board, std::array<int, 2> scores,
+                   int active)
+      : spec_(spec), board_(board), scores_(scores), active_(active) {}
 
   // Advance one turn: the *current* active player made `move`. It deliberately
   // takes no draw information, an outside observer seeing none.

@@ -40,6 +40,7 @@ struct NeuralSimOptions {
   double drop_best_prob = 0.0;
   int rollouts = 400;
   int sim_threads = 1;
+  int sim_horizon = 0;
   uint64_t seed = 0;
   EndgameSolver::Params endgame;
 };
@@ -65,6 +66,9 @@ po::options_description make_options_description(NeuralSimOptions& o) {
     ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
      "threads within one turn's simulation; leave at 1 when the game loop is "
      "already running games in parallel")  //
+    ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
+     "value truncation: rollouts stop after this many plies and this agent's own model scores "
+     "the horizon; 0 rolls out to a natural game end")  //
     ("seed,s", po::value<uint64_t>(&o.seed),
      "PRNG seed for the rollouts and drop decisions (default: derived from SeedProducer)");
   o.endgame.add_options(desc, "endgame-");
@@ -104,6 +108,7 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
   params.drop_best_prob = opts.drop_best_prob;
   params.sim.rollouts = opts.rollouts;
   params.sim.threads = opts.sim_threads;
+  params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
   // Fail on a bad scalar option now, before net_params() and the constructor

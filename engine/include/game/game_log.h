@@ -38,7 +38,8 @@ struct GameLog {
   int num_records = 0;
   std::array<int, 2> final_scores = {0, 0};
   std::array<Rack, 2> final_racks;   // tiles left on each rack at game end
-  const char* end_reason = nullptr;  // "out", "stalemate", or "max_turns"
+  const char* end_reason = nullptr;  // "out", "stalemate", "max_turns", or
+                                     // "truncated" (Game::set_max_plies)
   // Leading plies played uniformly at random via Game::set_random_opening
   // rather than by the seated agents (0 for a normal game). Positions before
   // the last of these have a random move after them and are excluded from

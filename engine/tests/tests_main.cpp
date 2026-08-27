@@ -569,6 +569,42 @@ TEST(Encoder, BasicLayout) {
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);  // opp num_glyphs
 }
 
+// The mid-game seeding constructor (a rollout's decision point): once two
+// applied plies have supplied both last-move slots, a seeded encoder's row is
+// byte-identical to a full-history encoder's.
+TEST(Encoder, MidGameSeedMatchesFullHistory) {
+  using namespace scribblez::binlog;
+  const Move m1 =
+    make_play_full(7, 7, /*horizontal=*/true, 0b1, 50, {Glyph::of(Tile::from_char('C'))});
+  const Move m2 = make_play_full(3, 3, /*horizontal=*/true, 0b1, 30,
+                                 {Glyph::played(Tile::from_char('D'), /*is_blank=*/true)});
+  const Move m3 =
+    make_play_full(9, 5, /*horizontal=*/false, 0b1, 12, {Glyph::of(Tile::from_char('E'))});
+  const Move m4 =
+    make_play_full(11, 2, /*horizontal=*/true, 0b1, 8, {Glyph::of(Tile::from_char('F'))});
+
+  Dictionary d = medium_dict();
+  const InputEncodingSpec spec{&d};
+  GameStateEncoder full{spec};
+  full.apply_move(m1);
+  full.apply_move(m2);
+  // The seed point: the state after m1/m2, with no history handed over.
+  GameStateEncoder seeded{spec, full.board(), {full.score(0), full.score(1)}, full.active_player()};
+  full.apply_move(m3);
+  full.apply_move(m4);
+  seeded.apply_move(m3);
+  seeded.apply_move(m4);
+  ASSERT_EQ(seeded.active_player(), full.active_player());
+
+  Rack active_rack;
+  active_rack.add(Tile::from_char('Q'));
+  std::vector<float> full_row(kInputFloats, -1.0f);
+  std::vector<float> seeded_row(kInputFloats, -2.0f);
+  full.encode_input(full.active_player(), active_rack, /*apply_flip=*/false, full_row.data());
+  seeded.encode_input(seeded.active_player(), active_rack, /*apply_flip=*/false, seeded_row.data());
+  ASSERT_EQ(0, std::memcmp(full_row.data(), seeded_row.data(), sizeof(float) * kInputFloats));
+}
+
 TEST(Encoder, LastOppPlaneMask) {
   using namespace scribblez::binlog;
 
@@ -2167,6 +2203,92 @@ TEST(Game, PlayFrom) {
     ASSERT_TRUE(rack_contains(logs[0].initial_racks[0], leave.tiles()[i]));
   ASSERT_EQ(logs[0].final_scores, logs[1].final_scores);  // deterministic per seed
   ASSERT_EQ(logs[0].end_reason, logs[1].end_reason);
+}
+
+// Game::set_max_plies (a value-truncated rollout's horizon): play stops after
+// exactly the cap, truncated() reports it, no end-of-game score adjustment is
+// applied, and leave() exposes the last mover's post-move pre-draw rack.
+TEST(Game, MaxPliesTruncation) {
+  const Dictionary d = medium_dict();
+  const Board board;
+  const Rack leave = rack_from("ING");
+  const std::array<Rack, 2> known = {leave, Rack{}};
+  const std::array<int, 2> scores = {120, 95};
+  constexpr int kPlies = 3;
+
+  const uint64_t seed = 7;
+  Bag pool(seed);
+  for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
+  TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+  TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+  scribblez::Game g(a0, a1, d, seed);
+  g.set_max_plies(kPlies);
+  g.play_from(board, scores, known, pool, /*to_move=*/1);
+
+  ASSERT_TRUE(g.truncated());
+  const GameLog log = g.log();
+  ASSERT_EQ(log.num_records, kPlies);
+  ASSERT_STREQ(log.end_reason, "truncated");
+  // Truncation applies no out/stalemate adjustment: the final scores are the
+  // running scores, the initial scores plus each player's move scores.
+  std::array<int, 2> expected = scores;
+  for (int i = 0; i < log.num_records; ++i)
+    expected[log.records[i].player] += log.records[i].score_delta;
+  ASSERT_EQ(log.final_scores, expected);
+  // leave(): the last mover's record's rack_before minus the tiles the move
+  // surrendered -- their post-move pre-draw rack.
+  const TurnRecord& last = log.records[kPlies - 1];
+  Rack expected_leave = last.rack_before;
+  for (int i = 0; i < last.move.num_glyphs(); ++i)
+    ASSERT_TRUE(expected_leave.remove(last.move.glyph(i).rack_tile()));
+  ASSERT_EQ(g.leave(last.player).to_string(), expected_leave.to_string());
+
+  // A game reaching its natural end under a generous cap is not truncated.
+  TestAgent b0(0, "B0", seed ^ 0x1111111111111111ULL);
+  TestAgent b1(0, "B1", seed ^ 0x2222222222222222ULL);
+  Bag pool2(seed);
+  for (int i = 0; i < leave.size(); ++i) pool2.remove(leave.tiles()[i]);
+  scribblez::Game g2(b0, b1, d, seed);
+  g2.set_max_plies(399);
+  g2.play_from(board, scores, known, pool2, /*to_move=*/1);
+  ASSERT_FALSE(g2.truncated());
+}
+
+// The cap never truncates an endgame: once the bag empties the game plays out
+// to a natural end, however many plies past the cap that takes -- the leaf
+// model's training domain is the pre-endgame prefix, so there is no valid
+// leaf to hand it there (see Game::set_max_plies).
+TEST(Game, MaxPliesSparesTheEndgame) {
+  const Dictionary d = medium_dict();
+  const Board board;
+  // Both racks fully known and a nearly-empty pool, so the bag empties within
+  // the first couple of plies while play continues.
+  const std::array<Rack, 2> known = {rack_from("CATSEIQ"), rack_from("RATESIN")};
+  const uint64_t seed = 7;
+  Bag pool(seed);
+  {
+    // Reduce the pool to exactly 2 tiles beyond the known racks.
+    Bag two(seed);
+    while (two.size() > 2) two.draw();
+    pool = two;
+  }
+  TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
+  TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
+  scribblez::Game g(a0, a1, d, seed);
+  g.set_max_plies(3);
+  g.play_from(board, {0, 0}, known, pool, /*to_move=*/0);
+
+  const GameLog log = g.log();
+  if (g.truncated()) {
+    // Truncation is only legitimate at a training-eligible capped ply: its
+    // pre-move bag must have been non-empty.
+    ASSERT_GT(log.records[log.num_records - 1].bag_size_before, 0);
+  } else {
+    // The expected path with a 2-tile bag: the cap passed inside the endgame
+    // and was ignored, so the game reached a natural end beyond it.
+    ASSERT_GE(log.num_records, 3);
+    ASSERT_TRUE(std::string(log.end_reason) == "out" || std::string(log.end_reason) == "stalemate");
+  }
 }
 
 // ===========================================================================
@@ -4044,6 +4166,319 @@ TEST(SimRunner, Basic) {
   fs::remove_all(tmp);
 }
 
+// Constant-output leaf stub for value-truncation tests: every horizon row
+// reads WLD (0.7, 0.1, 0.2) and predicted final delta +100 from the horizon
+// MOVER's POV, so the root-POV flip at odd horizons is exactly checkable.
+// Declares the contingent, no-opponent-leave input arm like the agent stubs.
+class ConstantLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  int rows_seen = 0;
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    for (int i = 0; i < batch.count; ++i) {
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = 0.7f;
+      wld[1] = 0.1f;
+      wld[2] = 0.2f;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = 100.0f;
+      sd[1] = 5.0f;
+    }
+    rows_seen += batch.count;
+  }
+};
+
+// Row-dependent leaf stub: outputs are a deterministic function of the
+// encoded row's score-diff scalar, so rollouts get distinct fractional
+// contributions -- which makes reduction-order determinism and CRN
+// cancellation real assertions rather than vacuous ones.
+class RowLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  int rows_seen = 0;
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    const scribblez::InputEncodingSpec spec{nullptr};
+    const size_t row_floats = scribblez::input_floats(spec);
+    const size_t sd_off =
+      scribblez::spatial_floats() +
+      scribblez::scalar_block_offset(spec, scribblez::ScalarBlockId::kScoreDiff);
+    for (int i = 0; i < batch.count; ++i) {
+      const float s = batch.rows[size_t(i) * row_floats + sd_off];
+      const float w = 0.5f + 0.4f * std::tanh(s);
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = w;
+      wld[1] = 0.1f;
+      wld[2] = 0.9f - w;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = s * scribblez::kScoreDiffInputScale;  // "the current diff holds up"
+      sd[1] = 5.0f;
+    }
+    rows_seen += batch.count;
+  }
+};
+
+// Poisons one output element of an otherwise-finite leaf readout, to exercise
+// the runner's hard-error guard.
+struct LeafPoison {
+  int head;   // 0 = WLD, 1 = score-diff
+  int index;  // element within the row
+  float value;
+};
+
+class NonFiniteLeafService : public scribblez::nn::PositionEvalService {
+ public:
+  explicit NonFiniteLeafService(LeafPoison poison) : poison_(poison) {}
+  bool opp_leave_input() const override { return false; }
+  int spatial_planes() const override { return scribblez::spatial_planes(); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override {
+    for (int i = 0; i < batch.count; ++i) {
+      float* wld = head_out[0] + size_t(i) * scribblez::nn::WldOutput::kRowElems;
+      wld[0] = 0.7f;
+      wld[1] = 0.1f;
+      wld[2] = 0.2f;
+      float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
+      sd[0] = 100.0f;
+      sd[1] = 5.0f;
+      (poison_.head == 0 ? wld : sd)[poison_.index] = poison_.value;
+    }
+  }
+
+ private:
+  LeafPoison poison_;
+};
+
+// Value truncation with a constant leaf: every rollout of every candidate is
+// cut at the horizon (a mid-game position cannot end within 4 plies), so the
+// observations are exact multiples of the stub's outputs -- from the root
+// mover's POV, which flips at an odd horizon.
+TEST(SimRunner, TruncatedPovParity) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_pov";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  for (const int horizon : {4, 3}) {
+    ConstantLeafService leaf;
+    SimRunner::Params params;
+    params.rollouts = 16;
+    params.threads = 2;
+    params.horizon_plies = horizon;
+    params.leaf_service = &leaf;
+    const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
+    ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
+    // The leaf is the horizon ply's post-move state from ITS mover's POV.
+    // The opponent moves first, so horizon 4's last ply is the root mover's
+    // own (opp, self, opp, self) and the readout carries over; horizon 3's
+    // is the opponent's, so win/loss and the delta sign flip.
+    const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
+    const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
+    const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
+    for (const SimObservation& o : obs) {
+      ASSERT_EQ(int(o.n), params.rollouts);
+      ASSERT_DOUBLE_EQ(o.wins, o.n * p_win);
+      ASSERT_DOUBLE_EQ(o.draws, o.n * double(0.1f));
+      ASSERT_DOUBLE_EQ(o.losses, o.n * p_loss);
+      ASSERT_DOUBLE_EQ(o.delta_sum, o.n * delta);
+      // The stub predicts sigma = 5, so the second moment carries mean^2 +
+      // sigma^2 whichever POV the mean was flipped from.
+      ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * (100.0 * 100.0 + 5.0 * 5.0));
+      // The win-conjoined planes carry the leaf probabilities per placement.
+      for (int i = 0; i < SimObservation::kCells; ++i) {
+        ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);
+        ASSERT_NEAR(o.self_win_count[i], p_win * o.self_next_count[i], 1e-3);
+      }
+    }
+  }
+  fs::remove_all(tmp);
+}
+
+// Truncated observations stay deterministic across thread counts (the fixed
+// reduction order), CRN-cancel exactly on duplicate candidates, and are
+// independent of which other candidates were simmed -- with the workers
+// sharing one stub service through EvalService's own serialization.
+TEST(SimRunner, TruncatedDeterminismAndCrn) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_crn";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  // The same play twice: a CRN duplicate whose observations must be equal.
+  const std::vector<Move> candidates = {plays.front(), plays.front(), plays[plays.size() / 2]};
+
+  RowLeafService leaf;
+  SimRunner::Params params;
+  params.rollouts = 16;
+  params.threads = 3;
+  params.horizon_plies = 4;
+  params.leaf_service = &leaf;
+  const uint64_t base_seed = 400;
+  const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, base_seed);
+
+  for (const SimObservation& o : obs) {
+    ASSERT_EQ(int(o.n), params.rollouts);
+    ASSERT_NEAR(o.wins + o.draws + o.losses, double(o.n), 1e-5);
+  }
+  // Exact CRN cancellation: the duplicate's observation is byte-identical.
+  ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(SimObservation)), 0);
+
+  // Thread-count independence, exactly (fractional contributions reduce in a
+  // fixed order).
+  {
+    SimRunner::Params p1 = params;
+    p1.threads = 1;
+    const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    for (size_t c = 0; c < obs.size(); ++c)
+      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
+  }
+  // CRN across candidate-set membership.
+  {
+    const std::vector<SimObservation> alone =
+      SimRunner(d, params).run(pos, {candidates[2]}, base_seed);
+    ASSERT_EQ(std::memcmp(&alone[0], &obs[2], sizeof(SimObservation)), 0);
+  }
+  fs::remove_all(tmp);
+}
+
+// A horizon past every game's natural end changes nothing: each rollout
+// finishes before the cap, contributes its exact terminal outcome, and the
+// leaf service is never consulted -- so the observations are byte-identical
+// to a terminal runner's.
+TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_term";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 1);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  SimRunner::Params terminal;
+  terminal.rollouts = 8;
+  const std::vector<SimObservation> obs_terminal = SimRunner(d, terminal).run(pos, candidates, 400);
+
+  RowLeafService leaf;
+  SimRunner::Params truncated = terminal;
+  truncated.horizon_plies = 350;  // beyond any natural game length
+  truncated.leaf_service = &leaf;
+  const std::vector<SimObservation> obs_truncated =
+    SimRunner(d, truncated).run(pos, candidates, 400);
+
+  ASSERT_EQ(leaf.rows_seen, 0);
+  for (size_t c = 0; c < obs_terminal.size(); ++c)
+    ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(SimObservation)), 0);
+  fs::remove_all(tmp);
+}
+
+// The horizon/service pairing and the minimum horizon are validated.
+TEST(SimRunner, ValidatesTruncationParams) {
+  SimRunner::Params p;
+  p.horizon_plies = 4;  // horizon without a service
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  ConstantLeafService leaf;
+  p.leaf_service = &leaf;
+  p.horizon_plies = 0;  // service without a horizon
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.horizon_plies = SimRunner::kMinHorizonPlies - 1;  // below the minimum
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.horizon_plies = SimRunner::kMinHorizonPlies;
+  SimRunner::validate(p);
+}
+
+// A non-finite leaf readout is a hard error -- whether NaN or the +/-inf an
+// FP16 overflow reaches first, and in any consumed field, including the
+// score-diff std that feeds delta_sq. Because a rollout runs on a worker
+// thread, the guard's throw must surface on the calling thread (threads > 1
+// here) rather than terminating the process.
+TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_nonfinite_leaf";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+  fs::path peg_path = tmp / "peg.json";
+  {
+    std::ofstream pf(peg_path);
+    pf << "[]";
+  }
+  HastyEquity::init(fix.path.string(), peg_path.string());
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = rack_from("CATSEIQ");
+  MoveGenerator gen(pos.board, d);
+  const std::vector<Move> plays = gen.generate(pos.rack);
+  ASSERT_GE(plays.size(), 1);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const LeafPoison cases[] = {
+    {1, 0, inf},  // score-diff mean overflows to +inf: isnan-false, was missed
+    {1, 1, inf},  // score-diff std -> inf: feeds delta_sq, was unchecked
+    {1, 1, nan},  // score-diff std -> NaN: likewise
+    {0, 2, nan},  // loss prob NaN while the checked win prob stays finite
+  };
+  for (const LeafPoison& c : cases) {
+    NonFiniteLeafService leaf(c);
+    SimRunner::Params params;
+    params.rollouts = 8;
+    params.threads = 2;
+    params.horizon_plies = 4;
+    params.leaf_service = &leaf;
+    EXPECT_THROW(SimRunner(d, params).run(pos, candidates, 400), std::runtime_error);
+  }
+  fs::remove_all(tmp);
+}
+
 // A full 7-tile known leave degenerates to a completely known opponent rack:
 // under a greedy (deterministic) rollout policy the opponent's first reply to
 // each candidate is then the same in every rollout, so the reply-placement
@@ -4219,16 +4654,28 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   EXPECT_EQ(rec_fields.at(0).at("name").as_string(), "move");
   EXPECT_EQ(rec_fields.at(0).at("dtype").at("struct").as_string(), "Move");
 
-  // A subarray field carries its element code and shape.
+  // A subarray field carries its element code and shape. The next-move
+  // planes are integer counts; the win-conjoined planes and the outcome
+  // accumulators are fractional under value truncation.
   const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
-  bool found_counts = false;
+  bool found_counts = false, found_win = false, found_wins = false;
   for (const bj::value& f : obs_fields) {
-    if (f.at("name").as_string() != "opp_next_count") continue;
-    found_counts = true;
-    EXPECT_EQ(f.at("dtype").as_string(), "<u2");
-    EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    if (f.at("name").as_string() == "opp_next_count") {
+      found_counts = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<u2");
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    } else if (f.at("name").as_string() == "opp_win_count") {
+      found_win = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<f4");
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+    } else if (f.at("name").as_string() == "wins") {
+      found_wins = true;
+      EXPECT_EQ(f.at("dtype").as_string(), "<f8");
+    }
   }
   EXPECT_TRUE(found_counts);
+  EXPECT_TRUE(found_win);
+  EXPECT_TRUE(found_wins);
 
   const bj::object& c = doc.at("constants").as_object();
   EXPECT_EQ(c.at("mset").at("magic").to_number<uint32_t>(), move_set_eval::kTargetMagic);
@@ -4669,15 +5116,15 @@ TEST(SimObservationLog, Roundtrip) {
   // mixup cannot round-trip cleanly.
   SimObservation o1{};
   o1.n = 16;
-  o1.wins = 9;
-  o1.draws = 1;
-  o1.losses = 6;
-  o1.delta_sum = 123;
-  o1.delta_sq_sum = 4567;
+  o1.wins = 9.25;  // fractional, as value-truncated rollouts accumulate
+  o1.draws = 1.5;
+  o1.losses = 5.25;
+  o1.delta_sum = 123.5;
+  o1.delta_sq_sum = 4567.25;
   o1.opp_next_count[7 * 15 + 7] = 12;
-  o1.opp_win_count[7 * 15 + 7] = 5;
+  o1.opp_win_count[7 * 15 + 7] = 5.5f;
   o1.self_next_count[3] = 2;
-  o1.self_win_count[3] = 1;
+  o1.self_win_count[3] = 1.25f;
   SimObservation o2{};
   o2.n = 16;
   o2.draws = 16;
@@ -4690,7 +5137,7 @@ TEST(SimObservationLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
 
   {
-    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234");
+    SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234", "beef5678", /*horizon_plies=*/4);
     w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
                    kSimObsPosFlagUniformTail);
     w.add_position(4, 0, {m2}, {o2}, 16, 1000);
@@ -4701,6 +5148,8 @@ TEST(SimObservationLog, Roundtrip) {
   ASSERT_EQ(r.num_positions(), 2);
   ASSERT_EQ(r.flags(), kSimObsFlagTrajectory);
   ASSERT_EQ(r.proposer_hash(), "cafe1234");
+  ASSERT_EQ(r.leaf_model_hash(), "beef5678");
+  ASSERT_EQ(r.horizon_plies(), 4);
   const SimObsReader::Position p0 = r.position(0);
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);

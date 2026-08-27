@@ -19,18 +19,30 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
   buffer->insert(buffer->end(), p, p + size);
 }
 
+// A fixed-width, NUL-padded model-hash header field read back as a string.
+std::string header_hash_field(const char* field, size_t size) {
+  return std::string(field, strnlen(field, size));
+}
+
 }  // namespace
 
 SimObsWriter::SimObsWriter(const std::string& path, uint32_t flags,
-                           const std::string& proposer_hash)
+                           const std::string& proposer_hash, const std::string& leaf_model_hash,
+                           int horizon_plies)
     : path_(path) {
+  RELEASE_ASSERT(leaf_model_hash.empty() == (horizon_plies == 0),
+                 "value-truncated sims carry a leaf model hash and a horizon, "
+                 "terminal sims neither");
   SimObsFileHeader hdr{};
   hdr.magic = kSimObsMagic;
   hdr.version = kSimObsVersion;
+  hdr.horizon_plies = uint16_t(horizon_plies);
   hdr.num_positions = 0;  // patched in close()
   hdr.flags = flags;
   std::memcpy(hdr.proposer_hash, proposer_hash.data(),
               std::min(proposer_hash.size(), sizeof(hdr.proposer_hash)));
+  std::memcpy(hdr.leaf_model_hash, leaf_model_hash.data(),
+              std::min(leaf_model_hash.size(), sizeof(hdr.leaf_model_hash)));
   append_bytes(&buffer_, &hdr, sizeof(hdr));
 }
 
@@ -81,8 +93,11 @@ void SimObsWriter::close() {
 }
 
 std::string SimObsReader::proposer_hash() const {
-  const char* h = header().proposer_hash;
-  return std::string(h, strnlen(h, sizeof(header().proposer_hash)));
+  return header_hash_field(header().proposer_hash, sizeof(header().proposer_hash));
+}
+
+std::string SimObsReader::leaf_model_hash() const {
+  return header_hash_field(header().leaf_model_hash, sizeof(header().leaf_model_hash));
 }
 
 SimObsReader::SimObsReader(const std::string& path) {

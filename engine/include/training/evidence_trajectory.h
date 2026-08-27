@@ -41,6 +41,9 @@ using StudentService = nn::TrtEvalService<nn::MoveSetEvaluationSpec>;
 
 struct TrajectoryOptions {
   int rollouts = 200;
+  // Value truncation; see SimRunner::Params::horizon_plies for the full
+  // semantics. The leaf service handed to TrajectoryRunner scores the horizon.
+  int horizon = 0;
   int proposals_min = 2;
   int proposals_max = 8;
   double temperature = 0.05;  // win-equity units
@@ -52,8 +55,9 @@ struct TrajectoryOptions {
 void validate(const TrajectoryOptions& opt);
 
 // Parallelism is across positions, so each runner is single-threaded (see
-// sim_obs_tool for the determinism rationale).
-SimRunner::Params sim_params(const TrajectoryOptions& opt);
+// sim_obs_tool for the determinism rationale). `leaf` is the shared
+// (serialized) truncation leaf service; null iff opt.horizon is 0.
+SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalService* leaf);
 
 // The decision point a trajectory is run at.
 struct DecisionPoint {
@@ -124,8 +128,11 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
 // hidden mode's replayed opponent rack is ground truth the mover cannot see).
 class TrajectoryRunner {
  public:
+  // `leaf` is the shared (serialized) truncation leaf service; null iff
+  // opt.horizon is 0.
   TrajectoryRunner(const Dictionary& dict, const InputEncodingSpec& spec,
-                   const TrajectoryOptions& opt, StudentScorer* scorer);
+                   const TrajectoryOptions& opt, StudentScorer* scorer,
+                   nn::PositionEvalService* leaf = nullptr);
 
   // Rank, score, select, sim. `base_seed` feeds SimRunner directly; the
   // trajectory draws come from their own stream derived from it, so adding a

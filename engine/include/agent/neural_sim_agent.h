@@ -55,8 +55,14 @@ class NeuralSimAgent : public Agent {
     double drop_best_prob = 0.0;
     // Rollouts per candidate, and their threading; see SimAgent::Params for
     // why 400. Sharing SimAgent's default keeps the equal-budget comparison
-    // against it the configuration-free default.
+    // against it the configuration-free default. Leave the truncation fields
+    // untouched here -- sim_horizon below is the one knob, and the agent's
+    // own served model is the leaf evaluator.
     SimRunner::Params sim = {400, 1};
+    // Value truncation; see SimRunner::Params::horizon_plies for the full
+    // semantics. The agent's own served model is the leaf that scores the
+    // horizon.
+    int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
