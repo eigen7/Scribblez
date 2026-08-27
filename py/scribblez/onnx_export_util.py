@@ -66,9 +66,9 @@ def architecture_signature(model: torch.nn.Module, opset: int) -> str:
 def weight_fingerprint(model: torch.nn.Module) -> str:
     """sha256 over the model's parameters and buffers in a deterministic order
     -- unlike architecture_signature, this changes with the WEIGHTS, so it
-    distinguishes two checkpoints of the same architecture. Used to tie graphs
-    that must come from one in-memory model (the move-proposal cache/step pair)
-    so a loader can reject a stale graph paired with a newer one."""
+    distinguishes any two differing checkpoints. Used to tie graphs that must
+    come from one in-memory model (the move-proposal cache/step pair) so a
+    loader can reject a graph paired with one exported from a different model."""
     h = hashlib.sha256()
     for name, tensor in sorted(model.state_dict().items()):
         h.update(name.encode())

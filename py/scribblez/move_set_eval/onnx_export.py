@@ -81,12 +81,8 @@ class MoveSetEvalExportModel(nn.Module):
         self.trunk = model.trunk
         self.board_pos_emb = model.board_pos_emb
         self.move_encoder = model.move_encoder
-        # The cross-attention is re-expressed from the trained
-        # nn.MultiheadAttention as plain q/k/v Linears (split_mha_qkv): tracing
-        # the packed in_proj leaves a bare Constant with no initializer behind
-        # it, which the TensorRT parser-refitter cannot refit (the refit gate
-        # probe caught exactly this); three plain Linears export as plain named
-        # initializers. out_proj is already a plain Linear.
+        # Cross-attention re-expressed as plain q/k/v Linears via split_mha_qkv
+        # (see onnx_export_util.py for why); out_proj is already a plain Linear.
         mha = model.cross_attn
         c = mha.embed_dim
         self.num_heads = mha.num_heads
