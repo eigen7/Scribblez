@@ -31,6 +31,9 @@ def test_classify_probe():
     assert classify_probe(0, "exited\n", "") == "stopped"
     assert classify_probe(0, "created\n", "") == "stopped"
     assert classify_probe(1, "", "Error: No such object: scz-x") == "missing"
+    # Docker 29 lowercased the phrasing ("error: no such object"); the match is
+    # case-insensitive so a missing container is not misread as unreachable.
+    assert classify_probe(1, "", "error: no such object: scz-x") == "missing"
     # ssh's own failure (exit 255) is unreachable even if the message happens
     # to mention objects; so is any docker failure that is not a definite
     # missing container (e.g. the daemon being down).
