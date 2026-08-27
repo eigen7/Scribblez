@@ -27,14 +27,11 @@ legacy tracer's main shape-baking hazard.
 import warnings
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import score_diff_input_layout
-from scribblez.fp16_gate import PROBE_LEADS, check_fp16_headroom
 from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
@@ -168,19 +165,12 @@ def export_onnx(
     move_encoding_version: int,
     board_size: int = 15,
     opset: int = 17,
-    probe_feeds: list[dict] | None = None,
-) -> float | None:
+):
     """Wrap `model` in the P=1 export forward, trace it with a dynamic "moves"
     axis, and write the ONNX graph to `path` atomically, stamping the
     input-encoding arm, `graph=move_set_eval`, and the move-encoding version
     into its metadata_props (the version is what stops a checkpoint from
-    silently running against an encoder whose rows it was not trained on).
-
-    probe_feeds, when given (see fp16_probe_feeds_from_batch), runs the
-    FP16-headroom gate on the written graph: an overflowing checkpoint raises
-    Fp16HeadroomError and no file lands at `path`. Returns the probe's peak
-    |activation| (the trainer's per-export growth series), or None when not
-    probed."""
+    silently running against an encoder whose rows it was not trained on)."""
     path = Path(path)
     was_training = model.training
     model.eval()  # explicit, not via the wrapper's aliasing of the submodules
@@ -228,54 +218,8 @@ def export_onnx(
                 "move_encoding_version": str(move_encoding_version),
             },
         )
-        peak = check_fp16_headroom(tmp_path, probe_feeds) if probe_feeds is not None else None
     if was_training:
         model.train()
-    return peak
-
-
-# Positions a probe batch contributes to the gate feeds. Each yields
-# 1 + len(PROBE_LEADS) P=1 forwards, so the probe stays a few dozen runs.
-FP16_PROBE_POSITIONS = 8
-
-
-def fp16_probe_feeds_from_batch(batch: dict, *, leads: tuple[int, ...] = PROBE_LEADS) -> list[dict]:
-    """Gate probe feeds from a training batch dict (MsetDataset / the evidence
-    dataset -- any dict with the board and move input keys): the first
-    FP16_PROBE_POSITIONS positions, each as one P=1 feed per lead in `leads`
-    (the board's score-diff scalar stamped, exactly the engine's own
-    encode_score_diff_sweep transform) plus one as encoded. The move rows keep
-    their encoded scalars: the measured overflow site is the board trunk's
-    pooled branch, which the board inputs alone drive."""
-    sd_index, sd_scale = score_diff_input_layout()
-    spatial = batch["input_spatial"].numpy()
-    scalar = batch["input_scalar"].numpy()
-    pos_id = batch["move_pos_id"].numpy()
-    moves = {
-        "move_letters": batch["move_letters"].numpy().astype(np.int32),
-        "move_blanks": batch["move_blanks"].numpy().astype(np.uint8),
-        "move_squares": batch["move_squares"].numpy().astype(np.int32),
-        "move_tile_mask": batch["move_tile_mask"].numpy().astype(np.uint8),
-        "move_scalars": batch["move_scalars"].numpy().astype(np.float32),
-    }
-    feeds = []
-    for p in range(min(FP16_PROBE_POSITIONS, spatial.shape[0])):
-        rows = pos_id == p
-        move_feed = {name: np.ascontiguousarray(arr[rows]) for name, arr in moves.items()}
-        scalars = [scalar[p]]
-        for lead in leads:
-            stamped = scalar[p].copy()
-            stamped[sd_index] = lead / sd_scale
-            scalars.append(stamped)
-        for sc in scalars:
-            feeds.append(
-                {
-                    "input_spatial": np.ascontiguousarray(spatial[p : p + 1]),
-                    "input_scalar": sc[None],
-                    **move_feed,
-                }
-            )
-    return feeds
 
 
 def legacy_checkpoint_condition(paths) -> dict:

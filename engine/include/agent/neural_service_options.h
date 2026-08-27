@@ -19,7 +19,10 @@ struct NeuralServiceOptions {
   std::string model;
   int batch_size = 256;
   int cuda_device = 0;
-  std::string precision = "FP16";
+  // BF16 by default: its FP32-range exponent serves any checkpoint's activation
+  // magnitudes without FP16 overflow, at a mantissa cost well below the model's
+  // own error. FP16 remains selectable for models known to fit its range.
+  std::string precision = "BF16";
 
   // Register --model/--batch-size/--cuda-device/--precision, bound to this
   // struct's fields. Call before parsing the agent's option tokens; an agent

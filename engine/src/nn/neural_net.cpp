@@ -1,7 +1,6 @@
 #include "nn/neural_net.h"
 
 #include "nn/cuda_util.h"
-#include "nn/fp32_pinning.h"
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
 
@@ -15,8 +14,6 @@
 #include <format>
 #include <iostream>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -247,58 +244,6 @@ void NeuralNetBase::Impl::deserialize_engine(const std::vector<char>& plan) {
   if (!engine) throw util::Exception("Failed to deserialize TensorRT engine");
 }
 
-namespace {
-
-// Maps a TensorRT INetworkDefinition onto the GPU-free Fp32PinGraph the pinning
-// walk runs over (nn/fp32_pinning.h). Tensor ids are assigned first-seen, so
-// they are stable and equal iff the ITensor pointers match, which is all the
-// walk needs.
-class TrtPinGraph : public nn::Fp32PinGraph {
- public:
-  explicit TrtPinGraph(nvinfer1::INetworkDefinition& network) : network_(network) {}
-
-  int num_layers() const override { return network_.getNbLayers(); }
-  std::string_view layer_name(int layer) const override {
-    return network_.getLayer(layer)->getName();
-  }
-  int num_inputs(int layer) const override { return network_.getLayer(layer)->getNbInputs(); }
-  int num_outputs(int layer) const override { return network_.getLayer(layer)->getNbOutputs(); }
-  int input_tensor(int layer, int input) const override {
-    return tensor_id(network_.getLayer(layer)->getInput(input));
-  }
-  int output_tensor(int layer, int output) const override {
-    return tensor_id(network_.getLayer(layer)->getOutput(output));
-  }
-  void pin_layer_fp32(int layer) override {
-    network_.getLayer(layer)->setPrecision(nvinfer1::DataType::kFLOAT);
-  }
-  void pin_output_fp32(int layer, int output) override {
-    network_.getLayer(layer)->setOutputType(output, nvinfer1::DataType::kFLOAT);
-  }
-
-  nn::PinLayerKind layer_kind(int layer) const override {
-    switch (network_.getLayer(layer)->getType()) {
-      case nvinfer1::LayerType::kCONSTANT:
-        return nn::PinLayerKind::kConstant;
-      case nvinfer1::LayerType::kSCALE:
-      case nvinfer1::LayerType::kNORMALIZATION:
-        return nn::PinLayerKind::kRenormalizing;
-      default:
-        return nn::PinLayerKind::kOther;
-    }
-  }
-
- private:
-  int tensor_id(nvinfer1::ITensor* tensor) const {
-    return ids_.emplace(tensor, int(ids_.size())).first->second;
-  }
-
-  nvinfer1::INetworkDefinition& network_;
-  mutable std::unordered_map<nvinfer1::ITensor*, int> ids_;
-};
-
-}  // namespace
-
 std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_bytes) {
   std::cerr << "[TRT] Building " << spec.graph
             << " engine from ONNX (one-time; cached per architecture afterward)...\n";
@@ -325,14 +270,13 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
 
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
+  // BF16 has FP32's exponent range, so it serves this family's activation
+  // magnitudes without the FP16 overflow that once needed per-layer FP32 pins
+  // (retired). FP16 stays available for models known to fit its range.
   if (params.precision == Precision::kFP16) {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
-    if (!spec.fp32_layer_substrings.empty()) {
-      TrtPinGraph graph(*network);
-      const int pinned = nn::pin_fp32_region(graph, spec.fp32_layer_substrings);
-      config->setFlag(nvinfer1::BuilderFlag::kOBEY_PRECISION_CONSTRAINTS);
-      std::cerr << "[TRT] Pinned " << pinned << " overflow-prone layers to FP32\n";
-    }
+  } else if (params.precision == Precision::kBF16) {
+    config->setFlag(nvinfer1::BuilderFlag::kBF16);
   }
   // The cache is keyed on model architecture, so a cached plan generally holds
   // a different same-architecture checkpoint's weights; every plan must be
@@ -482,13 +426,10 @@ void NeuralNetBase::load() {
   check_versions(m.spec, meta, m.params.onnx_path);
   m.opp_leave_input = meta.opp_leave_input;
 
-  std::string cache_path = engine_plan_cache_path(
-    meta.architecture_signature, m.params.precision,
-    std::format("{}_{}{}", m.spec.axis_tag, m.params.max_rows,
-                m.params.precision == Precision::kFP16 && !m.spec.fp32_layer_substrings.empty()
-                  ? "_fp32pin"
-                  : ""),
-    m.params.fast_build, m.params.mount_root);
+  std::string cache_path =
+    engine_plan_cache_path(meta.architecture_signature, m.params.precision,
+                           std::format("{}_{}", m.spec.axis_tag, m.params.max_rows),
+                           m.params.fast_build, m.params.mount_root);
 
   // The cache is keyed on the model's architecture signature, so a hit yields
   // a plan with the right structure but (in general) another checkpoint's

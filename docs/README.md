@@ -71,11 +71,12 @@
   ingest, and the trainer as a singleton consumer worker.
 
 ## Design proposals
-- **[fp16_safe_serving.md](fp16_safe_serving.md)** — making FP16-safety a
-  property of the models: measured monotone activation growth across
-  training (FP16 range crossed mid-run), the interim FP32-pin containment,
-  why not bf16, and the plan — magnitude penalties, an export/promotion
-  gate, then deleting the pinning machinery.
+- **[fp16_safe_serving.md](fp16_safe_serving.md)** — the FP16 activation-overflow
+  incident and its **resolution: serve BF16.** Records the measured monotone
+  activation growth, why the model-side containment program (magnitude
+  penalties + export gate + FP32 pins) was tried and then retired, and the
+  bf16-vs-fp16-vs-fp32 measurement that justified switching the serving format
+  instead.
 - **[generational_teacher.md](generational_teacher.md)** — AlphaZero-style
   teacher broadcast for the distillation pipeline: the teacher as versioned
   per-tag state advanced by one-click (later automatic) promotion,

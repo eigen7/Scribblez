@@ -20,7 +20,8 @@ Precision parse_precision(const std::string& s) {
   std::transform(up.begin(), up.end(), up.begin(), [](unsigned char c) { return std::toupper(c); });
   if (up == "FP32") return Precision::kFP32;
   if (up == "FP16") return Precision::kFP16;
-  throw util::CleanException("Invalid precision '{}'. Valid values are: FP32, FP16", s);
+  if (up == "BF16") return Precision::kBF16;
+  throw util::CleanException("Invalid precision '{}'. Valid values are: FP32, FP16, BF16", s);
 }
 
 const char* precision_to_string(Precision precision) {
@@ -29,6 +30,8 @@ const char* precision_to_string(Precision precision) {
       return "FP32";
     case Precision::kFP16:
       return "FP16";
+    case Precision::kBF16:
+      return "BF16";
   }
   return "FP32";
 }

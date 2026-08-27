@@ -216,18 +216,17 @@ void LeafBatcher::flush() {
     // A non-finite readout would flow silently into training data and
     // decisions -- a NaN compares false against everything, an inf poisons
     // the running sums -- so it is a hard error. Every consumed field is
-    // checked with isfinite, not isnan: an FP16 overflow reaches +/-inf
+    // checked with isfinite, not isnan: a range overflow reaches +/-inf
     // before any NaN, and the identity-decoded score-diff head applies no
     // softmax that would fold that inf into a NaN (unlike the WLD head), so
-    // inf must be caught explicitly. It should not happen: the position
-    // family's FP16 builds pin the measured overflow-prone trunk region to
-    // FP32 (model_specs.h), so a trip here means a new overflow site or an
-    // off-distribution input.
+    // inf must be caught explicitly. It should not happen: the leaf serves
+    // BF16, whose FP32-range exponent covers the trunk's magnitudes, so a
+    // trip here means an off-distribution input or a genuinely broken model.
     if (!std::isfinite(wld[0]) || !std::isfinite(wld[1]) || !std::isfinite(wld[2]) ||
         !std::isfinite(sd[0]) || !std::isfinite(sd[1])) {
       throw util::Exception(
-        "sim runner: the leaf model returned a non-finite value at a rollout horizon (new FP16 "
-        "overflow site, or off-distribution input)");
+        "sim runner: the leaf model returned a non-finite value at a rollout horizon "
+        "(off-distribution input, or a broken model)");
     }
     RolloutResult& r = (*results_)[pending_[j].slot];
     if (pending_[j].root_pov) {
