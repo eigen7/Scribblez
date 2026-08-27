@@ -387,6 +387,43 @@ def test_an_operator_pause_stops_a_parked_container(manager, spec, task, monkeyp
     assert [op for op, _ in _RecordingSshMachine.ops] == ["unpause", "stop"]
 
 
+def _collectable_ssh_slot(manager, spec, task, monkeypatch, *, probe: str):
+    """A running ssh slot wired to a machine whose re-probe returns `probe`,
+    for exercising _collect_ssh's response to a pull that raced a stop."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(_RecordingSshMachine, "state", probe)
+    _RecordingSshMachine.ops = []
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state, w.launched, w.undelivered = "running", True, 7
+    return w
+
+
+def _raise_stopped(*args, **kwargs):
+    raise SshMachineError("user@laptop: Error response from daemon: container c is not running")
+
+
+def test_a_collect_that_raced_a_stop_is_not_an_error(manager, spec, task, monkeypatch):
+    """An operator pausing a slot stops its container synchronously, so a
+    pull can reach a container that stopped since the pass probed it running.
+    A re-probe that no longer finds it running makes that the benign race it
+    is: the pull swallows it, leaving the count unknown for the flushed output
+    the next start (or a replacement's sweep) will take."""
+    monkeypatch.setattr(workers_mod, "pull_results", _raise_stopped)
+    w = _collectable_ssh_slot(manager, spec, task, monkeypatch, probe="stopped")
+    manager._collect_ssh(spec, task, w)  # does not raise
+    assert w.undelivered is None
+
+
+def test_a_collect_failure_on_a_running_container_propagates(manager, spec, task, monkeypatch):
+    """A pull that failed while the container is still up (a slow link hitting
+    the transfer timeout, say) is a real failure, not the stop race -- the
+    caller must see it."""
+    monkeypatch.setattr(workers_mod, "pull_results", _raise_stopped)
+    w = _collectable_ssh_slot(manager, spec, task, monkeypatch, probe="running")
+    with pytest.raises(SshMachineError):
+        manager._collect_ssh(spec, task, w)
+
+
 def test_a_parked_local_worker_is_simply_stopped(manager, spec, task, monkeypatch):
     """A local worker restarts in about a second; there is nothing to save."""
     stopped = []

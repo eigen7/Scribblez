@@ -977,14 +977,31 @@ class WorkerManager:
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Read a batch of slot `w`'s finished outputs out of its container
-        into the tag, and remember how much it still holds."""
+        into the tag, and remember how much it still holds.
+
+        The container can stop between the pass's probe and this pull: an
+        operator pausing the slot stops it synchronously (set_worker_state),
+        so a pull racing a "Pause all" reaches a container `docker exec` can no
+        longer read. That is a benign race, not a collection failure -- a
+        re-probe that finds it stopped (or gone) means the output it flushed on
+        the way down waits in place for the next start (or the sweep that
+        precedes a replacement) to take it. Any other failure -- a slow link
+        timing out while the container is still up, an unreachable host -- is
+        real, and propagates."""
+        machine = SshMachine(w.host)
         # Unknown until this pull says otherwise. A collection that fails --
         # a link slow enough to keep hitting the transfer timeout, say, while
         # the far cheaper probe still reports the container running -- must not
         # leave the last count standing in for knowledge: it would go on
         # claiming "drained" while the container fills up.
         w.undelivered = None
-        result = pull_results(SshMachine(w.host), **_transfer_target(spec, task, w))
+        try:
+            result = pull_results(machine, **_transfer_target(spec, task, w))
+        except SshMachineError:
+            name = _container_name(spec, task.tag, w.worker_id)
+            if machine.container_state(name) not in ("stopped", "missing"):
+                raise
+            return
         w.undelivered = result.remaining
         tasks.save_task(spec, task)
 
