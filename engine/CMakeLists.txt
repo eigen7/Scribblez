@@ -50,6 +50,7 @@ add_library(scribblez_core STATIC
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/agent/candidate_evaluator.cpp
+  src/agent/evidence_staging.cpp
   src/belief/leave_prior.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
