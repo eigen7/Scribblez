@@ -166,7 +166,13 @@ void run_position_worker(const char* buf, const Dictionary& dict, const Options&
     res.num_legal_moves = ranked.size();
     if (int(ranked.size()) > opt.top_k) ranked.resize(size_t(opt.top_k));
     res.candidates = std::move(ranked);
-    res.observations = runner.run(pos, res.candidates, res.base_seed);
+    // Name the position a runtime failure (e.g. the leaf-model NaN guard) hit,
+    // so an unattended multi-file run leaves a lead instead of a bare message.
+    try {
+      res.observations = runner.run(pos, res.candidates, res.base_seed);
+    } catch (const std::exception& e) {
+      throw util::Exception("game {} turn {}: {}", w.game_idx, w.turn_idx, e.what());
+    }
     meter->add_done();
   }
 }
@@ -211,8 +217,15 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
     workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
                          leaf_eval_service, std::cref(work), &next, &results, meter, &errors[t]);
   for (auto& w : workers) w.join();
-  for (const std::exception_ptr& e : errors)
-    if (e) std::rethrow_exception(e);
+  for (const std::exception_ptr& e : errors) {
+    if (!e) continue;
+    // Prepend the file, so a batch run's failure names both file and position.
+    try {
+      std::rethrow_exception(e);
+    } catch (const std::exception& ex) {
+      throw util::Exception("{}: {}", sobs_path.stem().string(), ex.what());
+    }
+  }
 
   // The work list is sorted by (game, turn) and results are indexed by work
   // slot, so the output is canonically ordered and byte-stable across thread

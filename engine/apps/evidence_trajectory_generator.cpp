@@ -43,6 +43,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -138,7 +139,13 @@ void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>
   TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf_eval_service);
   const std::vector<typename Front::Item>& work = front.work;
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
-    worker.run(i, work[i], runner);
+    // Name the item a runtime failure (e.g. the leaf-model NaN guard) hit, so
+    // an unattended run leaves a lead instead of a bare message.
+    try {
+      worker.run(i, work[i], runner);
+    } catch (const std::exception& e) {
+      throw util::Exception("{}: {}", Front::describe(work[i]), e.what());
+    }
     meter->add_done();
   }
 }
@@ -187,6 +194,11 @@ struct SlogResult {
 
 struct SlogFront {
   using Item = GamePositionIndex;
+
+  // Names an item for a runtime error's message.
+  static std::string describe(const Item& w) {
+    return std::format("game {} turn {}", w.game_idx, w.turn_idx);
+  }
 
   const char* buf;
   const InputEncodingSpec& spec;
@@ -320,6 +332,11 @@ struct GcgResult {
 
 struct GcgFront {
   using Item = GcgWork;
+
+  // Names an item for a runtime error's message.
+  static std::string describe(const Item& w) {
+    return std::format("{} (after {} turns)", w.path.stem().string(), w.position.turns);
+  }
 
   const InputEncodingSpec& spec;
   const Options& opt;
