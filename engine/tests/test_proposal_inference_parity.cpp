@@ -55,14 +55,15 @@ constexpr int kScalarFields = 6;
 constexpr int kPlaneFloats = scribblez::nn::kNumPlacementPlanes * scribblez::kBoardCells;
 
 // How far a TensorRT run may deviate from the PyTorch FP32 reference. Set from
-// the measured noise floor plus headroom, not loosely: on this fixture the
-// observed worst deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell
-// sigmoid off a 225-token attention -- the jitteriest head), and ~5e-5
-// (score_diff / gain). The bounds sit a handful-of-x above those, so cross-GPU /
-// cross-build kernel jitter passes while a real defect -- a dropped ev_obs
-// field, a mis-strided evidence plane, a mis-bound handoff -- which perturbs an
-// output well past the floor, fails. The test prints the actual deviations, so
-// widen here if a future model legitimately needs it.
+// the measured noise floor, not loosely: on this fixture the observed worst
+// deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell sigmoid off a
+// 225-token attention -- the jitteriest head), and ~5e-5 (score_diff / gain).
+// The bounds sit above those with room for cross-GPU / cross-build kernel jitter
+// -- ~6x on the jittery planes head, a wider (~50-100x) round-number margin on
+// the far tighter wld / score_diff / gain -- yet stay orders of magnitude below
+// any real defect (a dropped ev_obs field, a mis-strided evidence plane, a
+// mis-bound handoff move outputs by far more). The test prints the actual
+// deviations, so retune here if a future model legitimately needs it.
 struct Tolerance {
   float prob;        // the three WLD probabilities
   float planes;      // the sigmoid placement planes (widest head)
