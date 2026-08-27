@@ -78,11 +78,18 @@ class SshMachineError(Exception):
 def classify_probe(returncode: int, stdout: str, stderr: str) -> str:
     """Map a `docker inspect -f {{.State.Status}}` result onto the probe
     states: "running" | "paused" | "stopped" | "missing" | "unreachable". Only
-    a definite "No such object" counts as missing; any other failure (ssh
+    a definite "no such object" counts as missing; any other failure (ssh
     itself, a down docker daemon) is "unreachable", so the caller never
-    recreates a container it merely could not see."""
+    recreates a container it merely could not see.
+
+    The match is case-insensitive because Docker reworded the phrasing: 28 and
+    earlier said "Error: No such object", 29 says "error: no such object". A
+    capitalized-only check silently reclassified every missing container as
+    unreachable on Docker 29 -- and an unreachable slot is never removed
+    (removal refuses it) while it poisons the host's shared reachability
+    cache, starving every other slot on that host."""
     if returncode != 0:
-        if returncode != _SSH_FAILED and "No such object" in stderr:
+        if returncode != _SSH_FAILED and "no such object" in stderr.lower():
             return "missing"
         return "unreachable"
     status = stdout.strip()
