@@ -22,6 +22,11 @@ namespace nn {
 // belongs to.
 inline constexpr const char* kGraphPositionEval = "position_eval";
 inline constexpr const char* kGraphMoveSetEval = "move_set_eval";
+// The move proposal model's split evidence-path graphs (roadmap item 3): the
+// per-turn cache graph and the per-loop-iteration step graph. These strings
+// must match proposal_export.py's GRAPH_CACHE / GRAPH_STEP.
+inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
+inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
 
 struct OnnxMetadata {
   // The input-encoding arm: which optional block the board row carries.
