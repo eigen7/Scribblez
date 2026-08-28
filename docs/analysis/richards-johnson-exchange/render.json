@@ -16,15 +16,15 @@
           "squares": [[13,3],[13,4],[13,5],[13,6],[13,7],[13,8],[13,9]] },
         { "color": "rgba(192,57,43,0.72)", "label": "V lane", "labelAt": [4,0],
           "squares": [[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]] },
-        { "color": "rgba(230,126,34,0.88)", "label": "Y", "labelAt": [5,3],
-          "squares": [[5,3]] }
+        { "color": "rgba(230,126,34,0.88)", "label": "Y lane", "labelAt": [8,1],
+          "squares": [[5,1],[6,1],[7,1],[8,1],[9,1],[10,1],[11,1]] }
       ],
       "legend": [
         { "color": "rgba(41,128,185,0.72)", "text": "S-hook onto WOE (WOES) -- the obvious bingo lane" },
         { "color": "rgba(192,57,43,0.72)", "text": "Down the V of VIRGA -- rarer, but higher-scoring and dangerous" },
         { "color": "rgba(230,126,34,0.88)", "text": "Alongside the Y of JUDY -- least likely (needs the last A)" }
       ],
-      "caption": "Where Nigel reads Mike's likely bingo going. No tiles are placed -- these mark the lanes."
+      "caption": "Potential bingo spots"
     },
     {
       "state": "states/ply_21.json",

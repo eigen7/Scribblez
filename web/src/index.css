@@ -181,6 +181,11 @@ h1 {
 .board-cell.has-highlight {
   z-index: 3;
 }
+/* A cell carrying a label lifts above every other highlighted cell, so its
+   label overflows across neighbors (later in DOM) without being clipped. */
+.board-cell.has-label {
+  z-index: 8;
+}
 .board-cell-highlight {
   position: absolute;
   inset: 1px;

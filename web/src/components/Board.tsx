@@ -116,8 +116,10 @@ const Board: React.FC<BoardProps> = ({
               if (interactive && !tile) cellClass += ' clickable';
 
               // Highlighted squares lift above later sibling cells so a label
-              // anchored here can overflow across them without being painted over.
+              // anchored here can overflow across them without being painted
+              // over; a labelled cell lifts higher still, above other highlights.
               if (cellHighlights?.[r]?.[c]) cellClass += ' has-highlight';
+              if (cellHighlights?.[r]?.[c]?.label) cellClass += ' has-label';
 
               // Determine what to display in this cell.
               const isExistingTile = !!tile;
