@@ -691,6 +691,28 @@ class ManualGame {
   // ranges over [0, ply_count()]: 0 is the empty start, ply_count() the end.
   int ply_count() const { return int(turns_.size()); }
 
+  // Every legal play for `rack_str` on the board at `ply`, as notation strings
+  // ("8H WAREZ 54") sorted by descending score. Offline aid for finding the
+  // exact coordinates of a hypothetical move when authoring a variant GCG.
+  std::vector<std::string> list_moves(int ply, const std::string& rack_str) const {
+    const Board& board = snapshots_.at(std::size_t(ply)).board;
+    Rack rack;
+    for (const char c : rack_str) {
+      if (c == '?')
+        rack.add(BLANK);
+      else if (c >= 'A' && c <= 'Z')
+        rack.add(Tile::of(c - 'A'));
+    }
+    MoveGenerator gen(board, dict_);
+    std::vector<Move> moves = gen.generate(rack);
+    std::sort(moves.begin(), moves.end(),
+              [](const Move& a, const Move& b) { return a.score() > b.score(); });
+    std::vector<std::string> out;
+    out.reserve(moves.size());
+    for (const Move& m : moves) out.push_back(move_to_notation(board, m));
+    return out;
+  }
+
   void jump_to_ply(int ply) {
     if (ply < 0 || ply > int(turns_.size())) {
       status_ = "Invalid history position";
@@ -1220,13 +1242,12 @@ std::vector<int> parse_plies(const std::string& spec, int ply_count) {
   return plies;
 }
 
-// Headless companion to the live server: loads a GCG and writes each requested
-// ply's front-end state JSON (exactly what the WebSocket would send) to
-// `out_dir/ply_<n>.json`, so the render harness can rasterize it offline. No
-// browser, Vite, or socket is involved.
-void dump_states(ManualGame& game, const std::string& gcg_text, const std::string& source_name,
-                 const std::string& plies_spec, const std::filesystem::path& out_dir) {
-  game.load_gcg_text(gcg_text, source_name);
+// Headless companion to the live server: writes each requested ply's front-end
+// state JSON (exactly what the WebSocket would send) to `out_dir/ply_<n>.json`,
+// so the render harness can rasterize it offline. No browser, Vite, or socket
+// is involved. `game` must already have a GCG loaded.
+void dump_states(ManualGame& game, const std::string& plies_spec,
+                 const std::filesystem::path& out_dir) {
   const std::vector<int> plies = parse_plies(plies_spec, game.ply_count());
   std::filesystem::create_directories(out_dir);
   for (const int ply : plies) {
@@ -1251,6 +1272,8 @@ int main(int argc, char** argv) {
     std::string dump_gcg;
     std::string dump_plies;
     std::string dump_out = "board_states";
+    std::string list_rack;
+    int list_ply = 0;
 
     po::options_description desc("manual_gcg_tool options");
     desc.add_options()("help,h", "show this help message and exit")(
@@ -1263,17 +1286,28 @@ int main(int argc, char** argv) {
       "dump-plies", po::value<std::string>(&dump_plies),
       "comma-separated plies to dump (default: all); requires --dump-gcg")(
       "dump-out", po::value<std::string>(&dump_out)->default_value(dump_out),
-      "output directory for dumped state JSON; requires --dump-gcg");
+      "output directory for dumped state JSON; requires --dump-gcg")(
+      "list-rack", po::value<std::string>(&list_rack),
+      "instead of dumping, print every legal play for this rack (e.g. RULIEST) "
+      "on the --list-ply board; requires --dump-gcg")(
+      "list-ply", po::value<int>(&list_ply)->default_value(list_ply),
+      "ply whose board --list-rack enumerates against");
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
 
-    // Headless mode: no WebSocket, no Vite -- just GCG in, state JSON out.
+    // Headless mode: no WebSocket, no Vite -- just GCG in, state JSON (or a move
+    // list) out.
     if (!dump_gcg.empty()) {
       scribblez::ManualGame game(dict);
-      scribblez::dump_states(game, scribblez::read_file(dump_gcg), dump_gcg, dump_plies, dump_out);
+      game.load_gcg_text(scribblez::read_file(dump_gcg), dump_gcg);
+      if (!list_rack.empty()) {
+        for (const std::string& mv : game.list_moves(list_ply, list_rack)) std::cout << mv << "\n";
+      } else {
+        scribblez::dump_states(game, dump_plies, dump_out);
+      }
       return 0;
     }
 
