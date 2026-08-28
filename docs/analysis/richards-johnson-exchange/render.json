@@ -26,23 +26,6 @@
       "caption": "Potential bingo spots"
     },
     {
-      "state": "states/plan/ply_23.json",
-      "out": "images/plan.png",
-      "hideRacks": [0],
-      "overlayTiles": [ { "row": 5, "col": 1, "letter": "A" } ],
-      "highlights": [
-        { "color": "rgba(0,150,136,0.9)", "label": "C-play, TW", "labelAt": [12,7],
-          "squares": [[11,7],[12,7],[13,7],[14,7]] },
-        { "color": "rgba(243,156,18,0.85)", "label": "A possible 3 letter outplay", "labelAt": [7,1],
-          "squares": [[6,1],[7,1]] }
-      ],
-      "legend": [
-        { "color": "rgba(0,150,136,0.9)", "text": "A C-play hooking CLOSE (LOSE -> CLOSE) down to the H15 triple: ~25-37" },
-        { "color": "rgba(243,156,18,0.85)", "text": "A possible 3-letter outplay: an A (at B6) alongside the Y of JUDY" }
-      ],
-      "caption": "Here Mike has already bingoed 14D RETAILS (hooking WOES). Nigel's plan: a CLOSE hook to the H15 triple once he draws the C, then the 3-letter out with an A at B6."
-    },
-    {
       "state": "states/allee/ply_23.json",
       "out": "images/allee-line.png",
       "hideRacks": [0],

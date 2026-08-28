@@ -114,15 +114,14 @@ Furthermore, Nigel's leave of **AN** has many good properties:
 
 ### The line it aims for
 
-Mike bingos (~70, Nigel down ~20). Nigel then scores around the bottom — or
-better, hits the triple with a **CLOSE hook** once he has the C. Mike, stuck
-with his junk EELLT-based rack, plays something small, and Nigel goes out with a
-**3-letter A-play alongside the Y of JUDY**.
+After Nigel's exchange, suppose Mike bingos with the WOES hook for ~70 points,
+putting Nigel down ~20. Nigel will very likely be able to:
 
-![Nigel's plan after the exchange -- move-locations marked, no tiles placed](images/plan.png)
+1. Use the H15 TW square to score well, either with the CLOSE hook, or by
+   playing a 3- or 4-letter word on the bottom row.
+2. Go out on his next move with a 3- or 4-letter word.
 
-The highlighted squares mark *where* those plays go: the C-play hooking CLOSE
-down to the H15 triple, and the out alongside the Y of JUDY.
+Holding the A gives Nigel extra flexibility, as it reserves the B lane for him.
 
 ## Why not ALLEE — the worst case
 
@@ -173,7 +172,6 @@ BIN=../../../target/engine/manual_gcg_tool
 #    The critical position:
 $BIN --dump-gcg game.gcg --dump-plies 21 --dump-out states
 #    The hypotheticals (variant GCGs branched at move 22):
-$BIN --dump-gcg variants/plan.gcg    --dump-plies 23 --dump-out states/plan
 $BIN --dump-gcg variants/allee.gcg   --dump-plies 23 --dump-out states/allee
 $BIN --dump-gcg variants/doubles.gcg --dump-plies 23 --dump-out states/doubles
 
@@ -185,9 +183,7 @@ The manifest (`render.json`) names each state, its output PNG, and optional
 extras: `caption`; `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen "?"
 tiles); `unseenFrom` (e.g. `1` adds the Nigel-POV unseen-tiles strip);
 `highlights` (groups of squares tinted with a color and an optional point-value
-label, for marking where plays could go *without* placing a tile); `legend`;
-and `overlayTiles` (illustrative tiles drawn onto the board, e.g. a hypothetical
-hook).
+label, for marking where plays could go *without* placing a tile); and `legend`.
 The variant GCGs in `variants/` were built with the tool's move-lister to get
 exact, legal coordinates:
 

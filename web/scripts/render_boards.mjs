@@ -101,9 +101,6 @@ async function main() {
         state.unseen = computeUnseen(state, item.unseenFrom);
         state.unseenLabel = state.player_names[item.unseenFrom];
       }
-      // "overlayTiles": [{row,col,letter}] draws illustrative tiles onto the
-      // board (e.g. a hypothetical hook) that are not part of the dumped state.
-      for (const t of item.overlayTiles ?? []) state.board[t.row][t.col] = t.letter;
       // "highlights"/"legend" annotate squares (no tiles placed) and explain them.
       if (item.highlights) state.highlights = item.highlights;
       if (item.legend) state.legend = item.legend;
