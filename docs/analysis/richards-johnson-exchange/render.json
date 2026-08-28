@@ -4,7 +4,15 @@
       "state": "states/ply_21.json",
       "out": "images/critical-position.png",
       "hideRacks": [0],
-      "caption": "Move 22 (Nigel to play, up 379-326). Rack AEELLNT, 7 tiles in the bag. Mike's rack is unseen."
+      "unseenFrom": 1,
+      "caption": "Move 22 (Nigel to play, up 379-326). Rack AEELLNT, 7 tiles in the bag, 14 unseen. Nigel exchanged EELLT, keeping AN."
+    },
+    {
+      "state": "states/allee/ply_23.json",
+      "out": "images/allee-line.png",
+      "hideRacks": [0],
+      "unseenFrom": 1,
+      "caption": "Why not ALLEE: after ALLEE (Nigel 395) and Mike's reply RULIEST (396), Nigel holds CEINNTT with only A,D unseen -- and cannot reach a triple with a CLOSE hook (his best is ENCLOSE for ~12). Mike's leftover A,D win."
     },
     {
       "state": "states/ply_24.json",

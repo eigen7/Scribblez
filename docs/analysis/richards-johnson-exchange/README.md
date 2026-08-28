@@ -13,11 +13,10 @@ The board images below are rendered by this repo's own board renderer (the
 manual GCG tool's `--dump-gcg` state dump feeding the `?tool=render` harness —
 see [Reproducing the images](#reproducing-the-images)).
 
-Credit for the analysis goes to Will Anderson and his fellow commentators in
-his YouTube breakdown of this game ([search: "Will Anderson Nigel Richards
-exchange"](https://www.youtube.com/results?search_query=will+anderson+nigel+richards+exchange));
-the game itself is [annotated on
-cross-tables](https://www.cross-tables.com/annotated.php?u=55430).
+Credit for the analysis goes to Will Anderson and his fellow commentators
+Morris Greenberg, Rafi Stern, and Josh Sokol in [his YouTube breakdown of this
+game](https://www.youtube.com/watch?v=p94DqHv3xk8); the game itself is
+[annotated on cross-tables](https://www.cross-tables.com/annotated.php?u=55430).
 
 ## The position
 
@@ -127,11 +126,20 @@ with his junk EELLT-based rack, plays something small → Nigel goes out with a
 Even when Nigel draws the C after ALLEE, it doesn't guarantee the game.
 Drawing the C is only about **5/7** after ALLEE (and that already assumes the C
 is in the bag), and even with it Nigel doesn't always have the high-scoring
-CLOSE hook. In one line Mike bingos in reply, Nigel is left with **CEINNTT** —
-which cannot reach the triple with the CLOSE hook — and Mike's leftover **AD**
-gives him unblockable outplays and the win. This is only an *illustration* that
-the C is not a guarantee, not the main argument; the main argument is the
-timing above.
+CLOSE hook.
+
+![The ALLEE line: Nigel stuck with CEINNTT](images/allee-line.png)
+
+The board above is one such line: Nigel plays **ALLEE** (to 395), Mike replies
+with the bingo **RULIEST** (to 396), and Nigel is left holding **CEINNTT** with
+only **A, D** unseen. He has a C — but with these letters his best CLOSE hook is
+**ENCLOSE for ~12**, nowhere near the triple he needs (the engine's whole move
+list for CEINNTT here tops out at 24). Mike then goes out with his leftover
+**A, D** and wins. (The unseen count reducing to just **A, D** is exactly the
+timing trap: ALLEE left only two tiles in the bag.)
+
+This is only an *illustration* that the C is not a guarantee, not the main
+argument; the main argument is the timing above.
 
 ## The YE\_ and double-S danger
 
@@ -169,15 +177,25 @@ The board images are generated entirely by this repo:
 
 ```bash
 cd docs/analysis/richards-johnson-exchange
+BIN=../../../target/engine/manual_gcg_tool
 
-# 1. Dump per-ply front-end state JSON straight from the GCG (no server):
-../../../target/engine/manual_gcg_tool --dump-gcg game.gcg \
-  --dump-plies 21,24,26 --dump-out states
+# 1. Dump per-ply front-end state JSON straight from the GCG (no server).
+#    The actual game:
+$BIN --dump-gcg game.gcg --dump-plies 21,24,26 --dump-out states
+#    The ALLEE hypothetical (a variant GCG branched at move 22):
+$BIN --dump-gcg variants/allee.gcg --dump-plies 23 --dump-out states/allee
 
 # 2. Rasterize the states to PNGs via the ?tool=render harness (headless Chromium):
 node ../../../web/scripts/render_boards.mjs render.json
 ```
 
-The manifest (`render.json`) names each state, its output PNG, an optional
-`caption`, and an optional `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen
-"?" tiles for the Nigel-POV figure).
+The manifest (`render.json`) names each state, its output PNG, and optional
+`caption`, `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen "?" tiles), and
+`unseenFrom` (e.g. `1` adds the Nigel-POV unseen-tiles strip). The variant GCGs
+in `variants/` were built with the tool's move-lister to get exact, legal
+coordinates:
+
+```bash
+# e.g. find where ALLEE plays for Nigel's rack at move 22:
+$BIN --dump-gcg game.gcg --list-ply 21 --list-rack AEELLNT   # -> "B6 ALLEE 16"
+```
