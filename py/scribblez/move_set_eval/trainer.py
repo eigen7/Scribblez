@@ -15,9 +15,10 @@ carry its reasoning.
 Each pass records losses and the held-out top-K recall / Spearman metrics to
 the tag's dashboard DB (the Loss tab's curves), publishes a stats sample (the
 Stats tab), and saves the rolling checkpoint -- pausing and restarting the
-worker resumes at the next pass. The learning rate follows the shared
-rows-clock WSD schedule (generational/controls.py). The generational consume->train
-lifecycle (docs/generational_teacher.md) replaces this loop when it lands.
+worker resumes at the next pass. The optimizer and its learning-rate policy are
+the run's `optimizer` arm (generational/optim.py), the same as position_eval's.
+The generational consume->train lifecycle (docs/generational_teacher.md)
+replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train); scripts/move_set_eval/train.py
@@ -25,6 +26,7 @@ remains the headless CLI for ad-hoc runs outside any tag.
 """
 
 import functools
+import itertools
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -34,12 +36,8 @@ import torch
 from scribblez.dashboard import db
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
-from scribblez.generational.controls import (
-    WsdLrController,
-    WsdSchedule,
-    init_controls,
-    progress_line,
-)
+from scribblez.generational.controls import init_controls, progress_line
+from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -177,22 +175,66 @@ def epochs_left(params, state: MsetTrainState) -> bool:
     return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
 
 
+# Board-input batches the schedule-free arm recomputes BatchNorm statistics over
+# before the checkpoint reads the model (optim.ScheduleFreeArm.eval_mode). As in
+# position_eval, a small forward-only prefix of a fresh pass suffices; the WSD
+# arm ignores them.
+BN_RECALIBRATION_BATCHES = 32
+
+
+def _rows_per_step(train_ds: MsetDataset, params) -> float:
+    """Mean training rows (candidate moves) per optimizer step: a batch holds
+    batch_positions positions, each contributing its candidate moves, and the
+    rows-clock counts those moves. build_optimizer needs this to size the
+    schedule-free warmup, whose lr_warmup_rows is on that candidate-move clock
+    while AdamWScheduleFree counts steps (the WSD arm reads lr_warmup_rows on
+    the rows-clock directly and ignores it)."""
+    return params.batch_positions * train_ds.num_candidates / max(train_ds.num_positions, 1)
+
+
+def _encode_board_only(model, spatial, scalar):
+    """Exercise the mset model's BatchNorm for recalibration. All of it lives in
+    the board trunk (encode_board); the move-scoring heads carry none and would
+    demand the candidate set the plain forward takes, so the board encode alone
+    is both sufficient and all that is runnable without one."""
+    model.encode_board(spatial, scalar)
+
+
+def _recalibration_batches(train_ds: MsetDataset, params, epoch: int, device):
+    """(spatial, scalar) board-input pairs for the schedule-free arm's BatchNorm
+    recalibration, drawn from the training pairs under a seed distinct from the
+    epoch's. A generator, so under the WSD arm -- whose eval_mode ignores it --
+    nothing is ever drawn."""
+    batches = train_ds.iter_batches(
+        params.batch_positions, seed=epoch * 1000003 + 1, epoch_index=epoch
+    )
+    for batch in itertools.islice(batches, BN_RECALIBRATION_BATCHES):
+        yield batch["input_spatial"].to(device), batch["input_scalar"].to(device)
+
+
 def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, settled: bool):
     """One pass over the training pairs, then held-out metrics, the dashboard
     metric record, the rolling checkpoint, and a stats sample. `settled` says
     whether the corpus was final for this pass, which is what decides if the
-    pass spends the epoch budget."""
+    pass spends the epoch budget.
+
+    The optimizer arm is switched to training weights around the epoch and to
+    deployable ones around everything the checkpoint step reads -- metrics,
+    ONNX export, saved state -- so a schedule-free run exports and scores the
+    averaged iterate it would deploy (a no-op under the WSD arm)."""
+    optim_arm = ctx["optim_arm"]
     epoch = state.generation_index
     batches = ctx["train_ds"].iter_batches(params.batch_positions, seed=0, epoch_index=epoch)
     t0 = time.time()
     rows_before = state.rows_trained
+    optim_arm.train_mode()
     result = run_epoch(
         model,
         optimizer,
         batches,
         device,
         ctx["loss_cfg"],
-        lr_fn=ctx["lr_controller"].lr_fn,
+        lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
     )
@@ -200,13 +242,18 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     state.generation_index = epoch + 1
     state.settled_epochs += int(settled)
     train_s = time.time() - t0
+    optim_arm.eval_mode(
+        model,
+        _recalibration_batches(ctx["train_ds"], params, epoch, device),
+        forward_fn=_encode_board_only,
+    )
 
     t1 = time.time()
     metrics = evaluate(model, ctx["holdout_ds"], device, positions_per_batch=params.batch_positions)
     eval_s = time.time() - t1
 
     avg = result.losses
-    lr_now = ctx["lr_controller"].current
+    lr_now = optim_arm.current
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
     # Whether the pass counted, so the log says which of the two phases the run
     # is in without the reader having to infer it from the corpus size.
@@ -242,6 +289,9 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         "spearman_baseline_acc": metrics["spearman_baseline"],
         "lr": lr_now,
         "elapsed_s": train_s,
+        # Whatever else the arm wants on the record -- for a schedule-free run
+        # the averaging weight, which is what anneals there in place of the rate.
+        **optim_arm.metrics(),
     }
     # The exchange-slice series (docs/roadmap.md A4 exchange analysis): named
     # without the _acc suffix, so they land on their own Training-tab figures
@@ -281,6 +331,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         units=state.rows_trained - rows_before,
         nbytes=0,
     )
+    optim_arm.train_mode()
 
 
 def run(ctx: WorkerContext) -> int:
@@ -309,9 +360,7 @@ def run(ctx: WorkerContext) -> int:
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=params.lr, weight_decay=params.weight_decay
-    )
+    optimizer = build_optimizer(model, params, _rows_per_step(train_ds, params))
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, ctx.tag, asdict(params), n_params)
@@ -347,9 +396,7 @@ def run(ctx: WorkerContext) -> int:
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
-    run_ctx["lr_controller"] = WsdLrController(
-        conn, WsdSchedule.from_params(params), state.rows_trained
-    )
+    run_ctx["optim_arm"] = build_optim_arm(conn, params, optimizer, state.rows_trained)
     try:
         clock = corpus_clock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):

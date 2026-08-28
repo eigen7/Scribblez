@@ -144,6 +144,68 @@ def test_scoring_is_independent_across_positions():
         start += k
 
 
+def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
+    """The schedule-free bracket on the real mset model, CPU-only: one step
+    trains the base iterate, eval_mode deploys the different averaged one, and
+    recalibrates the board trunk's BatchNorm for it through encode_board -- the
+    forward hook the trainer passes, since the model's BatchNorm is all in the
+    trunk and its plain forward would demand the candidate set."""
+    from types import SimpleNamespace
+
+    from scribblez.generational.optim import ScheduleFreeArm, build_optimizer
+    from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+    from scribblez.move_set_eval.trainer import _encode_board_only
+
+    batch = _ragged_batch([3, 5, 2, 8])
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        spatial_planes=batch["input_spatial"].shape[1],
+        scalar_size=batch["input_scalar"].shape[1],
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    params = SimpleNamespace(
+        optimizer=OPTIMIZER_SCHEDULE_FREE, lr=1e-3, weight_decay=1e-4, lr_warmup_rows=0
+    )
+    opt = build_optimizer(model, params, rows_per_step=64)
+    arm = ScheduleFreeArm(params, opt)
+
+    # float32 board + move inputs (the dataset emits float64 for tight equality
+    # checks elsewhere; the model runs in its default float32 here).
+    fwd = [
+        batch["input_spatial"].float(),
+        batch["input_scalar"].float(),
+        batch["move_letters"],
+        batch["move_blanks"],
+        batch["move_squares"],
+        batch["move_tile_mask"].float(),
+        batch["move_scalars"].float(),
+        batch["move_pos_id"],
+    ]
+    first_bn = next(m for m in model.modules() if isinstance(m, torch.nn.BatchNorm2d))
+
+    # A few steps: the averaged iterate is the single base iterate after one
+    # step, so it only diverges from the training weights once there are several.
+    arm.train_mode()
+    for _ in range(3):
+        opt.zero_grad()
+        out = model(*fwd)
+        sum(v.sum() for v in out.values()).backward()
+        opt.step()
+    trained = [p.detach().clone() for p in model.parameters()]
+    bn_at_training = first_bn.running_mean.clone()
+
+    board_batch = [(fwd[0], fwd[1])]
+    arm.eval_mode(model, board_batch, forward_fn=_encode_board_only)
+
+    # The deployed iterate differs from the trained one (the swap did something)
+    # and the trunk's running statistics were recomputed for it.
+    assert not all(torch.equal(a, b) for a, b in zip(trained, model.parameters(), strict=True))
+    assert not torch.equal(bn_at_training, first_bn.running_mean)
+
+
 @pytest.fixture(scope="module")
 def corpus_dir(tmp_path_factory) -> Path:
     """A tiny .slog corpus labeled with .mset targets from a small teacher."""

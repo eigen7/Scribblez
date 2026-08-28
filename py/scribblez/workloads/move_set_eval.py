@@ -48,6 +48,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
 from scribblez.selfplay import hasty_player_spec, run_games
@@ -149,7 +150,19 @@ class MoveSetEvalParams:
         "produces swept pairs, which are the holdout",
     )
     batch_positions: int = param(64, "positions per training batch")
-    lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
+    optimizer: str = param(
+        OPTIMIZER_SCHEDULE_FREE,
+        "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
+        "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
+        "no horizon to pick, every pass's export deployable",
+        choices=OPTIMIZERS,
+    )
+    lr: float = param(
+        0.0,
+        "learning rate -- the peak the warmup-stable-decay schedule decays away from under the "
+        "wsd arm, the constant the averaged iterate is taken around under schedule_free; "
+        "0 = the arm's own default",
+    )
     lr_warmup_rows: int = param(
         15_000_000,
         "linear LR warmup length, in candidate moves trained (this trainer's rows-clock; "
@@ -158,7 +171,8 @@ class MoveSetEvalParams:
     lr_cycle_rows: int = param(
         300_000_000,
         "period of the stable->decay->restart LR cycle, in candidate moves trained "
-        "(~10 reference passes; the last fifth of each cycle decays)",
+        "(~10 reference passes; the last fifth of each cycle decays); "
+        "unused by the schedule_free arm, which has no cycle",
     )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     num_blocks: int = param(10, "board-trunk residual blocks")
@@ -316,4 +330,5 @@ SPEC = WorkloadSpec(
     ),
     progress="scribblez.workloads.move_set_eval:progress",
     sync_data_dirs=(SLOGS_DIR,),
+    primary_params=("optimizer",),
 )
