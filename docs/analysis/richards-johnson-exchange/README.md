@@ -161,26 +161,6 @@ Now an S makes an out-bingo in two places — **WOES** (S at J14) and **YEETS**
 Exchanging rather than playing a word is what lets Nigel answer this, again
 through timing: after an exchange he will likely be able to outrace a bingo.
 
-## What the engines say — and what happened
-
-No engine approves of the exchange, because the decisive factors are
-pre-endgame *timing and blocking dynamics* that current engines don't evaluate.
-As Will Anderson's panel put it, this is a "human position" — and they suspect
-future engines will vindicate it.
-
-What actually happened is just one of countless ways the game could have gone,
-and is **not** in itself a vindication of the play:
-
-![Nigel drew the C and played CLAN](images/clan.png)
-
-Mike did *not* connect on a bingo and played out; Nigel drew the C and played
-**CLAN** — which makes **CLOSE** across row 12, exactly the hook the whole plan
-was built around — leaving one tile in the bag. Mike then bingoed **RELISTEN**,
-and Nigel answered with his own out-bingo **ENTAILER** (hooking the R) to win
-495-412.
-
-![Nigel goes out to win](images/final.png)
-
 ## Reproducing the images
 
 The board images are generated entirely by this repo:
@@ -190,9 +170,10 @@ cd docs/analysis/richards-johnson-exchange
 BIN=../../../target/engine/manual_gcg_tool
 
 # 1. Dump per-ply front-end state JSON straight from the GCG (no server).
-#    The actual game:
-$BIN --dump-gcg game.gcg --dump-plies 21,24,26 --dump-out states
+#    The critical position:
+$BIN --dump-gcg game.gcg --dump-plies 21 --dump-out states
 #    The hypotheticals (variant GCGs branched at move 22):
+$BIN --dump-gcg variants/plan.gcg    --dump-plies 23 --dump-out states/plan
 $BIN --dump-gcg variants/allee.gcg   --dump-plies 23 --dump-out states/allee
 $BIN --dump-gcg variants/doubles.gcg --dump-plies 23 --dump-out states/doubles
 
@@ -204,7 +185,9 @@ The manifest (`render.json`) names each state, its output PNG, and optional
 extras: `caption`; `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen "?"
 tiles); `unseenFrom` (e.g. `1` adds the Nigel-POV unseen-tiles strip);
 `highlights` (groups of squares tinted with a color and an optional point-value
-label, for marking where plays could go *without* placing a tile); and `legend`.
+label, for marking where plays could go *without* placing a tile); `legend`;
+and `overlayTiles` (illustrative tiles drawn onto the board, e.g. a hypothetical
+hook).
 The variant GCGs in `variants/` were built with the tool's move-lister to get
 exact, legal coordinates:
 

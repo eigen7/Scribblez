@@ -4,8 +4,7 @@
       "state": "states/ply_21.json",
       "out": "images/critical-position.png",
       "hideRacks": [0],
-      "unseenFrom": 1,
-      "caption": "Move 22 (Nigel to play, up 379-326). Rack AEELLNT, 7 tiles in the bag, 14 unseen. Nigel exchanged EELLT, keeping AN."
+      "unseenFrom": 1
     },
     {
       "state": "states/ply_21.json",
@@ -27,20 +26,21 @@
       "caption": "Potential bingo spots"
     },
     {
-      "state": "states/ply_21.json",
+      "state": "states/plan/ply_23.json",
       "out": "images/plan.png",
       "hideRacks": [0],
+      "overlayTiles": [ { "row": 5, "col": 1, "letter": "A" } ],
       "highlights": [
         { "color": "rgba(0,150,136,0.9)", "label": "C-play, TW", "labelAt": [12,7],
           "squares": [[11,7],[12,7],[13,7],[14,7]] },
-        { "color": "rgba(243,156,18,0.8)", "label": "out", "labelAt": [5,3],
-          "squares": [[5,3]] }
+        { "color": "rgba(243,156,18,0.85)", "label": "A possible 3 letter outplay", "labelAt": [7,1],
+          "squares": [[6,1],[7,1]] }
       ],
       "legend": [
         { "color": "rgba(0,150,136,0.9)", "text": "A C-play hooking CLOSE (LOSE -> CLOSE) down to the H15 triple: ~25-37" },
-        { "color": "rgba(243,156,18,0.8)", "text": "The 3-letter out, an A-play alongside the Y of JUDY" }
+        { "color": "rgba(243,156,18,0.85)", "text": "A possible 3-letter outplay: an A (at B6) alongside the Y of JUDY" }
       ],
-      "caption": "The plan after the exchange (no tiles placed): once Nigel draws the C, a CLOSE hook to the triple, then out alongside the Y."
+      "caption": "Here Mike has already bingoed 14D RETAILS (hooking WOES). Nigel's plan: a CLOSE hook to the H15 triple once he draws the C, then the 3-letter out with an A at B6."
     },
     {
       "state": "states/allee/ply_23.json",
@@ -64,16 +64,6 @@
         { "color": "rgba(142,68,173,0.78)", "text": "S-hook onto YEET -> YEETS: a bingo down column O to O8" }
       ],
       "caption": "If Nigel plays a word and Mike sets up 8K YEET (holding an S), Mike threatens a bingo ending in S in TWO places -- WOES and YEETS -- and Nigel cannot block both."
-    },
-    {
-      "state": "states/ply_24.json",
-      "out": "images/clan.png",
-      "caption": "What happened: Nigel drew the C and played H12 CLAN (making CLOSE across row 12), leaving one tile in the bag."
-    },
-    {
-      "state": "states/ply_26.json",
-      "out": "images/final.png",
-      "caption": "Mike bingos RELISTEN; Nigel answers with his own out-bingo ENTAILER (hooking the R) to win 495-412."
     }
   ]
 }
