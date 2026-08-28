@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { toBlob } from 'html-to-image';
+import { captureLayoutBlob } from './exportImage';
+import { ManualRackSlot, rackSlotToTile } from './manualState';
 import Board from './components/Board';
 import Rack from './components/Rack';
 import ScoreBoard from './components/ScoreBoard';
-import { DragTilePayload, PlacedTile, TileInfo } from './types';
+import { DragTilePayload, PlacedTile } from './types';
 
 type ManualDirection = 'horizontal' | 'vertical';
 // How much of the opponent's rack an exported GCG's #Rack lines reveal. The
@@ -12,20 +13,6 @@ type ManualDirection = 'horizontal' | 'vertical';
 type GcgOpponentRack = 'full' | 'leave' | 'hidden';
 type CandidateSource = { source: 'bag' } | { source: 'rack'; slot: number };
 type ManualCandidate = PlacedTile & CandidateSource;
-
-interface ManualRackSlot {
-  letter: string;
-  score: number;
-  known: boolean;
-  // Whether the player drew this tile after their own last move. Their leave
-  // and their replenishment are shaded apart, so a reviewed position shows at a
-  // glance which of the tiles they hold their last play accounts for.
-  drawn: boolean;
-  // Whether a tile occupies this slot at all. A present-but-unknown slot
-  // renders as a "?" tile (selectable for exchange); an absent slot renders as
-  // empty space.
-  present: boolean;
-}
 
 interface BagTile {
   letter: string;
@@ -66,13 +53,6 @@ function historyParts(text: string): { location: string; word: string } {
 interface UnseenSlot {
   letter: string;
   present: boolean;
-}
-
-function rackSlotToTile(slot: ManualRackSlot): TileInfo {
-  if (!slot.present) return { letter: '', score: 0, isAbsent: true };
-  if (!slot.known) return { letter: '?', score: 0, isUnknown: true };
-  if (slot.letter === '?') return { letter: '', score: 0, isBlank: true, isDrawn: slot.drawn };
-  return { letter: slot.letter, score: slot.score, isDrawn: slot.drawn };
 }
 
 const DISTRIBUTION: ReadonlyArray<readonly [string, number]> = [
@@ -667,16 +647,7 @@ function AppManual() {
     if (!node) return;
     return saveViaPicker(
       async () => {
-        const blob = await toBlob(node, {
-          pixelRatio: 2,
-          backgroundColor: getComputedStyle(document.body).backgroundColor || '#1a2632',
-          filter: (el: HTMLElement) =>
-            !(
-              el.classList?.contains('action-bar') ||
-              el.classList?.contains('manual-status') ||
-              el.classList?.contains('cursor-hint')
-            ),
-        });
+        const blob = await captureLayoutBlob(node);
         if (!blob) throw new Error('render failed');
         return blob;
       },
