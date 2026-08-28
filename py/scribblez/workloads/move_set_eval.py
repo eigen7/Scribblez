@@ -330,5 +330,15 @@ SPEC = WorkloadSpec(
     ),
     progress="scribblez.workloads.move_set_eval:progress",
     sync_data_dirs=(SLOGS_DIR,),
-    primary_params=("optimizer",),
+    # Shown up front by the new-tag form; the rest are advanced. The required
+    # teacher first, then the run's shape -- its information condition, epoch
+    # budget (a fixed horizon, unlike position_eval's open-ended run), corpus
+    # size, and optimizer arm.
+    primary_params=(
+        "teacher_model",
+        "face_up_leaves",
+        "train_epochs",
+        "target_pairs",
+        "optimizer",
+    ),
 )
