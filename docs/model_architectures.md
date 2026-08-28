@@ -78,6 +78,32 @@ training signal.
 `sd_std_fc` reads a **detached** `v`, so the std loss trains that stack alone —
 never the trunk, never the mean.
 
+### Tile-supply cross-attention (`use_supply_attention`)
+
+The placement heads need to gate a square's cross-check letters on whether those
+tiles are actually *available* — in the bag, the opponent's known leave, or the
+mover's own rack. The convolutional trunk learns this poorly: cross-checks are a
+per-square, per-letter **spatial** signal while availability is a global
+per-letter **scalar**, and the two meet only through the trunk's per-channel
+bias/FiLM injection. That composition is sample-expensive, so the model gates
+common tiles on availability but falls back to a fixed frequency prior for rare
+ones (e.g. a ~0.17 hook belief for a letter with zero copies unseen).
+
+`use_supply_attention` inserts one cross-attention block on the post-trunk
+feature map (`supply_attention.py`). Each of the 27 tiles becomes a **supply
+token** carrying its per-seat availability (mover rack / unseen pool / opp
+leave); every board square attends to the supply tokens, its **query** built
+from the square's trunk features *and* its raw 52-plane cross-check vector, so
+"which letters are legal here" is explicit and matches the tokens' learned
+letter identities. A square hooking on S/Y then reads S- and Y-supply directly
+and gates its placement belief on the graded counts — distinguishing
+"available to me" from "available to the opponent", which a single gated input
+plane cannot. The output projection is **zero-initialised**, so the block is
+inert at init: a strict superset of the no-attention model, matching the
+`use_film` convention. Off by default and wired only through `PositionEvalModel`;
+requires the open-leaves arm (`face_up_leaves`), which supplies the opp-leave
+block.
+
 ### Losses
 
 | Head | Target | Loss | Weight |

@@ -38,6 +38,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
+from scribblez.position_eval.supply_attention import TileSupplyAttention
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
@@ -66,6 +67,7 @@ class PositionEvalModel(nn.Module):
         board_size: int = 15,
         lexicon_module: nn.Module | None = None,
         use_film: bool = False,
+        use_supply_attention: bool = False,
     ):
         super().__init__()
         self.board_size = board_size
@@ -80,6 +82,15 @@ class PositionEvalModel(nn.Module):
             num_blocks,
             lexicon_module=lexicon_module,
             use_film=use_film,
+        )
+
+        # Optional tile-supply cross-attention: refines the post-trunk feature map
+        # by letting each square attend to per-letter availability tokens, so the
+        # placement heads can gate a square's cross-check letters on whether those
+        # tiles are actually available (see supply_attention.py). Zero-initialised,
+        # so it is inert at init -- a strict superset of the no-attention model.
+        self.supply_attention = (
+            TileSupplyAttention(trunk_channels, scalar_size) if use_supply_attention else None
         )
 
         # --- Heads ---
@@ -146,6 +157,11 @@ class PositionEvalModel(nn.Module):
         # Shared conv trunk (s, the scalar projection, is reused by the value
         # heads below).
         x, s = self.trunk(input_spatial, input_scalar)
+
+        # Optional tile-supply cross-attention refines the feature map before the
+        # heads read it, so placement (and value) reflect letter availability.
+        if self.supply_attention is not None:
+            x = self.supply_attention(x, input_spatial, input_scalar)
 
         # Value summary: mean+max board pooling concatenated with the scalar
         # projection, so the heads see global board context and the raw scalars.
