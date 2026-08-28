@@ -22,6 +22,37 @@ interface RenderState {
   // POV player's name for the label. Filled in by the render driver.
   unseen?: string[];
   unseenLabel?: string;
+  // Optional annotation overlay: groups of squares to tint (no tile placed),
+  // each with a color and an optional point-value label anchored at `labelAt`
+  // (defaulting to the group's first square). For marking where plays could go.
+  highlights?: {
+    squares: [number, number][];
+    color: string;
+    label?: string;
+    labelAt?: [number, number];
+  }[];
+  // Optional legend rows drawn under the board (swatch + text) explaining the
+  // highlight colors.
+  legend?: { color: string; text: string }[];
+}
+
+const DIM = 15;
+
+// Turn the RenderState highlight groups into the per-cell grid <Board> draws:
+// every square in a group takes the group color; the label lands on the group's
+// `labelAt` square (or its first square).
+function buildCellHighlights(
+  groups: NonNullable<RenderState['highlights']>,
+): ({ color: string; label?: string } | null)[][] {
+  const grid: ({ color: string; label?: string } | null)[][] = Array.from({ length: DIM }, () =>
+    Array.from({ length: DIM }, () => null),
+  );
+  for (const group of groups) {
+    for (const [r, c] of group.squares) grid[r][c] = { color: group.color };
+    const [lr, lc] = group.labelAt ?? group.squares[0];
+    if (lr !== undefined) grid[lr][lc] = { color: group.color, label: group.label };
+  }
+  return grid;
 }
 
 declare global {
@@ -103,6 +134,7 @@ export default function RenderBoard() {
   if (!state) return <div className="render-missing">No render state provided.</div>;
 
   const lastMoveCells = new Set((state.last_move ?? []).map(([r, c]) => `${r},${c}`));
+  const cellHighlights = state.highlights ? buildCellHighlights(state.highlights) : undefined;
 
   return (
     <div className="render-root">
@@ -120,6 +152,7 @@ export default function RenderBoard() {
           onCellClick={NOOP}
           onCellDrop={NOOP}
           lastMoveCells={lastMoveCells}
+          cellHighlights={cellHighlights}
         />
         <RackRow slots={state.racks[0]} name={state.player_names[0]} score={state.scores[0]} top={false} />
         {state.unseen && state.unseen.length > 0 && (
@@ -132,6 +165,16 @@ export default function RenderBoard() {
                 <span className="render-unseen-tile" key={i}>{letter}</span>
               ))}
             </div>
+          </div>
+        )}
+        {state.legend && state.legend.length > 0 && (
+          <div className="render-legend">
+            {state.legend.map((row, i) => (
+              <div className="render-legend-row" key={i}>
+                <span className="render-legend-swatch" style={{ backgroundColor: row.color }} />
+                <span>{row.text}</span>
+              </div>
+            ))}
           </div>
         )}
         {state.caption && <div className="render-caption">{state.caption}</div>}

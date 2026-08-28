@@ -101,6 +101,9 @@ async function main() {
         state.unseen = computeUnseen(state, item.unseenFrom);
         state.unseenLabel = state.player_names[item.unseenFrom];
       }
+      // "highlights"/"legend" annotate squares (no tiles placed) and explain them.
+      if (item.highlights) state.highlights = item.highlights;
+      if (item.legend) state.legend = item.legend;
       // Blank a seat's rack to 7 unseen "?" tiles (a player-POV view): e.g.
       // "hideRacks": [0] hides Mike's rack in a Nigel-POV figure.
       for (const seat of item.hideRacks ?? []) {

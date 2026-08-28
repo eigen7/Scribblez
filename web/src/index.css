@@ -175,6 +175,34 @@ h1 {
   inset: 0;
 }
 
+/* Solid-fill overlay marking a square a play could reach, drawn with no tile on
+   it. The color (with its own alpha) comes inline; a `has-highlight` cell is
+   lifted so an overflowing label reads above neighboring squares. */
+.board-cell.has-highlight {
+  z-index: 3;
+}
+.board-cell-highlight {
+  position: absolute;
+  inset: 1px;
+  border-radius: 2px;
+  /* A faint light border delineates the tinted square from the board (also
+     green), so a highlight reads even when its color is close to the board. */
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.board-cell-highlight-label {
+  position: absolute;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  z-index: 6;
+  pointer-events: none;
+}
+
 /* Rack */
 .rack {
   margin-top: 12px;
@@ -1379,6 +1407,25 @@ h1 {
   border-radius: 4px;
   font-weight: 700;
   font-size: 15px;
+}
+.render-legend {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.render-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ecf0f1;
+  font-size: 14px;
+}
+.render-legend-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 .render-caption {
   margin-top: 14px;
