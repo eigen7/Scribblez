@@ -10,11 +10,13 @@ shape with the trajectory phase in front of the labeling.
 
 The trajectory generator sims, at each sampled position, the sequential loop
 the deployed agent will run: the greedy anchor, then temperature-softmax
-proposals from the tag's frozen `proposer_model` (a move-set-eval student
-export), then one uniform-random tail draw -- each candidate under common
-random numbers -- and records the ordered candidates with their sim outcomes
-(docs/sim_residual_feedback.md, "Evidence-trajectory generation"). The .sobs
-is both the evidence input (any prefix of the proposer picks) and the training
+on-policy picks from the tag's frozen `proposer_model` (a move-set-eval student
+export), then a stratified off-policy floor (rank-based strata plus a uniform
+draw over the full legal-move list) -- each candidate under common random
+numbers -- and records the ordered candidates with their sim outcomes and
+evidence role (docs/sim_residual_feedback.md, "Evidence-trajectory
+generation"). The .sobs is both the evidence input (any prefix of the anchor
+and on-policy picks) and the training
 target (each held-out simmed candidate's sim value and its CRN-paired gain over
 the prefix's best-so-far); the trainer reads no teacher labels.
 

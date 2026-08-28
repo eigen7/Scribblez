@@ -539,7 +539,7 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
   Threads::Threads)
 
 # Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
-# candidate selection (anchor, student-model proposals, uniform tail) simmed
+# candidate selection (anchor, on-policy picks, off-policy draws) simmed
 # per decision point. The library is the position-level recipe over the
 # student model; the generator supplies decision points from .slog self-play
 # data or .gcg position sets and writes trajectory .sobs sidecars.
