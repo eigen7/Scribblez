@@ -1,0 +1,20 @@
+{
+  "states": [
+    {
+      "state": "states/ply_21.json",
+      "out": "images/critical-position.png",
+      "hideRacks": [0],
+      "caption": "Move 22 (Nigel to play, up 379-326). Rack AEELLNT, 7 tiles in the bag. Mike's rack is unseen."
+    },
+    {
+      "state": "states/ply_24.json",
+      "out": "images/clan.png",
+      "caption": "What happened: Nigel drew the C and played CLAN (making CLOSE across row 12), leaving one tile in the bag."
+    },
+    {
+      "state": "states/ply_26.json",
+      "out": "images/final.png",
+      "caption": "Mike bingos RELISTEN; Nigel answers with his own out-bingo ENTAILER (hooking the R) to win 495-412."
+    }
+  ]
+}
