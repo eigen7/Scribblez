@@ -114,10 +114,17 @@ def save_task(spec: WorkloadSpec, task: TaskRecord):
 
 def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
     """Validate params against the workload's schema and persist a fresh task.
-    Raises params.ParamsError on bad values, AssertionError on a taken tag."""
+    Raises params.ParamsError on bad values, AssertionError on a taken tag.
+
+    A workload's `finalize` hook (WorkloadSpec.finalize) runs after validation,
+    on the typed params: its last chance to resolve derived fields before they
+    are frozen, since task.json is re-read verbatim on every worker start with
+    no dynamic step."""
     assert tag and all(c.isalnum() or c in "._-" for c in tag), f"invalid tag name '{tag}'"
     assert load_task(spec, tag) is None, f"tag '{tag}' already has a task"
     validated = params_mod.validate(spec.params_cls, raw_params)
+    if spec.finalize:
+        validated = resolve(spec.finalize)(spec, tag, validated)
     task = TaskRecord(workload=spec.name, tag=tag, params=asdict(validated), created_at=time.time())
     save_task(spec, task)
     return task

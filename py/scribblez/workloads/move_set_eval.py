@@ -7,12 +7,15 @@ left), then delivery of every complete pair to the tag's slogs/ store -- the
 same cycle shape as kill_test, with the sim tool swapped for the distillation
 target generator.
 
-The teacher is the tag's frozen `teacher_model` param: an ONNX exported by a
-position-eval training run, read in place. Every worker on a tag must read the
-same model bytes -- the generator stamps the teacher's content hash into each
-.mset, and MsetDataset refuses a corpus with mixed hashes -- which the frozen
-param provides as long as the file it names is never overwritten (models/
-exports are write-once, so pointing at one is safe).
+The teacher is a position-eval tag, named by the frozen `teacher_tag` param and
+pinned at task creation (`finalize`) to a concrete exported generation
+(`teacher_generation` -- the tag's latest export when left at -1); its ONNX is
+read in place. Every worker on a tag must
+read the same model bytes -- the generator stamps the teacher's content hash
+into each .mset, and MsetDataset refuses a corpus with mixed hashes -- which the
+pinned generation provides: position-eval exports are write-once, and pinning at
+creation stops a worker that restarts after a newer generation lands from
+resolving a different model and splitting the corpus's teacher hash.
 
 The generate role is GPU and local-only for now: the teacher runs under
 TensorRT, which the cloud worker image cannot host yet (the GPU-workloads item
@@ -42,15 +45,19 @@ growing-corpus loop (roadmap A3 slice 1); the generational consume->train
 lifecycle is docs/generational_teacher.md.
 """
 
+import dataclasses
+import functools
 import sys
 import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribblez import params as params_mod
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
+from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import mset_targets, pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
@@ -69,10 +76,18 @@ class MoveSetEvalParams:
     knobs (thread count) live on the slots.
     """
 
-    teacher_model: str = param(
+    teacher_tag: str = param(
         "",
-        "absolute path to the teacher position-eval ONNX (e.g. a position_eval tag's "
-        "models/model_epoch_NNNN.onnx); required, and must never be overwritten in place",
+        "name of the position_eval tag whose exported model is the teacher; required. "
+        "One of its exported generations at task creation is pinned as the teacher (the "
+        "latest, unless teacher_generation names one), so the tag must already hold an export",
+    )
+    teacher_generation: int = param(
+        -1,
+        "which exported generation of teacher_tag to distill from; -1 = its latest export at "
+        "task creation (generations count from 0, so -1 is the 'latest' sentinel). Resolved to "
+        "a concrete generation then and frozen, so every worker (and every restart) reads the "
+        "one teacher the corpus's .mset hash was stamped with",
     )
     games_per_batch: int = param(200, "self-play games per generation cycle")
     positions_per_game: int = param(0, "eligible turns targeted per game (0 = every eligible turn)")
@@ -191,6 +206,57 @@ class CycleResult:
     mset_seconds: float  # target-generator wall time
 
 
+def _teacher_paths(params: MoveSetEvalParams, mount_root=None) -> TagPaths:
+    """The position_eval tag `params.teacher_tag` lives in."""
+    return TagPaths(params.teacher_tag, POSITION_EVAL, *([mount_root] if mount_root else []))
+
+
+def resolved_teacher_generation(params: MoveSetEvalParams, mount_root=None) -> int:
+    """The concrete teacher generation for `params`: the one it pins (any
+    generation >= 0), or -- when unpinned (the -1 sentinel) -- the tag's latest
+    export. Generations count from 0, so 0 is a real pinnable generation and -1
+    is what means "latest"; conflating the two would leave a tag whose latest
+    export is generation 0 unpinned. Raises ParamsError if teacher_tag is unset
+    or the tag holds no export to distill from."""
+    if not params.teacher_tag:
+        raise params_mod.ParamsError("teacher_tag is required")
+    if params.teacher_generation < -1:
+        raise params_mod.ParamsError(
+            f"teacher_generation must be a generation index (>= 0) or -1 for the latest, "
+            f"got {params.teacher_generation}"
+        )
+    if params.teacher_generation >= 0:
+        return params.teacher_generation
+    gens = _teacher_paths(params, mount_root).exported_generations()
+    if not gens:
+        raise params_mod.ParamsError(
+            f"position_eval tag '{params.teacher_tag}' has no exported model to distill from"
+        )
+    return max(gens)
+
+
+def teacher_onnx(params: MoveSetEvalParams, mount_root=None) -> Path:
+    """The teacher ONNX for `params`' (teacher_tag, teacher_generation) -- the
+    model the generator labels against, read in place from the position_eval
+    tag's models/ dir."""
+    return _teacher_paths(params, mount_root).onnx_path(
+        resolved_teacher_generation(params, mount_root)
+    )
+
+
+def finalize(spec: WorkloadSpec, tag: str, params: MoveSetEvalParams) -> MoveSetEvalParams:
+    """Pin the teacher to a concrete exported generation at task creation, so
+    every generate worker -- and every restart -- reads the same teacher ONNX
+    bytes (MsetDataset's single-hash guard). Fails here, where the operator sees
+    it, if the named tag has no matching export."""
+    generation = resolved_teacher_generation(params)
+    if not _teacher_paths(params).onnx_path(generation).is_file():
+        raise params_mod.ParamsError(
+            f"position_eval tag '{params.teacher_tag}' has no generation {generation} exported"
+        )
+    return dataclasses.replace(params, teacher_generation=generation)
+
+
 def sweep_pair(stem: str, sweep_every: int) -> bool:
     """Whether the pair with this .slog stem is labeled as a full sweep.
 
@@ -204,16 +270,16 @@ def sweep_pair(stem: str, sweep_every: int) -> bool:
     return zlib.crc32(stem.encode()) % sweep_every == 0
 
 
-def label_pending(pending: list[Path], params: MoveSetEvalParams, threads: int) -> int:
+def label_pending(pending: list[Path], params: MoveSetEvalParams, threads: int, model: str) -> int:
     """Label `pending` .slog files, one generator run per selection mode over
-    the files that mode claims."""
+    the files that mode claims, against the teacher ONNX at `model`."""
     stratified = [s for s in pending if not sweep_pair(s.stem, params.sweep_every)]
     swept = [s for s in pending if sweep_pair(s.stem, params.sweep_every)]
     rc = 0
     if stratified:
         rc = mset_targets.label_stratified(
             stratified,
-            params.teacher_model,
+            model,
             mset_targets.StratifiedQuotas.from_params(params),
             params.positions_per_game,
             threads,
@@ -221,7 +287,7 @@ def label_pending(pending: list[Path], params: MoveSetEvalParams, threads: int) 
     if rc == 0 and swept:
         rc = mset_targets.label_full_sweep(
             swept,
-            params.teacher_model,
+            model,
             params.sweep_candidate_cap,
             params.sweep_positions_per_game,
             threads,
@@ -229,8 +295,11 @@ def label_pending(pending: list[Path], params: MoveSetEvalParams, threads: int) 
     return rc
 
 
-def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> CycleResult:
-    """One generation cycle into `out_dir`, with per-phase wall times."""
+def run_one_cycle(
+    out_dir: Path, params: MoveSetEvalParams, threads: int, model: str
+) -> CycleResult:
+    """One generation cycle into `out_dir`, labeling against the teacher ONNX at
+    `model`, with per-phase wall times."""
     t0 = time.monotonic()
     rc = run_games(
         out_dir,
@@ -249,22 +318,31 @@ def run_one_cycle(out_dir: Path, params: MoveSetEvalParams, threads: int) -> Cyc
     if not pending:
         return CycleResult(0, gen_seconds, 0.0)
     t1 = time.monotonic()
-    rc = label_pending(pending, params, threads)
+    rc = label_pending(pending, params, threads, model)
     return CycleResult(rc, gen_seconds, time.monotonic() - t1)
 
 
-def _cycle(work_dir: Path, params: MoveSetEvalParams, threads: int) -> tuple[int, dict]:
-    """One cycle in the shared generate loop's (returncode, phases) shape."""
-    r = run_one_cycle(work_dir, params, threads)
+def _cycle(model: str, work_dir: Path, params: MoveSetEvalParams, threads: int) -> tuple[int, dict]:
+    """One cycle in the shared generate loop's (returncode, phases) shape. `model`
+    is bound by run_generate; the loop supplies (work_dir, params, threads)."""
+    r = run_one_cycle(work_dir, params, threads, model)
     return r.returncode, {"gen_s": r.gen_seconds, "mset_s": r.mset_seconds}
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner (the shared pair-store loop over run_one_cycle)."""
-    if not mset_targets.require_model_file(ctx.params.teacher_model, "teacher_model"):
+    """The generate-role runner (the shared pair-store loop over run_one_cycle).
+
+    The teacher is resolved once, here: every cycle labels against the same
+    pinned ONNX, so the corpus's stamped teacher hash stays single."""
+    model = str(teacher_onnx(ctx.params))
+    if not mset_targets.require_model_file(model, "teacher model"):
         return 1
     return pair_store.run_pair_generate(
-        ctx, _cycle, ".mset", SLOGS_DIR, target_pairs=ctx.params.target_pairs
+        ctx,
+        functools.partial(_cycle, model),
+        ".mset",
+        SLOGS_DIR,
+        target_pairs=ctx.params.target_pairs,
     )
 
 
@@ -330,12 +408,14 @@ SPEC = WorkloadSpec(
     ),
     progress="scribblez.workloads.move_set_eval:progress",
     sync_data_dirs=(SLOGS_DIR,),
+    # Pin the teacher's generation before the params are frozen into task.json.
+    finalize="scribblez.workloads.move_set_eval:finalize",
     # Shown up front by the new-tag form; the rest are advanced. The required
     # teacher first, then the run's shape -- its information condition, epoch
     # budget (a fixed horizon, unlike position_eval's open-ended run), corpus
     # size, and optimizer arm.
     primary_params=(
-        "teacher_model",
+        "teacher_tag",
         "face_up_leaves",
         "train_epochs",
         "target_pairs",

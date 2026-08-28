@@ -9,9 +9,10 @@ proposal — not yet built; the implementation plan is at the end.
 
 ## Motivation
 
-The distillation pipeline ([roadmap.md](roadmap.md) A2/A3) freezes a
-`teacher_model` param per tag, and the roadmap's original stance was that
-refreshing the teacher means a new tag and a full corpus regeneration. That
+The distillation pipeline ([roadmap.md](roadmap.md) A2/A3) freezes its teacher
+(the `teacher_tag`/`teacher_generation` params) per tag, and the roadmap's
+original stance was that refreshing the teacher means a new tag and a full
+corpus regeneration. That
 is the wrong shape for the loop this project is building toward: the
 position-eval model improves as its own training run advances, and the
 student should track it — an AlphaZero-style cycle where a better
@@ -41,9 +42,9 @@ Two facts make teacher refresh cheap enough to do routinely:
 
 ## The teacher record
 
-`teacher_model` (frozen param) is replaced by a per-tag mutable **teacher
-record**, `teacher.json` under the tag root, controller-owned, written
-atomically:
+The frozen teacher (the `teacher_tag`/`teacher_generation` params) is replaced
+by a per-tag mutable **teacher record**, `teacher.json` under the tag root,
+controller-owned, written atomically:
 
 ```json
 {"epoch": 3,

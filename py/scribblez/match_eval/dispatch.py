@@ -63,10 +63,6 @@ def _rel(paths: TagPaths, path: Path) -> str:
     return str(path.relative_to(paths.root))
 
 
-def exported_generations(paths: TagPaths) -> list[int]:
-    return sorted(paths.onnx_epoch(p) for p in paths.onnx_dir.glob(f"{ONNX_PREFIX}*.onnx"))
-
-
 def recorded_generations(conn) -> set[int]:
     """Generations whose match is in the database."""
     return {r["epoch"] for r in conn.execute("SELECT epoch FROM match_eval")}
@@ -76,7 +72,7 @@ def pending_generation(paths: TagPaths, recorded: set[int], every: int) -> int |
     """The newest exported generation that is due a match and has none. Newest
     first keeps the readout tracking the training frontier; older stragglers
     backfill on later cycles."""
-    pending = [g for g in exported_generations(paths) if g % every == 0 and g not in recorded]
+    pending = [g for g in paths.exported_generations() if g % every == 0 and g not in recorded]
     return max(pending) if pending else None
 
 
