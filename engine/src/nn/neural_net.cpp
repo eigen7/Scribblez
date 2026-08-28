@@ -211,12 +211,26 @@ struct NeuralNetBase::Impl {
   std::vector<Binding> bindings;
 
   // Read off the deserialized engine's declared board input shapes and the
-  // model's own ONNX metadata_props.
+  // model's own ONNX metadata_props. spatial/scalar stay 0 for a graph with no
+  // board inputs (the move-proposal step graph); channels stays 0 unless the
+  // spec names a channels_tensor.
   int spatial_planes = 0;
   int scalar_floats = 0;
+  int channels = 0;
   bool opp_leave_input = false;
 
   int last_rows = -1;
+
+  // The binding named `name`, or null if the engine exposes no such tensor --
+  // for the reads that are conditional on a family declaring the tensor at all
+  // (the board inputs, the channels handoff), where binding()'s throw is not
+  // the wanted behavior.
+  const Binding* find_binding(const char* name) const {
+    for (const Binding& b : bindings) {
+      if (b.name == name) return &b;
+    }
+    return nullptr;
+  }
 };
 
 NeuralNetBase::Impl::~Impl() {
@@ -381,8 +395,16 @@ void NeuralNetBase::Impl::allocate_buffers() {
   // before an encoder layout change.
   check_required_layout(params.onnx_path, BindingLookup(*this), spec.tensors);
 
-  spatial_planes = engine->getTensorShape(SpatialInput::kName).d[1];
-  scalar_floats = engine->getTensorShape(ScalarInput::kName).d[1];
+  // The board-row widths, for a family that consumes board inputs; the
+  // move-proposal step graph takes none (its board arrives pre-encoded as a
+  // handoff tensor), so leave them 0 rather than read a nonexistent tensor.
+  if (find_binding(SpatialInput::kName)) {
+    spatial_planes = engine->getTensorShape(SpatialInput::kName).d[1];
+    scalar_floats = engine->getTensorShape(ScalarInput::kName).d[1];
+  }
+  // The trunk channel width, off the spec's named handoff tensor's per-row
+  // width (move_enc is (M, C), so its row elements ARE C).
+  if (spec.channels_tensor) channels = binding(spec.channels_tensor).elems_per_row;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +484,7 @@ void NeuralNetBase::load() {
 int NeuralNetBase::max_rows() const { return impl_->params.max_rows; }
 int NeuralNetBase::spatial_planes() const { return impl_->spatial_planes; }
 int NeuralNetBase::scalar_floats() const { return impl_->scalar_floats; }
+int NeuralNetBase::channels() const { return impl_->channels; }
 bool NeuralNetBase::opp_leave_input() const { return impl_->opp_leave_input; }
 
 void* NeuralNetBase::host_ptr(const char* name) const { return impl_->binding(name).host; }

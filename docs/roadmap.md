@@ -222,13 +222,28 @@ the leaf value stands for everything after. The horizon is set structurally
 
 ### 3. Engine runtime for the evidence path
 
-- **ONNX export** of the move proposal model, split so the cached parts
-  (trunk, move encodings, evidence-free predictions) are computed once per
-  turn and only the fusion stage plus re-scoring run per loop iteration.
-  Outputs must be bit-identical to a full recompute.
-- **Engine-side evidence staging**: `SimObservation` → model input, alongside
-  the stored per-candidate predicted planes.
-- Extends `MoveSetEvaluationSpec` or lands as a second spec beside it.
+**Done** — the move proposal model runs incrementally in the engine as two
+graphs, delivered over three PRs:
+
+- **Split ONNX export** (`py/scribblez/move_set_eval/proposal_export.py`): a
+  `move_proposal_cache` graph (trunk, move encodings, evidence-free
+  predictions, computed once per turn) and a `move_proposal_step` graph (the
+  fusion stage plus re-scoring, run per loop iteration over the cache tensors).
+  Their composition is asserted bit-identical to `MoveSetEvalModel.forward` in
+  PyTorch (`test_move_set_eval_evidence.py`); across independently built
+  TensorRT plans it is tolerance-bounded, not bitwise.
+- **Engine-side evidence staging** (`agent/evidence_staging.h`):
+  `SimObservation` + `Move` + the cache's per-candidate predictions →
+  the fusion stage's padded `(1, E, …)` inputs.
+- **Two specs beside `MoveSetEvaluationSpec`** (`MoveProposalCacheSpec` /
+  `MoveProposalStepSpec`) driven by a shared `agent/move_proposal_runtime.h`
+  helper — served at FP32, driving `NeuralNet<Spec>` directly (the handoff
+  tensors do not fit `TrtEvalService`'s row-uniform decode). Verified against
+  the PyTorch reference over empty/partial/full evidence sets by
+  `test_proposal_inference_parity.cpp`, with `proposal_infer_smoke` for GPU
+  liveness.
+
+The sequential *playing* agent that drives this loop is item 6.
 
 Moved ahead of data generation: the revised recipe's on-policy side (item 4)
 *is* the deployment loop, so the generator needs this runtime before the
