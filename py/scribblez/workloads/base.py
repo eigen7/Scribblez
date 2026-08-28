@@ -84,6 +84,11 @@ class WorkloadSpec:
     # Dotted path to progress(spec, tag) -> list[(label, value)]: the counters
     # shown in the tag listing and the task Overview.
     progress: str = ""
+    # Dotted path to finalize(spec, tag, params) -> params: a creation-time step
+    # that resolves derived/pinned fields before the params are frozen into
+    # task.json -- e.g. pinning a "latest" reference to a concrete generation so
+    # it cannot drift under a later worker restart. "" leaves params as validated.
+    finalize: str = ""
     # data/ subdirectories cloud workers deliver into; cloud_sync pulls exactly
     # these bucket prefixes (plus stats/ and params/) down to the local mount.
     sync_data_dirs: tuple[str, ...] = ()

@@ -2,13 +2,32 @@
 pair-store delivery it uses."""
 
 import numpy as np
+import pytest
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.move_set_eval import targets as T
 from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, MSET_MAGIC, MSET_VERSION
+from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.workloads import move_set_eval, mset_targets, pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SPEC, MoveSetEvalParams
+
+
+def _teacher_under(monkeypatch, mount_root):
+    """Point teacher resolution at a position_eval tag tree under `mount_root`,
+    so a test can stand one up without writing to the real mount."""
+    monkeypatch.setattr(
+        move_set_eval,
+        "_teacher_paths",
+        lambda params, mr=None: TagPaths(params.teacher_tag, POSITION_EVAL, mount_root=mount_root),
+    )
+
+
+def _write_teacher_export(mount_root, tag, generation):
+    """Create an exported-ONNX file for a position_eval tag under `mount_root`."""
+    models = TagPaths(tag, POSITION_EVAL, mount_root=mount_root).onnx_dir
+    models.mkdir(parents=True, exist_ok=True)
+    TagPaths(tag, POSITION_EVAL, mount_root=mount_root).onnx_path(generation).touch()
 
 
 def write_empty_pair(store, stem, flags=0):
@@ -44,10 +63,10 @@ def test_workload_is_registered_with_a_valid_schema():
     spec = workloads.get("move_set_eval")
     assert spec is SPEC
     fields = {f.name: f for f in params_mod.schema(MoveSetEvalParams)}
-    assert fields["teacher_model"].kind == "str"
-    env = spec.worker_env("t", MoveSetEvalParams(teacher_model="/x/teacher.onnx"), "generate")
-    assert env["SCZ_TEACHER_MODEL"] == "/x/teacher.onnx"
-    assert params_mod.from_env(MoveSetEvalParams, env).teacher_model == "/x/teacher.onnx"
+    assert fields["teacher_tag"].kind == "str"
+    env = spec.worker_env("t", MoveSetEvalParams(teacher_tag="face-up-official"), "generate")
+    assert env["SCZ_TEACHER_TAG"] == "face-up-official"
+    assert params_mod.from_env(MoveSetEvalParams, env).teacher_tag == "face-up-official"
 
 
 def test_train_role_is_registered():
@@ -144,7 +163,6 @@ def test_target_generator_command(tmp_path, monkeypatch):
     monkeypatch.setattr(mset_targets.subprocess, "run", fake_run)
     # Distinct values per field, so a flag wired to the wrong param fails.
     p = MoveSetEvalParams(
-        teacher_model="/models/teacher.onnx",
         quota_top=5,
         quota_mid=6,
         quota_tail=7,
@@ -152,9 +170,10 @@ def test_target_generator_command(tmp_path, monkeypatch):
         mid_rank_limit=24,
         positions_per_game=9,
     )
+    model = "/models/teacher.onnx"
     slogs = [tmp_path / "a.slog", tmp_path / "b.slog"]
     quotas = mset_targets.StratifiedQuotas.from_params(p)
-    rc = mset_targets.label_stratified(slogs, p.teacher_model, quotas, p.positions_per_game, 8)
+    rc = mset_targets.label_stratified(slogs, model, quotas, p.positions_per_game, 8)
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[0] == mset_targets.TARGET_GENERATOR
@@ -173,7 +192,7 @@ def test_target_generator_command(tmp_path, monkeypatch):
         assert f"{flag}={value}" in cmd
     assert "--full-sweep" not in cmd and "--sobs" not in cmd
 
-    mset_targets.label_stratified(slogs, p.teacher_model, quotas, 9, 8, with_sobs=True)
+    mset_targets.label_stratified(slogs, model, quotas, 9, 8, with_sobs=True)
     assert "--sobs" in captured["cmd"]
 
 
@@ -237,7 +256,7 @@ def test_cycle_targets_only_slogs_missing_their_sidecar(tmp_path, monkeypatch):
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
     rec = _LabelRecorder(monkeypatch)
-    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2, model="t.onnx")
     assert result.returncode == 0
     assert sorted(s for _, stems in rec.runs for s in stems) == ["fresh", "old_pending"]
 
@@ -253,7 +272,8 @@ def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypat
 
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
     rec = _LabelRecorder(monkeypatch)
-    assert move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2).returncode == 0
+    rc = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2, model="t.onnx")
+    assert rc.returncode == 0
 
     by_mode = dict(rec.runs)
     assert len(rec.runs) == 2
@@ -274,7 +294,7 @@ def test_cycle_stops_at_the_first_failing_selection_group(tmp_path, monkeypatch)
 
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
     rec = _LabelRecorder(monkeypatch, rc=9)
-    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2, model="t.onnx")
     assert result.returncode == 9
     assert [mode for mode, _ in rec.runs] == [False]  # the swept group never ran
 
@@ -284,7 +304,9 @@ def test_cycle_labels_everything_stratified_when_sweeps_are_off(tmp_path, monkey
         (tmp_path / f"{i:03d}.slog").touch()
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 0)
     rec = _LabelRecorder(monkeypatch)
-    move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(sweep_every=0), threads=2)
+    move_set_eval.run_one_cycle(
+        tmp_path, MoveSetEvalParams(sweep_every=0), threads=2, model="t.onnx"
+    )
     assert [mode for mode, _ in rec.runs] == [False]
 
 
@@ -301,13 +323,15 @@ def test_cycle_plays_the_variant_the_params_name(tmp_path, monkeypatch):
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
     _LabelRecorder(monkeypatch)
     for face_up in (False, True):
-        move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(face_up_leaves=face_up), threads=2)
+        move_set_eval.run_one_cycle(
+            tmp_path, MoveSetEvalParams(face_up_leaves=face_up), threads=2, model="t.onnx"
+        )
         assert seen["face_up_leaves"] is face_up
 
 
 def test_cycle_stops_on_selfplay_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(move_set_eval, "run_games", lambda *a, **k: 7)
-    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2, model="t.onnx")
     assert result.returncode == 7
     assert result.mset_seconds == 0.0
 
@@ -319,22 +343,72 @@ def test_cycle_propagates_generator_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(move_set_eval, "run_games", fake_run_games)
     _LabelRecorder(monkeypatch, rc=9)
-    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2)
+    result = move_set_eval.run_one_cycle(tmp_path, MoveSetEvalParams(), threads=2, model="t.onnx")
     assert result.returncode == 9
 
 
-def test_run_generate_requires_a_readable_teacher(tmp_path):
+def test_run_generate_requires_a_readable_teacher(tmp_path, monkeypatch):
+    _teacher_under(monkeypatch, tmp_path)  # a teacher tag whose export is absent
     ctx = WorkerContext(
         spec=SPEC,
         role=SPEC.role("generate"),
         tag="t",
-        params=MoveSetEvalParams(teacher_model=str(tmp_path / "missing.onnx")),
+        params=MoveSetEvalParams(teacher_tag="teach", teacher_generation=1),
         worker_id="w0",
         threads=1,
         max_cycles=1,
         sink=RecordingSink(),
     )
-    assert move_set_eval.run_generate(ctx) == 1
+    assert move_set_eval.run_generate(ctx) == 1  # the pinned export does not exist
+
+
+def test_teacher_resolution_pins_the_latest_export(tmp_path):
+    for generation in (1, 3, 7):
+        _write_teacher_export(tmp_path, "teach", generation)
+    p = MoveSetEvalParams(teacher_tag="teach")
+    assert move_set_eval.resolved_teacher_generation(p, mount_root=tmp_path) == 7
+    latest = TagPaths("teach", POSITION_EVAL, mount_root=tmp_path).onnx_path(7)
+    assert move_set_eval.teacher_onnx(p, mount_root=tmp_path) == latest
+    # An explicit generation wins over "latest".
+    p3 = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+    assert move_set_eval.resolved_teacher_generation(p3, mount_root=tmp_path) == 3
+
+
+def test_teacher_resolution_requires_a_tag_and_an_export(tmp_path):
+    with pytest.raises(params_mod.ParamsError, match="teacher_tag is required"):
+        move_set_eval.resolved_teacher_generation(MoveSetEvalParams())
+    TagPaths("empty", POSITION_EVAL, mount_root=tmp_path).onnx_dir.mkdir(parents=True)
+    with pytest.raises(params_mod.ParamsError, match="no exported model"):
+        move_set_eval.resolved_teacher_generation(
+            MoveSetEvalParams(teacher_tag="empty"), mount_root=tmp_path
+        )
+
+
+def test_finalize_pins_the_teacher_generation(tmp_path, monkeypatch):
+    _teacher_under(monkeypatch, tmp_path)
+    for generation in (2, 5):
+        _write_teacher_export(tmp_path, "teach", generation)
+    pinned = move_set_eval.finalize(SPEC, "run1", MoveSetEvalParams(teacher_tag="teach"))
+    assert pinned.teacher_generation == 5  # the latest at creation, frozen
+    # A generation whose export is missing fails at creation, where it is seen.
+    with pytest.raises(params_mod.ParamsError, match="does not exist"):
+        move_set_eval.finalize(
+            SPEC, "run1", MoveSetEvalParams(teacher_tag="teach", teacher_generation=9)
+        )
+
+
+def test_create_task_runs_the_finalize_hook(tmp_path, monkeypatch):
+    """create_task pins the teacher generation into the frozen params, so a
+    later worker restart cannot resolve a newer one."""
+    from scribblez.dashboard import tasks
+
+    _teacher_under(monkeypatch, tmp_path)
+    _write_teacher_export(tmp_path, "teach", 5)
+    saved = {}
+    monkeypatch.setattr(tasks, "load_task", lambda spec, tag: None)
+    monkeypatch.setattr(tasks, "save_task", lambda spec, task: saved.update(task.params))
+    tasks.create_task(SPEC, "run1", {"teacher_tag": "teach"})
+    assert saved["teacher_generation"] == 5
 
 
 class StubCtx:

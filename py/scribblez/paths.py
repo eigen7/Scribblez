@@ -159,6 +159,13 @@ class TagPaths:
         """The epoch an export's filename encodes -- the inverse of onnx_path."""
         return int(path.stem.rsplit("_", 1)[1])
 
+    def exported_generations(self) -> list[int]:
+        """The generation indices this tag has an exported ONNX for, ascending
+        (the inverse-parsed model_epoch_NNNN.onnx names in models/). The
+        filesystem is the authority on what is deployable: a generation's ONNX
+        is written before any dashboard row records it."""
+        return sorted(self.onnx_epoch(p) for p in self.onnx_dir.glob(f"{ONNX_PREFIX}*.onnx"))
+
     @property
     def onnx_sidecars(self) -> list[Path]:
         """Files in models/ that the exports reference rather than being one:
