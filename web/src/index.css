@@ -198,8 +198,15 @@ h1 {
   justify-content: center;
 }
 .board-cell-highlight-label {
-  position: absolute;
-  white-space: nowrap;
+  position: relative;
+  /* Size to the text (overflowing the ~38px cell, centered by the parent flex)
+     so short labels ("WOES", "C-play, TW") stay on one line; a long descriptive
+     label caps at max-width and wraps to a compact centered block. */
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 132px;
+  text-align: center;
+  line-height: 1.1;
   font-size: 15px;
   font-weight: 800;
   color: #ffffff;
