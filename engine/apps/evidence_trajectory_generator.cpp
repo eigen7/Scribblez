@@ -470,6 +470,14 @@ int main(int argc, char** argv) {
       "most model proposals per trajectory")(
       "temperature", po::value<double>(&traj.temperature)->default_value(traj.temperature),
       "softmax temperature over the model's win-equity scores (win-equity units)")(
+      "off-policy-top",
+      po::value<int>(&traj.off_policy_quotas.top)->default_value(traj.off_policy_quotas.top),
+      "lower rank bound of the off-policy contention window (the head the proposer owns; not "
+      "itself drawn from)")(
+      "off-policy-mid-rank-limit",
+      po::value<int>(&traj.off_policy_quotas.mid_rank_limit)
+        ->default_value(traj.off_policy_quotas.mid_rank_limit),
+      "exclusive rank bound between the off-policy contention window and the tail")(
       "off-policy-mid",
       po::value<int>(&traj.off_policy_quotas.mid)->default_value(traj.off_policy_quotas.mid),
       "off-policy draws from the contention window [off-policy-top, off-policy-mid-rank-limit)")(
@@ -480,14 +488,6 @@ int main(int argc, char** argv) {
       po::value<int>(&traj.off_policy_quotas.exchange)
         ->default_value(traj.off_policy_quotas.exchange),
       "off-policy draws among the non-PLAY (exchange/pass) candidates")(
-      "off-policy-top",
-      po::value<int>(&traj.off_policy_quotas.top)->default_value(traj.off_policy_quotas.top),
-      "lower rank bound of the off-policy contention window (the head the proposer owns; not "
-      "itself drawn from)")(
-      "off-policy-mid-rank-limit",
-      po::value<int>(&traj.off_policy_quotas.mid_rank_limit)
-        ->default_value(traj.off_policy_quotas.mid_rank_limit),
-      "exclusive rank bound between the off-policy contention window and the tail")(
       "off-policy-uniform",
       po::value<int>(&traj.off_policy_uniform)->default_value(traj.off_policy_uniform),
       "off-policy draws uniform over the whole legal-move list")(

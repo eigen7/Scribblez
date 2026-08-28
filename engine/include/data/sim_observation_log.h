@@ -79,7 +79,7 @@ struct SimObsPositionHeader {
   uint32_t num_candidates;   // SimObsRecord count that follows
   uint32_t rollouts;         // rollouts per candidate (== every record's obs.n)
   uint64_t base_seed;        // SimRunner::run seed, for reproducing the sims
-  uint32_t num_legal_moves;  // legal moves at the position (the uniform draw's domain)
+  uint32_t num_legal_moves;  // legal moves at the position (the off-policy draws' domain)
   uint32_t flags;            // reserved; no SimObsPosFlag bits at v4
 };
 static_assert(sizeof(SimObsPositionHeader) == 32, "SimObsPositionHeader must be 32 bytes");

@@ -56,6 +56,18 @@ std::vector<char> mask_of(const std::vector<Move>& ranked, const std::vector<Mov
   return taken;
 }
 
+// The rank strata shared by the labeled sample and the off-policy floor: the
+// contention window [quotas.top, quotas.mid_rank_limit), the tail
+// [quotas.mid_rank_limit, n), then the exchanges. Appends the drawn indices to
+// *out and marks each in *taken.
+void draw_rank_strata(const std::vector<Move>& ranked, const StratumQuotas& quotas,
+                      std::mt19937_64& rng, std::vector<char>* taken, std::vector<size_t>* out) {
+  const int n = int(ranked.size());
+  draw_rank_window(ranked, quotas.top, quotas.mid_rank_limit, quotas.mid, rng, taken, out);
+  draw_rank_window(ranked, quotas.mid_rank_limit, n, quotas.tail, rng, taken, out);
+  draw_exchanges(ranked, quotas.exchange, rng, taken, out);
+}
+
 }  // namespace
 
 Selection stratified_candidates(const std::vector<Move>& ranked, const Move& played,
@@ -80,21 +92,16 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
   // The sampled strata, over the indices the deterministic prefix has not taken.
   std::vector<char> taken = mask_of(ranked, out);
   std::vector<size_t> picks;
-  draw_rank_window(ranked, quotas.top, quotas.mid_rank_limit, quotas.mid, rng, &taken, &picks);
-  draw_rank_window(ranked, quotas.mid_rank_limit, n, quotas.tail, rng, &taken, &picks);
-  draw_exchanges(ranked, quotas.exchange, rng, &taken, &picks);
+  draw_rank_strata(ranked, quotas, rng, &taken, &picks);
   for (size_t i : picks) out.push_back(ranked[i]);
   return {std::move(out), 0u};
 }
 
 std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, const StratumQuotas& quotas,
                                      int uniform, std::vector<char>* taken, std::mt19937_64& rng) {
-  const int n = int(ranked.size());
   std::vector<size_t> picks;
-  draw_rank_window(ranked, quotas.top, quotas.mid_rank_limit, quotas.mid, rng, taken, &picks);
-  draw_rank_window(ranked, quotas.mid_rank_limit, n, quotas.tail, rng, taken, &picks);
-  draw_exchanges(ranked, quotas.exchange, rng, taken, &picks);
-  draw_rank_window(ranked, 0, n, uniform, rng, taken, &picks);
+  draw_rank_strata(ranked, quotas, rng, taken, &picks);
+  draw_rank_window(ranked, 0, int(ranked.size()), uniform, rng, taken, &picks);
   return picks;
 }
 
