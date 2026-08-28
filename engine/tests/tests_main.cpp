@@ -27,7 +27,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
 #include "sim/sim_runner.h"
-#include "training/evidence_trajectory.h"
+#include "training/evidence_trajectory_select.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
 #include "training/max_move_per_lane_input_encoder.h"

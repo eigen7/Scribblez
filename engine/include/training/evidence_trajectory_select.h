@@ -18,7 +18,6 @@
 #include "game/move.h"
 #include "util/math.h"
 
-#include <cstdint>
 #include <random>
 #include <vector>
 
@@ -41,8 +40,8 @@ size_t anchor_index(const std::vector<Move>& ranked);
 
 // The trajectory's candidate indices into `ranked`, in sim order: anchor, then
 // up to a sampled count of temperature-softmax proposals over the student's win
-// equities (drawn over every unsimmed candidate), then (when any move remains)
-// one uniform draw. Sets *uniform_tail accordingly.
+// equities, then (when any move remains) one uniform draw. Sets *uniform_tail
+// accordingly.
 std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
                                       const std::vector<float>& win_equity,
                                       const TrajectoryOptions& opt, std::mt19937_64& rng,

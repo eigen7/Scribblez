@@ -1,7 +1,6 @@
 #include "training/evidence_trajectory_select.h"
 
 #include <algorithm>
-#include <numeric>
 
 namespace scribblez::evidence {
 
@@ -19,14 +18,9 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
   std::vector<char> taken(n, 0);
   taken[chosen[0]] = 1;
 
-  // The student's ranking, best first: proposals draw from a temperature
-  // softmax over every unsimmed candidate (deployment's full support), so the
-  // order is just the canonical iteration order the sampler maps its draw onto.
-  std::vector<size_t> order(n);
-  std::iota(order.begin(), order.end(), size_t{0});
-  std::stable_sort(order.begin(), order.end(),
-                   [&](size_t a, size_t b) { return win_equity[a] > win_equity[b]; });
-
+  // Proposals draw from a temperature softmax over every unsimmed candidate
+  // (deployment's full support). The softmax is permutation-invariant, so the
+  // pool is built in the candidates' natural index order -- no ranking needed.
   std::uniform_int_distribution<int> length(opt.proposals_min, opt.proposals_max);
   const int proposals = length(rng);
   std::vector<double> pool_scores;
@@ -34,7 +28,7 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
   for (int p = 0; p < proposals; ++p) {
     pool_scores.clear();
     pool_index.clear();
-    for (size_t i : order) {
+    for (size_t i = 0; i < n; ++i) {
       if (taken[i]) continue;
       pool_scores.push_back(win_equity[i]);
       pool_index.push_back(i);

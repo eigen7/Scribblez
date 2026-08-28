@@ -538,11 +538,6 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
   Boost::system
   Threads::Threads)
 
-# Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
-# candidate selection (anchor, student-model proposals, uniform tail) simmed
-# per decision point. The library is the position-level recipe over the
-# student model; the generator supplies decision points from .slog self-play
-# data or .gcg position sets and writes trajectory .sobs sidecars.
 # The NN-free trajectory selection core (which candidates get simmed, in what
 # order): vectors in, indices out, so it links without the TensorRT runtime the
 # scoring front-end carries and is unit-tested directly in scribblez_tests.
@@ -550,6 +545,11 @@ add_library(scribblez_evidence_select STATIC src/training/evidence_trajectory_se
 set_target_properties(scribblez_evidence_select PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_evidence_select PUBLIC scribblez_core)
 
+# Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
+# candidate selection (anchor, student-model proposals, uniform tail) simmed
+# per decision point. The library is the position-level recipe over the
+# student model; the generator supplies decision points from .slog self-play
+# data or .gcg position sets and writes trajectory .sobs sidecars.
 add_library(scribblez_evidence STATIC src/training/evidence_trajectory.cpp)
 set_target_properties(scribblez_evidence PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_evidence PUBLIC scribblez_evidence_select scribblez_core scribblez_nn)
