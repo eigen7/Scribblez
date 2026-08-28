@@ -20,7 +20,7 @@ game](https://www.youtube.com/watch?v=p94DqHv3xk8); the game itself is
 
 ## The position
 
-![The critical position at move 22](images/critical-position.png)
+<img align="right" width="50%" alt="The critical position at move 22" src="images/critical-position.png">
 
 - **Nigel Richards: 379, on turn. Mike Johnson: 326.** Nigel leads by 53.
 - **Nigel's rack: A E E L L N T.**
@@ -33,6 +33,8 @@ game](https://www.youtube.com/watch?v=p94DqHv3xk8); the game itself is
 
 Nigel exchanged **EELLT**, keeping **AN**.
 
+<br clear="all"/>
+
 ## Reading the position first
 
 The move only makes sense on top of two reads that Nigel makes *before* he
@@ -40,6 +42,8 @@ weighs any play. Both come from Mike's last two turns — **N10 ZONES** (28) the
 **J11 WOE** (6).
 
 ### 1. Mike is very likely about to bingo
+
+<img align="left" width="50%" alt="Where Mike's likely bingo goes -- the lanes marked, no tiles placed" src="images/bingo-threats.png">
 
 An expert who plays a one-tile move like WOE is almost always holding a
 bingo-prone rack for next turn, and here the unseen tiles make that conclusion
@@ -51,7 +55,7 @@ a board that otherwise has none. So Nigel should expect a bingo, most likely:
   giving Nigel little counterplay, or
 - alongside the **Y of JUDY** — least likely, since it needs the last **A**.[^minor]
 
-![Where Mike's likely bingo goes -- the lanes marked, no tiles placed](images/bingo-threats.png)
+<br clear="all"/>
 
 ### 2. The C is very likely still in the bag
 
@@ -130,9 +134,9 @@ Drawing the C is only about **5/7** after ALLEE (and that already assumes the C
 is in the bag), and even with it Nigel doesn't always have the high-scoring
 CLOSE hook.
 
-![The ALLEE line: Nigel stuck with CEINNTT](images/allee-line.png)
+<img align="right" width="50%" alt="The ALLEE line: Nigel stuck with CEINNTT" src="images/allee-line.png">
 
-The board above is one such line: Nigel plays **ALLEE** (to 395), Mike replies
+The board here is one such line: Nigel plays **ALLEE** (to 395), Mike replies
 with the bingo **RULIEST** (to 396), and Nigel is left holding **CEINNTT** with
 only **A, D** unseen. He has a C — but with these letters his best CLOSE hook is
 **ENCLOSE for ~12**, nowhere near the triple he needs (the engine's whole move
@@ -143,6 +147,8 @@ timing trap: ALLEE left only two tiles in the bag.)
 This is only an *illustration* that the C is not a guarantee, not the main
 argument; the main argument is the timing above.
 
+<br clear="all"/>
+
 ## The YE\_ and double-S danger
 
 Playing a 5-letter word *now* (leaving two in the bag) also exposes Nigel to
@@ -151,14 +157,16 @@ Mike's last **S** up for nearly 100 points. Worse, that creates **two different
 S-lanes** for an out-bingo ending in S — **WOES** on one side and **YE\_S** on
 the other — and Nigel **cannot block both**.
 
-![The double-S threat: WOES and YEETS S-lanes](images/double-s.png)
+<img align="left" width="50%" alt="The double-S threat: WOES and YEETS S-lanes" src="images/double-s.png">
 
-Above, Nigel has played a word and Mike has set up **8K YEET** (holding an S).
+Here, Nigel has played a word and Mike has set up **8K YEET** (holding an S).
 Now an S makes an out-bingo in two places — **WOES** (S at J14) and **YEETS**
 (S at O8, a ~+98 lane down column O) — and one block can't stop both.
 
 Exchanging rather than playing a word is what lets Nigel answer this, again
 through timing: after an exchange he will likely be able to outrace a bingo.
+
+<br clear="all"/>
 
 ## Reproducing the images
 
