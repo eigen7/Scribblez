@@ -29,15 +29,15 @@ game](https://www.youtube.com/watch?v=p94DqHv3xk8); the game itself is
 - The unseen pool is **extremely bingo-prone**: every tile worth 4+ points is
   already on the board. Only the **C** and **D** are worth more than a point,
   and both are strong bingo letters.
-- The engine's clear favorite is **ALLEE** (a tree-lined walkway) for 16.
+- The engine's clear favorite is **B6 ALLEE** for 16.
 
 Nigel exchanged **EELLT**, keeping **AN**.
 
 ## Reading the position first
 
 The move only makes sense on top of two reads that Nigel makes *before* he
-weighs any play. Both come from Mike's last two turns — **ZONES** (28) then
-**WOE** (6).
+weighs any play. Both come from Mike's last two turns — **N10 ZONES** (28) then
+**J11 WOE** (6).
 
 ### 1. Mike is very likely about to bingo
 
@@ -49,20 +49,18 @@ a board that otherwise has none. So Nigel should expect a bingo, most likely:
 - **hooking an S onto WOE → WOES** (the obvious lane WOE just created), or
 - down the **V of VIRGA** — less likely, but higher-scoring and dangerous,
   giving Nigel little counterplay, or
-- alongside the **Y of JUDY** — least likely, since it needs the last **A**.
+- alongside the **Y of JUDY** — least likely, since it needs the last **A**.[^minor]
+
+![Where Mike's likely bingo goes -- the lanes marked, no tiles placed](images/bingo-threats.png)
 
 ### 2. The C is very likely still in the bag
 
-If Mike had held the **C** on his ZONES turn, he would have played **CONE (37)**
-and kept his S, not ZONES. He had no good C play on WOE either. So the C is
-almost certainly **still in the bag** — meaning **Nigel is very likely to draw
-it**, and Mike can only have it if he happened to draw it on a one-tile
-replenishment.
-
-*(Minor reads in the same vein: Mike probably doesn't hold two T's — WATT would
-have been an equally good setup that also sheds a duplicate — and is a shade
-less likely to hold the R, or he'd have played ZONER to set up his S even more
-powerfully.)*
+If Mike had held the **C** on his ZONES turn, he would have likely played
+**CONE (37)**, keeping his S — not ZONES. And if he drew the C *after* ZONES, he
+likely would have played a move like **H12 CITE (37)** instead of WOE. So if
+Mike has a C at all, he likely drew it after his 1-tile WOE play; we can
+conclude the C is **highly likely still in the bag**, and Nigel is very likely
+to draw it.
 
 With those two reads in hand, the logic of the exchange falls out.
 
@@ -73,53 +71,58 @@ worst case: **"how could I lose this game?"** Here the loss scenario is clear �
 Mike bingos, and then gets out before Nigel can catch up. Every candidate has
 to be judged against that.
 
-### Playing a word — even ALLEE — helps Mike's timing
+### Playing a move like B6 ALLEE helps Mike's timing
 
 Playing a scoring word draws Nigel back up to 7 and leaves only **2 tiles in
-the bag**. After Mike's expected bingo, Mike is then left with just **2 tiles**
-and **goes out immediately** — Nigel gets only one more turn, and the game
-simplifies into exactly the race Mike wants. Extending the lead doesn't help if
-it hands Mike the tempo.
+the bag**. After Mike's expected bingo, Mike is then left with just **2 tiles**.
+This gives Nigel only one more move before Mike goes out with a 2-tile outplay —
+the game simplifies into exactly the race Mike wants. Extending the lead doesn't
+help if it hands Mike the tempo.
 
-### The exchange satisfies two opposing goals at once
+### The exchange satisfies two seemingly contradictory goals at once
 
-Nigel needs to do two contradictory things:
+Nigel wants two things that seem to pull in opposite directions:
 
-- **Play as *few* tiles as possible** — keep **7 tiles in the bag** so that
-  when Mike bingos he is stuck with a **full 7-tile rack** and *cannot* go out,
-  buying Nigel the extra turns he needs to erase a ~20-point post-bingo
-  deficit.
-- **Play as *many* tiles as possible** — draw **5 fresh tiles** to chase the
+- **Maximize the number of tiles in the bag at the start of Mike's next turn** —
+  so that when Mike bingos he is stuck with a **full 7-tile rack** and *cannot*
+  go out, buying Nigel the extra turns he needs to erase the ~20-point
+  post-bingo deficit.
+- **Maximize the number of tiles Nigel draws after this turn** — to chase the
   **C** that is almost certainly in the bag.
 
-The only move that does both is an **exchange**. (Note that ALLEE, a 5-tile
-play, *does* fish for the C by drawing 5 — but it empties the bag to 2 and loses
-the timing. The exchange keeps the C-fishing while winning the timing battle.)
+The only move that does both is an **exchange**: playing a word draws 5 fresh
+tiles too, but it *removes* those tiles from the bag, whereas the exchange draws
+5 while leaving all 7 in the bag.
 
-### It sabotages Mike's endgame rack
+### Which tiles to exchange?
 
-Whatever Nigel throws back, Mike is guaranteed to end up holding it: with only
-14 unseen tiles, Mike collects the leftovers in the endgame. By throwing
-**EELLT**, Nigel guarantees Mike a rack with **duplicate E's and duplicate L's**
-at a minimum (triplicates are possible on further draws) — a stiff, inflexible
-rack that plays badly after a bingo and lets Nigel claw back the deficit over
-two turns.
+If Mike bingos on his next turn, then whatever tiles Nigel throws back are
+guaranteed to end up on Mike's rack. This means that Nigel wants to throw back
+tiles that give Mike maximum inflexibility. This favors throwing back tiles that
+are likely to result in duplicate or triplicate tiles. Given the **EELTT**
+already in the bag, throwing back **EELLT** accomplishes this goal
+**exceptionally** well.
 
-### Keep AN, not EN
+Furthermore, Nigel's leave of **AN** has many good properties:
 
-Of the two tiles Nigel keeps, **AN** is much better than EN:
-
-- With **AN** in reserve, **9 of the 13** other unseen letters give Nigel a
-  4-letter C-play hooking **CLOSE**; keeping **EN** drops that to **5 of 13**.
-- The **A** also plays alongside the **Y of JUDY**, giving Nigel an out there.
-  The **E** does not — which is likely part of why he threw the E back.
+- If he draws the C, he is highly likely to have a **CLOSE hook that hits the TW
+  bonus**, as 9 out of the 13 remaining unseen tiles can combine with **CAN** to
+  form a 4-letter word: CANE, CAIN, CLAN, CARN, CANS, CANT. A leave of **EN**
+  only yields 5/13, by comparison: CANE, CINE, CENT.
+- The **A** also plays alongside the **Y of JUDY**, which gives him extra
+  flexibility.
 
 ### The line it aims for
 
-Mike bingos (~70, Nigel down ~20) → Nigel scores **25-30 along the bottom**, or
-better, more by reaching the triple-word with a **CLOSE hook** → Mike, stuck
-with his junk EELLT-based rack, plays something small → Nigel goes out with a
-**3-letter word** such as an **A\_ play hooking the Y of JUDY**.
+Mike bingos (~70, Nigel down ~20). Nigel then scores around the bottom — or
+better, hits the triple with a **CLOSE hook** once he has the C. Mike, stuck
+with his junk EELLT-based rack, plays something small, and Nigel goes out with a
+**3-letter A-play alongside the Y of JUDY**.
+
+![Nigel's plan after the exchange -- move-locations marked, no tiles placed](images/plan.png)
+
+The highlighted squares mark *where* those plays go: the C-play hooking CLOSE
+down to the H15 triple, and the out alongside the Y of JUDY.
 
 ## Why not ALLEE — the worst case
 
@@ -143,13 +146,20 @@ argument; the main argument is the timing above.
 
 ## The YE\_ and double-S danger
 
-Playing a word *now* (leaving two in the bag) also exposes Nigel to two-tile
-setups off the **YE** — **YETI, YEET, YETT, YEAN** — that stand Mike's last S
-up for nearly 100 points. Worse, that creates **two different S-lanes** for a
-bingo ending in S — **WOES** on one side and **YE\_S** on the other — and Nigel
-**cannot block both**. Exchanging rather than playing a word is what lets Nigel
-answer this, again through timing: after an exchange he can immediately block or
-make a high C-play with one tile left in the bag.
+Playing a 5-letter word *now* (leaving two in the bag) also exposes Nigel to
+two-tile setups off the **YE** at K8 — **YETI, YEET, YETT, YEAN** — that stand
+Mike's last **S** up for nearly 100 points. Worse, that creates **two different
+S-lanes** for an out-bingo ending in S — **WOES** on one side and **YE\_S** on
+the other — and Nigel **cannot block both**.
+
+![The double-S threat: WOES and YEETS S-lanes](images/double-s.png)
+
+Above, Nigel has played a word and Mike has set up **8K YEET** (holding an S).
+Now an S makes an out-bingo in two places — **WOES** (S at J14) and **YEETS**
+(S at O8, a ~+98 lane down column O) — and one block can't stop both.
+
+Exchanging rather than playing a word is what lets Nigel answer this, again
+through timing: after an exchange he will likely be able to outrace a bingo.
 
 ## What the engines say — and what happened
 
@@ -182,20 +192,29 @@ BIN=../../../target/engine/manual_gcg_tool
 # 1. Dump per-ply front-end state JSON straight from the GCG (no server).
 #    The actual game:
 $BIN --dump-gcg game.gcg --dump-plies 21,24,26 --dump-out states
-#    The ALLEE hypothetical (a variant GCG branched at move 22):
-$BIN --dump-gcg variants/allee.gcg --dump-plies 23 --dump-out states/allee
+#    The hypotheticals (variant GCGs branched at move 22):
+$BIN --dump-gcg variants/allee.gcg   --dump-plies 23 --dump-out states/allee
+$BIN --dump-gcg variants/doubles.gcg --dump-plies 23 --dump-out states/doubles
 
 # 2. Rasterize the states to PNGs via the ?tool=render harness (headless Chromium):
 node ../../../web/scripts/render_boards.mjs render.json
 ```
 
 The manifest (`render.json`) names each state, its output PNG, and optional
-`caption`, `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen "?" tiles), and
-`unseenFrom` (e.g. `1` adds the Nigel-POV unseen-tiles strip). The variant GCGs
-in `variants/` were built with the tool's move-lister to get exact, legal
-coordinates:
+extras: `caption`; `hideRacks` (e.g. `[0]` blanks Mike's rack to unseen "?"
+tiles); `unseenFrom` (e.g. `1` adds the Nigel-POV unseen-tiles strip);
+`highlights` (groups of squares tinted with a color and an optional point-value
+label, for marking where plays could go *without* placing a tile); and `legend`.
+The variant GCGs in `variants/` were built with the tool's move-lister to get
+exact, legal coordinates:
 
 ```bash
 # e.g. find where ALLEE plays for Nigel's rack at move 22:
 $BIN --dump-gcg game.gcg --list-ply 21 --list-rack AEELLNT   # -> "B6 ALLEE 16"
 ```
+
+[^minor]: Two smaller reads in the same vein, not load-bearing for the rest of
+    the analysis: Mike probably doesn't hold two T's (WATT would have been an
+    equally good setup that also sheds a duplicate), and is a shade less likely
+    to hold the R (or he'd have played ZONER to set up his S even more
+    powerfully).

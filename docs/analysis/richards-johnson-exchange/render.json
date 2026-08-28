@@ -8,16 +8,67 @@
       "caption": "Move 22 (Nigel to play, up 379-326). Rack AEELLNT, 7 tiles in the bag, 14 unseen. Nigel exchanged EELLT, keeping AN."
     },
     {
+      "state": "states/ply_21.json",
+      "out": "images/bingo-threats.png",
+      "hideRacks": [0],
+      "highlights": [
+        { "color": "rgba(41,128,185,0.72)", "label": "WOES", "labelAt": [13,5],
+          "squares": [[13,3],[13,4],[13,5],[13,6],[13,7],[13,8],[13,9]] },
+        { "color": "rgba(192,57,43,0.72)", "label": "V lane", "labelAt": [4,0],
+          "squares": [[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]] },
+        { "color": "rgba(230,126,34,0.88)", "label": "Y", "labelAt": [5,3],
+          "squares": [[5,3]] }
+      ],
+      "legend": [
+        { "color": "rgba(41,128,185,0.72)", "text": "S-hook onto WOE (WOES) -- the obvious bingo lane" },
+        { "color": "rgba(192,57,43,0.72)", "text": "Down the V of VIRGA -- rarer, but higher-scoring and dangerous" },
+        { "color": "rgba(230,126,34,0.88)", "text": "Alongside the Y of JUDY -- least likely (needs the last A)" }
+      ],
+      "caption": "Where Nigel reads Mike's likely bingo going. No tiles are placed -- these mark the lanes."
+    },
+    {
+      "state": "states/ply_21.json",
+      "out": "images/plan.png",
+      "hideRacks": [0],
+      "highlights": [
+        { "color": "rgba(0,150,136,0.9)", "label": "C-play, TW", "labelAt": [12,7],
+          "squares": [[11,7],[12,7],[13,7],[14,7]] },
+        { "color": "rgba(243,156,18,0.8)", "label": "out", "labelAt": [5,3],
+          "squares": [[5,3]] }
+      ],
+      "legend": [
+        { "color": "rgba(0,150,136,0.9)", "text": "A C-play hooking CLOSE (LOSE -> CLOSE) down to the H15 triple: ~25-37" },
+        { "color": "rgba(243,156,18,0.8)", "text": "The 3-letter out, an A-play alongside the Y of JUDY" }
+      ],
+      "caption": "The plan after the exchange (no tiles placed): once Nigel draws the C, a CLOSE hook to the triple, then out alongside the Y."
+    },
+    {
       "state": "states/allee/ply_23.json",
       "out": "images/allee-line.png",
       "hideRacks": [0],
       "unseenFrom": 1,
-      "caption": "Why not ALLEE: after ALLEE (Nigel 395) and Mike's reply RULIEST (396), Nigel holds CEINNTT with only A,D unseen -- and cannot reach a triple with a CLOSE hook (his best is ENCLOSE for ~12). Mike's leftover A,D win."
+      "caption": "Why not ALLEE: after B6 ALLEE (Nigel 395) and Mike's reply 14E RULIEST (396), Nigel holds CEINNTT with only A,D unseen -- and cannot reach a triple with a CLOSE hook (his best is ENCLOSE for ~12). Mike's leftover A,D win."
+    },
+    {
+      "state": "states/doubles/ply_23.json",
+      "out": "images/double-s.png",
+      "hideRacks": [0],
+      "highlights": [
+        { "color": "rgba(41,128,185,0.72)", "label": "WOES", "labelAt": [13,5],
+          "squares": [[13,3],[13,4],[13,5],[13,6],[13,7],[13,8],[13,9]] },
+        { "color": "rgba(142,68,173,0.78)", "label": "YEETS", "labelAt": [3,14],
+          "squares": [[1,14],[2,14],[3,14],[4,14],[5,14],[6,14],[7,14]] }
+      ],
+      "legend": [
+        { "color": "rgba(41,128,185,0.72)", "text": "S-hook onto WOE -> WOES: a bingo through J14" },
+        { "color": "rgba(142,68,173,0.78)", "text": "S-hook onto YEET -> YEETS: a bingo down column O to O8" }
+      ],
+      "caption": "If Nigel plays a word and Mike sets up 8K YEET (holding an S), Mike threatens a bingo ending in S in TWO places -- WOES and YEETS -- and Nigel cannot block both."
     },
     {
       "state": "states/ply_24.json",
       "out": "images/clan.png",
-      "caption": "What happened: Nigel drew the C and played CLAN (making CLOSE across row 12), leaving one tile in the bag."
+      "caption": "What happened: Nigel drew the C and played H12 CLAN (making CLOSE across row 12), leaving one tile in the bag."
     },
     {
       "state": "states/ply_26.json",
