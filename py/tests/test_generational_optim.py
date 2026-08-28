@@ -19,6 +19,7 @@ from scribblez.generational.optim import (
     arm_lr,
     build_optim_arm,
     build_optimizer,
+    recalibrate_batchnorm,
 )
 from scribblez.generational.optimizer_arms import (
     DEFAULT_LR,
@@ -61,6 +62,17 @@ def test_build_optimizer_picks_the_arm():
     # Warmup is expressed in rows by the params and in steps by the optimizer.
     assert sf.param_groups[0]["warmup_steps"] == 10
     assert isinstance(build_optimizer(model, _Params(optimizer=OPTIMIZER_WSD)), torch.optim.AdamW)
+
+
+def test_build_optimizer_sizes_warmup_by_rows_per_step():
+    """A trainer whose rows-clock counts a unit other than its batch size passes
+    rows_per_step, and the schedule-free warmup is counted off it rather than
+    off params.batch_size (which such a trainer need not even have)."""
+    model = _model()
+    params = _Params(optimizer=OPTIMIZER_SCHEDULE_FREE, lr_warmup_rows=800, batch_size=8)
+    # batch_size alone would give 100 warmup steps; a wider row-per-step, fewer.
+    assert build_optimizer(model, params, rows_per_step=200).param_groups[0]["warmup_steps"] == 4
+    assert build_optimizer(model, params).param_groups[0]["warmup_steps"] == 100  # the default
 
 
 def test_an_unknown_optimizer_is_rejected():
@@ -180,6 +192,49 @@ def test_schedule_free_eval_mode_recomputes_batchnorm_for_the_deployed_weights()
     assert torch.allclose(
         bn.running_var, torch.stack([a.var(0, unbiased=True) for a in pre]).mean(0), atol=1e-5
     )
+
+
+class _BoardOnly(torch.nn.Module):
+    """A model whose BatchNorm is reached only through a named sub-forward, not
+    its plain forward -- a stand-in for the mset model, whose BatchNorm lives in
+    the board trunk and whose forward wants a candidate set recalibration has no
+    reason to build."""
+
+    def __init__(self):
+        super().__init__()
+        self.lin = torch.nn.Linear(3, 3)
+        self.bn = torch.nn.BatchNorm1d(3)
+
+    def encode(self, spatial, scalar):
+        return self.bn(self.lin(spatial))
+
+    def forward(self, spatial, scalar):
+        raise AssertionError("the plain forward must not drive recalibration here")
+
+
+def _encode_forward(model, spatial, scalar):
+    model.encode(spatial, scalar)
+
+
+def test_recalibrate_batchnorm_runs_the_given_forward():
+    """The BatchNorm-exercising pass is the caller's forward_fn: the default is
+    the whole model, but a trainer whose statistics sit behind a sub-forward
+    supplies its own, and only that pass runs."""
+    torch.manual_seed(0)
+    model = _BoardOnly()
+    x = torch.randn(16, 3, generator=torch.Generator().manual_seed(1))
+    batches = [(x[:8], None), (x[8:], None)]
+
+    recalibrate_batchnorm(model, batches, _encode_forward)
+    assert not model.training
+    with torch.no_grad():
+        pre = [model.lin(b) for b, _ in batches]
+    assert torch.allclose(
+        model.bn.running_mean, torch.stack([a.mean(0) for a in pre]).mean(0), atol=1e-6
+    )
+    # Omitting it falls back to the plain forward, which here is the wrong pass.
+    with pytest.raises(AssertionError):
+        recalibrate_batchnorm(model, batches)
 
 
 def test_an_unset_rate_falls_back_to_the_arms_default():

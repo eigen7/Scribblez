@@ -47,22 +47,40 @@ def arm_lr(params) -> float:
     return params.lr or DEFAULT_LR[params.optimizer]
 
 
-def build_optimizer(model, params):
+def build_optimizer(model, params, rows_per_step: int | None = None):
     """The run's optimizer, per `params.optimizer`.
 
     Built before the rolling checkpoint is resumed, so it carries no rows-clock
     state: the schedule-free arm's own warmup is counted in optimizer steps,
     converted here from the same `lr_warmup_rows` the WSD arm ramps over so one
-    knob covers both."""
+    knob covers both.
+
+    `rows_per_step` is the mean training rows per optimizer step, which turns
+    that row-count warmup into the step count AdamWScheduleFree wants. It
+    defaults to `params.batch_size` -- the rows-per-step of a trainer whose
+    rows-clock counts the same unit its batches are sized in (position_eval). A
+    trainer whose clock counts a different unit passes its own conversion
+    (move_set_eval counts candidate moves but batches by position, so a step is
+    many rows)."""
     lr = arm_lr(params)
+    if rows_per_step is None:
+        rows_per_step = params.batch_size
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
         return AdamWScheduleFree(
             model.parameters(),
             lr=lr,
             weight_decay=params.weight_decay,
-            warmup_steps=params.lr_warmup_rows // params.batch_size,
+            warmup_steps=int(params.lr_warmup_rows // max(rows_per_step, 1)),
         )
     return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=params.weight_decay)
+
+
+def _model_forward(model, spatial, scalar):
+    """Default BatchNorm-exercising forward for recalibration: the whole model
+    over one (spatial, scalar) board-input pair. A trainer whose BatchNorm sits
+    behind more than the plain board pass passes its own (move_set_eval's heads
+    take a candidate set the recalibration has no reason to build)."""
+    model(spatial, scalar)
 
 
 class WsdArm:
@@ -83,7 +101,7 @@ class WsdArm:
     def train_mode(self):
         pass
 
-    def eval_mode(self, model, batches):
+    def eval_mode(self, model, batches, forward_fn=_model_forward):
         pass
 
 
@@ -135,19 +153,22 @@ class ScheduleFreeArm:
     def train_mode(self):
         self._optimizer.train()
 
-    def eval_mode(self, model, batches):
+    def eval_mode(self, model, batches, forward_fn=_model_forward):
         """Swap the averaged iterate in and recompute `model`'s BatchNorm
         statistics for it over `batches` (an iterable of (spatial, scalar)
-        input pairs on the model's device; a few dozen batches suffice)."""
+        input pairs on the model's device; a few dozen batches suffice).
+        `forward_fn(model, spatial, scalar)` is the pass that exercises the
+        BatchNorm layers -- the whole model by default (see _model_forward)."""
         self._optimizer.eval()
-        recalibrate_batchnorm(model, batches)
+        recalibrate_batchnorm(model, batches, forward_fn)
 
 
 @torch.no_grad()
-def recalibrate_batchnorm(model, batches):
+def recalibrate_batchnorm(model, batches, forward_fn=_model_forward):
     """Replace every BatchNorm layer's running statistics with the exact
     (cumulative, momentum=None) mean/variance of the live weights' activations
-    over `batches`, leaving the model in eval mode. Each layer's momentum is
+    over `batches`, leaving the model in eval mode. `forward_fn(model, spatial,
+    scalar)` runs the pass that reaches those layers. Each layer's momentum is
     restored afterwards so training resumes with the ordinary running update."""
     bn_layers = [m for m in model.modules() if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
     momenta = [m.momentum for m in bn_layers]
@@ -156,7 +177,7 @@ def recalibrate_batchnorm(model, batches):
         m.momentum = None
     model.train()
     for spatial, scalar in batches:
-        model(spatial, scalar)
+        forward_fn(model, spatial, scalar)
     model.eval()
     for m, momentum in zip(bn_layers, momenta, strict=True):
         m.momentum = momentum
