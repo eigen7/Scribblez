@@ -43,7 +43,7 @@ weighs any play. Both come from Mike's last two turns — **N10 ZONES** (28) the
 
 ### 1. Mike is very likely about to bingo
 
-<img align="left" width="50%" alt="Where Mike's likely bingo goes -- the lanes marked, no tiles placed" src="images/bingo-threats.png">
+<img align="right" width="50%" alt="Where Mike's likely bingo goes -- the lanes marked, no tiles placed" src="images/bingo-threats.png">
 
 An expert who plays a one-tile move like WOE is almost always holding a
 bingo-prone rack for next turn, and here the unseen tiles make that conclusion
@@ -55,8 +55,6 @@ a board that otherwise has none. So Nigel should expect a bingo, most likely:
   giving Nigel little counterplay, or
 - alongside the **Y of JUDY** — least likely, since it needs the last **A**.[^minor]
 
-<br clear="all"/>
-
 ### 2. The C is very likely still in the bag
 
 If Mike had held the **C** on his ZONES turn, he would have likely played
@@ -67,6 +65,8 @@ conclude the C is **highly likely still in the bag**, and Nigel is very likely
 to draw it.
 
 With those two reads in hand, the logic of the exchange falls out.
+
+<br clear="all"/>
 
 ## The core logic of the exchange
 
