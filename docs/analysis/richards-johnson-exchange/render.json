@@ -30,7 +30,7 @@
       "out": "images/allee-line.png",
       "hideRacks": [0],
       "unseenFrom": 1,
-      "caption": "Why not ALLEE: after B6 ALLEE (Nigel 395) and Mike's reply 14E RULIEST (396), Nigel holds CEINNTT with only A,D unseen -- and cannot reach a triple with a CLOSE hook (his best is ENCLOSE for ~12). Mike's leftover A,D win."
+      "caption": "After B6 ALLEE and a reply like 14E RULIEST, Nigel can draw the C but not have a way to use it to hit the H15 TW, like in this position."
     },
     {
       "state": "states/doubles/ply_23.json",
