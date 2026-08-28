@@ -8,8 +8,9 @@ same cycle shape as kill_test, with the sim tool swapped for the distillation
 target generator.
 
 The teacher is a position-eval tag, named by the frozen `teacher_tag` param and
-pinned at task creation (`finalize`) to that tag's latest exported generation
-(`teacher_generation`); its ONNX is read in place. Every worker on a tag must
+pinned at task creation (`finalize`) to a concrete exported generation
+(`teacher_generation` -- the tag's latest export when left at -1); its ONNX is
+read in place. Every worker on a tag must
 read the same model bytes -- the generator stamps the teacher's content hash
 into each .mset, and MsetDataset refuses a corpus with mixed hashes -- which the
 pinned generation provides: position-eval exports are write-once, and pinning at
@@ -78,14 +79,15 @@ class MoveSetEvalParams:
     teacher_tag: str = param(
         "",
         "name of the position_eval tag whose exported model is the teacher; required. "
-        "Its latest exported generation at task creation is pinned as the teacher (see "
-        "teacher_generation), so the tag must already hold an export",
+        "One of its exported generations at task creation is pinned as the teacher (the "
+        "latest, unless teacher_generation names one), so the tag must already hold an export",
     )
     teacher_generation: int = param(
-        0,
-        "which exported generation of teacher_tag to distill from; 0 = its latest export at "
-        "task creation. Resolved to a concrete generation then and frozen, so every worker "
-        "(and every restart) reads the one teacher the corpus's .mset hash was stamped with",
+        -1,
+        "which exported generation of teacher_tag to distill from; -1 = its latest export at "
+        "task creation (generations count from 0, so -1 is the 'latest' sentinel). Resolved to "
+        "a concrete generation then and frozen, so every worker (and every restart) reads the "
+        "one teacher the corpus's .mset hash was stamped with",
     )
     games_per_batch: int = param(200, "self-play games per generation cycle")
     positions_per_game: int = param(0, "eligible turns targeted per game (0 = every eligible turn)")
@@ -210,12 +212,15 @@ def _teacher_paths(params: MoveSetEvalParams, mount_root=None) -> TagPaths:
 
 
 def resolved_teacher_generation(params: MoveSetEvalParams, mount_root=None) -> int:
-    """The concrete teacher generation for `params`: the one it pins, or -- when
-    unpinned (0) -- the tag's latest export. Raises ParamsError if teacher_tag
-    is unset or the tag holds no export to distill from."""
+    """The concrete teacher generation for `params`: the one it pins (any
+    generation >= 0), or -- when unpinned (the -1 sentinel) -- the tag's latest
+    export. Generations count from 0, so 0 is a real pinnable generation and -1
+    is what means "latest"; conflating the two would leave a tag whose latest
+    export is generation 0 unpinned. Raises ParamsError if teacher_tag is unset
+    or the tag holds no export to distill from."""
     if not params.teacher_tag:
         raise params_mod.ParamsError("teacher_tag is required")
-    if params.teacher_generation:
+    if params.teacher_generation >= 0:
         return params.teacher_generation
     gens = _teacher_paths(params, mount_root).exported_generations()
     if not gens:
@@ -240,9 +245,10 @@ def finalize(spec: WorkloadSpec, tag: str, params: MoveSetEvalParams) -> MoveSet
     bytes (MsetDataset's single-hash guard). Fails here, where the operator sees
     it, if the named tag has no matching export."""
     generation = resolved_teacher_generation(params)
-    onnx = _teacher_paths(params).onnx_path(generation)
-    if not onnx.is_file():
-        raise params_mod.ParamsError(f"teacher model does not exist: {onnx}")
+    if not _teacher_paths(params).onnx_path(generation).is_file():
+        raise params_mod.ParamsError(
+            f"position_eval tag '{params.teacher_tag}' has no generation {generation} exported"
+        )
     return dataclasses.replace(params, teacher_generation=generation)
 
 

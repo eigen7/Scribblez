@@ -149,8 +149,8 @@ More epochs on this corpus buy nothing. Whether more data would is untested.
 
 ## Reproducing
 
-Create a `move_set_eval` tag pointing `teacher_model` at an open-leaves
-position-eval export, set `face_up_leaves`, add a worker of each role, and
+Create a `move_set_eval` tag pointing `teacher_tag` at an open-leaves
+position_eval tag, set `face_up_leaves`, add a worker of each role, and
 start them. The trainer waits for `warmup_pairs`, keeps pace with the generator
 while it runs, and spends its `train_epochs` budget on passes over the finished
 corpus, so the tag completes unattended
