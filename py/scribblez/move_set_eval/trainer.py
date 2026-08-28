@@ -36,7 +36,7 @@ import torch
 from scribblez.dashboard import db
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
-from scribblez.generational.controls import init_controls, progress_line
+from scribblez.generational.controls import progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
@@ -334,6 +334,24 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     optim_arm.train_mode()
 
 
+def publish_config(conn, tag: str, params, model_params: int = 0):
+    """Record the run's config for the dashboard: the frozen params (the Info
+    tab) and each loss term's weight in the optimized total (WLD has weight 1),
+    so the Loss tab can stack the weighted contributions. Called before the
+    warmup wait so the Info tab shows the params immediately, the way
+    position_eval's does; `model_params` is 0 until the model is built and the
+    row is re-stamped with the real count."""
+    db.write_meta(conn, tag, asdict(params), model_params)
+    db.write_loss_weights(
+        conn,
+        {
+            "loss_wld": 1.0,
+            "loss_score_diff": params.lambda_sd,
+            "loss_planes": params.lambda_planes,
+        },
+    )
+
+
 def run(ctx: WorkerContext) -> int:
     """The train-role runner (invoked by the worker entrypoint)."""
     params = ctx.params
@@ -341,6 +359,12 @@ def run(ctx: WorkerContext) -> int:
     paths.root.mkdir(parents=True, exist_ok=True)
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
+
+    # Before the warmup wait, so the dashboard's Info tab shows the params while
+    # the trainer is still filling the store rather than staying blank until it
+    # reaches warmup_pairs and training starts.
+    conn = db.connect(paths.dashboard_db)
+    publish_config(conn, ctx.tag, params)
 
     wait_for_store(paths.data_dir / SLOGS_DIR, params)
     train_ds, holdout_ds = load_datasets(paths, params)
@@ -360,21 +384,8 @@ def run(ctx: WorkerContext) -> int:
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
+    db.write_meta(conn, ctx.tag, asdict(params), n_params)  # re-stamp with the parameter count
     optimizer = build_optimizer(model, params, _rows_per_step(train_ds, params))
-
-    conn = db.connect(paths.dashboard_db)
-    db.write_meta(conn, ctx.tag, asdict(params), n_params)
-    # Coefficients of each loss term in the optimized total (WLD has weight 1),
-    # so the dashboard can stack the weighted contributions.
-    db.write_loss_weights(
-        conn,
-        {
-            "loss_wld": 1.0,
-            "loss_score_diff": params.lambda_sd,
-            "loss_planes": params.lambda_planes,
-        },
-    )
-    init_controls(conn)
 
     # Beyond the frozen task params, the checkpoint config records what the
     # model was actually built against -- the adopted information-condition

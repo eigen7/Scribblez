@@ -426,6 +426,28 @@ def test_move_encoding_version_is_the_engines():
     assert move_encoding_version() == 1
 
 
+def test_publish_config_records_params_before_the_model_exists(tmp_path):
+    """The Info tab's params are written up front (parameter count re-stamped
+    once the model is built), so the dashboard shows the run's config while the
+    trainer is still filling the store toward warmup_pairs -- as position_eval
+    does -- rather than staying blank until training starts."""
+    import json
+
+    from scribblez.dashboard import db
+    from scribblez.move_set_eval import trainer
+    from scribblez.workloads.move_set_eval import MoveSetEvalParams
+
+    conn = db.connect(tmp_path / "dashboard.db")
+    params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3, lambda_sd=0.01)
+    trainer.publish_config(conn, "tag1", params)
+
+    meta = db.read_meta(conn)
+    assert meta is not None  # the row exists before any model or training pass
+    args = json.loads(meta["args_json"])
+    assert args["teacher_tag"] == "teach" and args["teacher_generation"] == 3
+    assert meta["model_params"] == 0  # unknown until the model is built and re-stamps it
+
+
 def _write_mset(path, positions, flags=0):
     """Hand-pack a minimal plane-less .mset (layout mirrored by targets.py's
     dtypes), plus its companion .slog. A position is (game_index, turn_index,
