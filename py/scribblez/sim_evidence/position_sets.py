@@ -39,7 +39,6 @@ class TrajectoryRecipe:
     proposals_min: int = 2
     proposals_max: int = 8
     temperature: float = 0.05
-    proposal_pool: int = 64
     open_leaves: bool = False
     seed: int = 0
 
@@ -49,7 +48,6 @@ class TrajectoryRecipe:
             f"--proposals-min={self.proposals_min}",
             f"--proposals-max={self.proposals_max}",
             f"--temperature={self.temperature}",
-            f"--proposal-pool={self.proposal_pool}",
             f"--seed={self.seed}",
             *(["--open-leaves"] if self.open_leaves else []),
         ]

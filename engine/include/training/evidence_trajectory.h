@@ -1,20 +1,12 @@
-// Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
-// candidate selection at one decision point -- the greedy anchor, then a
-// randomized-length sequence of proposals drawn from a temperature-softmax
-// over the move set evaluation model's win equities, then one uniform-random
-// draw over the remaining legal moves -- simmed under common random numbers.
-// The uniform tail is appended LAST deliberately: training rows pair an
-// evidence prefix with a held-out simmed candidate, so a last-slot sim yields
-// proves-best labels at every prefix size while never entering an evidence
-// set (the deployed loop's evidence contains only proposer picks). See
-// docs/sim_residual_feedback.md, "Evidence-trajectory generation".
-//
-// All of a position's candidates are simmed in one SimRunner call, so the
+// Evidence trajectories (docs/roadmap.md item 4): running one decision point's
+// candidate selection (the recipe lives in evidence_trajectory_select.h)
+// through the student scorer and the sim runner. The selected candidates are
+// simmed together in one SimRunner call under common random numbers, so the
 // trajectory order is pure record bookkeeping: every prefix of a position's
 // record array is a valid evidence set. The proposer cannot yet condition on
 // evidence mid-trajectory (roadmap item 3 lands the fusion runtime), so the
-// proposal distribution is computed once per position and sampled without
-// replacement -- the roadmap's bootstrap proposer.
+// proposal distribution is computed once per position -- the roadmap's
+// bootstrap proposer.
 //
 // This is the position-level core; the front-ends that supply decision points
 // (.slog replay, .gcg position sets) live in the evidence_trajectory_generator
@@ -25,6 +17,7 @@
 #include "encoding/input_encoder.h"
 #include "nn/trt_eval_service.h"
 #include "sim/sim_runner.h"
+#include "training/evidence_trajectory_select.h"
 #include "training/move_set_encoder.h"
 #include "util/math.h"
 
@@ -38,17 +31,6 @@
 namespace scribblez::evidence {
 
 using StudentService = nn::TrtEvalService<nn::MoveSetEvaluationSpec>;
-
-struct TrajectoryOptions {
-  int rollouts = 200;
-  // Value truncation; see SimRunner::Params::horizon_plies for the full
-  // semantics. The leaf service handed to TrajectoryRunner scores the horizon.
-  int horizon = 0;
-  int proposals_min = 2;
-  int proposals_max = 8;
-  double temperature = 0.05;  // win-equity units
-  int proposal_pool = 64;     // proposals are drawn from the model's top-N unsimmed candidates
-};
 
 // Throws util::CleanException on an unusable configuration (also validates
 // the runner params). Call before any worker thread exists.
@@ -106,20 +88,6 @@ class StudentScorer {
   std::deque<Request*> queue_;
   bool stopping_ = false;
 };
-
-// The anchor: the highest-raw-score candidate, taken off the move list by a
-// rule no model can be wrong about. `ranked` is descending static equity, so
-// ties resolve to the equity-preferred instance deterministically.
-size_t anchor_index(const std::vector<Move>& ranked);
-
-// The trajectory's candidate indices into `ranked`, in sim order: anchor,
-// then up to a sampled count of temperature-softmax proposals over the
-// student's win equities, then (when any move remains) one uniform draw.
-// Sets *uniform_tail accordingly.
-std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
-                                      const std::vector<float>& win_equity,
-                                      const TrajectoryOptions& opt, std::mt19937_64& rng,
-                                      util::SoftmaxSampler& sampler, bool* uniform_tail);
 
 // Per-worker: owns the scoring buffers, a single-threaded SimRunner and the
 // proposal sampler; student evaluations round-trip through the shared scorer.

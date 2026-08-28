@@ -286,7 +286,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/tests_main.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
-  target_link_libraries(scribblez_tests PRIVATE scribblez_core Boost::json GTest::gtest_main)
+  target_link_libraries(scribblez_tests PRIVATE
+    scribblez_core scribblez_evidence_select Boost::json GTest::gtest_main)
   # Point the tests at the container's lexicon mount (populated by
   # setup_wizard.py) so they cross-validate against the real GADDAG when it is
   # installed (the .kwg is not committed; the tests skip gracefully if absent),
@@ -542,9 +543,16 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
 # per decision point. The library is the position-level recipe over the
 # student model; the generator supplies decision points from .slog self-play
 # data or .gcg position sets and writes trajectory .sobs sidecars.
+# The NN-free trajectory selection core (which candidates get simmed, in what
+# order): vectors in, indices out, so it links without the TensorRT runtime the
+# scoring front-end carries and is unit-tested directly in scribblez_tests.
+add_library(scribblez_evidence_select STATIC src/training/evidence_trajectory_select.cpp)
+set_target_properties(scribblez_evidence_select PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(scribblez_evidence_select PUBLIC scribblez_core)
+
 add_library(scribblez_evidence STATIC src/training/evidence_trajectory.cpp)
 set_target_properties(scribblez_evidence PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(scribblez_evidence PUBLIC scribblez_core scribblez_nn)
+target_link_libraries(scribblez_evidence PUBLIC scribblez_evidence_select scribblez_core scribblez_nn)
 
 add_executable(evidence_trajectory_generator apps/evidence_trajectory_generator.cpp)
 target_link_libraries(evidence_trajectory_generator PRIVATE

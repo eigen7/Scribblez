@@ -39,7 +39,6 @@ RENAMES = {
     "traj_proposals_min": "proposals_min",
     "traj_proposals_max": "proposals_max",
     "traj_temperature": "temperature",
-    "traj_proposal_pool": "proposal_pool",
     "quota_top": "quota_top",
     "quota_mid": "quota_mid",
     "quota_tail": "quota_tail",

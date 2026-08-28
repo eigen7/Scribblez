@@ -27,6 +27,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
 #include "sim/sim_runner.h"
+#include "training/evidence_trajectory.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
 #include "training/max_move_per_lane_input_encoder.h"
@@ -4911,6 +4912,36 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   for (size_t i = 0; i < out.size(); ++i) {
     for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
   }
+}
+
+// The on-policy proposals draw a temperature softmax over EVERY unsimmed
+// candidate, not a capped head (docs/roadmap.md item 4, PR1): deployment
+// argmaxes over the full support, so a corpus proposal must be reachable at
+// any rank. With equal win equities the softmax is exactly uniform regardless
+// of temperature, so a candidate past the retired top-64 cap can only be drawn
+// once the cap is gone -- pinned here rather than left to the GPU-gated
+// end-to-end run.
+TEST(EvidenceTrajectory, ProposalsDrawBeyondTheRetiredPoolCap) {
+  constexpr int kN = 100;
+  const std::vector<Move> ranked = ranked_plays(kN);  // descending score: anchor is index 0
+  const std::vector<float> win_equity(kN, 0.5f);      // equal -> uniform softmax
+  evidence::TrajectoryOptions opt;
+  opt.proposals_min = 1;  // exactly one softmax proposal, then the uniform tail
+  opt.proposals_max = 1;
+  util::SoftmaxSampler sampler;
+  size_t deepest_proposal = 0;
+  for (uint64_t seed = 0; seed < 500; ++seed) {
+    std::mt19937_64 rng(seed);
+    bool uniform_tail = false;
+    const std::vector<size_t> chosen =
+      evidence::select_trajectory(ranked, win_equity, opt, rng, sampler, &uniform_tail);
+    ASSERT_GE(chosen.size(), 2u);
+    EXPECT_EQ(chosen[0], 0u);  // the anchor is always the highest-raw-score move
+    deepest_proposal = std::max(deepest_proposal, chosen[1]);
+  }
+  // The old cap kept unsimmed order indices 1..64 in reach; a proposal at 65+
+  // proves the softmax now spans the whole candidate set.
+  EXPECT_GT(deepest_proposal, 64u);
 }
 
 // The sampling shuffle is a fixed permutation per (seed, game): a smaller
