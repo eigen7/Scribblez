@@ -413,8 +413,11 @@ confirm "terrible, gain ≈ 0", a correct label in a region that otherwise has
 none, and what stops the head from hallucinating gain out there and spending
 deployment sims on it. Uniform draws alone are a poor floor over thousands
 of legal moves — they almost never land on the interesting different move —
-hence the stratified draws (low-score/high-leave, setups, exchanges) beside
-the uniform one.
+hence the stratified draws beside the uniform one. Generation 0's floor
+reuses the move-set sampler's **rank-based** strata (the contention zone, the
+tail, and exchanges) plus a uniform draw; the richer semantic strata the
+ideal wants — high-leave and setups — have no predicate yet and are a later
+refinement, not what the code supplies today.
 
 **The evidence set is order-free, so rows are assembled, not replayed.** The
 fusion stage is permutation-invariant and the gain label is a max over the

@@ -274,10 +274,11 @@ rollout configuration (truncated per item 2, CRN across the pool):
   keeps deep promotions out of the corpus (the egotize-lane set's
   structurally unsimmable GAVE was the exhibit).
 - **B ≈ 5 off-policy draws** — held out from evidence sets by construction,
-  stratified the way the `.mset` sampler is: a uniform draw plus draws from
-  the strata where surprising-but-good moves live (low-score / high-leave,
-  setups, exchanges). This is the bounded floor against the proposer's echo
-  chamber; the rationale is in
+  stratified the way the `.mset` sampler is, reusing its quotas: a uniform
+  draw plus draws from the rank-based strata (the contention zone, the tail,
+  and exchanges). This is the bounded floor against the proposer's echo
+  chamber; the richer semantic strata (high-leave, setups) are a later
+  refinement, and the rationale is in
   [sim_residual_feedback.md](sim_residual_feedback.md).
 
 Training rows are **assembled from the pool, not replayed from it**: the

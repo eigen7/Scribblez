@@ -54,9 +54,10 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
                                 const std::vector<SimObservation>& observations, uint32_t rollouts,
                                 uint64_t base_seed, uint32_t num_legal_moves,
-                                uint32_t position_flags) {
+                                const std::vector<SimObsRole>& roles) {
   RELEASE_ASSERT(!closed_);
   RELEASE_ASSERT(candidates.size() == observations.size());
+  RELEASE_ASSERT(roles.empty() || roles.size() == candidates.size());
   SimObsPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
@@ -64,12 +65,13 @@ void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
   ph.rollouts = rollouts;
   ph.base_seed = base_seed;
   ph.num_legal_moves = num_legal_moves;
-  ph.flags = position_flags;
+  ph.flags = 0;
   append_bytes(&buffer_, &ph, sizeof(ph));
   for (size_t c = 0; c < candidates.size(); ++c) {
     SimObsRecord rec{};
     rec.move = candidates[c];
     rec.obs = observations[c];
+    rec.role = roles.empty() ? SimObsRole::kAnchor : roles[c];
     append_bytes(&buffer_, &rec, sizeof(rec));
   }
   ++num_positions_;

@@ -4655,6 +4655,9 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   const bj::array& rec_fields = structs.at("SobsRecord").at("fields").as_array();
   EXPECT_EQ(rec_fields.at(0).at("name").as_string(), "move");
   EXPECT_EQ(rec_fields.at(0).at("dtype").at("struct").as_string(), "Move");
+  // The per-record evidence role serializes as its underlying byte.
+  EXPECT_EQ(rec_fields.at(2).at("name").as_string(), "role");
+  EXPECT_EQ(rec_fields.at(2).at("dtype").as_string(), "u1");
 
   // A subarray field carries its element code and shape. The next-move
   // planes are integer counts; the win-conjoined planes and the outcome
@@ -4926,17 +4929,20 @@ TEST(EvidenceTrajectory, ProposalsDrawBeyondTheRetiredPoolCap) {
   const std::vector<Move> ranked = ranked_plays(kN);  // descending score: anchor is index 0
   const std::vector<float> win_equity(kN, 0.5f);      // equal -> uniform softmax
   evidence::TrajectoryOptions opt;
-  opt.proposals_min = 1;  // exactly one softmax proposal, then the uniform tail
-  opt.proposals_max = 1;
+  opt.on_policy_min = 1;  // exactly one on-policy softmax proposal at chosen[1]
+  opt.on_policy_max = 1;
   util::SoftmaxSampler sampler;
   size_t deepest_proposal = 0;
   for (uint64_t seed = 0; seed < 500; ++seed) {
     std::mt19937_64 rng(seed);
-    bool uniform_tail = false;
+    std::vector<SimObsRole> roles;
     const std::vector<size_t> chosen =
-      evidence::select_trajectory(ranked, win_equity, opt, rng, sampler, &uniform_tail);
+      evidence::select_trajectory(ranked, win_equity, opt, rng, sampler, &roles);
+    ASSERT_EQ(chosen.size(), roles.size());
     ASSERT_GE(chosen.size(), 2u);
-    EXPECT_EQ(chosen[0], 0u);  // the anchor is always the highest-raw-score move
+    EXPECT_EQ(chosen[0], 0u);  // the anchor is the highest-raw-score move
+    EXPECT_EQ(roles[0], SimObsRole::kAnchor);
+    EXPECT_EQ(roles[1], SimObsRole::kOnPolicy);  // chosen[1] is the softmax proposal
     deepest_proposal = std::max(deepest_proposal, chosen[1]);
   }
   // The old cap kept unsimmed order indices 1..64 in reach; a proposal at 65+
@@ -5171,8 +5177,8 @@ TEST(SimObservationLog, Roundtrip) {
   {
     SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234", "beef5678", /*horizon_plies=*/4);
     w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
-                   kSimObsPosFlagUniformTail);
-    w.add_position(4, 0, {m2}, {o2}, 16, 1000);
+                   {SimObsRole::kAnchor, SimObsRole::kOffPolicy});
+    w.add_position(4, 0, {m2}, {o2}, 16, 1000);  // no roles: every record stores kAnchor
     w.close();
   }
 
@@ -5189,18 +5195,22 @@ TEST(SimObservationLog, Roundtrip) {
   ASSERT_EQ(p0.header->rollouts, 16);
   ASSERT_EQ(p0.header->base_seed, 999);
   ASSERT_EQ(p0.header->num_legal_moves, 321);
-  ASSERT_EQ(p0.header->flags, kSimObsPosFlagUniformTail);
-  SimObsRecord rec;  // copy out of the packed file view before comparing
+  ASSERT_EQ(p0.header->flags, 0u);  // no position flags at v4
+  SimObsRecord rec;                 // copy out of the packed file view before comparing
   std::memcpy(&rec, &p0.records[0], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m1, sizeof(Move)), 0);
   ASSERT_EQ(std::memcmp(&rec.obs, &o1, sizeof(SimObservation)), 0);
+  ASSERT_EQ(rec.role, SimObsRole::kAnchor);
   std::memcpy(&rec, &p0.records[1], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m2, sizeof(Move)), 0);
   ASSERT_EQ(std::memcmp(&rec.obs, &o2, sizeof(SimObservation)), 0);
+  ASSERT_EQ(rec.role, SimObsRole::kOffPolicy);
   const SimObsReader::Position p1 = r.position(1);
   ASSERT_EQ(p1.header->game_index, 4);
   ASSERT_EQ(p1.header->num_candidates, 1);
   ASSERT_EQ(p1.header->base_seed, 1000);
+  std::memcpy(&rec, &p1.records[0], sizeof(rec));
+  ASSERT_EQ(rec.role, SimObsRole::kAnchor);  // default when roles omitted
 
   // A version mismatch fails loudly (stale files must never misparse).
   {

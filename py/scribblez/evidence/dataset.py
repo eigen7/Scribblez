@@ -3,8 +3,8 @@ trajectory .sobs sidecars paired with pre-move inputs reconstructed by replay.
 
 Each position is identified by (game_index, turn_index) in a .slog file and
 carries, in a companion trajectory .sobs, its simmed candidates in trajectory
-order -- anchor, proposer picks, uniform tail -- with each one's raw CRN sim
-observations. A training row is (position, evidence prefix, held-out simmed
+order -- anchor, on-policy proposer picks, off-policy draws -- with each one's
+raw CRN sim observations. A training row is (position, evidence prefix, held-out simmed
 candidate): the prefix is what the model conditions on, and the held-out
 candidate's own sim outcome is the target -- its win value for the value
 heads, and its CRN-paired gain over the prefix's best-so-far for the
@@ -14,9 +14,9 @@ the same games' .mset sidecars through MsetDataset, as distillation rows for
 the plain pass, never as targets for these.
 
 Per epoch each position contributes ONE prefix, drawn uniformly from its valid
-prefix sizes (0 .. last proposer pick; the tail is never evidence), so a pass
-touches every position once and prefixes are covered across passes; the
-held-out candidates are the simmed ones outside the prefix, tail included.
+prefix sizes (0 .. last on-policy pick; off-policy draws are never evidence), so
+a pass touches every position once and prefixes are covered across passes; the
+held-out candidates are the simmed ones outside the prefix, off-policy included.
 Prefix 0 rows are what keeps the empty-evidence pass anchored, and where the
 gain target is the value itself. Only the simmed candidates are scored --
 those are the rows with sim labels -- so the candidate set per position is
@@ -235,6 +235,12 @@ class TrajectoryDataset:
         prefix_arr = np.asarray(prefixes, dtype=np.int64)
         pairs = zip(batch, prefixes, strict=True)
         gain = np.concatenate([gain_targets(pos.value, p) for pos, p in pairs])
+        # Held out = outside the evidence prefix (the rows that carry loss). A
+        # prefix only ever covers evidence-eligible records, so off-policy draws
+        # are held out at every prefix; the role check makes that explicit and
+        # order-independent rather than relying on the storage layout alone.
+        off_policy = np.concatenate([~pos.sobs.evidence_mask for pos in batch])
+        held_out = (slot >= prefix_arr[pos_id]) | off_policy
         return {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),
@@ -248,7 +254,7 @@ class TrajectoryDataset:
             "sim_delta": torch.from_numpy(np.concatenate([pos.delta for pos in batch])),
             "sim_value": torch.from_numpy(np.concatenate([pos.value for pos in batch])),
             "target_gain": torch.from_numpy(gain),
-            "held_out": torch.from_numpy(slot >= prefix_arr[pos_id]),
+            "held_out": torch.from_numpy(held_out),
             "slot": torch.from_numpy(slot),
             "prefix_sizes": torch.from_numpy(prefix_arr),
             "pre_move_diff": pre_diff_points,

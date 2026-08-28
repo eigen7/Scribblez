@@ -1,12 +1,12 @@
 // Evidence trajectories (docs/roadmap.md item 4): running one decision point's
 // candidate selection (the recipe lives in evidence_trajectory_select.h)
 // through the student scorer and the sim runner. The selected candidates are
-// simmed together in one SimRunner call under common random numbers, so the
-// trajectory order is pure record bookkeeping: every prefix of a position's
-// record array is a valid evidence set. The proposer cannot yet condition on
-// evidence mid-trajectory (roadmap item 3 lands the fusion runtime), so the
-// proposal distribution is computed once per position -- the roadmap's
-// bootstrap proposer.
+// simmed together in one SimRunner call under common random numbers; each
+// record carries its evidence role (SimObsRole), so a reader recovers which
+// candidates are evidence-eligible from the role rather than the order. The
+// proposer cannot yet condition on evidence mid-trajectory (roadmap item 3
+// lands the fusion runtime), so the proposal distribution is computed once per
+// position -- the roadmap's bootstrap proposer.
 //
 // This is the position-level core; the front-ends that supply decision points
 // (.slog replay, .gcg position sets) live in the evidence_trajectory_generator
@@ -50,8 +50,8 @@ struct DecisionPoint {
 
 struct TrajectoryResult {
   uint32_t num_legal_moves = 0;
-  bool uniform_tail = false;     // whether the last candidate is the uniform draw
-  std::vector<Move> candidates;  // trajectory order
+  std::vector<Move> candidates;   // trajectory order: anchor, on-policy, off-policy
+  std::vector<SimObsRole> roles;  // parallel to candidates
   std::vector<SimObservation> observations;
 };
 

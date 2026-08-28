@@ -16,19 +16,22 @@
 //   [SimObsFileHeader                       144 B]
 //   For each position p in [0, num_positions):
 //     [SimObsPositionHeader                  32 B]
-//     [SimObsRecord   num_candidates(p)    2760 B each]
+//     [SimObsRecord   num_candidates(p)    2761 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file. Records store the exact Move alongside its observation, the
 // evidence encoding pairing each observation with the move behind it.
 //
-// In a trajectory file (kSimObsFlagTrajectory) a position's records are in
-// the order the sequential loop simmed them -- the greedy anchor first, then
-// the proposer's picks -- so every prefix of the record array is a valid
-// evidence set. A trailing uniform-exploration draw, when present, is marked
-// by kSimObsPosFlagUniformTail (it can be absent: a small legal set may be
-// exhausted before the uniform slot).
+// In a trajectory file (kSimObsFlagTrajectory) a position's records carry a
+// per-record SimObsRole (docs/roadmap.md item 4): the greedy anchor, the
+// proposer's on-policy picks, and the stratified off-policy draws. The stored
+// order is anchor, then on-policy, then off-policy -- which the sim runner and
+// incumbent recovery rely on -- but evidence-eligibility is read off the role,
+// not the position, so an off-policy record renders held-out wherever it sits.
+// A valid evidence set is any subset of the anchor-plus-on-policy records that
+// contains the anchor; off-policy records are labels-only.
 
+#include "data/sim_obs_role.h"
 #include "game/move.h"
 #include "sim/sim_runner.h"
 
@@ -40,7 +43,7 @@ namespace scribblez {
 
 // "SOBS" in little-endian (bytes 'S','O','B','S' on disk).
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
-inline constexpr uint16_t kSimObsVersion = 3;
+inline constexpr uint16_t kSimObsVersion = 4;
 
 // SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
 // the opponent's entire true rack, an information condition no consumer
@@ -48,8 +51,9 @@ inline constexpr uint16_t kSimObsVersion = 3;
 inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
 inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajectory order
 
-// SimObsPositionHeader::flags bits.
-inline constexpr uint32_t kSimObsPosFlagUniformTail = 1u;  // last record is the uniform draw
+// SimObsPositionHeader::flags has no bits at v4: the uniform-tail bit it carried
+// through v3 is retired -- the off-policy exploration draw is now one of the
+// SimObsRole::kOffPolicy records, so held-out-ness is read off the record role.
 
 // Size of SimObsFileHeader's hex model-content-hash fields (the candidate
 // proposer, and the truncation leaf evaluator). All-zero bytes mean no such
@@ -76,16 +80,17 @@ struct SimObsPositionHeader {
   uint32_t rollouts;         // rollouts per candidate (== every record's obs.n)
   uint64_t base_seed;        // SimRunner::run seed, for reproducing the sims
   uint32_t num_legal_moves;  // legal moves at the position (the uniform draw's domain)
-  uint32_t flags;            // kSimObsPosFlag* bits
+  uint32_t flags;            // reserved; no SimObsPosFlag bits at v4
 };
 static_assert(sizeof(SimObsPositionHeader) == 32, "SimObsPositionHeader must be 32 bytes");
 
 struct SimObsRecord {
   Move move;  // 16 B; the simmed candidate
   SimObservation obs;
+  SimObsRole role;  // evidence eligibility; meaningful in trajectory files
 };
-static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation),
-              "SimObsRecord must pack move + observation with no padding");
+static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation) + 1,
+              "SimObsRecord must pack move + observation + role byte with no padding");
 
 #pragma pack(pop)
 
@@ -107,11 +112,14 @@ class SimObsWriter {
   SimObsWriter(const SimObsWriter&) = delete;
   SimObsWriter& operator=(const SimObsWriter&) = delete;
 
-  // `candidates` and `observations` are parallel arrays; `base_seed` is the
-  // SimRunner::run seed used.
+  // `candidates`, `observations`, and (in a trajectory file) `roles` are
+  // parallel arrays; `base_seed` is the SimRunner::run seed used. `roles` is
+  // empty for non-trajectory files -- every record then stores kAnchor, which
+  // their readers ignore; a trajectory writer passes one role per candidate.
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
                     const std::vector<SimObservation>& observations, uint32_t rollouts,
-                    uint64_t base_seed, uint32_t num_legal_moves = 0, uint32_t position_flags = 0);
+                    uint64_t base_seed, uint32_t num_legal_moves = 0,
+                    const std::vector<SimObsRole>& roles = {});
 
   void close();
 

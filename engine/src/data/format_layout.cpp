@@ -44,7 +44,7 @@ struct FieldInfo {
 // wrappers (MoveType, Glyph, bool) serialize as their underlying byte.
 consteval const char* scalar_code(std::meta::info t) {
   if (util::type_is<uint8_t>(t) || util::type_is<Glyph>(t) || util::type_is<MoveType>(t) ||
-      util::type_is<bool>(t))
+      util::type_is<SimObsRole>(t) || util::type_is<bool>(t))
     return "u1";
   if (util::type_is<int8_t>(t)) return "i1";
   if (util::type_is<uint16_t>(t)) return "<u2";
@@ -150,7 +150,9 @@ json::object build_constants() {
                {"flag_retired_open_rack", 1},
                {"flag_open_leaves", kSimObsFlagOpenLeaves},
                {"flag_trajectory", kSimObsFlagTrajectory},
-               {"pos_flag_uniform_tail", kSimObsPosFlagUniformTail}};
+               {"role_anchor", static_cast<uint8_t>(SimObsRole::kAnchor)},
+               {"role_on_policy", static_cast<uint8_t>(SimObsRole::kOnPolicy)},
+               {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

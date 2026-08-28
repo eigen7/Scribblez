@@ -36,18 +36,30 @@ class TrajectoryRecipe:
     everything besides the proposer that determines a trajectory."""
 
     rollouts: int = 200
-    proposals_min: int = 2
-    proposals_max: int = 8
+    on_policy_min: int = 2
+    on_policy_max: int = 8
     temperature: float = 0.05
+    off_policy_uniform: int = 1
+    quota_top: int = 4
+    quota_mid: int = 4
+    quota_tail: int = 4
+    quota_exchange: int = 2
+    mid_rank_limit: int = 32
     open_leaves: bool = False
     seed: int = 0
 
     def args(self) -> list[str]:
         return [
             f"--rollouts={self.rollouts}",
-            f"--proposals-min={self.proposals_min}",
-            f"--proposals-max={self.proposals_max}",
+            f"--on-policy-min={self.on_policy_min}",
+            f"--on-policy-max={self.on_policy_max}",
             f"--temperature={self.temperature}",
+            f"--off-policy-top={self.quota_top}",
+            f"--off-policy-mid={self.quota_mid}",
+            f"--off-policy-tail={self.quota_tail}",
+            f"--off-policy-exchange={self.quota_exchange}",
+            f"--off-policy-mid-rank-limit={self.mid_rank_limit}",
+            f"--off-policy-uniform={self.off_policy_uniform}",
             f"--seed={self.seed}",
             *(["--open-leaves"] if self.open_leaves else []),
         ]
