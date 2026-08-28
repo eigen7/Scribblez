@@ -220,6 +220,11 @@ def resolved_teacher_generation(params: MoveSetEvalParams, mount_root=None) -> i
     or the tag holds no export to distill from."""
     if not params.teacher_tag:
         raise params_mod.ParamsError("teacher_tag is required")
+    if params.teacher_generation < -1:
+        raise params_mod.ParamsError(
+            f"teacher_generation must be a generation index (>= 0) or -1 for the latest, "
+            f"got {params.teacher_generation}"
+        )
     if params.teacher_generation >= 0:
         return params.teacher_generation
     gens = _teacher_paths(params, mount_root).exported_generations()

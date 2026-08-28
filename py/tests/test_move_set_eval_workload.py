@@ -281,6 +281,7 @@ def test_cycle_labels_each_slog_in_the_mode_its_stem_selects(tmp_path, monkeypat
     assert len(rec.runs) == 2
     assert by_mode[True] == expected_swept
     assert by_mode[False] == set(stems) - expected_swept
+    assert rec.teachers == ["t.onnx", "t.onnx"]  # both modes label against the one model
 
 
 def test_cycle_stops_at_the_first_failing_selection_group(tmp_path, monkeypatch):
@@ -384,6 +385,11 @@ def test_teacher_resolution_requires_a_tag_and_an_export(tmp_path):
     with pytest.raises(params_mod.ParamsError, match="no exported model"):
         move_set_eval.resolved_teacher_generation(
             MoveSetEvalParams(teacher_tag="empty"), mount_root=tmp_path
+        )
+    # -1 is the sole "latest" sentinel; a stray negative is a typo, not "latest".
+    with pytest.raises(params_mod.ParamsError, match="teacher_generation must be"):
+        move_set_eval.resolved_teacher_generation(
+            MoveSetEvalParams(teacher_tag="empty", teacher_generation=-5)
         )
 
 
