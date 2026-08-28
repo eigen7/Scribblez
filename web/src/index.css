@@ -1353,10 +1353,37 @@ h1 {
 }
 .render-seat-name { font-weight: 700; font-size: 15px; }
 .render-seat-score { font-size: 20px; font-weight: 800; color: #f5deb3; }
+.render-unseen {
+  margin-top: 14px;
+  max-width: 620px;
+}
+.render-unseen-label {
+  color: #aed581;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.render-unseen-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.render-unseen-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: #f5deb3;
+  color: #2c3e50;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 15px;
+}
 .render-caption {
-  margin-top: 12px;
+  margin-top: 14px;
   color: #f5deb3;
   font-size: 14px;
-  max-width: 560px;
+  max-width: 620px;
 }
 .render-missing { color: #f5b7b1; padding: 40px; font-size: 16px; }

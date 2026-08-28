@@ -21,6 +21,33 @@ import http from 'node:http';
 
 const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+// Standard English Scrabble tile distribution (blanks tracked separately and
+// never surface as unseen letters, so they're omitted here).
+const TILE_DISTRIBUTION = {
+  A: 9, B: 2, C: 2, D: 4, E: 12, F: 2, G: 3, H: 2, I: 9, J: 1, K: 1, L: 4, M: 2,
+  N: 6, O: 8, P: 2, Q: 1, R: 6, S: 4, T: 6, U: 4, V: 2, W: 2, X: 1, Y: 2, Z: 1,
+};
+
+// The tiles unseen from `seat`'s point of view (the bag plus the opponent's
+// rack): the full distribution minus the tiles on the board and in `seat`'s own
+// rack. Board blanks appear lowercase and consume no letter, so they're skipped.
+function computeUnseen(state, seat) {
+  const counts = { ...TILE_DISTRIBUTION };
+  for (const row of state.board) {
+    for (const cell of row) {
+      if (cell && cell === cell.toUpperCase() && /[A-Z]/.test(cell)) counts[cell]--;
+    }
+  }
+  for (const slot of state.racks[seat]) {
+    if (slot.present && slot.known && counts[slot.letter] !== undefined) counts[slot.letter]--;
+  }
+  const unseen = [];
+  for (const letter of Object.keys(counts).sort()) {
+    for (let i = 0; i < counts[letter]; i++) unseen.push(letter);
+  }
+  return unseen;
+}
+
 function arg(flag, fallback) {
   const i = process.argv.indexOf(flag);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : fallback;
@@ -69,6 +96,11 @@ async function main() {
     for (const item of manifest.states) {
       const state = JSON.parse(readFileSync(resolve(manifestDir, item.state), 'utf8'));
       if (item.caption) state.caption = item.caption;
+      // "unseenFrom": <seat> adds an unseen-tiles strip from that seat's POV.
+      if (item.unseenFrom !== undefined) {
+        state.unseen = computeUnseen(state, item.unseenFrom);
+        state.unseenLabel = state.player_names[item.unseenFrom];
+      }
       // Blank a seat's rack to 7 unseen "?" tiles (a player-POV view): e.g.
       // "hideRacks": [0] hides Mike's rack in a Nigel-POV figure.
       for (const seat of item.hideRacks ?? []) {

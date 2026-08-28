@@ -18,6 +18,10 @@ interface RenderState {
   last_move?: [number, number][];
   // Optional caption drawn under the board (e.g. "Nigel to play, up 53").
   caption?: string;
+  // Optional unseen-tiles strip (the bag + opponent rack from one POV), with the
+  // POV player's name for the label. Filled in by the render driver.
+  unseen?: string[];
+  unseenLabel?: string;
 }
 
 declare global {
@@ -118,6 +122,18 @@ export default function RenderBoard() {
           lastMoveCells={lastMoveCells}
         />
         <RackRow slots={state.racks[0]} name={state.player_names[0]} score={state.scores[0]} top={false} />
+        {state.unseen && state.unseen.length > 0 && (
+          <div className="render-unseen">
+            <div className="render-unseen-label">
+              Unseen{state.unseenLabel ? ` (${state.unseenLabel} POV)` : ''} · {state.unseen.length}
+            </div>
+            <div className="render-unseen-tiles">
+              {state.unseen.map((letter, i) => (
+                <span className="render-unseen-tile" key={i}>{letter}</span>
+              ))}
+            </div>
+          </div>
+        )}
         {state.caption && <div className="render-caption">{state.caption}</div>}
       </div>
     </div>
