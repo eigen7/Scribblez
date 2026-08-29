@@ -65,6 +65,14 @@ namespace {
 
 // The mover holds at most RACK_SIZE tiles, so a full rack is the sound tile
 // budget for every mask -- an over-approximation never masks a real move.
+// TODO(sharpen self-mask): cap this by the tiles actually left in the endgame
+// (fewer remaining -> a tighter, more precise reachable set) rather than always
+// assuming a full rack. Precision only -- 7 is already sound -- and it needs
+// care: two plies out the mover has re-drawn, so a sound tight bound is not
+// simply today's rack size, and masking a real target would hit -log(0) (the
+// loss's force-keep-target guard backstops that). Bag count is not directly in
+// the observer's information set (bag + opp rack are lumped as the unseen pool);
+// total unseen = 100 - tiles-on-board - my-rack is what is knowable.
 constexpr int kMaskTileBudget = RACK_SIZE;
 
 // Writes an opp-head legality mask over the footprint classes. The opponent
