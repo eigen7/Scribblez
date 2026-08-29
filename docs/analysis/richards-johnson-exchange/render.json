@@ -1,0 +1,52 @@
+{
+  "states": [
+    {
+      "state": "states/ply_21.json",
+      "out": "images/critical-position.png",
+      "hideRacks": [0],
+      "unseenFrom": 1
+    },
+    {
+      "state": "states/ply_21.json",
+      "out": "images/bingo-threats.png",
+      "hideRacks": [0],
+      "highlights": [
+        { "color": "rgba(41,128,185,0.72)", "label": "WOES", "labelAt": [13,5],
+          "squares": [[13,3],[13,4],[13,5],[13,6],[13,7],[13,8],[13,9]] },
+        { "color": "rgba(192,57,43,0.72)", "label": "V lane", "labelAt": [4,0],
+          "squares": [[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]] },
+        { "color": "rgba(230,126,34,0.88)", "label": "Y lane", "labelAt": [8,1],
+          "squares": [[5,1],[6,1],[7,1],[8,1],[9,1],[10,1],[11,1]] }
+      ],
+      "legend": [
+        { "color": "rgba(41,128,185,0.72)", "text": "S-hook onto WOE (WOES) -- the obvious bingo lane" },
+        { "color": "rgba(192,57,43,0.72)", "text": "Down the V of VIRGA -- rarer, but higher-scoring and dangerous" },
+        { "color": "rgba(230,126,34,0.88)", "text": "Alongside the Y of JUDY -- least likely (needs the last A)" }
+      ],
+      "caption": "Potential bingo spots"
+    },
+    {
+      "state": "states/allee/ply_23.json",
+      "out": "images/allee-line.png",
+      "hideRacks": [0],
+      "unseenFrom": 1,
+      "caption": "After B6 ALLEE and a reply like 14E RULIEST, Nigel can draw the C but not have a way to use it to hit the H15 TW, like in this position."
+    },
+    {
+      "state": "states/doubles/ply_23.json",
+      "out": "images/double-s.png",
+      "hideRacks": [0],
+      "highlights": [
+        { "color": "rgba(41,128,185,0.72)", "label": "WOES", "labelAt": [13,5],
+          "squares": [[13,3],[13,4],[13,5],[13,6],[13,7],[13,8],[13,9]] },
+        { "color": "rgba(142,68,173,0.78)", "label": "YEETS", "labelAt": [3,14],
+          "squares": [[1,14],[2,14],[3,14],[4,14],[5,14],[6,14],[7,14]] }
+      ],
+      "legend": [
+        { "color": "rgba(41,128,185,0.72)", "text": "S-hook onto WOE -> WOES: a bingo through J14" },
+        { "color": "rgba(142,68,173,0.78)", "text": "S-hook onto YEET -> YEETS: a bingo down column O to O8" }
+      ],
+      "caption": "If Nigel plays a word and Mike sets up 8K YEET (holding an S), Mike threatens a bingo ending in S in TWO places -- WOES and YEETS -- and Nigel cannot block both."
+    }
+  ]
+}

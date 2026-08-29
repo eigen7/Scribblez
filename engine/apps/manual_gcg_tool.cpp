@@ -18,7 +18,9 @@
 #include <cctype>
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -685,6 +687,32 @@ class ManualGame {
     view_ply_ = turns_.size();
   }
 
+  // The number of turns recorded (the final, "tail" ply). A jump_to_ply target
+  // ranges over [0, ply_count()]: 0 is the empty start, ply_count() the end.
+  int ply_count() const { return int(turns_.size()); }
+
+  // Every legal play for `rack_str` on the board at `ply`, as notation strings
+  // ("8H WAREZ 54") sorted by descending score. Offline aid for finding the
+  // exact coordinates of a hypothetical move when authoring a variant GCG.
+  std::vector<std::string> list_moves(int ply, const std::string& rack_str) const {
+    const Board& board = snapshots_.at(std::size_t(ply)).board;
+    Rack rack;
+    for (const char c : rack_str) {
+      if (c == '?')
+        rack.add(BLANK);
+      else if (c >= 'A' && c <= 'Z')
+        rack.add(Tile::of(c - 'A'));
+    }
+    MoveGenerator gen(board, dict_);
+    std::vector<Move> moves = gen.generate(rack);
+    std::sort(moves.begin(), moves.end(),
+              [](const Move& a, const Move& b) { return a.score() > b.score(); });
+    std::vector<std::string> out;
+    out.reserve(moves.size());
+    for (const Move& m : moves) out.push_back(move_to_notation(board, m));
+    return out;
+  }
+
   void jump_to_ply(int ply) {
     if (ply < 0 || ply > int(turns_.size())) {
       status_ = "Invalid history position";
@@ -1188,6 +1216,50 @@ std::optional<boost::json::object> handle_message(ManualGame& game,
   return std::nullopt;
 }
 
+// Reads a whole text file into a string, throwing if it cannot be opened.
+std::string read_file(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw util::CleanException("cannot open GCG file: {}", path.string());
+  std::ostringstream buf;
+  buf << in.rdbuf();
+  return buf.str();
+}
+
+// Parses a comma-separated list of ply indices ("0,21,22"). An empty string
+// selects every ply from the empty start (0) through the final position.
+std::vector<int> parse_plies(const std::string& spec, int ply_count) {
+  std::vector<int> plies;
+  if (spec.empty()) {
+    for (int p = 0; p <= ply_count; ++p) plies.push_back(p);
+    return plies;
+  }
+  std::stringstream ss(spec);
+  std::string token;
+  while (std::getline(ss, token, ',')) {
+    if (token.empty()) continue;
+    plies.push_back(std::stoi(token));
+  }
+  return plies;
+}
+
+// Headless companion to the live server: writes each requested ply's front-end
+// state JSON (exactly what the WebSocket would send) to `out_dir/ply_<n>.json`,
+// so the render harness can rasterize it offline. No browser, Vite, or socket
+// is involved. `game` must already have a GCG loaded.
+void dump_states(ManualGame& game, const std::string& plies_spec,
+                 const std::filesystem::path& out_dir) {
+  const std::vector<int> plies = parse_plies(plies_spec, game.ply_count());
+  std::filesystem::create_directories(out_dir);
+  for (const int ply : plies) {
+    game.jump_to_ply(ply);
+    const std::filesystem::path path = out_dir / std::format("ply_{}.json", ply);
+    std::ofstream out(path, std::ios::binary);
+    if (!out) throw util::CleanException("cannot write state file: {}", path.string());
+    out << boost::json::serialize(game.state_json());
+    std::cerr << "wrote " << path.string() << "\n";
+  }
+}
+
 }  // namespace
 }  // namespace scribblez
 
@@ -1197,18 +1269,48 @@ int main(int argc, char** argv) {
     int ws_port = 8082;
     int vite_port = 5174;
     std::string web_dir = "web";
+    std::string dump_gcg;
+    std::string dump_plies;
+    std::string dump_out = "board_states";
+    std::string list_rack;
+    int list_ply = 0;
 
     po::options_description desc("manual_gcg_tool options");
     desc.add_options()("help,h", "show this help message and exit")(
       "port", po::value<int>(&ws_port)->default_value(ws_port), "engine WebSocket port")(
       "vite-port", po::value<int>(&vite_port)->default_value(vite_port), "browser UI port")(
       "web-dir", po::value<std::string>(&web_dir)->default_value(web_dir),
-      "front-end package dir (cwd of npm run dev)");
+      "front-end package dir (cwd of npm run dev)")(
+      "dump-gcg", po::value<std::string>(&dump_gcg),
+      "headless: load this GCG file and dump per-ply state JSON, then exit (no server)")(
+      "dump-plies", po::value<std::string>(&dump_plies),
+      "comma-separated plies to dump (default: all); requires --dump-gcg")(
+      "dump-out", po::value<std::string>(&dump_out)->default_value(dump_out),
+      "output directory for dumped state JSON; requires --dump-gcg")(
+      "list-rack", po::value<std::string>(&list_rack),
+      "instead of dumping, print every legal play for this rack (e.g. RULIEST) "
+      "on the --list-ply board; requires --dump-gcg")(
+      "list-ply", po::value<int>(&list_ply)->default_value(list_ply),
+      "ply whose board --list-rack enumerates against");
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
+
+    // Headless mode: no WebSocket, no Vite -- just GCG in, state JSON (or a move
+    // list) out.
+    if (!dump_gcg.empty()) {
+      scribblez::ManualGame game(dict);
+      game.load_gcg_text(scribblez::read_file(dump_gcg), dump_gcg);
+      if (!list_rack.empty()) {
+        for (const std::string& mv : game.list_moves(list_ply, list_rack)) std::cout << mv << "\n";
+      } else {
+        scribblez::dump_states(game, dump_plies, dump_out);
+      }
+      return 0;
+    }
+
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual", "manual", 5174);
     if (!vite.wait_until_ready()) {

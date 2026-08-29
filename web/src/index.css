@@ -175,6 +175,46 @@ h1 {
   inset: 0;
 }
 
+/* Solid-fill overlay marking a square a play could reach, drawn with no tile on
+   it. The color (with its own alpha) comes inline; a `has-highlight` cell is
+   lifted so an overflowing label reads above neighboring squares. */
+.board-cell.has-highlight {
+  z-index: 3;
+}
+/* A cell carrying a label lifts above every other highlighted cell, so its
+   label overflows across neighbors (later in DOM) without being clipped. */
+.board-cell.has-label {
+  z-index: 8;
+}
+.board-cell-highlight {
+  position: absolute;
+  inset: 1px;
+  border-radius: 2px;
+  /* A faint light border delineates the tinted square from the board (also
+     green), so a highlight reads even when its color is close to the board. */
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.board-cell-highlight-label {
+  position: relative;
+  /* Size to the text (overflowing the ~38px cell, centered by the parent flex)
+     so short labels ("WOES", "C-play, TW") stay on one line; a long descriptive
+     label caps at max-width and wraps to a compact centered block. */
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 132px;
+  text-align: center;
+  line-height: 1.1;
+  font-size: 15px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  z-index: 6;
+  pointer-events: none;
+}
+
 /* Rack */
 .rack {
   margin-top: 12px;
@@ -1331,3 +1371,78 @@ h1 {
 .role-head { display: flex; align-items: baseline; gap: 10px; }
 .role-head b { font-size: 15px; color: #2c3540; }
 .role-head span { font-size: 12.5px; color: #7c8694; }
+
+/* Offline board-render harness (?tool=render): a self-contained board picture
+   captured to PNG by web/scripts/render_boards.mjs. The captured node is
+   `.manual-board-section`, so its padding and background become the image's. */
+.render-root {
+  display: inline-block;
+  padding: 20px;
+}
+.render-root .manual-board-section {
+  padding: 22px 24px;
+  background: #2c3e50;
+  border-radius: 12px;
+}
+.render-seat-label {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 150px;
+  color: #ecf0f1;
+}
+.render-seat-name { font-weight: 700; font-size: 15px; }
+.render-seat-score { font-size: 20px; font-weight: 800; color: #f5deb3; }
+.render-unseen {
+  margin-top: 14px;
+  max-width: 620px;
+}
+.render-unseen-label {
+  color: #aed581;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.render-unseen-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.render-unseen-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: #f5deb3;
+  color: #2c3e50;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 15px;
+}
+.render-legend {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.render-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ecf0f1;
+  font-size: 14px;
+}
+.render-legend-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.render-caption {
+  margin-top: 14px;
+  color: #f5deb3;
+  font-size: 14px;
+  max-width: 620px;
+}
+.render-missing { color: #f5b7b1; padding: 40px; font-size: 16px; }

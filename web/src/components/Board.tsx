@@ -24,6 +24,11 @@ interface BoardProps {
   // here without judging occupancy or meaning -- the caller decides which
   // cells (if any) get an entry and what the ring color and tooltip mean.
   cellHalos?: ({ color: string; title: string } | null)[][];
+  // Per-cell solid-fill overlay, indexed [row][col], for marking squares a play
+  // could go to without placing any tile there. A non-null entry tints the cell
+  // with `color`; an optional `label` (e.g. "+98") is drawn as a badge anchored
+  // on that cell, overflowing it, to annotate the highlighted region.
+  cellHighlights?: ({ color: string; label?: string } | null)[][];
 }
 
 const BONUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -43,6 +48,7 @@ const BONUS_LABELS: Record<string, string> = {
 const Board: React.FC<BoardProps> = ({
   board, bonuses, candidateTiles, tileScores, cursorRow, cursorCol, cursorDir,
   interactive, onCellClick, onCellDrop, lastMoveCells, highlightLane, cellHalos,
+  cellHighlights,
 }) => {
   const dim = 15;
 
@@ -109,6 +115,12 @@ const Board: React.FC<BoardProps> = ({
 
               if (interactive && !tile) cellClass += ' clickable';
 
+              // Highlighted squares lift above later sibling cells so a label
+              // anchored here can overflow across them without being painted
+              // over; a labelled cell lifts higher still, above other highlights.
+              if (cellHighlights?.[r]?.[c]) cellClass += ' has-highlight';
+              if (cellHighlights?.[r]?.[c]?.label) cellClass += ' has-label';
+
               // Determine what to display in this cell.
               const isExistingTile = !!tile;
               const displayLetter = tile ?? candidate?.letter ?? null;
@@ -148,6 +160,18 @@ const Board: React.FC<BoardProps> = ({
                   ) : isCenter ? (
                     <span className="center-star">★</span>
                   ) : null}
+                  {cellHighlights?.[r]?.[c] && (
+                    <div
+                      className="board-cell-highlight"
+                      style={{ backgroundColor: cellHighlights[r][c]!.color }}
+                    >
+                      {cellHighlights[r][c]!.label && (
+                        <span className="board-cell-highlight-label">
+                          {cellHighlights[r][c]!.label}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {cellHalos?.[r]?.[c] && (
                     <div
                       className="board-cell-halo"

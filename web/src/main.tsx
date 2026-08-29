@@ -4,6 +4,7 @@ import App from './App';
 import AppManual from './AppManual';
 import AppBoard from './AppBoard';
 import MasterApp from './components/master/MasterApp';
+import RenderBoard from './RenderBoard';
 import './index.css';
 
 // The engine injects VITE_TOOL when it launches the dev server, so each tool's
@@ -15,6 +16,7 @@ const Root =
   tool === 'manual' ? AppManual
   : tool === 'board' ? AppBoard
   : tool === 'dashboard' ? MasterApp
+  : tool === 'render' ? RenderBoard
   : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -22,7 +22,6 @@
 #include "training/move_set_eval_candidates.h"
 #include "util/math.h"
 
-#include <cstdint>
 #include <random>
 #include <vector>
 
@@ -51,9 +50,9 @@ size_t anchor_index(const std::vector<Move>& ranked);
 
 // The trajectory's candidate indices into `ranked`, in sim order: the anchor,
 // up to a sampled count of temperature-softmax proposals over the student's win
-// equities (drawn over every unsimmed candidate), then the stratified off-policy
-// draws. Fills *roles in parallel with the returned indices (kAnchor, kOnPolicy,
-// kOffPolicy), so a reader recovers evidence-eligibility from the role.
+// equities, then the stratified off-policy draws. Fills *roles in parallel with
+// the returned indices (kAnchor, kOnPolicy, kOffPolicy), so a reader recovers
+// evidence-eligibility from the role.
 std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
                                       const std::vector<float>& win_equity,
                                       const TrajectoryOptions& opt, std::mt19937_64& rng,
