@@ -25,6 +25,8 @@ add_library(scribblez_core STATIC
   src/data/binary_log.cpp
   src/encoding/game_state_encoder.cpp
   src/training/training_targets.cpp
+  src/training/footprint.cpp
+  src/training/footprint_mask.cpp
   src/lexicon/word_map.cpp
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
@@ -284,6 +286,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
 
   add_executable(scribblez_tests
     tests/tests_main.cpp
+    tests/test_footprint.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
   target_link_libraries(scribblez_tests PRIVATE
