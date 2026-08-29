@@ -4929,7 +4929,7 @@ TEST(MoveSetEvalCandidates, OffPolicyDrawsRespectRankWindowsAndExclusion) {
   const std::vector<char> pre = taken;
   std::mt19937_64 rng(3);
   const std::vector<size_t> draws =
-    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/2, &taken, rng);
+    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/2, rng, &taken);
 
   // ranked_plays has no exchanges, so the exchange stratum contributes nothing:
   // mid + tail + uniform.
@@ -4962,7 +4962,7 @@ TEST(MoveSetEvalCandidates, OffPolicyExchangeStratumDrawsNonPlaysOnly) {
   std::vector<char> taken(ranked.size(), 0);
   std::mt19937_64 rng(1);
   const std::vector<size_t> draws =
-    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/0, &taken, rng);
+    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/0, rng, &taken);
   ASSERT_EQ(draws.size(), 2u);
   for (size_t idx : draws) EXPECT_NE(ranked[idx].type(), MoveType::PLAY);
 }

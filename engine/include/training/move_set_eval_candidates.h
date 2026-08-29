@@ -68,11 +68,11 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
 // indices already marked in *taken (the anchor and on-policy picks), marking
 // each drawn index in turn. quotas.top is the head the proposer owns: the mid
 // and tail strata draw only at rank >= quotas.top, so they never touch it; the
-// exchange and uniform strata are unrestricted by rank and may. Returns the
-// drawn indices in a stable stratum order (mid, tail, exchange, uniform); an
-// exhausted stratum simply yields fewer, with no cross-stratum backfill. Shares
-// the strata core with stratified_candidates. `taken` must be sized to
-// ranked.size().
+// exchange and uniform strata are unrestricted by rank and may draw from it.
+// Returns the drawn indices in a stable stratum order (mid, tail, exchange,
+// uniform); an exhausted stratum simply yields fewer, with no cross-stratum
+// backfill. Shares the strata core with stratified_candidates. `taken` must be
+// sized to ranked.size().
 std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, const StratumQuotas& quotas,
                                      int uniform, std::mt19937_64& rng, std::vector<char>* taken);
 
