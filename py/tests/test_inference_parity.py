@@ -21,7 +21,11 @@ import numpy as np
 import pytest
 import torch
 from scribblez.ffi import get_input_shapes
-from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
+from scribblez.position_eval.model import (
+    FOOTPRINT_CLASSES,
+    MASK_HEAD_NAMES,
+    PositionEvalModel,
+)
 from scribblez.position_eval.onnx_export import export_onnx
 
 # Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
@@ -121,7 +125,8 @@ def test_dynamic_batch_axis(tmp_path):
         assert score_diff.shape == (batch, 2)  # [mean, std]
         assert len(mask_outs) == len(MASK_HEAD_NAMES)
         for mask in mask_outs:
-            assert mask.shape == (batch, BOARD_SIZE, BOARD_SIZE)
+            # Each placement head exports raw footprint logits, not a (15,15) map.
+            assert mask.shape == (batch, FOOTPRINT_CLASSES)
 
 
 if __name__ == "__main__":

@@ -12,15 +12,21 @@ Architecture:
       points. The std stack reads a detached copy of the trunk summary, so its
       loss trains only that stack and never perturbs the trunk or the mean. The
       exported second value is the std directly.
-    * Placement masks (aux): one shared 1x1-conv reduction -> (4, 15, 15), the
-      four channels split into named (15, 15) sigmoid masks. The marginals
-      OppNextPlacement / SelfNextPlacement predict where each player's next
-      move places tiles; the conjunctions OppWinPlacement / SelfWinPlacement
-      predict Pr[player's next move occupies the cell AND that player wins] --
-      the per-square "opponent danger" / "self opportunity" maps of
-      docs/sim_residual_feedback.md. Pairing each conjunction with its marginal
-      lets consumers separate "plays there often" from "wins when playing
-      there".
+    * Placement heads (aux): four categorical distributions over move
+      FOOTPRINTS (training/footprint.h) -- a KataGo-policy-style Conv2d(C->13)
+      giving per-(cell, orientation, k) logits, flattened to the anchored
+      footprints, plus a pooled FC for the two catch-all classes (pass, and the
+      win heads' not-win / the plays heads' dummy). The plays heads
+      OppNextPlacement / SelfNextPlacement predict which footprint each player's
+      next move is; the win heads OppWinPlacement / SelfWinPlacement predict
+      Pr[footprint AND that player wins], carrying not-win on the extra class --
+      the "opponent danger" / "self opportunity" signals of
+      docs/sim_residual_feedback.md, now over move footprints instead of a
+      per-cell marginal. Trained by masked softmax cross-entropy: the raw
+      logits are the export, and each consumer masks illegal footprints before
+      the softmax (the mask is not in the graph). The (15,15) per-cell marginal
+      the dashboard shows is recovered downstream by summing footprint
+      probability over the cells each footprint covers.
 
 The two model input widths come from the engine session's input-encoding spec
 (85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
@@ -47,12 +53,44 @@ from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
 
 
-# The placement-mask heads, in the channel order mask_conv emits them (also
-# the order they appear in forward()'s output dict and the ONNX export). The
-# names and order are training_targets.h's placement targets, served over the
-# FFI -- the same single source the C++ TensorRT decode binds output tensors
-# by, so the export and the engine cannot disagree.
+# The placement heads, in the order they appear in forward()'s output dict and
+# the ONNX export. The names and order are training_targets.h's placement
+# targets, served over the FFI -- the same single source the C++ TensorRT decode
+# binds output tensors by, so the export and the engine cannot disagree.
 MASK_HEAD_NAMES = tuple(format_layout()["constants"]["placement_head_names"])
+
+# The footprint class space each placement head is a distribution over, read
+# from the same FFI source as the C++ targets/outputs so widths cannot drift:
+# num_classes = anchored footprints (side*side*slots_per_cell) + pass + extra.
+_FOOTPRINT = format_layout()["constants"]["footprint"]
+FOOTPRINT_CLASSES = _FOOTPRINT["num_classes"]
+FOOTPRINT_SLOTS_PER_CELL = _FOOTPRINT["slots_per_cell"]
+FOOTPRINT_ANCHORED = _FOOTPRINT["anchored"]
+# Catch-all classes past the anchored footprints: pass, then not-win/dummy.
+FOOTPRINT_CATCH_ALL = FOOTPRINT_CLASSES - FOOTPRINT_ANCHORED
+
+
+class FootprintPlacementHead(nn.Module):
+    """One placement head: a categorical distribution over move footprints.
+
+    Conv2d(C -> slots_per_cell) gives per-(cell, orientation, k) logits, whose
+    (cell, slot) flattening is exactly training_targets.h's anchored-footprint
+    class index (cell = row*side+col, then its slots). A pooled FC over the value
+    summary emits the trailing catch-all logits (pass, not-win/dummy). The head
+    is a raw-logit emitter; masking + softmax happen in the loss / consumers.
+    """
+
+    def __init__(self, trunk_channels: int, value_in: int, slots_per_cell: int, catch_all: int):
+        super().__init__()
+        self.conv = nn.Conv2d(trunk_channels, slots_per_cell, 1)
+        self.catch_all_fc = nn.Linear(value_in, catch_all)
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        b = x.shape[0]
+        # (B, slots, H, W) -> (B, H, W, slots) -> (B, H*W*slots): cell-major,
+        # slot-minor, matching footprint_class's (cell*slots + slot) layout.
+        anchored = self.conv(x).permute(0, 2, 3, 1).reshape(b, -1)
+        return torch.cat([anchored, self.catch_all_fc(value_in)], dim=1)  # (B, num_classes)
 
 
 class PositionEvalModel(nn.Module):
@@ -130,15 +168,17 @@ class PositionEvalModel(nn.Module):
             nn.Linear(256, 1),
         )
 
-        # Placement-mask heads (aux): one shared 1x1-conv reduction emitting a
-        # (len(MASK_HEAD_NAMES), 15, 15) logit stack, split per head in
-        # forward(). The masks read closely related board structure, so they
-        # share the reduction rather than each owning one.
-        self.mask_conv = nn.Sequential(
-            nn.Conv2d(trunk_channels, 32, 1, bias=False),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, len(MASK_HEAD_NAMES), 1),
+        # Placement heads (aux): one categorical footprint head per placement
+        # name. Each owns its own Conv2d(C->slots) policy reduction (they predict
+        # different distributions -- opp vs self, plays vs win -- so they do not
+        # share a trunk reduction) plus a pooled FC for the catch-all logits.
+        self.placement_heads = nn.ModuleDict(
+            {
+                name: FootprintPlacementHead(
+                    trunk_channels, value_in, FOOTPRINT_SLOTS_PER_CELL, FOOTPRINT_CATCH_ALL
+                )
+                for name in MASK_HEAD_NAMES
+            }
         )
 
     def forward(
@@ -152,7 +192,8 @@ class PositionEvalModel(nn.Module):
 
         Returns:
             Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),
-            and one (B,15,15) logit mask per MASK_HEAD_NAMES entry.
+            and one (B, FOOTPRINT_CLASSES) raw footprint-logit tensor per
+            MASK_HEAD_NAMES entry.
         """
         # Shared conv trunk (s, the scalar projection, is reused by the value
         # heads below).
@@ -168,7 +209,6 @@ class PositionEvalModel(nn.Module):
         value_in = torch.cat([mean_max_pool(x), s], dim=1)  # (B, 3C)
 
         wld = self.wld_fc(value_in)
-        masks = self.mask_conv(x)  # (B, len(MASK_HEAD_NAMES), 15, 15)
 
         # Score-diff head: [mean, std] in score points. The std stack reads a
         # detached copy of the value summary, so its loss never flows into the
@@ -179,9 +219,31 @@ class PositionEvalModel(nn.Module):
         sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
         out = {"wld": wld, "score_diff": sd}
-        for i, name in enumerate(MASK_HEAD_NAMES):
-            out[name] = masks[:, i]  # (B, 15, 15)
+        for name in MASK_HEAD_NAMES:
+            out[name] = self.placement_heads[name](x, value_in)  # (B, FOOTPRINT_CLASSES)
         return out
+
+
+def _placement_ce(
+    logits: torch.Tensor,
+    target_idx: torch.Tensor,
+    legal_mask: torch.Tensor,
+    mask_placement: bool,
+) -> torch.Tensor:
+    """Masked softmax cross-entropy for one footprint head.
+
+    logits (B, C) raw; target_idx (B,) the footprint class; legal_mask (B, C) in
+    {0,1}. When masking, illegal footprints are driven to -inf before the softmax
+    so they carry no probability or gradient. The target class is always kept in
+    the mask first (the -log(0) NaN guard): the engine masks are sound
+    over-approximations, but a data-dependent gap must degrade to an unmasked
+    target, never to NaN.
+    """
+    if mask_placement:
+        legal_mask = legal_mask.clone()
+        legal_mask.scatter_(1, target_idx.unsqueeze(1), 1.0)
+        logits = logits.masked_fill(legal_mask == 0, float("-inf"))
+    return F.cross_entropy(logits, target_idx)
 
 
 def compute_loss(
@@ -193,31 +255,31 @@ def compute_loss(
     lambda_win_placement: float = 0.5,
     huber_delta_mean: float = 10.0,
     huber_delta_std: float = 10.0,
-    placement_pos_weight: float = 1.0,
+    mask_placement: bool = True,
 ) -> dict[str, torch.Tensor]:
     """Compute combined loss for all heads.
 
     Args:
         outputs: model forward() result. "wld" (B,3 logits), "score_diff"
-                 (B,2 = [mean, std]), and one (B,15,15) logit mask per
-                 MASK_HEAD_NAMES entry.
+                 (B,2 = [mean, std]), and one (B, FOOTPRINT_CLASSES) raw
+                 footprint-logit tensor per MASK_HEAD_NAMES entry.
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
-                 final differential, and a (B,15,15) binary mask per
-                 MASK_HEAD_NAMES entry.
+                 final differential, and, per MASK_HEAD_NAMES entry, both the
+                 footprint class index ("<name>", (B,1)) and its legality mask
+                 ("<name>_mask", (B, FOOTPRINT_CLASSES) in {0,1}).
         lambda_wld: weight applied to the WLD (value) loss. 1.0 in normal
                  training; drop it to isolate the other heads (a diagnostic that
                  leaves the value head untrained).
-        lambda_next_placement: weight applied to each of the two marginal
+        lambda_next_placement: weight applied to each of the two plays-head
                  placement losses (opp and self).
-        lambda_win_placement: weight applied to each of the two win-placement
-                 conjunction losses (opp and self).
+        lambda_win_placement: weight applied to each of the two win-head
+                 placement losses (opp and self).
         huber_delta_mean: Huber transition point (points) for the mean.
         huber_delta_std: Huber transition point (points) for the std.
-        placement_pos_weight: BCE pos_weight for the placement-mask heads. 1.0 is
-                 the ordinary (calibrated) loss; >1 up-weights the sparse
-                 target-1 cells so a rare high-value square is not drowned by the
-                 ~98% empty cells -- at the cost of calibration, so it is a
-                 diagnostic knob, not a deployable default.
+        mask_placement: mask illegal footprints before the softmax (the
+                 deployable default). False runs plain softmax-CE over all
+                 classes -- the masked-vs-unmasked arm that keeps masking from
+                 confounding the loss-geometry result.
 
     Returns:
         Dict with "total" plus one entry per head loss.
@@ -239,19 +301,16 @@ def compute_loss(
     loss_sd_std = F.huber_loss(sd_std, std_target, delta=huber_delta_std)
     loss_sd = loss_sd_mean + loss_sd_std
 
-    # Placement-mask heads: binary cross-entropy per cell, the marginals
-    # weighted by lambda_next_placement and the conjunctions by
-    # lambda_win_placement. placement_pos_weight optionally up-weights the
-    # target-1 cells (a scalar tensor on the logits' device broadcasts over the
-    # board); None leaves BCE calibrated.
-    pos_weight = (
-        torch.tensor(placement_pos_weight, device=outputs[MASK_HEAD_NAMES[0]].device)
-        if placement_pos_weight != 1.0
-        else None
-    )
-    mask_losses = {
-        name: F.binary_cross_entropy_with_logits(
-            outputs[name], targets[name], pos_weight=pos_weight
+    # Placement heads: masked softmax cross-entropy against the footprint class,
+    # the plays heads weighted by lambda_next_placement and the win heads by
+    # lambda_win_placement. Softmax's conserved mass is the point -- it replaces
+    # the per-cell BCE's drifting, easy-negative-diluted geometry.
+    placement_losses = {
+        name: _placement_ce(
+            outputs[name],
+            targets[name].squeeze(1).long(),
+            targets[f"{name}_mask"],
+            mask_placement,
         )
         for name in MASK_HEAD_NAMES
     }
@@ -260,9 +319,9 @@ def compute_loss(
         lambda_wld * loss_wld
         + lambda_sd * loss_sd
         + lambda_next_placement
-        * (mask_losses["opp_next_placement"] + mask_losses["self_next_placement"])
+        * (placement_losses["opp_next_placement"] + placement_losses["self_next_placement"])
         + lambda_win_placement
-        * (mask_losses["opp_win_placement"] + mask_losses["self_win_placement"])
+        * (placement_losses["opp_win_placement"] + placement_losses["self_win_placement"])
     )
 
     return {
@@ -271,5 +330,5 @@ def compute_loss(
         "score_diff": loss_sd,
         "score_diff_mean": loss_sd_mean,
         "score_diff_std": loss_sd_std,
-        **mask_losses,
+        **placement_losses,
     }

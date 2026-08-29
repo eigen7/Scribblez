@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from .model import compute_loss
+from .model import MASK_HEAD_NAMES, compute_loss
 
 # Per-head loss keys accumulated each epoch ("total" is the optimized
 # objective).
@@ -41,7 +41,7 @@ class LossConfig:
     lambda_win_placement: float
     huber_delta_mean: float
     huber_delta_std: float
-    placement_pos_weight: float
+    mask_placement: bool
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -52,7 +52,7 @@ class LossConfig:
             args.lambda_win_placement,
             args.huber_delta_mean,
             args.huber_delta_std,
-            args.placement_pos_weight,
+            args.mask_placement,
         )
 
 
@@ -67,14 +67,14 @@ class EpochResult:
     rows_trained: int
 
 
-# Target tensors compute_loss consumes, pulled from the batch dict by name.
+# Target tensors compute_loss consumes, pulled from the batch dict by name: the
+# value targets, and per placement head both the footprint class index and its
+# legality mask.
 TARGET_KEYS = (
     "wld",
     "score_diff",
-    "opp_next_placement",
-    "self_next_placement",
-    "opp_win_placement",
-    "self_win_placement",
+    *MASK_HEAD_NAMES,
+    *(f"{name}_mask" for name in MASK_HEAD_NAMES),
 )
 
 
@@ -133,7 +133,7 @@ def run_epoch(
             lambda_win_placement=loss_cfg.lambda_win_placement,
             huber_delta_mean=loss_cfg.huber_delta_mean,
             huber_delta_std=loss_cfg.huber_delta_std,
-            placement_pos_weight=loss_cfg.placement_pos_weight,
+            mask_placement=loss_cfg.mask_placement,
         )
         optimizer.zero_grad()
         losses["total"].backward()
