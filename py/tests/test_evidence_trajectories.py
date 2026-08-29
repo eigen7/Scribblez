@@ -228,7 +228,6 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
             "--rollouts=8",
             "--proposals-min=1",
             "--proposals-max=3",
-            "--proposal-pool=8",
             "--positions-per-game=2",
             "--threads=4",
             "--seed=7",
@@ -410,7 +409,6 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
         "--rollouts=8",
         "--proposals-min=1",
         "--proposals-max=3",
-        "--proposal-pool=8",
         "--threads=2",
         "--seed=7",
     ]
@@ -559,7 +557,6 @@ def gcg_set(traj_corpus, tmp_path_factory) -> SimpleNamespace:
             "--rollouts=8",
             "--proposals-min=1",
             "--proposals-max=3",
-            "--proposal-pool=8",
             "--threads=2",
             "--seed=7",
         ],

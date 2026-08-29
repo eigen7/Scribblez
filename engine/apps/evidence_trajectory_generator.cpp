@@ -461,8 +461,6 @@ int main(int argc, char** argv) {
       "most model proposals per trajectory")(
       "temperature", po::value<double>(&traj.temperature)->default_value(traj.temperature),
       "softmax temperature over the model's win-equity scores (win-equity units)")(
-      "proposal-pool", po::value<int>(&traj.proposal_pool)->default_value(traj.proposal_pool),
-      "proposals are drawn from the model's top-N unsimmed candidates")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (.slog inputs)")(

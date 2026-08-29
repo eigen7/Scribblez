@@ -98,7 +98,6 @@ class EvidenceTrajectoriesParams:
     proposals_min: int = param(2, "least model proposals per trajectory")
     proposals_max: int = param(8, "most model proposals per trajectory")
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
-    proposal_pool: int = param(64, "proposals are drawn from the model's top-N unsimmed candidates")
     # The .mset labeling's stratified sample around the forced candidates
     # (move_set_eval's quotas; the resulting .mset labels are read by the trainer
     # only in unfrozen mode).
@@ -196,7 +195,6 @@ def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
         proposals_min=params.proposals_min,
         proposals_max=params.proposals_max,
         temperature=params.temperature,
-        proposal_pool=params.proposal_pool,
         open_leaves=params.face_up_leaves,
     )
 
@@ -235,7 +233,6 @@ def run_trajectory_generator(
         f"--proposals-min={params.proposals_min}",
         f"--proposals-max={params.proposals_max}",
         f"--temperature={params.temperature}",
-        f"--proposal-pool={params.proposal_pool}",
         f"--threads={threads}",
         *(["--open-leaves"] if params.face_up_leaves else []),
     ]
