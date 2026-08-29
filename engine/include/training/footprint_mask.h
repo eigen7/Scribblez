@@ -38,4 +38,21 @@ using FootprintMask = std::array<bool, kFootprintClasses>;
 void opp_footprint_mask(const Board& board, int tile_budget, bool flip, bool win_head,
                         FootprintMask& mask);
 
+// Legality for a SELF placement head (self_next / self_win): the mover plays two
+// plies out, after the opponent moves, so the board is unknown. This is an
+// opp-move-INVARIANT over-approximation from the current board -- it must never
+// mask a footprint that could become legal under some opponent move, so it is
+// cross-check-oblivious (the opponent's move can change every cross-check).
+//
+// A class is legal iff its covered cells fit the board, each is self-reachable,
+// and k <= self_budget. Self-reachability uses a tiles-to-reach distance
+// transform d(Z) = fewest tiles to bridge to empty Z from the current structure
+// (multi-source 4-neighbour BFS, occupied = 0): Z is reachable iff
+// d(Z) <= opp_budget + self_budget -- the opponent extends toward Z within its
+// budget and the mover finishes within its own. Sound because the BFS is a lower
+// bound on the true tile cost. A tile-less board treats every cell as reachable
+// (game-start guard). kPassClass is always legal; kExtraClass iff `win_head`.
+void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
+                         bool win_head, FootprintMask& mask);
+
 }  // namespace scribblez

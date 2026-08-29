@@ -141,5 +141,50 @@ TEST(FootprintMask, FlipMarksFlippedClassLegal) {
   EXPECT_TRUE(m[(5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2))]);
 }
 
+// The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
+// testable without a dictionary.
+TEST(SelfFootprintMask, ReachabilityFromStructure) {
+  Board b;
+  b.set(7, 7, G(4));  // a lone tile: the only structure to bridge from
+  FootprintMask m;
+  // opp_budget=1, self_budget=1 -> combined reach 2 tiles.
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*flip=*/false, /*win=*/false, m);
+  // (7,8) is one empty step from the tile: d=1 <= 2 -> a k=1 footprint is legal.
+  EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);
+  // (7,10) is three empty steps away: d=3 > 2 -> unreachable.
+  EXPECT_FALSE(m[(7 * 15 + 10) * kSlotsPerCell + 0]);
+  // A far corner is well beyond reach.
+  EXPECT_FALSE(m[(0 * 15 + 0) * kSlotsPerCell + 0]);
+  EXPECT_TRUE(m[kPassClass]);
+}
+
+TEST(SelfFootprintMask, CombinedBudgetWidensReach) {
+  Board b;
+  b.set(7, 7, G(4));
+  FootprintMask m;
+  const int far = (7 * 15 + 10) * kSlotsPerCell + 0;  // d=3 from the tile
+  self_footprint_mask(b, 1, 1, false, false, m);      // reach 2 -> out
+  EXPECT_FALSE(m[far]);
+  self_footprint_mask(b, 2, 1, false, false, m);  // reach 3 -> in
+  EXPECT_TRUE(m[far]);
+}
+
+TEST(SelfFootprintMask, BudgetCapsK) {
+  Board b;
+  b.set(7, 4, G(4));  // structure so nearby cells are reachable
+  FootprintMask m;
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, false, false, m);
+  EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
+  EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
+}
+
+TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
+  Board b;  // no structure -> game-start guard marks everything reachable
+  FootprintMask m;
+  self_footprint_mask(b, 7, 7, false, false, m);
+  EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
+  EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
+}
+
 }  // namespace
 }  // namespace scribblez
