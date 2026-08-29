@@ -19,7 +19,7 @@ import pytest
 import torch
 from scribblez import params as params_mod
 from scribblez import workloads
-from scribblez.evidence.dataset import gain_targets
+from scribblez.evidence.dataset import gain_targets, held_out_rows
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
     MOVE_DTYPE,
@@ -35,7 +35,13 @@ from scribblez.sim_evidence.sobs import (
 )
 from scribblez.workloads import evidence_trajectories as ET
 from scribblez.workloads import mset_targets, pair_store
-from scribblez.workloads.evidence_trajectories import SPEC, EvidenceTrajectoriesParams
+from scribblez.workloads.evidence_trajectories import (
+    SPEC,
+    EvidenceTrajectoriesParams,
+    max_evidence_width,
+    max_off_policy,
+    max_pool_width,
+)
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 TRAJECTORY_GENERATOR = _ENGINE_DIR / "evidence_trajectory_generator"
@@ -203,6 +209,40 @@ def test_v4_num_evidence_is_order_robust():
     pos = _synthetic_position(roles, num_legal_moves=10)
     assert pos.num_evidence == 1
     assert list(pos.evidence_prefix_sizes()) == [0, 1]
+
+
+def test_held_out_rows_excludes_off_policy_from_its_role():
+    """held_out_rows keeps off-policy draws out of the evidence set from the
+    role alone, not the storage order. The off-policy term is load-bearing:
+    with a prefix that reaches past the off-policy slot (the regression the
+    num_evidence clamp prevents), slot >= prefix alone would admit it, so the
+    row is held out only because it is off-policy."""
+    # One position, four candidates, off-policy at slot 2.
+    slot = np.array([0, 1, 2, 3], dtype=np.int64)
+    pos_id = np.zeros(4, dtype=np.int64)
+    off_policy = np.array([False, False, True, False])
+    # An over-wide prefix of 4: slot >= prefix holds for none, so only the
+    # off-policy term marks the labels-only row held out.
+    held = held_out_rows(slot, np.array([4], dtype=np.int64), pos_id, off_policy)
+    assert held.tolist() == [False, False, True, False]
+    # In-contract (prefix 2 <= num_evidence), the two terms agree: slots 2,3 held.
+    held = held_out_rows(slot, np.array([2], dtype=np.int64), pos_id, off_policy)
+    assert held.tolist() == [False, False, True, True]
+
+
+def test_trajectory_width_formulas():
+    """The two guard widths: max_evidence_width is the padded evidence capacity
+    (anchor + on-policy), max_pool_width the full record count the train-role
+    guard checks a corpus against (adds the off-policy floor). Pinned so a
+    swapped or mis-summed formula is caught without the GPU e2e path."""
+    params = EvidenceTrajectoriesParams()
+    assert max_evidence_width(params) == 1 + params.on_policy_max
+    assert max_off_policy(params) == (
+        params.quota_mid + params.quota_tail + params.quota_exchange + params.off_policy_uniform
+    )
+    assert max_pool_width(params) == 1 + params.on_policy_max + max_off_policy(params)
+    # The pool the guard admits is strictly wider than the padded evidence input.
+    assert max_pool_width(params) > max_evidence_width(params)
 
 
 # --- the e2e path (GPU) ---

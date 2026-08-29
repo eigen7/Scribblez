@@ -273,7 +273,7 @@ rollout configuration (truncated per item 2, CRN across the pool):
   generation: deployment argmaxes over every unsimmed candidate, and a cap
   keeps deep promotions out of the corpus (the egotize-lane set's
   structurally unsimmable GAVE was the exhibit).
-- **B ≈ 5 off-policy draws** — held out from evidence sets by construction,
+- **B ≈ 11 off-policy draws** — held out from evidence sets by construction,
   stratified the way the `.mset` sampler is, reusing its quotas: a uniform
   draw plus draws from the rank-based strata (the contention zone, the tail,
   and exchanges). This is the bounded floor against the proposer's echo

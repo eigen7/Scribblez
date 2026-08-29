@@ -66,14 +66,15 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
 // [quotas.mid_rank_limit, n), quotas.exchange non-PLAY indices, and `uniform`
 // indices over the whole move list -- each uniform, distinct, and excluding the
 // indices already marked in *taken (the anchor and on-policy picks), marking
-// each drawn index in turn. quotas.top is the head the proposer owns, so it is a
-// window bound only: nothing is drawn from ranks below it except via the uniform
-// draw. Returns the drawn indices in a stable stratum order (mid, tail, exchange,
-// uniform); an exhausted stratum simply yields fewer, with no cross-stratum
-// backfill. Shares the strata core with stratified_candidates. `taken` must be
-// sized to ranked.size().
+// each drawn index in turn. quotas.top is the head the proposer owns: the mid
+// and tail strata draw only at rank >= quotas.top, so they never touch it; the
+// exchange and uniform strata are unrestricted by rank and may. Returns the
+// drawn indices in a stable stratum order (mid, tail, exchange, uniform); an
+// exhausted stratum simply yields fewer, with no cross-stratum backfill. Shares
+// the strata core with stratified_candidates. `taken` must be sized to
+// ranked.size().
 std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, const StratumQuotas& quotas,
-                                     int uniform, std::vector<char>* taken, std::mt19937_64& rng);
+                                     int uniform, std::mt19937_64& rng, std::vector<char>* taken);
 
 // The capped full sweep: the top `cap` candidates by static equity, plus every
 // exchange candidate and the played move wherever they rank, in equity-rank

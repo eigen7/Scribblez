@@ -98,6 +98,21 @@ def gain_targets(value: np.ndarray, prefix: int) -> np.ndarray:
     return np.maximum(value - best, 0.0).astype(np.float32)
 
 
+def held_out_rows(
+    slot: np.ndarray, prefix_arr: np.ndarray, pos_id: np.ndarray, off_policy: np.ndarray
+) -> np.ndarray:
+    """Which flattened candidate rows are held out of the evidence prefix (the
+    rows that carry loss): those at or past their position's prefix, plus every
+    off-policy draw. The off-policy term reads eligibility from the record's
+    role, not its storage order: a prefix only ever covers evidence-eligible
+    records (drawn from evidence_prefix_sizes, capped at num_evidence), so an
+    off-policy draw already falls at or past it -- but the term keeps a
+    labels-only sim out of the evidence set even should a prefix ever reach past
+    num_evidence, rather than trusting the anchor->on-policy->off-policy layout
+    to hold."""
+    return (slot >= prefix_arr[pos_id]) | off_policy
+
+
 class _TrajPosition:
     """One trajectory position: where to reconstruct its input, and its sims."""
 
@@ -235,12 +250,8 @@ class TrajectoryDataset:
         prefix_arr = np.asarray(prefixes, dtype=np.int64)
         pairs = zip(batch, prefixes, strict=True)
         gain = np.concatenate([gain_targets(pos.value, p) for pos, p in pairs])
-        # Held out = outside the evidence prefix (the rows that carry loss). A
-        # prefix only ever covers evidence-eligible records, so off-policy draws
-        # are held out at every prefix; the role check makes that explicit and
-        # order-independent rather than relying on the storage layout alone.
         off_policy = np.concatenate([~pos.sobs.evidence_mask for pos in batch])
-        held_out = (slot >= prefix_arr[pos_id]) | off_policy
+        held_out = held_out_rows(slot, prefix_arr, pos_id, off_policy)
         return {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),

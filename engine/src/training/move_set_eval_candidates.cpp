@@ -98,7 +98,7 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
 }
 
 std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, const StratumQuotas& quotas,
-                                     int uniform, std::vector<char>* taken, std::mt19937_64& rng) {
+                                     int uniform, std::mt19937_64& rng, std::vector<char>* taken) {
   std::vector<size_t> picks;
   draw_rank_strata(ranked, quotas, rng, taken, &picks);
   draw_rank_window(ranked, 0, int(ranked.size()), uniform, rng, taken, &picks);
