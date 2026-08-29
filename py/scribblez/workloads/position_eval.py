@@ -176,5 +176,6 @@ SPEC = WorkloadSpec(
         "random_opening_mean",
         "match_every_generations",
         "optimizer",
+        "use_supply_attention",
     ),
 )
