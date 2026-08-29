@@ -111,6 +111,13 @@ class PositionEvalParams:
         "injection sites (scalars emit a per-channel gain alongside the additive bias); "
         "off is the additive-injection baseline",
     )
+    use_supply_attention: bool = param(
+        False,
+        "tile-supply cross-attention after the trunk: each square attends to per-letter "
+        "availability tokens (rack / unseen pool / opp leave) so the placement heads can "
+        "gate a square's cross-checks on whether those tiles are available; requires the "
+        "open-leaves arm (face_up_leaves)",
+    )
     # Loss.
     lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")
@@ -169,5 +176,6 @@ SPEC = WorkloadSpec(
         "random_opening_mean",
         "match_every_generations",
         "optimizer",
+        "use_supply_attention",
     ),
 )
