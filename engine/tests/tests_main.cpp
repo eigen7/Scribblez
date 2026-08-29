@@ -4962,6 +4962,20 @@ TEST(MoveSetEvalCandidates, OffPolicyDrawsWholeUntakenPoolIncludingNonPlays) {
   EXPECT_EQ(sorted, (std::vector<size_t>{2u, 3u, 4u}));
 }
 
+// count == 0 (a validated-legal config) draws nothing and leaves `taken` as it
+// was -- pins the loop's count guard against an off-by-one.
+TEST(MoveSetEvalCandidates, OffPolicyDrawsCountZeroDrawsNothing) {
+  const std::vector<Move> ranked = ranked_plays(6);
+  std::vector<char> taken(ranked.size(), 0);
+  taken[0] = 1;  // one pre-taken index
+  const std::vector<char> pre = taken;
+  std::mt19937_64 rng(1);
+  const std::vector<size_t> draws =
+    move_set_eval::off_policy_draws(ranked, /*count=*/0, rng, &taken);
+  EXPECT_TRUE(draws.empty());
+  EXPECT_EQ(taken, pre);  // nothing marked
+}
+
 // The on-policy proposals draw a temperature softmax over EVERY unsimmed
 // candidate, not a capped head (docs/roadmap.md item 4, PR1): deployment
 // argmaxes over the full support, so a corpus proposal must be reachable at

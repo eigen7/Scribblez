@@ -23,7 +23,7 @@ namespace scribblez {
 enum class SimObsRole : uint8_t {
   kAnchor = 0,     // the greedy highest-raw-score move; every evidence set holds it
   kOnPolicy = 1,   // a proposer pick; evidence-eligible
-  kOffPolicy = 2,  // a stratified off-policy draw; labels-only, never in an evidence set
+  kOffPolicy = 2,  // a uniform off-policy draw; labels-only, never in an evidence set
 };
 
 }  // namespace scribblez

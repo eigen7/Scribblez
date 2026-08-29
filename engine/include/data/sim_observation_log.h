@@ -24,7 +24,8 @@
 //
 // In a trajectory file (kSimObsFlagTrajectory) a position's records carry a
 // per-record SimObsRole (docs/roadmap.md item 4): the greedy anchor, the
-// proposer's on-policy picks, and the stratified off-policy draws. The stored
+// proposer's on-policy picks, and the off-policy draws (a uniform sample of the
+// untaken legal moves). The stored
 // order is anchor, then on-policy, then off-policy -- which the sim runner and
 // incumbent recovery rely on -- but evidence-eligibility is read off the role,
 // not the position, so an off-policy record renders held-out wherever it sits.
