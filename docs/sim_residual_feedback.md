@@ -365,28 +365,38 @@ and are free.
 The deployed evidence consumer is a separate model: a **copy** of the move
 set evaluation student — trunk, move encoder, heads, fusion stage — plus the
 proves-best head. The student itself stays a pure distillation model (and,
-under D2, the rollout policy); the copy is what trains on evidence. Three
+under D2, the rollout policy); the copy is what trains on evidence. Two
 loss components ([roadmap.md](roadmap.md) item 5 is the spec):
 
 - **The proves-best gain** (primary): Huber against the CRN-paired gain of a
   held-out simmed candidate over its evidence set's best
-  ([candidate selection](#candidate-selection)).
+  ([candidate selection](#candidate-selection)). The best-so-far the gain is
+  measured against is a **known scalar at inference** — the max sim value over
+  the evidence set gathered so far — so it is fed to the head as an **input**
+  rather than reconstructed from the pooled evidence: the evidence reaches the
+  head only through a mean pool, which cannot represent the max the target
+  rides on.
 - **Conditioned value heads** (auxiliary): the conditioned WLD / score-diff
   against the held-out candidate's own sim outcome. The gain is a thin
   transform of the conditioned value, so these rows feed the head at no
   extra sim cost — and the targets are sim outcomes, never the plain
   teacher, whose board-only readout would train the fusion stage to ignore
   evidence.
-- **A self-distillation anchor** (stabilizer, small coefficient): the plain
-  pass pressured toward the frozen student's outputs, recomputed on the fly
-  by a frozen-student forward on the same batch — no stored labels — over
-  **all** legal candidates of each position (extendable to sim-less
-  positions if drift shows up). The anchor is what keeps the gain argmax
-  safe over the thousands of candidates that never receive a sim label: the
-  backbone must not drift off the dense teacher-shaped ranking on the
-  strength of a handful of sim rows. It applies to the plain
-  (empty-evidence) pass only; pressuring conditioned outputs toward a
-  board-only function is the ignore-the-evidence failure again.
+
+The backbone trains — the copy is free to follow the sim signal — starting from
+the student's ranking, and the empty-evidence (prefix-0) rows keep the
+evidence-free pass calibrated as a board-only prior on the simmed candidates.
+There is deliberately **no self-distillation anchor**. An anchor would add only
+one thing: extending that calibration to the *unsimmed* legal moves the gain
+argmax ranges over at deployment. But doing so cleanly requires a live
+frozen-student forward over **all** `N` candidates of each training position,
+and the replay pipeline reconstructs encoded inputs, not a move list — there is
+no move generator it can call, so all-`N` coverage is a new engine build for a
+speculative stabilizer. The gain head instead relies on generalizing from a
+diverse held-out set (anchor, on-policy, low-value off-policy draws) and the
+student starting point, with the backbone learning rate as the drift knob;
+whether the argmax over unsimmed moves holds up is measured at the agent
+(item 6), and the anchor is a known fallback if it does not.
 
 Distillation from an evidence-conditioned position evaluation model (the
 section above) remains the deferred richer variant: dense conditioned labels
@@ -567,22 +577,23 @@ the condition, so mixing modes within a tag fails loudly.
 | 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/sim/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
 | 4 | Evidence encoder + fusion stage reading the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps; multi-size evidence-set training. | 3 | **Built on the student side** — the fusion stage and its exactness tests ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)) plus the multi-prefix trainer (`py/scribblez/evidence/`). The position evaluation model's own evidence training stays deferred with the conditioned-teacher variant. |
-| 5 | The **move proposal model** ([above](#the-move-proposal-model)): the student copy with the proves-best head, trained gain-first with the sim-outcome auxiliaries and the self-distillation anchor, on subset-assembled rows from the hybrid pools. | 4, roadmap items 2–4 | **Regime settled; training waits on the deployment-quality corpus.** The gen-1 frozen-backbone trial over the 200-rollout v1 corpus is the recorded floor: conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 vs the plain value's 0.61. |
+| 5 | The **move proposal model** ([above](#the-move-proposal-model)): the student copy with the proves-best head (best-so-far fed as an input), trained gain-first with the sim-outcome auxiliaries — no self-distillation anchor — on subset-assembled rows from the hybrid pools. | 4, roadmap items 2–4 | **Regime settled; training waits on the deployment-quality corpus.** The gen-1 frozen-backbone trial over the 200-rollout v1 corpus is the recorded floor: conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 vs the plain value's 0.61. |
 | 6 | The sequential agent (the decision procedure above at `B = 1, R = K`) and the proves-best acquisition head that drives it; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way ([roadmap.md](roadmap.md)). | 5 | — |
 
 ## Open questions
 
 - **Budget split** — whether later sims should use smaller `S`, and the
   early-stopping threshold for the sequential schedule.
-- **Fusion refinements for the move proposal build** — two identified, both
-  cheap, neither validated. (a) Evidence reaches the global summary by mean
-  pooling, but best-so-far — the one statistic the gain head must know — is
-  a max: mean+max (the trunk's own pooling convention) or attention pooling
-  with a learned query. (b) A direct move-query → evidence-token
-  cross-attention (`O(N·K)`), so a candidate compares itself to each simmed
-  move by encoding rather than only through shared board squares — a
-  leave-twin with a different footprint is currently visible only through
-  the move scalars and the pooled summary.
+- **Fusion refinements for the move proposal build.** The statistic the gain
+  head most needs — best-so-far — is resolved by **feeding it as an input**
+  (it is a known scalar at inference), which sidesteps the earlier worry that a
+  mean pool cannot carry the max; a mean+max or attention pooling of the
+  evidence summary is therefore no longer required for that purpose. One
+  refinement remains open, cheap and unvalidated: a direct move-query →
+  evidence-token cross-attention (`O(N·K)`), so a candidate compares itself to
+  each simmed move by encoding rather than only through shared board squares —
+  a leave-twin with a different footprint is currently visible only through the
+  move scalars and the pooled summary.
 - **A/B/T of the pool recipe** — A ≈ 15 / B ≈ 5 with evidence-set sizes up
   to the deployment budget are starting points; on-policy depth per position
   trades against position count once sim throughput binds, and the stopping
