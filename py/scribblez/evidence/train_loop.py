@@ -28,7 +28,6 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -58,7 +57,7 @@ _MOVE_KEYS = (
     "move_scalars",
     "move_pos_id",
 )
-_TARGET_KEYS = ("sim_wld", "sim_delta", "sim_value", "target_gain", "held_out", "slot")
+_TARGET_KEYS = ("sim_wld", "sim_delta", "sim_value", "target_gain", "held_out")
 
 
 @dataclass
@@ -118,27 +117,27 @@ def batch_evidence_inputs(
     batched sibling of move_set_eval.evidence.build_evidence_inputs (the
     single-position deployment builder), equal to collating it per position.
 
-    The evidence rows are the batch's own candidate rows with slot < prefix:
-    their move half is those rows' move inputs (same moves, same pre-move
-    differential, so identical to a fresh encode), scattered to padded index
-    pos_id * max_e + slot; the predicted half is the plain pass over the same
-    rows, on device; the observed half is the .sobs records of the prefixes,
-    concatenated in batch order (position blocks, ascending slot -- the order
-    the selected rows have), one host-to-device copy per field.
+    The evidence rows are the batch's own candidate rows the subset marks
+    (`in_evidence`): their move half is those rows' move inputs (same moves,
+    same pre-move differential, so identical to a fresh encode), scattered to
+    padded index pos_id * max_e + `ev_index` (the member's compact slot within
+    its unit's set, so an arbitrary subset packs the way the deployment builder
+    does); the predicted half is the plain pass over the same rows, on device;
+    the observed half is the .sobs records the subset selects, gathered from the
+    flattened records by the same membership mask, so both halves enumerate the
+    unit blocks in ascending slot order and cannot drift apart.
     """
     letters, blanks, squares, tile_mask, scalars, pos_id = move_args
     p = len(batch["positions"])
-    prefix = batch["prefix_sizes"].to(device)
-    slot = batch["slot"].to(device)
-    sel = slot < prefix[pos_id]
-    flat = (pos_id * max_e + slot)[sel]
+    in_evidence = batch["in_evidence"]
+    sel = in_evidence.to(device)
+    flat = (pos_id * max_e + batch["ev_index"].to(device))[sel]
     dtype = scalars.dtype
     scatter = functools.partial(_scatter_rows, flat=flat, shape=(p, max_e))
 
-    prefixes = zip(batch["positions"], batch["prefix_sizes"].tolist(), strict=True)
-    rows = [(pos.moves[:k], pos.obs[:k]) for pos, k in prefixes]
-    moves_np = np.concatenate([m for m, _ in rows])
-    obs_np = np.concatenate([o for _, o in rows])
+    sel_np = in_evidence.numpy()
+    moves_np = batch["all_moves"][sel_np]
+    obs_np = batch["all_obs"][sel_np]
     observed_p = torch.from_numpy(observed_planes(moves_np, obs_np)).to(device=device, dtype=dtype)
     observed_s = torch.from_numpy(observed_scalars(obs_np)).to(device=device, dtype=dtype)
 
@@ -348,9 +347,9 @@ def evaluate(model, dataset, device, positions_per_batch: int, max_e: int, seed:
             continue
         plain, cond = conditioned_forward(model, batch, device, max_e)
         pos_id = batch["move_pos_id"].to(device)
-        prefix = batch["prefix_sizes"].to(device)[pos_id]
-        with_ev = held & (prefix > 0)
-        no_ev = held & (prefix == 0)
+        size = batch["evidence_size"].to(device)[pos_id]
+        with_ev = held & (size > 0)
+        no_ev = held & (size == 0)
         if bool(no_ev.any()):
             exact = max(exact, float((cond["wld"][no_ev] - plain["wld"][no_ev]).abs().max()))
         v_plain = win_equity(torch.softmax(plain["wld"], dim=1))
