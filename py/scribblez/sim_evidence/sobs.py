@@ -29,11 +29,13 @@ SOBS_FLAG_OPEN_LEAVES = _CONST["sobs"]["flag_open_leaves"]
 # valid evidence set (docs/roadmap.md item 4).
 SOBS_FLAG_TRAJECTORY = _CONST["sobs"]["flag_trajectory"]
 
-# SobsPositionHeader.flags bits: the position's last record is the
-# uniform-exploration draw (absent when the trajectory exhausted the legal
-# set first). A tail record contributes proves-best labels at every prefix
-# size but never belongs to an evidence prefix itself.
-SOBS_POS_FLAG_UNIFORM_TAIL = _CONST["sobs"]["pos_flag_uniform_tail"]
+# SimObsRole values (data/sim_obs_role.h): a trajectory record's evidence
+# eligibility. Anchor and on-policy records are evidence-eligible; off-policy
+# draws are labels-only and never belong to an evidence set. (The v3
+# SobsPositionHeader uniform-tail flag this replaces is retired.)
+ROLE_ANCHOR = _CONST["sobs"]["role_anchor"]
+ROLE_ON_POLICY = _CONST["sobs"]["role_on_policy"]
+ROLE_OFF_POLICY = _CONST["sobs"]["role_off_policy"]
 
 BOARD = _CONST["board_size"]
 CELLS = BOARD * BOARD
@@ -70,9 +72,9 @@ RECORD_DTYPE = struct_dtype("SobsRecord")
 
 @dataclass
 class SobsPosition:
-    """One position's sim evidence: the simmed candidates and their raw
-    observations. In a trajectory file (SOBS_FLAG_TRAJECTORY) the arrays are
-    in trajectory order and `flags` carries the SOBS_POS_FLAG_* bits."""
+    """One position's sim evidence: the simmed candidates, their raw
+    observations, and (in a trajectory file, SOBS_FLAG_TRAJECTORY) each one's
+    evidence role, in trajectory order (anchor, on-policy, off-policy)."""
 
     game_index: int
     turn_index: int
@@ -82,17 +84,28 @@ class SobsPosition:
     flags: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     obs: np.ndarray  # (K,) observation records
+    roles: np.ndarray  # (K,) uint8 SimObsRole codes
 
     @property
-    def has_uniform_tail(self) -> bool:
-        return bool(self.flags & SOBS_POS_FLAG_UNIFORM_TAIL)
+    def evidence_mask(self) -> np.ndarray:
+        """(K,) bool: True for evidence-eligible records (anchor + on-policy),
+        False for the labels-only off-policy draws."""
+        return self.roles != ROLE_OFF_POLICY
+
+    @property
+    def num_evidence(self) -> int:
+        """The largest valid evidence prefix: the leading run of
+        evidence-eligible records. Under the storage invariant (anchor, then
+        on-policy, then off-policy) this is the evidence-eligible count; should
+        an off-policy record ever precede an on-policy one, the prefix stops at
+        it rather than admitting a labels-only record into an evidence set."""
+        off = np.flatnonzero(self.roles == ROLE_OFF_POLICY)
+        return int(off[0]) if off.size else len(self.roles)
 
     def evidence_prefix_sizes(self) -> range:
         """The valid evidence-prefix sizes of a trajectory position: 0 through
-        the last proposer pick -- the uniform tail, when present, is a labeled
-        candidate only, never evidence."""
-        k = len(self.moves)
-        return range((k - 1 if self.has_uniform_tail else k) + 1)
+        num_evidence. Off-policy draws are labels-only, never evidence."""
+        return range(self.num_evidence + 1)
 
 
 def _read_header(path: str | Path) -> np.void:
@@ -161,6 +174,7 @@ def read_sobs(path: str | Path) -> list[SobsPosition]:
                 flags=int(ph["flags"]),
                 moves=records["move"],
                 obs=records["obs"],
+                roles=records["role"],
             )
         )
     if off != len(buf):

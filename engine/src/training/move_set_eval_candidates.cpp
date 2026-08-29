@@ -62,6 +62,21 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
   return {std::move(out), 0u};
 }
 
+std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, int count,
+                                     std::mt19937_64& rng, std::vector<char>* taken) {
+  std::vector<size_t> pool;
+  for (size_t i = 0; i < ranked.size(); ++i) {
+    if (!(*taken)[i]) pool.push_back(i);
+  }
+  std::shuffle(pool.begin(), pool.end(), rng);
+  std::vector<size_t> picks;
+  for (size_t j = 0; j < pool.size() && int(picks.size()) < count; ++j) {
+    picks.push_back(pool[j]);
+    (*taken)[pool[j]] = 1;
+  }
+  return picks;
+}
+
 Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& played, int cap) {
   std::vector<Move> out;
   bool played_kept = false;

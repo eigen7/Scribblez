@@ -3,7 +3,7 @@
 // model's response to it. For one position, one checkpoint (generation 0 is
 // the frozen student itself; N is the trainer's pass N-1) and one evidence
 // prefix, the tab shows the trajectory the generator simmed (anchor ->
-// proposals -> uniform tail, cards dimmed beyond the prefix), the board with
+// on-policy proposals -> off-policy draws, cards dimmed beyond the prefix), the board with
 // the selected simmed candidate previewed and its sim / model / residual
 // placement overlay, and the move table over the legal moves re-ranked by the
 // conditioned value with the loop's next acquisition (argmax proves-best gain
@@ -55,7 +55,7 @@ interface Card {
   score: number;
   tiles: PlacedTile[];
   lane: { horizontal: boolean; index: number } | null;
-  tail: boolean;
+  off_policy: boolean;
   in_prefix: boolean;
   sim: SimStats;
   plain_value: number;
@@ -126,11 +126,11 @@ const val = (v: number) => v.toFixed(3);
 
 // One simmed candidate: its slot role, notation, sim outcome, and the plain vs
 // conditioned value. Cards beyond the prefix are dimmed (they are labeled
-// candidates, not evidence at this prefix); the tail is never evidence.
+// candidates, not evidence at this prefix); off-policy draws are never evidence.
 function TrajectoryCard({
   card, selected, onSelect,
 }: { card: Card; selected: boolean; onSelect: () => void }) {
-  const role = card.tail ? 'tail' : card.slot === 0 ? 'anchor' : `proposal ${card.slot}`;
+  const role = card.off_policy ? 'off-policy' : card.slot === 0 ? 'anchor' : `proposal ${card.slot}`;
   return (
     <button
       type="button"
@@ -493,7 +493,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
           </div>
 
           <div className="lane-detail" style={{ maxWidth: 'none' }}>
-            <h3>Trajectory — anchor → proposals → tail (click a card to preview it)</h3>
+            <h3>Trajectory — anchor → on-policy → off-policy (click a card to preview it)</h3>
             <div className="traj-strip">
               {payload.trajectory.map((c) => (
                 <TrajectoryCard key={c.slot} card={c} selected={c.slot === payload.planes?.slot} onSelect={() => setSlot(c.slot)} />

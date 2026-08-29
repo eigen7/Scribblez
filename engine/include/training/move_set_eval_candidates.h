@@ -59,6 +59,18 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
                                 const StratumQuotas& quotas, std::mt19937_64& rng,
                                 std::span<const Move> forced = {});
 
+// The off-policy floor for an evidence trajectory (docs/roadmap.md item 4):
+// `count` distinct legal-move indices drawn uniformly from those the anchor and
+// on-policy picks have not already taken (marked in *taken), returned in draw
+// order and marked in turn. The draw is the bounded exploration floor against
+// the proposer's echo chamber, and it assumes nothing about which moves are
+// worth exploring: sampling the untaken moves uniformly reaches exchanges and
+// the tail at their natural frequency in `ranked`, with no stratum reserved for
+// them. These draws are labels-only: a training row never places them in an
+// evidence set. `taken` must be sized to ranked.size().
+std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, int count,
+                                     std::mt19937_64& rng, std::vector<char>* taken);
+
 // The capped full sweep: the top `cap` candidates by static equity, plus every
 // exchange candidate and the played move wherever they rank, in equity-rank
 // order throughout.

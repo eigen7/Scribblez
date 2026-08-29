@@ -94,8 +94,8 @@ and the trained model's response to it (roadmap items 2–4).
   list — the plain pass runs once per (checkpoint, position), and only the
   fusion + re-score run per evidence prefix.
 - **UI**: generation slider, set/position pickers, an **evidence prefix**
-  slider (0 … the proposer picks; the uniform tail is never evidence); the
-  trajectory strip (anchor → proposals → tail, dimmed beyond the prefix,
+  slider (0 … the on-policy picks; the off-policy draws are never evidence); the
+  trajectory strip (anchor → on-policy → off-policy, dimmed beyond the prefix,
   each card with its sim value ± SE, delta moments, plain and conditioned
   value); the board previewing the selected candidate with the Positions
   tab's placement overlay (sim count planes vs the conditioned pass's

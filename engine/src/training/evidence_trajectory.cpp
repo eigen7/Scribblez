@@ -22,11 +22,12 @@ void validate(const TrajectoryOptions& opt) {
   TrajectoryOptions terminal = opt;  // the leaf pairing is the caller's to check
   terminal.horizon = 0;
   SimRunner::validate(sim_params(terminal, nullptr));
-  if (opt.proposals_min < 0) throw util::CleanException("--proposals-min must be >= 0");
-  if (opt.proposals_max < opt.proposals_min) {
-    throw util::CleanException("--proposals-max must be >= --proposals-min");
+  if (opt.on_policy_min < 0) throw util::CleanException("--on-policy-min must be >= 0");
+  if (opt.on_policy_max < opt.on_policy_min) {
+    throw util::CleanException("--on-policy-max must be >= --on-policy-min");
   }
   if (opt.temperature <= 0.0) throw util::CleanException("--temperature must be > 0");
+  if (opt.off_policy_count < 0) throw util::CleanException("--off-policy-count must be >= 0");
 }
 
 // --- StudentScorer ---
@@ -115,7 +116,7 @@ TrajectoryResult TrajectoryRunner::run(const DecisionPoint& dp, uint64_t base_se
   res.num_legal_moves = ranked.size();
   std::mt19937_64 rng(util::splitmix64(base_seed ^ 0x7A6A11EC70ull));
   const std::vector<size_t> chosen =
-    select_trajectory(ranked, win_equity, opt_, rng, sampler_, &res.uniform_tail);
+    select_trajectory(ranked, win_equity, opt_, rng, sampler_, &res.roles);
   res.candidates.reserve(chosen.size());
   for (size_t idx : chosen) res.candidates.push_back(ranked[idx]);
   res.observations = runner_.run(pos, res.candidates, base_seed);

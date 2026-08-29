@@ -34,7 +34,13 @@ from scribblez.move_set_eval.evidence import build_evidence_inputs, observed_pla
 from scribblez.move_set_eval.model import win_equity
 from scribblez.move_set_eval.moves import encode_moves
 from scribblez.move_set_eval.targets import PLANE_NAMES
-from scribblez.sim_evidence.sobs import BOARD, MOVE_PLAY, SobsPosition, glyph_char
+from scribblez.sim_evidence.sobs import (
+    BOARD,
+    MOVE_PLAY,
+    ROLE_OFF_POLICY,
+    SobsPosition,
+    glyph_char,
+)
 
 
 def _sim_stats(obs: np.ndarray) -> dict:
@@ -249,8 +255,6 @@ def payload(
     slot_of = {int(i): s for s, i in enumerate(sim_index)}
     stats = [_sim_stats(o) for o in sobs.obs]
     next_sim = _next_sim(cond.gain, sim_index, prefix) if trained else None
-    k = len(sobs.moves)
-    tail = sobs.has_uniform_tail
 
     cards = [
         {
@@ -260,7 +264,7 @@ def payload(
             "score": int(sobs.moves[s]["score"]),
             "tiles": move_tiles(sobs.moves[s]),
             "lane": move_lane(sobs.moves[s]),
-            "tail": tail and s == k - 1,
+            "off_policy": bool(sobs.roles[s] == ROLE_OFF_POLICY),
             "in_prefix": s < prefix,
             "sim": stats[s],
             "plain_value": float(plain.value[i]),

@@ -3,7 +3,7 @@
 Hand-maintained positions for watching the evidence loop think: each `.gcg`
 is a decision point whose sim evidence should move the evidence-conditioned
 model off its plain first pass. The dashboard's trajectory pane runs the
-trajectory recipe here (anchor, proposer picks, uniform tail, all CRN-simmed)
+trajectory recipe here (anchor, on-policy picks, off-policy draws, all CRN-simmed)
 and shows the observed-vs-predicted residual per simmed candidate and the
 model's re-scoring at every evidence prefix; the evidence trainer reads the
 same sidecars for its position-set metric.

@@ -71,7 +71,12 @@ from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.evidence_trajectories import SLOGS_DIR, max_evidence, recipe_of
+from scribblez.workloads.evidence_trajectories import (
+    SLOGS_DIR,
+    max_evidence_width,
+    max_pool_width,
+    recipe_of,
+)
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -227,7 +232,7 @@ class PositionSetProbe:
 
     def __init__(self, params, student_cfg: dict, threads: int):
         self.student_cfg = student_cfg
-        self.max_e = max_evidence(params)
+        self.max_e = max_evidence_width(params)
         self.positions: list[tuple[str, object]] = []  # (gcg text, SobsPosition)
         set_dir = POSITIONS_ROOT / DEFAULT_SET
         if not set_gcgs(set_dir):
@@ -561,14 +566,17 @@ def run(ctx: WorkerContext) -> int:
             f"student was trained with open_leaves={student_cfg['open_leaves']}"
         )
         return 1
-    max_e = max_evidence(params)
-    if train_ds.max_trajectory > max_e:
+    max_pool = max_pool_width(params)
+    if train_ds.max_trajectory > max_pool:
         print(
             f"error: a trajectory holds {train_ds.max_trajectory} candidates, more than the "
-            f"recipe's {max_e} (1 + proposals_max + 1): the corpus was not simmed with this "
-            "tag's recipe"
+            f"recipe's {max_pool} (1 + on_policy_max + off-policy floor): the corpus was not "
+            "simmed with this tag's recipe"
         )
         return 1
+    # The padded evidence width the model conditions on -- only the anchor and
+    # on-policy picks ever enter an evidence set, never the off-policy floor.
+    max_e = max_evidence_width(params)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} simmed candidates; "
         f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates "

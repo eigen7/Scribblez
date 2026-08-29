@@ -1,5 +1,5 @@
 """Tests for evidence-trajectory generation (roadmap item 4): the trajectory
-.sobs contract end to end (anchor slot, uniform tail, v2 header fields,
+.sobs contract end to end (anchor slot, per-record roles, v4 header fields,
 proposer hash), the .mset labeling's forced inclusion of simmed candidates,
 and the evidence_trajectories workload's cycle and delivery.
 
@@ -19,17 +19,29 @@ import pytest
 import torch
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.evidence.dataset import gain_targets, held_out_rows
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
+    MOVE_DTYPE,
+    RECORD_DTYPE,
+    ROLE_ANCHOR,
+    ROLE_OFF_POLICY,
+    ROLE_ON_POLICY,
     SOBS_FLAG_TRAJECTORY,
-    SOBS_POS_FLAG_UNIFORM_TAIL,
+    SobsPosition,
     read_sobs,
     read_sobs_flags,
     read_sobs_proposer_hash,
 )
 from scribblez.workloads import evidence_trajectories as ET
 from scribblez.workloads import mset_targets, pair_store
-from scribblez.workloads.evidence_trajectories import SPEC, EvidenceTrajectoriesParams
+from scribblez.workloads.evidence_trajectories import (
+    SPEC,
+    EvidenceTrajectoriesParams,
+    max_evidence_width,
+    max_off_policy,
+    max_pool_width,
+)
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 TRAJECTORY_GENERATOR = _ENGINE_DIR / "evidence_trajectory_generator"
@@ -153,6 +165,84 @@ def test_deliver_pairs_carries_the_sobs_sidecar(tmp_path):
     assert (work / "c.slog").exists()  # incomplete pairs stay put
 
 
+def _synthetic_position(roles: np.ndarray, num_legal_moves: int = 64) -> SobsPosition:
+    k = len(roles)
+    return SobsPosition(
+        game_index=0,
+        turn_index=0,
+        rollouts=100,
+        base_seed=0,
+        num_legal_moves=num_legal_moves,
+        flags=0,
+        moves=np.zeros(k, MOVE_DTYPE),
+        obs=np.zeros(k, RECORD_DTYPE["obs"]),
+        roles=roles,
+    )
+
+
+def test_v4_roles_split_evidence_from_labels_only_draws():
+    """A synthetic v4 position: evidence prefixes cover only the anchor and the
+    on-policy records; off-policy draws sit outside every prefix and never enter
+    the gain baseline (the split item 5's subset assembly depends on)."""
+    roles = np.array(
+        [ROLE_ANCHOR, ROLE_ON_POLICY, ROLE_ON_POLICY, ROLE_OFF_POLICY, ROLE_OFF_POLICY],
+        dtype=np.uint8,
+    )
+    pos = _synthetic_position(roles)
+    assert pos.num_evidence == 3
+    assert list(pos.evidence_prefix_sizes()) == [0, 1, 2, 3]
+    assert pos.evidence_mask.tolist() == [True, True, True, False, False]
+    # The off-policy draw carries the largest value, but because it is never in
+    # a prefix it never raises the best-so-far baseline the gain is measured
+    # against -- so no candidate's gain is suppressed by a labels-only sim.
+    value = np.array([0.2, 0.5, 0.3, 0.9, 0.4], dtype=np.float32)
+    for prefix in pos.evidence_prefix_sizes():
+        best = float(value[:prefix].max()) if prefix else 0.0
+        assert best <= 0.5  # the off-policy 0.9 is never in an evidence prefix
+        np.testing.assert_allclose(gain_targets(value, prefix), np.maximum(value - best, 0.0))
+
+
+def test_v4_num_evidence_is_order_robust():
+    """Should an off-policy record ever precede an on-policy one, the evidence
+    prefix stops at it rather than admitting a labels-only record."""
+    roles = np.array([ROLE_ANCHOR, ROLE_OFF_POLICY, ROLE_ON_POLICY], dtype=np.uint8)
+    pos = _synthetic_position(roles, num_legal_moves=10)
+    assert pos.num_evidence == 1
+    assert list(pos.evidence_prefix_sizes()) == [0, 1]
+
+
+def test_held_out_rows_excludes_off_policy_from_its_role():
+    """held_out_rows keeps off-policy draws out of the evidence set from the
+    role alone, not the storage order. The off-policy term is load-bearing:
+    with a prefix that reaches past the off-policy slot (the regression the
+    num_evidence clamp prevents), slot >= prefix alone would admit it, so the
+    row is held out only because it is off-policy."""
+    # One position, four candidates, off-policy at slot 2.
+    slot = np.array([0, 1, 2, 3], dtype=np.int64)
+    pos_id = np.zeros(4, dtype=np.int64)
+    off_policy = np.array([False, False, True, False])
+    # An over-wide prefix of 4: slot >= prefix holds for none, so only the
+    # off-policy term marks the labels-only row held out.
+    held = held_out_rows(slot, np.array([4], dtype=np.int64), pos_id, off_policy)
+    assert held.tolist() == [False, False, True, False]
+    # In-contract (prefix 2 <= num_evidence), the two terms agree: slots 2,3 held.
+    held = held_out_rows(slot, np.array([2], dtype=np.int64), pos_id, off_policy)
+    assert held.tolist() == [False, False, True, True]
+
+
+def test_trajectory_width_formulas():
+    """The two guard widths: max_evidence_width is the padded evidence capacity
+    (anchor + on-policy), max_pool_width the full record count the train-role
+    guard checks a corpus against (adds the off-policy floor). Pinned so a
+    swapped or mis-summed formula is caught without the GPU e2e path."""
+    params = EvidenceTrajectoriesParams()
+    assert max_evidence_width(params) == 1 + params.on_policy_max
+    assert max_off_policy(params) == params.off_policy_count
+    assert max_pool_width(params) == 1 + params.on_policy_max + max_off_policy(params)
+    # The pool the guard admits is strictly wider than the padded evidence input.
+    assert max_pool_width(params) > max_evidence_width(params)
+
+
 # --- the e2e path (GPU) ---
 
 
@@ -226,8 +316,8 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
             f"--model={d / 'student.onnx'}",
             "--fast-build",
             "--rollouts=8",
-            "--proposals-min=1",
-            "--proposals-max=3",
+            "--on-policy-min=1",
+            "--on-policy-max=3",
             "--positions-per-game=2",
             "--threads=4",
             "--seed=7",
@@ -256,9 +346,9 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
 
 
 def test_trajectory_sobs_contract(traj_corpus):
-    """The .sobs v2 trajectory contract: flags, proposer hash, per-position
-    legal counts, the anchor's raw-score supremacy, the uniform tail, and
-    trajectory sizes within the configured bounds."""
+    """The .sobs v4 trajectory contract: flags, proposer hash, per-position
+    legal counts, the anchor's raw-score supremacy, and the per-record roles
+    (anchor, then on-policy, then off-policy)."""
     sobs_files = sorted(traj_corpus.dir.glob("*.sobs"))
     assert sobs_files
     total_positions = 0
@@ -269,18 +359,21 @@ def test_trajectory_sobs_contract(traj_corpus):
             total_positions += 1
             k = len(pos.moves)
             assert 0 < k <= pos.num_legal_moves
-            # anchor + [1..3] proposals + at most one uniform tail.
-            assert k <= 1 + 3 + 1
+            assert pos.flags == 0  # no position flags at v4
+            roles = np.asarray(pos.roles)
+            # Storage order: exactly one anchor first, then on-policy, then the
+            # off-policy floor -- so evidence-eligible records form a prefix.
+            assert roles[0] == ROLE_ANCHOR
+            assert (roles == ROLE_ANCHOR).sum() == 1
+            evidence = roles != ROLE_OFF_POLICY
+            num_evidence = pos.num_evidence
+            assert evidence[:num_evidence].all() and not evidence[num_evidence:].any()
+            assert set(roles[1:num_evidence].tolist()) <= {ROLE_ON_POLICY}
+            # Off-policy draws are labels-only: the evidence prefix stops at them.
+            assert max(pos.evidence_prefix_sizes()) == num_evidence
             # The anchor holds the position's highest raw score, so no other
             # simmed candidate may beat it.
             assert all(int(m["score"]) <= int(pos.moves[0]["score"]) for m in pos.moves[1:])
-            if pos.has_uniform_tail:
-                assert pos.flags & SOBS_POS_FLAG_UNIFORM_TAIL
-                assert max(pos.evidence_prefix_sizes()) == k - 1
-            else:
-                # No tail only when the trajectory exhausted the legal set.
-                assert k == pos.num_legal_moves
-                assert max(pos.evidence_prefix_sizes()) == k
             # Rollout counts match the header (every candidate was simmed).
             assert all(int(o["n"]) == pos.rollouts == 8 for o in pos.obs)
     assert total_positions > 0
@@ -407,8 +500,8 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
         f"--model={traj_corpus.dir / 'student.onnx'}",
         "--fast-build",
         "--rollouts=8",
-        "--proposals-min=1",
-        "--proposals-max=3",
+        "--on-policy-min=1",
+        "--on-policy-max=3",
         "--threads=2",
         "--seed=7",
     ]
@@ -421,7 +514,8 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
         assert len(positions) == 1
         pos = positions[0]
         assert (pos.game_index, pos.turn_index) == (0, n_turns)
-        assert 0 < len(pos.moves) <= 1 + 3 + 1
+        # anchor + [1..3] on-policy + the default off-policy floor (3 uniform draws).
+        assert 0 < len(pos.moves) <= 1 + 3 + 3
         assert all(int(m["score"]) <= int(pos.moves[0]["score"]) for m in pos.moves[1:])
         assert all(int(o["n"]) == pos.rollouts == 8 for o in pos.obs)
     # A rerun sims nothing (the outputs exist), and a mixed invocation refuses.
@@ -555,8 +649,8 @@ def gcg_set(traj_corpus, tmp_path_factory) -> SimpleNamespace:
             f"--model={traj_corpus.dir / 'student.onnx'}",
             "--fast-build",
             "--rollouts=8",
-            "--proposals-min=1",
-            "--proposals-max=3",
+            "--on-policy-min=1",
+            "--on-policy-max=3",
             "--threads=2",
             "--seed=7",
         ],
@@ -600,7 +694,7 @@ def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_s
         cards = view["trajectory"]
         assert [c["slot"] for c in cards] == list(range(len(sobs.moves)))
         assert all(c["in_prefix"] == (c["slot"] < top) for c in cards)
-        assert cards[-1]["tail"] == sobs.has_uniform_tail
+        assert all(c["off_policy"] == bool(sobs.roles[c["slot"]] == ROLE_OFF_POLICY) for c in cards)
         assert cards[0]["notation"] == notations[a.sim_index[0]]
         rows = {m["index"]: m for m in view["moves"]}
         assert set(a.sim_index.tolist()) <= set(rows)  # every simmed candidate is a row

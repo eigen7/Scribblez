@@ -51,7 +51,7 @@ from scribblez.sim_evidence.position_sets import (
 from scribblez.sim_evidence.sobs import SobsPosition, read_sobs
 from scribblez.workloads.evidence_trajectories import (
     EvidenceTrajectoriesParams,
-    max_evidence,
+    max_evidence_width,
     recipe_of,
 )
 
@@ -180,7 +180,7 @@ def position_payload(
         str(gcg),
         str(sobs_path),
         _mtime(sobs_path),
-        max_evidence(params),
+        max_evidence_width(params),
     )
     sobs = analysis.sobs
     max_prefix = max(sobs.evidence_prefix_sizes())

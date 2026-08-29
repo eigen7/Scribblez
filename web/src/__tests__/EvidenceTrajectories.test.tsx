@@ -10,9 +10,9 @@ import EvidenceTrajectories from '../components/EvidenceTrajectories';
 const empty15 = () => Array.from({ length: 15 }, () => Array<string | null>(15).fill(null));
 
 const sim = { n: 8, win: 0.5, draw: 0, loss: 0.5, value: 0.5, value_se: 0.17, delta_mean: 1, delta_std: 2 };
-const card = (slot: number, index: number, notation: string, in_prefix: boolean, tail = false) => ({
+const card = (slot: number, index: number, notation: string, in_prefix: boolean, off_policy = false) => ({
   slot, index, notation, score: 10, tiles: [{ row: 7, col: 7, letter: 'A', isBlank: false }],
-  lane: { horizontal: true, index: 7 }, tail, in_prefix, sim,
+  lane: { horizontal: true, index: 7 }, off_policy, in_prefix, sim,
   plain_value: 0.6, cond_value: 0.55, plain_rank: index, cond_rank: index,
 });
 const row = (index: number, notation: string, extra: Partial<Record<string, unknown>> = {}) => ({
@@ -30,7 +30,7 @@ function payload(prefix: number, slot: number) {
     },
     prefix, max_prefix: 2, rollouts: 8, num_legal_moves: 3, trained: true, score_diff: 53,
     next_sim: 2,
-    trajectory: [card(0, 0, '8H ANCHOR', prefix > 0), card(1, 1, '8H PROP', prefix > 1), card(2, 5, '8H TAIL', false, true)],
+    trajectory: [card(0, 0, '8H ANCHOR', prefix > 0), card(1, 1, '8H PROP', prefix > 1), card(2, 5, '8H OFFPOL', false, true)],
     moves: [row(0, '8H ANCHOR', { slot: 0, sim_value: 0.5 }), row(1, '8H PROP', { slot: 1, sim_value: 0.5 }), row(2, '8H NEXT', { next_sim: true })],
     planes: { slot, n: 8, heads: {} },
   };
@@ -67,13 +67,13 @@ describe('EvidenceTrajectories', () => {
     render(<EvidenceTrajectories task="evidence_trajectories" tag="trajectories" />);
     await waitFor(() => expect(document.querySelectorAll('.traj-card').length).toBe(3));
     // Latest generation (2), largest prefix (2): anchor + proposal in the
-    // prefix, the tail dimmed.
+    // prefix, the off-policy draw dimmed.
     expect(screen.getByText('gen 2 (pass 1)')).toBeInTheDocument();
     const cards = document.querySelectorAll('.traj-card');
     expect(cards[0].classList.contains('beyond')).toBe(false);
     expect(cards[1].classList.contains('beyond')).toBe(false);
     expect(cards[2].classList.contains('beyond')).toBe(true);
-    expect(cards[2].textContent).toContain('tail');
+    expect(cards[2].textContent).toContain('off-policy');
     // The prefix's last candidate is selected by default.
     expect(cards[1].classList.contains('selected')).toBe(true);
     // The move table marks the next sim, and the header names it.

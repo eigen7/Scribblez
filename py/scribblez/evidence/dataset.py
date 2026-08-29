@@ -3,8 +3,8 @@ trajectory .sobs sidecars paired with pre-move inputs reconstructed by replay.
 
 Each position is identified by (game_index, turn_index) in a .slog file and
 carries, in a companion trajectory .sobs, its simmed candidates in trajectory
-order -- anchor, proposer picks, uniform tail -- with each one's raw CRN sim
-observations. A training row is (position, evidence prefix, held-out simmed
+order -- anchor, on-policy proposer picks, off-policy draws -- with each one's
+raw CRN sim observations. A training row is (position, evidence prefix, held-out simmed
 candidate): the prefix is what the model conditions on, and the held-out
 candidate's own sim outcome is the target -- its win value for the value
 heads, and its CRN-paired gain over the prefix's best-so-far for the
@@ -14,9 +14,9 @@ the same games' .mset sidecars through MsetDataset, as distillation rows for
 the plain pass, never as targets for these.
 
 Per epoch each position contributes ONE prefix, drawn uniformly from its valid
-prefix sizes (0 .. last proposer pick; the tail is never evidence), so a pass
-touches every position once and prefixes are covered across passes; the
-held-out candidates are the simmed ones outside the prefix, tail included.
+prefix sizes (0 .. last on-policy pick; off-policy draws are never evidence), so
+a pass touches every position once and prefixes are covered across passes; the
+held-out candidates are the simmed ones outside the prefix, off-policy included.
 Prefix 0 rows are what keeps the empty-evidence pass anchored, and where the
 gain target is the value itself. Only the simmed candidates are scored --
 those are the rows with sim labels -- so the candidate set per position is
@@ -96,6 +96,21 @@ def gain_targets(value: np.ndarray, prefix: int) -> np.ndarray:
     its seed base."""
     best = float(value[:prefix].max()) if prefix > 0 else 0.0
     return np.maximum(value - best, 0.0).astype(np.float32)
+
+
+def held_out_rows(
+    slot: np.ndarray, prefix_arr: np.ndarray, pos_id: np.ndarray, off_policy: np.ndarray
+) -> np.ndarray:
+    """Which flattened candidate rows are held out of the evidence prefix (the
+    rows that carry loss): those at or past their position's prefix, plus every
+    off-policy draw. The off-policy term reads eligibility from the record's
+    role, not its storage order: a prefix only ever covers evidence-eligible
+    records (drawn from evidence_prefix_sizes, capped at num_evidence), so an
+    off-policy draw already falls at or past it -- but the term keeps a
+    labels-only sim out of the evidence set even should a prefix ever reach past
+    num_evidence, rather than trusting the anchor->on-policy->off-policy layout
+    to hold."""
+    return (slot >= prefix_arr[pos_id]) | off_policy
 
 
 class _TrajPosition:
@@ -235,6 +250,8 @@ class TrajectoryDataset:
         prefix_arr = np.asarray(prefixes, dtype=np.int64)
         pairs = zip(batch, prefixes, strict=True)
         gain = np.concatenate([gain_targets(pos.value, p) for pos, p in pairs])
+        off_policy = np.concatenate([~pos.sobs.evidence_mask for pos in batch])
+        held_out = held_out_rows(slot, prefix_arr, pos_id, off_policy)
         return {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),
@@ -248,7 +265,7 @@ class TrajectoryDataset:
             "sim_delta": torch.from_numpy(np.concatenate([pos.delta for pos in batch])),
             "sim_value": torch.from_numpy(np.concatenate([pos.value for pos in batch])),
             "target_gain": torch.from_numpy(gain),
-            "held_out": torch.from_numpy(slot >= prefix_arr[pos_id]),
+            "held_out": torch.from_numpy(held_out),
             "slot": torch.from_numpy(slot),
             "prefix_sizes": torch.from_numpy(prefix_arr),
             "pre_move_diff": pre_diff_points,

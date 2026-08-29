@@ -10,11 +10,13 @@ shape with the trajectory phase in front of the labeling.
 
 The trajectory generator sims, at each sampled position, the sequential loop
 the deployed agent will run: the greedy anchor, then temperature-softmax
-proposals from the tag's frozen `proposer_model` (a move-set-eval student
-export), then one uniform-random tail draw -- each candidate under common
-random numbers -- and records the ordered candidates with their sim outcomes
-(docs/sim_residual_feedback.md, "Evidence-trajectory generation"). The .sobs
-is both the evidence input (any prefix of the proposer picks) and the training
+on-policy picks from the tag's frozen `proposer_model` (a move-set-eval student
+export), then an off-policy floor of a few candidates drawn uniformly over the
+untaken legal moves -- each candidate under common random
+numbers -- and records the ordered candidates with their sim outcomes and
+evidence role (docs/sim_residual_feedback.md, "Evidence-trajectory
+generation"). The .sobs is both the evidence input (any prefix of the anchor
+and on-policy picks) and the training
 target (each held-out simmed candidate's sim value and its CRN-paired gain over
 the prefix's best-so-far); the trainer reads no teacher labels.
 
@@ -95,16 +97,20 @@ class EvidenceTrajectoriesParams:
         "absolute path to the position-eval ONNX that scores rollout horizons; required with, "
         "and only with, horizon, and frozen like proposer_model",
     )
-    proposals_min: int = param(2, "least model proposals per trajectory")
-    proposals_max: int = param(8, "most model proposals per trajectory")
+    on_policy_min: int = param(2, "least on-policy (proposer) picks per trajectory")
+    on_policy_max: int = param(8, "most on-policy (proposer) picks per trajectory")
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
-    # The .mset labeling's stratified sample around the forced candidates
-    # (move_set_eval's quotas; the resulting .mset labels are read by the trainer
-    # only in unfrozen mode).
-    quota_top: int = param(4, "labeled candidates from the head of the equity ranking")
-    quota_mid: int = param(4, "labeled candidates sampled from the contention zone")
-    quota_tail: int = param(4, "labeled candidates sampled uniformly from the remaining ranks")
-    quota_exchange: int = param(2, "labeled exchange candidates")
+    off_policy_count: int = param(
+        3, "labels-only off-policy draws, uniform over the untaken legal moves"
+    )
+    # The stratum quotas drive the .mset labeling's stratified sample around the
+    # forced candidates (docs/roadmap.md item 4): a handful of candidates per
+    # position for dense value labels. The off-policy floor no longer reuses
+    # them -- it is a plain uniform draw (off_policy_count).
+    quota_top: int = param(4, "labeled head candidates")
+    quota_mid: int = param(4, "candidates sampled from the contention zone")
+    quota_tail: int = param(4, "candidates sampled from the remaining ranks")
+    quota_exchange: int = param(2, "exchange candidates")
     mid_rank_limit: int = param(32, "exclusive rank bound of the contention zone")
     # Self-play condition (mirrors move_set_eval's generation params).
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
@@ -192,17 +198,31 @@ def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
     both sim the set under exactly the tag's recipe)."""
     return TrajectoryRecipe(
         rollouts=params.rollouts,
-        proposals_min=params.proposals_min,
-        proposals_max=params.proposals_max,
+        on_policy_min=params.on_policy_min,
+        on_policy_max=params.on_policy_max,
         temperature=params.temperature,
+        off_policy_count=params.off_policy_count,
         open_leaves=params.face_up_leaves,
     )
 
 
-def max_evidence(params: EvidenceTrajectoriesParams) -> int:
-    """The padded evidence-set width the trainer uses: the longest trajectory
-    the recipe can produce (anchor + proposals_max + the uniform tail)."""
-    return 1 + params.proposals_max + 1
+def max_off_policy(params: EvidenceTrajectoriesParams) -> int:
+    """The most off-policy draws a trajectory can carry: the uniform floor."""
+    return params.off_policy_count
+
+
+def max_evidence_width(params: EvidenceTrajectoriesParams) -> int:
+    """The padded evidence-set capacity: the anchor plus the most on-policy
+    picks. Off-policy draws are labels-only and never enter an evidence set, so
+    they do not widen the padded evidence input the model conditions on."""
+    return 1 + params.on_policy_max
+
+
+def max_pool_width(params: EvidenceTrajectoriesParams) -> int:
+    """The most records a position's pool can hold: anchor + on-policy picks +
+    the off-policy floor. This is the full trajectory length the train-role
+    guard checks a corpus against."""
+    return 1 + params.on_policy_max + max_off_policy(params)
 
 
 @dataclass(frozen=True)
@@ -230,9 +250,10 @@ def run_trajectory_generator(
             else []
         ),
         f"--positions-per-game={params.positions_per_game}",
-        f"--proposals-min={params.proposals_min}",
-        f"--proposals-max={params.proposals_max}",
+        f"--on-policy-min={params.on_policy_min}",
+        f"--on-policy-max={params.on_policy_max}",
         f"--temperature={params.temperature}",
+        f"--off-policy-count={params.off_policy_count}",
         f"--threads={threads}",
         *(["--open-leaves"] if params.face_up_leaves else []),
     ]

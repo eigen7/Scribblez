@@ -1,8 +1,9 @@
 // Offline generator of evidence trajectories (.sobs sidecars stamped
 // kSimObsFlagTrajectory) -- the training data of docs/sim_residual_feedback.md's
 // evidence conditioning and proves-best head (docs/roadmap.md, item 4). The
-// per-position recipe (anchor, student-model proposals, uniform tail, all under
-// common random numbers) is training/evidence_trajectory.h; this tool supplies
+// per-position recipe (anchor, on-policy student proposals, a uniform
+// off-policy floor, all under common random numbers) is
+// training/evidence_trajectory_select.h; this tool supplies
 // the decision points from one of two front-ends:
 //
 // - .slog self-play data (--slog-dir / --slog-file): a sampled subset of each
@@ -106,6 +107,9 @@ uint32_t file_flags(const Options& opt) {
   return kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
 }
 
+// The most off-policy draws a position can carry, for the run banner.
+int max_off_policy(const evidence::TrajectoryOptions& t) { return t.off_policy_count; }
+
 // What every worker shares: the lexicon and encoding, the options, the
 // scorer over the loaded proposer model, and -- under --horizon -- the
 // truncation leaf service (shared freely: EvalService serializes its
@@ -122,8 +126,7 @@ struct Shared {
 void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uint32_t turn_idx,
                 uint64_t base_seed, const TrajectoryResult& t) {
   writer->add_position(game_idx, turn_idx, t.candidates, t.observations,
-                       uint32_t(opt.traj.rollouts), base_seed, t.num_legal_moves,
-                       t.uniform_tail ? kSimObsPosFlagUniformTail : 0u);
+                       uint32_t(opt.traj.rollouts), base_seed, t.num_legal_moves, t.roles);
 }
 
 // Runs a front-end's work items across opt.threads worker threads plus the
@@ -281,9 +284,10 @@ void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const 
     total_positions +=
       binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
   std::cerr << "evidence trajectories: " << pending.size() << " file(s), " << total_positions
-            << " positions; anchor + " << opt.traj.proposals_min << ".." << opt.traj.proposals_max
-            << " proposals + uniform tail x " << opt.traj.rollouts << " rollouts, proposer "
-            << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
+            << " positions; anchor + " << opt.traj.on_policy_min << ".." << opt.traj.on_policy_max
+            << " on-policy + up to " << max_off_policy(opt.traj) << " off-policy x "
+            << opt.traj.rollouts << " rollouts, proposer " << proposer_hash.substr(0, 12) << ", "
+            << opt.threads << " threads\n";
 
   util::ProgressMeter meter(total_positions, "positions");
   for (const binlog::PendingSlog& p : pending) {
@@ -405,9 +409,10 @@ void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const O
   results.resize(front.work.size());
   fs::create_directories(opt.out_dir);
   std::cerr << "evidence trajectories: " << front.work.size() << " gcg position(s); anchor + "
-            << opt.traj.proposals_min << ".." << opt.traj.proposals_max
-            << " proposals + uniform tail x " << opt.traj.rollouts << " rollouts, proposer "
-            << proposer_hash.substr(0, 12) << ", " << opt.threads << " threads\n";
+            << opt.traj.on_policy_min << ".." << opt.traj.on_policy_max << " on-policy + up to "
+            << max_off_policy(opt.traj) << " off-policy x " << opt.traj.rollouts
+            << " rollouts, proposer " << proposer_hash.substr(0, 12) << ", " << opt.threads
+            << " threads\n";
 
   util::ProgressMeter meter(front.work.size(), "positions");
   StudentScorer scorer(service);
@@ -455,12 +460,15 @@ int main(int argc, char** argv) {
       "leaf-model", po::value<std::string>(&opt.leaf_model),
       "position evaluation model (.onnx) scoring rollout horizons; required with, and only "
       "with, --horizon")(
-      "proposals-min", po::value<int>(&traj.proposals_min)->default_value(traj.proposals_min),
+      "on-policy-min", po::value<int>(&traj.on_policy_min)->default_value(traj.on_policy_min),
       "least model proposals per trajectory (the randomized length's lower bound)")(
-      "proposals-max", po::value<int>(&traj.proposals_max)->default_value(traj.proposals_max),
+      "on-policy-max", po::value<int>(&traj.on_policy_max)->default_value(traj.on_policy_max),
       "most model proposals per trajectory")(
       "temperature", po::value<double>(&traj.temperature)->default_value(traj.temperature),
       "softmax temperature over the model's win-equity scores (win-equity units)")(
+      "off-policy-count",
+      po::value<int>(&traj.off_policy_count)->default_value(traj.off_policy_count),
+      "labels-only off-policy draws, uniform over the untaken legal moves")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (.slog inputs)")(
