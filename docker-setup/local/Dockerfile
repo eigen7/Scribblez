@@ -120,6 +120,17 @@ RUN python3 -c "import site; \
 #    mechanics. These items should occasionally be moved above.
 RUN pip3 install --no-cache-dir schedulefree
 
+# gh (GitHub CLI) from GitHub's own apt repo, so coding agents can read PR
+# comments / diffs directly instead of hand-rolling API calls.
+RUN mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
+    rm -rf /var/lib/apt/lists/*
+
 # 9) Macondo's data-path env var, so it finds its kwg/leaves when the engine
 #    launches it as a subprocess.
 ENV MACONDO_CONFIG_DATA_PATH=/workspace/mount/macondo/data
