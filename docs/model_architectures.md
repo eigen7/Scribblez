@@ -73,10 +73,36 @@ concatenates the channel-wise mean and max over the board: `(B, C, H, W)` →
 One board in, six heads out. `wld` is the inference head; the rest are auxiliary
 training signal.
 
-![PositionEvalModel: the value summary feeding three FC stacks, plus the shared mask convolution](images/arch_position_eval.svg)
+![PositionEvalModel: the value summary feeding three FC stacks, plus the four footprint placement heads](images/arch_position_eval.svg)
 
 `sd_std_fc` reads a **detached** `v`, so the std loss trains that stack alone —
 never the trunk, never the mean.
+
+### Placement heads (footprint-categorical)
+
+The four placement heads are **categorical distributions over move footprints**,
+not per-cell Bernoulli masks. A footprint is `(anchor, orientation, k)` — the
+first newly-placed square, the play axis, and the tile count `k ∈ 1..7` — and it
+covers "the first `k` empty cells from the anchor". Each head is a
+`FootprintPlacementHead`: a `Conv2d(C → 13)` whose `(cell, slot)` flattening is
+exactly `training_targets.h`'s anchored-class index, plus a pooled FC for the two
+catch-all classes (`pass`, and the win heads' `not-win` / the plays heads'
+dummy), giving `(B, 2927)` raw logits. The plays heads (`*_next_placement`)
+distribute over footprints ∪ {pass}; the win heads (`*_win_placement`) over
+{footprint ∧ win} ∪ {not-win}, a proper distribution whose collapse is
+`Pr[covers cell ∧ that seat wins]`.
+
+Training is **masked softmax cross-entropy** against the footprint class: an
+engine-computed legality mask (a sound over-approximation — opp heads exact-ish
+from the board, self heads opp-move-invariant; recomputed per row on replay)
+drives illegal footprints to −∞ before the softmax, and the target class is
+always kept first (the `−log(0)` guard). Softmax's conserved mass replaces the
+per-cell BCE's drifting, easy-negative-diluted geometry — the loss-geometry fix
+for the I13/M7 magnitude residuals. `mask_placement=False` is the
+masked-vs-unmasked arm. The graph emits raw logits (`kIdentity`); every consumer
+masks and softmaxes itself, and the dashboard/`.mset` collapse each head to the
+old per-cell `(15, 15)` marginal (`Σ` footprint probability over covered cells)
+so the distilled student and MC-truth pairing are unchanged.
 
 ### Tile-supply cross-attention (`use_supply_attention`)
 
@@ -111,8 +137,8 @@ block.
 | `wld` | one-hot win/draw/loss | cross-entropy | 1 |
 | `score_diff[:,0]` | observed final differential | Huber (δ=10) | `lambda_sd` = 1 |
 | `score_diff[:,1]` | `MAD_TO_STD · \|mean − target\|`, detached | Huber (δ=10) | `lambda_sd` = 1 |
-| `*_next_placement` | binary per-cell mask | BCE-with-logits | `lambda_next_placement` = 0.5 each |
-| `*_win_placement` | binary per-cell mask | BCE-with-logits | `lambda_win_placement` = 0.5 each |
+| `*_next_placement` | footprint class index (+ legality mask) | masked softmax-CE | `lambda_next_placement` = 0.5 each |
+| `*_win_placement` | footprint class index (+ legality mask) | masked softmax-CE | `lambda_win_placement` = 0.5 each |
 
 `MAD_TO_STD = sqrt(π/2)` rescales the absolute-residual target so its optimum is
 a Gaussian σ. The recipe carries no activation-magnitude restoring forces: BF16
@@ -298,9 +324,9 @@ plain pass for drift.
 | Unit of output | one board | one candidate move |
 | Board encodes per output | 1 | 1 / candidate-set |
 | Move-conditioning | none (board is post-move) | tile embeddings + cross-attention |
-| Heads | wld, score_diff, 4 placement masks | wld, score_diff, 4 placement planes, proves-best gain |
+| Heads | wld, score_diff, 4 footprint placement heads | wld, score_diff, 4 placement planes, proves-best gain |
 | Supervision | game outcomes / observed spread | teacher readouts (`.mset` sidecar) |
-| ONNX outputs | `wld`, `score_diff`, 4 mask names | plain graph: `wld`, `score_diff`; evidence-path split (below) adds `planes` and `gain` |
+| ONNX outputs | `wld`, `score_diff`, 4 footprint-logit heads | plain graph: `wld`, `score_diff`; evidence-path split (below) adds `planes` and `gain` |
 
 The move set evaluation model has two ONNX export paths. The plain graph
 (`onnx_export.py`, `move_set_eval`) emits `wld` and `score_diff` for the

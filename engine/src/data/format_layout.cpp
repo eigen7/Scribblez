@@ -178,9 +178,9 @@ json::object build_constants() {
   // over (footprint.h), so the Python model / loss / viz read one width, class
   // layout, and the pass/not-win slot indices from the same source the C++
   // targets and TensorRT output descriptors do.
-  c["footprint"] = {{"num_classes", kFootprintClasses},   {"slots_per_cell", kSlotsPerCell},
-                    {"side", kFootprintSide},              {"max_k", kFootprintMaxK},
-                    {"anchored", kAnchoredFootprints},     {"pass_class", kPassClass},
+  c["footprint"] = {{"num_classes", kFootprintClasses}, {"slots_per_cell", kSlotsPerCell},
+                    {"side", kFootprintSide},           {"max_k", kFootprintMaxK},
+                    {"anchored", kAnchoredFootprints},  {"pass_class", kPassClass},
                     {"extra_class", kExtraClass}};
   return c;
 }
