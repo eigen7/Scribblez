@@ -319,44 +319,50 @@ one job and one lifecycle: the student stays a pure distillation vessel (the
 dense prior, the backbone source, and — under D2 — the rollout policy),
 while the copy is free to follow the sim signal.
 
-Trained on item 4's assembled rows, three loss components:
+Trained on item 4's assembled rows, two loss components:
 
 - **Gain** (primary): Huber against the held-out candidate's CRN-paired gain
-  over its evidence set's best.
+  over its evidence set's best. The best-so-far the gain is measured against
+  is a **known scalar at inference** — the max sim value over the evidence set
+  gathered so far — so it is fed to the head as an **input**, not left to be
+  reconstructed from the pooled evidence (a mean pool cannot carry the max the
+  target rides on).
 - **Conditioned WLD / score-diff** (auxiliary): soft-CE / Huber against the
   held-out candidate's own sim outcome, on the same rows. Sim outcomes and
   never the plain teacher, whose readout is a function of the board alone —
   as a target on evidence-bearing rows it would train the fusion stage to
   ignore evidence. The gain is a thin transform of the conditioned value, so
   these auxiliaries feed the head at no extra sim cost.
-- **Self-distillation anchor** (stabilizer, small coefficient): the plain
-  pass pressured toward the **frozen student's outputs**, recomputed on the
-  fly by a frozen-student forward over **all** legal candidates of the
-  batch's positions — no stored labels, full-set coverage, extendable to
-  sim-less positions if drift shows up. The anchor is what keeps the gain
-  argmax safe over the thousands of candidates that never receive a sim
-  label: the backbone must not drift off the teacher-shaped ranking on the
-  strength of a handful of sim rows. Plain pass only — pressuring
-  conditioned outputs toward a board-only function is the
-  ignore-the-evidence failure again.
+
+The backbone trains — the copy is free to follow the sim signal — starting
+from the student's ranking, and the empty-evidence (prefix-0) rows keep the
+evidence-free pass calibrated as a board-only prior on the simmed candidates.
+There is deliberately **no self-distillation anchor**: an anchor's only added
+job would be extending that calibration to the *unsimmed* legal moves the gain
+argmax ranges over, and doing so cleanly needs a live frozen-student forward
+over **all** `N` candidates per position — which the replay pipeline (encoded
+inputs, no move list) cannot supply without a new engine move generator, a
+large build for a speculative stabilizer. The gain head instead generalizes
+from a diverse held-out set (anchor, on-policy, low-value off-policy draws) and
+the student starting point, with `backbone_lr_mult` as the drift knob; whether
+the argmax over unsimmed moves holds up is measured at the agent (item 6), the
+anchor a known fallback if it does not.
 
 The gen-1 **frozen-backbone trial** (fusion stage + head only, over the
-200-rollout v1 corpus) is the recorded floor this regime replaces:
-conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 against the
-plain value's 0.61. The mechanism demonstrably engages on exhibits, but
-200-rollout evidence is too noisy — and a zero-initialized fusion stage over
-a frozen trunk too weak — to beat the plain ranking. Both diagnoses are
-addressed above: deployment-count rollouts (item 2), and a trainable
-backbone held by the anchor.
+200-rollout v1 corpus) is the recorded floor: conditioned − plain soft-CE
+−0.0008, acquisition hit rate 0.57 against the plain value's 0.61. The
+mechanism demonstrably engages on exhibits, but 200-rollout evidence is too
+noisy — and a zero-initialized fusion stage over a frozen trunk too weak — to
+beat the plain ranking. Both diagnoses are addressed above: deployment-count
+rollouts (item 2), and a trainable backbone.
 
-Two fusion refinements to validate during this build (cheap, unimplemented):
-evidence reaches the global summary by mean pooling, but best-so-far — the
-one statistic the gain head must know — is a max, so mean+max (the trunk's
-own pooling convention) or attention pooling with a learned query; and a
-direct move-query → evidence-token cross-attention (`O(N·K)`), letting a
-candidate compare itself to each simmed move by encoding rather than only
-through shared board squares — a leave-twin with a different footprint is
-currently visible only through the move scalars and the pooled summary.
+One fusion refinement remains open to validate during this build (cheap,
+unimplemented): a direct move-query → evidence-token cross-attention (`O(N·K)`),
+letting a candidate compare itself to each simmed move by encoding rather than
+only through shared board squares — a leave-twin with a different footprint is
+currently visible only through the move scalars and the pooled summary. (The
+earlier mean+max / attention-pooling refinement is obviated by feeding
+best-so-far in directly.)
 
 ### 6. The sequential agent
 
@@ -442,8 +448,7 @@ the one above it.
 - **Predicts**: per candidate, WLD + score differential + the four placement
   planes.
 - **Roles**: the dense prior over full candidate sets; the backbone the move
-  proposal model is copied from and anchored to; under D2, the rollout
-  policy.
+  proposal model is copied from; under D2, the rollout policy.
 - **Status**: v2 (with planes) trained
   ([move_set_eval_v2_results.md](move_set_eval_v2_results.md)).
 
@@ -453,14 +458,14 @@ the one above it.
   ([item 5](#5-the-move-proposal-model)); the model at the root of the
   deployed loop.
 - **Trained on**: evidence-set rows assembled from item 4's pools, under the
-  three-part loss of item 5 — gain first, sim-outcome auxiliaries,
-  self-distillation anchor.
+  two-part loss of item 5 — gain first (best-so-far fed as an input) and the
+  sim-outcome auxiliaries.
 - **Bootstrapping**: the gen-0 pool's on-policy side is selected by the
   plain student (temperature softmax over the full candidate set) — correct
   at the empty evidence set, and the greedy anchor supplies the first sim
   regardless of proposer. Later generations select with the current move
   proposal model, and each new student generation refreshes the copy's
-  starting point and anchor target.
+  starting point.
 
 ## Rack inference — parked
 
@@ -498,7 +503,8 @@ belief system of design.md §3.
 - **A frozen-backbone move proposal model.** The gen-1 frozen trial stays in
   the trainer as the diagnostic it was and in the record as the floor
   ([item 5](#5-the-move-proposal-model)); the plan trains the backbone,
-  held by the self-distillation anchor.
+  starting from the student and relying on the sim signal plus a small
+  backbone learning rate rather than an explicit anchor.
 - **Backtracking self-play** — rewind to a decision point and play out a
   different candidate. Needs a `.slog` branch-point extension and a branching
   `GameRunner` mode; parked until training signal is demonstrably

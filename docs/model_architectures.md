@@ -216,22 +216,27 @@ first-pass predictions, roadmap item 4).
 
 ### The proves-best head (roadmap item 5)
 
-`proves_best`: `Linear(4C, C) → ReLU → Linear(C, 1) → softplus`, off the same
-fused per-move vector as `head` and `plane_proj`, output `gain` (M,) ≥ 0 —
-the expected improvement `E[max(0, v − best-so-far)]` a sim of that candidate
-would contribute over the best simmed so far. Meaningful only under evidence
-(at the empty set it collapses to the value itself); exported by the
-`move_proposal_step` graph of the evidence path (roadmap item 3, §4 below).
+`proves_best`: a small softplus MLP off the same fused per-move vector as
+`head` and `plane_proj`, taking additionally the scalar **best-so-far** (the
+max sim value over the evidence set gathered so far — a known input at
+inference), output `gain` (M,) ≥ 0 — the expected improvement
+`E[max(0, v − best-so-far)]` a sim of that candidate would contribute over the
+best simmed so far. Feeding best-so-far in directly is what lets the head
+compare against it, rather than reconstructing a max from the mean-pooled
+evidence summary. Meaningful only under evidence (at the empty set it collapses
+to the value itself); exported by the `move_proposal_step` graph of the
+evidence path (roadmap item 3, §4 below).
 
 ### Training the evidence path (`scribblez.evidence`)
 
 > **Plan status.** The modes below are what the code implements today. The
 > gen-1 frozen-mode trial over the 200-rollout trajectory corpus is the
 > recorded floor (conditioned − plain soft-CE −0.0008; acquisition hit rate
-> 0.57 vs the plain value's 0.61), and the plan has moved to a separate
-> **move proposal model** — a student copy trained gain-first, with an
-> on-the-fly self-distillation anchor to the frozen student in place of the
-> `.mset` stream — over a deployment-rollout-count corpus of
+> 0.57 vs the plain value's 0.61). Item 5 revises this into the **move
+> proposal model**: a student copy with a **trainable backbone**, trained
+> gain-first (best-so-far fed as a head input) with the sim-outcome conditioned
+> auxiliaries and **no self-distillation anchor** — the `.mset` distillation
+> stream is dropped — over a deployment-rollout-count corpus of
 > subset-assembled evidence sets ([roadmap.md](roadmap.md) items 2–5).
 
 The fusion stage and the proves-best head train over the student. In the
