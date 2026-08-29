@@ -245,14 +245,25 @@ def build_all_archs(
         f.write(dispatch_makefile)
         dispatch_path = f.name
     try:
-        run_rc(f"make -f {dispatch_path} -j{total_jobs} all")
+        dispatch_rc = run_rc(f"make -f {dispatch_path} -j{total_jobs} all")
     finally:
         os.unlink(dispatch_path)
 
     print(f"\nAbove output was for arch={primary}.")
     _print_log_locations(archs)
 
-    return [arch for arch, marker in fail_markers.items() if os.path.exists(marker)]
+    failed = [arch for arch, marker in fail_markers.items() if os.path.exists(marker)]
+    if dispatch_rc and not failed:
+        # Every recipe swallows its own failure with `|| touch <marker>` and so
+        # reports success to make, which means a nonzero exit from the dispatch
+        # make can only be a structural failure no per-arch marker captured
+        # (make couldn't schedule a recipe, a jobserver error, a signal). Fail
+        # the build rather than mistaking that empty marker set for success.
+        sys.exit(
+            f"Build failed: the dispatch make exited {dispatch_rc} without any "
+            "arch reporting a compile failure. See the output above."
+        )
+    return failed
 
 
 def count_warnings(log_path: str) -> int:
