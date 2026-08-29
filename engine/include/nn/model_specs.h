@@ -141,39 +141,42 @@ struct ScoreDiffOutput {
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
-// The four placement-mask heads -- one float per board cell, raw logits -- in
-// export order (onnx_export.py's MASK_HEAD_NAMES), also the SimObservation
-// plane order and the .mset plane order.
+// The four placement heads -- raw logits over the kFootprintClasses move
+// footprints (see training/footprint.h), in export order (onnx_export.py's
+// MASK_HEAD_NAMES), also the SimObservation and .mset plane order. kIdentity,
+// not kSigmoid/kSoftmax: the legality mask must be applied BEFORE the softmax
+// and is not in the TRT graph, so the graph emits raw logits and each consumer
+// (Python loss, dashboard, mset-gen) does the masked-softmax itself.
 struct OppNextMaskOutput {
   static constexpr const char* kName = OppNextPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kBoardCells;
+  static constexpr int kRowElems = kFootprintClasses;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
 struct SelfNextMaskOutput {
   static constexpr const char* kName = SelfNextPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kBoardCells;
+  static constexpr int kRowElems = kFootprintClasses;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
 struct OppWinMaskOutput {
   static constexpr const char* kName = OppWinPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kBoardCells;
+  static constexpr int kRowElems = kFootprintClasses;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
 struct SelfWinMaskOutput {
   static constexpr const char* kName = SelfWinPlacementTarget::kName;
   using Elem = float;
-  static constexpr int kRowElems = kBoardCells;
+  static constexpr int kRowElems = kFootprintClasses;
   static constexpr bool kDynamic = true;
-  static constexpr RowDecode kDecode = RowDecode::kSigmoid;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
 // The number of placement-plane heads (targets.PLANE_NAMES) -- the four
