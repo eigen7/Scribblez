@@ -273,12 +273,13 @@ rollout configuration (truncated per item 2, CRN across the pool):
   generation: deployment argmaxes over every unsimmed candidate, and a cap
   keeps deep promotions out of the corpus (the egotize-lane set's
   structurally unsimmable GAVE was the exhibit).
-- **B ≈ 11 off-policy draws** — held out from evidence sets by construction,
-  stratified the way the `.mset` sampler is, reusing its quotas: a uniform
-  draw plus draws from the rank-based strata (the contention zone, the tail,
-  and exchanges). This is the bounded floor against the proposer's echo
-  chamber; the richer semantic strata (high-leave, setups) are a later
-  refinement, and the rationale is in
+- **B ≈ 3 off-policy draws** — held out from evidence sets by construction,
+  drawn uniformly over the legal moves the anchor and on-policy picks did not
+  take. This is the bounded floor against the proposer's echo chamber, kept
+  deliberately assumption-free: a uniform draw samples exchanges and the tail
+  at their natural frequency, so no stratum has to be hand-specified.
+  Stratified or semantic draws (contention zone, high-leave, setups) are a
+  later refinement if the floor proves too coarse; the rationale is in
   [sim_residual_feedback.md](sim_residual_feedback.md).
 
 Training rows are **assembled from the pool, not replayed from it**: the

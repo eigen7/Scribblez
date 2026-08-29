@@ -3,8 +3,8 @@
 // simmed, in what order, and each one's evidence role. The greedy anchor first,
 // then a randomized-length sequence of on-policy proposals drawn from a
 // temperature softmax over the move set evaluation model's win equities (over
-// EVERY unsimmed candidate -- deployment's full support), then the stratified
-// off-policy draws (the labels-only exploration floor).
+// EVERY unsimmed candidate -- deployment's full support), then a uniform draw of
+// off-policy candidates (the labels-only exploration floor).
 //
 // The anchor and the on-policy proposals are evidence (SimObsRole::kAnchor /
 // kOnPolicy); the off-policy draws are labels-only (kOffPolicy) -- simmed for
@@ -19,7 +19,6 @@
 
 #include "data/sim_obs_role.h"
 #include "game/move.h"
-#include "training/move_set_eval_candidates.h"
 #include "util/math.h"
 
 #include <random>
@@ -35,12 +34,9 @@ struct TrajectoryOptions {
   int on_policy_min = 2;
   int on_policy_max = 8;
   double temperature = 0.05;  // win-equity units
-  // The off-policy floor (docs/roadmap.md item 4): rank-stratified draws plus
-  // `off_policy_uniform` uniform draws, all held out of every evidence set. The
-  // strata reuse move_set_eval's quota shape (top is a window bound, not a draw
-  // count -- the head is the proposer's).
-  move_set_eval::StratumQuotas off_policy_quotas;
-  int off_policy_uniform = 1;
+  // The off-policy floor (docs/roadmap.md item 4): this many candidates drawn
+  // uniformly over the untaken legal moves, all held out of every evidence set.
+  int off_policy_count = 3;
 };
 
 // The anchor: the highest-raw-score candidate, taken off the move list by a
@@ -50,7 +46,7 @@ size_t anchor_index(const std::vector<Move>& ranked);
 
 // The trajectory's candidate indices into `ranked`, in sim order: the anchor,
 // up to a sampled count of temperature-softmax proposals over the student's win
-// equities, then the stratified off-policy draws. Fills *roles in parallel with
+// equities, then the uniform off-policy draws. Fills *roles in parallel with
 // the returned indices (kAnchor, kOnPolicy, kOffPolicy), so a reader recovers
 // evidence-eligibility from the role.
 std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,

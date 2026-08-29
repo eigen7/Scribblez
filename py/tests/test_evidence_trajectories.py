@@ -237,9 +237,7 @@ def test_trajectory_width_formulas():
     swapped or mis-summed formula is caught without the GPU e2e path."""
     params = EvidenceTrajectoriesParams()
     assert max_evidence_width(params) == 1 + params.on_policy_max
-    assert max_off_policy(params) == (
-        params.quota_mid + params.quota_tail + params.quota_exchange + params.off_policy_uniform
-    )
+    assert max_off_policy(params) == params.off_policy_count
     assert max_pool_width(params) == 1 + params.on_policy_max + max_off_policy(params)
     # The pool the guard admits is strictly wider than the padded evidence input.
     assert max_pool_width(params) > max_evidence_width(params)
@@ -516,8 +514,8 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
         assert len(positions) == 1
         pos = positions[0]
         assert (pos.game_index, pos.turn_index) == (0, n_turns)
-        # anchor + [1..3] on-policy + the default off-policy floor (mid+tail+exchange+uniform).
-        assert 0 < len(pos.moves) <= 1 + 3 + (4 + 4 + 2 + 1)
+        # anchor + [1..3] on-policy + the default off-policy floor (3 uniform draws).
+        assert 0 < len(pos.moves) <= 1 + 3 + 3
         assert all(int(m["score"]) <= int(pos.moves[0]["score"]) for m in pos.moves[1:])
         assert all(int(o["n"]) == pos.rollouts == 8 for o in pos.obs)
     # A rerun sims nothing (the outputs exist), and a mixed invocation refuses.

@@ -1,5 +1,7 @@
 #include "training/evidence_trajectory_select.h"
 
+#include "training/move_set_eval_candidates.h"
+
 #include <algorithm>
 
 namespace scribblez::evidence {
@@ -43,10 +45,10 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
     roles->push_back(SimObsRole::kOnPolicy);
   }
 
-  // The off-policy floor: stratified + uniform draws over what the anchor and
-  // on-policy picks have not taken. Labels-only -- never in an evidence set.
-  const std::vector<size_t> off_policy = move_set_eval::off_policy_draws(
-    ranked, opt.off_policy_quotas, opt.off_policy_uniform, rng, &taken);
+  // The off-policy floor: a uniform draw over what the anchor and on-policy
+  // picks have not taken. Labels-only -- never in an evidence set.
+  const std::vector<size_t> off_policy =
+    move_set_eval::off_policy_draws(ranked, opt.off_policy_count, rng, &taken);
   for (size_t idx : off_policy) {
     chosen.push_back(idx);
     roles->push_back(SimObsRole::kOffPolicy);

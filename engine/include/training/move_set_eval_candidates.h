@@ -59,22 +59,17 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
                                 const StratumQuotas& quotas, std::mt19937_64& rng,
                                 std::span<const Move> forced = {});
 
-// The off-policy floor for an evidence trajectory (docs/roadmap.md item 4): the
-// held-out draws a training row never places in an evidence set. From `ranked`
-// (descending static equity) it draws quotas.mid indices from the contention
-// window [quotas.top, quotas.mid_rank_limit), quotas.tail from
-// [quotas.mid_rank_limit, n), quotas.exchange non-PLAY indices, and `uniform`
-// indices over the whole move list -- each uniform, distinct, and excluding the
-// indices already marked in *taken (the anchor and on-policy picks), marking
-// each drawn index in turn. quotas.top is the head the proposer owns: the mid
-// and tail strata draw only at rank >= quotas.top, so they never touch it; the
-// exchange and uniform strata are unrestricted by rank and may draw from it.
-// Returns the drawn indices in a stable stratum order (mid, tail, exchange,
-// uniform); an exhausted stratum simply yields fewer, with no cross-stratum
-// backfill. Shares the strata core with stratified_candidates. `taken` must be
-// sized to ranked.size().
-std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, const StratumQuotas& quotas,
-                                     int uniform, std::mt19937_64& rng, std::vector<char>* taken);
+// The off-policy floor for an evidence trajectory (docs/roadmap.md item 4):
+// `count` distinct legal-move indices drawn uniformly from those the anchor and
+// on-policy picks have not already taken (marked in *taken), returned in draw
+// order and marked in turn. A plain uniform draw over the whole move list -- the
+// bounded exploration floor against the proposer's echo chamber, deliberately
+// assuming nothing about which moves are worth exploring (exchanges and the tail
+// are sampled at their natural frequency in `ranked`, no stratum reserved for
+// them). These draws are labels-only: a training row never places them in an
+// evidence set. `taken` must be sized to ranked.size().
+std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, int count,
+                                     std::mt19937_64& rng, std::vector<char>* taken);
 
 // The capped full sweep: the top `cap` candidates by static equity, plus every
 // exchange candidate and the played move wherever they rank, in equity-rank

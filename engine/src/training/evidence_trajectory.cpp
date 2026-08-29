@@ -27,6 +27,7 @@ void validate(const TrajectoryOptions& opt) {
     throw util::CleanException("--on-policy-max must be >= --on-policy-min");
   }
   if (opt.temperature <= 0.0) throw util::CleanException("--temperature must be > 0");
+  if (opt.off_policy_count < 0) throw util::CleanException("--off-policy-count must be >= 0");
 }
 
 // --- StudentScorer ---

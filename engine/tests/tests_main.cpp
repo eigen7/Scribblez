@@ -4918,53 +4918,48 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
 }
 
 // off_policy_draws (the trajectory off-policy floor, docs/roadmap.md item 4)
-// draws each stratum from its documented rank window, excludes the anchor and
-// on-policy indices already marked in `taken`, and marks what it draws. The
-// stratum order is stable: mid, tail, exchange, uniform.
-TEST(MoveSetEvalCandidates, OffPolicyDrawsRespectRankWindowsAndExclusion) {
-  const std::vector<Move> ranked = ranked_plays(40);  // all PLAY, descending score
-  const move_set_eval::StratumQuotas quotas;          // top4 mid4 tail4 exchange2 limit32
-  std::vector<char> taken(ranked.size(), 0);
-  for (size_t i : {size_t{0}, size_t{7}, size_t{33}}) taken[i] = 1;  // anchor/on-policy stand-ins
+// draws `count` distinct legal-move indices uniformly from those not already
+// taken (the anchor and on-policy picks), excludes them, and marks what it
+// draws. No stratification -- exchanges and the tail are reachable at their
+// natural frequency in the move list.
+TEST(MoveSetEvalCandidates, OffPolicyDrawsUniformlyExcludingTaken) {
+  std::vector<Move> ranked = ranked_plays(20);
+  TileCounts xchg;
+  xchg.add(Tile::from_char('A'));
+  ranked.push_back(Move::exchange(xchg));  // a non-PLAY candidate is in the pool
+  const size_t n = ranked.size();
+  std::vector<char> taken(n, 0);
+  for (size_t i : {size_t{0}, size_t{5}, size_t{12}}) taken[i] = 1;  // anchor/on-policy stand-ins
   const std::vector<char> pre = taken;
   std::mt19937_64 rng(3);
   const std::vector<size_t> draws =
-    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/2, rng, &taken);
+    move_set_eval::off_policy_draws(ranked, /*count=*/4, rng, &taken);
 
-  // ranked_plays has no exchanges, so the exchange stratum contributes nothing:
-  // mid + tail + uniform.
-  ASSERT_EQ(draws.size(), size_t(quotas.mid + quotas.tail + 2));
-  for (int j = 0; j < quotas.mid; ++j) {
-    EXPECT_GE(draws[size_t(j)], size_t(quotas.top));
-    EXPECT_LT(draws[size_t(j)], size_t(quotas.mid_rank_limit));
-  }
-  for (int j = quotas.mid; j < quotas.mid + quotas.tail; ++j) {
-    EXPECT_GE(draws[size_t(j)], size_t(quotas.mid_rank_limit));
-    EXPECT_LT(draws[size_t(j)], ranked.size());
-  }
+  ASSERT_EQ(draws.size(), 4u);
   for (size_t a = 0; a < draws.size(); ++a) {
+    EXPECT_LT(draws[a], n);
     EXPECT_FALSE(pre[draws[a]]);   // never a pre-marked (anchor/on-policy) index
     EXPECT_TRUE(taken[draws[a]]);  // marked afterward
     for (size_t b = a + 1; b < draws.size(); ++b) EXPECT_NE(draws[a], draws[b]);  // distinct
   }
 }
 
-// The exchange stratum draws only non-PLAY candidates, wherever they rank.
-TEST(MoveSetEvalCandidates, OffPolicyExchangeStratumDrawsNonPlaysOnly) {
-  std::vector<Move> ranked = ranked_plays(10);
+// A count larger than the untaken pool yields exactly the remaining pool -- and
+// a non-PLAY (exchange) is reachable with no stratum reserved for it.
+TEST(MoveSetEvalCandidates, OffPolicyDrawsWholeUntakenPoolIncludingNonPlays) {
+  std::vector<Move> ranked = ranked_plays(4);
   TileCounts xchg;
   xchg.add(Tile::from_char('A'));
-  ranked.push_back(Move::exchange(xchg));  // index 10
-  ranked.push_back(Move::pass());          // index 11
-  move_set_eval::StratumQuotas quotas;
-  quotas.top = quotas.mid = quotas.tail = 0;  // only the exchange stratum draws
-  quotas.exchange = 2;
+  ranked.push_back(Move::exchange(xchg));  // index 4, a non-PLAY
   std::vector<char> taken(ranked.size(), 0);
+  taken[0] = taken[1] = 1;  // untaken pool: indices 2, 3, 4(exchange)
   std::mt19937_64 rng(1);
   const std::vector<size_t> draws =
-    move_set_eval::off_policy_draws(ranked, quotas, /*uniform=*/0, rng, &taken);
-  ASSERT_EQ(draws.size(), 2u);
-  for (size_t idx : draws) EXPECT_NE(ranked[idx].type(), MoveType::PLAY);
+    move_set_eval::off_policy_draws(ranked, /*count=*/10, rng, &taken);
+  ASSERT_EQ(draws.size(), 3u);  // capped at the untaken pool
+  std::vector<size_t> sorted = draws;
+  std::ranges::sort(sorted);
+  EXPECT_EQ(sorted, (std::vector<size_t>{2u, 3u, 4u}));
 }
 
 // The on-policy proposals draw a temperature softmax over EVERY unsimmed

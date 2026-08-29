@@ -396,7 +396,7 @@ teacher on real outcomes.
 ### Evidence-trajectory generation
 
 The training pools come from running sims at ordinary self-play positions;
-the concrete recipe — the greedy anchor, `A` on-policy picks, `B` stratified
+the concrete recipe — the greedy anchor, `A` on-policy picks, `B` uniform
 off-policy draws, all at the deployment rollout configuration — is
 [roadmap.md](roadmap.md) item 4. Two structural facts shape it.
 
@@ -411,13 +411,19 @@ corrected — a blind spot that persists precisely when the teacher shares it,
 which is the lexical case this whole loop exists for. Most floor sims
 confirm "terrible, gain ≈ 0", a correct label in a region that otherwise has
 none, and what stops the head from hallucinating gain out there and spending
-deployment sims on it. Uniform draws alone are a poor floor over thousands
-of legal moves — they almost never land on the interesting different move —
-hence the stratified draws beside the uniform one. Generation 0's floor
-reuses the move-set sampler's **rank-based** strata (the contention zone, the
-tail, and exchanges) plus a uniform draw; the richer semantic strata the
-ideal wants — high-leave and setups — have no predicate yet and are a later
-refinement, not what the code supplies today.
+deployment sims on it. Generation 0 keeps this floor deliberately
+assumption-free: a uniform draw over the legal moves the anchor and on-policy
+picks did not take. The tempting objection — that uniform draws almost never
+land on the interesting near-miss move — misreads the division of labor:
+those near-miss candidates are exactly what the full-support on-policy softmax
+already covers, so the floor's job is the *negative* one, confirming that the
+move classes the proposer ignores are ignored for cause. Uniform serves that
+well; and because the raw move list enumerates every exchange subset and every
+blank designation, uniform draws already sample exchanges and the tail at
+their (variant-inflated) natural frequency, with no stratum hand-specified for
+them. Stratified or semantic draws — the contention zone, high-leave, setups —
+remain a later refinement if the uniform floor proves too coarse, not what the
+code supplies today.
 
 **The evidence set is order-free, so rows are assembled, not replayed.** The
 fusion stage is permutation-invariant and the gain label is a max over the

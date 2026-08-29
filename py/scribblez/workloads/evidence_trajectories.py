@@ -11,8 +11,8 @@ shape with the trajectory phase in front of the labeling.
 The trajectory generator sims, at each sampled position, the sequential loop
 the deployed agent will run: the greedy anchor, then temperature-softmax
 on-policy picks from the tag's frozen `proposer_model` (a move-set-eval student
-export), then a stratified off-policy floor (rank-based strata plus a uniform
-draw over the full legal-move list) -- each candidate under common random
+export), then an off-policy floor of a few candidates drawn uniformly over the
+untaken legal moves -- each candidate under common random
 numbers -- and records the ordered candidates with their sim outcomes and
 evidence role (docs/sim_residual_feedback.md, "Evidence-trajectory
 generation"). The .sobs is both the evidence input (any prefix of the anchor
@@ -100,19 +100,17 @@ class EvidenceTrajectoriesParams:
     on_policy_min: int = param(2, "least on-policy (proposer) picks per trajectory")
     on_policy_max: int = param(8, "most on-policy (proposer) picks per trajectory")
     temperature: float = param(0.05, "proposal softmax temperature, in win-equity units")
-    off_policy_uniform: int = param(
-        1, "off-policy draws taken uniformly over the whole legal-move list"
+    off_policy_count: int = param(
+        3, "labels-only off-policy draws, uniform over the untaken legal moves"
     )
-    # The stratum quotas serve two consumers (docs/roadmap.md item 4): the .mset
-    # labeling's stratified sample around the forced candidates, and the
-    # trajectory's off-policy floor -- the held-out draws simmed for their gain
-    # labels but never placed in an evidence set. The off-policy floor reuses the
-    # same quotas (quota_top is a window bound there, not a draw count -- the head
-    # is the proposer's), so one knob set drives both.
-    quota_top: int = param(4, "labeled head candidates; off-policy contention-window lower rank")
-    quota_mid: int = param(4, "candidates sampled from the contention zone (labeled + off-policy)")
-    quota_tail: int = param(4, "candidates sampled from the remaining ranks (labeled + off-policy)")
-    quota_exchange: int = param(2, "exchange candidates (labeled + off-policy)")
+    # The stratum quotas drive the .mset labeling's stratified sample around the
+    # forced candidates (docs/roadmap.md item 4): a handful of candidates per
+    # position for dense value labels. The off-policy floor no longer reuses
+    # them -- it is a plain uniform draw (off_policy_count).
+    quota_top: int = param(4, "labeled head candidates")
+    quota_mid: int = param(4, "candidates sampled from the contention zone")
+    quota_tail: int = param(4, "candidates sampled from the remaining ranks")
+    quota_exchange: int = param(2, "exchange candidates")
     mid_rank_limit: int = param(32, "exclusive rank bound of the contention zone")
     # Self-play condition (mirrors move_set_eval's generation params).
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
@@ -203,20 +201,14 @@ def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
         on_policy_min=params.on_policy_min,
         on_policy_max=params.on_policy_max,
         temperature=params.temperature,
-        off_policy_uniform=params.off_policy_uniform,
-        quota_top=params.quota_top,
-        quota_mid=params.quota_mid,
-        quota_tail=params.quota_tail,
-        quota_exchange=params.quota_exchange,
-        mid_rank_limit=params.mid_rank_limit,
+        off_policy_count=params.off_policy_count,
         open_leaves=params.face_up_leaves,
     )
 
 
 def max_off_policy(params: EvidenceTrajectoriesParams) -> int:
-    """The most off-policy draws a trajectory can carry: the rank strata
-    (mid + tail + exchange) plus the uniform draws."""
-    return params.quota_mid + params.quota_tail + params.quota_exchange + params.off_policy_uniform
+    """The most off-policy draws a trajectory can carry: the uniform floor."""
+    return params.off_policy_count
 
 
 def max_evidence_width(params: EvidenceTrajectoriesParams) -> int:
@@ -261,12 +253,7 @@ def run_trajectory_generator(
         f"--on-policy-min={params.on_policy_min}",
         f"--on-policy-max={params.on_policy_max}",
         f"--temperature={params.temperature}",
-        f"--off-policy-top={params.quota_top}",
-        f"--off-policy-mid={params.quota_mid}",
-        f"--off-policy-tail={params.quota_tail}",
-        f"--off-policy-exchange={params.quota_exchange}",
-        f"--off-policy-mid-rank-limit={params.mid_rank_limit}",
-        f"--off-policy-uniform={params.off_policy_uniform}",
+        f"--off-policy-count={params.off_policy_count}",
         f"--threads={threads}",
         *(["--open-leaves"] if params.face_up_leaves else []),
     ]

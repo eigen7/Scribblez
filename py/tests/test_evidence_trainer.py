@@ -111,8 +111,8 @@ def test_dataset_rows_follow_the_prefix(traj_datasets):
     or past the prefix; the gain targets are the CRN-paired improvements over
     the prefix's best; prefixes never include the off-policy draws."""
     train, _ = traj_datasets
-    # anchor + [1..3] on-policy + the default off-policy floor (mid+tail+exchange+uniform).
-    assert train.num_positions > 0 and train.max_trajectory <= 1 + 3 + (4 + 4 + 2 + 1)
+    # anchor + [1..3] on-policy + the default off-policy floor (3 uniform draws).
+    assert train.num_positions > 0 and train.max_trajectory <= 1 + 3 + 3
     seen_prefixes = set()
     epochs = (b for e in range(4) for b in train.iter_batches(4, seed=1, epoch_index=e))
     for batch in epochs:

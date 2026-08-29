@@ -107,12 +107,8 @@ uint32_t file_flags(const Options& opt) {
   return kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
 }
 
-// The most off-policy draws a position can carry (mid + tail + exchange +
-// uniform), for the run banner.
-int max_off_policy(const evidence::TrajectoryOptions& t) {
-  return t.off_policy_quotas.mid + t.off_policy_quotas.tail + t.off_policy_quotas.exchange +
-         t.off_policy_uniform;
-}
+// The most off-policy draws a position can carry, for the run banner.
+int max_off_policy(const evidence::TrajectoryOptions& t) { return t.off_policy_count; }
 
 // What every worker shares: the lexicon and encoding, the options, the
 // scorer over the loaded proposer model, and -- under --horizon -- the
@@ -470,27 +466,9 @@ int main(int argc, char** argv) {
       "most model proposals per trajectory")(
       "temperature", po::value<double>(&traj.temperature)->default_value(traj.temperature),
       "softmax temperature over the model's win-equity scores (win-equity units)")(
-      "off-policy-top",
-      po::value<int>(&traj.off_policy_quotas.top)->default_value(traj.off_policy_quotas.top),
-      "lower rank bound of the off-policy contention window (the head the proposer owns; not "
-      "itself drawn from)")(
-      "off-policy-mid-rank-limit",
-      po::value<int>(&traj.off_policy_quotas.mid_rank_limit)
-        ->default_value(traj.off_policy_quotas.mid_rank_limit),
-      "exclusive rank bound between the off-policy contention window and the tail")(
-      "off-policy-mid",
-      po::value<int>(&traj.off_policy_quotas.mid)->default_value(traj.off_policy_quotas.mid),
-      "off-policy draws from the contention window [off-policy-top, off-policy-mid-rank-limit)")(
-      "off-policy-tail",
-      po::value<int>(&traj.off_policy_quotas.tail)->default_value(traj.off_policy_quotas.tail),
-      "off-policy draws from the tail ranks [off-policy-mid-rank-limit, n)")(
-      "off-policy-exchange",
-      po::value<int>(&traj.off_policy_quotas.exchange)
-        ->default_value(traj.off_policy_quotas.exchange),
-      "off-policy draws among the non-PLAY (exchange/pass) candidates")(
-      "off-policy-uniform",
-      po::value<int>(&traj.off_policy_uniform)->default_value(traj.off_policy_uniform),
-      "off-policy draws uniform over the whole legal-move list")(
+      "off-policy-count",
+      po::value<int>(&traj.off_policy_count)->default_value(traj.off_policy_count),
+      "labels-only off-policy draws, uniform over the untaken legal moves")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
       "eligible turns sampled per game (.slog inputs)")(
