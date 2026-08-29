@@ -1,14 +1,21 @@
+#include "data/gcg_reader.h"
 #include "game/board.h"
+#include "game/game_log.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/tile.h"
+#include "lexicon/dictionary.h"
 #include "training/footprint.h"
 #include "training/footprint_mask.h"
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <fstream>
+#include <optional>
 #include <set>
+#include <sstream>
+#include <string>
 #include <utility>
 
 namespace scribblez {
@@ -184,6 +191,66 @@ TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
   self_footprint_mask(b, 7, 7, false, false, m);
   EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
   EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
+}
+
+std::string slurp(const std::string& path) {
+  std::ifstream f(path);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
+}
+
+// Gate (b): the mask must never exclude a move that actually happens, or the
+// masked-softmax cross-entropy would take -log(0) -> NaN on that target. Replay
+// each real game; for every played move assert its footprint class is in the opp
+// mask on the pre-move board (one ply ahead -- needs the lexicon for cross-checks)
+// and in the self mask on the board two plies earlier (the self head's context;
+// cross-check-oblivious, so it runs with or without the lexicon).
+void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
+  Board board;
+  if (dict) board.ensure_movegen_caches(*dict);
+  std::optional<Board> two_plies_ago;  // board before the previous move
+  for (const ParsedGcgTurn& turn : game.turns) {
+    const Move& m = turn.record.move;
+    if (m.type() == MoveType::PLAY) {
+      const int cls = footprint_class(m, /*flip=*/false);
+      if (dict) {
+        FootprintMask opp;
+        opp_footprint_mask(board, RACK_SIZE, /*flip=*/false, /*win_head=*/false, opp);
+        EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
+      }
+      if (two_plies_ago) {
+        FootprintMask self;
+        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, false, false, self);
+        EXPECT_TRUE(self[cls]) << "self mask excluded a real move (class " << cls << ")";
+      }
+    }
+    two_plies_ago = board;  // board before THIS move == two plies before the next
+    if (m.type() == MoveType::PLAY) {
+      board.apply(m);
+      if (dict) board.ensure_movegen_caches(*dict);
+    }
+  }
+}
+
+TEST(FootprintMaskSoundness, RealGamesNeverMaskAPlayedMove) {
+  std::optional<Dictionary> dict;
+  const char* kwg = SCRIBBLEZ_DEFAULT_KWG;
+  if (std::ifstream(kwg).good()) dict = Dictionary::load_kwg(kwg);
+
+  const char* fixtures[] = {"boreal.gcg",  "egotize-lane.gcg",   "FOE.gcg",      "ole.gcg",
+                            "violets.gcg", "postbingo-gave.gcg", "pos09-gnu.gcg"};
+  int swept = 0;
+  for (const char* name : fixtures) {
+    const std::string text = slurp(std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/" + name);
+    if (text.empty()) continue;
+    ParsedGcgGame game;
+    std::string err;
+    if (!read_gcg_text(text, &game, &err)) continue;  // skip an unparseable fixture
+    sweep_game(game, dict ? &*dict : nullptr);
+    ++swept;
+  }
+  EXPECT_GT(swept, 0) << "no fixtures swept";
 }
 
 }  // namespace
