@@ -40,6 +40,13 @@ inline constexpr int kFootprintClasses = kAnchoredFootprints + 2;            // 
 // (EXCHANGE / PASS) maps to kPassClass.
 int footprint_class(const Move& m, bool flip);
 
+// Decode a per-cell slot [0, kSlotsPerCell) into its orientation (in the same
+// frame the slot was encoded -- flipped if the class is a flipped-frame class)
+// and tile count k. Slot 0 is the orientation-free k==1 footprint (horizontal
+// reported by convention); the caller un-flips the orientation if it needs board
+// coordinates.
+void footprint_slot_decode(int slot, bool& horizontal, int& k);
+
 // The covered board cells of a footprint class, in the `flip` frame: the first
 // k empty cells from the anchor along the orientation on `board` (the state
 // BEFORE the move). Writes the (row, col) pairs into `cells` and returns their

@@ -15,8 +15,9 @@ int slot_for(bool horizontal, int k) {
   return base + (k - 2);
 }
 
-// Recover (orientation, k) from a per-cell slot.
-void orientation_k_for(int slot, bool& horizontal, int& k) {
+}  // namespace
+
+void footprint_slot_decode(int slot, bool& horizontal, int& k) {
   if (slot == 0) {
     horizontal = true;  // orientation-free; a lone tile has no distinct axis
     k = 1;
@@ -28,8 +29,6 @@ void orientation_k_for(int slot, bool& horizontal, int& k) {
     k = slot - kFootprintMaxK + 2;
   }
 }
-
-}  // namespace
 
 int footprint_class(const Move& m, bool flip) {
   if (m.type() != MoveType::PLAY) return kPassClass;
@@ -51,7 +50,7 @@ int footprint_cells(int cls, const Board& board, bool flip,
   const int cell = cls / kSlotsPerCell;
   bool horizontal;
   int k;
-  orientation_k_for(cls % kSlotsPerCell, horizontal, k);
+  footprint_slot_decode(cls % kSlotsPerCell, horizontal, k);
 
   // The class is in the flip frame; the board is natural. Un-flip the anchor and
   // orientation into board coordinates, walk empties there, and re-flip each

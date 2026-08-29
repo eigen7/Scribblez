@@ -3,6 +3,7 @@
 #include "game/move.h"
 #include "game/tile.h"
 #include "training/footprint.h"
+#include "training/footprint_mask.h"
 
 #include <gtest/gtest.h>
 
@@ -93,6 +94,51 @@ TEST(Footprint, ImpossibleClassOnBoardReturnsZero) {
   // Catch-all classes cover no cells.
   EXPECT_EQ(footprint_cells(kPassClass, b, false, cells), 0);
   EXPECT_EQ(footprint_cells(kExtraClass, b, false, cells), 0);
+}
+
+int count_true(const FootprintMask& m) {
+  int n = 0;
+  for (bool b : m) n += b;
+  return n;
+}
+
+// On an empty board every square reads as unconstrained, so the opp mask reduces
+// to geometry + tile budget -- exercisable without a dictionary. (Cross-check
+// gating and the self-mask soundness sweep need a real corpus; that lands with
+// the FFI + sweep piece.)
+TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
+  Board b;
+  FootprintMask m;
+  opp_footprint_mask(b, /*tile_budget=*/7, /*flip=*/false, /*win_head=*/false, m);
+  EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);    // horizontal k=3 fits
+  EXPECT_FALSE(m[(7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2))]);  // horizontal k=7 off the edge
+  EXPECT_TRUE(m[kPassClass]);                                      // pass always legal
+  EXPECT_FALSE(m[kExtraClass]);                                    // dummy for a plays head
+  EXPECT_EQ(count_true(m), 2295 + 1);  // every geometrically-fitting footprint + pass
+}
+
+TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
+  Board b;
+  FootprintMask m;
+  opp_footprint_mask(b, 7, false, /*win_head=*/true, m);
+  EXPECT_TRUE(m[kExtraClass]);
+  EXPECT_EQ(count_true(m), 2295 + 2);  // + pass + not-win
+}
+
+TEST(FootprintMask, BudgetCapsK) {
+  Board b;
+  FootprintMask m;
+  opp_footprint_mask(b, /*tile_budget=*/2, false, false, m);
+  EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
+  EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
+}
+
+TEST(FootprintMask, FlipMarksFlippedClassLegal) {
+  Board b;
+  FootprintMask m;
+  opp_footprint_mask(b, 7, /*flip=*/true, false, m);
+  // The flip image of horizontal k=3 at (7,5) is vertical k=3 at (5,7).
+  EXPECT_TRUE(m[(5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2))]);
 }
 
 }  // namespace
