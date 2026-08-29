@@ -30,6 +30,18 @@ bool encode_position_eval_analysis_input_with_leaves(const std::string& gcg_text
                                                      const InputEncodingSpec& spec, float* out,
                                                      std::string* error);
 
+// Collapse the four placement heads' raw footprint logits at this analysis
+// position into the four board-frame per-cell occupancy marginals the dashboard
+// overlay and Monte-Carlo truth compare against -- the same
+// mask+softmax+scatter the .mset writer applies (training/footprint_collapse.h),
+// run here on the analysis (post-move) board so the web endpoint keeps reading a
+// (15,15) plane per head. `raw` is kPlacementHeads * kFootprintClasses (the
+// model's undecoded output); `out` receives kPlacementHeads * (side*side)
+// floats. False (with *error) on a parse error or a non-PLAY final move.
+bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
+                                               const InputEncodingSpec& spec, const float* raw,
+                                               float* out, std::string* error);
+
 // The web-render bundle for the same analysis position: the GameState JSON plus
 // "start_player", "last_move", and "opp_leave" (the opponent's retained leave,
 // '?' = a blank), with the final mover's leave as the shown rack. It goes

@@ -191,6 +191,17 @@ int scribblez_position_eval_analyze_gcg(ScribblezSession* s, const char* gcg_tex
                                         int opp_leave_input, float* out_input, int input_cap,
                                         char* out_err, int err_cap);
 
+// Collapse a dataset GCG's post-move placement logits into per-cell marginals.
+// `raw` holds the four placement heads' raw footprint logits
+// (kPlacementHeads * kFootprintClasses, the model's undecoded output for this
+// position); the four board-frame (15x15) occupancy marginals are written to
+// `out` (kPlacementHeads * 225 floats) via the same mask+softmax+scatter the
+// .mset writer applies. Returns the floats written, or -1 with a reason in
+// `out_err`: a parse error, a non-PLAY final move, or a buffer too small.
+int scribblez_position_eval_collapse_placement(ScribblezSession* s, const char* gcg_text,
+                                               const float* raw, int raw_cap, float* out,
+                                               int out_cap, char* out_err, int err_cap);
+
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
 // a dataset GCG's post-move position, from the POV of the player that made the
