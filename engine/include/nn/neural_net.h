@@ -34,7 +34,7 @@ struct NeuralNetParamsBase {
   int max_rows = 0;  // NeuralNetParams<Spec> sets the family default
 
   Precision precision = Precision::kFP16;
-  uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
+  uint64_t workspace_bytes = uint64_t{1} << 29;  // 512 MiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
 
   // Build at TensorRT optimization level 0: take the first working kernel per
