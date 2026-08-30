@@ -286,5 +286,36 @@ TEST(FootprintCollapse, MassLandsOnCoveredCells) {
   EXPECT_NEAR(total, 3.0f, 0.02f);  // three covered cells, ~all the mass
 }
 
+// The collapse actually applies the legality mask, not just softmax+scatter: a
+// dominant logit on an ILLEGAL footprint contributes no plane mass. Uses the
+// self head, whose mask excludes footprints too far to reach in two plies: a
+// lone tile at (0,0) leaves (14,12..14) unreachable (distance 26+ > budget 14).
+// Were the mask dropped, that footprint's huge logit would light its cells.
+TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
+  Board b;
+  b.set(0, 0, G(0));  // the only structure; the far corner is unreachable from it
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+
+  Glyph played[3] = {G(0), G(1), G(2)};
+  const uint16_t sq = (1u << 12) | (1u << 13) | (1u << 14);
+  const int illegal = footprint_class(Move::play(true, 14, sq, 0, played, 3), /*flip=*/false);
+  ASSERT_LT(illegal, kAnchoredFootprints);
+
+  std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
+  raw[1 * kFootprintClasses + illegal] = 20.0f;  // head 1 (self_next); would dominate unmasked
+  std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
+  collapse_footprint_planes(b, d, /*flip=*/false, raw.data(), out.data());
+
+  const float* self_plane = out.data() + 1 * kFootprintSide * kFootprintSide;
+  EXPECT_LT(self_plane[14 * kFootprintSide + 12], 0.01f);
+  EXPECT_LT(self_plane[14 * kFootprintSide + 13], 0.01f);
+  EXPECT_LT(self_plane[14 * kFootprintSide + 14], 0.01f);
+  // The mass did not vanish -- masked-softmax spread it over the reachable
+  // (legal) footprints near the tile, so the plane still sums to ~its tiles.
+  float total = 0.0f;
+  for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) total += self_plane[i];
+  EXPECT_GT(total, 0.5f);
+}
+
 }  // namespace
 }  // namespace scribblez

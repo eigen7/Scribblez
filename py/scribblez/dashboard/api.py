@@ -463,9 +463,8 @@ def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
     """The placement predictions for one on-disk ONNX file + dataset position:
     board-frame (15, 15) per-cell occupancy marginals keyed by head name (the
     footprint heads' raw logits collapsed by the engine), or None when the engine
-    does not
-    encode the model's declared input widths (an earlier, differently sized
-    encoding era).
+    does not encode the model's declared input widths (an earlier, differently
+    sized encoding era).
 
     Cached per (onnx_path, position): an ONNX export is atomic (a temp file renamed
     into place), so a path that exists is always complete and its content never
@@ -484,9 +483,9 @@ def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
 
 def _position_eval_placement_pred(tag, task, mount_root, generation, position):
     """The selected generation's ONNX placement predictions for a dataset
-    position: board-frame (15, 15) per-cell occupancy marginals keyed by head name,
-    or None when
-    the generation has no exported ONNX (or one from an incompatible encoding era).
+    position: board-frame (15, 15) per-cell occupancy marginals keyed by head
+    name, or None when the generation has no exported ONNX (or one from an
+    incompatible encoding era).
 
     File existence is checked uncached on every call: memoizing a miss would pin a
     null prediction to the generation even if its export appears later. Only once

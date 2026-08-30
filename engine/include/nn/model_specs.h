@@ -143,7 +143,7 @@ struct ScoreDiffOutput {
 
 // The four placement heads -- raw logits over the kFootprintClasses move
 // footprints (see training/footprint.h), in export order (onnx_export.py's
-// MASK_HEAD_NAMES), also the SimObservation and .mset plane order. kIdentity,
+// PLACEMENT_HEAD_NAMES), also the SimObservation and .mset plane order. kIdentity,
 // not kSigmoid/kSoftmax: the legality mask must be applied BEFORE the softmax
 // and is not in the TRT graph, so the graph emits raw logits and each consumer
 // (Python loss, dashboard, mset-gen) does the masked-softmax itself.

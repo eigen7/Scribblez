@@ -29,9 +29,9 @@ from scribblez.ffi import (
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 
 # The four placement heads, the two per-side legality masks, and the footprint
-# class-space width, from the same FFI source the engine targets use.
+# class-space width, all from the same FFI source the engine targets use.
 _PLACEMENT_HEADS = tuple(format_layout()["constants"]["placement_head_names"])
-_PLACEMENT_MASKS = ("opp_placement_mask", "self_placement_mask")
+_PLACEMENT_MASKS = tuple(format_layout()["constants"]["placement_mask_names"])
 _FOOTPRINT_CLASSES = format_layout()["constants"]["footprint"]["num_classes"]
 
 # ---------------------------------------------------------------------------

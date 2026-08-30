@@ -8,8 +8,10 @@ handling without the real trunk or the C++ data layout.
 import torch
 from scribblez.position_eval.model import (
     FOOTPRINT_CLASSES,
+    FOOTPRINT_EXTRA_CLASS,
     PLACEMENT_HEAD_NAMES,
     PLACEMENT_MASK_NAMES,
+    _head_legal_mask,
     compute_loss,
 )
 from scribblez.position_eval.train_loop import EpochResult, LossConfig, run_epoch
@@ -119,8 +121,11 @@ def test_masked_placement_guards_the_target_class():
     to an unmasked target, never to -log(0). With every class but the target
     illegal, a plays head has only the target legal so its CE is ~0; a leaky mask
     (a large finite fill instead of -inf) would leave mass elsewhere and fail
-    that. A win head additionally keeps the not-win class legal, so its CE is
-    finite but positive -- pinning that win heads open the extra slot."""
+    that. A win head keeps its not-win (extra) class legal too, so its effective
+    mask holds exactly {target, extra} and its CE is finite but > 0 -- checked
+    both directly (the head's mask opens the extra slot) and through the loss (a
+    regression that dropped the win-head extra-opening would leave a target-only
+    mask and a 0 loss)."""
     torch.manual_seed(0)
     model = _StubModel()
     batch = _batch()
@@ -131,7 +136,12 @@ def test_masked_placement_guards_the_target_class():
     losses = compute_loss(out, targets, mask_placement=True)
     for name in PLACEMENT_HEAD_NAMES:
         assert torch.isfinite(losses[name]), f"{name} loss is not finite"
-        if "win" not in name:
+        extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
+        if "win" in name:
+            assert extra_legal.all(), f"{name} did not open the not-win class"
+            assert losses[name] > 1e-3, f"{name} loss {losses[name]} collapsed to a plays head"
+        else:
+            assert not extra_legal.any(), f"{name} wrongly opened the not-win class"
             assert losses[name] < 1e-5, f"{name} loss {losses[name]} is not ~0"
 
 

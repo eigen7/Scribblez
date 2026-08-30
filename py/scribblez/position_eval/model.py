@@ -70,12 +70,13 @@ FOOTPRINT_EXTRA_CLASS = _FOOTPRINT["extra_class"]
 # Catch-all classes past the anchored footprints: pass, then not-win/dummy.
 FOOTPRINT_CATCH_ALL = FOOTPRINT_CLASSES - FOOTPRINT_ANCHORED
 
-# The legality-mask targets: one per SIDE (opp / self), not per head. A side's
-# plays head and win head share the same footprint legality and differ only at
-# the extra (not-win) class, so training_targets.h emits one mask per side (in
-# the plays-head form, extra illegal) and the loss makes extra legal for the win
-# head. _head_mask_name/_head_is_win derive the mapping from the head name.
-PLACEMENT_MASK_NAMES = ("opp_placement_mask", "self_placement_mask")
+# The legality-mask targets: one per SIDE (opp / self), not per head, read from
+# the same FFI source as the head names so the two cannot drift. A side's plays
+# head and win head share the footprint legality and differ only at the extra
+# (not-win) class, so training_targets.h emits one mask per side (in the
+# plays-head form, extra illegal) and the loss makes extra legal for the win
+# head. _head_mask_name/_head_is_win derive the head -> side mapping.
+PLACEMENT_MASK_NAMES = tuple(format_layout()["constants"]["placement_mask_names"])
 
 
 def _head_mask_name(head: str) -> str:
