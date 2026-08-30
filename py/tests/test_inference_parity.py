@@ -23,7 +23,7 @@ import torch
 from scribblez.ffi import get_input_shapes
 from scribblez.position_eval.model import (
     FOOTPRINT_CLASSES,
-    MASK_HEAD_NAMES,
+    PLACEMENT_HEAD_NAMES,
     PositionEvalModel,
 )
 from scribblez.position_eval.onnx_export import export_onnx
@@ -39,7 +39,7 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 
 # Exported graph output order (onnx_export.export_onnx output_names). A silent
 # reordering here would scramble which head the agent reads -- assert it.
-OUTPUT_NAMES = ["wld", "score_diff", *MASK_HEAD_NAMES]
+OUTPUT_NAMES = ["wld", "score_diff", *PLACEMENT_HEAD_NAMES]
 
 
 def _random_model(seed: int = 0) -> PositionEvalModel:
@@ -123,7 +123,7 @@ def test_dynamic_batch_axis(tmp_path):
         )
         assert wld.shape == (batch, 3)
         assert score_diff.shape == (batch, 2)  # [mean, std]
-        assert len(mask_outs) == len(MASK_HEAD_NAMES)
+        assert len(mask_outs) == len(PLACEMENT_HEAD_NAMES)
         for mask in mask_outs:
             # Each placement head exports raw footprint logits, not a (15,15) map.
             assert mask.shape == (batch, FOOTPRINT_CLASSES)

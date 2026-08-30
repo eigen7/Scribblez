@@ -17,10 +17,6 @@ namespace {
 
 inline constexpr int kBoardCells = kFootprintSide * kFootprintSide;
 
-// The mover holds at most RACK_SIZE tiles, so a full rack is the sound tile
-// budget for every mask -- matching the per-row masks in training_targets.cpp.
-constexpr int kBudget = RACK_SIZE;
-
 // One anchored footprint's covered cells as flat plane indices (r*side + c, in
 // the flip frame footprint_cells reports), precomputed once per board and reused
 // across the four heads.
@@ -86,18 +82,20 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict, bool 
   // not-win outcome), which carries no cells -- so it changes the softmax
   // denominator (P[covers & win] <= P[covers]) but not which cells are covered.
   FootprintMask opp_mask, self_mask;
-  opp_footprint_mask(board, kBudget, flip, /*win_head=*/false, opp_mask);
-  self_footprint_mask(board, kBudget, kBudget, flip, /*win_head=*/false, self_mask);
+  opp_footprint_mask(board, kMaskTileBudget, flip, /*win_head=*/false, opp_mask);
+  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, flip, /*win_head=*/false, self_mask);
   FootprintMask opp_win_mask = opp_mask, self_win_mask = self_mask;
   opp_win_mask[kExtraClass] = true;
   self_win_mask[kExtraClass] = true;
   const std::array<const FootprintMask*, kPlacementHeads> masks = {&opp_mask, &self_mask,
                                                                    &opp_win_mask, &self_win_mask};
 
-  std::vector<CellList> cells;
+  // Reused across calls on this thread -- the generator collapses many
+  // candidates per thread, so the ~44KB cells buffer and the prob buffer are
+  // allocated once and refilled, not per candidate.
+  thread_local std::vector<CellList> cells;
+  thread_local std::vector<float> prob;
   compute_cells(board, flip, cells);
-
-  std::vector<float> prob;
   for (int h = 0; h < kPlacementHeads; ++h) {
     masked_softmax(raw + size_t(h) * kFootprintClasses, *masks[h], prob);
     scatter(prob, cells, out + size_t(h) * kBoardCells);

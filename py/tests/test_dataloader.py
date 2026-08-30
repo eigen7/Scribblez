@@ -28,9 +28,10 @@ from scribblez.ffi import (
 # test_move_set_eval_targets.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 
-# The four placement heads and the footprint class-space width, from the same
-# FFI source the engine targets use.
+# The four placement heads, the two per-side legality masks, and the footprint
+# class-space width, from the same FFI source the engine targets use.
 _PLACEMENT_HEADS = tuple(format_layout()["constants"]["placement_head_names"])
+_PLACEMENT_MASKS = ("opp_placement_mask", "self_placement_mask")
 _FOOTPRINT_CLASSES = format_layout()["constants"]["footprint"]["num_classes"]
 
 # ---------------------------------------------------------------------------
@@ -157,16 +158,19 @@ class TestStreamingDataset:
             assert "score_diff" in b
             for head in _PLACEMENT_HEADS:
                 assert head in b  # footprint class index
-                assert f"{head}_mask" in b  # per-head legality mask
+            for mask in _PLACEMENT_MASKS:
+                assert mask in b  # per-side legality mask
             assert tuple(b["input_spatial"].shape[1:]) == in_shapes["input_spatial"]
             assert b["input_scalar"].shape[1] == in_shapes["input_scalar"][0]
             assert b["wld"].shape[1] == 3
             assert b["score_diff"].shape[1] == 1
-            # Each placement head is a single footprint class index plus a
-            # FOOTPRINT_CLASSES-wide legality mask (not a per-cell (15,15) map).
+            # Each placement head is a single footprint class index; each side
+            # carries one FOOTPRINT_CLASSES-wide legality mask (not a per-cell
+            # (15,15) map).
             for head in _PLACEMENT_HEADS:
                 assert b[head].shape[1] == 1
-                assert b[f"{head}_mask"].shape[1] == _FOOTPRINT_CLASSES
+            for mask in _PLACEMENT_MASKS:
+                assert b[mask].shape[1] == _FOOTPRINT_CLASSES
 
         # Determinism: same seed, same output.
         batches2 = list(ds.iter_batches(batch_size=4, seed=555))

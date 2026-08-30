@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from .model import MASK_HEAD_NAMES, compute_loss
+from .model import PLACEMENT_HEAD_NAMES, PLACEMENT_MASK_NAMES, compute_loss
 
 # Per-head loss keys accumulated each epoch ("total" is the optimized
 # objective).
@@ -68,13 +68,13 @@ class EpochResult:
 
 
 # Target tensors compute_loss consumes, pulled from the batch dict by name: the
-# value targets, and per placement head both the footprint class index and its
-# legality mask.
+# value targets, each head's footprint class index, and the two per-side legality
+# masks.
 TARGET_KEYS = (
     "wld",
     "score_diff",
-    *MASK_HEAD_NAMES,
-    *(f"{name}_mask" for name in MASK_HEAD_NAMES),
+    *PLACEMENT_HEAD_NAMES,
+    *PLACEMENT_MASK_NAMES,
 )
 
 

@@ -13,7 +13,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 import torch.nn.functional as F
-from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
+from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.position_eval.supply_attention import (
     OPP_LEAVE0,
@@ -134,5 +134,5 @@ def test_onnx_export_matches_torch():
         outs = dict(zip([o.name for o in sess.get_outputs()], sess.run(None, feed), strict=True))
     with torch.no_grad():
         ref = model(sp, sc)
-    for name in ["wld", "score_diff", *MASK_HEAD_NAMES]:
+    for name in ["wld", "score_diff", *PLACEMENT_HEAD_NAMES]:
         assert np.abs(outs[name] - ref[name].numpy()).max() < 1e-4, name

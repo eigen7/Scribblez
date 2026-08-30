@@ -69,7 +69,11 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
-from scribblez.position_eval.model import MASK_HEAD_NAMES, compute_loss
+from scribblez.position_eval.model import (
+    PLACEMENT_HEAD_NAMES,
+    PLACEMENT_MASK_NAMES,
+    compute_loss,
+)
 from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import (
@@ -82,7 +86,12 @@ from scribblez.sim_evidence.sobs import (
 )
 from scribblez.workloads import kill_test as kill_test_workload
 
-TARGET_KEYS = ("wld", "score_diff", *MASK_HEAD_NAMES)
+TARGET_KEYS = (
+    "wld",
+    "score_diff",
+    *PLACEMENT_HEAD_NAMES,
+    *PLACEMENT_MASK_NAMES,
+)
 ARMS = ("none", "shuffled", "scalar", "full")
 
 

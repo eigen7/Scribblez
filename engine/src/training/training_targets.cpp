@@ -63,57 +63,42 @@ void SelfWinPlacementTarget::encode(const EncodeContext& v, float* out) {
 
 namespace {
 
-// The mover holds at most RACK_SIZE tiles, so a full rack is the sound tile
-// budget for every mask -- an over-approximation never masks a real move.
-// TODO(sharpen self-mask): cap this by the tiles actually left in the endgame
-// (fewer remaining -> a tighter, more precise reachable set) rather than always
-// assuming a full rack. Precision only -- 7 is already sound -- and it needs
-// care: two plies out the mover has re-drawn, so a sound tight bound is not
-// simply today's rack size, and masking a real target would hit -log(0) (the
-// loss's force-keep-target guard backstops that). Bag count is not directly in
-// the observer's information set (bag + opp rack are lumped as the unseen pool);
-// total unseen = 100 - tiles-on-board - my-rack is what is knowable.
-constexpr int kMaskTileBudget = RACK_SIZE;
+// TODO(sharpen self-mask): kMaskTileBudget (footprint_mask.h) caps k at a full
+// rack, the loosest sound bound. It could be tightened by the tiles actually
+// left in the endgame (fewer remaining -> a tighter, more precise reachable set)
+// -- precision only, 7 is already sound, and it needs care: two plies out the
+// mover has re-drawn, so a sound tight bound is not simply today's rack size,
+// and masking a real target would hit -log(0) (the loss's force-keep-target
+// guard backstops that). Bag count is not directly in the observer's information
+// set (bag + opp rack are lumped as the unseen pool); total unseen = 100 -
+// tiles-on-board - my-rack is what is knowable.
 
-// Writes an opp-head legality mask over the footprint classes. The opponent
-// moves next on the sampled board, so the mask is computed there; opp_win adds
-// the not-win outcome via `win_head`. Reads cross-checks off the board, binding
-// the dictionary on demand (idempotent if the input encoder already built them).
-void encode_opp_mask(const EncodeContext& v, bool win_head, float* out) {
-  const Board& board = v.enc->board();
-  board.ensure_movegen_caches(*v.spec.dict);
-  FootprintMask mask;
-  opp_footprint_mask(board, kMaskTileBudget, v.apply_flip, win_head, mask);
-  for (int c = 0; c < kFootprintClasses; ++c) out[c] = mask[c] ? 1.0f : 0.0f;
-}
-
-// Writes a self-head legality mask. The mover plays two plies out on an unknown
-// board, so the mask is the opp-move-invariant (cross-check-oblivious)
-// over-approximation from the sampled board; self_win adds not-win via
-// `win_head`.
-void encode_self_mask(const EncodeContext& v, bool win_head, float* out) {
-  FootprintMask mask;
-  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, v.apply_flip, win_head,
-                      mask);
+void write_mask(const FootprintMask& mask, float* out) {
   for (int c = 0; c < kFootprintClasses; ++c) out[c] = mask[c] ? 1.0f : 0.0f;
 }
 
 }  // namespace
 
-void OppNextPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  encode_opp_mask(v, /*win_head=*/false, out);
+// The opp side's plays-head legality: the opponent moves next on the sampled
+// board, so the mask is exact-ish there. kExtraClass stays illegal (win_head
+// false) -- the loss sets it legal for the win head. Binds the dictionary on
+// demand (idempotent if the input encoder already built the caches).
+void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
+  const Board& board = v.enc->board();
+  board.ensure_movegen_caches(*v.spec.dict);
+  FootprintMask mask;
+  opp_footprint_mask(board, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
+  write_mask(mask, out);
 }
 
-void SelfNextPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  encode_self_mask(v, /*win_head=*/false, out);
-}
-
-void OppWinPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  encode_opp_mask(v, /*win_head=*/true, out);
-}
-
-void SelfWinPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  encode_self_mask(v, /*win_head=*/true, out);
+// The self side's plays-head legality: the mover plays two plies out on an
+// unknown board, so this is the opp-move-invariant (cross-check-oblivious)
+// over-approximation from the sampled board.
+void SelfPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
+  FootprintMask mask;
+  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, v.apply_flip,
+                      /*win_head=*/false, mask);
+  write_mask(mask, out);
 }
 
 }  // namespace scribblez

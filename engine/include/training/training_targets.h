@@ -89,35 +89,32 @@ struct SelfWinPlacementTarget {
   static void encode(const EncodeContext& v, float* out);
 };
 
-// The per-head legality masks over the footprint classes, one float per class
+// The per-SIDE legality masks over the footprint classes, one float per class
 // (1.0 = keep, 0.0 = drive to -inf before the softmax), recomputed on replay
 // from the sampled board so the masked softmax-CE never spends probability on a
 // structurally illegal footprint. Sound over-approximations (see
-// training/footprint_mask.h): opp heads exact-ish from the current board (the
-// opponent moves next), self heads opp-move-invariant (the mover plays two plies
-// out). The loss additionally force-keeps the target class, so a mask can never
-// zero out the very footprint it is scored against (-log(0) guard).
+// training/footprint_mask.h): the opp side is exact-ish from the current board
+// (the opponent moves next), the self side is opp-move-invariant (the mover
+// plays two plies out). The loss additionally force-keeps the target class, so a
+// mask can never zero out the very footprint it is scored against (-log(0)
+// guard).
+//
+// One mask per SIDE, not per head: a side's plays head (opp_next / self_next)
+// and win head (opp_win / self_win) share the same footprint legality and differ
+// only at kExtraClass -- the not-win outcome, legal for the win head, an unused
+// dummy for the plays head. These masks carry the plays-head form (kExtraClass
+// illegal); the loss sets kExtraClass legal for the win head. Emitting one mask
+// per side (not four) halves both the sweep cost on the replay path and the mask
+// bytes in the row, and matches what footprint_collapse.cpp already does.
 
-struct OppNextPlacementMaskTarget {
-  static constexpr const char* kName = "opp_next_placement_mask";
+struct OppPlacementMaskTarget {
+  static constexpr const char* kName = "opp_placement_mask";
   static constexpr int kDims[] = {kFootprintClasses};
   static void encode(const EncodeContext& v, float* out);
 };
 
-struct SelfNextPlacementMaskTarget {
-  static constexpr const char* kName = "self_next_placement_mask";
-  static constexpr int kDims[] = {kFootprintClasses};
-  static void encode(const EncodeContext& v, float* out);
-};
-
-struct OppWinPlacementMaskTarget {
-  static constexpr const char* kName = "opp_win_placement_mask";
-  static constexpr int kDims[] = {kFootprintClasses};
-  static void encode(const EncodeContext& v, float* out);
-};
-
-struct SelfWinPlacementMaskTarget {
-  static constexpr const char* kName = "self_win_placement_mask";
+struct SelfPlacementMaskTarget {
+  static constexpr const char* kName = "self_placement_mask";
   static constexpr int kDims[] = {kFootprintClasses};
   static void encode(const EncodeContext& v, float* out);
 };
@@ -149,8 +146,8 @@ struct TargetList {
 
 using AllTargets =
   TargetList<WldTarget, ScoreDiffTarget, OppNextPlacementTarget, SelfNextPlacementTarget,
-             OppWinPlacementTarget, SelfWinPlacementTarget, OppNextPlacementMaskTarget,
-             SelfNextPlacementMaskTarget, OppWinPlacementMaskTarget, SelfWinPlacementMaskTarget>;
+             OppWinPlacementTarget, SelfWinPlacementTarget, OppPlacementMaskTarget,
+             SelfPlacementMaskTarget>;
 
 // Constants derived from AllTargets, so code that just wants a size need not
 // mention the template or the target struct.
@@ -166,7 +163,7 @@ inline constexpr int kScoreDiffOutputFloats = 2;
 // The four placement heads' class index (1 float) and legality-mask
 // (kFootprintClasses floats) target widths.
 inline constexpr int kPlacementClassFloats = detail::target_floats<OppNextPlacementTarget>();
-inline constexpr int kPlacementMaskFloats = detail::target_floats<OppNextPlacementMaskTarget>();
+inline constexpr int kPlacementMaskFloats = detail::target_floats<OppPlacementMaskTarget>();
 static_assert(kPlacementClassFloats == 1);
 static_assert(kPlacementMaskFloats == kFootprintClasses);
 

@@ -57,7 +57,7 @@ MAD_TO_STD = math.sqrt(math.pi / 2)  # ~1.2533
 # the ONNX export. The names and order are training_targets.h's placement
 # targets, served over the FFI -- the same single source the C++ TensorRT decode
 # binds output tensors by, so the export and the engine cannot disagree.
-MASK_HEAD_NAMES = tuple(format_layout()["constants"]["placement_head_names"])
+PLACEMENT_HEAD_NAMES = tuple(format_layout()["constants"]["placement_head_names"])
 
 # The footprint class space each placement head is a distribution over, read
 # from the same FFI source as the C++ targets/outputs so widths cannot drift:
@@ -66,8 +66,24 @@ _FOOTPRINT = format_layout()["constants"]["footprint"]
 FOOTPRINT_CLASSES = _FOOTPRINT["num_classes"]
 FOOTPRINT_SLOTS_PER_CELL = _FOOTPRINT["slots_per_cell"]
 FOOTPRINT_ANCHORED = _FOOTPRINT["anchored"]
+FOOTPRINT_EXTRA_CLASS = _FOOTPRINT["extra_class"]
 # Catch-all classes past the anchored footprints: pass, then not-win/dummy.
 FOOTPRINT_CATCH_ALL = FOOTPRINT_CLASSES - FOOTPRINT_ANCHORED
+
+# The legality-mask targets: one per SIDE (opp / self), not per head. A side's
+# plays head and win head share the same footprint legality and differ only at
+# the extra (not-win) class, so training_targets.h emits one mask per side (in
+# the plays-head form, extra illegal) and the loss makes extra legal for the win
+# head. _head_mask_name/_head_is_win derive the mapping from the head name.
+PLACEMENT_MASK_NAMES = ("opp_placement_mask", "self_placement_mask")
+
+
+def _head_mask_name(head: str) -> str:
+    return "opp_placement_mask" if head.startswith("opp") else "self_placement_mask"
+
+
+def _head_is_win(head: str) -> bool:
+    return "win" in head
 
 
 class FootprintPlacementHead(nn.Module):
@@ -177,7 +193,7 @@ class PositionEvalModel(nn.Module):
                 name: FootprintPlacementHead(
                     trunk_channels, value_in, FOOTPRINT_SLOTS_PER_CELL, FOOTPRINT_CATCH_ALL
                 )
-                for name in MASK_HEAD_NAMES
+                for name in PLACEMENT_HEAD_NAMES
             }
         )
 
@@ -193,7 +209,7 @@ class PositionEvalModel(nn.Module):
         Returns:
             Dict with keys: "wld" (B,3 logits), "score_diff" (B,2 = [mean, std]),
             and one (B, FOOTPRINT_CLASSES) raw footprint-logit tensor per
-            MASK_HEAD_NAMES entry.
+            PLACEMENT_HEAD_NAMES entry.
         """
         # Shared conv trunk (s, the scalar projection, is reused by the value
         # heads below).
@@ -219,27 +235,38 @@ class PositionEvalModel(nn.Module):
         sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
 
         out = {"wld": wld, "score_diff": sd}
-        for name in MASK_HEAD_NAMES:
+        for name in PLACEMENT_HEAD_NAMES:
             out[name] = self.placement_heads[name](x, value_in)  # (B, FOOTPRINT_CLASSES)
         return out
+
+
+def _head_legal_mask(head: str, targets: dict[str, torch.Tensor]) -> torch.Tensor:
+    """The (B, C) legality mask for one placement head: its side's mask, with the
+    extra (not-win) class made legal for a win head. The stored side mask carries
+    the plays-head form (extra illegal), so a plays head reads it unchanged."""
+    side = targets[_head_mask_name(head)]
+    if not _head_is_win(head):
+        return side
+    legal = side.clone()
+    legal[:, FOOTPRINT_EXTRA_CLASS] = 1.0
+    return legal
 
 
 def _placement_ce(
     logits: torch.Tensor,
     target_idx: torch.Tensor,
-    legal_mask: torch.Tensor,
-    mask_placement: bool,
+    legal_mask: torch.Tensor | None,
 ) -> torch.Tensor:
     """Masked softmax cross-entropy for one footprint head.
 
-    logits (B, C) raw; target_idx (B,) the footprint class; legal_mask (B, C) in
-    {0,1}. When masking, illegal footprints are driven to -inf before the softmax
-    so they carry no probability or gradient. The target class is always kept in
-    the mask first (the -log(0) NaN guard): the engine masks are sound
+    logits (B, C) raw; target_idx (B,) the footprint class. When legal_mask is
+    given (B, C in {0,1}), illegal footprints are driven to -inf before the
+    softmax so they carry no probability or gradient, with the target class always
+    kept first (the -log(0) NaN guard): the engine masks are sound
     over-approximations, but a data-dependent gap must degrade to an unmasked
-    target, never to NaN.
+    target, never to NaN. legal_mask None is the unmasked arm (plain softmax-CE).
     """
-    if mask_placement:
+    if legal_mask is not None:
         legal_mask = legal_mask.clone()
         legal_mask.scatter_(1, target_idx.unsqueeze(1), 1.0)
         logits = logits.masked_fill(legal_mask == 0, float("-inf"))
@@ -262,11 +289,12 @@ def compute_loss(
     Args:
         outputs: model forward() result. "wld" (B,3 logits), "score_diff"
                  (B,2 = [mean, std]), and one (B, FOOTPRINT_CLASSES) raw
-                 footprint-logit tensor per MASK_HEAD_NAMES entry.
+                 footprint-logit tensor per PLACEMENT_HEAD_NAMES entry.
         targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
-                 final differential, and, per MASK_HEAD_NAMES entry, both the
-                 footprint class index ("<name>", (B,1)) and its legality mask
-                 ("<name>_mask", (B, FOOTPRINT_CLASSES) in {0,1}).
+                 final differential, the footprint class index per
+                 PLACEMENT_HEAD_NAMES entry ("<name>", (B,1)), and the two side
+                 legality masks ("opp_placement_mask" / "self_placement_mask",
+                 (B, FOOTPRINT_CLASSES) in {0,1}) each head reads via its side.
         lambda_wld: weight applied to the WLD (value) loss. 1.0 in normal
                  training; drop it to isolate the other heads (a diagnostic that
                  leaves the value head untrained).
@@ -304,15 +332,16 @@ def compute_loss(
     # Placement heads: masked softmax cross-entropy against the footprint class,
     # the plays heads weighted by lambda_next_placement and the win heads by
     # lambda_win_placement. Softmax's conserved mass is the point -- it replaces
-    # the per-cell BCE's drifting, easy-negative-diluted geometry.
+    # the per-cell BCE's drifting, easy-negative-diluted geometry. Each head reads
+    # its side's legality mask (win heads with the not-win class made legal); the
+    # unmasked arm passes None.
     placement_losses = {
         name: _placement_ce(
             outputs[name],
             targets[name].squeeze(1).long(),
-            targets[f"{name}_mask"],
-            mask_placement,
+            _head_legal_mask(name, targets) if mask_placement else None,
         )
-        for name in MASK_HEAD_NAMES
+        for name in PLACEMENT_HEAD_NAMES
     }
 
     total = (

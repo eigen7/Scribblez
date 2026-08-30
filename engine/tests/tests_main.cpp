@@ -2299,13 +2299,13 @@ TEST(Game, MaxPliesSparesTheEndgame) {
 
 namespace {
 
-// The label row lays the ten targets out as
+// The label row lays the eight targets out as
 //   [wld(3), score_diff(1),
-//    opp_next(1), self_next(1), opp_win(1), self_win(1),        // footprint class index
-//    opp_next_mask(N), self_next_mask(N), opp_win_mask(N), self_win_mask(N)]  //
-//    N=kFootprintClasses
-// -- the four placement heads are a single categorical footprint class each,
-// paired with a per-head legality mask.
+//    opp_next(1), self_next(1), opp_win(1), self_win(1),   // footprint class index
+//    opp_placement_mask(N), self_placement_mask(N)]        // N=kFootprintClasses
+// -- the four placement heads are a single categorical footprint class each; the
+// two per-side legality masks (plays-head form, kExtraClass illegal) are shared,
+// a head's win variant opening kExtraClass in the loss.
 constexpr int kClassBase = kWldFloats + kScoreDiffFloats;
 constexpr int kMaskBase = kClassBase + 4 * kPlacementClassFloats;
 
@@ -2395,15 +2395,20 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   const int self_next = kClassBase + 1;
   const int opp_win = kClassBase + 2;
   const int self_win = kClassBase + 3;
-  const float* opp_next_mask = flat.data() + kMaskBase + 0 * kFootprintClasses;
-  const float* self_win_mask = flat.data() + kMaskBase + 3 * kFootprintClasses;
+  const float* opp_mask = flat.data() + kMaskBase + 0 * kFootprintClasses;
+  const float* self_mask = flat.data() + kMaskBase + 1 * kFootprintClasses;
 
-  // No next move -> the plays heads are kPassClass, and pass is always legal.
+  // No next move -> the plays heads are kPassClass, and pass is always legal in
+  // both side masks; the not-win (extra) class is illegal in the plays-head-form
+  // side mask (the loss opens it for win heads).
   auto v = fx.view(/*fs_active=*/100, /*fs_opp=*/80, /*active_player=*/0);
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(flat[opp_next], float(kPassClass));
   ASSERT_EQ(flat[self_next], float(kPassClass));
-  ASSERT_EQ(opp_next_mask[kPassClass], 1.0f);
+  ASSERT_EQ(opp_mask[kPassClass], 1.0f);
+  ASSERT_EQ(self_mask[kPassClass], 1.0f);
+  ASSERT_EQ(opp_mask[kExtraClass], 0.0f);
+  ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
   // A horizontal opponent PLAY at (4,2) covering 3 empty cells -> its footprint
   // class, which the opp mask keeps (the -log(0) soundness property) and whose
@@ -2417,7 +2422,7 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   const int cls = int(flat[opp_next]);
   ASSERT_EQ(cls, footprint_class(next_play, /*flip=*/false));
   ASSERT_LT(cls, kAnchoredFootprints);
-  ASSERT_EQ(opp_next_mask[cls], 1.0f);
+  ASSERT_EQ(opp_mask[cls], 1.0f);
   std::array<std::pair<int, int>, kFootprintMaxK> cells;
   const int n = footprint_cells(cls, fx.enc.board(), /*flip=*/false, cells);
   ASSERT_EQ(n, 3);
@@ -2464,7 +2469,10 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   encode_labels_flat(v, flat.data());  // mover (0) losing
   ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
   ASSERT_EQ(int(flat[self_win]), kExtraClass);
-  ASSERT_EQ(self_win_mask[kExtraClass], 1.0f);  // not-win is legal for win heads
+  // The self side mask keeps the played footprint legal (the -log(0) property);
+  // kExtraClass stays illegal here -- the loss opens it for the self_win head.
+  ASSERT_EQ(self_mask[footprint_class(self_play, /*flip=*/false)], 1.0f);
+  ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
   v.final_score_p0 = 100;
   v.final_score_p1 = 80;  // mover wins
