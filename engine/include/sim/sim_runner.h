@@ -62,8 +62,9 @@ struct SimPosition {
 };
 
 // Aggregate observations from `n` rollouts of one candidate, all from the
-// mover's POV. The spatial planes mirror the placement-mask training targets --
-// how often the opponent's reply or the mover's own next move placed a tile on
+// mover's POV. The spatial planes mirror the placement heads' collapsed per-cell
+// marginals (training/footprint_collapse.h) -- how often the opponent's reply or
+// the mover's own next move placed a tile on
 // the square, and how often it did so in a rollout that player went on to win
 // -- as row-major COUNTS rather than frequencies, so a consumer can weigh them
 // by sample size. SimObsWriter/SimObsReader serialize the layout verbatim.

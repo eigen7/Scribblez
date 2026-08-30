@@ -6,6 +6,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "training/footprint.h"
+#include "training/footprint_collapse.h"
 #include "training/footprint_mask.h"
 
 #include <gtest/gtest.h>
@@ -17,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 namespace {
@@ -251,6 +253,37 @@ TEST(FootprintMaskSoundness, RealGamesNeverMaskAPlayedMove) {
     ++swept;
   }
   EXPECT_GT(swept, 0) << "no fixtures swept";
+}
+
+// collapse_footprint_planes: overwhelming logit mass on one known footprint
+// lands as ~1 on exactly the board cells that footprint covers, and ~0
+// elsewhere. Pins the mask -> masked-softmax -> footprint_cells scatter,
+// including that the scatter is not row/col transposed.
+TEST(FootprintCollapse, MassLandsOnCoveredCells) {
+  Board b;  // empty: every square unconstrained, so the opp mask is dict-free
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+
+  // A horizontal 3-tile play at row 7, cols 5,6,7 -- the first placement head's
+  // target -- covers (7,5), (7,6), (7,7).
+  Glyph played[3] = {G(0), G(1), G(2)};
+  const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3), /*flip=*/false);
+
+  std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
+  raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
+  std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
+  collapse_footprint_planes(b, d, /*flip=*/false, raw.data(), out.data());
+
+  const float* plane = out.data();  // head 0
+  const auto cell = [&](int r, int c) { return plane[r * kFootprintSide + c]; };
+  EXPECT_GT(cell(7, 5), 0.99f);
+  EXPECT_GT(cell(7, 6), 0.99f);
+  EXPECT_GT(cell(7, 7), 0.99f);
+  EXPECT_LT(cell(5, 7), 0.01f);  // the transpose of (7,5): a row/col swap would light this
+  EXPECT_LT(cell(7, 8), 0.01f);  // just past the covered run
+  float total = 0.0f;
+  for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) total += plane[i];
+  EXPECT_NEAR(total, 3.0f, 0.02f);  // three covered cells, ~all the mass
 }
 
 }  // namespace

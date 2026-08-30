@@ -12,7 +12,7 @@ inline constexpr int kPlacementHeads = 4;
 
 // Collapse the four placement heads' raw footprint logits at one post-move state
 // into the four per-cell occupancy marginals the .mset teacher target stores --
-// the PR1 bridge that lets the categorical footprint heads keep feeding the
+// the bridge that lets the categorical footprint heads keep feeding the
 // per-cell (15,15) student/distillation stack unchanged.
 //
 // `raw` is kPlacementHeads x kFootprintClasses (each head's raw logits, the
