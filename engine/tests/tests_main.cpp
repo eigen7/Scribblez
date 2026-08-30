@@ -2299,191 +2299,195 @@ TEST(Game, MaxPliesSparesTheEndgame) {
 
 namespace {
 
-// Helper: build an EncodeContext with just the fields encode_labels reads for
-// heads 0 and 1 (no next moves set -> the placement heads emit all zeros).
-scribblez::EncodeContext make_scores_view(int fs_active, int fs_opp, int active_player,
-                                          bool apply_flip = false) {
-  using namespace scribblez::binlog;
-  EncodeContext v{};
-  v.has_opp_next_move = false;
-  v.has_self_next_move = false;
+// The label row lays the eight targets out as
+//   [wld(3), score_diff(1),
+//    opp_next(1), self_next(1), opp_win(1), self_win(1),   // footprint class index
+//    opp_placement_mask(N), self_placement_mask(N)]        // N=kFootprintClasses
+// -- the four placement heads are a single categorical footprint class each; the
+// two per-side legality masks (plays-head form, kExtraClass illegal) are shared,
+// a head's win variant opening kExtraClass in the loss.
+constexpr int kClassBase = kWldFloats + kScoreDiffFloats;
+constexpr int kMaskBase = kClassBase + 4 * kPlacementClassFloats;
+
+// An EncodeContext holding just the fields the label targets read: the final
+// scores / POV (wld, score_diff, win-head gating) and the encoder + spec the
+// masks read the sampled board and dictionary through. The next moves stay
+// unset -- a caller that wants the placement class targets exercised sets them.
+scribblez::EncodeContext scores_view(const GameStateEncoder& enc, const InputEncodingSpec& spec,
+                                     int fs_active, int fs_opp, int active_player,
+                                     bool flip = false) {
+  scribblez::EncodeContext v{};
+  v.enc = &enc;
+  v.spec = spec;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
   v.final_score_p1 = active_player == 0 ? fs_opp : fs_active;
-  v.apply_flip = apply_flip;
+  v.apply_flip = flip;
   return v;
 }
 
-// Convenience: call AllTargets::encode_all into one contiguous buffer of
-// size kLabelFloats laid out as [wld(3), score_diff(1), opp_next(225),
-// self_next(225), opp_win(225), self_win(225)].
+// The label targets read the sampled board and dictionary through the context's
+// encoder for the masks; a single empty-board encoder over an in-memory
+// dictionary serves every sub-case (only the board matters to the masks, and on
+// an empty board every square is unconstrained, so the opp mask is
+// dictionary-free but still binds the caches). The class targets need no board.
+struct LabelFixture {
+  Dictionary dict = Dictionary::build_from_words({"CAT", "CATS", "BAT"});
+  InputEncodingSpec spec{&dict};
+  GameStateEncoder enc{spec, Board{}, std::array<int, 2>{0, 0}, 0};
+
+  scribblez::EncodeContext view(int fs_active, int fs_opp, int active_player, bool flip = false) {
+    return scores_view(enc, spec, fs_active, fs_opp, active_player, flip);
+  }
+};
+
 void encode_labels_flat(const scribblez::EncodeContext& view, float* flat) {
   scribblez::AllTargets::encode_all(view, flat);
 }
 
 }  // namespace
 
-TEST(TrainingTargets, EncodeLabels) {
-  using namespace scribblez::binlog;
-  float flat[kLabelFloats];
+TEST(TrainingTargets, EncodeLabelsWldAndScoreDiff) {
+  LabelFixture fx;
+  std::vector<float> flat(kLabelFloats);
 
-  auto check_score_diff = [&](int diff_signed) {
-    // Score-diff target is a single scalar at offset kWldFloats: the final
-    // differential, stored as-is.
-    ASSERT_EQ(flat[kWldFloats], float(diff_signed));
-  };
+  auto check_score_diff = [&](int diff_signed) { ASSERT_EQ(flat[kWldFloats], float(diff_signed)); };
 
-  // Win.
-  auto v_win = make_scores_view(/*fs_active=*/120, /*fs_opp=*/100, /*active_player=*/0);
-  encode_labels_flat(v_win, flat);
+  auto v_win = fx.view(/*fs_active=*/120, /*fs_opp=*/100, /*active_player=*/0);
+  encode_labels_flat(v_win, flat.data());
   ASSERT_EQ(flat[0], 1.0f);
   ASSERT_EQ(flat[1], 0.0f);
   ASSERT_EQ(flat[2], 0.0f);
   check_score_diff(20);
 
-  // Draw.
-  auto v_draw = make_scores_view(75, 75, 1);
-  encode_labels_flat(v_draw, flat);
+  auto v_draw = fx.view(75, 75, 1);
+  encode_labels_flat(v_draw, flat.data());
   ASSERT_EQ(flat[0], 0.0f);
   ASSERT_EQ(flat[1], 1.0f);
   ASSERT_EQ(flat[2], 0.0f);
   check_score_diff(0);
 
-  // Loss with negative score_diff.
-  auto v_loss = make_scores_view(80, 95, 0);
-  encode_labels_flat(v_loss, flat);
+  auto v_loss = fx.view(80, 95, 0);
+  encode_labels_flat(v_loss, flat.data());
   ASSERT_EQ(flat[0], 0.0f);
   ASSERT_EQ(flat[1], 0.0f);
   ASSERT_EQ(flat[2], 1.0f);
   check_score_diff(-15);
 
   // Large differentials are stored as-is (not clipped or rejected).
-  auto v_huge_win = make_scores_view(/*fs_active=*/620, /*fs_opp=*/0, 0);
-  encode_labels_flat(v_huge_win, flat);
+  encode_labels_flat(fx.view(620, 0, 0), flat.data());
   check_score_diff(620);
-  auto v_huge_loss = make_scores_view(0, 620, 0);
-  encode_labels_flat(v_huge_loss, flat);
+  encode_labels_flat(fx.view(0, 620, 0), flat.data());
   check_score_diff(-620);
 
   // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
-    auto v = make_scores_view(a, b, 0);
-    encode_labels_flat(v, flat);
+    encode_labels_flat(fx.view(a, b, 0), flat.data());
     ASSERT_EQ(flat[0] + flat[1] + flat[2], 1.0f);
   }
+}
 
-  // With no next move, head 2 (opp_next_placement) is all zeros.
-  encode_labels_flat(v_win, flat);
-  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
-    ASSERT_EQ(flat[kWldFloats + kScoreDiffFloats + i], 0.0f);
-  }
+TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
+  LabelFixture fx;
+  std::vector<float> flat(kLabelFloats);
 
-  // Build a tiny "next move": a horizontal PLAY at (4, 2) covering 3 cells
-  // (squares 0, 1, 2 of the move direction; col 2, 3, 4 of row 4). The
-  // opp-next-placement head should light up exactly those three cells in
-  // canonical orientation, and exactly their transposed cells when
-  // apply_flip=true.
+  const int opp_next = kClassBase + 0;
+  const int self_next = kClassBase + 1;
+  const int opp_win = kClassBase + 2;
+  const int self_win = kClassBase + 3;
+  const float* opp_mask = flat.data() + kMaskBase + 0 * kFootprintClasses;
+  const float* self_mask = flat.data() + kMaskBase + 1 * kFootprintClasses;
+
+  // No next move -> the plays heads are kPassClass, and pass is always legal in
+  // both side masks; the not-win (extra) class is illegal in the plays-head-form
+  // side mask (the loss opens it for win heads).
+  auto v = fx.view(/*fs_active=*/100, /*fs_opp=*/80, /*active_player=*/0);
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(flat[opp_next], float(kPassClass));
+  ASSERT_EQ(flat[self_next], float(kPassClass));
+  ASSERT_EQ(opp_mask[kPassClass], 1.0f);
+  ASSERT_EQ(self_mask[kPassClass], 1.0f);
+  ASSERT_EQ(opp_mask[kExtraClass], 0.0f);
+  ASSERT_EQ(self_mask[kExtraClass], 0.0f);
+
+  // A horizontal opponent PLAY at (4,2) covering 3 empty cells -> its footprint
+  // class, which the opp mask keeps (the -log(0) soundness property) and whose
+  // covered cells round-trip on the (empty) sampled board.
   Move next_play = make_play_full(4, 2, /*horizontal=*/true, 0b111, 0,
                                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                    Glyph::of(Tile::from_char('C'))});
+  v.opp_next_move = next_play;
+  v.has_opp_next_move = true;
+  encode_labels_flat(v, flat.data());
+  const int cls = int(flat[opp_next]);
+  ASSERT_EQ(cls, footprint_class(next_play, /*flip=*/false));
+  ASSERT_LT(cls, kAnchoredFootprints);
+  ASSERT_EQ(opp_mask[cls], 1.0f);
+  std::array<std::pair<int, int>, kFootprintMaxK> cells;
+  const int n = footprint_cells(cls, fx.enc.board(), /*flip=*/false, cells);
+  ASSERT_EQ(n, 3);
+  ASSERT_EQ(cells[0], std::make_pair(4, 2));
+  ASSERT_EQ(cells[1], std::make_pair(4, 3));
+  ASSERT_EQ(cells[2], std::make_pair(4, 4));
 
-  EncodeContext v_with_next{};
-  v_with_next.opp_next_move = next_play;
-  v_with_next.has_opp_next_move = true;
-  v_with_next.active_player = 0;
-  v_with_next.final_score_p0 = 100;
-  v_with_next.final_score_p1 = 80;
-  v_with_next.apply_flip = false;
+  // apply_flip transposes the class into the flipped frame (anchor and
+  // orientation both swap), matching footprint_class under the same flip.
+  v.apply_flip = true;
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[opp_next]), footprint_class(next_play, /*flip=*/true));
+  v.apply_flip = false;
 
-  encode_labels_flat(v_with_next, flat);
-  const float* plane = flat + kWldFloats + kScoreDiffFloats;
-  int set_cells = 0;
-  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
-    if (plane[i] == 1.0f) ++set_cells;
-  }
-  ASSERT_EQ(set_cells, 3);
-  ASSERT_EQ(plane[4 * 15 + 2], 1.0f);
-  ASSERT_EQ(plane[4 * 15 + 3], 1.0f);
-  ASSERT_EQ(plane[4 * 15 + 4], 1.0f);
-
-  // apply_flip transposes (r,c) -> (c,r).
-  v_with_next.apply_flip = true;
-  encode_labels_flat(v_with_next, flat);
-  set_cells = 0;
-  for (int i = 0; i < kOppNextPlacementFloats; ++i) {
-    if (plane[i] == 1.0f) ++set_cells;
-  }
-  ASSERT_EQ(set_cells, 3);
-  ASSERT_EQ(plane[2 * 15 + 4], 1.0f);
-  ASSERT_EQ(plane[3 * 15 + 4], 1.0f);
-  ASSERT_EQ(plane[4 * 15 + 4], 1.0f);
-
-  // EXCHANGE / PASS next move -> all zeros.
+  // EXCHANGE next move -> kPassClass.
   TileCounts xch_tiles;
   xch_tiles.add(Tile::from_char('A'));
-  v_with_next.opp_next_move = Move::exchange(xch_tiles);
-  v_with_next.apply_flip = false;
-  encode_labels_flat(v_with_next, flat);
-  for (int i = 0; i < kOppNextPlacementFloats; ++i) ASSERT_EQ(plane[i], 0.0f);
+  v.opp_next_move = Move::exchange(xch_tiles);
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[opp_next]), kPassClass);
 
-  // --- Self marginal + win-placement conjunction heads ---
-  const float* self_next = plane + kOppNextPlacementFloats;
-  const float* opp_win = self_next + kSelfNextPlacementFloats;
-  const float* self_win = opp_win + kOppWinPlacementFloats;
+  // --- Win heads: the footprint if that seat won, else kExtraClass (not-win) ---
+  v.opp_next_move = next_play;  // opponent plays; active player (0) is winning
 
-  // Restore the opponent PLAY. The active player is winning (100 > 80), so the
-  // opp-win conjunction stays all zeros even though the placement mask is set.
-  v_with_next.opp_next_move = next_play;
-  encode_labels_flat(v_with_next, flat);
-  ASSERT_EQ(plane[4 * 15 + 2], 1.0f);
-  for (int i = 0; i < kOppWinPlacementFloats; ++i) ASSERT_EQ(opp_win[i], 0.0f);
+  // Active player winning -> the opponent did NOT win -> opp_win is not-win.
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[opp_win]), kExtraClass);
 
-  // With the opponent winning, the opp-win plane equals the placement plane.
-  v_with_next.final_score_p0 = 80;
-  v_with_next.final_score_p1 = 100;
-  encode_labels_flat(v_with_next, flat);
-  ASSERT_EQ(std::memcmp(plane, opp_win, sizeof(float) * kOppNextPlacementFloats), 0);
-  ASSERT_EQ(opp_win[4 * 15 + 2], 1.0f);
-  // No mover next move -> self-win stays all zeros regardless of outcome.
-  for (int i = 0; i < kSelfWinPlacementFloats; ++i) ASSERT_EQ(self_win[i], 0.0f);
+  // Opponent winning -> opp_win is the played footprint, same class as opp_next.
+  v.final_score_p0 = 80;
+  v.final_score_p1 = 100;
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[opp_win]), int(flat[opp_next]));
+  ASSERT_LT(int(flat[opp_win]), kAnchoredFootprints);
 
-  // A mover next move (vertical PLAY on (7,3) and (8,3)) lights self-win on
-  // exactly its cells when the mover wins, and not while the mover is losing.
+  // A vertical mover PLAY at (7,3)/(8,3): self_next is always its footprint;
+  // self_win is that footprint only when the mover wins, else not-win.
   Move self_play =
     make_play_full(7, 3, /*horizontal=*/false, 0b11, 0,
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('E'))});
-  v_with_next.self_next_move = self_play;
-  v_with_next.has_self_next_move = true;
-  encode_labels_flat(v_with_next, flat);  // opponent still winning
-  for (int i = 0; i < kSelfWinPlacementFloats; ++i) ASSERT_EQ(self_win[i], 0.0f);
+  v.self_next_move = self_play;
+  v.has_self_next_move = true;
 
-  v_with_next.final_score_p0 = 100;
-  v_with_next.final_score_p1 = 80;  // the mover wins again
-  encode_labels_flat(v_with_next, flat);
-  // The self marginal lights the mover's placement regardless of outcome, and
-  // the winning case makes self_win identical to it.
-  ASSERT_EQ(self_next[7 * 15 + 3], 1.0f);
-  ASSERT_EQ(self_next[8 * 15 + 3], 1.0f);
-  ASSERT_EQ(std::memcmp(self_next, self_win, sizeof(float) * kSelfNextPlacementFloats), 0);
-  int self_cells = 0;
-  for (int i = 0; i < kSelfWinPlacementFloats; ++i) {
-    if (self_win[i] == 1.0f) ++self_cells;
-  }
-  ASSERT_EQ(self_cells, 2);
-  ASSERT_EQ(self_win[7 * 15 + 3], 1.0f);
-  ASSERT_EQ(self_win[8 * 15 + 3], 1.0f);
-  // The mover winning zeroes the opp-win plane.
-  for (int i = 0; i < kOppWinPlacementFloats; ++i) ASSERT_EQ(opp_win[i], 0.0f);
+  encode_labels_flat(v, flat.data());  // mover (0) losing
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[self_win]), kExtraClass);
+  // The self side mask keeps the played footprint legal (the -log(0) property);
+  // kExtraClass stays illegal here -- the loss opens it for the self_win head.
+  ASSERT_EQ(self_mask[footprint_class(self_play, /*flip=*/false)], 1.0f);
+  ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
-  // A draw counts as not winning for both conjunctions; the marginals are
-  // outcome-independent and stay lit.
-  v_with_next.final_score_p0 = 90;
-  v_with_next.final_score_p1 = 90;
-  encode_labels_flat(v_with_next, flat);
-  for (int i = 0; i < kOppWinPlacementFloats; ++i) ASSERT_EQ(opp_win[i], 0.0f);
-  for (int i = 0; i < kSelfWinPlacementFloats; ++i) ASSERT_EQ(self_win[i], 0.0f);
-  ASSERT_EQ(plane[4 * 15 + 2], 1.0f);
-  ASSERT_EQ(self_next[7 * 15 + 3], 1.0f);
+  v.final_score_p0 = 100;
+  v.final_score_p1 = 80;  // mover wins
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[self_win]), int(flat[self_next]));
+
+  // A draw counts as not winning for both conjunctions; the marginals hold.
+  v.final_score_p0 = 90;
+  v.final_score_p1 = 90;
+  encode_labels_flat(v, flat.data());
+  ASSERT_EQ(int(flat[opp_win]), kExtraClass);
+  ASSERT_EQ(int(flat[self_win]), kExtraClass);
+  ASSERT_EQ(int(flat[opp_next]), footprint_class(next_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
 }
 
 // ===========================================================================
@@ -2614,14 +2618,24 @@ TEST(DataLoader, PerRowSymmetry) {
   ASSERT_NE(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)), 0);
 
   // Expected labels for active=p0 (final p0=350 vs p1=200 -> active wins by
-  // 150). The move after turn 0 is p1's PASS and the game has no turn 2, so
-  // every placement head (the two marginals and the two conjunctions) is
-  // all-zero, making the whole label tail flip-invariant.
+  // 150). The move after turn 0 is p1's PASS and the game has no turn 2, so the
+  // placement class targets are all pass/not-win; but the legality masks read
+  // the (asymmetric) sampled board, so the label tail is NOT flip-invariant --
+  // a flipped row carries the transposed masks. Build both frames from an
+  // encoder in the turn-0 post-move state (the Q applied).
+  GameStateEncoder label_enc{InputEncodingSpec{&dict}};
+  label_enc.apply_move(fix.self_move);
+  const InputEncodingSpec label_spec{&dict};
   float ref_labels[kLabelFloats];
-  encode_labels_flat(
-    make_scores_view(/*fs_active=*/fix.final_score_p0, /*fs_opp=*/fix.final_score_p1,
-                     /*active_player=*/fix.active_player),
-    ref_labels);
+  float ref_labels_flipped[kLabelFloats];
+  encode_labels_flat(scores_view(label_enc, label_spec, fix.final_score_p0, fix.final_score_p1,
+                                 fix.active_player, /*flip=*/false),
+                     ref_labels);
+  encode_labels_flat(scores_view(label_enc, label_spec, fix.final_score_p0, fix.final_score_p1,
+                                 fix.active_player, /*flip=*/true),
+                     ref_labels_flipped);
+  // The masks make the two frames differ, so the flip actually reaches labels.
+  ASSERT_NE(std::memcmp(ref_labels, ref_labels_flipped, kLabelFloats * sizeof(float)), 0);
 
   DataLoader::Params params;
   params.spec = {&dict};
@@ -2666,13 +2680,14 @@ TEST(DataLoader, PerRowSymmetry) {
       const bool is_flipped =
         std::memcmp(row.data(), ref_flipped.data(), kInputFloats * sizeof(float)) == 0;
       ASSERT_TRUE(is_normal || is_flipped);  // every row matches one of the two
+      // The label tail flips with the input: a normal row carries the canonical
+      // masks, a flipped row the transposed ones.
+      const float* want = is_normal ? ref_labels : ref_labels_flipped;
       if (is_normal)
         ++normal_count;
       else
         ++flipped_count;
-      // Labels are flip-invariant.
-      ASSERT_EQ(std::memcmp(row.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)),
-                0);
+      ASSERT_EQ(std::memcmp(row.data() + kInputFloats, want, kLabelFloats * sizeof(float)), 0);
     }
     // With n=200 fair coin flips, the probability that one bucket is empty
     // is 2 * 2^-200; the test is effectively deterministic.
@@ -2764,9 +2779,15 @@ TEST(DataLoader, EligibleBeginOffset) {
     ref_enc.encode_input(/*active_player=*/1, leave, /*apply_flip=*/false, ref_row.data());
   }
   // Labels for POV p1 (final 200 vs 350); turn 1 is the last turn, so the
-  // opp-next-placement head is all-zero, matching the scores-only view.
+  // placement class targets are all pass/not-win. The legality masks read the
+  // turn-1 post-move board, so the reference encoder must be in that state
+  // (both plays applied), matching the loader's unflipped row.
+  GameStateEncoder label_enc{InputEncodingSpec{&dict}};
+  label_enc.apply_move(q_play);
+  label_enc.apply_move(c_play);
   float ref_labels[kLabelFloats];
-  encode_labels_flat(make_scores_view(/*fs_active=*/200, /*fs_opp=*/350, /*active_player=*/1),
+  encode_labels_flat(scores_view(label_enc, InputEncodingSpec{&dict}, /*fs_active=*/200,
+                                 /*fs_opp=*/350, /*active_player=*/1),
                      ref_labels);
 
   DataLoader::Params params;

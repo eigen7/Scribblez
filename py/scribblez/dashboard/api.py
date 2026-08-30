@@ -38,11 +38,12 @@ from scribblez.ffi import (
     analyze_gcg,
     analyze_position_eval_gcg,
     analyze_position_eval_gcg_leaves,
+    collapse_position_eval_placement,
     position_eval_board_json,
 )
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
-from scribblez.position_eval.model import MASK_HEAD_NAMES
+from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 from scribblez.workloads.position_eval import PositionEvalParams
 
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
@@ -313,7 +314,7 @@ def _mc_payload(name: str, face_up_leaves: bool) -> dict:
 def _placement_block(name: str, face_up_leaves: bool, pred) -> dict | None:
     """The Positions tab's residual-heat-map payload: for each of the four placement
     heads, the Monte-Carlo truth (per-square rollout fraction count/n, board frame)
-    paired with the model's on-demand sigmoid prediction (`pred`, or None).
+    paired with the model's on-demand placement prediction (`pred`, or None).
 
     None when the ground-truth file carries no per-square planes (an older
     results file), so the frontend can hide the overlay."""
@@ -324,7 +325,7 @@ def _placement_block(name: str, face_up_leaves: bool, pred) -> dict | None:
     n = gt.get("n", 0)
     denom = n or 1
     heads = {}
-    for head in MASK_HEAD_NAMES:
+    for head in PLACEMENT_HEAD_NAMES:
         truth = (np.asarray(planes[head], dtype=np.float64) / denom).tolist()
         heads[head] = {"truth": truth, "pred": None if pred is None else pred[head].tolist()}
     return {"n": n, "heads": heads}
@@ -442,27 +443,28 @@ def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict
     }
 
 
-def _run_position_eval_masks(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
-    """The exported model's four placement-mask heads for one flat input row
-    (encoded under the model's `arm`), as board-frame (15, 15)
-    sigmoid-probability arrays keyed by head name.
+def _run_position_eval_masks(sess, arm: InputArm, flat_input: np.ndarray, gcg_text: str) -> dict:
+    """The exported model's four placement heads for one dataset position, as
+    board-frame (15, 15) per-cell occupancy marginals keyed by head name.
 
-    The analysis encoder never flips the board (apply_flip=False in
-    position_eval_analysis.cpp), so the convolutional mask heads emit their squares
-    in the same row/col frame as the board -- the frame the Monte-Carlo ground-truth
-    planes use -- and need no transpose."""
-    outs = sess.run(list(MASK_HEAD_NAMES), _position_eval_onnx_feed(arm, flat_input))
-    return {
-        name: 1.0 / (1.0 + np.exp(-out[0])) for name, out in zip(MASK_HEAD_NAMES, outs, strict=True)
-    }
+    The heads emit raw footprint logits; the engine collapse masks the illegal
+    footprints, softmaxes, and scatters each footprint's probability onto the
+    cells it covers -- reproducing the (15, 15) marginal the old per-cell heads
+    emitted (and the frame the Monte-Carlo ground-truth planes use). The analysis
+    encoder never flips the board, so the planes need no transpose."""
+    outs = sess.run(list(PLACEMENT_HEAD_NAMES), _position_eval_onnx_feed(arm, flat_input))
+    raw = np.stack([out[0] for out in outs], axis=0)  # (4, FOOTPRINT_CLASSES)
+    planes = collapse_position_eval_placement(gcg_text, raw)  # (4, 15, 15)
+    return dict(zip(PLACEMENT_HEAD_NAMES, planes, strict=True))
 
 
 @lru_cache(maxsize=256)
 def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
-    """The mask predictions for one on-disk ONNX file + dataset position: board-frame
-    sigmoid (15, 15) arrays keyed by head name, or None when the engine does not
-    encode the model's declared input widths (an earlier, differently sized
-    encoding era).
+    """The placement predictions for one on-disk ONNX file + dataset position:
+    board-frame (15, 15) per-cell occupancy marginals keyed by head name (the
+    footprint heads' raw logits collapsed by the engine), or None when the engine
+    does not encode the model's declared input widths (an earlier, differently
+    sized encoding era).
 
     Cached per (onnx_path, position): an ONNX export is atomic (a temp file renamed
     into place), so a path that exists is always complete and its content never
@@ -471,17 +473,19 @@ def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
     sess = _position_eval_onnx_session(Path(onnx_path_str))
     arm = _position_eval_model_arm(sess)
     gcg = _position_eval_dataset_files()[position]
+    gcg_text = gcg.read_text()
     try:
-        flat = analyze_position_eval_gcg(gcg.read_text(), arm)
+        flat = analyze_position_eval_gcg(gcg_text, arm)
     except ValueError:  # the model's widths are not today's layout
         return None
-    return _run_position_eval_masks(sess, arm, flat)
+    return _run_position_eval_masks(sess, arm, flat, gcg_text)
 
 
 def _position_eval_placement_pred(tag, task, mount_root, generation, position):
-    """The selected generation's ONNX placement-mask predictions for a dataset
-    position: board-frame sigmoid (15, 15) arrays keyed by head name, or None when
-    the generation has no exported ONNX (or one from an incompatible encoding era).
+    """The selected generation's ONNX placement predictions for a dataset
+    position: board-frame (15, 15) per-cell occupancy marginals keyed by head
+    name, or None when the generation has no exported ONNX (or one from an
+    incompatible encoding era).
 
     File existence is checked uncached on every call: memoizing a miss would pin a
     null prediction to the generation even if its export appears later. Only once

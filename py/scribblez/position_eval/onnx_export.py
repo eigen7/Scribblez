@@ -1,11 +1,12 @@
 """Export a trained PositionEvalModel to ONNX.
 
 The exported graph takes the same two inputs as the PyTorch model
-(`input_spatial`, `input_scalar`) and produces all three head outputs
-(`wld`, `score_diff`, then one mask output per
-`scribblez.position_eval.model.MASK_HEAD_NAMES` entry). The batch dimension
-is dynamic
-so the same file serves single-position and batched inference.
+(`input_spatial`, `input_scalar`) and produces all head outputs (`wld`,
+`score_diff`, then one raw footprint-logit output per
+`scribblez.position_eval.model.PLACEMENT_HEAD_NAMES` entry, each (batch,
+FOOTPRINT_CLASSES) -- masking and softmax happen in the consumer, not the
+graph). The batch dimension is dynamic so the same file serves single-position
+and batched inference.
 """
 
 import warnings
@@ -24,7 +25,7 @@ from scribblez.onnx_export_util import (
     write_metadata,
 )
 
-from .model import MASK_HEAD_NAMES
+from .model import PLACEMENT_HEAD_NAMES
 
 # Frozen compiled-lexicon buffers are identical across every checkpoint, so rather
 # than bake ~24 MB into each per-generation ONNX they are shared: moved into one blob
@@ -107,10 +108,11 @@ def export_onnx(
             (dummy_spatial, dummy_scalar),
             str(tmp_path),
             input_names=["input_spatial", "input_scalar"],
-            output_names=["wld", "score_diff", *MASK_HEAD_NAMES],
+            output_names=["wld", "score_diff", *PLACEMENT_HEAD_NAMES],
             dynamic_axes={
                 name: {0: "batch"}
-                for name in ("input_spatial", "input_scalar", "wld", "score_diff", *MASK_HEAD_NAMES)
+                for name in ("input_spatial", "input_scalar", "wld", "score_diff")
+                + PLACEMENT_HEAD_NAMES
             },
             opset_version=opset,
             dynamo=False,

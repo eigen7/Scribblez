@@ -17,6 +17,7 @@ import pytest
 from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
 from scribblez.ffi import (
     NativeDataLoader,
+    format_layout,
     get_input_shapes,
     get_target_shapes,
     read_file_header,
@@ -26,6 +27,12 @@ from scribblez.ffi import (
 # This checkout's own binaries, not the primary checkout's -- see the note in
 # test_move_set_eval_targets.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+
+# The four placement heads, the two per-side legality masks, and the footprint
+# class-space width, all from the same FFI source the engine targets use.
+_PLACEMENT_HEADS = tuple(format_layout()["constants"]["placement_head_names"])
+_PLACEMENT_MASKS = tuple(format_layout()["constants"]["placement_mask_names"])
+_FOOTPRINT_CLASSES = format_layout()["constants"]["footprint"]["num_classes"]
 
 # ---------------------------------------------------------------------------
 # Fixture: generate .slog files using the test_slog_writer binary.
@@ -149,18 +156,21 @@ class TestStreamingDataset:
             assert "input_scalar" in b
             assert "wld" in b
             assert "score_diff" in b
-            assert "opp_next_placement" in b
-            assert "self_next_placement" in b
-            assert "opp_win_placement" in b
-            assert "self_win_placement" in b
+            for head in _PLACEMENT_HEADS:
+                assert head in b  # footprint class index
+            for mask in _PLACEMENT_MASKS:
+                assert mask in b  # per-side legality mask
             assert tuple(b["input_spatial"].shape[1:]) == in_shapes["input_spatial"]
             assert b["input_scalar"].shape[1] == in_shapes["input_scalar"][0]
             assert b["wld"].shape[1] == 3
             assert b["score_diff"].shape[1] == 1
-            assert b["opp_next_placement"].shape[1:] == (15, 15)
-            assert b["self_next_placement"].shape[1:] == (15, 15)
-            assert b["opp_win_placement"].shape[1:] == (15, 15)
-            assert b["self_win_placement"].shape[1:] == (15, 15)
+            # Each placement head is a single footprint class index; each side
+            # carries one FOOTPRINT_CLASSES-wide legality mask (not a per-cell
+            # (15,15) map).
+            for head in _PLACEMENT_HEADS:
+                assert b[head].shape[1] == 1
+            for mask in _PLACEMENT_MASKS:
+                assert b[mask].shape[1] == _FOOTPRINT_CLASSES
 
         # Determinism: same seed, same output.
         batches2 = list(ds.iter_batches(batch_size=4, seed=555))

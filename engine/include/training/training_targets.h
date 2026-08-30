@@ -15,6 +15,7 @@
 // Targets are emitted in declaration order.
 
 #include "encoding/encode_context.h"
+#include "training/footprint.h"
 
 #include <array>
 #include <cstddef>
@@ -39,13 +40,23 @@ struct ScoreDiffTarget {
   static void encode(const EncodeContext& v, float* out);
 };
 
+// The four placement targets are the FOOTPRINT CLASS INDEX of a next move (see
+// training/footprint.h) -- a single class in [0, kFootprintClasses), stored as a
+// float and read back as the label for a masked softmax-CE head, replacing the
+// former per-cell Bernoulli maps. Emitted in the (optionally diagonally flipped)
+// `apply_flip` frame the input encoder used, so the class stays aligned with the
+// spatial planes. Each is paired with a legality mask target below.
+//
+// PLAYS heads (opp_next, self_next): the played footprint, or kPassClass for an
+// absent / EXCHANGE / PASS move. WIN heads (opp_win, self_win): the conjunction
+// Pr[footprint & that-seat-wins] -- the footprint if that seat went on to win
+// (draws counting as not winning), else kExtraClass (the "not-win" outcome), so
+// the head is a proper distribution over {footprints} u {pass} u {not-win}.
+
 struct OppNextPlacementTarget {
-  // Cell (r,c) is 1.0 iff the opponent placed a tile there on their next move.
-  // All zeros if that move is missing, EXCHANGE, or PASS. Transposed when
-  // apply_flip is set, staying aligned with the input's spatial planes.
-  static constexpr int kSide = 15;
+  // The opponent's next move as a footprint class, in the `apply_flip` frame.
   static constexpr const char* kName = "opp_next_placement";
-  static constexpr int kDims[] = {kSide, kSide};
+  static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
 };
 
@@ -54,30 +65,57 @@ struct SelfNextPlacementTarget {
   // from the sampled snapshot. The marginal-occupancy partner of
   // SelfWinPlacementTarget, letting the network separate "plays there often"
   // from "wins when playing there" (see docs/sim_residual_feedback.md).
-  static constexpr int kSide = 15;
   static constexpr const char* kName = "self_next_placement";
-  static constexpr int kDims[] = {kSide, kSide};
+  static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
 };
 
 struct OppWinPlacementTarget {
-  // OppNextPlacementTarget conjoined with the opponent going on to win, draws
-  // counting as not winning. The head trained against it predicts, per square,
-  // Pr[opponent-next-move-occupies AND opponent-wins] -- an "opponent danger"
-  // map of spots whose occupation is associated with losing (see
+  // OppNextPlacementTarget conjoined with the opponent going on to win: the
+  // footprint class if the opponent won, else kExtraClass. An "opponent danger"
+  // signal over move footprints whose occurrence is associated with losing (see
   // docs/sim_residual_feedback.md).
-  static constexpr int kSide = 15;
   static constexpr const char* kName = "opp_win_placement";
-  static constexpr int kDims[] = {kSide, kSide};
+  static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
 };
 
 struct SelfWinPlacementTarget {
-  // OppWinPlacementTarget's mover-side sibling -- a "self opportunity" map of
-  // hot spots for the mover's follow-up (see docs/sim_residual_feedback.md).
-  static constexpr int kSide = 15;
+  // OppWinPlacementTarget's mover-side sibling -- a "self opportunity" signal
+  // over the footprints of the mover's winning follow-ups (see
+  // docs/sim_residual_feedback.md).
   static constexpr const char* kName = "self_win_placement";
-  static constexpr int kDims[] = {kSide, kSide};
+  static constexpr int kDims[] = {1};
+  static void encode(const EncodeContext& v, float* out);
+};
+
+// The per-SIDE legality masks over the footprint classes, one float per class
+// (1.0 = keep, 0.0 = drive to -inf before the softmax), recomputed on replay
+// from the sampled board so the masked softmax-CE never spends probability on a
+// structurally illegal footprint. Sound over-approximations (see
+// training/footprint_mask.h): the opp side is exact-ish from the current board
+// (the opponent moves next), the self side is opp-move-invariant (the mover
+// plays two plies out). The loss additionally force-keeps the target class, so a
+// mask can never zero out the very footprint it is scored against (-log(0)
+// guard).
+//
+// One mask per SIDE, not per head: a side's plays head (opp_next / self_next)
+// and win head (opp_win / self_win) share the same footprint legality and differ
+// only at kExtraClass -- the not-win outcome, legal for the win head, an unused
+// dummy for the plays head. These masks carry the plays-head form (kExtraClass
+// illegal); the loss sets kExtraClass legal for the win head. Emitting one mask
+// per side (not four) halves both the sweep cost on the replay path and the mask
+// bytes in the row, and matches what footprint_collapse.cpp already does.
+
+struct OppPlacementMaskTarget {
+  static constexpr const char* kName = "opp_placement_mask";
+  static constexpr int kDims[] = {kFootprintClasses};
+  static void encode(const EncodeContext& v, float* out);
+};
+
+struct SelfPlacementMaskTarget {
+  static constexpr const char* kName = "self_placement_mask";
+  static constexpr int kDims[] = {kFootprintClasses};
   static void encode(const EncodeContext& v, float* out);
 };
 
@@ -108,7 +146,8 @@ struct TargetList {
 
 using AllTargets =
   TargetList<WldTarget, ScoreDiffTarget, OppNextPlacementTarget, SelfNextPlacementTarget,
-             OppWinPlacementTarget, SelfWinPlacementTarget>;
+             OppWinPlacementTarget, SelfWinPlacementTarget, OppPlacementMaskTarget,
+             SelfPlacementMaskTarget>;
 
 // Constants derived from AllTargets, so code that just wants a size need not
 // mention the template or the target struct.
@@ -120,11 +159,13 @@ inline constexpr int kScoreDiffFloats = detail::target_floats<ScoreDiffTarget>()
 // The score-diff head's OUTPUT width -- the Gaussian's mean and standard
 // deviation -- as against kScoreDiffFloats, the target the NLL scores them on.
 inline constexpr int kScoreDiffOutputFloats = 2;
-inline constexpr int kOppNextPlacementFloats = detail::target_floats<OppNextPlacementTarget>();
-inline constexpr int kOppNextPlacementSide = OppNextPlacementTarget::kSide;
-inline constexpr int kSelfNextPlacementFloats = detail::target_floats<SelfNextPlacementTarget>();
-inline constexpr int kOppWinPlacementFloats = detail::target_floats<OppWinPlacementTarget>();
-inline constexpr int kSelfWinPlacementFloats = detail::target_floats<SelfWinPlacementTarget>();
+
+// The four placement heads' class index (1 float) and legality-mask
+// (kFootprintClasses floats) target widths.
+inline constexpr int kPlacementClassFloats = detail::target_floats<OppNextPlacementTarget>();
+inline constexpr int kPlacementMaskFloats = detail::target_floats<OppPlacementMaskTarget>();
+static_assert(kPlacementClassFloats == 1);
+static_assert(kPlacementMaskFloats == kFootprintClasses);
 
 }  // namespace scribblez
 

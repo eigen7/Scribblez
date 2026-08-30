@@ -56,7 +56,7 @@ def test_glyph_char_follows_the_engine_code_table():
 
 def test_placement_head_names_are_the_target_heads():
     from scribblez.move_set_eval.targets import PLANE_NAMES
-    from scribblez.position_eval.model import MASK_HEAD_NAMES
+    from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 
     golden = (
         "opp_next_placement",
@@ -64,5 +64,5 @@ def test_placement_head_names_are_the_target_heads():
         "opp_win_placement",
         "self_win_placement",
     )
-    assert MASK_HEAD_NAMES == golden
+    assert PLACEMENT_HEAD_NAMES == golden
     assert PLANE_NAMES == golden

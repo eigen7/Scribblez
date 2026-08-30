@@ -6,7 +6,14 @@ handling without the real trunk or the C++ data layout.
 """
 
 import torch
-from scribblez.position_eval.model import MASK_HEAD_NAMES, compute_loss
+from scribblez.position_eval.model import (
+    FOOTPRINT_CLASSES,
+    FOOTPRINT_EXTRA_CLASS,
+    PLACEMENT_HEAD_NAMES,
+    PLACEMENT_MASK_NAMES,
+    _head_legal_mask,
+    compute_loss,
+)
 from scribblez.position_eval.train_loop import EpochResult, LossConfig, run_epoch
 
 _LOSS_CFG = LossConfig(
@@ -16,9 +23,13 @@ _LOSS_CFG = LossConfig(
     lambda_win_placement=0.5,
     huber_delta_mean=10.0,
     huber_delta_std=10.0,
-    placement_pos_weight=1.0,
+    mask_placement=True,
 )
 _CPU = torch.device("cpu")
+
+# The label keys compute_loss reads: a class index per head plus the two per-side
+# legality masks.
+_TARGET_KEYS = ["wld", "score_diff", *PLACEMENT_HEAD_NAMES, *PLACEMENT_MASK_NAMES]
 
 
 class _StubModel(torch.nn.Module):
@@ -28,8 +39,8 @@ class _StubModel(torch.nn.Module):
         super().__init__()
         self.wld = torch.nn.Linear(scalar_size, 3)
         self.score = torch.nn.Linear(scalar_size, 2)
-        self.masks = torch.nn.ModuleDict(
-            {name: torch.nn.Linear(scalar_size, 15 * 15) for name in MASK_HEAD_NAMES}
+        self.placement = torch.nn.ModuleDict(
+            {name: torch.nn.Linear(scalar_size, FOOTPRINT_CLASSES) for name in PLACEMENT_HEAD_NAMES}
         )
 
     def forward(self, input_spatial, input_scalar):
@@ -37,21 +48,25 @@ class _StubModel(torch.nn.Module):
             "wld": self.wld(input_scalar),
             "score_diff": self.score(input_scalar),
         }
-        for name, fc in self.masks.items():
-            out[name] = fc(input_scalar).view(-1, 15, 15)
+        for name, fc in self.placement.items():
+            out[name] = fc(input_scalar)  # (B, FOOTPRINT_CLASSES) raw logits
         return out
 
 
 def _batch(bs: int = 4, scalar_size: int = 8) -> dict:
     wld = torch.zeros(bs, 3)
     wld[torch.arange(bs), torch.randint(0, 3, (bs,))] = 1.0
-    return {
+    batch = {
         "input_spatial": torch.randn(bs, 2, 15, 15),
         "input_scalar": torch.randn(bs, scalar_size),
         "wld": wld,
         "score_diff": torch.randn(bs, 1) * 20,
-        **{name: (torch.rand(bs, 15, 15) > 0.85).float() for name in MASK_HEAD_NAMES},
     }
+    for name in PLACEMENT_HEAD_NAMES:  # a footprint class index per head
+        batch[name] = torch.randint(0, FOOTPRINT_CLASSES, (bs, 1)).float()
+    for name in PLACEMENT_MASK_NAMES:  # a non-trivial legality mask per side
+        batch[name] = (torch.rand(bs, FOOTPRINT_CLASSES) > 0.5).float()
+    return batch
 
 
 def test_run_epoch_accumulates_and_counts():
@@ -64,7 +79,7 @@ def test_run_epoch_accumulates_and_counts():
     assert result.samples == 12
     assert result.rows_trained == 112  # 100 + 3 * 4
     assert 0.0 <= result.wld_acc <= 1.0
-    assert set(result.losses) >= {"total", "wld", "score_diff", *MASK_HEAD_NAMES}
+    assert set(result.losses) >= {"total", "wld", "score_diff", *PLACEMENT_HEAD_NAMES}
     assert result.losses["total"] > 0.0
 
 
@@ -100,23 +115,50 @@ def test_run_epoch_leaves_lr_untouched_without_lr_fn():
     assert opt.param_groups[0]["lr"] == 0.123
 
 
-def test_placement_pos_weight_upweights_occupied_cells():
-    """placement_pos_weight > 1 raises each placement head's loss when the target
-    has occupied (1) cells and leaves an all-zero-target head untouched -- pinning
-    that it acts as a BCE pos_weight on the target-1 cells only."""
+def test_masked_placement_guards_the_target_class():
+    """The NaN guard force-keeps the target class, so the masked softmax-CE stays
+    finite even with an all-illegal side mask -- a data-dependent gap must degrade
+    to an unmasked target, never to -log(0). With every class but the target
+    illegal, a plays head has only the target legal so its CE is ~0; a leaky mask
+    (a large finite fill instead of -inf) would leave mass elsewhere and fail
+    that. A win head keeps its not-win (extra) class legal too, so its effective
+    mask holds exactly {target, extra} and its CE is finite but > 0 -- checked
+    both directly (the head's mask opens the extra slot) and through the loss (a
+    regression that dropped the win-head extra-opening would leave a target-only
+    mask and a 0 loss)."""
     torch.manual_seed(0)
     model = _StubModel()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
-    targets = {k: batch[k] for k in ["wld", "score_diff", *MASK_HEAD_NAMES]}
-    plain = compute_loss(out, targets, placement_pos_weight=1.0)
-    weighted = compute_loss(out, targets, placement_pos_weight=5.0)
-    for name in MASK_HEAD_NAMES:
-        has_pos = targets[name].sum() > 0
-        if has_pos:
-            assert weighted[name] > plain[name], f"{name} should grow with pos_weight"
+    targets = {k: batch[k] for k in _TARGET_KEYS}
+    for name in PLACEMENT_MASK_NAMES:  # the adversarial case: nothing legal
+        targets[name] = torch.zeros_like(targets[name])
+    losses = compute_loss(out, targets, mask_placement=True)
+    for name in PLACEMENT_HEAD_NAMES:
+        assert torch.isfinite(losses[name]), f"{name} loss is not finite"
+        extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
+        if "win" in name:
+            assert extra_legal.all(), f"{name} did not open the not-win class"
+            assert losses[name] > 1e-3, f"{name} loss {losses[name]} collapsed to a plays head"
         else:
-            assert torch.isclose(weighted[name], plain[name]), f"{name} has no positives"
+            assert not extra_legal.any(), f"{name} wrongly opened the not-win class"
+            assert losses[name] < 1e-5, f"{name} loss {losses[name]} is not ~0"
+
+
+def test_mask_placement_changes_the_loss():
+    """Masking illegal footprints reshapes the softmax normalizer, so the masked
+    and unmasked placement losses differ for every head -- the masked-vs-unmasked
+    arm that keeps masking from confounding the loss-geometry result is a real,
+    per-head toggle, not one wired for a single head."""
+    torch.manual_seed(0)
+    model = _StubModel()
+    batch = _batch()
+    out = model(batch["input_spatial"], batch["input_scalar"])
+    targets = {k: batch[k] for k in _TARGET_KEYS}
+    masked = compute_loss(out, targets, mask_placement=True)
+    unmasked = compute_loss(out, targets, mask_placement=False)
+    for name in PLACEMENT_HEAD_NAMES:
+        assert not torch.isclose(masked[name], unmasked[name]), f"{name} masking is inert"
 
 
 def test_lambda_wld_scales_the_wld_term_out_of_the_total():
@@ -127,7 +169,7 @@ def test_lambda_wld_scales_the_wld_term_out_of_the_total():
     model = _StubModel()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
-    targets = {k: batch[k] for k in ["wld", "score_diff", *MASK_HEAD_NAMES]}
+    targets = {k: batch[k] for k in _TARGET_KEYS}
     on = compute_loss(out, targets, lambda_wld=1.0)
     off = compute_loss(out, targets, lambda_wld=0.0)
     assert torch.isclose(off["total"], on["total"] - on["wld"])

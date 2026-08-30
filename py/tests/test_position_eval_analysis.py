@@ -16,6 +16,8 @@ from scribblez.ffi import (
     InputArm,
     analyze_position_eval_gcg,
     analyze_position_eval_gcg_leaves,
+    collapse_position_eval_placement,
+    format_layout,
     position_eval_board_json,
     session_input_arm,
 )
@@ -91,6 +93,34 @@ def test_a_bad_position_is_an_os_error_not_a_width_error():
     _text()
     with pytest.raises(OSError):
         analyze_position_eval_gcg("#character-encoding UTF-8\n", session_input_arm())
+
+
+def _placement_shape() -> tuple[int, int]:
+    consts = format_layout()["constants"]
+    return len(consts["placement_head_names"]), consts["footprint"]["num_classes"]
+
+
+def test_collapse_placement_produces_board_marginals():
+    """The engine collapse turns the four heads' raw footprint logits into
+    board-frame per-cell occupancy marginals: a (heads, 15, 15) stack of
+    probabilities in [0, 1], nonzero because legal footprints exist here."""
+    text = _text()
+    heads, classes = _placement_shape()
+    raw = np.random.default_rng(0).standard_normal((heads, classes)).astype(np.float32)
+    planes = collapse_position_eval_placement(text, raw)
+    assert planes.shape == (heads, 15, 15)
+    assert np.isfinite(planes).all()
+    assert (planes >= 0.0).all()
+    assert (planes <= 1.0 + 1e-5).all()  # a per-cell marginal, not a summed logit
+    assert planes.sum() > 0.0  # some footprint is legal on this board
+
+
+def test_collapse_placement_bad_gcg_is_os_error():
+    _text()
+    heads, classes = _placement_shape()
+    raw = np.zeros((heads, classes), dtype=np.float32)
+    with pytest.raises(OSError):
+        collapse_position_eval_placement("#character-encoding UTF-8\n", raw)
 
 
 def test_ground_truth_is_per_condition():

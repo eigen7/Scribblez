@@ -121,12 +121,12 @@ class PositionEvalParams:
     # Loss.
     lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")
-    lambda_next_placement: float = param(0.5, "marginal placement loss weight (opp and self)")
-    lambda_win_placement: float = param(0.5, "win-placement conjunction loss weight (opp and self)")
-    placement_pos_weight: float = param(
-        1.0,
-        "BCE pos_weight for the placement heads; >1 up-weights the sparse occupied "
-        "cells (a diagnostic that trades calibration for magnitude)",
+    lambda_next_placement: float = param(0.5, "plays-head footprint loss weight (opp and self)")
+    lambda_win_placement: float = param(0.5, "win-head footprint loss weight (opp and self)")
+    mask_placement: bool = param(
+        True,
+        "mask illegal footprints before the placement softmax (the deployable default); "
+        "off runs plain softmax-CE over all classes (the masked-vs-unmasked arm)",
     )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")

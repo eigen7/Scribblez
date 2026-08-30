@@ -27,6 +27,7 @@ add_library(scribblez_core STATIC
   src/training/training_targets.cpp
   src/training/footprint.cpp
   src/training/footprint_mask.cpp
+  src/training/footprint_collapse.cpp
   src/lexicon/word_map.cpp
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp

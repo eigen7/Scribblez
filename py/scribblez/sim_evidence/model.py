@@ -21,7 +21,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from scribblez.position_eval.model import MASK_HEAD_NAMES, PositionEvalModel
+from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS
 from scribblez.spatial_trunk import mean_max_pool
 
@@ -124,12 +124,11 @@ class EvidencePositionEvalModel(PositionEvalModel):
         value_in = torch.cat([mean_max_pool(x), s], dim=1) + self.value_proj(ev_pooled)
 
         wld = self.wld_fc(value_in)
-        masks = self.mask_conv(x)
         sd_mean = self.sd_mean_fc(value_in)
         sd_std = nn.functional.softplus(self.sd_std_fc(value_in.detach())) + 1e-3
         sd = torch.cat([sd_mean, sd_std], dim=1)
 
         out = {"wld": wld, "score_diff": sd}
-        for i, name in enumerate(MASK_HEAD_NAMES):
-            out[name] = masks[:, i]
+        for name in PLACEMENT_HEAD_NAMES:
+            out[name] = self.placement_heads[name](x, value_in)
         return out

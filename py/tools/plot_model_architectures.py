@@ -384,10 +384,9 @@ def position_eval() -> Diagram:
         mask_col,
         264,
         [
-            title("mask_conv"),
-            sub("conv 1×1  C → 32, no bias"),
-            sub("BatchNorm → ReLU"),
-            sub("conv 1×1  32 → 4"),
+            title("4 × FootprintPlacementHead"),
+            sub("conv 1×1  C → 13 slots → anchored"),
+            sub("pooled FC  3C → 2 (pass, extra)"),
         ],
         "head",
     )
@@ -397,8 +396,8 @@ def position_eval() -> Diagram:
         mask_col,
         400,
         [
-            title("4 placement masks"),
-            mono("(B, 15, 15) logits each"),
+            title("4 placement heads"),
+            mono("(B, 2927) footprint logits each"),
             sub("opp_next_placement"),
             sub("self_next_placement"),
             sub("opp_win_placement"),

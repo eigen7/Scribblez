@@ -174,6 +174,17 @@ json::object build_constants() {
   // also the .mset plane order and the SimObservation count-plane order.
   c["placement_head_names"] = {OppNextPlacementTarget::kName, SelfNextPlacementTarget::kName,
                                OppWinPlacementTarget::kName, SelfWinPlacementTarget::kName};
+  // The two per-side legality-mask targets (opp / self), in row order. One mask
+  // per side, not per head: a head's win variant opens kExtraClass in the loss.
+  c["placement_mask_names"] = {OppPlacementMaskTarget::kName, SelfPlacementMaskTarget::kName};
+  // The footprint categorical class space each placement head is a distribution
+  // over (footprint.h), so the Python model / loss / viz read one width, class
+  // layout, and the pass/not-win slot indices from the same source the C++
+  // targets and TensorRT output descriptors do.
+  c["footprint"] = {{"num_classes", kFootprintClasses}, {"slots_per_cell", kSlotsPerCell},
+                    {"side", kFootprintSide},           {"max_k", kFootprintMaxK},
+                    {"anchored", kAnchoredFootprints},  {"pass_class", kPassClass},
+                    {"extra_class", kExtraClass}};
   return c;
 }
 

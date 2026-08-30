@@ -15,6 +15,13 @@ namespace scribblez {
 
 using FootprintMask = std::array<bool, kFootprintClasses>;
 
+// The sound tile budget every caller passes these masks: a mover holds at most
+// RACK_SIZE tiles, so a full rack is the loosest cap and never masks a real move
+// (a smaller, endgame-aware budget would only tighten -- see the TODO in
+// training_targets.cpp). Shared so the per-row training masks and the .mset /
+// dashboard collapse cannot drift.
+inline constexpr int kMaskTileBudget = RACK_SIZE;
+
 // Legality for an OPPONENT placement head (opp_next / opp_win): the opponent
 // moves next on `board`, so the current-board test is exact for them. A class
 // (anchor, orientation, k) is legal iff its covered cells (the first k empty

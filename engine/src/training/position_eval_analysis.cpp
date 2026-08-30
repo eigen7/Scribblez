@@ -8,6 +8,7 @@
 #include "game/tile.h"
 #include "game/tile_counts.h"
 #include "serve/position_json.h"
+#include "training/footprint_collapse.h"
 #include "util/assert.h"
 
 #include <boost/json.hpp>
@@ -127,6 +128,17 @@ bool encode_position_eval_analysis_input_with_leaves(const std::string& gcg_text
     }
   }
   replay_and_encode(pos, leave, opp_leave, spec, out);
+  return true;
+}
+
+bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
+                                               const InputEncodingSpec& spec, const float* raw,
+                                               float* out, std::string* error) {
+  ParsedGcgPostMove pos;
+  if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
+  // The analysis encoder never flips, so the model's planes -- and this collapse
+  // -- are in the board's own frame.
+  collapse_footprint_planes(pos.board, *spec.dict, /*flip=*/false, raw, out);
   return true;
 }
 
