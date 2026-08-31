@@ -352,19 +352,19 @@ def position_eval() -> Diagram:
     d.edge(cat.bottom, value.head)
 
     wld_fc = d.box(
-        340, 486, [title("wld_fc"), sub("Linear 3C → 64 → ReLU"), sub("Linear 64 → 3")], "head"
+        340, 486, [title("WldHead.fc"), sub("Linear 3C → 64 → ReLU"), sub("Linear 64 → 3")], "head"
     )
     mean_fc = d.box(
         565,
         486,
-        [title("sd_mean_fc"), sub("Linear 3C → 256 → ReLU"), sub("Linear 256 → 1")],
+        [title("ScoreDiffHead.mean_fc"), sub("Linear 3C → 256 → ReLU"), sub("Linear 256 → 1")],
         "head",
     )
     std_fc = d.box(
         790,
         486,
         [
-            title("sd_std_fc"),
+            title("ScoreDiffHead.std_fc"),
             sub("reads  v.detach()"),
             sub("Linear 3C → 256 → ReLU"),
             sub("Linear 256 → 1, softplus"),
@@ -384,7 +384,7 @@ def position_eval() -> Diagram:
         mask_col,
         264,
         [
-            title("4 × FootprintPlacementHead"),
+            title("4 × PlacementHead"),
             sub("conv 1×1  C → 13 slots → anchored"),
             sub("pooled FC  3C → 2 (pass, extra)"),
         ],

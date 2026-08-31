@@ -14,46 +14,14 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from .model import PLACEMENT_HEAD_NAMES, PLACEMENT_MASK_NAMES, compute_loss
+# The loss config and the loss itself live with the head registry in model.py:
+# the model owns compute_loss(), and the per-head loss keys and batch target keys
+# are derived from its heads (model.loss_keys() / model.target_keys()), so a new
+# head extends them without touching this loop. LossConfig is re-exported for
+# callers that import it from the train loop.
+from .model import LossConfig
 
-# Per-head loss keys accumulated each epoch ("total" is the optimized
-# objective).
-LOSS_KEYS = (
-    "total",
-    "wld",
-    "score_diff",
-    "score_diff_mean",
-    "score_diff_std",
-    "opp_next_placement",
-    "self_next_placement",
-    "opp_win_placement",
-    "self_win_placement",
-)
-
-
-@dataclass
-class LossConfig:
-    """Weights and Huber transition points for the combined post-move loss."""
-
-    lambda_wld: float
-    lambda_sd: float
-    lambda_next_placement: float
-    lambda_win_placement: float
-    huber_delta_mean: float
-    huber_delta_std: float
-    mask_placement: bool
-
-    @classmethod
-    def from_args(cls, args) -> LossConfig:
-        return cls(
-            args.lambda_wld,
-            args.lambda_sd,
-            args.lambda_next_placement,
-            args.lambda_win_placement,
-            args.huber_delta_mean,
-            args.huber_delta_std,
-            args.mask_placement,
-        )
+__all__ = ["LossConfig", "EpochResult", "run_epoch"]
 
 
 @dataclass
@@ -67,22 +35,11 @@ class EpochResult:
     rows_trained: int
 
 
-# Target tensors compute_loss consumes, pulled from the batch dict by name: the
-# value targets, each head's footprint class index, and the two per-side legality
-# masks.
-TARGET_KEYS = (
-    "wld",
-    "score_diff",
-    *PLACEMENT_HEAD_NAMES,
-    *PLACEMENT_MASK_NAMES,
-)
-
-
-def _to_device(batch: dict, device):
-    """Split a batch dict into (spatial, scalar) inputs and the target
-    tensors, each moved to `device`."""
+def _to_device(batch: dict, device, target_keys: tuple[str, ...]):
+    """Split a batch dict into (spatial, scalar) inputs and the `target_keys`
+    target tensors, each moved to `device`."""
     inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
-    targets = {k: batch[k].to(device) for k in TARGET_KEYS}
+    targets = {k: batch[k].to(device) for k in target_keys}
     return inputs, targets
 
 
@@ -109,7 +66,8 @@ def run_epoch(
         rows_trained), invoked at most ~once per second.
     """
     model.train()
-    sums = {k: 0.0 for k in LOSS_KEYS}
+    target_keys = model.target_keys()
+    sums = {k: 0.0 for k in model.loss_keys()}
     n_batches = 0
     correct = 0
     samples = 0
@@ -117,14 +75,14 @@ def run_epoch(
     last_progress = 0.0
 
     for batch in batches:
-        (input_spatial, input_scalar), targets = _to_device(batch, device)
+        (input_spatial, input_scalar), targets = _to_device(batch, device, target_keys)
         if lr_fn is not None:
             lr = lr_fn(rows_trained)
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
         outputs = model(input_spatial, input_scalar)
-        losses = compute_loss(
+        losses = model.compute_loss(
             outputs,
             targets,
             lambda_wld=loss_cfg.lambda_wld,

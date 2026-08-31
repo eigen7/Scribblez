@@ -75,8 +75,8 @@ training signal.
 
 ![PositionEvalModel: the value summary feeding three FC stacks, plus the four footprint placement heads](images/arch_position_eval.svg)
 
-`sd_std_fc` reads a **detached** `v`, so the std loss trains that stack alone —
-never the trunk, never the mean.
+`ScoreDiffHead.std_fc` reads a **detached** `v`, so the std loss trains that
+stack alone — never the trunk, never the mean.
 
 ### Placement heads (footprint-categorical)
 
@@ -84,7 +84,7 @@ The four placement heads are **categorical distributions over move footprints**,
 not per-cell Bernoulli masks. A footprint is `(anchor, orientation, k)` — the
 first newly-placed square, the play axis, and the tile count `k ∈ 1..7` — and it
 covers "the first `k` empty cells from the anchor". Each head is a
-`FootprintPlacementHead`: a `Conv2d(C → 13)` whose `(cell, slot)` flattening is
+`PlacementHead`: a `Conv2d(C → 13)` whose `(cell, slot)` flattening is
 exactly `training_targets.h`'s anchored-class index, plus a pooled FC for the two
 catch-all classes (`pass`, and the win heads' `not-win` / the plays heads'
 dummy), giving `(B, 2927)` raw logits. The plays heads (`*_next_placement`)

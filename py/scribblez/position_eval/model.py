@@ -4,29 +4,25 @@ Architecture:
   - Spatial trunk: (planes, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
   - Scalar injection: (scalars,) -> FC -> 128 -> broadcast-add to spatial features
   - Pooling: global average pool -> 128-d trunk vector
-  - Six heads:
-    * WLD (inference): FC -> 3 logits (win/draw/loss)
-    * ScoreDiff (aux): FC -> 2 = [mean, std] of the final score differential.
-      The mean is regressed against the observed differential and the std
-      against the absolute residual of the mean, both with Huber loss in score
-      points. The std stack reads a detached copy of the trunk summary, so its
-      loss trains only that stack and never perturbs the trunk or the mean. The
-      exported second value is the std directly.
-    * Placement heads (aux): four categorical distributions over move
-      FOOTPRINTS (training/footprint.h) -- a KataGo-policy-style Conv2d(C->13)
-      giving per-(cell, orientation, k) logits, flattened to the anchored
-      footprints, plus a pooled FC for the two catch-all classes (pass, and the
-      win heads' not-win / the plays heads' dummy). The plays heads
-      OppNextPlacement / SelfNextPlacement predict which footprint each player's
-      next move is; the win heads OppWinPlacement / SelfWinPlacement predict
-      Pr[footprint AND that player wins], carrying not-win on the extra class --
-      the "opponent danger" / "self opportunity" signals of
-      docs/sim_residual_feedback.md, now over move footprints instead of a
-      per-cell marginal. Trained by masked softmax cross-entropy: the raw
-      logits are the export, and each consumer masks illegal footprints before
-      the softmax (the mask is not in the graph). The (15,15) per-cell marginal
-      the dashboard shows is recovered downstream by summing footprint
-      probability over the cells each footprint covers.
+  - Six output heads, each a Head subclass (below) owning its own forward and
+    loss; the per-head mechanics live in those class docstrings. In brief, by
+    role rather than mechanism:
+    * WLD (inference): 3 win/draw/loss logits.
+    * ScoreDiff (aux): [mean, std] of the final score differential.
+    * Placement heads (aux): four categorical distributions over move FOOTPRINTS
+      (training/footprint.h). The plays heads OppNextPlacement / SelfNextPlacement
+      predict each player's next-move footprint; the win heads OppWinPlacement /
+      SelfWinPlacement predict Pr[footprint AND that player wins], carrying
+      not-win on the extra class -- the "opponent danger" / "self opportunity"
+      signals of docs/sim_residual_feedback.md over move footprints. The (15,15)
+      per-cell marginal the dashboard shows is recovered downstream by summing
+      footprint probability over the cells each footprint covers.
+
+The model holds the heads in a name-keyed registry (self.heads), and forward(),
+compute_loss()'s total, and the loss/target key sets all iterate it -- so an
+auxiliary head is added by adding one entry to _build_heads(). The placement
+family is generated from the FFI-served PLACEMENT_HEAD_NAMES; WLD and score-diff
+are singleton heads in the same registry.
 
 The two model input widths come from the engine session's input-encoding spec
 (85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
@@ -37,7 +33,11 @@ docs/model_architectures.md diagrams this network; any change to the
 architecture belongs in the same commit as the corresponding change there.
 """
 
+from __future__ import annotations
+
 import math
+from dataclasses import dataclass
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
@@ -87,20 +87,163 @@ def _head_is_win(head: str) -> bool:
     return "win" in head
 
 
-class FootprintPlacementHead(nn.Module):
-    """One placement head: a categorical distribution over move footprints.
+@dataclass
+class LossConfig:
+    """Weights and Huber transition points for the combined post-move loss. Each
+    head reads the field(s) it needs from this config in its loss()."""
 
-    Conv2d(C -> slots_per_cell) gives per-(cell, orientation, k) logits, whose
-    (cell, slot) flattening is exactly training_targets.h's anchored-footprint
-    class index (cell = row*side+col, then its slots). A pooled FC over the value
-    summary emits the trailing catch-all logits (pass, not-win/dummy). The head
-    is a raw-logit emitter; masking + softmax happen in the loss / consumers.
+    lambda_wld: float
+    lambda_sd: float
+    lambda_next_placement: float
+    lambda_win_placement: float
+    huber_delta_mean: float
+    huber_delta_std: float
+    mask_placement: bool
+
+    @classmethod
+    def from_args(cls, args) -> LossConfig:
+        return cls(
+            args.lambda_wld,
+            args.lambda_sd,
+            args.lambda_next_placement,
+            args.lambda_win_placement,
+            args.huber_delta_mean,
+            args.huber_delta_std,
+            args.mask_placement,
+        )
+
+
+class HeadLoss(NamedTuple):
+    """One head's loss contribution: `weighted` is added into the optimized
+    total; `reported` is its per-key (unweighted) losses to log."""
+
+    weighted: torch.Tensor
+    reported: dict[str, torch.Tensor]
+
+
+# --- Heads ----------------------------------------------------------------
+
+
+class Head(nn.Module):
+    """Base class for a position-eval output head.
+
+    A head's forward takes the trunk feature map `x` (B, C, 15, 15) and the value
+    summary `value_in` (B, 3C) and returns its single output tensor (value heads
+    ignore `x`), so the model can run every head with a uniform call. Subclasses
+    set `name` (the output-dict key, also the ONNX output name), `loss_keys` (the
+    per-key losses loss() reports -- (name,) except for a composite head), and
+    `target_keys` (the target-dict keys loss() reads).
     """
 
-    def __init__(self, trunk_channels: int, value_in: int, slots_per_cell: int, catch_all: int):
+    name: str
+    loss_keys: tuple[str, ...]
+    target_keys: tuple[str, ...]
+
+    def loss(
+        self, outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor], cfg: LossConfig
+    ) -> HeadLoss:
+        raise NotImplementedError
+
+
+class WldHead(Head):
+    """WLD (value) inference head: FC over the value summary -> 3 win/draw/loss
+    logits, trained by softmax cross-entropy against the one-hot outcome.
+    lambda_wld weights it in the total; drop it to 0 to isolate the other heads
+    (a diagnostic that leaves the value head untrained)."""
+
+    name = "wld"
+    loss_keys = ("wld",)
+    target_keys = ("wld",)
+
+    def __init__(self, value_in: int):
         super().__init__()
-        self.conv = nn.Conv2d(trunk_channels, slots_per_cell, 1)
-        self.catch_all_fc = nn.Linear(value_in, catch_all)
+        self.fc = nn.Sequential(
+            nn.Linear(value_in, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 3),
+        )
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        return self.fc(value_in)
+
+    def loss(self, outputs, targets, cfg):
+        ce = F.cross_entropy(outputs["wld"], targets["wld"].argmax(dim=1))
+        return HeadLoss(cfg.lambda_wld * ce, {"wld": ce})
+
+
+class ScoreDiffHead(Head):
+    """Score-diff aux head: two independent FC stacks over the value summary
+    producing [mean, std] of the final score differential.
+
+    forward: the mean stack regresses the differential; the std stack reads a
+    detached copy of the value summary and is mapped through softplus + a floor
+    to a positive std, so the exported second value is the std directly and its
+    loss never flows into the trunk or the mean.
+
+    loss: two Huber regressions in score points -- the mean against the observed
+    differential, the std against the absolute residual of the mean (scaled by
+    MAD_TO_STD so its optimum is a Gaussian sigma), the std prediction and target
+    both detached from trunk and mean. The reported score_diff is their sum;
+    lambda_sd weights it in the total."""
+
+    name = "score_diff"
+    loss_keys = ("score_diff", "score_diff_mean", "score_diff_std")
+    target_keys = ("score_diff",)
+
+    def __init__(self, value_in: int):
+        super().__init__()
+        self.mean_fc = nn.Sequential(
+            nn.Linear(value_in, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1),
+        )
+        self.std_fc = nn.Sequential(
+            nn.Linear(value_in, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1),
+        )
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        mean = self.mean_fc(value_in)  # (B, 1)
+        std = F.softplus(self.std_fc(value_in.detach())) + 1e-3  # (B, 1)
+        return torch.cat([mean, std], dim=1)  # (B, 2): [mean, std]
+
+    def loss(self, outputs, targets, cfg):
+        mean = outputs["score_diff"][:, 0]
+        std = outputs["score_diff"][:, 1]
+        target = targets["score_diff"].squeeze(1)
+        loss_mean = F.huber_loss(mean, target, delta=cfg.huber_delta_mean)
+        std_target = (mean.detach() - target).abs() * MAD_TO_STD
+        loss_std = F.huber_loss(std, std_target, delta=cfg.huber_delta_std)
+        total = loss_mean + loss_std
+        reported = {"score_diff": total, "score_diff_mean": loss_mean, "score_diff_std": loss_std}
+        return HeadLoss(cfg.lambda_sd * total, reported)
+
+
+class PlacementHead(Head):
+    """One placement head: a categorical distribution over move footprints.
+
+    forward: Conv2d(C -> slots_per_cell) gives per-(cell, orientation, k) logits,
+    whose (cell, slot) flattening is exactly training_targets.h's
+    anchored-footprint class index (cell = row*side+col, then its slots); a
+    pooled FC over the value summary emits the trailing catch-all logits (pass,
+    not-win/dummy). The head is a raw-logit emitter -- masking + softmax happen in
+    the loss / consumers.
+
+    loss: masked softmax cross-entropy against the footprint class. Softmax's
+    conserved mass is the point -- it replaces the per-cell BCE's drifting,
+    easy-negative-diluted geometry. The head's legality-mask side (opp/self), its
+    not-win-class handling (win vs plays), and its loss weight
+    (lambda_win_placement vs lambda_next_placement) all follow from its name."""
+
+    def __init__(self, name: str, trunk_channels: int, value_in: int):
+        super().__init__()
+        self.name = name
+        self.loss_keys = (name,)
+        self.target_keys = (name, _head_mask_name(name))
+        self._is_win = _head_is_win(name)
+        self.conv = nn.Conv2d(trunk_channels, FOOTPRINT_SLOTS_PER_CELL, 1)
+        self.catch_all_fc = nn.Linear(value_in, FOOTPRINT_CATCH_ALL)
 
     def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
         b = x.shape[0]
@@ -108,6 +251,22 @@ class FootprintPlacementHead(nn.Module):
         # slot-minor, matching footprint_class's (cell*slots + slot) layout.
         anchored = self.conv(x).permute(0, 2, 3, 1).reshape(b, -1)
         return torch.cat([anchored, self.catch_all_fc(value_in)], dim=1)  # (B, num_classes)
+
+    def loss(self, outputs, targets, cfg):
+        legal = _head_legal_mask(self.name, targets) if cfg.mask_placement else None
+        ce = _placement_ce(outputs[self.name], targets[self.name].squeeze(1).long(), legal)
+        weight = cfg.lambda_win_placement if self._is_win else cfg.lambda_next_placement
+        return HeadLoss(weight * ce, {self.name: ce})
+
+
+def _build_heads(trunk_channels: int, value_in: int) -> list[Head]:
+    """The head registry, in output (== ONNX) order: wld, score_diff, then the
+    FFI-driven placement family. An auxiliary head is added by adding it here."""
+    return [
+        WldHead(value_in),
+        ScoreDiffHead(value_in),
+        *(PlacementHead(name, trunk_channels, value_in) for name in PLACEMENT_HEAD_NAMES),
+    ]
 
 
 class PositionEvalModel(nn.Module):
@@ -148,55 +307,30 @@ class PositionEvalModel(nn.Module):
             TileSupplyAttention(trunk_channels, scalar_size) if use_supply_attention else None
         )
 
-        # --- Heads ---
-        # TODO: make the set of heads modular so experimenting with additional
-        # auxiliary heads touches as few places as possible. Right now each head
-        # is hardcoded in several spots that must stay in sync: its submodule here
-        # in __init__, its output entry in forward(), its loss term and weight in
-        # compute_loss(), and the class/forward docstrings. A registry of head
-        # objects (each owning its modules, forward, and loss) iterated over in
-        # these spots would let a new head be added in one place.
-        # The value heads read a 3C summary: mean+max board pooling (2C) plus the
-        # scalar projection (C), so the score-diff scalar reaches them directly.
+        # Heads, keyed by output name (see _build_heads and the Heads section).
+        # The value heads read a 3C summary -- mean+max board pooling (2C) plus
+        # the scalar projection (C) -- so the score-diff scalar reaches them
+        # directly.
         value_in = 3 * trunk_channels
-
-        # WLD head (inference head): FC -> 3.
-        self.wld_fc = nn.Sequential(
-            nn.Linear(value_in, 64),
-            nn.ReLU(inplace=True),
-            nn.Linear(64, 3),
+        self.heads = nn.ModuleDict(
+            {head.name: head for head in _build_heads(trunk_channels, value_in)}
         )
 
-        # Score-diff head (aux): two independent FC stacks over the value
-        # summary. The mean stack regresses the final score differential; the
-        # std stack regresses the absolute residual of the mean and reads a
-        # detached copy of the value summary (see forward()), so the std loss
-        # updates only this stack -- never the shared trunk or the mean.
-        # forward() maps the std stack's output through softplus to a positive
-        # std, so the exported second value is the std directly.
-        self.sd_mean_fc = nn.Sequential(
-            nn.Linear(value_in, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 1),
-        )
-        self.sd_std_fc = nn.Sequential(
-            nn.Linear(value_in, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 1),
-        )
+    def loss_keys(self) -> tuple[str, ...]:
+        """The per-head loss keys accumulated each epoch ("total" is the
+        optimized objective), derived from the heads so a new head extends it."""
+        return ("total", *(key for head in self.heads.values() for key in head.loss_keys))
 
-        # Placement heads (aux): one categorical footprint head per placement
-        # name. Each owns its own Conv2d(C->slots) policy reduction (they predict
-        # different distributions -- opp vs self, plays vs win -- so they do not
-        # share a trunk reduction) plus a pooled FC for the catch-all logits.
-        self.placement_heads = nn.ModuleDict(
-            {
-                name: FootprintPlacementHead(
-                    trunk_channels, value_in, FOOTPRINT_SLOTS_PER_CELL, FOOTPRINT_CATCH_ALL
-                )
-                for name in PLACEMENT_HEAD_NAMES
-            }
-        )
+    def target_keys(self) -> tuple[str, ...]:
+        """The batch target tensors the heads' losses consume, pulled from the
+        batch dict by name (deduplicated across heads that share a side mask)."""
+        return tuple(dict.fromkeys(key for head in self.heads.values() for key in head.target_keys))
+
+    def _run_heads(self, x: torch.Tensor, value_in: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Run every head over the trunk feature map `x` and value summary
+        `value_in`, returning the output dict in head (== ONNX) order. Shared with
+        subclasses that condition `x` / `value_in` before the heads."""
+        return {name: head(x, value_in) for name, head in self.heads.items()}
 
     def forward(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
@@ -224,21 +358,68 @@ class PositionEvalModel(nn.Module):
         # Value summary: mean+max board pooling concatenated with the scalar
         # projection, so the heads see global board context and the raw scalars.
         value_in = torch.cat([mean_max_pool(x), s], dim=1)  # (B, 3C)
+        return self._run_heads(x, value_in)
 
-        wld = self.wld_fc(value_in)
+    def compute_loss(
+        self,
+        outputs: dict[str, torch.Tensor],
+        targets: dict[str, torch.Tensor],
+        lambda_wld: float = 1.0,
+        lambda_sd: float = 1.0,
+        lambda_next_placement: float = 0.5,
+        lambda_win_placement: float = 0.5,
+        huber_delta_mean: float = 10.0,
+        huber_delta_std: float = 10.0,
+        mask_placement: bool = True,
+    ) -> dict[str, torch.Tensor]:
+        """Combined loss over the heads: the weighted sum each head contributes,
+        plus every head's reported per-key losses.
 
-        # Score-diff head: [mean, std] in score points. The std stack reads a
-        # detached copy of the value summary, so its loss never flows into the
-        # trunk or the mean. softplus + floor keeps the std positive and away
-        # from zero.
-        sd_mean = self.sd_mean_fc(value_in)  # (B, 1)
-        sd_std = F.softplus(self.sd_std_fc(value_in.detach())) + 1e-3  # (B, 1)
-        sd = torch.cat([sd_mean, sd_std], dim=1)  # (B, 2): [mean, std]
+        Each Head owns its own loss term and reads the weight it needs from the
+        assembled LossConfig, so the total and the returned dict both derive from
+        the head set -- there is no per-head term to hand-maintain here.
 
-        out = {"wld": wld, "score_diff": sd}
-        for name in PLACEMENT_HEAD_NAMES:
-            out[name] = self.placement_heads[name](x, value_in)  # (B, FOOTPRINT_CLASSES)
-        return out
+        Args:
+            outputs: this model's forward() result. "wld" (B,3 logits),
+                     "score_diff" (B,2 = [mean, std]), and one (B,
+                     FOOTPRINT_CLASSES) raw footprint-logit tensor per
+                     PLACEMENT_HEAD_NAMES entry.
+            targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the
+                     observed final differential, the footprint class index per
+                     PLACEMENT_HEAD_NAMES entry ("<name>", (B,1)), and the two
+                     side legality masks ("opp_placement_mask" /
+                     "self_placement_mask", (B, FOOTPRINT_CLASSES) in {0,1}) each
+                     head reads via its side.
+            lambda_wld: weight on the WLD (value) loss (WldHead).
+            lambda_sd: weight on the score-diff loss (ScoreDiffHead).
+            lambda_next_placement: weight on each plays-head placement loss (opp/self).
+            lambda_win_placement: weight on each win-head placement loss (opp/self).
+            huber_delta_mean: Huber transition point (points) for the score-diff mean.
+            huber_delta_std: Huber transition point (points) for the score-diff std.
+            mask_placement: mask illegal footprints before the softmax (the
+                     deployable default). False runs plain softmax-CE over all
+                     classes -- the masked-vs-unmasked arm that keeps masking
+                     from confounding the loss-geometry result.
+
+        Returns:
+            Dict with "total" plus one entry per head-reported loss key.
+        """
+        cfg = LossConfig(
+            lambda_wld,
+            lambda_sd,
+            lambda_next_placement,
+            lambda_win_placement,
+            huber_delta_mean,
+            huber_delta_std,
+            mask_placement,
+        )
+        total: torch.Tensor | None = None
+        reported: dict[str, torch.Tensor] = {}
+        for head in self.heads.values():
+            head_loss = head.loss(outputs, targets, cfg)
+            total = head_loss.weighted if total is None else total + head_loss.weighted
+            reported.update(head_loss.reported)
+        return {"total": total, **reported}
 
 
 def _head_legal_mask(head: str, targets: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -272,93 +453,3 @@ def _placement_ce(
         legal_mask.scatter_(1, target_idx.unsqueeze(1), 1.0)
         logits = logits.masked_fill(legal_mask == 0, float("-inf"))
     return F.cross_entropy(logits, target_idx)
-
-
-def compute_loss(
-    outputs: dict[str, torch.Tensor],
-    targets: dict[str, torch.Tensor],
-    lambda_wld: float = 1.0,
-    lambda_sd: float = 1.0,
-    lambda_next_placement: float = 0.5,
-    lambda_win_placement: float = 0.5,
-    huber_delta_mean: float = 10.0,
-    huber_delta_std: float = 10.0,
-    mask_placement: bool = True,
-) -> dict[str, torch.Tensor]:
-    """Compute combined loss for all heads.
-
-    Args:
-        outputs: model forward() result. "wld" (B,3 logits), "score_diff"
-                 (B,2 = [mean, std]), and one (B, FOOTPRINT_CLASSES) raw
-                 footprint-logit tensor per PLACEMENT_HEAD_NAMES entry.
-        targets: dict with "wld" (B,3) one-hot, "score_diff" (B,1) the observed
-                 final differential, the footprint class index per
-                 PLACEMENT_HEAD_NAMES entry ("<name>", (B,1)), and the two side
-                 legality masks ("opp_placement_mask" / "self_placement_mask",
-                 (B, FOOTPRINT_CLASSES) in {0,1}) each head reads via its side.
-        lambda_wld: weight applied to the WLD (value) loss. 1.0 in normal
-                 training; drop it to isolate the other heads (a diagnostic that
-                 leaves the value head untrained).
-        lambda_next_placement: weight applied to each of the two plays-head
-                 placement losses (opp and self).
-        lambda_win_placement: weight applied to each of the two win-head
-                 placement losses (opp and self).
-        huber_delta_mean: Huber transition point (points) for the mean.
-        huber_delta_std: Huber transition point (points) for the std.
-        mask_placement: mask illegal footprints before the softmax (the
-                 deployable default). False runs plain softmax-CE over all
-                 classes -- the masked-vs-unmasked arm that keeps masking from
-                 confounding the loss-geometry result.
-
-    Returns:
-        Dict with "total" plus one entry per head loss.
-    """
-    # WLD: cross-entropy against one-hot target.
-    wld_target_idx = targets["wld"].argmax(dim=1)
-    loss_wld = F.cross_entropy(outputs["wld"], wld_target_idx)
-
-    # Score-diff: two Huber regressions in score points. The mean regresses the
-    # observed differential. The std regresses the absolute residual of the mean
-    # (scaled by MAD_TO_STD so its optimum is a Gaussian sigma). The std
-    # prediction and the residual target are both detached from the trunk and
-    # the mean, so the std loss trains only the std stack.
-    sd_mean = outputs["score_diff"][:, 0]
-    sd_std = outputs["score_diff"][:, 1]
-    sd_target = targets["score_diff"].squeeze(1)
-    loss_sd_mean = F.huber_loss(sd_mean, sd_target, delta=huber_delta_mean)
-    std_target = (sd_mean.detach() - sd_target).abs() * MAD_TO_STD
-    loss_sd_std = F.huber_loss(sd_std, std_target, delta=huber_delta_std)
-    loss_sd = loss_sd_mean + loss_sd_std
-
-    # Placement heads: masked softmax cross-entropy against the footprint class,
-    # the plays heads weighted by lambda_next_placement and the win heads by
-    # lambda_win_placement. Softmax's conserved mass is the point -- it replaces
-    # the per-cell BCE's drifting, easy-negative-diluted geometry. Each head reads
-    # its side's legality mask (win heads with the not-win class made legal); the
-    # unmasked arm passes None.
-    placement_losses = {
-        name: _placement_ce(
-            outputs[name],
-            targets[name].squeeze(1).long(),
-            _head_legal_mask(name, targets) if mask_placement else None,
-        )
-        for name in PLACEMENT_HEAD_NAMES
-    }
-
-    total = (
-        lambda_wld * loss_wld
-        + lambda_sd * loss_sd
-        + lambda_next_placement
-        * (placement_losses["opp_next_placement"] + placement_losses["self_next_placement"])
-        + lambda_win_placement
-        * (placement_losses["opp_win_placement"] + placement_losses["self_win_placement"])
-    )
-
-    return {
-        "total": total,
-        "wld": loss_wld,
-        "score_diff": loss_sd,
-        "score_diff_mean": loss_sd_mean,
-        "score_diff_std": loss_sd_std,
-        **placement_losses,
-    }
