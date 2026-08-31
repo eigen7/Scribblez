@@ -20,7 +20,10 @@
 //                     last two plies.
 //     kCrossChecks    horizontal then vertical: plane L marks empty squares
 //                     where placing L satisfies the lexicon's cross-check mask
-//                     along that axis.
+//                     along that axis. A square with no perpendicular neighbor
+//                     constrains nothing, so every letter is legal and all 26
+//                     of its planes are set -- 1 always reads as "L legal
+//                     here", never conditioned on the neighbors.
 //
 //   Scalar blocks (POV-visible information only, normalized to [0, 1] but for
 //   the signed kScoreDiff)
@@ -75,7 +78,9 @@ struct InputEncodingSpec {
 // which read as version 0 -- the version at the entry's introduction.
 //
 //   1: cross-check planes bug fixes
-inline constexpr int kInputEncodingVersion = 1;
+//   2: cross-check planes for a square with no perpendicular neighbor encode
+//      all-ones (every letter legal) instead of all-zeros
+inline constexpr int kInputEncodingVersion = 2;
 
 inline constexpr int kBoardSide = 15;
 inline constexpr int kBoardCells = kBoardSide * kBoardSide;  // 225

@@ -72,9 +72,11 @@ int encode_placement_plane(const Move& m, bool flip, float* out) {
 }
 
 // Set `cc`'s legal letters at `cell` across a 26-plane block. A square with no
-// perpendicular run constrains nothing, and stays zero rather than set all 26.
+// perpendicular run constrains nothing, so its mask is all-ones and the block
+// is written all-ones -- a plane's 1 means "letter legal here" regardless of
+// whether the square has an occupied neighbor, rather than an all-zero block
+// that a reader can only interpret by first checking the neighbors.
 void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
-  if (!cc.has_neighbor) return;
   for (int l = 0; l < 26; ++l) {
     if (cc.mask & (1u << l)) planes[l * kBoardCells + cell] = 1.0f;
   }
