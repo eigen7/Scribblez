@@ -24,6 +24,10 @@
 - **[model_architectures.md](model_architectures.md)** — wiring diagrams for the
   two trained networks and the spatial trunk they share: layer-by-layer shapes,
   the head fan-out of each, and their loss tables.
+- **[footprint_native_placement.md](footprint_native_placement.md)** — the plan to
+  make placement footprint-categorical end to end (removing the per-cell collapse
+  outside visualization): the (15,15,13) spatial reshape, sparse top-k storage,
+  the PR slicing, and the plan-review dissent it resolved.
 - **[generational_training.md](generational_training.md)** — the generate→train
   lifecycle (rows-clock, sliding window, reuse-driven epochs, live controls),
   plus the forward-looking game-pool producer, resource-contention manager, and
