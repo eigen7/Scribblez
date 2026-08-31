@@ -317,9 +317,14 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
         assert metrics[f"regret@{k}"] >= 0.0
-    # The baseline over a sweep is the exact static-equity ranking, which is a
-    # real move ordering rather than a shuffle: it must beat a coin flip.
-    assert metrics["spearman_baseline"] > 0.0
+    # The Spearman baseline is the static-equity stored order scored against the
+    # teacher's values -- a signed correlation only over a *trained* teacher
+    # (where higher static equity means higher win-equity: the A3 gate's real
+    # reading). This fixture's teacher is randomly initialized, so the sign is
+    # an accident of the init, not an invariant; assert only the range, as the
+    # stratified path does.
+    for suffix in ("", "_baseline"):
+        assert -1.0 <= metrics[f"spearman{suffix}"] <= 1.0
     # Exchange-slice metrics (the A4 dedicated-head readout): a sweep keeps
     # every exchange candidate, so eligible positions exist in any corpus with
     # bag >= 7 turns, and both metrics stay in range.
