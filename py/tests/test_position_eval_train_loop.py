@@ -26,7 +26,6 @@ _LOSS_CFG = LossConfig(
     lambda_win_placement=0.5,
     huber_delta_mean=10.0,
     huber_delta_std=10.0,
-    mask_placement=True,
 )
 _CPU = torch.device("cpu")
 _SCALAR_SIZE = 8
@@ -129,7 +128,7 @@ def test_masked_placement_guards_the_target_class():
     targets = {k: batch[k] for k in _TARGET_KEYS}
     for name in PLACEMENT_MASK_NAMES:  # the adversarial case: nothing legal
         targets[name] = torch.zeros_like(targets[name])
-    losses = model.compute_loss(out, targets, mask_placement=True)
+    losses = model.compute_loss(out, targets)
     for name in PLACEMENT_HEAD_NAMES:
         assert torch.isfinite(losses[name]), f"{name} loss is not finite"
         extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
@@ -139,22 +138,6 @@ def test_masked_placement_guards_the_target_class():
         else:
             assert not extra_legal.any(), f"{name} wrongly opened the not-win class"
             assert losses[name] < 1e-5, f"{name} loss {losses[name]} is not ~0"
-
-
-def test_mask_placement_changes_the_loss():
-    """Masking illegal footprints reshapes the softmax normalizer, so the masked
-    and unmasked placement losses differ for every head -- the masked-vs-unmasked
-    arm that keeps masking from confounding the loss-geometry result is a real,
-    per-head toggle, not one wired for a single head."""
-    torch.manual_seed(0)
-    model = _model()
-    batch = _batch()
-    out = model(batch["input_spatial"], batch["input_scalar"])
-    targets = {k: batch[k] for k in _TARGET_KEYS}
-    masked = model.compute_loss(out, targets, mask_placement=True)
-    unmasked = model.compute_loss(out, targets, mask_placement=False)
-    for name in PLACEMENT_HEAD_NAMES:
-        assert not torch.isclose(masked[name], unmasked[name]), f"{name} masking is inert"
 
 
 def test_compute_loss_matches_reference_math():
@@ -181,7 +164,6 @@ def test_compute_loss_matches_reference_math():
         lambda_win_placement=lambda_win,
         huber_delta_mean=delta_mean,
         huber_delta_std=delta_std,
-        mask_placement=True,
     )
 
     # The reference: the loss written out by hand, head by head.

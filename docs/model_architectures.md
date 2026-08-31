@@ -98,8 +98,7 @@ from the board, self heads opp-move-invariant; recomputed per row on replay)
 drives illegal footprints to −∞ before the softmax, and the target class is
 always kept first (the `−log(0)` guard). Softmax's conserved mass replaces the
 per-cell BCE's drifting, easy-negative-diluted geometry — the loss-geometry fix
-for the I13/M7 magnitude residuals. `mask_placement=False` is the
-masked-vs-unmasked arm. The graph emits raw logits (`kIdentity`); every consumer
+for the I13/M7 magnitude residuals. The graph emits raw logits (`kIdentity`); every consumer
 masks and softmaxes itself, and the dashboard/`.mset` collapse each head to the
 old per-cell `(15, 15)` marginal (`Σ` footprint probability over covered cells)
 so the distilled student and MC-truth pairing are unchanged.

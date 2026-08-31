@@ -91,7 +91,6 @@ def run_epoch(
             lambda_win_placement=loss_cfg.lambda_win_placement,
             huber_delta_mean=loss_cfg.huber_delta_mean,
             huber_delta_std=loss_cfg.huber_delta_std,
-            mask_placement=loss_cfg.mask_placement,
         )
         optimizer.zero_grad()
         losses["total"].backward()

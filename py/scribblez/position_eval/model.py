@@ -98,7 +98,6 @@ class LossConfig:
     lambda_win_placement: float
     huber_delta_mean: float
     huber_delta_std: float
-    mask_placement: bool
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -109,7 +108,6 @@ class LossConfig:
             args.lambda_win_placement,
             args.huber_delta_mean,
             args.huber_delta_std,
-            args.mask_placement,
         )
 
 
@@ -253,7 +251,7 @@ class PlacementHead(Head):
         return torch.cat([anchored, self.catch_all_fc(value_in)], dim=1)  # (B, num_classes)
 
     def loss(self, outputs, targets, cfg):
-        legal = _head_legal_mask(self.name, targets) if cfg.mask_placement else None
+        legal = _head_legal_mask(self.name, targets)
         ce = _placement_ce(outputs[self.name], targets[self.name].squeeze(1).long(), legal)
         weight = cfg.lambda_win_placement if self._is_win else cfg.lambda_next_placement
         return HeadLoss(weight * ce, {self.name: ce})
@@ -370,7 +368,6 @@ class PositionEvalModel(nn.Module):
         lambda_win_placement: float = 0.5,
         huber_delta_mean: float = 10.0,
         huber_delta_std: float = 10.0,
-        mask_placement: bool = True,
     ) -> dict[str, torch.Tensor]:
         """Combined loss over the heads: the weighted sum each head contributes,
         plus every head's reported per-key losses.
@@ -396,10 +393,6 @@ class PositionEvalModel(nn.Module):
             lambda_win_placement: weight on each win-head placement loss (opp/self).
             huber_delta_mean: Huber transition point (points) for the score-diff mean.
             huber_delta_std: Huber transition point (points) for the score-diff std.
-            mask_placement: mask illegal footprints before the softmax (the
-                     deployable default). False runs plain softmax-CE over all
-                     classes -- the masked-vs-unmasked arm that keeps masking
-                     from confounding the loss-geometry result.
 
         Returns:
             Dict with "total" plus one entry per head-reported loss key.
@@ -411,7 +404,6 @@ class PositionEvalModel(nn.Module):
             lambda_win_placement,
             huber_delta_mean,
             huber_delta_std,
-            mask_placement,
         )
         total: torch.Tensor | None = None
         reported: dict[str, torch.Tensor] = {}
@@ -437,19 +429,17 @@ def _head_legal_mask(head: str, targets: dict[str, torch.Tensor]) -> torch.Tenso
 def _placement_ce(
     logits: torch.Tensor,
     target_idx: torch.Tensor,
-    legal_mask: torch.Tensor | None,
+    legal_mask: torch.Tensor,
 ) -> torch.Tensor:
     """Masked softmax cross-entropy for one footprint head.
 
-    logits (B, C) raw; target_idx (B,) the footprint class. When legal_mask is
-    given (B, C in {0,1}), illegal footprints are driven to -inf before the
-    softmax so they carry no probability or gradient, with the target class always
-    kept first (the -log(0) NaN guard): the engine masks are sound
-    over-approximations, but a data-dependent gap must degrade to an unmasked
-    target, never to NaN. legal_mask None is the unmasked arm (plain softmax-CE).
+    logits (B, C) raw; target_idx (B,) the footprint class; legal_mask (B, C in
+    {0,1}). Illegal footprints are driven to -inf before the softmax so they carry
+    no probability or gradient, with the target class always kept first (the
+    -log(0) NaN guard): the engine masks are sound over-approximations, but a
+    data-dependent gap must degrade to an unmasked target, never to NaN.
     """
-    if legal_mask is not None:
-        legal_mask = legal_mask.clone()
-        legal_mask.scatter_(1, target_idx.unsqueeze(1), 1.0)
-        logits = logits.masked_fill(legal_mask == 0, float("-inf"))
+    legal_mask = legal_mask.clone()
+    legal_mask.scatter_(1, target_idx.unsqueeze(1), 1.0)
+    logits = logits.masked_fill(legal_mask == 0, float("-inf"))
     return F.cross_entropy(logits, target_idx)
