@@ -15,35 +15,101 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
 
+#include <array>
 #include <sstream>
+#include <string_view>
 
 namespace scribblez {
 
-// TODO: Collapse the per-type knowledge scattered across this file into a single
-// edit point. Several functions each carry their own switch over the known
-// player types: parse_player_spec() validates the type string, make_one()
-// dispatches to the right Agent's from_spec(), PlayerSpec::display_name()
-// supplies a default name, and all_player_types_help() lists each type's help.
-// Adding a player type today means touching all of them.
-//
-// Replace this with a compile-time type-list of agent traits — one entry per
-// agent (e.g. a struct exposing the type string, default display name, and the
-// Agent subclass) — and have each of the above iterate the list generically.
-// Then a new player type is a single new entry in that list.
 namespace {
 
 namespace po = boost::program_options;
+
+// Everything the factory needs to know about a player type lives in one row of
+// kPlayerTypes below, so adding a type is a single new entry -- no per-type
+// switch scattered across parse_player_spec(), make_one(), display_name(), and
+// all_player_types_help(); each of those iterates the list generically.
+struct PlayerType {
+  std::string_view type_str;      // --type value (lowercased)
+  std::string_view default_name;  // display name when --name is omitted
+  std::string (*options_help)();  // the agent's per-type --player help block
+  // Construct the agent. opp_name is the other seat's display name; only the
+  // human seat's from_spec takes it, so the uniform adapter ignores it.
+  std::unique_ptr<Agent> (*build)(const std::vector<std::string>& tokens, int thread_id,
+                                  const std::string& name, const std::string& opp_name);
+};
+
+// Adapter for the eight agents whose from_spec is the uniform three-arg form:
+// drop opp_name, forward the rest. from_spec is a non-type template argument,
+// so one template covers them all and each returns its own unique_ptr subtype
+// (implicitly converted to unique_ptr<Agent>).
+template <auto FromSpec>
+std::unique_ptr<Agent> build_agent(const std::vector<std::string>& tokens, int thread_id,
+                                   const std::string& name, const std::string& /*opp_name*/) {
+  return FromSpec(tokens, thread_id, name);
+}
+
+// The human seat is the lone outlier: its from_spec also takes the opponent's
+// display name (shown in the browser UI).
+std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int thread_id,
+                                   const std::string& name, const std::string& opp_name) {
+  return HumanWebAgent::from_spec(tokens, thread_id, name, opp_name);
+}
+
+// The single source of per-type knowledge. Adding a player type is one new row.
+constexpr std::array<PlayerType, 9> kPlayerTypes{{
+  {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
+  {"human", "You", &HumanWebAgent::options_help, &build_human},
+  {"hastybot", "HastyBot", &HastyBotAgent::options_help, &build_agent<&HastyBotAgent::from_spec>},
+  {"hastybot-endgame", "EndgameHastyBot", &EndgameHastyBotAgent::options_help,
+   &build_agent<&EndgameHastyBotAgent::from_spec>},
+  {"mset-sim", "MsetSim", &MsetSimAgent::options_help, &build_agent<&MsetSimAgent::from_spec>},
+  {"neural", "Neural", &NeuralAgent::options_help, &build_agent<&NeuralAgent::from_spec>},
+  {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,
+   &build_agent<&NeuralSimAgent::from_spec>},
+  {"sim", "SimBot", &SimAgent::options_help, &build_agent<&SimAgent::from_spec>},
+  {"weirdbot", "WeirdBot", &WeirdBotAgent::options_help, &build_agent<&WeirdBotAgent::from_spec>},
+}};
+
+// The entry whose type_str matches `type` (already lowercased), or nullptr.
+const PlayerType* find_player_type(std::string_view type) {
+  for (const PlayerType& pt : kPlayerTypes) {
+    if (pt.type_str == type) return &pt;
+  }
+  return nullptr;
+}
+
+// "greedy | human | ... | weirdbot" for the --type help line.
+std::string type_choices_bar() {
+  std::string out;
+  for (const PlayerType& pt : kPlayerTypes) {
+    if (!out.empty()) out += " | ";
+    out += pt.type_str;
+  }
+  return out;
+}
+
+// "greedy, human, ..., or weirdbot" for the unknown-type error message.
+std::string type_choices_prose() {
+  std::string out;
+  for (std::size_t i = 0; i < kPlayerTypes.size(); ++i) {
+    if (i > 0) out += ", ";
+    if (i + 1 == kPlayerTypes.size()) out += "or ";
+    out += kPlayerTypes[i].type_str;
+  }
+  return out;
+}
 
 // The --player options common to every agent type. Built by both
 // parse_player_spec() and all_player_types_help(), so the parsed options and
 // the documented ones share one source of truth.
 po::options_description universal_player_options(std::string& type_str, std::string& name) {
+  static const std::string type_help = "player type: " + type_choices_bar();
   po::options_description desc;
   desc.add_options()                                         //
     ("type", po::value<std::string>(&type_str)->required(),  //
-     "player type: greedy | human | hastybot | hastybot-endgame | mset-sim | neural | "
-     "neural-sim | sim | weirdbot")          //
-    ("name", po::value<std::string>(&name),  //
+     type_help.c_str())                                      //
+    ("name", po::value<std::string>(&name),                  //
      "display name shown in the UI");
   return desc;
 }
@@ -75,64 +141,27 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   }
 
   out.type = boost::to_lower_copy(type_str);
-  if (out.type != "greedy" && out.type != "human" && out.type != "hastybot" &&
-      out.type != "hastybot-endgame" && out.type != "mset-sim" && out.type != "neural" &&
-      out.type != "neural-sim" && out.type != "sim" && out.type != "weirdbot") {
-    throw util::CleanException(
-      "bad --player spec \"{}\": unknown type '{}' (expected greedy, human, hastybot, "
-      "hastybot-endgame, mset-sim, neural, neural-sim, sim, or weirdbot)",
-      spec, type_str);
+  if (find_player_type(out.type) == nullptr) {
+    throw util::CleanException("bad --player spec \"{}\": unknown type '{}' (expected {})", spec,
+                               type_str, type_choices_prose());
   }
   return out;
 }
 
-// Dispatch to the chosen Agent subclass's from_spec().
+// Dispatch to the chosen Agent subclass's from_spec() via its table entry.
 std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
                                 const std::string& opp_name) {
-  std::string name = spec.display_name();
-  if (spec.type == "greedy") {
-    return GreedyAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "hastybot") {
-    return HastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "hastybot-endgame") {
-    return EndgameHastyBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "mset-sim") {
-    return MsetSimAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "neural") {
-    return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "neural-sim") {
-    return NeuralSimAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "sim") {
-    return SimAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "weirdbot") {
-    return WeirdBotAgent::from_spec(spec.remaining_tokens, thread_id, name);
-  }
-  if (spec.type == "human") {
-    return HumanWebAgent::from_spec(spec.remaining_tokens, thread_id, name, opp_name);
-  }
-  throw util::Exception("unhandled player type: {}", spec.type);
+  const PlayerType* pt = find_player_type(spec.type);
+  if (pt == nullptr) throw util::Exception("unhandled player type: {}", spec.type);
+  return pt->build(spec.remaining_tokens, thread_id, spec.display_name(), opp_name);
 }
 
 }  // namespace
 
 std::string PlayerSpec::display_name() const {
   if (!name.empty()) return name;
-  if (type == "human") return "You";
-  if (type == "hastybot") return "HastyBot";
-  if (type == "hastybot-endgame") return "EndgameHastyBot";
-  if (type == "greedy") return "Greedy";
-  if (type == "mset-sim") return "MsetSim";
-  if (type == "neural") return "Neural";
-  if (type == "neural-sim") return "NeuralSim";
-  if (type == "sim") return "SimBot";
-  if (type == "weirdbot") return "WeirdBot";
+  const PlayerType* pt = find_player_type(type);
+  if (pt != nullptr) return std::string(pt->default_name);
   return type;  // unknown types: fall back to the literal type string
 }
 
@@ -165,16 +194,9 @@ PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thr
 
 std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
-  o << "--player \"--type=greedy [options]\"\n" << GreedyAgent::options_help() << "\n";
-  o << "--player \"--type=hastybot [options]\"\n" << HastyBotAgent::options_help() << "\n";
-  o << "--player \"--type=hastybot-endgame [options]\"\n"
-    << EndgameHastyBotAgent::options_help() << "\n";
-  o << "--player \"--type=mset-sim [options]\"\n" << MsetSimAgent::options_help() << "\n";
-  o << "--player \"--type=neural [options]\"\n" << NeuralAgent::options_help() << "\n";
-  o << "--player \"--type=neural-sim [options]\"\n" << NeuralSimAgent::options_help() << "\n";
-  o << "--player \"--type=sim [options]\"\n" << SimAgent::options_help() << "\n";
-  o << "--player \"--type=weirdbot [options]\"\n" << WeirdBotAgent::options_help() << "\n";
-  o << "--player \"--type=human [options]\"\n" << HumanWebAgent::options_help() << "\n";
+  for (const PlayerType& pt : kPlayerTypes) {
+    o << "--player \"--type=" << pt.type_str << " [options]\"\n" << pt.options_help() << "\n";
+  }
   std::string type_str, name;  // scratch binding targets; never read here
   o << "Universal --player options (parsed by the factory before dispatch):\n"
     << universal_player_options(type_str, name);
