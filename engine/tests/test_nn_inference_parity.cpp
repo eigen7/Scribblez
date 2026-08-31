@@ -232,10 +232,11 @@ TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
                   kFp16ScoreDiffTol, inputs, expected, n);
 }
 
-// The sharing the OOM fix rests on: PositionEvalService::create() must return
-// the same instance for equal params (so a run's threads drive one engine, not
-// one apiece) and a distinct instance when an engine-determining field differs.
-// Reuses this suite's fixture because create() builds a real engine.
+// PositionEvalService::create() must return the same instance for equal params
+// -- so a run's threads share one loaded engine (and its execution-context
+// memory) instead of one apiece -- and a distinct instance when an
+// engine-determining field differs. Reuses this suite's fixture because create()
+// builds a real engine.
 TEST_F(NnInferenceParityTest, CreateSharesOneServicePerParams) {
   scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
   params.onnx_path = dir_ + "/model.onnx";

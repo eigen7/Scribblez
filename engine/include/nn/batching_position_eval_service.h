@@ -23,11 +23,13 @@ namespace nn {
 // queue -- gathering every waiting request's rows into one combined batch it
 // hands to the wrapped service (which chunks to its own max_rows), then
 // scattering each request's decoded rows back to that caller's buffers -- and
-// keeps going until the queue empties before standing down. Rows are scored
-// independently, so a combined batch changes no result; a request that arrives
-// mid-inference is simply served by the next drain. There is no owner thread to
-// start, stop, or outlive the callers, and a failed inference propagates to
-// exactly the requests it was serving.
+// keeps going until the queue empties before standing down. A drain that finds
+// just one waiting request (the common case under light or bursty load) skips
+// the gather/scatter and evaluates straight into that caller's buffers. Rows
+// are scored independently, so a combined batch changes no result; a request
+// that arrives mid-inference is simply served by the next drain. There is no
+// owner thread to start, stop, or outlive the callers, and a failed inference
+// propagates to exactly the requests it was serving.
 //
 // The wrapped service must itself be serialized-one-call-at-a-time (the default
 // EvalService contract); this decorator guarantees only the dispatcher calls it,
@@ -61,11 +63,17 @@ class BatchingPositionEvalService : public PositionEvalService {
     std::exception_ptr error;
   };
 
-  // Gather every request's rows into one combined batch, evaluate it through
-  // inner_, and scatter each request's decoded rows back. Records a per-request
-  // exception instead of throwing, so the dispatcher loop cannot strand waiting
-  // callers.
+  // Deliver each request in `pack` its decoded rows. A pack of one is evaluated
+  // straight into its buffers; a larger pack is gathered into one combined batch
+  // and scattered back. Never throws -- see try_evaluate.
   void serve(const std::vector<Request*>& pack);
+
+  // Evaluate `batch` through inner_ into `head_out`; on success return true. On
+  // failure record the exception on every request in `blame` (each waiting
+  // caller rethrows its own copy) and return false, so the dispatcher loop never
+  // strands a caller by letting an inference throw escape.
+  bool try_evaluate(const SpecBatch& batch, std::span<float* const> head_out,
+                    const std::vector<Request*>& blame);
 
   std::unique_ptr<PositionEvalService> inner_;
 

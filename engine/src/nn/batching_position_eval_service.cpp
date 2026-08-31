@@ -42,18 +42,26 @@ void BatchingPositionEvalService::evaluate(const SpecBatch& batch,
   if (req.error) std::rethrow_exception(req.error);
 }
 
+bool BatchingPositionEvalService::try_evaluate(const SpecBatch& batch,
+                                               std::span<float* const> head_out,
+                                               const std::vector<Request*>& blame) {
+  try {
+    inner_->evaluate(batch, head_out);
+    return true;
+  } catch (...) {
+    const std::exception_ptr error = std::current_exception();
+    for (Request* r : blame) r->error = error;
+    return false;
+  }
+}
+
 void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
   // Single-request drain -- the common case under low or bursty concurrency,
   // where a caller finds the queue empty and serves only itself. Evaluate
   // straight into the caller's buffers, skipping the gather/scatter copies that
   // earn their keep only when coalescing more than one request.
   if (pack.size() == 1) {
-    Request* r = pack.front();
-    try {
-      inner_->evaluate(*r->batch, r->head_out);
-    } catch (...) {
-      r->error = std::current_exception();
-    }
+    try_evaluate(*pack.front()->batch, pack.front()->head_out, pack);
     return;
   }
 
@@ -72,16 +80,10 @@ void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
     offset += r->batch->count;
   }
 
-  try {
-    // The wrapped service chunks this to its own max_rows; the combined batch is
-    // in general larger than -- and unaligned with -- any single request's.
-    float* const combined[] = {wld_out_.data(), score_diff_out_.data()};
-    inner_->evaluate(SpecBatch{in_rows_.data(), total}, combined);
-  } catch (...) {
-    const std::exception_ptr error = std::current_exception();
-    for (Request* r : pack) r->error = error;
-    return;
-  }
+  // The wrapped service chunks this to its own max_rows; the combined batch is
+  // in general larger than -- and unaligned with -- any single request's.
+  float* const combined[] = {wld_out_.data(), score_diff_out_.data()};
+  if (!try_evaluate(SpecBatch{in_rows_.data(), total}, combined, pack)) return;
 
   offset = 0;
   for (const Request* r : pack) {
