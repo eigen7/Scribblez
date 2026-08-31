@@ -31,6 +31,10 @@ namespace scribblez {
 
 class Dictionary;
 
+namespace nn {
+class ServiceCache;
+}
+
 class NeuralSimAgent : public Agent {
  public:
   // `dict` is required and must outlive the agent. An `endgame` budget of 0
@@ -69,12 +73,15 @@ class NeuralSimAgent : public Agent {
 
   using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
 
-  NeuralSimAgent(const Params& params, const NetParams& net_params);
-
   // Takes an already-constructed evaluator (real or a scripted stub), loading
   // no model and touching no GPU. `max_batch` bounds one evaluate() call.
   NeuralSimAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
                  int max_batch = 256);
+
+  // Borrows a run-shared service (nn::ServiceCache) instead of owning one, so
+  // every thread's NeuralSimAgent -- and its value-truncated rollout leaf --
+  // drive a single loaded model. `service` must outlive the agent.
+  NeuralSimAgent(const Params& params, nn::PositionEvalService* service, int max_batch);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -85,7 +92,8 @@ class NeuralSimAgent : public Agent {
   // and --name already stripped. Requires --model=<path.onnx>. Throws
   // util::CleanException on bad input.
   static std::unique_ptr<NeuralSimAgent> from_spec(const std::vector<std::string>& tokens,
-                                                   int thread_id, const std::string& name);
+                                                   int thread_id, const std::string& name,
+                                                   nn::ServiceCache& services);
 
   static std::string options_help();
 

@@ -10,6 +10,7 @@
 #include "agent/agent.h"
 #include "agent/player_factory.h"
 #include "arena/game_sink.h"
+#include "nn/service_cache.h"
 
 #include <array>
 #include <cstdint>
@@ -63,6 +64,11 @@ class GameEngine {
 
  private:
   Params params_;
+  // The run-shared evaluation services the model-driven agents borrow. Declared
+  // before agents_ so it is destroyed AFTER them (members die in reverse
+  // declaration order): the agents hold non-owning pointers into these
+  // services, which must outlive them. Keep this ordering.
+  nn::ServiceCache services_;
   std::vector<PlayerFactory::Players> agents_;
 };
 

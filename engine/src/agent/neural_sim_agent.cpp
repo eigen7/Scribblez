@@ -47,6 +47,23 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
   validate(params);
 }
 
+NeuralSimAgent::NeuralSimAgent(const Params& params, nn::PositionEvalService* service,
+                               int max_batch)
+    : Agent(params.thread_id, params.name),
+      shortlist_(params.shortlist),
+      sim_top_k_(params.sim_top_k),
+      rank_objective_(params.rank_objective),
+      sim_objective_(params.sim_objective),
+      drop_best_prob_(params.drop_best_prob),
+      seed_(params.seed),
+      evaluator_(require_dict(params.dict), service, max_batch),
+      runner_(*params.dict,
+              make_runner_params(params.sim, params.sim_horizon,
+                                 params.sim_horizon > 0 ? &evaluator_.service() : nullptr)),
+      endgame_(params.thread_id, params.endgame) {
+  validate(params);
+}
+
 void NeuralSimAgent::validate(const Params& params) {
   if (params.shortlist < 0)
     throw util::CleanException("neural-sim agent: --shortlist must be >= 0 (0 = all moves)");

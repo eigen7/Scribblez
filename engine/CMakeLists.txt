@@ -150,6 +150,7 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
+  src/nn/service_cache.cpp
   # The move-proposal two-graph runtime (roadmap item 3): drives the cache and
   # step NeuralNet<Spec>s and marshals the handoff between them. Lives with the
   # TensorRT layer (it drives two nets and stages evidence); scribblez_nn

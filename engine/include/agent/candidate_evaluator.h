@@ -52,6 +52,11 @@ class CandidateEvaluator {
   CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::PositionEvalService> service,
                      int max_batch);
 
+  // Borrows a service owned elsewhere (nn::ServiceCache), so the per-thread
+  // evaluators of one run share a single loaded model. `service` must outlive
+  // this evaluator.
+  CandidateEvaluator(const Dictionary& dict, nn::PositionEvalService* service, int max_batch);
+
   // The owning agent forwards its own begin_game() / observe_move() here, so
   // the mirrored encoder sees both seats' moves; its placement-plane features
   // depend on them, which make_move() alone cannot see.
@@ -62,8 +67,9 @@ class CandidateEvaluator {
   // is deciding a turn.
   int active_player() const { return encoder_.active_player(); }
 
-  // The owned service, for an agent that reuses its model elsewhere -- e.g.
-  // as the value-truncated rollout leaf evaluator (SimRunner::Params).
+  // The service in use, for an agent that reuses its model elsewhere -- e.g.
+  // as the value-truncated rollout leaf evaluator (SimRunner::Params). Owned or
+  // borrowed, whichever this evaluator was built with.
   nn::PositionEvalService& service() { return *service_; }
 
   // Evaluate candidates[idx[0..k)]'s post-move rows from the mover's POV,
@@ -85,7 +91,11 @@ class CandidateEvaluator {
 
  private:
   int max_batch_;
-  std::unique_ptr<nn::PositionEvalService> service_;
+  // owned_service_ holds the service only when this evaluator was handed
+  // ownership; service_ is the one actually used and is never null (it aliases
+  // owned_service_ when owning, else the ServiceCache instance being borrowed).
+  std::unique_ptr<nn::PositionEvalService> owned_service_;
+  nn::PositionEvalService* service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
 

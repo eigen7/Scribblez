@@ -583,3 +583,70 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
   }
   ASSERT_TRUE(found) << "no solver-beats-greedy endgame found in the scan";
 }
+
+// --- Shared, borrowed service (nn::ServiceCache path) -----------------------
+
+TEST_F(NeuralAgentEquityTest, BorrowedServiceIsSharedAndNotOwned) {
+  // A ServiceCache hands the same PositionEvalService* to every thread's agent,
+  // so N threads drive one loaded model. Mirror that with one stub borrowed by
+  // two agents: both drive it correctly, and neither owns it -- it outlives
+  // them here, and the test alone frees it.
+  OpeningPosition pos("CARETS");
+  ASSERT_GE(pos.plays.size(), 3u);
+  const int top_k = 2;
+  const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
+  ASSERT_EQ(int(order.size()), top_k);
+  const MoveRequest req = pos.request();
+
+  StubEvalService shared;  // owned by the test, borrowed by both agents
+  const NeuralAgent::Params base{.thread_id = 0,
+                                 .name = "borrow",
+                                 .dict = &pos.dict,
+                                 .top_k = top_k,
+                                 .objective = EvalObjective::kScoreDiff};
+  {
+    NeuralAgent a(base, &shared, /*max_batch=*/top_k);
+    NeuralAgent b(base, &shared, /*max_batch=*/top_k);
+    a.begin_game({});
+    b.begin_game({});
+    shared.scripted = {sd(1.0f), sd(9.0f)};  // second-ranked candidate wins
+    EXPECT_TRUE(same_move(a.make_move(req).move, pos.plays[order[1]]));
+    shared.scripted = {sd(9.0f), sd(1.0f)};  // top-ranked candidate wins
+    EXPECT_TRUE(same_move(b.make_move(req).move, pos.plays[order[0]]));
+  }
+  // Both agents destroyed; the borrowed service is still a live object (a
+  // double-free would trip here or at this scope's exit).
+  EXPECT_EQ(shared.spatial_planes(), scribblez::spatial_planes());
+}
+
+TEST(NeuralNetSharingKey, EqualityDistinguishesEngineDeterminingFields) {
+  // ServiceCache keys on NeuralNetParams equality to decide who shares one
+  // loaded engine. Each field that changes the built engine (or its buffers)
+  // must break equality -- copy_aux and fast_build especially: they are
+  // correctness, not just performance (aux host buffers exist only under
+  // copy_aux; fast_build is a separately cached, differently optimized plan).
+  using Params = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
+  Params a;
+  a.onnx_path = "model.onnx";
+
+  EXPECT_EQ(a, Params(a));  // identical params share
+
+  Params b = a;
+  b.onnx_path = "other.onnx";
+  EXPECT_NE(a, b);
+  b = a;
+  b.precision = nn::Precision::kFP32;
+  EXPECT_NE(a, b);
+  b = a;
+  b.max_rows = a.max_rows + 1;
+  EXPECT_NE(a, b);
+  b = a;
+  b.cuda_device_id = a.cuda_device_id + 1;
+  EXPECT_NE(a, b);
+  b = a;
+  b.copy_aux = !a.copy_aux;
+  EXPECT_NE(a, b);
+  b = a;
+  b.fast_build = !a.fast_build;
+  EXPECT_NE(a, b);
+}

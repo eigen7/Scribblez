@@ -13,6 +13,10 @@ class options_description;
 
 namespace scribblez {
 
+namespace nn {
+class ServiceCache;
+}
+
 // A parsed `--player` specification, e.g. `--player "--type=human --name=Dave"`.
 struct PlayerSpec {
   std::string type;                           // e.g. "greedy", "human", "hastybot" (lowercased)
@@ -40,7 +44,10 @@ class PlayerFactory {
 
   // Validate and parse the raw `--player` specs and return both agents.
   // Defaults to two greedy players. Throws util::CleanException on bad input.
-  static Players make_players(const Params& params, int thread_id);
+  // Model-driven seats resolve their (run-shared) service through `services`,
+  // so calling this once per thread yields agents that share one loaded model
+  // per distinct spec rather than one apiece.
+  static Players make_players(const Params& params, int thread_id, nn::ServiceCache& services);
 
   static std::string all_player_types_help();
 };
