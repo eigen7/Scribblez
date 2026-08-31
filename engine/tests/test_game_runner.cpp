@@ -128,3 +128,69 @@ TEST_F(GameRunnerTest, PairedGamesShareSeedsAndMirrorSeats) {
 TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
   EXPECT_THROW(GameRunner(paired_params(/*games=*/3), hasty_players()), util::CleanException);
 }
+
+// PlayerFactory's per-type knowledge lives in one trait list (player_factory.cpp).
+// These lexicon-free tests pin the list-generated surfaces -- default names, the
+// help block, and the unknown-type error -- so each stays covered as types are
+// added. Full construction of every type isn't unit-testable (human blocks on
+// its Vite server, neural needs a model), so agent building is left to the
+// GameRunner suite's real hastybot games above.
+namespace {
+
+// Every player type paired with its default display name (no explicit --name).
+const std::array<std::pair<const char*, const char*>, 9> kTypeDefaults{{
+  {"greedy", "Greedy"},
+  {"human", "You"},
+  {"hastybot", "HastyBot"},
+  {"hastybot-endgame", "EndgameHastyBot"},
+  {"mset-sim", "MsetSim"},
+  {"neural", "Neural"},
+  {"neural-sim", "NeuralSim"},
+  {"sim", "SimBot"},
+  {"weirdbot", "WeirdBot"},
+}};
+
+}  // namespace
+
+// Each type resolves to its trait-list default name, and an explicit --name wins.
+TEST(PlayerFactoryTest, DefaultDisplayNames) {
+  for (const auto& [type, def] : kTypeDefaults) {
+    PlayerSpec spec;
+    spec.type = type;
+    EXPECT_EQ(spec.display_name(), def) << "type " << type;
+    spec.name = "Zed";
+    EXPECT_EQ(spec.display_name(), "Zed") << "explicit --name should win for " << type;
+  }
+}
+
+// An unknown type falls back to the literal type string (no trait entry).
+TEST(PlayerFactoryTest, UnknownTypeDisplayNameFallsBack) {
+  PlayerSpec spec;
+  spec.type = "nope";
+  EXPECT_EQ(spec.display_name(), "nope");
+}
+
+// The help block is generated from the list: one --type=<t> line per type.
+TEST(PlayerFactoryTest, HelpListsEveryType) {
+  const std::string help = PlayerFactory::all_player_types_help();
+  for (const auto& [type, def] : kTypeDefaults) {
+    EXPECT_NE(help.find(std::string("--type=") + type + " "), std::string::npos)
+      << "help missing type " << type;
+  }
+}
+
+// A bad --type is rejected before any agent is built, and the error names every
+// valid type (the listing is generated from the same list).
+TEST(PlayerFactoryTest, UnknownTypeErrorNamesEveryType) {
+  PlayerFactory::Params params;
+  params.specs = {"--type=bogus", "--type=greedy"};
+  try {
+    PlayerFactory::make_players(params, /*thread_id=*/0);
+    FAIL() << "expected a CleanException for the bogus type";
+  } catch (const util::CleanException& e) {
+    const std::string msg = e.what();
+    for (const auto& [type, def] : kTypeDefaults) {
+      EXPECT_NE(msg.find(type), std::string::npos) << "error missing type " << type;
+    }
+  }
+}
