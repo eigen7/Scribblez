@@ -32,23 +32,15 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
   return spec;
 }
 
-CandidateEvaluator::CandidateEvaluator(const Dictionary& dict, nn::PositionEvalService* service,
+CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
+                                       std::shared_ptr<nn::PositionEvalService> service,
                                        int max_batch)
     : max_batch_(max_batch),
-      service_(service),
+      service_(std::move(service)),
       spec_(derive_input_spec(dict, *service_, "candidate evaluator")),
       encoder_(spec_) {
   if (max_batch_ < 1) throw util::Exception("candidate evaluator: max batch must be >= 1");
   input_buf_.resize(size_t(max_batch_) * input_floats(spec_));
-}
-
-// Delegates the shared setup to the borrowing ctor with the raw pointer, then
-// takes ownership -- the pointee does not move, so service_ stays valid.
-CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
-                                       std::unique_ptr<nn::PositionEvalService> service,
-                                       int max_batch)
-    : CandidateEvaluator(dict, service.get(), max_batch) {
-  owned_service_ = std::move(service);
 }
 
 void CandidateEvaluator::begin_game(const BeginGameRequest& req) {

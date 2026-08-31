@@ -16,10 +16,6 @@
 
 namespace scribblez {
 
-namespace nn {
-class ServiceCache;
-}
-
 // Position evaluation model agent. On its turn it picks a candidate set of
 // legal plays, hands them to its CandidateEvaluator (which encodes each
 // resulting post-move position from the agent's POV and batch-evaluates them
@@ -55,15 +51,11 @@ class NeuralAgent : public Agent {
 
   using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
 
-  // Takes an already-constructed evaluator (real or a scripted stub), loading
-  // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
+  // Takes a shared evaluation service (nn::PositionEvalService::create() in
+  // production, a scripted stub in tests). Loads no model and touches no GPU;
+  // `max_batch` bounds one evaluate() call.
+  NeuralAgent(const Params& params, std::shared_ptr<nn::PositionEvalService> service,
               int max_batch = 256);
-
-  // Borrows a run-shared service (nn::ServiceCache) instead of owning one, so
-  // every thread's NeuralAgent drives a single loaded model. `max_batch` bounds
-  // one evaluate() call; `service` must outlive the agent.
-  NeuralAgent(const Params& params, nn::PositionEvalService* service, int max_batch);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -74,8 +66,7 @@ class NeuralAgent : public Agent {
   // --name already stripped. Requires --model=<path.onnx>. Throws
   // util::CleanException on bad input.
   static std::unique_ptr<NeuralAgent> from_spec(const std::vector<std::string>& tokens,
-                                                int thread_id, const std::string& name,
-                                                nn::ServiceCache& services);
+                                                int thread_id, const std::string& name);
 
   static std::string options_help();
 

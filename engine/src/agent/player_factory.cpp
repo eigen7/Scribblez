@@ -86,11 +86,9 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   return out;
 }
 
-// Dispatch to the chosen Agent subclass's from_spec(). The model-driven seats
-// (neural, neural-sim) resolve their run-shared service through `services`; the
-// others ignore it.
-std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id, const std::string& opp_name,
-                                nn::ServiceCache& services) {
+// Dispatch to the chosen Agent subclass's from_spec().
+std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
+                                const std::string& opp_name) {
   std::string name = spec.display_name();
   if (spec.type == "greedy") {
     return GreedyAgent::from_spec(spec.remaining_tokens, thread_id, name);
@@ -105,10 +103,10 @@ std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id, const std
     return MsetSimAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "neural") {
-    return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name, services);
+    return NeuralAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "neural-sim") {
-    return NeuralSimAgent::from_spec(spec.remaining_tokens, thread_id, name, services);
+    return NeuralSimAgent::from_spec(spec.remaining_tokens, thread_id, name);
   }
   if (spec.type == "sim") {
     return SimAgent::from_spec(spec.remaining_tokens, thread_id, name);
@@ -147,8 +145,7 @@ void PlayerFactory::Params::add_options(boost::program_options::options_descript
                      "(repeat once per seat; default: two greedy)");
 }
 
-PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thread_id,
-                                                   nn::ServiceCache& services) {
+PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thread_id) {
   std::vector<std::string> raw = params.specs;
   if (raw.empty()) raw = {"--type=greedy", "--type=greedy"};
   if (raw.size() != 2) {
@@ -161,8 +158,8 @@ PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thr
   // Build both agents. A Human agent's ctor blocks on its Vite dev server
   // coming up, so this is the point at which the browser UI appears.
   Players out;
-  out[0] = make_one(specs[0], thread_id, specs[1].display_name(), services);
-  out[1] = make_one(specs[1], thread_id, specs[0].display_name(), services);
+  out[0] = make_one(specs[0], thread_id, specs[1].display_name());
+  out[1] = make_one(specs[1], thread_id, specs[0].display_name());
   return out;
 }
 

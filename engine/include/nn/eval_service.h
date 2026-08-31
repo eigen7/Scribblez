@@ -2,11 +2,16 @@
 
 #include "nn/model_specs.h"
 
+#include <memory>
 #include <mutex>
 #include <span>
 
 namespace scribblez {
 namespace nn {
+
+// nn/neural_net.h; a reference parameter needs only the forward declaration.
+template <typename Spec>
+struct NeuralNetParams;
 
 // What a served model says about the board rows it consumes: its
 // input-encoding arm, and the input widths that arm implies. Agents build their
@@ -36,16 +41,30 @@ class ServedModelInputs {
 // of their own; the serialization is sound for the TensorRT service because
 // the underlying contract is one call at a time, not thread affinity
 // (neural_net.h).
+//
+// evaluate() is virtual so a decorator can replace the serialize-one-caller
+// policy with something that keeps many callers in flight at once --
+// BatchingPositionEvalService coalesces their rows into larger GPU batches.
+// Such an override does its own synchronization and leaves mutex_ untouched.
 template <typename Spec>
 class EvalService : public ServedModelInputs {
  public:
   using SpecBatch = Spec::Batch;
   using Outputs = Spec::Outputs;
 
+  // A ready-to-use service for `params`, shared: a second call with equal params
+  // returns the same still-live instance, so the game threads of one run drive
+  // one loaded model (and one execution context, whose activation memory would
+  // otherwise be paid per thread) instead of one apiece. The instance lives as
+  // long as its shared_ptr holders. Defined per family in the TensorRT layer;
+  // currently the position family (which also wraps the shared engine in the
+  // batching decorator, so callers coalesce their requests).
+  static std::shared_ptr<EvalService> create(const NeuralNetParams<Spec>& params);
+
   // One destination per Outputs entry, in list order: head_out[i] receives
   // batch-rows x that head's kRowElems floats, decoded per the head's
   // RowDecode.
-  void evaluate(const SpecBatch& batch, std::span<float* const> head_out) {
+  virtual void evaluate(const SpecBatch& batch, std::span<float* const> head_out) {
     std::lock_guard<std::mutex> lock(mutex_);
     do_evaluate(batch, head_out);
   }
@@ -63,6 +82,13 @@ class EvalService : public ServedModelInputs {
 
 using PositionEvalService = EvalService<PositionEvaluationSpec>;
 using MoveSetEvalService = EvalService<MoveSetEvaluationSpec>;
+
+// Only the position family specializes create() (defined in the TensorRT
+// layer); declared here so every caller sees it is specialized rather than
+// implicitly instantiated.
+template <>
+std::shared_ptr<PositionEvalService> PositionEvalService::create(
+  const NeuralNetParams<PositionEvaluationSpec>& params);
 
 }  // namespace nn
 }  // namespace scribblez

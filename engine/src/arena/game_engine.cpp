@@ -44,17 +44,14 @@ GameEngine::GameEngine(const Params& params, const PlayerFactory::Params& player
     : params_(params) {
   if (params_.threads < 1) throw util::CleanException("threads must be >= 1");
   // Build the first pair to check parallelism support before creating the rest.
-  // Every pair shares services_' loaded models, so a thread adds an agent, not
-  // another engine/execution-context (whose activation memory N threads once
-  // paid N times over -- the OOM this sharing removes).
-  agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/0, services_));
+  agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/0));
   bool parallel_ok = agents_[0][0]->supports_parallelism() && agents_[0][1]->supports_parallelism();
   if (!parallel_ok && params_.threads > 1) {
     std::cerr << "Warning: a player does not support parallelism; running single-threaded.\n";
     params_.threads = 1;
   }
   for (int i = 1; i < params_.threads; ++i) {
-    agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/i, services_));
+    agents_.push_back(PlayerFactory::make_players(player_params, /*thread_id=*/i));
   }
 }
 
