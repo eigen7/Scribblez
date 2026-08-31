@@ -22,8 +22,8 @@ namespace {
 // them jointly rather than as a per-axis OR of `cell_ok` (see
 // lone_tile_admits_letter).
 template <typename CellOk, typename LoneOk>
-void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, CellOk cell_ok,
-                     LoneOk lone_ok, FootprintMask& mask) {
+void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, FootprintMask& mask,
+                     CellOk cell_ok, LoneOk lone_ok) {
   mask.fill(false);
   for (int cell = 0; cell < kFootprintCells; ++cell) {
     int anchor_r = cell / kFootprintSide;
@@ -104,25 +104,24 @@ bool cell_admits_letter(const Board& board, const Supply& supply, bool horizonta
 
 // Can some AVAILABLE letter play as a LONE tile at board cell (r,c)? A single
 // tile forms every cross-word its neighbours dictate at once, so its letter must
-// satisfy the vertical AND the horizontal cross-check simultaneously (an axis
-// with no neighbour imposes no constraint). We intersect the two cross-check
-// masks and check the result holds a stocked tile -- not the per-axis OR of
-// cell_admits_letter, which would wrongly admit a cell whose sole real move needs
-// an unavailable letter (e.g. a tile below a vertical SHRILL: the down-word admits
-// only S/Y, so with neither unseen the square is unplayable even though its empty
-// perpendicular axis is unconstrained), and would also admit a cross-point whose
-// two cross-words share no common legal letter. A blank in `supply` is a wildcard
-// satisfying any jointly-legal square. Cache indexing matches cell_admits_letter:
-// the vertical (down-column) cross-word is the non-transposed cache, the
-// horizontal (along-row) the transposed.
+// satisfy the vertical AND the horizontal cross-check simultaneously. We
+// intersect the two cross-check masks and check the result holds a stocked tile
+// -- not the per-axis OR of cell_admits_letter, which would wrongly admit a cell
+// whose sole real move needs an unavailable letter (e.g. a tile below a vertical
+// SHRILL: the down-word admits only S/Y, so with neither unseen the square is
+// unplayable even though its empty perpendicular axis is unconstrained), and
+// would also admit a cross-point whose two cross-words share no common legal
+// letter. A neighbour-free axis carries an all-ones mask (cross_check_at), so it
+// drops out of the intersection with no special-casing. A blank in `supply` is a
+// wildcard satisfying any jointly-legal square. Cache indexing matches
+// cell_admits_letter: the vertical (down-column) cross-word is the non-transposed
+// cache, the horizontal (along-row) the transposed.
 bool lone_tile_admits_letter(const Board& board, const Supply& supply, int r, int c) {
   const CrossCheck& vert = board.cross_checks(false)[r * BOARD_SIZE + c];
   const CrossCheck& horiz = board.cross_checks(true)[c * BOARD_SIZE + r];
-  const uint32_t vmask = vert.has_neighbor ? vert.mask : kAllLettersMask;
-  const uint32_t hmask = horiz.has_neighbor ? horiz.mask : kAllLettersMask;
-  const uint32_t allowed = vmask & hmask;  // letters legal in both words the tile forms
-  if (supply.blank) return allowed != 0;   // a wildcard fills any jointly-legal square
-  return (allowed & supply.letters) != 0;  // a jointly-legal letter that is in stock
+  const uint32_t allowed = vert.mask & horiz.mask;  // letters legal in both words the tile forms
+  if (supply.blank) return allowed != 0;            // a wildcard fills any jointly-legal square
+  return (allowed & supply.letters) != 0;           // a jointly-legal letter that is in stock
 }
 
 // Tiles-to-reach distance field: d[Z] = the fewest tiles that must be placed to
@@ -170,9 +169,9 @@ void opp_footprint_mask(const Board& board, const uint8_t* supply, int tile_budg
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
   const Supply s = make_supply(supply);
   mark_footprints(
-    board, kmax, flip, win_head,
+    board, kmax, flip, win_head, mask,
     [&](bool horizontal, int r, int c) { return cell_admits_letter(board, s, horizontal, r, c); },
-    [&](int r, int c) { return lone_tile_admits_letter(board, s, r, c); }, mask);
+    [&](int r, int c) { return lone_tile_admits_letter(board, s, r, c); });
 }
 
 void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
@@ -184,8 +183,8 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
   // the lone-tile test coincides with the multi-tile per-cell one.
   const auto reachable = [&](int r, int c) { return dist[r * kFootprintSide + c] <= reach; };
   mark_footprints(
-    board, kmax, flip, win_head, [&](bool, int r, int c) { return reachable(r, c); }, reachable,
-    mask);
+    board, kmax, flip, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); },
+    reachable);
 }
 
 }  // namespace scribblez
