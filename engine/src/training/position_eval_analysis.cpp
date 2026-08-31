@@ -13,6 +13,7 @@
 
 #include <boost/json.hpp>
 
+#include <cstdint>
 #include <format>
 #include <string>
 
@@ -136,9 +137,16 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
                                                float* out, std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
+  // The opponent (who moves next on pos.board) draws from or holds the unseen
+  // pool: 100 tiles less the board and the mover's rack (pos.leave). Feeding it
+  // as the availability supply is what makes the collapse's opp marginal match
+  // the availability-masked belief the model was trained on -- e.g. a Y-hook with
+  // no Y unseen collapses to a hard zero here.
+  uint8_t supply[27];
+  compute_unseen_pool(supply, pos.board, pos.leave);
   // The analysis encoder never flips, so the model's planes -- and this collapse
   // -- are in the board's own frame.
-  collapse_footprint_planes(pos.board, *spec.dict, /*flip=*/false, raw, out);
+  collapse_footprint_planes(pos.board, *spec.dict, supply, /*flip=*/false, raw, out);
   return true;
 }
 

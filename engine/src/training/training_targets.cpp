@@ -3,6 +3,8 @@
 #include "encoding/game_state_encoder.h"
 #include "training/footprint_mask.h"
 
+#include <cstdint>
+
 namespace scribblez {
 
 // ---------- WldTarget ---------------------------------------------------
@@ -80,14 +82,22 @@ void write_mask(const FootprintMask& mask, float* out) {
 }  // namespace
 
 // The opp side's plays-head legality: the opponent moves next on the sampled
-// board, so the mask is exact-ish there. kExtraClass stays illegal (win_head
-// false) -- the loss sets it legal for the win head. Binds the dictionary on
-// demand (idempotent if the input encoder already built the caches).
+// board, so the mask is exact-ish there. Availability comes from the unseen pool
+// (100 - board - mover's rack), exactly the pool the input encoder feeds the
+// model, so the mask agrees with the belief the model can form. kExtraClass stays
+// illegal (win_head false) -- the loss sets it legal for the win head. Binds the
+// dictionary on demand (idempotent if the input encoder already built the caches).
 void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
   const Board& board = v.enc->board();
   board.ensure_movegen_caches(*v.spec.dict);
+  uint8_t supply[27];
+  const uint8_t* supply_ptr = nullptr;
+  if (v.pov_rack != nullptr) {
+    compute_unseen_pool(supply, board, *v.pov_rack);
+    supply_ptr = supply;
+  }
   FootprintMask mask;
-  opp_footprint_mask(board, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
+  opp_footprint_mask(board, supply_ptr, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 
