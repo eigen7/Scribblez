@@ -32,11 +32,7 @@ inline constexpr int kMaskTileBudget = RACK_SIZE;
 // (its perpendicular cross-check permits it, or the square is unconstrained) and
 // present in `supply` -- AND k <= tile_budget. A lone tile (k==1) is
 // orientation-free and legal iff at least one available letter is admissible in
-// both orientations at once -- i.e. legal in the vertical AND the horizontal
-// cross-word together (a neighbour-free axis constrains nothing). So a tile below
-// a vertical word whose only end-hook is unavailable is masked, and a cross-point
-// whose two cross-words share no legal letter is illegal even though each axis
-// alone admits one.
+// both orientations at once.
 //
 // `supply` is the opponent's availability as a 27-count array (A..Z then blank),
 // the unseen pool the opponent draws from or holds -- 100 tiles minus the board
