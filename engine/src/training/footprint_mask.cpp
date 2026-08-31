@@ -15,12 +15,7 @@ namespace {
 // Mark the legal footprint classes given a multi-tile per-cell predicate
 // `cell_ok(board_horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
 // the tile-count cap `kmax`. Shared by the opp and self masks, which differ only
-// in those predicates and the cap. A class (anchor, orientation, k>=2) is legal
-// iff its anchor is empty, its first k empty cells stay on the board, and each
-// passes `cell_ok` for the play's board-frame orientation. A lone tile (k==1) is
-// orientation-free: it forms BOTH of its cross-words at once, so `lone_ok` tests
-// them jointly rather than as a per-axis OR of `cell_ok` (see
-// lone_tile_admits_letter).
+// in those predicates and the cap.
 template <typename CellOk, typename LoneOk>
 void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, FootprintMask& mask,
                      CellOk cell_ok, LoneOk lone_ok) {
@@ -102,20 +97,9 @@ bool cell_admits_letter(const Board& board, const Supply& supply, bool horizonta
   return (cc.mask & supply.letters) != 0;                     // legal AND in stock
 }
 
-// Can some AVAILABLE letter play as a LONE tile at board cell (r,c)? A single
-// tile forms every cross-word its neighbours dictate at once, so its letter must
-// satisfy the vertical AND the horizontal cross-check simultaneously. We
-// intersect the two cross-check masks and check the result holds a stocked tile
-// -- not the per-axis OR of cell_admits_letter, which would wrongly admit a cell
-// whose sole real move needs an unavailable letter (e.g. a tile below a vertical
-// SHRILL: the down-word admits only S/Y, so with neither unseen the square is
-// unplayable even though its empty perpendicular axis is unconstrained), and
-// would also admit a cross-point whose two cross-words share no common legal
-// letter. A neighbour-free axis carries an all-ones mask (cross_check_at), so it
-// drops out of the intersection with no special-casing. A blank in `supply` is a
-// wildcard satisfying any jointly-legal square. Cache indexing matches
-// cell_admits_letter: the vertical (down-column) cross-word is the non-transposed
-// cache, the horizontal (along-row) the transposed.
+// Can some AVAILABLE letter play as a LONE tile at (r,c)? It forms both its
+// cross-words at once, so its letter must clear both cross-checks -- their mask
+// intersection, not cell_admits_letter's per-axis test.
 bool lone_tile_admits_letter(const Board& board, const Supply& supply, int r, int c) {
   const CrossCheck& vert = board.cross_checks(false)[r * BOARD_SIZE + c];
   const CrossCheck& horiz = board.cross_checks(true)[c * BOARD_SIZE + r];
