@@ -218,6 +218,56 @@ TEST(FootprintMask, AvailabilityEmptySupplyMasksEverything) {
   EXPECT_FALSE(opp_admits(b, supply_of(""), cls));  // nothing to place at all
 }
 
+// The lone-tile fix in miniature (the I13 case): a single tile below a vertical
+// word forms that word as its DOWN cross-word, so it is playable only with a
+// letter that both completes the word and is in stock -- NOT, as the old per-axis
+// OR wrongly allowed, any letter merely because the empty across-axis is
+// unconstrained. Board: 'A' above (7,7), down-word "A_" legal for {X,Y}.
+TEST(FootprintMask, AvailabilityGatesLoneTileHook) {
+  Board b;
+  b.set(6, 7, G(0));  // 'A'
+  const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
+  b.ensure_movegen_caches(d);
+
+  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;    // orientation-free k==1 at (7,7)
+  EXPECT_TRUE(opp_admits(b, supply_of("XY"), lone));    // both down-hooks in stock
+  EXPECT_TRUE(opp_admits(b, supply_of("YE"), lone));    // one legal down-hook (Y) suffices
+  EXPECT_TRUE(opp_admits(b, supply_of("?"), lone));     // a blank is a wildcard hook
+  EXPECT_FALSE(opp_admits(b, supply_of("EIO"), lone));  // no legal down-hook -> masked (the fix)
+  EXPECT_FALSE(opp_admits(b, supply_of(""), lone));     // nothing to place at all
+
+  // Board legality only (null supply) still admits it -- some letter (X/Y) exists.
+  FootprintMask m;
+  opp_footprint_mask(b, /*supply=*/nullptr, RACK_SIZE, false, false, m);
+  EXPECT_TRUE(m[lone]);
+}
+
+// A lone tile at a cross-point forms BOTH cross-words at once, so the exact test
+// intersects the two cross-check letter sets -- a per-axis "some available letter
+// fits this axis, AND some available letter fits that axis" is not enough. Board:
+// 'A' above (7,7) [down-word {X,Y}] and 'B' left of it [across-word {E}]. No
+// single letter is in both sets, so the square is unplayable even with X, Y and E
+// all in stock; overlapping cross-words readmit it.
+TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
+  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;
+
+  Board disjoint;
+  disjoint.set(6, 7, G(0));  // 'A' above: down-word "A_" -> {X, Y}
+  disjoint.set(7, 6, G(1));  // 'B' left:  across-word "B_" -> {E}
+  const Dictionary dd = Dictionary::build_from_words({"AX", "AY", "BE"});
+  disjoint.ensure_movegen_caches(dd);
+  EXPECT_FALSE(opp_admits(disjoint, supply_of("XYE"), lone));  // no letter fits both words
+  EXPECT_FALSE(opp_admits(disjoint, supply_of("?"), lone));  // no jointly-legal square for a blank
+
+  Board overlap;
+  overlap.set(6, 7, G(0));                                           // down-word "A_"
+  overlap.set(7, 6, G(1));                                           // across-word "B_"
+  const Dictionary od = Dictionary::build_from_words({"AE", "BE"});  // both admit only E
+  overlap.ensure_movegen_caches(od);
+  EXPECT_TRUE(opp_admits(overlap, supply_of("E"), lone));    // E fits both words and is in stock
+  EXPECT_FALSE(opp_admits(overlap, supply_of("XY"), lone));  // only E fits; X/Y satisfy neither
+}
+
 // The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
 // testable without a dictionary.
 TEST(SelfFootprintMask, ReachabilityFromStructure) {

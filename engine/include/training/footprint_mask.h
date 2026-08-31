@@ -31,8 +31,8 @@ inline constexpr int kMaskTileBudget = RACK_SIZE;
 // AVAILABLE letter in the play orientation -- a letter both legal at the square
 // (its perpendicular cross-check permits it, or the square is unconstrained) and
 // present in `supply` -- AND k <= tile_budget. A lone tile (k==1) is
-// orientation-free and legal if it admits an available letter in either
-// orientation.
+// orientation-free and legal iff at least one available letter is admissible in
+// both orientations at once.
 //
 // `supply` is the opponent's availability as a 27-count array (A..Z then blank),
 // the unseen pool the opponent draws from or holds -- 100 tiles minus the board

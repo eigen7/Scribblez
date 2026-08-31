@@ -12,16 +12,13 @@ namespace scribblez {
 
 namespace {
 
-// Mark the legal footprint classes given a per-cell placeability predicate
-// `cell_ok(board_horizontal, r, c)` and the tile-count cap `kmax`. Shared by the
-// opp and self masks, which differ only in that predicate and cap. A class
-// (anchor, orientation, k) is legal iff its anchor is empty, its first k empty
-// cells stay on the board, and each passes the predicate for the play's
-// board-frame orientation. A lone tile (k==1) is orientation-free -- legal if it
-// passes the predicate along either axis.
-template <typename CellOk>
-void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, CellOk cell_ok,
-                     FootprintMask& mask) {
+// Mark the legal footprint classes given a multi-tile per-cell predicate
+// `cell_ok(board_horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
+// the tile-count cap `kmax`. Shared by the opp and self masks, which differ only
+// in those predicates and the cap.
+template <typename CellOk, typename LoneOk>
+void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, FootprintMask& mask,
+                     CellOk cell_ok, LoneOk lone_ok) {
   mask.fill(false);
   for (int cell = 0; cell < kFootprintCells; ++cell) {
     int anchor_r = cell / kFootprintSide;
@@ -37,9 +34,7 @@ void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, Cel
       const int cls = cell * kSlotsPerCell + slot;
 
       if (k == 1) {
-        if (cell_ok(true, anchor_r, anchor_c) || cell_ok(false, anchor_r, anchor_c)) {
-          mask[cls] = true;
-        }
+        if (lone_ok(anchor_r, anchor_c)) mask[cls] = true;
         continue;
       }
 
@@ -102,6 +97,17 @@ bool cell_admits_letter(const Board& board, const Supply& supply, bool horizonta
   return (cc.mask & supply.letters) != 0;                     // legal AND in stock
 }
 
+// Can some AVAILABLE letter play as a LONE tile at (r,c)? It forms both its
+// cross-words at once, so its letter must clear both cross-checks -- their mask
+// intersection, not cell_admits_letter's per-axis test.
+bool lone_tile_admits_letter(const Board& board, const Supply& supply, int r, int c) {
+  const CrossCheck& vert = board.cross_checks(false)[r * BOARD_SIZE + c];
+  const CrossCheck& horiz = board.cross_checks(true)[c * BOARD_SIZE + r];
+  const uint32_t allowed = vert.mask & horiz.mask;  // letters legal in both words the tile forms
+  if (supply.blank) return allowed != 0;            // a wildcard fills any jointly-legal square
+  return (allowed & supply.letters) != 0;           // a jointly-legal letter that is in stock
+}
+
 // Tiles-to-reach distance field: d[Z] = the fewest tiles that must be placed to
 // bridge to empty cell Z from the current structure. Multi-source 4-neighbour
 // BFS with every occupied cell a 0 seed (words can turn at any tile), so it is a
@@ -147,9 +153,9 @@ void opp_footprint_mask(const Board& board, const uint8_t* supply, int tile_budg
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
   const Supply s = make_supply(supply);
   mark_footprints(
-    board, kmax, flip, win_head,
+    board, kmax, flip, win_head, mask,
     [&](bool horizontal, int r, int c) { return cell_admits_letter(board, s, horizontal, r, c); },
-    mask);
+    [&](int r, int c) { return lone_tile_admits_letter(board, s, r, c); });
 }
 
 void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
@@ -157,10 +163,12 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
   const std::array<int, kFootprintCells> dist = tiles_to_reach(board);
   const int reach = opp_budget + self_budget;  // opp bridges, then the mover finishes
   const int kmax = self_budget < kFootprintMaxK ? self_budget : kFootprintMaxK;
+  // Orientation-free reachability -- the self mask is cross-check-oblivious, so
+  // the lone-tile test coincides with the multi-tile per-cell one.
+  const auto reachable = [&](int r, int c) { return dist[r * kFootprintSide + c] <= reach; };
   mark_footprints(
-    board, kmax, flip, win_head,
-    [&](bool /*orientation-free*/, int r, int c) { return dist[r * kFootprintSide + c] <= reach; },
-    mask);
+    board, kmax, flip, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); },
+    reachable);
 }
 
 }  // namespace scribblez
