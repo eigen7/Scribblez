@@ -28,13 +28,13 @@ Architecture:
       the dashboard shows is recovered downstream by summing footprint
       probability over the cells each footprint covers.
 
-Each head is one entry in the HEADS registry: a Head owning its submodule
-factory, the forward-output key that submodule writes, its loss term, and the
-target keys that loss reads. forward(), compute_loss()'s total, and the derived
-LOSS_KEYS / TARGET_KEYS all iterate HEADS, so an auxiliary head is added in one
-place (the registry) rather than threaded through each of them. The placement
-family is generated from the FFI-served PLACEMENT_HEAD_NAMES; WLD and score-diff
-are singleton heads in the same registry.
+Each head is one Head (an nn.Module) owning its submodule(s), the forward slice
+that produces its single output tensor, its loss term, and the target/loss keys
+that loss implies. The model holds them in a name-keyed registry (self.heads),
+and forward(), compute_loss()'s total, and the loss/target key sets all iterate
+it -- so an auxiliary head is added by adding one entry to _build_heads(). The
+placement family is generated from the FFI-served PLACEMENT_HEAD_NAMES; WLD and
+score-diff are singleton heads in the same registry.
 
 The two model input widths come from the engine session's input-encoding spec
 (85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
@@ -48,6 +48,7 @@ architecture belongs in the same commit as the corresponding change there.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -133,15 +134,45 @@ class HeadLoss(NamedTuple):
     reported: dict[str, torch.Tensor]
 
 
-# --- Head submodules ------------------------------------------------------
+# --- Heads ----------------------------------------------------------------
 #
-# Each takes the trunk feature map `x` (B, C, 15, 15) and the value summary
-# `value_in` (B, 3C) and returns one output tensor, so PositionEvalModel can
-# run every head with a uniform call (the value heads ignore `x`).
+# Each head is one nn.Module owning its submodule(s), the forward producing its
+# single output tensor (stored under `name` in the model's output dict), its loss
+# term, and the target/loss keys that loss implies. forward(), compute_loss(),
+# and the model's loss/target key sets all iterate the model's heads, so a head
+# is added by adding one entry to _build_heads() -- nothing else is touched.
 
 
-class WldNet(nn.Module):
-    """WLD inference head: value summary -> 3 win/draw/loss logits."""
+class Head(nn.Module):
+    """Base class for a position-eval output head.
+
+    A head's forward takes the trunk feature map `x` (B, C, 15, 15) and the value
+    summary `value_in` (B, 3C) and returns its single output tensor (value heads
+    ignore `x`), so the model can run every head with a uniform call. Subclasses
+    set `name` (the output-dict key, also the ONNX output name), `loss_keys` (the
+    per-key losses loss() reports -- (name,) except for a composite head), and
+    `target_keys` (the target-dict keys loss() reads).
+    """
+
+    name: str
+    loss_keys: tuple[str, ...]
+    target_keys: tuple[str, ...]
+
+    def loss(
+        self, outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor], cfg: LossConfig
+    ) -> HeadLoss:
+        raise NotImplementedError
+
+
+class WldHead(Head):
+    """WLD (value) inference head: FC over the value summary -> 3 win/draw/loss
+    logits, trained by softmax cross-entropy against the one-hot outcome.
+    lambda_wld weights it in the total; drop it to 0 to isolate the other heads
+    (a diagnostic that leaves the value head untrained)."""
+
+    name = "wld"
+    loss_keys = ("wld",)
+    target_keys = ("wld",)
 
     def __init__(self, value_in: int):
         super().__init__()
@@ -154,14 +185,29 @@ class WldNet(nn.Module):
     def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
         return self.fc(value_in)
 
+    def loss(self, outputs, targets, cfg):
+        ce = F.cross_entropy(outputs["wld"], targets["wld"].argmax(dim=1))
+        return HeadLoss(cfg.lambda_wld * ce, {"wld": ce})
 
-class ScoreDiffNet(nn.Module):
-    """Score-diff head: two independent FC stacks over the value summary
-    producing [mean, std] of the final score differential. The mean stack
-    regresses the differential; the std stack reads a detached copy of the value
-    summary (so its loss updates only this stack, never the trunk or the mean)
-    and is mapped through softplus + a floor to a positive std, so the exported
-    second value is the std directly."""
+
+class ScoreDiffHead(Head):
+    """Score-diff aux head: two independent FC stacks over the value summary
+    producing [mean, std] of the final score differential.
+
+    forward: the mean stack regresses the differential; the std stack reads a
+    detached copy of the value summary and is mapped through softplus + a floor
+    to a positive std, so the exported second value is the std directly and its
+    loss never flows into the trunk or the mean.
+
+    loss: two Huber regressions in score points -- the mean against the observed
+    differential, the std against the absolute residual of the mean (scaled by
+    MAD_TO_STD so its optimum is a Gaussian sigma), the std prediction and target
+    both detached from trunk and mean. The reported score_diff is their sum;
+    lambda_sd weights it in the total."""
+
+    name = "score_diff"
+    loss_keys = ("score_diff", "score_diff_mean", "score_diff_std")
+    target_keys = ("score_diff",)
 
     def __init__(self, value_in: int):
         super().__init__()
@@ -181,93 +227,6 @@ class ScoreDiffNet(nn.Module):
         std = F.softplus(self.std_fc(value_in.detach())) + 1e-3  # (B, 1)
         return torch.cat([mean, std], dim=1)  # (B, 2): [mean, std]
 
-
-class FootprintPlacementHead(nn.Module):
-    """One placement head: a categorical distribution over move footprints.
-
-    Conv2d(C -> slots_per_cell) gives per-(cell, orientation, k) logits, whose
-    (cell, slot) flattening is exactly training_targets.h's anchored-footprint
-    class index (cell = row*side+col, then its slots). A pooled FC over the value
-    summary emits the trailing catch-all logits (pass, not-win/dummy). The head
-    is a raw-logit emitter; masking + softmax happen in the loss / consumers.
-    """
-
-    def __init__(self, trunk_channels: int, value_in: int, slots_per_cell: int, catch_all: int):
-        super().__init__()
-        self.conv = nn.Conv2d(trunk_channels, slots_per_cell, 1)
-        self.catch_all_fc = nn.Linear(value_in, catch_all)
-
-    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
-        b = x.shape[0]
-        # (B, slots, H, W) -> (B, H, W, slots) -> (B, H*W*slots): cell-major,
-        # slot-minor, matching footprint_class's (cell*slots + slot) layout.
-        anchored = self.conv(x).permute(0, 2, 3, 1).reshape(b, -1)
-        return torch.cat([anchored, self.catch_all_fc(value_in)], dim=1)  # (B, num_classes)
-
-
-# --- Head registry --------------------------------------------------------
-
-
-class Head:
-    """One output head of the position-eval network -- the single source that
-    forward(), the loss total, and the derived LOSS_KEYS / TARGET_KEYS iterate.
-
-    A head owns the factory for its submodule (build_module), the forward-output
-    key that submodule writes (`name`), the per-key losses it reports
-    (`loss_keys`), the target-dict keys its loss reads (`target_keys`), and the
-    loss term itself (loss). Adding an auxiliary head means adding one Head to
-    HEADS; nothing in the model's forward, compute_loss, or the key lists is
-    touched.
-    """
-
-    #: forward()'s output-dict key -- also the head's ONNX output name.
-    name: str
-    #: per-key losses this head reports (== {name} except for a composite head).
-    loss_keys: tuple[str, ...]
-    #: target-dict keys this head's loss reads.
-    target_keys: tuple[str, ...]
-
-    def build_module(self, trunk_channels: int, value_in: int) -> nn.Module:
-        raise NotImplementedError
-
-    def loss(
-        self, outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor], cfg: LossConfig
-    ) -> HeadLoss:
-        raise NotImplementedError
-
-
-class WldHead(Head):
-    """WLD (value) head, trained by softmax cross-entropy against the one-hot
-    outcome. lambda_wld weights it in the total; drop it to 0 to isolate the
-    other heads (a diagnostic that leaves the value head untrained)."""
-
-    name = "wld"
-    loss_keys = ("wld",)
-    target_keys = ("wld",)
-
-    def build_module(self, trunk_channels, value_in):
-        return WldNet(value_in)
-
-    def loss(self, outputs, targets, cfg):
-        ce = F.cross_entropy(outputs["wld"], targets["wld"].argmax(dim=1))
-        return HeadLoss(cfg.lambda_wld * ce, {"wld": ce})
-
-
-class ScoreDiffHead(Head):
-    """Score-diff head: two Huber regressions in score points. The mean
-    regresses the observed differential; the std regresses the absolute residual
-    of the mean (scaled by MAD_TO_STD so its optimum is a Gaussian sigma). The
-    std prediction and its target are both detached from the trunk and the mean,
-    so the std loss trains only the std stack. The reported score_diff is their
-    sum; lambda_sd weights it in the total."""
-
-    name = "score_diff"
-    loss_keys = ("score_diff", "score_diff_mean", "score_diff_std")
-    target_keys = ("score_diff",)
-
-    def build_module(self, trunk_channels, value_in):
-        return ScoreDiffNet(value_in)
-
     def loss(self, outputs, targets, cfg):
         mean = outputs["score_diff"][:, 0]
         std = outputs["score_diff"][:, 1]
@@ -281,23 +240,36 @@ class ScoreDiffHead(Head):
 
 
 class PlacementHead(Head):
-    """One footprint placement head: a FootprintPlacementHead submodule and its
-    masked softmax cross-entropy against the footprint class. Softmax's conserved
-    mass is the point -- it replaces the per-cell BCE's drifting,
+    """One placement head: a categorical distribution over move footprints.
+
+    forward: Conv2d(C -> slots_per_cell) gives per-(cell, orientation, k) logits,
+    whose (cell, slot) flattening is exactly training_targets.h's
+    anchored-footprint class index (cell = row*side+col, then its slots); a
+    pooled FC over the value summary emits the trailing catch-all logits (pass,
+    not-win/dummy). The head is a raw-logit emitter -- masking + softmax happen in
+    the loss / consumers.
+
+    loss: masked softmax cross-entropy against the footprint class. Softmax's
+    conserved mass is the point -- it replaces the per-cell BCE's drifting,
     easy-negative-diluted geometry. The head's legality-mask side (opp/self), its
     not-win-class handling (win vs plays), and its loss weight
     (lambda_win_placement vs lambda_next_placement) all follow from its name."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, trunk_channels: int, value_in: int):
+        super().__init__()
         self.name = name
         self.loss_keys = (name,)
         self.target_keys = (name, _head_mask_name(name))
         self._is_win = _head_is_win(name)
+        self.conv = nn.Conv2d(trunk_channels, FOOTPRINT_SLOTS_PER_CELL, 1)
+        self.catch_all_fc = nn.Linear(value_in, FOOTPRINT_CATCH_ALL)
 
-    def build_module(self, trunk_channels, value_in):
-        return FootprintPlacementHead(
-            trunk_channels, value_in, FOOTPRINT_SLOTS_PER_CELL, FOOTPRINT_CATCH_ALL
-        )
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        b = x.shape[0]
+        # (B, slots, H, W) -> (B, H, W, slots) -> (B, H*W*slots): cell-major,
+        # slot-minor, matching footprint_class's (cell*slots + slot) layout.
+        anchored = self.conv(x).permute(0, 2, 3, 1).reshape(b, -1)
+        return torch.cat([anchored, self.catch_all_fc(value_in)], dim=1)  # (B, num_classes)
 
     def loss(self, outputs, targets, cfg):
         legal = _head_legal_mask(self.name, targets) if cfg.mask_placement else None
@@ -306,20 +278,14 @@ class PlacementHead(Head):
         return HeadLoss(weight * ce, {self.name: ce})
 
 
-# The registry. Order fixes forward()'s output-dict order and thus the ONNX
-# output order (wld, score_diff, *PLACEMENT_HEAD_NAMES). The placement family is
-# generated from the FFI-served names; WLD and score-diff are singleton heads.
-HEADS: tuple[Head, ...] = (
-    WldHead(),
-    ScoreDiffHead(),
-    *(PlacementHead(name) for name in PLACEMENT_HEAD_NAMES),
-)
-
-# Per-head loss keys accumulated each epoch ("total" is the optimized
-# objective), and the target tensors compute_loss consumes -- both derived from
-# HEADS so a new head extends them automatically.
-LOSS_KEYS = ("total", *(key for head in HEADS for key in head.loss_keys))
-TARGET_KEYS = tuple(dict.fromkeys(key for head in HEADS for key in head.target_keys))
+def _build_heads(trunk_channels: int, value_in: int) -> list[Head]:
+    """The head registry, in output (== ONNX) order: wld, score_diff, then the
+    FFI-driven placement family. An auxiliary head is added by adding it here."""
+    return [
+        WldHead(value_in),
+        ScoreDiffHead(value_in),
+        *(PlacementHead(name, trunk_channels, value_in) for name in PLACEMENT_HEAD_NAMES),
+    ]
 
 
 class PositionEvalModel(nn.Module):
@@ -360,19 +326,30 @@ class PositionEvalModel(nn.Module):
             TileSupplyAttention(trunk_channels, scalar_size) if use_supply_attention else None
         )
 
-        # Heads: one submodule per HEADS entry, keyed by its output name. The
-        # value heads read a 3C summary -- mean+max board pooling (2C) plus the
-        # scalar projection (C) -- so the score-diff scalar reaches them directly.
+        # Heads, keyed by output name (see _build_heads / the HEADS docstring).
+        # The value heads read a 3C summary -- mean+max board pooling (2C) plus
+        # the scalar projection (C) -- so the score-diff scalar reaches them
+        # directly.
         value_in = 3 * trunk_channels
-        self.head_nets = nn.ModuleDict(
-            {head.name: head.build_module(trunk_channels, value_in) for head in HEADS}
+        self.heads = nn.ModuleDict(
+            {head.name: head for head in _build_heads(trunk_channels, value_in)}
         )
+
+    def loss_keys(self) -> tuple[str, ...]:
+        """The per-head loss keys accumulated each epoch ("total" is the
+        optimized objective), derived from the heads so a new head extends it."""
+        return ("total", *(key for head in self.heads.values() for key in head.loss_keys))
+
+    def target_keys(self) -> tuple[str, ...]:
+        """The batch target tensors the heads' losses consume, pulled from the
+        batch dict by name (deduplicated across heads that share a side mask)."""
+        return tuple(dict.fromkeys(key for head in self.heads.values() for key in head.target_keys))
 
     def _run_heads(self, x: torch.Tensor, value_in: torch.Tensor) -> dict[str, torch.Tensor]:
         """Run every head over the trunk feature map `x` and value summary
-        `value_in`, returning the output dict in HEADS (== ONNX) order. Shared
-        with subclasses that condition `x` / `value_in` before the heads."""
-        return {head.name: self.head_nets[head.name](x, value_in) for head in HEADS}
+        `value_in`, returning the output dict in head (== ONNX) order. Shared with
+        subclasses that condition `x` / `value_in` before the heads."""
+        return {name: head(x, value_in) for name, head in self.heads.items()}
 
     def forward(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
@@ -437,6 +414,7 @@ def _placement_ce(
 
 
 def compute_loss(
+    heads: Iterable[Head],
     outputs: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
     lambda_wld: float = 1.0,
@@ -447,14 +425,16 @@ def compute_loss(
     huber_delta_std: float = 10.0,
     mask_placement: bool = True,
 ) -> dict[str, torch.Tensor]:
-    """Combined loss for all heads: the weighted sum each head contributes, plus
-    every head's reported per-key losses.
+    """Combined loss over `heads` (the model's heads, i.e. model.heads.values()):
+    the weighted sum each head contributes, plus every head's reported per-key
+    losses.
 
-    Each entry of the HEADS registry owns its own loss term and reads the weight
-    it needs from the assembled LossConfig, so the total and the returned dict
-    both derive from HEADS -- there is no per-head term to hand-maintain here.
+    Each Head owns its own loss term and reads the weight it needs from the
+    assembled LossConfig, so the total and the returned dict both derive from the
+    head set -- there is no per-head term to hand-maintain here.
 
     Args:
+        heads: the model's head modules, each with a loss() term.
         outputs: model forward() result. "wld" (B,3 logits), "score_diff"
                  (B,2 = [mean, std]), and one (B, FOOTPRINT_CLASSES) raw
                  footprint-logit tensor per PLACEMENT_HEAD_NAMES entry.
@@ -475,8 +455,7 @@ def compute_loss(
                  confounding the loss-geometry result.
 
     Returns:
-        Dict with "total" plus one entry per head-reported loss key (LOSS_KEYS
-        minus "total").
+        Dict with "total" plus one entry per head-reported loss key.
     """
     cfg = LossConfig(
         lambda_wld,
@@ -489,7 +468,7 @@ def compute_loss(
     )
     total: torch.Tensor | None = None
     reported: dict[str, torch.Tensor] = {}
-    for head in HEADS:
+    for head in heads:
         head_loss = head.loss(outputs, targets, cfg)
         total = head_loss.weighted if total is None else total + head_loss.weighted
         reported.update(head_loss.reported)

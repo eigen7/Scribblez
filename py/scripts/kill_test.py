@@ -330,7 +330,12 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
         for idx in batch_slices(len(train["wld"]), args.batch_size, generator):
             batch = to_device(train, idx, device)
             out = forward(model, batch)
-            losses = compute_loss(out, {k: batch[k] for k in TARGET_KEYS}, lambda_sd=args.lambda_sd)
+            losses = compute_loss(
+                model.heads.values(),
+                out,
+                {k: batch[k] for k in TARGET_KEYS},
+                lambda_sd=args.lambda_sd,
+            )
             optimizer.zero_grad()
             losses["total"].backward()
             optimizer.step()

@@ -14,14 +14,14 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-# LOSS_KEYS (the per-head losses accumulated each epoch, "total" being the
-# optimized objective), TARGET_KEYS (the target tensors pulled from each batch),
-# and LossConfig (the loss weights) all derive from / live with the head
-# registry in model.py, so a new head extends them without touching this loop.
-# Re-exported here for callers that import them from the train loop.
-from .model import LOSS_KEYS, TARGET_KEYS, LossConfig, compute_loss
+# The loss weights (LossConfig) and the loss itself live with the head registry
+# in model.py; the per-head loss keys and the batch target keys are derived from
+# the model's heads (model.loss_keys() / model.target_keys()), so a new head
+# extends them without touching this loop. LossConfig is re-exported for callers
+# that import it from the train loop.
+from .model import LossConfig, compute_loss
 
-__all__ = ["LOSS_KEYS", "TARGET_KEYS", "LossConfig", "EpochResult", "run_epoch", "compute_loss"]
+__all__ = ["LossConfig", "EpochResult", "run_epoch", "compute_loss"]
 
 
 @dataclass
@@ -35,11 +35,11 @@ class EpochResult:
     rows_trained: int
 
 
-def _to_device(batch: dict, device):
-    """Split a batch dict into (spatial, scalar) inputs and the target
-    tensors, each moved to `device`."""
+def _to_device(batch: dict, device, target_keys: tuple[str, ...]):
+    """Split a batch dict into (spatial, scalar) inputs and the `target_keys`
+    target tensors, each moved to `device`."""
     inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
-    targets = {k: batch[k].to(device) for k in TARGET_KEYS}
+    targets = {k: batch[k].to(device) for k in target_keys}
     return inputs, targets
 
 
@@ -66,7 +66,9 @@ def run_epoch(
         rows_trained), invoked at most ~once per second.
     """
     model.train()
-    sums = {k: 0.0 for k in LOSS_KEYS}
+    heads = list(model.heads.values())
+    target_keys = model.target_keys()
+    sums = {k: 0.0 for k in model.loss_keys()}
     n_batches = 0
     correct = 0
     samples = 0
@@ -74,7 +76,7 @@ def run_epoch(
     last_progress = 0.0
 
     for batch in batches:
-        (input_spatial, input_scalar), targets = _to_device(batch, device)
+        (input_spatial, input_scalar), targets = _to_device(batch, device, target_keys)
         if lr_fn is not None:
             lr = lr_fn(rows_trained)
             for group in optimizer.param_groups:
@@ -82,6 +84,7 @@ def run_epoch(
 
         outputs = model(input_spatial, input_scalar)
         losses = compute_loss(
+            heads,
             outputs,
             targets,
             lambda_wld=loss_cfg.lambda_wld,

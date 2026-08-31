@@ -1,8 +1,8 @@
 """Unit tests for the shared position evaluation training-epoch loop.
 
-A tiny stub model producing every position evaluation head over small inputs
+A tiny real PositionEvalModel (small trunk, few blocks) over small inputs
 exercises run_epoch's forward/backward/accumulate and its learning-rate
-handling without the real trunk or the C++ data layout.
+handling, and drives the per-head loss registry through compute_loss.
 """
 
 import torch
@@ -13,6 +13,7 @@ from scribblez.position_eval.model import (
     MAD_TO_STD,
     PLACEMENT_HEAD_NAMES,
     PLACEMENT_MASK_NAMES,
+    PositionEvalModel,
     _head_legal_mask,
     _placement_ce,
     compute_loss,
@@ -29,39 +30,32 @@ _LOSS_CFG = LossConfig(
     mask_placement=True,
 )
 _CPU = torch.device("cpu")
+_SCALAR_SIZE = 8
+_SPATIAL_PLANES = 2
 
 # The label keys compute_loss reads: a class index per head plus the two per-side
 # legality masks.
 _TARGET_KEYS = ["wld", "score_diff", *PLACEMENT_HEAD_NAMES, *PLACEMENT_MASK_NAMES]
 
 
-class _StubModel(torch.nn.Module):
-    """Minimal model producing every position evaluation head from the scalar input."""
-
-    def __init__(self, scalar_size: int = 8):
-        super().__init__()
-        self.wld = torch.nn.Linear(scalar_size, 3)
-        self.score = torch.nn.Linear(scalar_size, 2)
-        self.placement = torch.nn.ModuleDict(
-            {name: torch.nn.Linear(scalar_size, FOOTPRINT_CLASSES) for name in PLACEMENT_HEAD_NAMES}
-        )
-
-    def forward(self, input_spatial, input_scalar):
-        out = {
-            "wld": self.wld(input_scalar),
-            "score_diff": self.score(input_scalar),
-        }
-        for name, fc in self.placement.items():
-            out[name] = fc(input_scalar)  # (B, FOOTPRINT_CLASSES) raw logits
-        return out
+def _model() -> PositionEvalModel:
+    """A small real model on the _batch() input shapes -- a genuine head
+    registry, cheap enough (tiny trunk, 2 blocks) for a unit test."""
+    return PositionEvalModel(
+        spatial_planes=_SPATIAL_PLANES,
+        scalar_size=_SCALAR_SIZE,
+        trunk_channels=8,
+        num_blocks=2,
+        board_size=15,
+    )
 
 
-def _batch(bs: int = 4, scalar_size: int = 8) -> dict:
+def _batch(bs: int = 4) -> dict:
     wld = torch.zeros(bs, 3)
     wld[torch.arange(bs), torch.randint(0, 3, (bs,))] = 1.0
     batch = {
-        "input_spatial": torch.randn(bs, 2, 15, 15),
-        "input_scalar": torch.randn(bs, scalar_size),
+        "input_spatial": torch.randn(bs, _SPATIAL_PLANES, 15, 15),
+        "input_scalar": torch.randn(bs, _SCALAR_SIZE),
         "wld": wld,
         "score_diff": torch.randn(bs, 1) * 20,
     }
@@ -74,7 +68,7 @@ def _batch(bs: int = 4, scalar_size: int = 8) -> dict:
 
 def test_run_epoch_accumulates_and_counts():
     torch.manual_seed(0)
-    model = _StubModel()
+    model = _model()
     opt = torch.optim.SGD(model.parameters(), lr=0.1)
     result = run_epoch(model, opt, [_batch() for _ in range(3)], _CPU, _LOSS_CFG, rows_trained=100)
     assert isinstance(result, EpochResult)
@@ -88,15 +82,15 @@ def test_run_epoch_accumulates_and_counts():
 
 def test_run_epoch_takes_a_gradient_step():
     torch.manual_seed(0)
-    model = _StubModel()
-    before = model.wld.weight.detach().clone()
+    model = _model()
+    before = model.heads["wld"].fc[0].weight.detach().clone()
     opt = torch.optim.SGD(model.parameters(), lr=0.5)
     run_epoch(model, opt, [_batch()], _CPU, _LOSS_CFG)
-    assert not torch.equal(before, model.wld.weight)
+    assert not torch.equal(before, model.heads["wld"].fc[0].weight)
 
 
 def test_run_epoch_applies_lr_fn_per_step():
-    model = _StubModel()
+    model = _model()
     opt = torch.optim.SGD(model.parameters(), lr=999.0)  # overwritten by lr_fn
     seen = []
 
@@ -112,7 +106,7 @@ def test_run_epoch_applies_lr_fn_per_step():
 
 
 def test_run_epoch_leaves_lr_untouched_without_lr_fn():
-    model = _StubModel()
+    model = _model()
     opt = torch.optim.SGD(model.parameters(), lr=0.123)
     run_epoch(model, opt, [_batch()], _CPU, _LOSS_CFG)
     assert opt.param_groups[0]["lr"] == 0.123
@@ -130,13 +124,13 @@ def test_masked_placement_guards_the_target_class():
     regression that dropped the win-head extra-opening would leave a target-only
     mask and a 0 loss)."""
     torch.manual_seed(0)
-    model = _StubModel()
+    model = _model()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
     for name in PLACEMENT_MASK_NAMES:  # the adversarial case: nothing legal
         targets[name] = torch.zeros_like(targets[name])
-    losses = compute_loss(out, targets, mask_placement=True)
+    losses = compute_loss(model.heads.values(), out, targets, mask_placement=True)
     for name in PLACEMENT_HEAD_NAMES:
         assert torch.isfinite(losses[name]), f"{name} loss is not finite"
         extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
@@ -154,12 +148,12 @@ def test_mask_placement_changes_the_loss():
     arm that keeps masking from confounding the loss-geometry result is a real,
     per-head toggle, not one wired for a single head."""
     torch.manual_seed(0)
-    model = _StubModel()
+    model = _model()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    masked = compute_loss(out, targets, mask_placement=True)
-    unmasked = compute_loss(out, targets, mask_placement=False)
+    masked = compute_loss(model.heads.values(), out, targets, mask_placement=True)
+    unmasked = compute_loss(model.heads.values(), out, targets, mask_placement=False)
     for name in PLACEMENT_HEAD_NAMES:
         assert not torch.isclose(masked[name], unmasked[name]), f"{name} masking is inert"
 
@@ -170,11 +164,12 @@ def test_compute_loss_matches_reference_math():
     formulas exactly -- per head, and in the weighted total -- so a future change
     to a head's loss can only move that head's number, never silently the math."""
     torch.manual_seed(0)
-    model = _StubModel()
+    model = _model()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
     losses = compute_loss(
+        model.heads.values(),
         out,
         targets,
         lambda_wld=1.0,
@@ -215,11 +210,11 @@ def test_lambda_wld_scales_the_wld_term_out_of_the_total():
     the other heads sets it to 0): total(lambda_wld=0) == total(lambda_wld=1)
     minus exactly the wld term, and the per-head wld loss itself is unweighted."""
     torch.manual_seed(0)
-    model = _StubModel()
+    model = _model()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    on = compute_loss(out, targets, lambda_wld=1.0)
-    off = compute_loss(out, targets, lambda_wld=0.0)
+    on = compute_loss(model.heads.values(), out, targets, lambda_wld=1.0)
+    off = compute_loss(model.heads.values(), out, targets, lambda_wld=0.0)
     assert torch.isclose(off["total"], on["total"] - on["wld"])
     assert torch.equal(off["wld"], on["wld"])  # the reported head loss is unweighted
