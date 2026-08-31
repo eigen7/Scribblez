@@ -51,9 +51,10 @@ struct NeuralNetParamsBase {
 
   // Every field determines the engine that gets built (or the buffers it
   // allocates), so equality over all of them decides whether two callers may
-  // share one loaded service (nn::ServiceCache). copy_aux and fast_build are
-  // load-bearing here, not just perf: copy_aux decides whether aux host buffers
-  // exist at all, and fast_build selects a different, separately cached plan.
+  // share one loaded service (nn::PositionEvalService::create()). copy_aux and
+  // fast_build are load-bearing here, not just perf: copy_aux decides whether
+  // aux host buffers exist at all, and fast_build selects a different,
+  // separately cached plan.
   bool operator==(const NeuralNetParamsBase&) const = default;
 
   // Register the command-line-facing subset, bound to this struct's fields.

@@ -128,4 +128,38 @@ TEST(BatchingPositionEvalService, PropagatesInnerFailure) {
   EXPECT_THROW(svc.evaluate(SpecBatch{in.data(), 1}, head_out), std::runtime_error);
 }
 
+TEST(BatchingPositionEvalService, FailureReachesEveryCoalescedCaller) {
+  // Many threads contend, so drains coalesce more than one request; serve()'s
+  // catch must set the exception on every request in the pack, not just one --
+  // otherwise a co-batched caller returns garbage (or hangs) instead of
+  // throwing. Every call must observe the failure.
+  BatchingPositionEvalService svc(std::make_unique<ThrowingStub>());
+  constexpr int kThreads = 8;
+  constexpr int kCalls = 200;
+  std::atomic<int> threw{0};
+  std::atomic<int> returned{0};
+
+  auto worker = [&] {
+    std::vector<float> in = rows_with_markers({1.0f, 2.0f});
+    std::vector<float> wld(2 * WldOutput::kRowElems);
+    std::vector<float> sd(2 * ScoreDiffOutput::kRowElems);
+    float* const head_out[] = {wld.data(), sd.data()};
+    for (int c = 0; c < kCalls; ++c) {
+      try {
+        svc.evaluate(SpecBatch{in.data(), 2}, head_out);
+        ++returned;
+      } catch (const std::runtime_error&) {
+        ++threw;
+      }
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) threads.emplace_back(worker);
+  for (std::thread& t : threads) t.join();
+
+  EXPECT_EQ(returned.load(), 0);
+  EXPECT_EQ(threw.load(), kThreads * kCalls);
+}
+
 }  // namespace

@@ -61,10 +61,11 @@ class BatchingPositionEvalService : public PositionEvalService {
     std::exception_ptr error;
   };
 
-  // Gather every request's rows into one batch, evaluate it through inner_, and
-  // scatter each request's decoded rows back. Records a per-request exception
-  // instead of throwing, so the dispatcher loop cannot strand waiting callers.
-  void serve(const std::vector<Request*>& batch);
+  // Gather every request's rows into one combined batch, evaluate it through
+  // inner_, and scatter each request's decoded rows back. Records a per-request
+  // exception instead of throwing, so the dispatcher loop cannot strand waiting
+  // callers.
+  void serve(const std::vector<Request*>& pack);
 
   std::unique_ptr<PositionEvalService> inner_;
 

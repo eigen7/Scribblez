@@ -43,6 +43,20 @@ void BatchingPositionEvalService::evaluate(const SpecBatch& batch,
 }
 
 void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
+  // Single-request drain -- the common case under low or bursty concurrency,
+  // where a caller finds the queue empty and serves only itself. Evaluate
+  // straight into the caller's buffers, skipping the gather/scatter copies that
+  // earn their keep only when coalescing more than one request.
+  if (pack.size() == 1) {
+    Request* r = pack.front();
+    try {
+      inner_->evaluate(*r->batch, r->head_out);
+    } catch (...) {
+      r->error = std::current_exception();
+    }
+    return;
+  }
+
   const int row_floats = spatial_planes() * kBoardCells + scalar_floats();
   int total = 0;
   for (const Request* r : pack) total += r->batch->count;

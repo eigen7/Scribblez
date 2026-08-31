@@ -9,7 +9,8 @@
 namespace scribblez {
 namespace nn {
 
-// nn/neural_net.h; a reference parameter needs only the forward declaration.
+// Defined in nn/neural_net.h; a reference parameter needs only the forward
+// declaration.
 template <typename Spec>
 struct NeuralNetParams;
 

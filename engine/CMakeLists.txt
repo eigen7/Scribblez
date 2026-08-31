@@ -354,9 +354,9 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # BatchingPositionEvalService: that coalescing many concurrent evaluate()
   # calls onto one shared service returns each caller its own correct rows
   # (parity with calling the wrapped service directly), holds under a many-thread
-  # stress, serves a request larger than the wrapped service's chunk, and
-  # propagates an inference failure to exactly its callers. Runs against a
-  # scripted stub -- no GPU.
+  # stress, and propagates an inference failure to exactly its callers -- to a
+  # lone caller and to every caller of a coalesced pack. Runs against a scripted
+  # stub -- no GPU.
   add_executable(test_batching_eval_service tests/test_batching_eval_service.cpp)
   target_link_libraries(test_batching_eval_service PRIVATE
     scribblez_core Threads::Threads GTest::gtest_main)
