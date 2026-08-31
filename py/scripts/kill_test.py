@@ -69,11 +69,6 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
-from scribblez.position_eval.model import (
-    PLACEMENT_HEAD_NAMES,
-    PLACEMENT_MASK_NAMES,
-    compute_loss,
-)
 from scribblez.sim_evidence.model import EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import (
@@ -86,12 +81,6 @@ from scribblez.sim_evidence.sobs import (
 )
 from scribblez.workloads import kill_test as kill_test_workload
 
-TARGET_KEYS = (
-    "wld",
-    "score_diff",
-    *PLACEMENT_HEAD_NAMES,
-    *PLACEMENT_MASK_NAMES,
-)
 ARMS = ("none", "shuffled", "scalar", "full")
 
 
@@ -330,10 +319,9 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
         for idx in batch_slices(len(train["wld"]), args.batch_size, generator):
             batch = to_device(train, idx, device)
             out = forward(model, batch)
-            losses = compute_loss(
-                model.heads.values(),
+            losses = model.compute_loss(
                 out,
-                {k: batch[k] for k in TARGET_KEYS},
+                {k: batch[k] for k in model.target_keys()},
                 lambda_sd=args.lambda_sd,
             )
             optimizer.zero_grad()

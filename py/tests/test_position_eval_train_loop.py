@@ -16,7 +16,6 @@ from scribblez.position_eval.model import (
     PositionEvalModel,
     _head_legal_mask,
     _placement_ce,
-    compute_loss,
 )
 from scribblez.position_eval.train_loop import EpochResult, LossConfig, run_epoch
 
@@ -130,7 +129,7 @@ def test_masked_placement_guards_the_target_class():
     targets = {k: batch[k] for k in _TARGET_KEYS}
     for name in PLACEMENT_MASK_NAMES:  # the adversarial case: nothing legal
         targets[name] = torch.zeros_like(targets[name])
-    losses = compute_loss(model.heads.values(), out, targets, mask_placement=True)
+    losses = model.compute_loss(out, targets, mask_placement=True)
     for name in PLACEMENT_HEAD_NAMES:
         assert torch.isfinite(losses[name]), f"{name} loss is not finite"
         extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
@@ -152,32 +151,36 @@ def test_mask_placement_changes_the_loss():
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    masked = compute_loss(model.heads.values(), out, targets, mask_placement=True)
-    unmasked = compute_loss(model.heads.values(), out, targets, mask_placement=False)
+    masked = model.compute_loss(out, targets, mask_placement=True)
+    unmasked = model.compute_loss(out, targets, mask_placement=False)
     for name in PLACEMENT_HEAD_NAMES:
         assert not torch.isclose(masked[name], unmasked[name]), f"{name} masking is inert"
 
 
 def test_compute_loss_matches_reference_math():
-    """Loss parity guard for the head-registry refactor: compute_loss (which
-    sums each Head's own loss term) must reproduce the pre-registry monolithic
-    formulas exactly -- per head, and in the weighted total -- so a future change
-    to a head's loss can only move that head's number, never silently the math."""
+    """Every head's loss and the weighted total must equal a hand-written
+    reference computed straight from the loss formulas, so a change to one head's
+    loss -- a swapped Huber delta, a flipped win/plays weight, a dropped detach --
+    can only move that head's number, never silently the whole objective. The
+    weights and Huber deltas below are all DISTINCT so that a mean-vs-std delta or
+    win-vs-plays weight mix-up actually changes the result the reference checks."""
     torch.manual_seed(0)
     model = _model()
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    losses = compute_loss(
-        model.heads.values(),
+    lambda_wld, lambda_sd = 1.0, 0.004
+    lambda_next, lambda_win = 0.3, 0.7
+    delta_mean, delta_std = 8.0, 12.0
+    losses = model.compute_loss(
         out,
         targets,
-        lambda_wld=1.0,
-        lambda_sd=0.004,
-        lambda_next_placement=0.5,
-        lambda_win_placement=0.5,
-        huber_delta_mean=10.0,
-        huber_delta_std=10.0,
+        lambda_wld=lambda_wld,
+        lambda_sd=lambda_sd,
+        lambda_next_placement=lambda_next,
+        lambda_win_placement=lambda_win,
+        huber_delta_mean=delta_mean,
+        huber_delta_std=delta_std,
         mask_placement=True,
     )
 
@@ -185,8 +188,10 @@ def test_compute_loss_matches_reference_math():
     ref = {"wld": F.cross_entropy(out["wld"], targets["wld"].argmax(dim=1))}
     sd_mean, sd_std = out["score_diff"][:, 0], out["score_diff"][:, 1]
     sd_target = targets["score_diff"].squeeze(1)
-    loss_mean = F.huber_loss(sd_mean, sd_target, delta=10.0)
-    loss_std = F.huber_loss(sd_std, (sd_mean.detach() - sd_target).abs() * MAD_TO_STD, delta=10.0)
+    loss_mean = F.huber_loss(sd_mean, sd_target, delta=delta_mean)
+    loss_std = F.huber_loss(
+        sd_std, (sd_mean.detach() - sd_target).abs() * MAD_TO_STD, delta=delta_std
+    )
     ref["score_diff_mean"], ref["score_diff_std"] = loss_mean, loss_std
     ref["score_diff"] = loss_mean + loss_std
     for name in PLACEMENT_HEAD_NAMES:
@@ -194,10 +199,10 @@ def test_compute_loss_matches_reference_math():
             out[name], targets[name].squeeze(1).long(), _head_legal_mask(name, targets)
         )
     total = (
-        1.0 * ref["wld"]
-        + 0.004 * ref["score_diff"]
-        + 0.5 * (ref["opp_next_placement"] + ref["self_next_placement"])
-        + 0.5 * (ref["opp_win_placement"] + ref["self_win_placement"])
+        lambda_wld * ref["wld"]
+        + lambda_sd * ref["score_diff"]
+        + lambda_next * (ref["opp_next_placement"] + ref["self_next_placement"])
+        + lambda_win * (ref["opp_win_placement"] + ref["self_win_placement"])
     )
 
     for key, value in ref.items():
@@ -214,7 +219,7 @@ def test_lambda_wld_scales_the_wld_term_out_of_the_total():
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    on = compute_loss(model.heads.values(), out, targets, lambda_wld=1.0)
-    off = compute_loss(model.heads.values(), out, targets, lambda_wld=0.0)
+    on = model.compute_loss(out, targets, lambda_wld=1.0)
+    off = model.compute_loss(out, targets, lambda_wld=0.0)
     assert torch.isclose(off["total"], on["total"] - on["wld"])
     assert torch.equal(off["wld"], on["wld"])  # the reported head loss is unweighted

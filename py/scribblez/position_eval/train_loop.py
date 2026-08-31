@@ -14,14 +14,14 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-# The loss weights (LossConfig) and the loss itself live with the head registry
-# in model.py; the per-head loss keys and the batch target keys are derived from
-# the model's heads (model.loss_keys() / model.target_keys()), so a new head
-# extends them without touching this loop. LossConfig is re-exported for callers
-# that import it from the train loop.
-from .model import LossConfig, compute_loss
+# The loss config and the loss itself live with the head registry in model.py:
+# the model owns compute_loss(), and the per-head loss keys and batch target keys
+# are derived from its heads (model.loss_keys() / model.target_keys()), so a new
+# head extends them without touching this loop. LossConfig is re-exported for
+# callers that import it from the train loop.
+from .model import LossConfig
 
-__all__ = ["LossConfig", "EpochResult", "run_epoch", "compute_loss"]
+__all__ = ["LossConfig", "EpochResult", "run_epoch"]
 
 
 @dataclass
@@ -66,7 +66,6 @@ def run_epoch(
         rows_trained), invoked at most ~once per second.
     """
     model.train()
-    heads = list(model.heads.values())
     target_keys = model.target_keys()
     sums = {k: 0.0 for k in model.loss_keys()}
     n_batches = 0
@@ -83,8 +82,7 @@ def run_epoch(
                 group["lr"] = lr
 
         outputs = model(input_spatial, input_scalar)
-        losses = compute_loss(
-            heads,
+        losses = model.compute_loss(
             outputs,
             targets,
             lambda_wld=loss_cfg.lambda_wld,
