@@ -33,7 +33,7 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
 }
 
 CandidateEvaluator::CandidateEvaluator(const Dictionary& dict,
-                                       std::unique_ptr<nn::PositionEvalService> service,
+                                       std::shared_ptr<nn::PositionEvalService> service,
                                        int max_batch)
     : max_batch_(max_batch),
       service_(std::move(service)),

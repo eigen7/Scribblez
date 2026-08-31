@@ -31,7 +31,7 @@ const Dictionary& require_dict(const Dictionary* dict) {
 }  // namespace
 
 NeuralSimAgent::NeuralSimAgent(const Params& params,
-                               std::unique_ptr<nn::PositionEvalService> service, int max_batch)
+                               std::shared_ptr<nn::PositionEvalService> service, int max_batch)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),
       sim_top_k_(params.sim_top_k),

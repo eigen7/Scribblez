@@ -51,11 +51,10 @@ class NeuralAgent : public Agent {
 
   using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
 
-  NeuralAgent(const Params& params, const NetParams& net_params);
-
-  // Takes an already-constructed evaluator (real or a scripted stub), loading
-  // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
+  // Takes a shared evaluation service (nn::PositionEvalService::create() in
+  // production, a scripted stub in tests). Loads no model and touches no GPU;
+  // `max_batch` bounds one evaluate() call.
+  NeuralAgent(const Params& params, std::shared_ptr<nn::PositionEvalService> service,
               int max_batch = 256);
 
   MoveDecision make_move(const MoveRequest& req) override;

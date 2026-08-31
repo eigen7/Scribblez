@@ -92,10 +92,10 @@ class NeuralSimAgentTest : public ::testing::Test {
 TEST_F(NeuralSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
   NeuralSimAgent::Params p = params();
   p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum
-  EXPECT_THROW(NeuralSimAgent(p, std::make_unique<StubEvalService>(), /*max_batch=*/1024),
+  EXPECT_THROW(NeuralSimAgent(p, std::make_shared<StubEvalService>(), /*max_batch=*/1024),
                std::runtime_error);
   p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon
-  EXPECT_NO_THROW(NeuralSimAgent(p, std::make_unique<StubEvalService>(), /*max_batch=*/1024));
+  EXPECT_NO_THROW(NeuralSimAgent(p, std::make_shared<StubEvalService>(), /*max_batch=*/1024));
 }
 
 TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
@@ -107,7 +107,7 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   // own favourites score low, so the sim set differs from SimAgent's.
   const auto scripted = script_favouring(candidates.size(), {2, 3});
 
-  auto stub = std::make_unique<StubEvalService>();
+  auto stub = std::make_shared<StubEvalService>();
   stub->scripted = scripted;
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
   agent.begin_game({});
@@ -136,7 +136,7 @@ TEST_F(NeuralSimAgentTest, ShortlistCapsWhatTheModelEvaluates) {
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
   ASSERT_EQ(candidates.size(), 3u);
 
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
@@ -163,7 +163,7 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   }
   ASSERT_GE(exchange_idx, 0) << "no exchange candidate; the check would be vacuous";
 
-  auto stub = std::make_unique<StubEvalService>();
+  auto stub = std::make_shared<StubEvalService>();
   stub->scripted = script_favouring(candidates.size(), {exchange_idx});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
   agent.begin_game({});
@@ -177,7 +177,7 @@ TEST_F(NeuralSimAgentTest, DropBestProbExcludesTheModelsFavourite) {
   const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   for (const double prob : {0.0, 1.0}) {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     stub->scripted = scripted;
     p.drop_best_prob = prob;
     NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
@@ -197,7 +197,7 @@ TEST_F(NeuralSimAgentTest, OneSeedGivesOneDecision) {
 
   Move moves[2];
   for (int i = 0; i < 2; ++i) {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     stub->scripted = scripted;
     NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
     agent.begin_game({});
@@ -213,7 +213,7 @@ TEST_F(NeuralSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
   // size-1 early return must fire before either can happen.
   NeuralSimAgent::Params p = params();
   p.drop_best_prob = 1.0;
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
   agent.begin_game({});
@@ -237,7 +237,7 @@ TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
   ASSERT_EQ(candidates.size(), 3u);
 
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted = script_favouring(candidates.size(), {1});
   NeuralSimAgent agent(p, std::move(stub), /*max_batch=*/1024);
@@ -251,7 +251,7 @@ TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
 }
 
 TEST_F(NeuralSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   NeuralSimAgent agent(params(), std::move(stub),
                        /*max_batch=*/1024);  // endgame budget 0: solver declines
@@ -269,7 +269,7 @@ TEST_F(NeuralSimAgentTest, AnUnusableRolloutCountIsRejected) {
   const auto build = [&](int rollouts) {
     NeuralSimAgent::Params p = params();
     p.sim.rollouts = rollouts;
-    return NeuralSimAgent(p, std::make_unique<StubEvalService>(), /*max_batch=*/1024);
+    return NeuralSimAgent(p, std::make_shared<StubEvalService>(), /*max_batch=*/1024);
   };
   EXPECT_THROW(build(0), std::runtime_error);
   EXPECT_THROW(build(SimRunner::kMaxRollouts + 1), std::runtime_error);

@@ -53,6 +53,11 @@ add_library(scribblez_core STATIC
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/agent/candidate_evaluator.cpp
+  # Coalesces concurrent position-eval requests into larger GPU batches. A
+  # decorator over the EvalService interface with no CUDA/TensorRT dependency,
+  # so it lives in the core library (like CandidateEvaluator) and is unit-tested
+  # with a scripted stub.
+  src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
   src/belief/leave_prior.cpp
   src/belief/move_likelihood.cpp
@@ -345,6 +350,17 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_neural_agent PRIVATE
     scribblez_core Boost::json Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_agent)
+
+  # BatchingPositionEvalService: that coalescing many concurrent evaluate()
+  # calls onto one shared service returns each caller its own correct rows
+  # (parity with calling the wrapped service directly), holds under a many-thread
+  # stress, and propagates an inference failure to exactly its callers -- to a
+  # lone caller and to every caller of a coalesced pack. Runs against a scripted
+  # stub -- no GPU.
+  add_executable(test_batching_eval_service tests/test_batching_eval_service.cpp)
+  target_link_libraries(test_batching_eval_service PRIVATE
+    scribblez_core Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_batching_eval_service)
 
   # Rack inference: the hypergeometric prior and its sampler, the observations
   # that carry no information, posterior shape and reproducibility, and that

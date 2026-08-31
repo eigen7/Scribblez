@@ -181,7 +181,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
   // Value head prefers the SECOND-ranked equity candidate -> the agent overrides
   // HastyBot's equity argmax and plays it.
   {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub",
@@ -196,7 +196,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
 
   // Value head prefers the top equity candidate -> the agent agrees with HastyBot.
   {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub",
@@ -211,7 +211,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
 
   // The win-prob objective reads win_prob, not score_diff_mean.
   {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
     NeuralAgent agent({.thread_id = 0,
                        .name = "stub-wp",
@@ -235,7 +235,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
   const MoveRequest req = pos.request();
 
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted = {sd(1.0f), sd(5.0f)};  // among the two survivors, processing-pos 1 wins
   NeuralAgent agent({.thread_id = 0,
@@ -267,7 +267,7 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
   ASSERT_LT(pos.equities[lo], pos.equities[hi]);  // a meaningful override needs distinct equities
   const MoveRequest req = pos.request();
 
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(size_t(n), sd(0.0f));
   sp->scripted[size_t(lo)] = sd(9.0f);  // generation index == processing index
@@ -294,7 +294,7 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   const int target = n - 1;  // a candidate in the final chunk
   const MoveRequest req = pos.request();
 
-  auto stub = std::make_unique<CountingStubEvalService>();
+  auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(size_t(n), sd(0.0f));
   sp->scripted[size_t(target)] = sd(9.0f);
@@ -336,7 +336,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
                      .dict = &dict,
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
-                    std::make_unique<StubEvalService>());
+                    std::make_shared<StubEvalService>());
   agent.begin_game({});
   agent.observe_move(move_a);
   agent.observe_move(move_b);
@@ -412,7 +412,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
                      .dict = &dict,
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
-                    std::make_unique<StubEvalService>());
+                    std::make_shared<StubEvalService>());
   agent.begin_game({initial_scores});
   agent.observe_move(move0);
   agent.observe_move(move1);
@@ -453,7 +453,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
 
   // Temperature 0 -> always the model-preferred candidate (order[0]).
   {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     StubEvalService* gp = stub.get();
     NeuralAgent greedy({.thread_id = 0,
                         .name = "greedy",
@@ -471,7 +471,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
   // High temperature -> both candidates are sampled, but the higher-rated one
   // (order[0]) still dominates. Seeded for reproducibility.
   {
-    auto stub = std::make_unique<StubEvalService>();
+    auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
     NeuralAgent sampler({.thread_id = 0,
                          .name = "sampler",
@@ -546,7 +546,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
 
     // Solving enabled: the solver's move (with its certificate as the
     // decision's projection), and no model call at all.
-    auto solving_stub = std::make_unique<CountingStubEvalService>();
+    auto solving_stub = std::make_shared<CountingStubEvalService>();
     CountingStubEvalService* solving_sp = solving_stub.get();
     NeuralAgent solving({.thread_id = 0,
                          .name = "solving",
@@ -564,7 +564,7 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
     EXPECT_EQ(solving_sp->calls, 0);
 
     // Solving disabled: the greedy static-equity move, again without the model.
-    auto disabled_stub = std::make_unique<CountingStubEvalService>();
+    auto disabled_stub = std::make_shared<CountingStubEvalService>();
     CountingStubEvalService* disabled_sp = disabled_stub.get();
     NeuralAgent disabled({.thread_id = 0,
                           .name = "disabled",
@@ -582,4 +582,67 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
     found = true;
   }
   ASSERT_TRUE(found) << "no solver-beats-greedy endgame found in the scan";
+}
+
+// --- Shared service (nn::PositionEvalService::create() path) ----------------
+
+TEST_F(NeuralAgentEquityTest, AgentsShareOneService) {
+  // create() hands every thread's agent the same shared_ptr, so N threads drive
+  // one loaded model. Mirror that with one shared stub two agents hold: both
+  // drive it correctly, and it lives exactly as long as its holders (freed here
+  // only when the last agent -- and the test -- drop it).
+  OpeningPosition pos("CARETS");
+  ASSERT_GE(pos.plays.size(), 3u);
+  const int top_k = 2;
+  const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
+  ASSERT_EQ(int(order.size()), top_k);
+  const MoveRequest req = pos.request();
+
+  auto shared = std::make_shared<StubEvalService>();
+  const NeuralAgent::Params base{.thread_id = 0,
+                                 .name = "shared",
+                                 .dict = &pos.dict,
+                                 .top_k = top_k,
+                                 .objective = EvalObjective::kScoreDiff};
+  NeuralAgent a(base, shared, /*max_batch=*/top_k);
+  NeuralAgent b(base, shared, /*max_batch=*/top_k);
+  EXPECT_EQ(shared.use_count(), 3);  // the test plus both agents
+  a.begin_game({});
+  b.begin_game({});
+  shared->scripted = {sd(1.0f), sd(9.0f)};  // second-ranked candidate wins
+  EXPECT_TRUE(same_move(a.make_move(req).move, pos.plays[order[1]]));
+  shared->scripted = {sd(9.0f), sd(1.0f)};  // top-ranked candidate wins
+  EXPECT_TRUE(same_move(b.make_move(req).move, pos.plays[order[0]]));
+}
+
+TEST(NeuralNetSharingKey, EqualityDistinguishesEngineDeterminingFields) {
+  // create() keys on NeuralNetParams equality to decide who shares one loaded
+  // engine. Each field that changes the built engine (or its buffers) must
+  // break equality -- copy_aux and fast_build especially: they are correctness,
+  // not just performance (aux host buffers exist only under copy_aux; fast_build
+  // is a separately cached, differently optimized plan).
+  using Params = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
+  Params a;
+  a.onnx_path = "model.onnx";
+
+  EXPECT_EQ(a, Params(a));  // identical params share
+
+  Params b = a;
+  b.onnx_path = "other.onnx";
+  EXPECT_NE(a, b);
+  b = a;
+  b.precision = nn::Precision::kFP32;
+  EXPECT_NE(a, b);
+  b = a;
+  b.max_rows = a.max_rows + 1;
+  EXPECT_NE(a, b);
+  b = a;
+  b.cuda_device_id = a.cuda_device_id + 1;
+  EXPECT_NE(a, b);
+  b = a;
+  b.copy_aux = !a.copy_aux;
+  EXPECT_NE(a, b);
+  b = a;
+  b.fast_build = !a.fast_build;
+  EXPECT_NE(a, b);
 }

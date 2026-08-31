@@ -1,20 +1,20 @@
 // Command-line construction of NeuralAgent, kept separate from the agent's
-// selection logic (neural_agent.cpp). This is also the only NeuralAgent
-// translation unit that references the concrete nn::TrtEvalService: the
-// production constructor lives here, so the core agent TU -- and the agent's
-// unit tests, which inject a stub through the other constructor -- carry no
-// CUDA/TensorRT dependency. Parsing the `--type=neural` option string
-// additionally pulls in Boost.program_options, the process-wide Lexicon, and
-// the shared NeuralServiceOptions block (neural_service_options.cpp, which
-// resolves --precision through nn::parse_precision), all kept out of the core
-// agent TU.
+// selection logic (neural_agent.cpp). from_spec resolves the run-shared model
+// through nn::PositionEvalService::create() and hands the agent the shared_ptr,
+// so the core agent TU -- and the agent's unit tests, which inject a stub
+// through the same constructor -- carry no CUDA/TensorRT dependency (create()'s
+// construction of the concrete service lives in the TensorRT layer). Parsing the
+// `--type=neural` option string additionally pulls in Boost.program_options,
+// the process-wide Lexicon, and the shared NeuralServiceOptions block
+// (neural_service_options.cpp, which resolves --precision through
+// nn::parse_precision), all kept out of the core agent TU.
 
 #include "agent/neural_agent.h"
 #include "agent/neural_service_options.h"
 #include "endgame/endgame_solver.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "nn/trt_eval_service.h"
+#include "nn/eval_service.h"
 #include "util/exception.h"
 #include "util/seed_producer.h"
 
@@ -65,9 +65,6 @@ po::options_description make_options_description(NeuralOptions& opts) {
 
 }  // namespace
 
-NeuralAgent::NeuralAgent(const Params& params, const NetParams& net_params)
-    : NeuralAgent(params, nn::make_loaded_service(net_params), net_params.max_rows) {}
-
 std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::string>& tokens,
                                                     int thread_id, const std::string& name) {
   NeuralOptions opts;
@@ -93,6 +90,10 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? opts.seed : SeedProducer::instance().next();
+  // One loaded model per (net_params), shared across this run's threads;
+  // net_params.max_rows bounds one evaluate() call, matching the batch the
+  // shared engine was built for.
+  std::shared_ptr<nn::PositionEvalService> service = nn::PositionEvalService::create(net_params);
   return std::make_unique<NeuralAgent>(
     NeuralAgent::Params{.thread_id = thread_id,
                         .name = name,
@@ -102,7 +103,7 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
                         .temperature = opts.temperature,
                         .seed = resolved_seed,
                         .endgame = opts.endgame},
-    net_params);
+    std::move(service), net_params.max_rows);
 }
 
 std::string NeuralAgent::options_help() {

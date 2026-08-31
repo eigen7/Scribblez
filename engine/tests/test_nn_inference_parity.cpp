@@ -232,6 +232,29 @@ TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
                   kFp16ScoreDiffTol, inputs, expected, n);
 }
 
+// PositionEvalService::create() must return the same instance for equal params
+// -- so a run's threads share one loaded engine (and its execution-context
+// memory) instead of one apiece -- and a distinct instance when an
+// engine-determining field differs. Reuses this suite's fixture because create()
+// builds a real engine.
+TEST_F(NnInferenceParityTest, CreateSharesOneServicePerParams) {
+  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
+  params.onnx_path = dir_ + "/model.onnx";
+  params.precision = scribblez::nn::Precision::kBF16;
+
+  std::shared_ptr<scribblez::nn::PositionEvalService> a =
+    scribblez::nn::PositionEvalService::create(params);
+  std::shared_ptr<scribblez::nn::PositionEvalService> b =
+    scribblez::nn::PositionEvalService::create(params);
+  EXPECT_EQ(a.get(), b.get()) << "equal params must share one loaded service";
+
+  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> other = params;
+  other.max_rows = params.max_rows + 1;  // an engine-determining field differs
+  std::shared_ptr<scribblez::nn::PositionEvalService> c =
+    scribblez::nn::PositionEvalService::create(other);
+  EXPECT_NE(a.get(), c.get()) << "differing params must not share";
+}
+
 // Custom main (instead of gtest_main): InitGoogleTest strips the gtest flags,
 // and the first remaining argument, if any, names a fixture directory to reuse.
 int main(int argc, char** argv) {

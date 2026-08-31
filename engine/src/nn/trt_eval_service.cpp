@@ -1,12 +1,16 @@
 #include "nn/trt_eval_service.h"
 
 #include "encoding/input_encoder.h"
+#include "nn/batching_position_eval_service.h"
 
 #include <Eigen/Core>
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 namespace scribblez {
 namespace nn {
@@ -170,6 +174,32 @@ template std::unique_ptr<EvalService<PositionEvaluationSpec>> make_loaded_servic
   const NeuralNetParams<PositionEvaluationSpec>& params);
 template std::unique_ptr<EvalService<MoveSetEvaluationSpec>> make_loaded_service(
   const NeuralNetParams<MoveSetEvaluationSpec>& params);
+
+// The shared-service factory (eval_service.h). Position family only: a run's
+// threads all resolve the same model to one instance, wrapped in the batching
+// decorator so they coalesce their requests. The move-set family has no create()
+// definition yet -- its agents still build per instance.
+template <>
+std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create(
+  const NeuralNetParams<PositionEvaluationSpec>& params) {
+  // Process-wide registry of the live shared services, keyed on the full
+  // engine-determining params. Held weakly, so a service is freed once its last
+  // holder (a run's agents) drops it; a later run rebuilds.
+  static std::mutex mutex;
+  static std::vector<std::pair<NeuralNetParamsBase, std::weak_ptr<PositionEvalService>>> registry;
+
+  std::lock_guard<std::mutex> lock(mutex);
+  std::erase_if(registry, [](const auto& entry) { return entry.second.expired(); });
+  for (const auto& [key, weak] : registry) {
+    if (key == params) {
+      if (std::shared_ptr<PositionEvalService> live = weak.lock()) return live;
+    }
+  }
+  auto service = std::make_shared<BatchingPositionEvalService>(
+    make_loaded_service<PositionEvaluationSpec>(params));
+  registry.emplace_back(params, service);
+  return service;
+}
 
 std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
                                                                 int cuda_device_id) {

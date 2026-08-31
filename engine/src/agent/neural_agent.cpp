@@ -15,7 +15,7 @@
 
 namespace scribblez {
 
-NeuralAgent::NeuralAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> service,
+NeuralAgent::NeuralAgent(const Params& params, std::shared_ptr<nn::PositionEvalService> service,
                          int max_batch)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),

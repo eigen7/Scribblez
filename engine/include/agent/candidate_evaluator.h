@@ -47,9 +47,11 @@ InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedMode
 
 class CandidateEvaluator {
  public:
-  // Takes an already-constructed evaluator (real or a scripted stub), loading
-  // no model and touching no GPU. `max_batch` bounds one evaluate() call.
-  CandidateEvaluator(const Dictionary& dict, std::unique_ptr<nn::PositionEvalService> service,
+  // Takes a shared evaluation service (nn::PositionEvalService::create() in
+  // production, a scripted stub in tests). Loads no model and touches no GPU;
+  // `max_batch` bounds one evaluate() call. The service is shared, so every
+  // thread's evaluator drives one loaded model.
+  CandidateEvaluator(const Dictionary& dict, std::shared_ptr<nn::PositionEvalService> service,
                      int max_batch);
 
   // The owning agent forwards its own begin_game() / observe_move() here, so
@@ -62,8 +64,8 @@ class CandidateEvaluator {
   // is deciding a turn.
   int active_player() const { return encoder_.active_player(); }
 
-  // The owned service, for an agent that reuses its model elsewhere -- e.g.
-  // as the value-truncated rollout leaf evaluator (SimRunner::Params).
+  // The shared service, for an agent that reuses its model elsewhere -- e.g. as
+  // the value-truncated rollout leaf evaluator (SimRunner::Params).
   nn::PositionEvalService& service() { return *service_; }
 
   // Evaluate candidates[idx[0..k)]'s post-move rows from the mover's POV,
@@ -85,7 +87,7 @@ class CandidateEvaluator {
 
  private:
   int max_batch_;
-  std::unique_ptr<nn::PositionEvalService> service_;
+  std::shared_ptr<nn::PositionEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
 
