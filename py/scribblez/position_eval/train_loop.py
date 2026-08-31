@@ -14,46 +14,14 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from .model import PLACEMENT_HEAD_NAMES, PLACEMENT_MASK_NAMES, compute_loss
+# LOSS_KEYS (the per-head losses accumulated each epoch, "total" being the
+# optimized objective), TARGET_KEYS (the target tensors pulled from each batch),
+# and LossConfig (the loss weights) all derive from / live with the head
+# registry in model.py, so a new head extends them without touching this loop.
+# Re-exported here for callers that import them from the train loop.
+from .model import LOSS_KEYS, TARGET_KEYS, LossConfig, compute_loss
 
-# Per-head loss keys accumulated each epoch ("total" is the optimized
-# objective).
-LOSS_KEYS = (
-    "total",
-    "wld",
-    "score_diff",
-    "score_diff_mean",
-    "score_diff_std",
-    "opp_next_placement",
-    "self_next_placement",
-    "opp_win_placement",
-    "self_win_placement",
-)
-
-
-@dataclass
-class LossConfig:
-    """Weights and Huber transition points for the combined post-move loss."""
-
-    lambda_wld: float
-    lambda_sd: float
-    lambda_next_placement: float
-    lambda_win_placement: float
-    huber_delta_mean: float
-    huber_delta_std: float
-    mask_placement: bool
-
-    @classmethod
-    def from_args(cls, args) -> LossConfig:
-        return cls(
-            args.lambda_wld,
-            args.lambda_sd,
-            args.lambda_next_placement,
-            args.lambda_win_placement,
-            args.huber_delta_mean,
-            args.huber_delta_std,
-            args.mask_placement,
-        )
+__all__ = ["LOSS_KEYS", "TARGET_KEYS", "LossConfig", "EpochResult", "run_epoch", "compute_loss"]
 
 
 @dataclass
@@ -65,17 +33,6 @@ class EpochResult:
     n_batches: int
     samples: int
     rows_trained: int
-
-
-# Target tensors compute_loss consumes, pulled from the batch dict by name: the
-# value targets, each head's footprint class index, and the two per-side legality
-# masks.
-TARGET_KEYS = (
-    "wld",
-    "score_diff",
-    *PLACEMENT_HEAD_NAMES,
-    *PLACEMENT_MASK_NAMES,
-)
 
 
 def _to_device(batch: dict, device):
