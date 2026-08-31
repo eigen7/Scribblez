@@ -17,7 +17,9 @@ ignoring the leave entirely. It runs three probes against one ONNX checkpoint
      frequency-prior model barely moves.
   3. TAIL PERCENTILES -- per-position corr(pred, MC truth) over the large set. The
      failure lives in the tail (constrained boards), so the mean is blind to it;
-     split |pred - truth| by whether a cell carries cross-check bits.
+     split |pred - truth| by whether a cell carries a live cross-check constraint
+     (a proper subset of letters -- not an all-ones open square or an all-zero
+     occupied one).
 
 The motivating case is pos-09 M7: the opponent holds G and GNU plays vertically
 there (MC truth 0.668). A vertical play's constraint lives in the V (vertical)
@@ -82,12 +84,13 @@ def encode(gcg_text: str, arm) -> tuple[np.ndarray, np.ndarray]:
 
 
 def hook_block(sp: np.ndarray, r: int, c: int) -> tuple[int, str]:
-    """Which cross-check block carries this square's set: the non-empty one. A hook
-    constrains plays along the axis perpendicular to its cross-word, so a square with
-    a vertical cross-word carries its set in the V block."""
-    h = int(sp[HCC0:VCC0, r, c].sum())
-    v = int(sp[VCC0:CC_END, r, c].sum())
-    return (VCC0, "V") if v >= h else (HCC0, "H")
+    """Which cross-check block carries this square's constraint: the proper subset.
+    A hook constrains plays along the axis perpendicular to its cross-word, so that
+    block has letters *unset*; an unconstrained axis is all-ones. Pick the block with
+    more unset bits, so a square with a vertical cross-word resolves to the V block."""
+    h_unset = int((sp[HCC0:VCC0, r, c] == 0).sum())
+    v_unset = int((sp[VCC0:CC_END, r, c] == 0).sum())
+    return (VCC0, "V") if v_unset >= h_unset else (HCC0, "H")
 
 
 def probe_letter_selectivity(model: Model, arm, square: str, focus: str):
@@ -100,7 +103,10 @@ def probe_letter_selectivity(model: Model, arm, square: str, focus: str):
     scores = []
     for letter in range(26):
         x = sp.copy()
-        x[HCC0:CC_END, r, c] = 0
+        # Clear only the hook block, not both -- the perpendicular axis stays at its
+        # natural encoding (all-ones when unconstrained) rather than reading as fully
+        # illegal, which would be off-distribution.
+        x[block0 : block0 + 26, r, c] = 0
         x[block0 + letter, r, c] = 1
         scores.append((chr(ord("A") + letter), float(model.opp_placement(x, sc)[r, c])))
     scores.sort(key=lambda t: -t[1])
@@ -152,7 +158,11 @@ def probe_tail_percentiles(model: Model, arm, limit: int):
         if truth.std() == 0 or pred.std() == 0:
             continue
         cors.append(np.corrcoef(pred.ravel(), truth.ravel())[0, 1])
-        bits = sp[HCC0:CC_END].sum(axis=0) > 0  # cells carrying any cross-check bit
+        # A constrained cross-check cell is a proper subset: some letters legal and
+        # some not. All-ones is an unconstrained (neighbor-free) square and all-zero
+        # is an occupied or fully-dead one -- neither carries a live constraint.
+        cc_sum = sp[HCC0:CC_END].sum(axis=0)
+        bits = (cc_sum > 0) & (cc_sum < CC_END - HCC0)
         err = np.abs(pred - truth)
         has_bits.append(err[bits].mean() if bits.any() else np.nan)
         no_bits.append(err[~bits].mean() if (~bits).any() else np.nan)

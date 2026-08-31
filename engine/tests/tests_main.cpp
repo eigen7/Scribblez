@@ -772,14 +772,24 @@ TEST(Encoder, CrossCheckPlanesQi) {
     }
   };
 
+  // A square with no perpendicular neighbor constrains nothing: every letter is
+  // legal, so all 26 planes of the axis block are set.
+  const auto assert_horizontal_unconstrained = [&](int r, int c) {
+    for (int l = 0; l < 26; ++l) ASSERT_EQ(h_cross_check(Tile::of(l), r, c), 1.0f);
+  };
+  const auto assert_vertical_unconstrained = [&](int r, int c) {
+    for (int l = 0; l < 26; ++l) ASSERT_EQ(v_cross_check(Tile::of(l), r, c), 1.0f);
+  };
+
   // Left and right of QI, the cross word runs across through the QI:
   //   - right of I: QIS -> only 'S'
   //   - left of Q: none in this fixture dictionary
   assert_vertical_set(7, 9, {'S'});
   assert_vertical_set(7, 6, {});
-  // Nothing runs down through either square, so the horizontal block is zero.
-  assert_horizontal_set(7, 9, {});
-  assert_horizontal_set(7, 6, {});
+  // Nothing runs down through either square, so no vertical cross word
+  // constrains it and the horizontal block is all-ones.
+  assert_horizontal_unconstrained(7, 9);
+  assert_horizontal_unconstrained(7, 6);
 
   // Above and below QI, the cross word runs down:
   //   - below Q: QI -> only 'I'
@@ -789,9 +799,11 @@ TEST(Encoder, CrossCheckPlanesQi) {
   assert_horizontal_set(6, 7, {});
   assert_horizontal_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
   assert_horizontal_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
-  assert_vertical_set(8, 7, {});
-  assert_vertical_set(6, 8, {});
-  assert_vertical_set(8, 8, {});
+  // No horizontal cross word runs through these squares, so the vertical block
+  // is all-ones (every letter legal).
+  assert_vertical_unconstrained(8, 7);
+  assert_vertical_unconstrained(6, 8);
+  assert_vertical_unconstrained(8, 8);
 
   // Occupied squares never carry cross-check planes.
   assert_horizontal_set(7, 7, {});
@@ -799,13 +811,12 @@ TEST(Encoder, CrossCheckPlanesQi) {
   assert_vertical_set(7, 7, {});
   assert_vertical_set(7, 8, {});
 
-  // Spot-check that cells with no cross-check stay zero in both families.
-  const Tile a = Tile::from_char('A');
-  const Tile z = Tile::from_char('Z');
-  ASSERT_EQ(h_cross_check(a, 0, 0), 0.0f);
-  ASSERT_EQ(h_cross_check(z, 14, 14), 0.0f);
-  ASSERT_EQ(v_cross_check(a, 0, 0), 0.0f);
-  ASSERT_EQ(v_cross_check(z, 14, 14), 0.0f);
+  // A cell with no neighbor in any direction is fully unconstrained: every
+  // plane in both families is set.
+  assert_horizontal_unconstrained(0, 0);
+  assert_horizontal_unconstrained(14, 14);
+  assert_vertical_unconstrained(0, 0);
+  assert_vertical_unconstrained(14, 14);
 }
 
 // A letter illegal as a lone tile can be legal inside a longer word, so the
