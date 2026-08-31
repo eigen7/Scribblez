@@ -64,44 +64,44 @@ void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, Foo
   mask[kExtraClass] = win_head;
 }
 
-// The opponent's tile availability, distilled from the 27-count supply for a
-// fast per-cell test: `letters` has bit L set iff at least one of letter L is in
-// stock, and `blank` iff a wildcard blank is. A null supply is "everything in
-// stock", which makes the availability test collapse to pure board legality.
-struct Supply {
-  uint32_t letters = kAllLettersMask;  // null-supply default: every letter available
-  bool blank = true;
-};
+// The opponent's tile availability as a bit-set for a fast per-cell test: bit L
+// set iff at least one of tile L is in stock, indexed like the 27-count array
+// (0..25 = A..Z, 26 = blank).
+using tile_set_t = uint32_t;
+inline constexpr tile_set_t kBlankTile = 1u << 26;                     // wildcard blank
+inline constexpr tile_set_t kAllTiles = kAllLettersMask | kBlankTile;  // every tile in stock
 
-Supply make_supply(const uint8_t* counts) {
-  if (counts == nullptr) return Supply{};
-  Supply s{0u, counts[26] > 0};
-  for (int l = 0; l < 26; ++l)
-    if (counts[l] > 0) s.letters |= (1u << l);
-  return s;
+// The available tiles distilled from a 27-count array. A null array is
+// "everything in stock", which collapses the availability test to board legality.
+tile_set_t available_tiles(const uint8_t* counts) {
+  if (counts == nullptr) return kAllTiles;
+  tile_set_t avail = 0;
+  for (int t = 0; t < 27; ++t)
+    if (counts[t] > 0) avail |= (1u << t);
+  return avail;
 }
 
 // Can some AVAILABLE letter play at empty cell (r,c) in board-frame orientation
 // `horizontal`? Its perpendicular cross-check mask must share a letter with
-// `supply` (a blank is a wildcard). Cache indexing matches the input encoder: a
+// `avail` (a blank is a wildcard). Cache indexing matches the input encoder: a
 // horizontal word's cross-words run down the columns (non-transposed [r*side+c]),
 // a vertical word's along the rows (transposed [c*side+r]).
-bool cell_admits_letter(const Board& board, const Supply& supply, bool horizontal, int r, int c) {
+bool cell_admits_letter(const Board& board, tile_set_t avail, bool horizontal, int r, int c) {
   const CrossCheck& cc = horizontal ? board.cross_checks(false)[r * BOARD_SIZE + c]
                                     : board.cross_checks(true)[c * BOARD_SIZE + r];
-  if (supply.blank) return cc.mask != 0;   // a wildcard plays wherever any letter is legal
-  return (cc.mask & supply.letters) != 0;  // a legal letter that is also in stock
+  if (avail & kBlankTile) return cc.mask != 0;  // a wildcard plays wherever any letter is legal
+  return (cc.mask & avail) != 0;                // an available letter that is legal here
 }
 
 // Can some AVAILABLE letter play as a LONE tile at (r,c)? It forms both its
 // cross-words at once, so its letter must clear both cross-checks -- their mask
 // intersection, not cell_admits_letter's per-axis test.
-bool lone_tile_admits_letter(const Board& board, const Supply& supply, int r, int c) {
+bool lone_tile_admits_letter(const Board& board, tile_set_t avail, int r, int c) {
   const CrossCheck& vert = board.cross_checks(false)[r * BOARD_SIZE + c];
   const CrossCheck& horiz = board.cross_checks(true)[c * BOARD_SIZE + r];
   const uint32_t allowed = vert.mask & horiz.mask;  // letters legal in both words the tile forms
-  if (supply.blank) return allowed != 0;            // a wildcard fills any jointly-legal square
-  return (allowed & supply.letters) != 0;           // a jointly-legal letter that is in stock
+  if (avail & kBlankTile) return allowed != 0;      // a wildcard fills any jointly-legal square
+  return (allowed & avail) != 0;                    // a jointly-legal letter that is in stock
 }
 
 // Tiles-to-reach distance field: d[Z] = the fewest tiles that must be placed to
@@ -144,14 +144,16 @@ std::array<int, kFootprintCells> tiles_to_reach(const Board& board) {
 
 }  // namespace
 
-void opp_footprint_mask(const Board& board, const uint8_t* supply, int tile_budget, bool flip,
-                        bool win_head, FootprintMask& mask) {
+void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
+                        bool flip, bool win_head, FootprintMask& mask) {
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
-  const Supply s = make_supply(supply);
+  const tile_set_t avail = available_tiles(available_counts);
   mark_footprints(
     board, kmax, flip, win_head, mask,
-    [&](bool horizontal, int r, int c) { return cell_admits_letter(board, s, horizontal, r, c); },
-    [&](int r, int c) { return lone_tile_admits_letter(board, s, r, c); });
+    [&](bool horizontal, int r, int c) {
+      return cell_admits_letter(board, avail, horizontal, r, c);
+    },
+    [&](int r, int c) { return lone_tile_admits_letter(board, avail, r, c); });
 }
 
 void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,

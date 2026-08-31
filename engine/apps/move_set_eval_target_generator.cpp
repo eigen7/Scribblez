@@ -306,12 +306,12 @@ void collapse_worker(const std::vector<CollapseJob>* jobs, const Dictionary* dic
     post.apply_move(*j.move);
     // The collapse still does its full job here -- mask, softmax, and scatter the
     // 2927 footprint logits into the four (15,15) per-cell teacher planes the
-    // .mset writer stores. Only AVAILABILITY masking is opted out (supply=null ->
+    // .mset writer stores. Only AVAILABILITY masking is opted out (null counts ->
     // board-legality only): this per-cell teacher-target consumer is being retired
     // (the student stack is migrating to footprints), so it does not fund plumbing
     // a per-candidate unseen pool that would soon be deleted.
-    collapse_footprint_planes(post.board(), *dict, /*supply=*/nullptr, /*flip=*/false, j.raw,
-                              j.out);
+    collapse_footprint_planes(post.board(), *dict, /*available_counts=*/nullptr, /*flip=*/false,
+                              j.raw, j.out);
   }
 }
 

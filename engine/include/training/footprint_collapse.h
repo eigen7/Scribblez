@@ -28,18 +28,19 @@ inline constexpr int kPlacementHeads = 4;
 // per-cell marginal the old Bernoulli heads emitted, now derived from the
 // footprint distribution.
 //
-// `supply` is the opponent's 27-count tile availability (the unseen pool; see
-// opp_footprint_mask), applied to the two OPP heads so a footprint whose hooks
-// no available tile can satisfy is masked out and its mass renormalizes onto
-// viable footprints. `supply == nullptr` disables availability (board legality
-// only) -- what the .mset teacher path passes, since that collapse consumer is
-// being retired and does not fund the extra plumbing. The self heads never take
-// availability (two plies out, post-redraw).
+// `available_counts` is the opponent's 27-count tile availability (the unseen
+// pool; see opp_footprint_mask), applied to the two OPP heads so a footprint
+// whose hooks no available tile can satisfy is masked out and its mass
+// renormalizes onto viable footprints. `available_counts == nullptr` disables
+// availability (board legality only) -- what the .mset teacher path passes, since
+// that collapse consumer is being retired and does not fund the extra plumbing.
+// The self heads never take availability (two plies out, post-redraw).
 //
 // `board` gets its movegen caches bound from `dict` on demand. `flip` is the
 // frame the logits were produced in (the generator encodes unflipped); the
 // output planes are in that same frame.
-void collapse_footprint_planes(const Board& board, const Dictionary& dict, const uint8_t* supply,
-                               bool flip, const float* raw, float* out);
+void collapse_footprint_planes(const Board& board, const Dictionary& dict,
+                               const uint8_t* available_counts, bool flip, const float* raw,
+                               float* out);
 
 }  // namespace scribblez

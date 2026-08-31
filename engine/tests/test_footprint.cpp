@@ -30,10 +30,10 @@ using CellSet = std::set<std::pair<int, int>>;
 
 Glyph G(int letter_index) { return Glyph::of(Tile::of(letter_index)); }
 
-// A 27-count availability supply (A..Z then blank at 26) holding one of each
+// A 27-count availability array (A..Z then blank at 26) holding one of each
 // listed letter; '?' adds a wildcard blank. Unlisted letters stay 0 (out of
-// stock). Feeds opp_footprint_mask / collapse_footprint_planes as `supply`.
-std::array<uint8_t, 27> supply_of(const std::string& letters) {
+// stock). Feeds opp_footprint_mask / collapse_footprint_planes as available_counts.
+std::array<uint8_t, 27> available_of(const std::string& letters) {
   std::array<uint8_t, 27> s{};
   for (char ch : letters) {
     if (ch == '?')
@@ -44,9 +44,9 @@ std::array<uint8_t, 27> supply_of(const std::string& letters) {
   return s;
 }
 
-bool opp_admits(const Board& b, const std::array<uint8_t, 27>& supply, int cls) {
+bool opp_admits(const Board& b, const std::array<uint8_t, 27>& available_counts, int cls) {
   FootprintMask m;
-  opp_footprint_mask(b, supply.data(), RACK_SIZE, /*flip=*/false, /*win_head=*/false, m);
+  opp_footprint_mask(b, available_counts.data(), RACK_SIZE, /*flip=*/false, /*win_head=*/false, m);
   return m[cls];
 }
 
@@ -135,14 +135,14 @@ int count_true(const FootprintMask& m) {
 }
 
 // On an empty board every square reads as unconstrained, so with no availability
-// supply the opp mask reduces to geometry + tile budget -- exercisable without a
-// dictionary. (Cross-check and availability gating need a real board/supply; see
+// counts the opp mask reduces to geometry + tile budget -- exercisable without a
+// dictionary. (Cross-check and availability gating need a real board/counts; see
 // the availability tests below and the soundness sweep.)
 TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, /*tile_budget=*/7, /*flip=*/false, /*win_head=*/false,
-                     m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/7, /*flip=*/false,
+                     /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);    // horizontal k=3 fits
   EXPECT_FALSE(m[(7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2))]);  // horizontal k=7 off the edge
   EXPECT_TRUE(m[kPassClass]);                                      // pass always legal
@@ -153,7 +153,7 @@ TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
 TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, 7, false, /*win_head=*/true, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, 7, false, /*win_head=*/true, m);
   EXPECT_TRUE(m[kExtraClass]);
   EXPECT_EQ(count_true(m), 2295 + 2);  // + pass + not-win
 }
@@ -161,7 +161,7 @@ TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
 TEST(FootprintMask, BudgetCapsK) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, /*tile_budget=*/2, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/2, false, false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
   EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
 }
@@ -169,7 +169,7 @@ TEST(FootprintMask, BudgetCapsK) {
 TEST(FootprintMask, FlipMarksFlippedClassLegal) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, 7, /*flip=*/true, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, 7, /*flip=*/true, false, m);
   // The flip image of horizontal k=3 at (7,5) is vertical k=3 at (5,7).
   EXPECT_TRUE(m[(5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2))]);
 }
@@ -190,24 +190,24 @@ TEST(FootprintMask, AvailabilityGatesHookLetters) {
   const uint16_t sq = (1u << 7) | (1u << 8);
   const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2), /*flip=*/false);
 
-  EXPECT_TRUE(opp_admits(b, supply_of("XY"), cls));    // both hooks in stock
-  EXPECT_TRUE(opp_admits(b, supply_of("YE"), cls));    // one legal hook (Y) suffices
-  EXPECT_TRUE(opp_admits(b, supply_of("XE"), cls));    // the other legal hook (X)
-  EXPECT_FALSE(opp_admits(b, supply_of("EIO"), cls));  // no legal hook available -> masked
-  EXPECT_TRUE(opp_admits(b, supply_of("?"), cls));     // a blank is a wildcard hook
-  EXPECT_TRUE(opp_admits(b, supply_of("EIO?"), cls));  // ... even amid non-hook letters
-  EXPECT_TRUE(opp_admits(b, supply_of("XY"), cls));    // sanity: unchanged on re-check
+  EXPECT_TRUE(opp_admits(b, available_of("XY"), cls));    // both hooks in stock
+  EXPECT_TRUE(opp_admits(b, available_of("YE"), cls));    // one legal hook (Y) suffices
+  EXPECT_TRUE(opp_admits(b, available_of("XE"), cls));    // the other legal hook (X)
+  EXPECT_FALSE(opp_admits(b, available_of("EIO"), cls));  // no legal hook available -> masked
+  EXPECT_TRUE(opp_admits(b, available_of("?"), cls));     // a blank is a wildcard hook
+  EXPECT_TRUE(opp_admits(b, available_of("EIO?"), cls));  // ... even amid non-hook letters
+  EXPECT_TRUE(opp_admits(b, available_of("XY"), cls));    // sanity: unchanged on re-check
 
-  // A null supply disables availability -- pure board legality readmits it.
+  // Null availability disables the gate -- pure board legality readmits it.
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, RACK_SIZE, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, false, false, m);
   EXPECT_TRUE(m[cls]);
 }
 
 // The unconstrained free cell (7,8) still needs SOME tile: an utterly empty
-// supply (a blank-less bag with no listed letters) masks even a footprint whose
+// availability (a blank-less bag with no listed letters) masks even a footprint whose
 // only real constraint is "place a tile here".
-TEST(FootprintMask, AvailabilityEmptySupplyMasksEverything) {
+TEST(FootprintMask, AvailabilityEmptyMasksEverything) {
   Board b;
   b.set(6, 7, G(0));
   const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
@@ -215,7 +215,7 @@ TEST(FootprintMask, AvailabilityEmptySupplyMasksEverything) {
   Glyph played[2] = {G(23), G(23)};
   const uint16_t sq = (1u << 7) | (1u << 8);
   const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2), /*flip=*/false);
-  EXPECT_FALSE(opp_admits(b, supply_of(""), cls));  // nothing to place at all
+  EXPECT_FALSE(opp_admits(b, available_of(""), cls));  // nothing to place at all
 }
 
 // The lone-tile fix in miniature (the I13 case): a single tile below a vertical
@@ -229,16 +229,16 @@ TEST(FootprintMask, AvailabilityGatesLoneTileHook) {
   const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
   b.ensure_movegen_caches(d);
 
-  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;    // orientation-free k==1 at (7,7)
-  EXPECT_TRUE(opp_admits(b, supply_of("XY"), lone));    // both down-hooks in stock
-  EXPECT_TRUE(opp_admits(b, supply_of("YE"), lone));    // one legal down-hook (Y) suffices
-  EXPECT_TRUE(opp_admits(b, supply_of("?"), lone));     // a blank is a wildcard hook
-  EXPECT_FALSE(opp_admits(b, supply_of("EIO"), lone));  // no legal down-hook -> masked (the fix)
-  EXPECT_FALSE(opp_admits(b, supply_of(""), lone));     // nothing to place at all
+  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;       // orientation-free k==1 at (7,7)
+  EXPECT_TRUE(opp_admits(b, available_of("XY"), lone));    // both down-hooks in stock
+  EXPECT_TRUE(opp_admits(b, available_of("YE"), lone));    // one legal down-hook (Y) suffices
+  EXPECT_TRUE(opp_admits(b, available_of("?"), lone));     // a blank is a wildcard hook
+  EXPECT_FALSE(opp_admits(b, available_of("EIO"), lone));  // no legal down-hook -> masked (the fix)
+  EXPECT_FALSE(opp_admits(b, available_of(""), lone));     // nothing to place at all
 
-  // Board legality only (null supply) still admits it -- some letter (X/Y) exists.
+  // Board legality only (null availability) still admits it -- some letter (X/Y) exists.
   FootprintMask m;
-  opp_footprint_mask(b, /*supply=*/nullptr, RACK_SIZE, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, false, false, m);
   EXPECT_TRUE(m[lone]);
 }
 
@@ -256,16 +256,17 @@ TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
   disjoint.set(7, 6, G(1));  // 'B' left:  across-word "B_" -> {E}
   const Dictionary dd = Dictionary::build_from_words({"AX", "AY", "BE"});
   disjoint.ensure_movegen_caches(dd);
-  EXPECT_FALSE(opp_admits(disjoint, supply_of("XYE"), lone));  // no letter fits both words
-  EXPECT_FALSE(opp_admits(disjoint, supply_of("?"), lone));  // no jointly-legal square for a blank
+  EXPECT_FALSE(opp_admits(disjoint, available_of("XYE"), lone));  // no letter fits both words
+  EXPECT_FALSE(
+    opp_admits(disjoint, available_of("?"), lone));  // no jointly-legal square for a blank
 
   Board overlap;
   overlap.set(6, 7, G(0));                                           // down-word "A_"
   overlap.set(7, 6, G(1));                                           // across-word "B_"
   const Dictionary od = Dictionary::build_from_words({"AE", "BE"});  // both admit only E
   overlap.ensure_movegen_caches(od);
-  EXPECT_TRUE(opp_admits(overlap, supply_of("E"), lone));    // E fits both words and is in stock
-  EXPECT_FALSE(opp_admits(overlap, supply_of("XY"), lone));  // only E fits; X/Y satisfy neither
+  EXPECT_TRUE(opp_admits(overlap, available_of("E"), lone));    // E fits both words and is in stock
+  EXPECT_FALSE(opp_admits(overlap, available_of("XY"), lone));  // only E fits; X/Y satisfy neither
 }
 
 // The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
@@ -335,14 +336,15 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
     if (m.type() == MoveType::PLAY) {
       const int cls = footprint_class(m, /*flip=*/false);
       if (dict) {
-        // Availability supply the mover of `m` could draw from: everything off
-        // the board (the loosest sound pool -- a superset of any one rack, so it
-        // can never exclude a move the mover actually makes). This exercises the
+        // Availability the mover of `m` could draw from: everything off the board
+        // (the loosest sound pool -- a superset of any one rack, so it can never
+        // exclude a move the mover actually makes). This exercises the
         // availability path and, in the fixtures' endgames, its binding regime.
-        uint8_t supply[27];
-        compute_unseen_pool(supply, board, Rack{});
+        uint8_t available_counts[27];
+        compute_unseen_pool(available_counts, board, Rack{});
         FootprintMask opp;
-        opp_footprint_mask(board, supply, RACK_SIZE, /*flip=*/false, /*win_head=*/false, opp);
+        opp_footprint_mask(board, available_counts, RACK_SIZE, /*flip=*/false, /*win_head=*/false,
+                           opp);
         EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
       }
       if (two_plies_ago) {
@@ -396,7 +398,8 @@ TEST(FootprintCollapse, MassLandsOnCoveredCells) {
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
-  collapse_footprint_planes(b, d, /*supply=*/nullptr, /*flip=*/false, raw.data(), out.data());
+  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
+                            out.data());
 
   const float* plane = out.data();  // head 0
   const auto cell = [&](int r, int c) { return plane[r * kFootprintSide + c]; };
@@ -428,7 +431,8 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[1 * kFootprintClasses + illegal] = 20.0f;  // head 1 (self_next); would dominate unmasked
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
-  collapse_footprint_planes(b, d, /*supply=*/nullptr, /*flip=*/false, raw.data(), out.data());
+  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
+                            out.data());
 
   const float* self_plane = out.data() + 1 * kFootprintSide * kFootprintSide;
   EXPECT_LT(self_plane[14 * kFootprintSide + 12], 0.01f);
@@ -463,12 +467,12 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
 
-  const std::array<uint8_t, 27> with_y = supply_of("YE");
+  const std::array<uint8_t, 27> with_y = available_of("YE");
   collapse_footprint_planes(b, d, with_y.data(), /*flip=*/false, raw.data(), out.data());
   const float lit = out[7 * kFootprintSide + 7];
   EXPECT_GT(lit, 0.9f);  // Y available -> the dominant hook lands on (7,7)
 
-  const std::array<uint8_t, 27> no_y = supply_of("EIO");  // letters, but no Y, no blank
+  const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, but no Y, no blank
   collapse_footprint_planes(b, d, no_y.data(), /*flip=*/false, raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
   EXPECT_LT(gated, 0.05f);       // the 20-logit footprint no longer reaches (7,7)
