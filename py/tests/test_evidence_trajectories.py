@@ -19,7 +19,7 @@ import pytest
 import torch
 from scribblez import params as params_mod
 from scribblez import workloads
-from scribblez.evidence.dataset import gain_targets, held_out_rows
+from scribblez.evidence.dataset import assemble_subset, gain_targets
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
     MOVE_DTYPE,
@@ -197,9 +197,11 @@ def test_v4_roles_split_evidence_from_labels_only_draws():
     # against -- so no candidate's gain is suppressed by a labels-only sim.
     value = np.array([0.2, 0.5, 0.3, 0.9, 0.4], dtype=np.float32)
     for prefix in pos.evidence_prefix_sizes():
-        best = float(value[:prefix].max()) if prefix else 0.0
-        assert best <= 0.5  # the off-policy 0.9 is never in an evidence prefix
-        np.testing.assert_allclose(gain_targets(value, prefix), np.maximum(value - best, 0.0))
+        subset = np.zeros(len(value), dtype=bool)
+        subset[:prefix] = True  # a leading prefix is one valid subset
+        best = float(value[subset].max()) if prefix else 0.0
+        assert best <= 0.5  # the off-policy 0.9 is never in an evidence subset
+        np.testing.assert_allclose(gain_targets(value, subset), np.maximum(value - best, 0.0))
 
 
 def test_v4_num_evidence_is_order_robust():
@@ -211,23 +213,22 @@ def test_v4_num_evidence_is_order_robust():
     assert list(pos.evidence_prefix_sizes()) == [0, 1]
 
 
-def test_held_out_rows_excludes_off_policy_from_its_role():
-    """held_out_rows keeps off-policy draws out of the evidence set from the
-    role alone, not the storage order. The off-policy term is load-bearing:
-    with a prefix that reaches past the off-policy slot (the regression the
-    num_evidence clamp prevents), slot >= prefix alone would admit it, so the
-    row is held out only because it is off-policy."""
-    # One position, four candidates, off-policy at slot 2.
-    slot = np.array([0, 1, 2, 3], dtype=np.int64)
-    pos_id = np.zeros(4, dtype=np.int64)
-    off_policy = np.array([False, False, True, False])
-    # An over-wide prefix of 4: slot >= prefix holds for none, so only the
-    # off-policy term marks the labels-only row held out.
-    held = held_out_rows(slot, np.array([4], dtype=np.int64), pos_id, off_policy)
-    assert held.tolist() == [False, False, True, False]
-    # In-contract (prefix 2 <= num_evidence), the two terms agree: slots 2,3 held.
-    held = held_out_rows(slot, np.array([2], dtype=np.int64), pos_id, off_policy)
-    assert held.tolist() == [False, False, True, True]
+def test_assemble_subset_never_draws_a_labels_only_record():
+    """Subset assembly reads eligibility from the role, not the storage order:
+    an off-policy draw is never a member (its held-out row is what carries the
+    floor label), and the num_evidence clamp keeps an on-policy record sitting
+    behind an off-policy one out of every subset too."""
+    # off-policy at slot 1, an on-policy behind it -> num_evidence clamps to 1.
+    roles = np.array([ROLE_ANCHOR, ROLE_OFF_POLICY, ROLE_ON_POLICY], dtype=np.uint8)
+    pos = _synthetic_position(roles, num_legal_moves=10)
+    assert pos.num_evidence == 1
+    rng = np.random.default_rng(0)
+    sizes = set()
+    for _ in range(200):
+        mask = assemble_subset(rng, pos)
+        sizes.add(int(mask.sum()))
+        assert not mask[1] and not mask[2]  # neither the off-policy nor the clamped on-policy
+    assert sizes == {0, 1}  # empty or the anchor alone
 
 
 def test_trajectory_width_formulas():

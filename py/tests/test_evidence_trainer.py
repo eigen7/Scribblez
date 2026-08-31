@@ -1,9 +1,10 @@
-"""Tests for the evidence trainer (roadmap items 2-3): the sim-outcome targets,
-the frozen-backbone model surface (proves-best head, freeze, student init),
-the trajectory dataset's rows, and -- on the GPU e2e corpus of
-test_evidence_trajectories -- a training pass with the plain-vs-conditioned
-metrics and the prefix-0 exactness they rest on, in both the frozen mode and
-the unfrozen (joint distillation + sim-outcome) one."""
+"""Tests for the evidence trainer (roadmap items 2-3, 5): the sim-outcome
+targets, the subset-assembly dataset (arbitrary evidence subsets, the single
+membership tensor threading its five seams, the batched evidence builder), the
+frozen-backbone model surface (proves-best head, freeze, student init), and --
+on the GPU e2e corpus of test_evidence_trajectories -- a training pass with the
+plain-vs-conditioned metrics and the empty-subset exactness they rest on, in
+both the frozen mode and the unfrozen (joint distillation + sim-outcome) one."""
 
 import numpy as np
 import pytest
@@ -12,13 +13,21 @@ from scribblez.evidence import dataset as ED
 from scribblez.evidence.train_loop import (
     Distillation,
     LossConfig,
+    batch_evidence_inputs,
     conditioned_forward,
     evaluate,
     run_epoch,
 )
+from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.dataset import MsetDataset
 from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.sim_evidence.sobs import (
+    ROLE_ANCHOR,
+    ROLE_OFF_POLICY,
+    ROLE_ON_POLICY,
+    SobsPosition,
+)
 from test_evidence_trajectories import traj_corpus  # noqa: F401  (fixture)
 from test_move_set_eval_evidence import _synthetic_sobs
 
@@ -32,11 +41,178 @@ def test_sim_targets_and_gain():
     assert np.allclose(wld.sum(axis=1), 1.0)
     assert np.allclose(value, [0.5, 0.75, 0.5, 0.75])
     assert np.allclose(delta[:, 0], 12.0) and np.allclose(delta[:, 1], 5.0)
-    # Prefix 0: the gain is the value itself. Prefix 2: best-so-far is 0.75, so
-    # only a candidate strictly above it gains, and the tie gains nothing.
-    assert np.allclose(ED.gain_targets(value, 0), value)
-    assert np.allclose(ED.gain_targets(value, 2), [0.0, 0.0, 0.0, 0.0])
-    assert np.allclose(ED.gain_targets(value, 1), [0.0, 0.25, 0.0, 0.25])
+
+    def subset(*members):
+        m = np.zeros(4, dtype=bool)
+        m[list(members)] = True
+        return m
+
+    # Empty subset: the gain is the value itself. best-so-far is a max over the
+    # subset's members, not a leading prefix -- a subset {0,3} (values 0.5, 0.75)
+    # tops out at 0.75, so only a candidate strictly above it gains and the tie
+    # gains nothing; a non-contiguous {1} (0.75) baselines the same at 0.75.
+    assert np.allclose(ED.gain_targets(value, subset()), value)
+    assert np.allclose(ED.gain_targets(value, subset(0, 3)), [0.0, 0.0, 0.0, 0.0])
+    assert np.allclose(ED.gain_targets(value, subset(0)), [0.0, 0.25, 0.0, 0.25])
+    assert np.allclose(ED.gain_targets(value, subset(1)), [0.0, 0.0, 0.0, 0.0])
+
+
+# --- subset assembly (CPU, synthetic v4 positions -- no GPU, no model) ---
+
+
+def _traj_pos(roles, num_legal_moves: int = 64) -> SobsPosition:
+    """A synthetic trajectory position carrying real (distinct-per-candidate)
+    move and observation records under the given per-candidate roles."""
+    roles = np.asarray(roles, dtype=np.uint8)
+    moves, obs = _synthetic_sobs(len(roles))
+    return SobsPosition(0, 0, 100, 0, num_legal_moves, 0, moves, obs, roles)
+
+
+_ROLES = [ROLE_ANCHOR, ROLE_ON_POLICY, ROLE_ON_POLICY, ROLE_ON_POLICY, ROLE_OFF_POLICY]
+
+
+def test_assemble_subset_holds_only_the_anchor_and_on_policy_within_the_cap():
+    """A drawn subset is empty or contains the anchor; it never holds an
+    off-policy (labels-only) draw; and it fits min(num_evidence, cap)."""
+    pos = _traj_pos(_ROLES)
+    assert pos.num_evidence == 4  # anchor + 3 on-policy
+    rng = np.random.default_rng(0)
+    seen_sizes, seen_members = set(), set()
+    for _ in range(400):
+        mask = ED.assemble_subset(rng, pos, max_evidence_width=3)
+        size = int(mask.sum())
+        seen_sizes.add(size)
+        assert size <= 3  # capped below num_evidence
+        assert not (mask & (pos.roles == ROLE_OFF_POLICY)).any()  # never labels-only
+        if size:
+            assert mask[0]  # the anchor is in every non-empty subset
+            seen_members.update(np.flatnonzero(mask).tolist())
+    assert seen_sizes == {0, 1, 2, 3}
+    # Non-contiguous subsets occur: on-policy slots 1..3 all appear as members.
+    assert {1, 2, 3} <= seen_members
+
+
+def test_assemble_subset_empty_fraction_pins_the_zero_prefix_rate():
+    """empty_fraction fixes P(empty subset) -- the all-held-out rows that set
+    the rows-clocked LR horizon -- and the default sweeps size uniformly."""
+    pos = _traj_pos(_ROLES)
+    rng = np.random.default_rng(1)
+    assert all(not ED.assemble_subset(rng, pos, empty_fraction=1.0).any() for _ in range(20))
+    assert all(ED.assemble_subset(rng, pos, empty_fraction=0.0).any() for _ in range(20))
+    empties = sum(not ED.assemble_subset(rng, pos, empty_fraction=0.25).any() for _ in range(2000))
+    assert 0.2 < empties / 2000 < 0.3  # ~1/4
+    # Default: uniform over {0..num_evidence}, so empties at ~1/(4+1).
+    default = sum(not ED.assemble_subset(rng, pos).any() for _ in range(2000))
+    assert 0.15 < default / 2000 < 0.25
+
+
+def test_compact_index_packs_members_in_slot_order():
+    """_compact_index gives each member its 0-based rank in slot order -- the
+    padded slot an arbitrary subset scatters to, the way the deployment builder
+    packs {0, 2, 3} into rows 0, 1, 2."""
+    mask = np.array([True, False, True, True, False])
+    assert ED._compact_index(mask).tolist() == [0, 0, 1, 2, 0]
+    assert ED._compact_index(np.zeros(3, bool)).tolist() == [0, 0, 0]
+
+
+def _cpu_evidence_batch(units, pre_diffs):
+    """The subset of a batch dict + move_args batch_evidence_inputs reads, built
+    from (position, subset mask) units the way _build_batch does (real
+    _compact_index), so the seam is exercised without board inputs or a GPU."""
+    positions = [pos for pos, _ in units]
+    masks = [mask for _, mask in units]
+    all_moves = np.concatenate([pos.moves for pos in positions])
+    all_obs = np.concatenate([pos.obs for pos in positions])
+    counts = [len(pos.moves) for pos in positions]
+    pos_id = np.repeat(np.arange(len(units), dtype=np.int64), counts)
+    in_evidence = np.concatenate(masks)
+    ev_index = np.concatenate([ED._compact_index(mask) for mask in masks])
+    enc = move_enc.encode_moves(all_moves, np.asarray(pre_diffs, np.int32)[pos_id])
+    move_keys = ("letters", "blanks", "squares", "tile_mask", "scalars")
+    move_args = (*(torch.from_numpy(enc[k]) for k in move_keys), torch.from_numpy(pos_id))
+    batch = {
+        "positions": positions,
+        "in_evidence": torch.from_numpy(in_evidence),
+        "ev_index": torch.from_numpy(ev_index),
+        "all_moves": all_moves,
+        "all_obs": all_obs,
+    }
+    return batch, move_args
+
+
+def _fabricated_plain(m: int, seed: int = 0):
+    gen = torch.Generator().manual_seed(seed)
+    return {
+        "wld": torch.randn(m, 3, generator=gen),
+        "score_diff": torch.randn(m, 2, generator=gen),
+        "planes": torch.randn(m, 4, 225, generator=gen),
+    }
+
+
+def test_batch_evidence_inputs_aligns_the_halves_for_arbitrary_subsets():
+    """The batched builder over non-contiguous subsets equals collating the
+    deployment per-position builder over each subset's members: the observed
+    half (raw .sobs records) and the predicted half (the plain pass) are
+    gathered in the same enumeration, so a token's observation and prediction
+    describe the same candidate."""
+    from scribblez.move_set_eval.evidence import build_evidence_inputs, collate_evidence
+
+    max_e = 5
+    # Unit 0: non-contiguous subset {0, 2}. Unit 1: the full anchor+on-policy
+    # set. Unit 2: the empty subset (degrades to the plain pass).
+    units = [
+        (_traj_pos(_ROLES), np.array([True, False, True, False, False])),
+        (_traj_pos(_ROLES), np.array([True, True, True, True, False])),
+        (_traj_pos(_ROLES), np.zeros(5, bool)),
+    ]
+    pre_diffs = [7, -13, 4]
+    batch, move_args = _cpu_evidence_batch(units, pre_diffs)
+    m = int(move_args[-1].shape[0])
+    plain = _fabricated_plain(m)
+    fast = batch_evidence_inputs(batch, move_args, plain, max_e, torch.device("cpu"))
+
+    items, offset = [], 0
+    for (pos, mask), pre in zip(units, pre_diffs, strict=True):
+        members = np.flatnonzero(mask)
+        rows = offset + members
+        offset += len(pos.moves)
+        first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
+        items.append(
+            build_evidence_inputs(pos.moves[members], pos.obs[members], pre, first, max_e=max_e)
+        )
+    slow = collate_evidence(items)
+
+    import dataclasses
+
+    for f in dataclasses.fields(fast):
+        a, b = getattr(fast, f.name), getattr(slow, f.name)
+        assert a.shape == b.shape, f.name
+        if a.dtype == torch.bool:
+            assert torch.equal(a, b), f.name
+        else:
+            assert torch.allclose(a.float(), b.float(), atol=1e-6), f.name
+    # The empty subset carries no evidence token.
+    assert not fast.mask[2].any()
+
+
+def test_batch_evidence_inputs_is_membership_order_invariant():
+    """Membership is a set: specifying a subset's members in a different order
+    yields byte-identical EvidenceInputs (the builder canonicalizes to slot
+    order), so the fusion stage's permutation invariance is never leaned on to
+    hide a builder that tracked order."""
+    max_e = 5
+    pos = _traj_pos(_ROLES)
+    forward = np.zeros(5, bool)
+    forward[[0, 2, 3]] = True
+    reverse = np.zeros(5, bool)
+    reverse[[3, 2, 0]] = True  # same set, "built" in the other order
+    plain = _fabricated_plain(len(pos.moves))
+    a = batch_evidence_inputs(*_cpu_evidence_batch([(pos, forward)], [9]), plain, max_e, "cpu")
+    b = batch_evidence_inputs(*_cpu_evidence_batch([(pos, reverse)], [9]), plain, max_e, "cpu")
+    import dataclasses
+
+    for f in dataclasses.fields(a):
+        assert torch.equal(getattr(a, f.name), getattr(b, f.name)), f.name
 
 
 def _tiny_model() -> MoveSetEvalModel:
@@ -106,30 +282,42 @@ def mset_datasets(traj_datasets):
     return mset_train, mset_hold
 
 
-def test_dataset_rows_follow_the_prefix(traj_datasets):
-    """Every simmed candidate is a scored row; the held-out ones are those at
-    or past the prefix; the gain targets are the CRN-paired improvements over
-    the prefix's best; prefixes never include the off-policy draws."""
+def test_dataset_rows_follow_the_subset(traj_datasets):
+    """Every simmed candidate is a scored row; held-out is exactly ~in_evidence;
+    the gain targets are the CRN-paired improvements over the subset's best; a
+    subset only ever holds evidence-eligible (anchor + on-policy) records; K
+    subsets per pool multiply the units."""
     train, _ = traj_datasets
     # anchor + [1..3] on-policy + the default off-policy floor (3 uniform draws).
     assert train.num_positions > 0 and train.max_trajectory <= 1 + 3 + 3
-    seen_prefixes = set()
+    seen_sizes = set()
+    units = 0
     epochs = (b for e in range(4) for b in train.iter_batches(4, seed=1, epoch_index=e))
     for batch in epochs:
         pos_id = batch["move_pos_id"].numpy()
-        slot = batch["slot"].numpy()
-        prefixes = batch["prefix_sizes"].numpy()
+        in_ev = batch["in_evidence"].numpy()
         held = batch["held_out"].numpy()
-        assert (held == (slot >= prefixes[pos_id])).all()
+        size = batch["evidence_size"].numpy()
+        assert (held == ~in_ev).all()
         for p, pos in enumerate(batch["positions"]):
-            k = int(prefixes[p])
-            seen_prefixes.add(k)
-            assert k in pos.evidence_prefix_sizes()
             rows = pos_id == p
             assert rows.sum() == len(pos.moves)
+            members = in_ev[rows]
+            assert int(members.sum()) == size[p]
+            assert size[p] in pos.evidence_prefix_sizes()  # 0..num_evidence
+            seen_sizes.add(int(size[p]))
+            # Off-policy draws are labels-only: never members, always held out.
+            assert not (members & ~pos.evidence_mask).any()
             _, _, value = ED.sim_targets(pos.obs)
-            assert np.allclose(batch["target_gain"].numpy()[rows], ED.gain_targets(value, k))
-    assert 0 in seen_prefixes and len(seen_prefixes) > 1
+            assert np.allclose(batch["target_gain"].numpy()[rows], ED.gain_targets(value, members))
+            units += 1
+    assert 0 in seen_sizes and len(seen_sizes) > 1
+    # One subset per pool per epoch, over four epochs: K-multiplicity.
+    assert units == 4 * train.num_positions
+    triple = sum(
+        1 for b in train.iter_batches(4, seed=1, subsets_per_pool=3) for _ in b["positions"]
+    )
+    assert triple == 3 * train.num_positions
 
 
 def test_training_pass_moves_only_the_evidence_path(traj_datasets):
@@ -164,7 +352,7 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
     batch = next(train.iter_batches(4, seed=3))
     plain, cond = conditioned_forward(model, batch, device, max_e=8)
     with_ev = batch["held_out"].to(device) & (
-        batch["prefix_sizes"].to(device)[batch["move_pos_id"].to(device)] > 0
+        batch["evidence_size"].to(device)[batch["move_pos_id"].to(device)] > 0
     )
     if bool(with_ev.any()):
         assert not torch.allclose(plain["wld"][with_ev], cond["wld"][with_ev])
@@ -508,23 +696,29 @@ def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
     device = torch.device("cuda")
     model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device).eval()
     max_e = 8
-    for batch in train.iter_batches(4, seed=2):
+    # subsets_per_pool > 1 so arbitrary (non-prefix) subsets are exercised: the
+    # per-position builder is fed the subset's members, and the batched builder
+    # must pack them the same compact way.
+    for batch in train.iter_batches(4, seed=2, subsets_per_pool=3):
         move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
         spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
-        pos_id, slot = move_args[-1], batch["slot"].to(device)
+        pos_id = move_args[-1]
+        in_ev = batch["in_evidence"].numpy()
         with torch.no_grad():
             board, g = model.encode_board(spatial, scalar)
             plain = model.score_moves(board, g, model.encode_moves(board, *move_args), pos_id)
             fast = batch_evidence_inputs(batch, move_args, plain, max_e, device)
             items = []
+            offset = 0
             for p, pos in enumerate(batch["positions"]):
-                k = int(batch["prefix_sizes"][p])
-                rows = (pos_id == p) & (slot < k)
+                members = np.flatnonzero(in_ev[offset : offset + len(pos.moves)])
+                rows = torch.from_numpy(offset + members).to(device)
+                offset += len(pos.moves)
                 first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
                 items.append(
                     build_evidence_inputs(
-                        pos.moves[:k],
-                        pos.obs[:k],
+                        pos.moves[members],
+                        pos.obs[members],
                         int(batch["pre_move_diff"][p]),
                         first,
                         max_e=max_e,
