@@ -81,20 +81,16 @@ Supply make_supply(const uint8_t* counts) {
   return s;
 }
 
-// Can some AVAILABLE letter play at board cell (r,c) as part of a word in
-// board-frame orientation `horizontal`? The perpendicular cross-check picks the
-// legal letters (non-empty, or all letters if the square is unconstrained); the
-// letter must also be in `supply`. A blank in `supply` is a wildcard, so it
-// satisfies any board-legal square and the test reduces to board legality. A
-// horizontal word's cross-words run down the columns (non-transposed cache,
-// indexed [r*side+c]); a vertical word's along the rows (transposed cache,
-// [c*side+r]) -- matching the input encoder.
+// Can some AVAILABLE letter play at empty cell (r,c) in board-frame orientation
+// `horizontal`? Its perpendicular cross-check mask must share a letter with
+// `supply` (a blank is a wildcard). Cache indexing matches the input encoder: a
+// horizontal word's cross-words run down the columns (non-transposed [r*side+c]),
+// a vertical word's along the rows (transposed [c*side+r]).
 bool cell_admits_letter(const Board& board, const Supply& supply, bool horizontal, int r, int c) {
   const CrossCheck& cc = horizontal ? board.cross_checks(false)[r * BOARD_SIZE + c]
                                     : board.cross_checks(true)[c * BOARD_SIZE + r];
-  if (supply.blank) return !cc.has_neighbor || cc.mask != 0;  // wildcard fills any legal square
-  if (!cc.has_neighbor) return supply.letters != 0;           // unconstrained: any available tile
-  return (cc.mask & supply.letters) != 0;                     // legal AND in stock
+  if (supply.blank) return cc.mask != 0;   // a wildcard plays wherever any letter is legal
+  return (cc.mask & supply.letters) != 0;  // a legal letter that is also in stock
 }
 
 // Can some AVAILABLE letter play as a LONE tile at (r,c)? It forms both its
