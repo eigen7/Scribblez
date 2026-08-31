@@ -304,10 +304,12 @@ void collapse_worker(const std::vector<CollapseJob>* jobs, const Dictionary* dic
     const CollapseJob& j = (*jobs)[i];
     GameStateEncoder post = *j.pre_enc;
     post.apply_move(*j.move);
-    // No availability supply: this teacher-target collapse is the retired
-    // consumer (the per-cell student stack is migrating to footprints), so it is
-    // left on the pure board-legality mask rather than plumbing a per-candidate
-    // unseen pool through the job.
+    // The collapse still does its full job here -- mask, softmax, and scatter the
+    // 2927 footprint logits into the four (15,15) per-cell teacher planes the
+    // .mset writer stores. Only AVAILABILITY masking is opted out (supply=null ->
+    // board-legality only): this per-cell teacher-target consumer is being retired
+    // (the student stack is migrating to footprints), so it does not fund plumbing
+    // a per-candidate unseen pool that would soon be deleted.
     collapse_footprint_planes(post.board(), *dict, /*supply=*/nullptr, /*flip=*/false, j.raw,
                               j.out);
   }
