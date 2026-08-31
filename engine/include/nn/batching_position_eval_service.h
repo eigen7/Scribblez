@@ -60,7 +60,7 @@ class BatchingPositionEvalService : public PositionEvalService {
     const SpecBatch* batch;
     std::span<float* const> head_out;
     bool done = false;
-    std::exception_ptr error;
+    std::exception_ptr error = nullptr;
   };
 
   // Deliver each request in `pack` its decoded rows. A pack of one is evaluated
