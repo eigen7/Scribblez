@@ -90,14 +90,14 @@ void write_mask(const FootprintMask& mask, float* out) {
 void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
   const Board& board = v.enc->board();
   board.ensure_movegen_caches(*v.spec.dict);
-  uint8_t supply[27];
-  const uint8_t* supply_ptr = nullptr;
+  uint8_t available_counts[27];
+  const uint8_t* available_ptr = nullptr;
   if (v.pov_rack != nullptr) {
-    compute_unseen_pool(supply, board, *v.pov_rack);
-    supply_ptr = supply;
+    compute_unseen_pool(available_counts, board, *v.pov_rack);
+    available_ptr = available_counts;
   }
   FootprintMask mask;
-  opp_footprint_mask(board, supply_ptr, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
+  opp_footprint_mask(board, available_ptr, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 
