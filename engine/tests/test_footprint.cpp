@@ -479,5 +479,33 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   EXPECT_LT(gated, lit * 0.1f);  // ... a >10x drop vs. when its hook was available
 }
 
+// masked_placement_distributions returns the same mask + masked-softmax the
+// collapse applies, but per class instead of scattered to cells: each head is a
+// distribution over its legal footprints (sums to ~1), a dominant logit on a
+// legal footprint takes ~all its head's mass, and a structurally illegal class
+// stays at zero.
+TEST(FootprintCollapse, MaskedDistributionsAreLegalSoftmaxes) {
+  Board b;  // empty board: unconstrained, so the opp mask is dict-free
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+  Glyph played[3] = {G(0), G(1), G(2)};
+  const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3), /*flip=*/false);
+
+  std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
+  raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next) dominant
+  std::vector<float> dist(kPlacementHeads * kFootprintClasses, 0.0f);
+  masked_placement_distributions(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
+                                 dist.data());
+
+  EXPECT_GT(dist[cls], 0.99f);  // the dominant legal footprint takes ~all head 0's mass
+  for (int h = 0; h < kPlacementHeads; ++h) {  // each head is a legal-class distribution
+    float sum = 0.0f;
+    for (int c = 0; c < kFootprintClasses; ++c) sum += dist[size_t(h) * kFootprintClasses + c];
+    EXPECT_NEAR(sum, 1.0f, 1e-4) << "head " << h;
+  }
+  const int off_edge = (7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2));  // k=7 off the right edge
+  EXPECT_EQ(dist[off_edge], 0.0f);  // structurally illegal -> masked to zero
+}
+
 }  // namespace
 }  // namespace scribblez

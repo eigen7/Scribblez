@@ -40,18 +40,19 @@ encoding (`footprint_spatial.top_k_sparse`). But the two formats hold different
 distributions and the offline probe already contradicts the "peaked" assumption
 for one of them:
 
-- **`.mset` teacher target — probably dense.** The offline probe
-  `py/scripts/position_eval/footprint_topk_fidelity.py` on a footprints-official
-  checkpoint finds the teacher softmax **broad**: top-128 keeps only ~76–94% of
-  the mass (p10 worst-case), no k ≤ 128 clears 99%. That measurement is the
-  **unmasked** softmax — a conservative *lower* bound, since the student distills
-  the board-legality-**masked** distribution (illegal footprints zeroed, then
-  renormalized), which is more concentrated. So the definitive dense-vs-sparse
-  call needs the *masked* top-k mass, measured in **BC1** (where the mask and the
-  teacher-target generation are in hand — extend the probe with an FFI that
-  returns the mask or the masked distribution). Working assumption: if the masked
-  distribution stays broad, `.mset` stores the target **dense** (quantized), which
-  is also the simpler design (no codec, no k, no fidelity risk).
+- **`.mset` teacher target — dense.** The offline probe
+  `py/scripts/position_eval/footprint_topk_fidelity.py` measures the fidelity of
+  the student's actual distillation target: the engine's board-legality-**masked**
+  footprint softmax (via `ffi.masked_position_eval_placement`, which runs the same
+  mask + masked-softmax the `.mset` writer applies). On a footprints-official
+  checkpoint the masked distribution is **broad** — top-128 keeps a p10 worst-case
+  of only ~0.81–0.94 across the heads, and `self_next_placement` is the most
+  diffuse (median 0.90, p10 0.81 at k=128). No k ≤ 128 clears 99%; capturing the
+  tail would need k in the many hundreds, defeating the point of sparsity. So the
+  `.mset` teacher target is stored **dense** (per head, absmax-quantized like the
+  current per-cell planes but 2927-wide) — which is also the simpler design (no
+  codec, no k, no fidelity loss), at ~13× the per-cell planes' bytes. That size is
+  the accepted cost; the corpus regenerates anyway.
 - **`.sobs` sim-obs histogram — sparse.** This is a histogram of *actual* rollout
   moves; the rollout policy is near-greedy per drawn rack, so ~300 rollouts touch
   few distinct footprints regardless of how broad the teacher's *predicted*
@@ -148,10 +149,11 @@ evidence train-loop files.
 
 ## Decisions
 
-1. **Storage is per-format, gated on the probe:** `.sobs` sparse top-k; `.mset`
-   dense unless the *masked* top-k probe (BC1) shows the target is concentrated.
-   The unmasked probe already shows the teacher distribution is broad. `k` (where
-   used) is a format constant; no dual dense/sparse path.
+1. **Storage is per-format** (settled by the masked fidelity probe): `.mset` teacher
+   target **dense** (the masked distribution is broad — no k ≤ 128 clears 99%);
+   `.sobs` sim-obs histogram **sparse top-k** (genuinely sparse rollout counts;
+   width confirmed against a real histogram in BC2). `k` is a format constant; no
+   dual dense/sparse path.
 2. **Masked softmax-CE / KL** distillation loss (replaces per-cell BCE).
 3. **Catch-all → scalars**, win heads **conditional-on-win** with the observed
    histogram normalized to match.

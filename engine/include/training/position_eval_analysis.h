@@ -42,6 +42,15 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
                                                const InputEncodingSpec& spec, const float* raw,
                                                float* out, std::string* error);
 
+// The same masked footprint distributions, per class instead of collapsed to
+// cells (training/footprint_collapse.h masked_placement_distributions): `out`
+// receives kPlacementHeads * kFootprintClasses floats. Lets the sparsity/fidelity
+// of the distilled placement target be measured off the live teacher. False (with
+// *error) on a parse error or a non-PLAY final move.
+bool masked_position_eval_analysis_placement(const std::string& gcg_text,
+                                             const InputEncodingSpec& spec, const float* raw,
+                                             float* out, std::string* error);
+
 // The web-render bundle for the same analysis position: the GameState JSON plus
 // "start_player", "last_move", and "opp_leave" (the opponent's retained leave,
 // '?' = a blank), with the final mover's leave as the shown rack. It goes

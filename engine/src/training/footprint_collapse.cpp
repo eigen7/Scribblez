@@ -71,28 +71,33 @@ void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells,
   }
 }
 
+// The four heads' legality into `masks` (opp_next, self_next, opp_win, self_win):
+// opp / self, each with a plays (win_head=false) and a win (win_head=true)
+// variant. win_head toggles only kExtraClass (the not-win outcome). Availability
+// (`available_counts`) gates the opp heads only; the self heads never take it
+// (see footprint_mask.h).
+void fill_head_masks(const Board& board, const uint8_t* available_counts, bool flip,
+                     std::array<FootprintMask, kPlacementHeads>& masks) {
+  opp_footprint_mask(board, available_counts, kMaskTileBudget, flip, /*win_head=*/false, masks[0]);
+  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, flip, /*win_head=*/false, masks[1]);
+  masks[2] = masks[0];
+  masks[3] = masks[1];
+  masks[2][kExtraClass] = true;  // opp_win opens the not-win class
+  masks[3][kExtraClass] = true;  // self_win opens the not-win class
+}
+
 }  // namespace
 
 void collapse_footprint_planes(const Board& board, const Dictionary& dict,
                                const uint8_t* available_counts, bool flip, const float* raw,
                                float* out) {
   board.ensure_movegen_caches(dict);
+  std::array<FootprintMask, kPlacementHeads> masks;
+  fill_head_masks(board, available_counts, flip, masks);
 
-  // The four heads' legality: opp / self, each with a plays (win_head=false) and
-  // a win (win_head=true) variant. win_head toggles only kExtraClass (the
-  // not-win outcome), which carries no cells -- so it changes the softmax
-  // denominator (P[covers & win] <= P[covers]) but not which cells are covered.
-  // Availability (`available_counts`) gates the opp heads only; the self heads
-  // never take it (see footprint_mask.h).
-  FootprintMask opp_mask, self_mask;
-  opp_footprint_mask(board, available_counts, kMaskTileBudget, flip, /*win_head=*/false, opp_mask);
-  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, flip, /*win_head=*/false, self_mask);
-  FootprintMask opp_win_mask = opp_mask, self_win_mask = self_mask;
-  opp_win_mask[kExtraClass] = true;
-  self_win_mask[kExtraClass] = true;
-  const std::array<const FootprintMask*, kPlacementHeads> masks = {&opp_mask, &self_mask,
-                                                                   &opp_win_mask, &self_win_mask};
-
+  // win_head toggles only kExtraClass, which carries no cells -- so it changes
+  // the softmax denominator (P[covers & win] <= P[covers]) but not which cells
+  // are covered.
   // Reused across calls on this thread -- the generator collapses many
   // candidates per thread, so the ~44KB cells buffer and the prob buffer are
   // allocated once and refilled, not per candidate.
@@ -100,8 +105,22 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
   thread_local std::vector<float> prob;
   compute_cells(board, flip, cells);
   for (int h = 0; h < kPlacementHeads; ++h) {
-    masked_softmax(raw + size_t(h) * kFootprintClasses, *masks[h], prob);
+    masked_softmax(raw + size_t(h) * kFootprintClasses, masks[h], prob);
     scatter(prob, cells, out + size_t(h) * kBoardCells);
+  }
+}
+
+void masked_placement_distributions(const Board& board, const Dictionary& dict,
+                                    const uint8_t* available_counts, bool flip, const float* raw,
+                                    float* out) {
+  board.ensure_movegen_caches(dict);
+  std::array<FootprintMask, kPlacementHeads> masks;
+  fill_head_masks(board, available_counts, flip, masks);
+
+  thread_local std::vector<float> prob;
+  for (int h = 0; h < kPlacementHeads; ++h) {
+    masked_softmax(raw + size_t(h) * kFootprintClasses, masks[h], prob);
+    std::copy_n(prob.data(), kFootprintClasses, out + size_t(h) * kFootprintClasses);
   }
 }
 

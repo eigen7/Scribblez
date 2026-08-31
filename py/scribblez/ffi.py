@@ -124,6 +124,18 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
+    lib.scribblez_position_eval_masked_placement.restype = ctypes.c_int
+    lib.scribblez_position_eval_masked_placement.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # gcg_text
+        ctypes.POINTER(ctypes.c_float),  # raw (kPlacementHeads * kFootprintClasses)
+        ctypes.c_int,  # raw_cap
+        ctypes.POINTER(ctypes.c_float),  # out (kPlacementHeads * kFootprintClasses)
+        ctypes.c_int,  # out_cap
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_position_eval_board_json.restype = ctypes.c_int
     lib.scribblez_position_eval_board_json.argtypes = [
         ctypes.c_char_p,  # gcg_text
@@ -788,6 +800,39 @@ def collapse_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarr
     if n < 0:
         _raise_analysis_error(err.value.decode("utf-8"))
     return out.reshape(heads, side, side)
+
+
+def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray:
+    """The four placement heads' MASKED footprint distributions for a dataset GCG.
+
+    `raw` is the four heads' raw footprint logits, shape (4, num_classes) or flat;
+    the result is (4, num_classes), each head a distribution over the 2927 classes
+    (illegal footprints at zero) via the same board-legality mask + masked softmax
+    the engine applies to the .mset teacher target -- but per class, not collapsed
+    to cells. This is the exact distilled placement target, exposed so its
+    per-footprint sparsity/fidelity can be measured. OSError on a parse error or a
+    non-PLAY final move.
+    """
+    consts = format_layout()["constants"]
+    heads = len(consts["placement_head_names"])
+    classes = consts["footprint"]["num_classes"]
+    lib = _lib()
+    raw32 = np.ascontiguousarray(raw, dtype=np.float32).reshape(-1)
+    out = np.zeros(heads * classes, dtype=np.float32)
+    err = ctypes.create_string_buffer(256)
+    n = lib.scribblez_position_eval_masked_placement(
+        _session(),
+        gcg_text.encode("utf-8"),
+        raw32.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        len(raw32),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        len(out),
+        err,
+        len(err),
+    )
+    if n < 0:
+        _raise_analysis_error(err.value.decode("utf-8"))
+    return out.reshape(heads, classes)
 
 
 def _raise_analysis_error(reason: str):

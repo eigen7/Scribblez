@@ -8,11 +8,11 @@ Truncating to top-k drops tail mass; this probe measures how much, on the teache
 softmax over a position set, so `k` is chosen from data rather than guessed.
 
 For each head it reports, across positions, the median and the worst-case (p10)
-fraction of the softmax mass the top-k keeps, at several k -- and the smallest k
-whose p10 clears the target. The softmax is unmasked (raw teacher logits): the
-board-legality-masked distribution is strictly more concentrated, so unmasked
-top-k mass is a conservative lower bound on what the deployed masked target keeps.
-The win heads carry not-win mass in kExtraClass, so they are reported separately.
+fraction of the mass the top-k keeps, at several k -- and the smallest k whose p10
+clears the target. The distribution is the engine's MASKED footprint softmax (via
+ffi.masked_position_eval_placement) -- the exact target the student distills,
+board-legality mask and availability applied, illegal footprints at zero -- not an
+unmasked proxy. The win heads carry not-win mass in kExtraClass, reported per head.
 
 Usage:
     ./py/scripts/position_eval/footprint_topk_fidelity.py \
@@ -35,14 +35,10 @@ DEFAULT_GCG_DIR = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-datase
 DEFAULT_MODEL_GLOB = "/workspace/mount/tags/position_eval/footprints-official/models/*.onnx"
 
 
-def softmax(logits):
-    m = logits.max(axis=-1, keepdims=True)
-    e = np.exp(logits - m)
-    return e / e.sum(axis=-1, keepdims=True)
-
-
 def head_distributions(sess, gcg_text, arm):
-    """Softmax distribution (len(HEADS), NUM_CLASSES) for one position."""
+    """The engine's masked footprint distribution (len(HEADS), NUM_CLASSES) for
+    one position: run the teacher for raw logits, then apply the same mask +
+    masked-softmax the .mset target uses."""
     row = ffi.analyze_position_eval_gcg(gcg_text, arm)
     sp = row[: N_PLANES * 225].reshape(N_PLANES, 15, 15)[None].astype(np.float32)
     sc = row[N_PLANES * 225 :][None].astype(np.float32)
@@ -50,7 +46,8 @@ def head_distributions(sess, gcg_text, arm):
     onames = [o.name for o in sess.get_outputs()]
     outs = sess.run(None, {inames[0]: sp, inames[1]: sc})
     named = dict(zip(onames, outs, strict=True))
-    return softmax(np.stack([named[h][0] for h in HEADS]))
+    raw = np.stack([named[h][0] for h in HEADS])  # (H, NUM_CLASSES) raw logits
+    return ffi.masked_position_eval_placement(gcg_text, raw)
 
 
 def main():
