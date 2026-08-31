@@ -4,6 +4,7 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -68,15 +69,37 @@ void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, Cel
   mask[kExtraClass] = win_head;
 }
 
-// Can some letter play at board cell (r,c) as part of a word in board-frame
-// orientation `horizontal`? The perpendicular cross-check must be non-empty, or
-// the square unconstrained. A horizontal word's cross-words run down the columns
-// (non-transposed cache, indexed [r*side+c]); a vertical word's along the rows
-// (transposed cache, [c*side+r]) -- matching the input encoder.
-bool cell_admits_letter(const Board& board, bool horizontal, int r, int c) {
+// The opponent's tile availability, distilled from the 27-count supply for a
+// fast per-cell test: `letters` has bit L set iff at least one of letter L is in
+// stock, and `blank` iff a wildcard blank is. A null supply is "everything in
+// stock", which makes the availability test collapse to pure board legality.
+struct Supply {
+  uint32_t letters = kAllLettersMask;  // null-supply default: every letter available
+  bool blank = true;
+};
+
+Supply make_supply(const uint8_t* counts) {
+  if (counts == nullptr) return Supply{};
+  Supply s{0u, counts[26] > 0};
+  for (int l = 0; l < 26; ++l)
+    if (counts[l] > 0) s.letters |= (1u << l);
+  return s;
+}
+
+// Can some AVAILABLE letter play at board cell (r,c) as part of a word in
+// board-frame orientation `horizontal`? The perpendicular cross-check picks the
+// legal letters (non-empty, or all letters if the square is unconstrained); the
+// letter must also be in `supply`. A blank in `supply` is a wildcard, so it
+// satisfies any board-legal square and the test reduces to board legality. A
+// horizontal word's cross-words run down the columns (non-transposed cache,
+// indexed [r*side+c]); a vertical word's along the rows (transposed cache,
+// [c*side+r]) -- matching the input encoder.
+bool cell_admits_letter(const Board& board, const Supply& supply, bool horizontal, int r, int c) {
   const CrossCheck& cc = horizontal ? board.cross_checks(false)[r * BOARD_SIZE + c]
                                     : board.cross_checks(true)[c * BOARD_SIZE + r];
-  return !cc.has_neighbor || cc.mask != 0;
+  if (supply.blank) return !cc.has_neighbor || cc.mask != 0;  // wildcard fills any legal square
+  if (!cc.has_neighbor) return supply.letters != 0;           // unconstrained: any available tile
+  return (cc.mask & supply.letters) != 0;                     // legal AND in stock
 }
 
 // Tiles-to-reach distance field: d[Z] = the fewest tiles that must be placed to
@@ -119,12 +142,13 @@ std::array<int, kFootprintCells> tiles_to_reach(const Board& board) {
 
 }  // namespace
 
-void opp_footprint_mask(const Board& board, int tile_budget, bool flip, bool win_head,
-                        FootprintMask& mask) {
+void opp_footprint_mask(const Board& board, const uint8_t* supply, int tile_budget, bool flip,
+                        bool win_head, FootprintMask& mask) {
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
+  const Supply s = make_supply(supply);
   mark_footprints(
     board, kmax, flip, win_head,
-    [&](bool horizontal, int r, int c) { return cell_admits_letter(board, horizontal, r, c); },
+    [&](bool horizontal, int r, int c) { return cell_admits_letter(board, s, horizontal, r, c); },
     mask);
 }
 

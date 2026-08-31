@@ -73,16 +73,18 @@ void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells,
 
 }  // namespace
 
-void collapse_footprint_planes(const Board& board, const Dictionary& dict, bool flip,
-                               const float* raw, float* out) {
+void collapse_footprint_planes(const Board& board, const Dictionary& dict, const uint8_t* supply,
+                               bool flip, const float* raw, float* out) {
   board.ensure_movegen_caches(dict);
 
   // The four heads' legality: opp / self, each with a plays (win_head=false) and
   // a win (win_head=true) variant. win_head toggles only kExtraClass (the
   // not-win outcome), which carries no cells -- so it changes the softmax
   // denominator (P[covers & win] <= P[covers]) but not which cells are covered.
+  // Availability (`supply`) gates the opp heads only; the self heads never take
+  // it (see footprint_mask.h).
   FootprintMask opp_mask, self_mask;
-  opp_footprint_mask(board, kMaskTileBudget, flip, /*win_head=*/false, opp_mask);
+  opp_footprint_mask(board, supply, kMaskTileBudget, flip, /*win_head=*/false, opp_mask);
   self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, flip, /*win_head=*/false, self_mask);
   FootprintMask opp_win_mask = opp_mask, self_win_mask = self_mask;
   opp_win_mask[kExtraClass] = true;
