@@ -8,8 +8,7 @@ Architecture:
     loss; the per-head mechanics live in those class docstrings. In brief, by
     role rather than mechanism:
     * WLD (inference): 3 win/draw/loss logits.
-    * ScoreDiff (aux): [mean, std] of the final score differential; the std
-      trains on a detached stack so the exported std never perturbs the mean.
+    * ScoreDiff (aux): [mean, std] of the final score differential.
     * Placement heads (aux): four categorical distributions over move FOOTPRINTS
       (training/footprint.h). The plays heads OppNextPlacement / SelfNextPlacement
       predict each player's next-move footprint; the win heads OppWinPlacement /
