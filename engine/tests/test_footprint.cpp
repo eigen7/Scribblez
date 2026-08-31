@@ -207,7 +207,7 @@ TEST(FootprintMask, AvailabilityGatesHookLetters) {
 // The unconstrained free cell (7,8) still needs SOME tile: an utterly empty
 // availability (a blank-less bag with no listed letters) masks even a footprint whose
 // only real constraint is "place a tile here".
-TEST(FootprintMask, AvailabilityEmptySupplyMasksEverything) {
+TEST(FootprintMask, AvailabilityEmptyMasksEverything) {
   Board b;
   b.set(6, 7, G(0));
   const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
