@@ -25,7 +25,7 @@ family is generated from the FFI-served PLACEMENT_HEAD_NAMES; WLD and score-diff
 are singleton heads in the same registry.
 
 The two model input widths come from the engine session's input-encoding spec
-(85 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
+(87 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
 the six head output shapes, are fixed by the training pipeline and the C++
 inference contract; the trunk between them is free to change.
 

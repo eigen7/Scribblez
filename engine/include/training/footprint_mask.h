@@ -74,4 +74,14 @@ void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int
 void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
                          bool win_head, FootprintMask& mask);
 
+// Per-cell reachability plane in the `flip` frame: out[r*kFootprintSide + c] == 1
+// iff some legal "who moves next" footprint covers that cell, else 0. It is the
+// opp_footprint_mask (with `available_counts` as the stock and `tile_budget` as
+// the cap -- nullptr counts being board legality only) reduced to the board
+// squares its legal footprints touch, i.e. "which squares this pool can reach on
+// the current board." The input-feature view of the mask; `board` must have
+// movegen caches built. Writes exactly kFootprintCells floats.
+void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
+                               bool flip, float* out);
+
 }  // namespace scribblez

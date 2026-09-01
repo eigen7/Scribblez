@@ -4,6 +4,7 @@
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
 #include "game/tile.h"
+#include "training/footprint_mask.h"
 #include "util/assert.h"
 #include "util/math.h"
 
@@ -14,11 +15,10 @@
 
 namespace scribblez {
 
-// Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the active
-// player has no way to distinguish the bag from the opponent's rack, so
-// unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack).
-// This depends only on data the active player observes.
-void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
+// TILE_COUNTS minus every tile on `board`, then minus every tile in `held` when
+// non-null. The arithmetic core of the unseen pool (held = my rack) and the
+// self-reach pool (held = the opponent tiles known to us).
+static void tiles_off_board_and_hand(uint8_t out[27], const Board& board, const Rack* held) {
   for (int i = 0; i < 27; ++i) out[i] = uint8_t(TILE_COUNTS[i]);
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
@@ -29,17 +29,35 @@ void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rac
       --out[t];
     }
   }
-  for (Tile t : my_rack.tiles()) {
+  if (held == nullptr) return;
+  for (Tile t : held->tiles()) {
     if (t.is_empty()) continue;
     DEBUG_ASSERT(out[t] > 0);
     --out[t];
   }
 }
 
+// Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the active
+// player has no way to distinguish the bag from the opponent's rack, so
+// unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack).
+// This depends only on data the active player observes.
+void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
+  tiles_off_board_and_hand(out, board, &my_rack);
+}
+
 namespace {
 
 // Index into a single 15x15 plane: row-major if !flip, transposed if flip.
 inline int plane_idx(int r, int c, bool flip) { return util::plane_index(r, c, kBoardSide, flip); }
+
+// The tiles the POV player could still hold or draw for their OWN next play,
+// used by the self-reach plane: every unplayed tile minus any the opponent is
+// KNOWN to hold (`known_opp`, the open-leaves leave; null in the hidden arm).
+// S - O in the reachability note's terms -- it keeps the mover's own rack (they
+// can play it) and, in the hidden arm, the indistinguishable bag + opponent pool.
+void compute_self_reach_pool(uint8_t out[27], const Board& board, const Rack* known_opp) {
+  tiles_off_board_and_hand(out, board, known_opp);
+}
 
 // Everything the block writers read: the POV-visible position state, plus the
 // blocks the spec makes optional.
@@ -49,7 +67,8 @@ struct PovCtx {
   const Move& self_move;
   const Move& opp_move;
   int score_diff;
-  const uint8_t* unseen;  // 27 per-kind unseen-pool counts
+  const uint8_t* unseen;     // 27 per-kind unseen-pool counts (S - M)
+  const uint8_t* self_pool;  // 27 per-kind self-reach counts (S - O)
   bool apply_flip;
   const Rack* opp_leave;  // null iff the spec excludes the open-leaves block
 };
@@ -164,6 +183,14 @@ int encode_move_meta(const Move& self_move, const Move& opp_move, float* out) {
   return kMoveMetaFloats;
 }
 
+// One reachability plane at `out`: the squares `pool` can reach on the current
+// board, "who moves next" semantics reduced to per-cell coverage. The mover
+// holds at most a full rack, so kMaskTileBudget caps k.
+int encode_reach_plane(const Board& board, const uint8_t* pool, bool flip, float* out) {
+  footprint_reachable_cells(board, pool, kMaskTileBudget, flip, out);
+  return 1;
+}
+
 // Registry dispatch: write one block at `out`, returning its plane count.
 int encode_spatial_block(SpatialBlockId id, const PovCtx& ctx, float* out) {
   switch (id) {
@@ -178,6 +205,10 @@ int encode_spatial_block(SpatialBlockId id, const PovCtx& ctx, float* out) {
       return encode_placement_plane(ctx.opp_move, ctx.apply_flip, out);
     case SpatialBlockId::kCrossChecks:
       return encode_cross_check_planes(ctx.board, ctx.apply_flip, out);
+    case SpatialBlockId::kOppReach:
+      return encode_reach_plane(ctx.board, ctx.unseen, ctx.apply_flip, out);
+    case SpatialBlockId::kSelfReach:
+      return encode_reach_plane(ctx.board, ctx.self_pool, ctx.apply_flip, out);
   }
   std::abort();  // unreachable: the switch covers every SpatialBlockId
 }
@@ -223,10 +254,13 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   // up front (a no-op when already valid) so they are lexicon-accurate
   // regardless of the board's prior cache state.
   board.ensure_movegen_caches(*spec.dict);
+  const Rack* known_opp = spec.opp_leave_input ? opp_leave : nullptr;
   uint8_t unseen[27];
   compute_unseen_pool(unseen, board, my_rack);
-  const PovCtx ctx{board,      my_rack, self_move,  opp_move,
-                   score_diff, unseen,  apply_flip, spec.opp_leave_input ? opp_leave : nullptr};
+  uint8_t self_pool[27];
+  compute_self_reach_pool(self_pool, board, known_opp);
+  const PovCtx ctx{board,  my_rack,   self_move,  opp_move, score_diff,
+                   unseen, self_pool, apply_flip, known_opp};
 
   float* cursor = out;
   for (const SpatialBlockDef& def : kSpatialBlocks) {

@@ -36,9 +36,10 @@ from scribblez import ffi
 from scribblez.paths import REPO_ROOT
 from scribblez.position_eval import analysis as A
 
-# The face-up-leaves arm (opp_leave_input on): 85 planes, 163 scalars.
-# Cross-check blocks and the opp-leave scalar block within that layout.
-N_PLANES = 85
+# The face-up-leaves arm (opp_leave_input on): 87 planes, 163 scalars.
+# Cross-check blocks and the opp-leave scalar block within that layout (the two
+# reachability planes append after the cross-checks, so these offsets are fixed).
+N_PLANES = 87
 HCC0, VCC0, CC_END = 33, 59, 85  # horizontal / vertical cross-check plane ranges
 OPP_LEAVE0 = 136  # opp-leave scalar block: OPP_LEAVE0 + (letter index 0..25)
 

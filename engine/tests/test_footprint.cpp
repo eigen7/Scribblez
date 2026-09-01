@@ -507,5 +507,75 @@ TEST(FootprintCollapse, MaskedDistributionsAreLegalSoftmaxes) {
   EXPECT_EQ(dist[off_edge], 0.0f);  // structurally illegal -> masked to zero
 }
 
+// footprint_reachable_cells: on an empty board every square is coverable (a lone
+// tile fits anywhere), a null pool is board-legality-only, and it equals the
+// same reduction when the pool holds every tile.
+TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
+  Board b;  // empty: every square unconstrained
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+  b.ensure_movegen_caches(d);
+
+  std::vector<float> null_pool(kFootprintCells, -1.0f);
+  footprint_reachable_cells(b, /*available_counts=*/nullptr, kMaskTileBudget, /*flip=*/false,
+                            null_pool.data());
+  for (int i = 0; i < kFootprintCells; ++i) EXPECT_EQ(null_pool[i], 1.0f) << "cell " << i;
+
+  // A null pool is "everything in stock" -> identical to a full-count array.
+  std::array<uint8_t, 27> all_stock;
+  all_stock.fill(9);
+  std::vector<float> full_pool(kFootprintCells, -1.0f);
+  footprint_reachable_cells(b, all_stock.data(), kMaskTileBudget, /*flip=*/false, full_pool.data());
+  EXPECT_EQ(null_pool, full_pool);
+}
+
+// A cell is reachable iff some legal "moves-next" footprint covers it: occupied
+// squares are never covered, and availability gates a fully boxed cell whose
+// every covering footprint needs the same hook letter. (7,7) is walled by A's on
+// all four sides with only "AYA" legal, so its horizontal and vertical
+// cross-checks are both {Y} -- it lights only when Y is in stock.
+TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
+  Board b;
+  b.set(6, 7, G(0));  // A above
+  b.set(8, 7, G(0));  // A below
+  b.set(7, 6, G(0));  // A left
+  b.set(7, 8, G(0));  // A right
+  const Dictionary d = Dictionary::build_from_words({"AYA"});
+  b.ensure_movegen_caches(d);
+
+  const auto reach_at = [&](const std::array<uint8_t, 27>& pool, int r, int c) {
+    std::vector<float> plane(kFootprintCells, -1.0f);
+    footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/false, plane.data());
+    return plane[r * kFootprintSide + c];
+  };
+
+  const std::array<uint8_t, 27> with_y = available_of("YE");
+  EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);    // Y in stock -> the boxed cell is reachable
+  EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied square is never covered
+  EXPECT_EQ(reach_at(with_y, 14, 14), 1.0f);  // an unconstrained far corner still reachable
+
+  const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, no Y, no blank
+  EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);    // every footprint covering (7,7) needs Y -> gated off
+  EXPECT_EQ(reach_at(no_y, 14, 14), 1.0f);  // ... but the corner, needing no specific letter, stays
+}
+
+// The plane is expressed in the flip frame, so reachability under the diagonal
+// flip is the transpose of reachability without it -- the invariant the input
+// encoder's spatial planes all share.
+TEST(FootprintReachable, FlipIsTheTranspose) {
+  Board b;
+  b.set(3, 5, G(1));  // an asymmetric bit of structure so the transpose is non-trivial
+  b.set(9, 2, G(2));
+  const Dictionary d = Dictionary::build_from_words({"CAT", "AY"});
+  b.ensure_movegen_caches(d);
+  const std::array<uint8_t, 27> pool = available_of("CATY");
+
+  std::vector<float> normal(kFootprintCells, 0.0f), flipped(kFootprintCells, 0.0f);
+  footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/false, normal.data());
+  footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/true, flipped.data());
+  for (int r = 0; r < kFootprintSide; ++r)
+    for (int c = 0; c < kFootprintSide; ++c)
+      EXPECT_EQ(flipped[r * kFootprintSide + c], normal[c * kFootprintSide + r]) << r << "," << c;
+}
+
 }  // namespace
 }  // namespace scribblez

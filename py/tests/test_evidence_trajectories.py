@@ -591,8 +591,8 @@ def test_gcg_position_inputs_reads_the_exhibit_decision():
     from scribblez.ffi import gcg_position_board_json, gcg_position_inputs
 
     text = (TEST_DATA / "egotize-lane.gcg").read_text()
-    inputs = gcg_position_inputs(text, opp_leave_input=True, spatial_planes=85, scalar_size=163)
-    assert inputs.input_spatial.shape == (85, 15, 15) and inputs.input_scalar.shape == (163,)
+    inputs = gcg_position_inputs(text, opp_leave_input=True, spatial_planes=87, scalar_size=163)
+    assert inputs.input_spatial.shape == (87, 15, 15) and inputs.input_scalar.shape == (163,)
     assert inputs.score_diff == 440 - 387
     bundle = gcg_position_board_json(text, open_leaves=True)
     assert len(bundle["moves"]) == len(inputs.moves) > 100

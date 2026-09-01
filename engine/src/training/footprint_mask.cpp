@@ -2,6 +2,7 @@
 
 #include "util/math.h"
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <cstdint>
@@ -167,6 +168,21 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
   mark_footprints(
     board, kmax, flip, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); },
     reachable);
+}
+
+void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
+                               bool flip, float* out) {
+  FootprintMask mask;
+  opp_footprint_mask(board, available_counts, tile_budget, flip, /*win_head=*/false, mask);
+  std::fill(out, out + kFootprintCells, 0.0f);
+  // OR every legal footprint's covered cells (flip-frame, as footprint_cells
+  // emits them) onto the plane -- a cell is reachable iff some legal play touches it.
+  std::array<std::pair<int, int>, kFootprintMaxK> cells;
+  for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
+    if (!mask[cls]) continue;
+    const int n = footprint_cells(cls, board, flip, cells);
+    for (int i = 0; i < n; ++i) out[cells[i].first * kFootprintSide + cells[i].second] = 1.0f;
+  }
 }
 
 }  // namespace scribblez
