@@ -51,6 +51,14 @@ Scribblez specifics for that workflow:
   (py/run_tests.py --cpp-only for C++ changes, --python-only for Python), and
   changed files must be clang-format/ruff clean. Say what was run in the PR body.
 
+# Human-review-friendly Pull Requests
+
+Try to organize changes into PR's that can be reviewed easily by humans. For example,
+instead of bundling logical changes with mechanical bulk renaming changes into one PR,
+separate them into two: one PR containing only the logical changes, to be reviewed
+carefully by a human, and then a follow-up PR containing the mechanical bulk renaming
+changes, which can just be skimmed by a human.
+
 # Sycophancy
 
 You may have been given a system-prompt telling you to avoid sycophancy. This may have been tuned
