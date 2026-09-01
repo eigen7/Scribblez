@@ -78,6 +78,8 @@ struct ScribblezSession {
                                        int err_cap) const;
   int position_eval_collapse_placement(const char* gcg_text, const float* raw, int raw_cap,
                                        float* out, int out_cap, char* out_err, int err_cap) const;
+  int position_eval_masked_placement(const char* gcg_text, const float* raw, int raw_cap,
+                                     float* out, int out_cap, char* out_err, int err_cap) const;
   int gcg_position_inputs(const char* gcg_text, bool opp_leave_input, float* out_input,
                           int input_cap, int32_t* out_score_diff, void* out_moves, int moves_cap,
                           char* out_err, int err_cap) const;
@@ -511,11 +513,41 @@ int ScribblezSession::position_eval_collapse_placement(const char* gcg_text, con
   }
 }
 
+int ScribblezSession::position_eval_masked_placement(const char* gcg_text, const float* raw,
+                                                     int raw_cap, float* out, int out_cap,
+                                                     char* out_err, int err_cap) const {
+  if (out_err && err_cap > 0) out_err[0] = '\0';
+  if (!gcg_text || !raw || !out) return -1;
+  constexpr int kRaw = scribblez::kPlacementHeads * scribblez::kFootprintClasses;
+  constexpr int kOut = scribblez::kPlacementHeads * scribblez::kFootprintClasses;
+  if (raw_cap < kRaw || out_cap < kOut) {
+    emit_string("masked placement buffer too small", out_err, err_cap);
+    return -1;
+  }
+  try {
+    std::string error;
+    if (!scribblez::masked_position_eval_analysis_placement(gcg_text, spec, raw, out, &error)) {
+      emit_string(error, out_err, err_cap);
+      return -1;
+    }
+    return kOut;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
 int scribblez_position_eval_collapse_placement(ScribblezSession* s, const char* gcg_text,
                                                const float* raw, int raw_cap, float* out,
                                                int out_cap, char* out_err, int err_cap) {
   return s->position_eval_collapse_placement(gcg_text, raw, raw_cap, out, out_cap, out_err,
                                              err_cap);
+}
+
+int scribblez_position_eval_masked_placement(ScribblezSession* s, const char* gcg_text,
+                                             const float* raw, int raw_cap, float* out, int out_cap,
+                                             char* out_err, int err_cap) {
+  return s->position_eval_masked_placement(gcg_text, raw, raw_cap, out, out_cap, out_err, err_cap);
 }
 
 int scribblez_position_eval_board_json(const char* gcg_text, char* out_json, int out_cap) {

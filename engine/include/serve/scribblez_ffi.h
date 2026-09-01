@@ -202,6 +202,15 @@ int scribblez_position_eval_collapse_placement(ScribblezSession* s, const char* 
                                                const float* raw, int raw_cap, float* out,
                                                int out_cap, char* out_err, int err_cap);
 
+// The same masked footprint distributions, per class instead of collapsed to
+// cells: `out` receives kPlacementHeads * kFootprintClasses floats (each head a
+// distribution over the 2927 classes, illegal footprints at zero). Same inputs
+// and error contract as the collapse export above. Exposes the exact distilled
+// placement target so its per-footprint sparsity/fidelity can be measured.
+int scribblez_position_eval_masked_placement(ScribblezSession* s, const char* gcg_text,
+                                             const float* raw, int raw_cap, float* out, int out_cap,
+                                             char* out_err, int err_cap);
+
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
 // a dataset GCG's post-move position, from the POV of the player that made the
