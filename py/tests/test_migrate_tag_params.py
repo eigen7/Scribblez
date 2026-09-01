@@ -104,8 +104,14 @@ def test_refuses_while_a_worker_is_alive(tmp_path):
     root = tmp_path / "tags" / _WORKLOAD / "t"
     (root / "params").mkdir(parents=True)
     (root / "task.json").write_text(
-        json.dumps({"workload": _WORKLOAD, "tag": "t", "params": {"mask_placement": True},
-                    "workers": [{"worker_id": "local-0", "role": "generate", "pid": os.getpid()}]})
+        json.dumps(
+            {
+                "workload": _WORKLOAD,
+                "tag": "t",
+                "params": {"mask_placement": True},
+                "workers": [{"worker_id": "local-0", "role": "generate", "pid": os.getpid()}],
+            }
+        )
     )
     spec = workloads.get(_WORKLOAD)
     with pytest.raises(SystemExit, match="still running"):

@@ -179,12 +179,24 @@ def main():
     ap.add_argument("workload", help="workload name, e.g. position_eval")
     ap.add_argument("--tag", action="append", default=[], help="tag to migrate (repeatable)")
     ap.add_argument("--all", action="store_true", help="every tag under the workload")
-    ap.add_argument("--rename", action="append", default=[], metavar="OLD=NEW",
-                    help="rename a param (repeatable)")
-    ap.add_argument("--drop", action="append", default=[], metavar="PARAM",
-                    help="drop a param (repeatable)")
-    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", dest="sets",
-                    help="set a param, value parsed as JSON then coerced (repeatable)")
+    ap.add_argument(
+        "--rename",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="rename a param (repeatable)",
+    )
+    ap.add_argument(
+        "--drop", action="append", default=[], metavar="PARAM", help="drop a param (repeatable)"
+    )
+    ap.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        dest="sets",
+        help="set a param, value parsed as JSON then coerced (repeatable)",
+    )
     ap.add_argument("--mount-root", default=str(DEFAULT_MOUNT_ROOT))
     ap.add_argument("--dry-run", action="store_true", help="report changes without writing")
     args = ap.parse_args()
@@ -200,8 +212,9 @@ def main():
         print("no tags found")
         return
 
-    total = sum(migrate_tag(spec, t, args.mount_root, renames, args.drop, sets, args.dry_run)
-                for t in tags)
+    total = sum(
+        migrate_tag(spec, t, args.mount_root, renames, args.drop, sets, args.dry_run) for t in tags
+    )
     if args.dry_run:
         print(f"\ndry run: {total} file(s) would change; nothing written")
     elif total:
