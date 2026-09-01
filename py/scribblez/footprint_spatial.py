@@ -17,10 +17,12 @@ under a flip. Any future flipped consumer must permute the 13 channels too, not
 just H/W.
 
 The sparse codec keeps the top-k classes of a per-head distribution as fixed
-padded ``(index, value)`` pairs -- the on-disk form for ``.sobs`` / ``.mset``,
-where a dense 2927-wide plane would be ~13× the per-cell marginal it replaces. The
-codec is generic over the class count, so both the anchored+catch-all distribution
-and any sub-block can use it.
+padded ``(index, value)`` pairs. Both on-disk formats (``.mset``, ``.sobs``)
+ended up dense -- the teacher distribution is too broad for any small k, and the
+sim observation stayed a verbatim POD -- so the codec currently has no on-disk
+consumer; it remains for offline analysis (the fidelity probe). It is generic
+over the class count, so both the anchored+catch-all distribution and any
+sub-block can use it.
 """
 
 import numpy as np
@@ -58,6 +60,15 @@ def from_spatial(anchored, catch_all):
     catch_all = np.asarray(catch_all)
     flat = anchored.reshape(*anchored.shape[:-3], ANCHORED)
     return np.concatenate([flat, catch_all], axis=-1)
+
+
+def to_slot_planes(dense):
+    """A ``(..., NUM_CLASSES)`` array as ``(..., SLOTS_PER_CELL, SIDE, SIDE)``
+    per-slot board maps, the catch-all block dropped. This is the evidence
+    fusion's channel layout: anchored class ``(cell, slot)`` lands on channel
+    ``slot`` at ``cell``."""
+    anchored, _ = to_spatial(dense)  # (..., SIDE, SIDE, SLOTS)
+    return np.moveaxis(anchored, -1, -3)
 
 
 def top_k_sparse(dense, k):

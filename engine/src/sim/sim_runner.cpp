@@ -142,16 +142,13 @@ void accumulate(const RolloutResult& o, SimObservation* obs) {
   obs->delta_sum += o.delta;
   obs->delta_sq_sum += o.delta_sq;
 
-  visit_placed_squares(o.opp_reply, [&](int r, int c) {
-    const int cell = r * BOARD_SIZE + c;
-    ++obs->opp_next_count[cell];
-    obs->opp_win_count[cell] += float(o.p_loss);
-  });
-  visit_placed_squares(o.self_next, [&](int r, int c) {
-    const int cell = r * BOARD_SIZE + c;
-    ++obs->self_next_count[cell];
-    obs->self_win_count[cell] += float(o.p_win);
-  });
+  // One footprint class per move (the opponent wins iff the mover loses).
+  const int opp_cls = footprint_class(o.opp_reply, /*flip=*/false);
+  ++obs->opp_next_count[opp_cls];
+  obs->opp_win_count[opp_cls] += float(o.p_loss);
+  const int self_cls = footprint_class(o.self_next, /*flip=*/false);
+  ++obs->self_next_count[self_cls];
+  obs->self_win_count[self_cls] += float(o.p_win);
 }
 
 // Worker t: plays rollout indices {t, t+threads, ...} of EVERY candidate (the

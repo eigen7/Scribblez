@@ -21,14 +21,16 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from scribblez.footprint_spatial import SLOTS_PER_CELL
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS
 from scribblez.spatial_trunk import mean_max_pool
 
-# Per-candidate spatial evidence channels: the four rollout-frequency planes
-# (opp/self placement, each also conjoined with that player winning) plus the
-# candidate's own footprint.
-NUM_EVIDENCE_PLANES = 5
+# Per-candidate spatial evidence channels (sobs.evidence_features' layout):
+# the four footprint histograms (opp/self placement, each also conjoined with
+# that player winning) as per-slot board channels, plus the candidate's own
+# footprint one-hot block.
+NUM_EVIDENCE_PLANES = 5 * SLOTS_PER_CELL
 
 
 class EvidenceEncoder(nn.Module):
@@ -63,8 +65,8 @@ class EvidenceEncoder(nn.Module):
     def forward(
         self, planes: torch.Tensor, scalars: torch.Tensor, mask: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """planes (B,K,5,15,15), scalars (B,K,S), mask (B,K) bool ->
-        spatial residual (B,C,15,15), pooled tokens (B,d_token)."""
+        """planes (B,K,NUM_EVIDENCE_PLANES,15,15), scalars (B,K,S), mask
+        (B,K) bool -> spatial residual (B,C,15,15), pooled tokens (B,d_token)."""
         b, k = mask.shape
         denom = mask.sum(dim=1).clamp(min=1).float()  # (B,)
 

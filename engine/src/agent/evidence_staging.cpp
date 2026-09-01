@@ -29,28 +29,38 @@ void softmax3(const float* logits, float* out) {
   for (int i = 0; i < 3; ++i) out[i] = float(out[i] / sum);
 }
 
-// The four observed rollout-frequency planes (count / rollouts) followed by the
-// four evidence-free predicted planes (the model's per-cell probabilities, copied
-// through) and the candidate's footprint -- kNumEvidencePlanes planes of kCells each.
+// One head's dense footprint histogram scattered into its kSlotsPerCell
+// channels: anchored class (cell, slot) -> channel `slot` at `cell`, scaled by
+// inv_n. The anchored classes tile the head's channels exactly; the two
+// catch-all classes are dropped.
+template <typename T>
+void scatter_histogram(const T* hist, float inv_n, float* out) {
+  for (int cls = 0; cls < kAnchoredFootprints; ++cls)
+    out[(cls % kSlotsPerCell) * kCells + cls / kSlotsPerCell] = float(hist[cls]) * inv_n;
+}
+
+// The observed rollout-frequency channels (histogram counts / rollouts)
+// followed by the evidence-free predicted channels (the model's footprint
+// probabilities, copied through) and the candidate's own footprint one-hot --
+// kNumEvidencePlanes planes of kCells each. `out` arrives zeroed.
 void stage_planes(const SimObservation& obs, const Move& move, const float* plane_probs,
                   float* out) {
   const float inv_n = 1.0f / float(std::max<std::uint32_t>(obs.n, 1));
-  for (int cell = 0; cell < kCells; ++cell) {
-    out[0 * kCells + cell] = float(obs.opp_next_count[cell]) * inv_n;
-    out[1 * kCells + cell] = float(obs.self_next_count[cell]) * inv_n;
-    out[2 * kCells + cell] = obs.opp_win_count[cell] * inv_n;
-    out[3 * kCells + cell] = obs.self_win_count[cell] * inv_n;
+  scatter_histogram(obs.opp_next_count.data(), inv_n, out + 0 * kSlotsPerCell * kCells);
+  scatter_histogram(obs.self_next_count.data(), inv_n, out + 1 * kSlotsPerCell * kCells);
+  scatter_histogram(obs.opp_win_count.data(), inv_n, out + 2 * kSlotsPerCell * kCells);
+  scatter_histogram(obs.self_win_count.data(), inv_n, out + 3 * kSlotsPerCell * kCells);
+  // The model's predicted planes arrive already softmaxed and already in the
+  // evidence-channel layout (catch-all dropped in the graph): a plain copy.
+  std::memcpy(out + kNumObservedPlanes * kCells, plane_probs,
+              sizeof(float) * kNumPredictedPlanes * kCells);
+  // The candidate's own footprint, one-hot at (slot channel, anchor cell);
+  // a PASS/EXCHANGE maps to a catch-all class and leaves the block zero.
+  const int cls = footprint_class(move, /*flip=*/false);
+  if (cls < kAnchoredFootprints) {
+    float* footprint = out + (kNumObservedPlanes + kNumPredictedPlanes) * kCells;
+    footprint[(cls % kSlotsPerCell) * kCells + cls / kSlotsPerCell] = 1.0f;
   }
-  // The model's predicted planes are already per-cell probabilities (the
-  // footprint head's anchor marginal, softmaxed in the graph), so they are
-  // copied through -- not squashed again.
-  for (int p = 0; p < kNumPredictedPlanes; ++p) {
-    float* dst = out + (kNumObservedPlanes + p) * kCells;
-    const float* src = plane_probs + p * kCells;
-    for (int cell = 0; cell < kCells; ++cell) dst[cell] = src[cell];
-  }
-  float* footprint = out + (kNumEvidencePlanes - 1) * kCells;
-  visit_placed_squares(move, [&](int r, int c) { footprint[r * BOARD_SIZE + c] = 1.0f; });
 }
 
 // The six observed scalars (WDL frequencies, delta mean/std in scaled score

@@ -2,19 +2,19 @@
 
 The position-eval **teacher** predicts placement as a categorical distribution
 over 2927 **footprint** classes (`engine/include/training/footprint.h`). The
-move-set-eval **student**'s distillation target is now footprint-native too (BC1,
-below). What is still **per-cell** (15×15) is the evidence path -- fed by a plain
-slot-sum anchor marginal (`footprint_cell_marginal`: softmax, drop the catch-all,
-sum the per-cell slots) until its own change migrates it to footprint space --
-while the sim observation is raw per-cell rollout counts, not a decoded model
-output. `collapse_footprint_planes` -- which masks-softmaxes each head's 2927
-logits and scatters the probability onto the board cells each footprint covers --
-now survives only for dashboard visualization.
+move-set-eval **student**'s distillation target is footprint-native too (BC1,
+below), and BC2 migrated the **evidence path**: the sim observation is a dense
+per-head footprint histogram (`.sobs` v5), the evidence fusion consumes
+footprint slot-channel planes (`NUM_EVIDENCE_PLANES` 9 → 117), and the
+transitional per-cell bridge (`footprint_cell_marginal` feeding the fusion) is
+gone -- the marginal survives only as a display reduction (the Trajectories
+pane), alongside `collapse_footprint_planes` for the per-move analysis viz.
 
-This document is the plan to make placement **footprint-categorical end to end**,
-retiring that transitional per-cell evidence bridge too. It was reviewed by a
-four-panelist plan-review (including a cross-vendor seat); the design below is the
-post-review version, and the dissent it resolved is summarized at the end.
+This document is the plan that drove the migration. It was reviewed by a
+four-panelist plan-review (including a cross-vendor seat); the design below is
+the post-review version, the dissent it resolved is summarized at the end, and
+the **BC2 execution deviations** -- simplifications approved after review --
+are recorded inline in *[BC2: ...]* notes.
 
 ## The key idea: footprints are spatial
 
@@ -61,6 +61,10 @@ for one of them:
   few distinct footprints regardless of how broad the teacher's *predicted*
   distribution is. Sparse top-k with a fixed padded width fits; confirm the width
   against a real histogram when `.sobs` v5 exists (BC2).
+  *[BC2 deviation: stored **dense** after all. Keeping `SimObservation` a
+  verbatim fixed-stride POD avoids the format rewrite entirely (a version bump
+  over the same layout machinery); the ~13× size is accepted, and a sparse
+  re-encode stays open as a later, purely mechanical change.]*
 
 `k` (where used) is a **format constant**, not a runtime tunable. The project
 carries no backwards-compatibility burden, so each format commits to one encoding
@@ -72,6 +76,8 @@ dense per-head histogram; only the serialized record is padded top-k. The `.sobs
 and `.mset` writers/readers therefore stop treating the observation/planes as a
 verbatim fixed-stride POD — a format rewrite (new `sizeof` + `static_assert`s),
 not a version-number bump over the same layout. Same for `.mset`'s `TargetWriter`.
+*[BC2: with `.sobs` dense, none of this rewrite was needed — the record stays a
+verbatim POD and v4 → v5 is an ordinary version bump.]*
 
 ## Win-head normalization
 
@@ -84,6 +90,15 @@ footprint bucket) is normalized the **same** way — divided by its win count to
 normalization is what makes the evidence residual (observed vs. predicted)
 well-defined. Catch-all scalars: `P(win)` and pass mass per head; the plays heads'
 extra slot is inert.
+
+*[BC2 deviation: no conditional-on-win renormalization, and no catch-all
+scalars. The evidence planes carry the RAW quantities — observed counts / n and
+the unmasked softmax with the two catch-all classes simply dropped — because
+observed and predicted are already in matched units (both un-renormalized
+frequencies over the same class space), the conv learns any residual scaling,
+and the WLD scalars the token carries already supply `P(win)` on both sides.
+This trades the clean per-head residual for a simpler, division-free staging
+path.]*
 
 ## Predicted placement at serving is unmasked
 
@@ -115,6 +130,12 @@ evidence path changes (see PR BC1). When the evidence path is itself migrated
 
 Benchmark Option 2 against Option 1 and the collapsed baseline in BC2.
 
+*[BC2 deviation: Option 1 committed without the benchmark. The widened conv is
+the conservative choice (it preserves the working architecture and its
+neighborhood bias) and the staging cost is a per-token 117×225 fill on a path
+that is not hot; the compact encoder remains available as a later experiment if
+the dense tensor ever shows up in a profile.]*
+
 ## Visualization is the only surviving collapse — but two data planes
 
 1. **Per-move analysis viz** (`position_eval_analysis.cpp → scribblez_ffi.cpp →
@@ -123,9 +144,11 @@ Benchmark Option 2 against Option 1 and the collapsed baseline in BC2.
    unaffected by the corpus/format work — not a regen gate.
 2. **Trajectories/Positions tab** (`sim_evidence/sobs.py`,
    `evidence/trajectory_view.py`, `dashboard/trajectories_api.py`) reads `.sobs`
-   placement **directly** (per-cell numpy dtype), bypassing the collapse. `.sobs`
-   v5 breaks this, so BC2 rebuilds its per-cell view from the sparse histogram via
-   the slot-sum marginal.
+   placement **directly** (numpy dtype), bypassing the collapse. `.sobs` v5
+   changed it under BC2: the pane's observed truth plane is now the histogram's
+   slot-sum anchor marginal, drawn beside the prediction's
+   `footprint_cell_marginal` — the two per-cell views are now the same
+   reduction on both sides.
 
 ## PR slicing
 
@@ -154,14 +177,14 @@ evidence train-loop files.
 
 1. **Storage is per-format** (settled by the masked fidelity probe): `.mset` teacher
    target **dense** (the masked distribution is broad — no k ≤ 128 clears 99%);
-   `.sobs` sim-obs histogram **sparse top-k** (genuinely sparse rollout counts;
-   width confirmed against a real histogram in BC2). `k` is a format constant; no
-   dual dense/sparse path.
+   `.sobs` sim-obs histogram — planned sparse top-k, **landed dense** (BC2
+   deviation above: the verbatim POD wins). No dual dense/sparse path either way.
 2. **Masked softmax-CE / KL** distillation loss (replaces per-cell BCE).
-3. **Catch-all → scalars**, win heads **conditional-on-win** with the observed
-   histogram normalized to match.
-4. **Fusion:** widened spatial conv is the baseline; the compact residual encoder is
-   benchmarked against it in BC2.
+3. **Catch-all → scalars**, win heads **conditional-on-win** — *superseded by the
+   BC2 deviation above: catch-all dropped outright, raw un-renormalized
+   histograms/distributions.*
+4. **Fusion:** the widened spatial conv, committed without the compact-encoder
+   benchmark (BC2 deviation above).
 5. **Predicted placement at serving is unmasked** (no Board/Dictionary in staging).
 
 ## Plan-review dissent (resolved)

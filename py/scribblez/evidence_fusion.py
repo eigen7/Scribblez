@@ -42,23 +42,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scribblez.footprint_spatial import SLOTS_PER_CELL
 from scribblez.spatial_trunk import mean_max_pool
 
-# Per-token spatial channels: the four observed rollout-frequency planes and
-# the model's four predicted planes (both in the placement-head order the FFI
-# serves -- targets.PLANE_NAMES), plus the candidate's own footprint.
-EVIDENCE_PLANE_NAMES = (
-    "obs_opp_next",
-    "obs_self_next",
-    "obs_opp_win",
-    "obs_self_win",
-    "pred_opp_next",
-    "pred_self_next",
-    "pred_opp_win",
-    "pred_self_win",
-    "footprint",
-)
-NUM_EVIDENCE_PLANES = len(EVIDENCE_PLANE_NAMES)
+# Per-token spatial channels -- THE canonical evidence-plane layout; the C++
+# staging port (agent/evidence_staging.h) mirrors it and must change in
+# lockstep. Placement is footprint-categorical: each head is SLOTS_PER_CELL
+# board-shaped channels, anchored class (cell, slot) at channel
+# (head * SLOTS_PER_CELL + slot). First the four observed rollout-frequency
+# histograms (SimObservation's counts / rollouts) and the model's four
+# predicted footprint distributions (both in the placement-head order the FFI
+# serves -- targets.PLANE_NAMES), then the candidate's own footprint as a
+# one-hot in a final SLOTS_PER_CELL block. The two catch-all classes
+# (pass / not-win) are dropped and nothing is renormalized: the conv sees the
+# raw per-class frequencies/probabilities.
+_PLANE_HEADS = ("opp_next", "self_next", "opp_win", "self_win")
+EVIDENCE_PLANE_NAMES = tuple(
+    f"{kind}_{head}_s{slot}"
+    for kind in ("obs", "pred")
+    for head in _PLANE_HEADS
+    for slot in range(SLOTS_PER_CELL)
+) + tuple(f"footprint_s{slot}" for slot in range(SLOTS_PER_CELL))
+# The three channel blocks, in order: observed, predicted, candidate footprint.
+NUM_OBSERVED_PLANES = len(_PLANE_HEADS) * SLOTS_PER_CELL
+NUM_PREDICTED_PLANES = len(_PLANE_HEADS) * SLOTS_PER_CELL
+NUM_EVIDENCE_PLANES = len(EVIDENCE_PLANE_NAMES)  # 117
+assert NUM_EVIDENCE_PLANES == NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES + SLOTS_PER_CELL
 
 # Per-token scalars: the sim's value estimate with its rollout count (the
 # confidence signal -- maps built from 40 rollouts and from 2000 warrant

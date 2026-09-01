@@ -14,7 +14,8 @@ import torch
 from scribblez.dataset import row_layout
 from scribblez.evidence.dataset import TrajectoryDataset
 from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
-from scribblez.sim_evidence.model import EvidencePositionEvalModel
+from scribblez.footprint_spatial import SLOTS_PER_CELL
+from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     _FILE_HEADER,
     MOVE_PLAY,
@@ -24,6 +25,7 @@ from scribblez.sim_evidence.sobs import (
     SOBS_VERSION,
     evidence_features,
     move_footprint,
+    move_footprint_class,
     read_sobs,
 )
 
@@ -132,19 +134,33 @@ def test_move_footprint_and_features(sobs_dir):
     slog = sorted(sobs_dir.glob("*.slog"))[0]
     positions = read_sobs(slog.with_suffix(".sobs"))
     pos = positions[0]
+    obs_channels = 4 * SLOTS_PER_CELL
     planes, scalars, mask = evidence_features(pos, max_k=TOP_K + 2)
-    assert planes.shape == (TOP_K + 2, 5, 15, 15)
+    assert planes.shape == (TOP_K + 2, 5 * SLOTS_PER_CELL, 15, 15)
     assert scalars.shape == (TOP_K + 2, NUM_EVIDENCE_SCALARS)
     assert mask.sum() == len(pos.moves)
     for i, move in enumerate(pos.moves):
+        # The per-cell mirror of visit_placed_squares still walks the squares.
         foot = move_footprint(move)
         if int(move["type"]) == MOVE_PLAY:
             assert foot.sum() == int(move["num_played"])
         else:
             assert foot.sum() == 0
-        assert np.array_equal(planes[i, 4].astype(np.float32), foot)
-        # Frequencies are per-rollout fractions in [0, 1].
-        assert float(planes[i, :4].max()) <= 1.0
+        # The candidate block is a one-hot at (footprint slot, anchor cell)
+        # for a play, all zeros for a pass/exchange (dropped catch-all).
+        cand = planes[i, obs_channels:].astype(np.float32)
+        if int(move["type"]) == MOVE_PLAY:
+            cls = move_footprint_class(move)
+            cell, slot = divmod(cls, SLOTS_PER_CELL)
+            assert cand.sum() == 1.0
+            assert cand[slot, cell // 15, cell % 15] == 1.0
+            assert foot[cell // 15, cell % 15] == 1.0  # the anchor is a placed square
+        else:
+            assert cand.sum() == 0
+        # Frequencies are per-rollout fractions in [0, 1]; each observed head's
+        # anchored mass is at most its rollout total.
+        assert float(planes[i, :obs_channels].max()) <= 1.0
+        assert float(planes[i, :SLOTS_PER_CELL].astype(np.float32).sum()) <= 1.0 + 1e-3
     # W/D/L frequencies sum to 1 for real candidates.
     assert np.allclose(scalars[mask][:, :3].sum(axis=1), 1.0)
 
@@ -267,14 +283,14 @@ def test_model_ignores_masked_evidence():
         out_zero = model(
             spatial,
             scalar,
-            torch.zeros(b, k, 5, 15, 15),
+            torch.zeros(b, k, NUM_EVIDENCE_PLANES, 15, 15),
             torch.zeros(b, k, NUM_EVIDENCE_SCALARS),
             mask,
         )
         out_junk = model(
             spatial,
             scalar,
-            torch.randn(b, k, 5, 15, 15),
+            torch.randn(b, k, NUM_EVIDENCE_PLANES, 15, 15),
             torch.randn(b, k, NUM_EVIDENCE_SCALARS),
             mask,
         )
@@ -288,7 +304,7 @@ def test_model_trains_on_evidence():
     b, k = 3, 4
     spatial = torch.randn(b, *shapes["input_spatial"])
     scalar = torch.randn(b, shapes["input_scalar"][0])
-    planes = torch.rand(b, k, 5, 15, 15)
+    planes = torch.rand(b, k, NUM_EVIDENCE_PLANES, 15, 15)
     scalars = torch.randn(b, k, NUM_EVIDENCE_SCALARS)
     mask = torch.ones(b, k, dtype=torch.bool)
     mask[0, 2:] = False  # a padded set in the batch
@@ -313,7 +329,7 @@ def test_empty_evidence_is_finite():
         out = model(
             spatial,
             scalar,
-            torch.zeros(1, 3, 5, 15, 15),
+            torch.zeros(1, 3, NUM_EVIDENCE_PLANES, 15, 15),
             torch.zeros(1, 3, NUM_EVIDENCE_SCALARS),
             mask,
         )

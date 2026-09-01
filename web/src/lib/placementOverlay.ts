@@ -1,9 +1,11 @@
 // Board-overlay math for the Positions tab's placement-head heat map.
 //
 // Each of the model's four placement heads predicts, per board square, the
-// probability of some event (e.g. "the opponent's next move covers this
-// square"). Monte-Carlo rollouts give an empirical ground-truth probability
-// for the same event. This module turns one head's (truth, pred) pair, plus
+// probability of some event -- "the opponent's next move covers this square"
+// for the Positions tab's collapsed view, "is anchored at this square" for the
+// Trajectories pane's marginals. Monte-Carlo rollouts give an empirical
+// ground-truth probability for the same event. This module turns one head's
+// (truth, pred) pair, plus
 // a display mode, into a per-cell "halo" -- a ring color plus a hover
 // tooltip -- that a caller hands to <Board cellHalos=... />.
 //

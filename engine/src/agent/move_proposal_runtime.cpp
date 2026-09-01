@@ -182,8 +182,8 @@ const MoveProposalPredictions& MoveProposalRuntime::encode(
   plain_.gain.clear();  // the cache graph emits no gain head
   softmax_rows(cache_wld_.data(), m, WldOutput::kRowElems, plain_.wld.data());
   copy_rows(cache_score_diff_.data(), m, ScoreDiffOutput::kRowElems, plain_.score_diff.data());
-  // The graph already emits per-cell probabilities (the footprint head's anchor
-  // marginal), so the planes pass through -- no sigmoid.
+  // The graph already emits footprint probabilities (softmaxed slot-channel
+  // planes), so they pass through -- no sigmoid.
   copy_rows(cache_planes_.data(), m, PlanesOutput::kRowElems, plain_.planes.data());
   return plain_;
 }

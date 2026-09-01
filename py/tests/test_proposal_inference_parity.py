@@ -38,7 +38,7 @@ from scribblez.evidence_fusion import (
     EvidenceInputs,
 )
 from scribblez.ffi import get_input_shapes
-from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_cell_marginal
+from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
 from scribblez.move_set_eval.moves import move_encoding_dims
 from scribblez.move_set_eval.proposal_export import (
     CACHE_INPUT_NAMES,
@@ -199,10 +199,10 @@ def _reference(model, spatial, scalar, moves, ev):
                 evidence=ev,
             )
         )
-    # The proposal graphs serve the per-cell anchor marginal of the footprint
-    # head (what the evidence path consumes), so the reference reduces its
-    # footprint logits the same way.
-    out["planes"] = footprint_cell_marginal(out["planes"]).flatten(2)
+    # The proposal graphs serve the footprint heads' slot-channel probabilities
+    # (the evidence-plane layout), so the reference decodes its footprint
+    # logits the same way.
+    out["planes"] = footprint_slot_planes(out["planes"]).flatten(2)
     return out
 
 

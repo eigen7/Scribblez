@@ -34,6 +34,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "nn/eval_service.h"
+#include "training/footprint.h"
 
 #include <array>
 #include <cstdint>
@@ -77,7 +78,11 @@ struct SimPosition {
 // predicted. Every consumer normalizes by `n` -- the rollout count, integral
 // in both configurations -- so the frequency semantics are unchanged.
 struct SimObservation {
-  static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
+  // Placement is a histogram over the kFootprintClasses footprint classes
+  // (training/footprint.h), not per-cell occupancy: each rollout's reply / next
+  // move contributes to exactly one class (its footprint), in the unflipped
+  // frame. Stored dense; the anchored classes reshape to (15, 15, slots).
+  static constexpr int kClasses = kFootprintClasses;
 
   // Doubles first, so the layout carries no alignment padding to serialize.
   double wins = 0;  // outcome weight for the mover winning (draws are neither)
@@ -93,12 +98,12 @@ struct SimObservation {
   double delta_sq_sum = 0;
   uint32_t n = 0;  // rollouts
 
-  std::array<uint16_t, kCells> opp_next_count{};
-  std::array<uint16_t, kCells> self_next_count{};
-  std::array<float, kCells> opp_win_count{};
-  std::array<float, kCells> self_win_count{};
+  std::array<uint16_t, kClasses> opp_next_count{};
+  std::array<uint16_t, kClasses> self_next_count{};
+  std::array<float, kClasses> opp_win_count{};
+  std::array<float, kClasses> self_win_count{};
 };
-static_assert(sizeof(SimObservation) == 44 + (2 + 2 + 4 + 4) * SimObservation::kCells,
+static_assert(sizeof(SimObservation) == 44 + (2 + 2 + 4 + 4) * SimObservation::kClasses,
               "SimObservation is serialized verbatim; its layout must stay packed");
 
 // Which simulated quantity ranks a candidate set: how often the rollouts were

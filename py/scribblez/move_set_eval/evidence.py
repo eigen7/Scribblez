@@ -24,29 +24,17 @@ import torch
 from scribblez.evidence_fusion import (
     NUM_EVIDENCE_PLANES,
     NUM_EVIDENCE_SCALARS,
+    NUM_OBSERVED_PLANES,
+    NUM_PREDICTED_PLANES,
     EvidenceInputs,
 )
-from scribblez.sim_evidence.sobs import BOARD, move_footprint
+from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
-from .model import footprint_cell_marginal
+from .model import footprint_slot_planes
 from .moves import encode_moves, move_encoding_dims
 
-# SimObservation's count-plane fields, in the placement-head order the
-# observed half of EVIDENCE_PLANE_NAMES mirrors.
-_COUNT_PLANES = ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
-
-
-def observed_planes(moves: np.ndarray, obs: np.ndarray) -> np.ndarray:
-    """(K,) .sobs records -> (K, 5, 15, 15): the four count planes normalized
-    by each candidate's rollout count, plus its footprint."""
-    k = len(obs)
-    n = np.maximum(obs["n"].astype(np.float32), 1.0)[:, None, None]
-    planes = np.zeros((k, 5, BOARD, BOARD), dtype=np.float32)
-    for j, name in enumerate(_COUNT_PLANES):
-        planes[:, j] = obs[name].astype(np.float32).reshape(k, BOARD, BOARD) / n
-    for i in range(k):
-        planes[i, 4] = move_footprint(moves[i])
-    return planes
+# EVIDENCE_PLANE_NAMES' block boundaries: observed | predicted | candidate.
+_PREDICTED_END = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
 
 
 def observed_scalars(obs: np.ndarray) -> np.ndarray:
@@ -116,12 +104,12 @@ def build_evidence_inputs(
 
     enc = encode_moves(np.asarray(moves), np.full(k, pre_move_diff, dtype=np.int32))
 
-    observed = observed_planes(moves, obs)
-    predicted = footprint_cell_marginal(first_pass["planes"].detach()).cpu().float().numpy()
     planes = np.zeros((k, NUM_EVIDENCE_PLANES, BOARD, BOARD), dtype=np.float32)
-    planes[:, :4] = observed[:, :4]
-    planes[:, 4:8] = predicted  # (k, 4, BOARD, BOARD) per-cell anchor marginal
-    planes[:, 8] = observed[:, 4]
+    planes[:, :NUM_OBSERVED_PLANES] = observed_slot_planes(obs)
+    planes[:, NUM_OBSERVED_PLANES:_PREDICTED_END] = (
+        footprint_slot_planes(first_pass["planes"].detach()).cpu().float().numpy()
+    )
+    planes[:, _PREDICTED_END:] = candidate_slot_planes(moves)
 
     scalars = np.concatenate([observed_scalars(obs), predicted_scalars(first_pass)], axis=1)
     assert scalars.shape[1] == NUM_EVIDENCE_SCALARS
