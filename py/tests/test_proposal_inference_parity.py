@@ -38,7 +38,7 @@ from scribblez.evidence_fusion import (
     EvidenceInputs,
 )
 from scribblez.ffi import get_input_shapes
-from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_cell_marginal
 from scribblez.move_set_eval.moves import move_encoding_dims
 from scribblez.move_set_eval.proposal_export import (
     CACHE_INPUT_NAMES,
@@ -186,17 +186,24 @@ def _reference(model, spatial, scalar, moves, ev):
     letters, blanks, squares, tile_mask, scalars = moves
     m = len(scalars)
     with torch.no_grad():
-        return model(
-            torch.from_numpy(spatial),
-            torch.from_numpy(scalar),
-            torch.from_numpy(letters).long(),
-            torch.from_numpy(blanks).bool(),
-            torch.from_numpy(squares).long(),
-            torch.from_numpy(tile_mask).float(),
-            torch.from_numpy(scalars),
-            torch.zeros(m, dtype=torch.long),
-            evidence=ev,
+        out = dict(
+            model(
+                torch.from_numpy(spatial),
+                torch.from_numpy(scalar),
+                torch.from_numpy(letters).long(),
+                torch.from_numpy(blanks).bool(),
+                torch.from_numpy(squares).long(),
+                torch.from_numpy(tile_mask).float(),
+                torch.from_numpy(scalars),
+                torch.zeros(m, dtype=torch.long),
+                evidence=ev,
+            )
         )
+    # The proposal graphs serve the per-cell anchor marginal of the footprint
+    # head (what the evidence path consumes), so the reference reduces its
+    # footprint logits the same way.
+    out["planes"] = footprint_cell_marginal(out["planes"]).flatten(2)
+    return out
 
 
 @pytest.mark.parametrize("kind", ["empty", "partial", "full"])

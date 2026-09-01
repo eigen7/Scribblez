@@ -298,8 +298,8 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     # (plots.MSET_QUALITY) instead of crowding the Loss tab's Accuracy panel.
     # Plane-readout quality on the holdout, when it carries plane targets
     # (the stratified fallback holdout; the full-sweep slice does not).
-    if "plane_bce" in metrics:
-        record["plane_bce"] = metrics["plane_bce"]
+    if "plane_ce" in metrics:
+        record["plane_ce"] = metrics["plane_ce"]
     record["exch_rank_regret"] = metrics["exch_rank_regret"]
     record["exch_rank_regret_baseline"] = metrics["exch_rank_regret_baseline"]
     record["positions_with_exchanges"] = metrics["positions_with_exchanges"]

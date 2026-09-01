@@ -221,7 +221,7 @@ EVIDENCE_QUALITY = [
     ),
     (
         "Distillation health: held-out loss",
-        ["distill_loss", "distill_loss_wld", "distill_plane_bce"],
+        ["distill_loss", "distill_loss_wld", "distill_plane_ce"],
     ),
     # The hand-maintained position set (positions/NWL23/face-up-trajectory-set,
     # what the Trajectories tab shows): over every position and evidence

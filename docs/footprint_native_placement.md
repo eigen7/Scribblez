@@ -1,17 +1,20 @@
 # Footprint-native placement
 
 The position-eval **teacher** predicts placement as a categorical distribution
-over 2927 **footprint** classes (`engine/include/training/footprint.h`), but every
-consumer below it is still **per-cell** (15×15): the sim observation, the
-move-set-eval **student**'s distillation target, and the evidence path. The bridge
-between them is `collapse_footprint_planes`, which masks-softmaxes each head's 2927
-logits and scatters the probability onto the board cells each footprint covers.
+over 2927 **footprint** classes (`engine/include/training/footprint.h`). The
+move-set-eval **student**'s distillation target is now footprint-native too (BC1,
+below). What is still **per-cell** (15×15) is the evidence path -- fed by a plain
+slot-sum anchor marginal (`footprint_cell_marginal`: softmax, drop the catch-all,
+sum the per-cell slots) until its own change migrates it to footprint space --
+while the sim observation is raw per-cell rollout counts, not a decoded model
+output. `collapse_footprint_planes` -- which masks-softmaxes each head's 2927
+logits and scatters the probability onto the board cells each footprint covers --
+now survives only for dashboard visualization.
 
-That collapse is a temporary compatibility layer. This document is the plan to
-make placement **footprint-categorical end to end**, so the collapse survives only
-for dashboard visualization. It was reviewed by a four-panelist plan-review
-(including a cross-vendor seat); the design below is the post-review version, and
-the dissent it resolved is summarized at the end.
+This document is the plan to make placement **footprint-categorical end to end**,
+retiring that transitional per-cell evidence bridge too. It was reviewed by a
+four-panelist plan-review (including a cross-vendor seat); the design below is the
+post-review version, and the dissent it resolved is summarized at the end.
 
 ## The key idea: footprints are spatial
 
@@ -84,8 +87,8 @@ extra slot is inert.
 
 ## Predicted placement at serving is unmasked
 
-Today the evidence path feeds `sigmoid(plane_logits)` — pure arithmetic, no Board
-or Dictionary in `evidence_staging`. The footprint-native path feeds the
+Today the evidence path feeds `footprint_cell_marginal(plane_logits)` — pure
+arithmetic, no Board or Dictionary in `evidence_staging`. The footprint-native path feeds the
 **unmasked** footprint softmax (or raw logits), **not** a board-legality-masked
 distribution, so staging stays free of the masking machinery and there is no
 per-candidate mask on the serving hot path. The board-legality mask remains a

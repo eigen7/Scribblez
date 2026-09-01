@@ -17,8 +17,6 @@ constexpr int kCells = kEvidencePlaneCells;
 constexpr double kScorePointScale = 100.0;
 constexpr double kRolloutLogScale = 8.0;
 
-float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
-
 // Softmax of one candidate's three WLD logits into [p_win, p_draw, p_loss],
 // numerically stable (the same decode the eval service applies to this head).
 void softmax3(const float* logits, float* out) {
@@ -32,9 +30,9 @@ void softmax3(const float* logits, float* out) {
 }
 
 // The four observed rollout-frequency planes (count / rollouts) followed by the
-// four evidence-free predicted planes (sigmoid of the cache's plane logits) and
-// the candidate's footprint -- kNumEvidencePlanes planes of kCells each.
-void stage_planes(const SimObservation& obs, const Move& move, const float* plane_logits,
+// four evidence-free predicted planes (the model's per-cell probabilities, copied
+// through) and the candidate's footprint -- kNumEvidencePlanes planes of kCells each.
+void stage_planes(const SimObservation& obs, const Move& move, const float* plane_probs,
                   float* out) {
   const float inv_n = 1.0f / float(std::max<std::uint32_t>(obs.n, 1));
   for (int cell = 0; cell < kCells; ++cell) {
@@ -43,10 +41,13 @@ void stage_planes(const SimObservation& obs, const Move& move, const float* plan
     out[2 * kCells + cell] = obs.opp_win_count[cell] * inv_n;
     out[3 * kCells + cell] = obs.self_win_count[cell] * inv_n;
   }
+  // The model's predicted planes are already per-cell probabilities (the
+  // footprint head's anchor marginal, softmaxed in the graph), so they are
+  // copied through -- not squashed again.
   for (int p = 0; p < kNumPredictedPlanes; ++p) {
     float* dst = out + (kNumObservedPlanes + p) * kCells;
-    const float* src = plane_logits + p * kCells;
-    for (int cell = 0; cell < kCells; ++cell) dst[cell] = sigmoidf(src[cell]);
+    const float* src = plane_probs + p * kCells;
+    for (int cell = 0; cell < kCells; ++cell) dst[cell] = src[cell];
   }
   float* footprint = out + (kNumEvidencePlanes - 1) * kCells;
   visit_placed_squares(move, [&](int r, int c) { footprint[r * BOARD_SIZE + c] = 1.0f; });
@@ -98,7 +99,7 @@ void stage_evidence(std::span<const Move> moves, std::span<const SimObservation>
     std::memcpy(out.move_enc + size_t(j) * c, predictions.move_enc + size_t(idx) * c,
                 sizeof(float) * c);
     stage_planes(observations[j], moves[j],
-                 predictions.plane_logits + size_t(idx) * kNumPredictedPlanes * kCells,
+                 predictions.plane_probs + size_t(idx) * kNumPredictedPlanes * kCells,
                  out.obs_planes + size_t(j) * kNumEvidencePlanes * kCells);
     stage_scalars(observations[j], predictions.wld_logits + size_t(idx) * 3,
                   predictions.score_diff + size_t(idx) * 2,

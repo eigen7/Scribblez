@@ -4743,7 +4743,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
 
   constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
   constexpr uint32_t kPlanes = move_set_eval::kTargetPlanes;
-  constexpr uint32_t kCells = move_set_eval::kPlaneCells;
+  constexpr uint32_t kCells = move_set_eval::kPlaneWidth;  // footprint classes per head
 
   const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
@@ -5783,11 +5783,11 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   std::vector<float> move_enc = {1.0f, 2.0f, 3.0f, 4.0f, 7.0f, 8.0f};  // rows 0,1,2
   std::vector<float> wld_logits = {0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 2.0f, 0.0f, 0.0f};
   std::vector<float> score_diff = {-50.0f, 10.0f, 0.0f, 0.0f, 30.0f, 5.0f};  // [mean,std] rows
-  std::vector<float> plane_logits(size_t(kScored) * kNumPredictedPlanes * kCells, 0.0f);
-  // Scored candidate 2, predicted plane 2, cell 7: a non-default logit.
-  plane_logits[(2 * kNumPredictedPlanes + 2) * kCells + 7] = 2.0f;
+  std::vector<float> plane_probs(size_t(kScored) * kNumPredictedPlanes * kCells, 0.0f);
+  // Scored candidate 2, predicted plane 2, cell 7: a non-default probability.
+  plane_probs[(2 * kNumPredictedPlanes + 2) * kCells + 7] = 0.7f;
   const CachePredictions pred{move_enc.data(), wld_logits.data(), score_diff.data(),
-                              plane_logits.data(), kChannels};
+                              plane_probs.data(), kChannels};
 
   // Evidence candidate 0 == scored 2: a horizontal play at (7,7); observations
   // with rollouts n=4.
@@ -5853,14 +5853,15 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(ev_move_enc[4], 0.0f);
   EXPECT_FLOAT_EQ(ev_move_enc[7], 0.0f);
 
-  // Candidate 0 planes: observed counts / rollouts, predicted sigmoid, footprint.
+  // Candidate 0 planes: observed counts / rollouts, predicted probs copied
+  // through, footprint.
   const float* p0 = ev_planes.data();
-  EXPECT_FLOAT_EQ(p0[0 * kCells + 5], 0.5f);                             // opp_next 2/4
-  EXPECT_FLOAT_EQ(p0[1 * kCells + 10], 1.0f);                            // self_next 4/4
-  EXPECT_FLOAT_EQ(p0[2 * kCells + 5], 0.25f);                            // opp_win 1/4
-  EXPECT_FLOAT_EQ(p0[3 * kCells + 10], 0.5f);                            // self_win 2/4
-  EXPECT_FLOAT_EQ(p0[6 * kCells + 7], 1.0f / (1.0f + std::exp(-2.0f)));  // pred plane 2, cell 7
-  EXPECT_FLOAT_EQ(p0[4 * kCells + 0], 0.5f);  // pred plane 0, default logit 0 -> sigmoid 0.5
+  EXPECT_FLOAT_EQ(p0[0 * kCells + 5], 0.5f);   // opp_next 2/4
+  EXPECT_FLOAT_EQ(p0[1 * kCells + 10], 1.0f);  // self_next 4/4
+  EXPECT_FLOAT_EQ(p0[2 * kCells + 5], 0.25f);  // opp_win 1/4
+  EXPECT_FLOAT_EQ(p0[3 * kCells + 10], 0.5f);  // self_win 2/4
+  EXPECT_FLOAT_EQ(p0[6 * kCells + 7], 0.7f);   // pred plane 2, cell 7 (prob, not re-squashed)
+  EXPECT_FLOAT_EQ(p0[4 * kCells + 0], 0.0f);   // pred plane 0, default 0
   EXPECT_FLOAT_EQ(p0[8 * kCells + (7 * BOARD_SIZE + 7)], 1.0f);  // footprint at (7,7)
   EXPECT_FLOAT_EQ(p0[8 * kCells + 0], 0.0f);
 

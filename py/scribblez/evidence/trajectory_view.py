@@ -31,11 +31,10 @@ import torch
 from scribblez.evidence.checkpoints import EvidenceCheckpoint
 from scribblez.ffi import GcgPositionInputs, gcg_position_inputs
 from scribblez.move_set_eval.evidence import build_evidence_inputs, observed_planes
-from scribblez.move_set_eval.model import win_equity
+from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
 from scribblez.move_set_eval.moves import encode_moves
 from scribblez.move_set_eval.targets import PLANE_NAMES
 from scribblez.sim_evidence.sobs import (
-    BOARD,
     MOVE_PLAY,
     ROLE_OFF_POLICY,
     SobsPosition,
@@ -94,7 +93,8 @@ def move_lane(move: np.void) -> dict | None:
 @dataclass
 class ScoredPass:
     """A pass's per-legal-move readouts as numpy: value (N,), gain (N,) and
-    the sigmoid placement planes (N, 4, 15, 15)."""
+    the per-cell placement planes (N, 4, 15, 15) -- the footprint head's anchor
+    marginal, the same per-cell view the evidence path consumes."""
 
     value: np.ndarray
     gain: np.ndarray
@@ -103,7 +103,7 @@ class ScoredPass:
     @classmethod
     def from_outputs(cls, out: dict[str, torch.Tensor]) -> ScoredPass:
         value = win_equity(torch.softmax(out["wld"].float(), dim=1))
-        planes = torch.sigmoid(out["planes"].float()).view(-1, len(PLANE_NAMES), BOARD, BOARD)
+        planes = footprint_cell_marginal(out["planes"].float())
         return cls(
             value=value.cpu().numpy(),
             gain=out["gain"].float().cpu().numpy(),
@@ -314,8 +314,8 @@ def payload(
 def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None) -> dict | None:
     """The overlay's plane pair for one simmed candidate (its trajectory slot):
     per placement head the sim count plane normalized by rollouts and the
-    conditioned pass's sigmoid prediction at this prefix (the plain one at
-    prefix 0, where the two passes coincide). None without a candidate."""
+    conditioned pass's predicted per-cell marginal at this prefix (the plain one
+    at prefix 0, where the two passes coincide). None without a candidate."""
     if slot is None or not 0 <= slot < len(analysis.sim_index):
         return None
     observed = analysis.observed_planes()

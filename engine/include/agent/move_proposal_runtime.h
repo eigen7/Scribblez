@@ -21,8 +21,9 @@
 // through TrtEvalService: that service scales every output by the chunk row
 // count in a uniform decode loop, which cannot serve the cache's static
 // (board/g) or raw (move_enc) handoff outputs. This class instead reads those
-// off the host buffers itself and applies each head's activation
-// (softmax/sigmoid) here.
+// off the host buffers itself and applies each head's activation (softmax on the
+// WLD head; the plane head is already softmaxed to a per-cell marginal in the
+// graph) here.
 //
 // SCOPE: this is the runtime that drives and tests the two-graph loop today, not
 // the finished production surface. The sequential *playing* agent -- the loop
@@ -126,7 +127,7 @@ class MoveProposalRuntime {
   std::vector<float> cache_move_enc_;    // (M, C) raw
   std::vector<float> cache_wld_;         // (M, 3) raw logits
   std::vector<float> cache_score_diff_;  // (M, 2) [mean, std]
-  std::vector<float> cache_planes_;      // (M, 4, 225) raw logits
+  std::vector<float> cache_planes_;      // (M, 4, 225) per-cell probs (anchor marginal)
   std::vector<float> cache_board_;       // (225, C) raw
   std::vector<float> cache_g_;           // (3C,) raw
 

@@ -28,6 +28,7 @@ from scribblez.evidence_fusion import (
 )
 from scribblez.sim_evidence.sobs import BOARD, move_footprint
 
+from .model import footprint_cell_marginal
 from .moves import encode_moves, move_encoding_dims
 
 # SimObservation's count-plane fields, in the placement-head order the
@@ -116,10 +117,10 @@ def build_evidence_inputs(
     enc = encode_moves(np.asarray(moves), np.full(k, pre_move_diff, dtype=np.int32))
 
     observed = observed_planes(moves, obs)
-    predicted = torch.sigmoid(first_pass["planes"].detach()).cpu().float().numpy()
+    predicted = footprint_cell_marginal(first_pass["planes"].detach()).cpu().float().numpy()
     planes = np.zeros((k, NUM_EVIDENCE_PLANES, BOARD, BOARD), dtype=np.float32)
     planes[:, :4] = observed[:, :4]
-    planes[:, 4:8] = predicted.reshape(k, 4, BOARD, BOARD)
+    planes[:, 4:8] = predicted  # (k, 4, BOARD, BOARD) per-cell anchor marginal
     planes[:, 8] = observed[:, 4]
 
     scalars = np.concatenate([observed_scalars(obs), predicted_scalars(first_pass)], axis=1)

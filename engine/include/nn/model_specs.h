@@ -228,11 +228,12 @@ struct MoveEncHandoff {
   static constexpr bool kDynamic = true;
 };
 
-// planes (M, 4, 225): the four placement-plane heads' per-cell logits, a raw
+// planes (M, 4, 225): the four placement-plane heads' per-cell probabilities
+// (the footprint head's anchor marginal, already softmaxed in the graph), a raw
 // output of both graphs. No kDecode: unlike the mask/wld/score_diff descriptors,
-// these two are read only by the orchestrator (which sigmoids the planes and
-// reads the softplus'd gain as is), never by TrtEvalService's RowDecode path, so
-// a decode field here would be dead metadata.
+// these two are read only by the orchestrator (which copies the planes through
+// and reads the softplus'd gain as is), never by TrtEvalService's RowDecode path,
+// so a decode field here would be dead metadata.
 struct PlanesOutput {
   static constexpr const char* kName = "planes";
   using Elem = float;

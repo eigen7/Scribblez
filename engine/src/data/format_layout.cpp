@@ -162,7 +162,7 @@ json::object build_constants() {
                  {"flag_full_sweep", move_set_eval::kTargetFlagFullSweep},
                  {"target_names_v1", std::move(target_names)},
                  {"planes", move_set_eval::kTargetPlanes},
-                 {"plane_cells", move_set_eval::kPlaneCells}};
+                 {"plane_width", move_set_eval::kPlaneWidth}};
   }
   // The board-row encoding semantics version the exporters stamp into ONNX
   // metadata (input_encoder.h).

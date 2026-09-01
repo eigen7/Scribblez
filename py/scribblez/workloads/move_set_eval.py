@@ -194,7 +194,7 @@ class MoveSetEvalParams:
     trunk_channels: int = param(192, "board-trunk width")
     num_heads: int = param(4, "cross-attention heads")
     lambda_sd: float = param(0.004, "score-diff loss weight")
-    lambda_planes: float = param(1.0, "placement-plane BCE weight (roadmap item 1 readouts)")
+    lambda_planes: float = param(1.0, "placement-plane softmax-CE weight (roadmap item 1 readouts)")
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 

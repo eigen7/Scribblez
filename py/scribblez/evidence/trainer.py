@@ -292,7 +292,7 @@ class StudentReference:
 def distill_metrics(model, holdout_ds: MsetDataset, device, batch_positions: int, cfg) -> dict:
     """The plain pass's distillation health on the .mset holdout, as
     `distill_*` series: the student trainer's ranking metrics against the
-    teacher (recall@1 with the incumbent baseline, Spearman), the plane BCE,
+    teacher (recall@1 with the incumbent baseline, Spearman), the plane CE,
     and the distillation loss itself."""
     m = mset_eval.evaluate(
         model, holdout_ds, device, positions_per_batch=batch_positions, loss_cfg=cfg
@@ -304,8 +304,8 @@ def distill_metrics(model, holdout_ds: MsetDataset, device, batch_positions: int
         "distill_loss": m["loss"],
         "distill_loss_wld": m["loss_wld"],
     }
-    if "plane_bce" in m:
-        out["distill_plane_bce"] = m["plane_bce"]
+    if "plane_ce" in m:
+        out["distill_plane_ce"] = m["plane_ce"]
     return out
 
 

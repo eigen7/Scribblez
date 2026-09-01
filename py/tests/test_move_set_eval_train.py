@@ -14,7 +14,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
+from scribblez.footprint_spatial import NUM_CLASSES, SIDE, SLOTS_PER_CELL
 from scribblez.move_set_eval import moves as move_enc
+from scribblez.move_set_eval.model import compute_loss, footprint_cell_marginal
+from scribblez.move_set_eval.targets import PLANE_NAMES
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 
 # This checkout's own binaries, so a worktree's tests exercise the code built
@@ -64,6 +68,82 @@ def test_encode_moves_matches_footprint():
     assert list(enc["letters"][0][mask]) == [18, 1, 4]
     assert not enc["blanks"][0][mask].any()
     np.testing.assert_allclose(enc["scalars"][0], [0.50, 3 / 7, 1.0], atol=1e-6)
+
+
+def test_footprint_cell_marginal_lands_mass_at_the_anchored_cell():
+    """The footprint -> per-cell bridge, pinned against a hand-built input rather
+    than another call of itself (every caller uses this same function as its
+    reference): mass on one anchored class must marginalize to that class's board
+    cell, two slots at a cell must add, and catch-all mass must be dropped -- so a
+    cell/slot transposition or a missed catch-all slice can't hide."""
+    row, col, slot = 3, 5, 7
+    cls = (row * SIDE + col) * SLOTS_PER_CELL + slot
+    logits = torch.full((NUM_CLASSES,), -30.0, dtype=torch.float64)
+    logits[cls] = 30.0  # softmax ~ one-hot on the anchored class at (row, col)
+    marg = footprint_cell_marginal(logits)
+    assert marg.shape == (SIDE, SIDE)
+    assert marg[row, col] > 0.999
+    assert marg.sum() > 0.999  # all mass landed on an anchored cell
+
+    # Two slots of the same cell (0, 0) carry equal mass; it adds at that cell.
+    two = torch.full((NUM_CLASSES,), -30.0, dtype=torch.float64)
+    a, b = 0 * SLOTS_PER_CELL + 0, 0 * SLOTS_PER_CELL + 1
+    two[a] = two[b] = 0.0
+    marg_two = footprint_cell_marginal(two)
+    assert torch.allclose(marg_two[0, 0], 2.0 * F.softmax(two, dim=-1)[a], atol=1e-9)
+
+    # Mass on a catch-all class (index >= ANCHORED) never reaches the board.
+    catch = torch.full((NUM_CLASSES,), -30.0, dtype=torch.float64)
+    catch[NUM_CLASSES - 1] = 30.0
+    assert footprint_cell_marginal(catch).sum() < 1e-3
+
+
+def test_compute_loss_plane_term_matches_reference_ce():
+    """The plane term is soft softmax cross-entropy against the teacher footprint
+    distribution, meaned over heads and moves; pin it to a hand-written reference
+    so a swapped reduction (mean vs sum over classes, a flipped softmax axis) or a
+    doubly-applied weight moves this head's number, never silently the total."""
+    torch.manual_seed(0)
+    m, num_planes = 3, len(PLANE_NAMES)
+    outputs = {
+        "wld": torch.randn(m, 3, dtype=torch.float64),
+        "score_diff": torch.randn(m, 2, dtype=torch.float64),
+        "planes": torch.randn(m, num_planes, NUM_CLASSES, dtype=torch.float64),
+    }
+    tp = torch.rand(m, num_planes, NUM_CLASSES, dtype=torch.float64)
+    tp = tp / tp.sum(dim=-1, keepdim=True)  # a proper per-head distribution
+    targets = {
+        "target_wld": F.softmax(torch.randn(m, 3, dtype=torch.float64), dim=1),
+        "target_score_diff": torch.randn(m, 2, dtype=torch.float64),
+        "target_planes": tp,
+    }
+    lambda_sd, lambda_planes = 0.03, 0.5  # distinct so a mixed-up weight shows
+    losses = compute_loss(outputs, targets, lambda_sd=lambda_sd, lambda_planes=lambda_planes)
+
+    ref_planes = -(tp * F.log_softmax(outputs["planes"], dim=-1)).sum(dim=-1).mean()
+    assert torch.allclose(losses["planes"], ref_planes)
+    # The plane weight reaches the weighted total exactly once.
+    ref_total = losses["wld"] + lambda_sd * losses["score_diff"] + lambda_planes * ref_planes
+    assert torch.allclose(losses["total"], ref_total)
+
+
+def test_compute_loss_without_plane_targets_is_a_zero_plane_term():
+    """A batch carrying no plane targets contributes a zero plane term (the head
+    just gets no gradient), never a NaN or a spurious penalty on the total."""
+    torch.manual_seed(0)
+    m = 2
+    outputs = {
+        "wld": torch.randn(m, 3, dtype=torch.float64),
+        "score_diff": torch.randn(m, 2, dtype=torch.float64),
+        "planes": torch.randn(m, len(PLANE_NAMES), NUM_CLASSES, dtype=torch.float64),
+    }
+    targets = {
+        "target_wld": F.softmax(torch.randn(m, 3, dtype=torch.float64), dim=1),
+        "target_score_diff": torch.randn(m, 2, dtype=torch.float64),
+    }
+    losses = compute_loss(outputs, targets)
+    assert losses["planes"].item() == 0.0
+    assert torch.isfinite(losses["total"])
 
 
 def _ragged_batch(counts: list[int], seed: int = 0) -> dict[str, torch.Tensor]:
@@ -313,7 +393,7 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
         model, ds, torch.device("cpu"), positions_per_batch=64, max_candidates_per_batch=256
     )
     assert metrics["positions"] == ds.num_positions
-    assert "plane_bce" not in metrics  # no plane targets on this slice
+    assert "plane_ce" not in metrics  # no plane targets on this slice
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
         assert metrics[f"regret@{k}"] >= 0.0
@@ -356,9 +436,9 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
         assert batch["target_wld"].shape == (m, 3)
         assert batch["target_score_diff"].shape == (m, 2)
         # A stratified corpus carries the teacher's placement planes,
-        # dequantized to per-cell probabilities.
+        # dequantized to per-head footprint distributions.
         assert ds.has_planes
-        assert batch["target_planes"].shape == (m, 4, 225)
+        assert batch["target_planes"].shape == (m, 4, NUM_CLASSES)
         assert batch["target_planes"].dtype == torch.float32
         assert float(batch["target_planes"].min()) >= 0.0
         assert float(batch["target_planes"].max()) <= 1.0
@@ -410,8 +490,8 @@ def test_train_step_and_eval(corpus_dir):
     metrics = evaluate(model, ds, device, positions_per_batch=8)
     assert metrics["positions"] == ds.num_positions
     # This slice carries plane targets, so the plane-readout metric is
-    # reported (and BCE is positive for any non-degenerate model).
-    assert metrics["plane_bce"] > 0.0
+    # reported (and CE is positive for any non-degenerate model).
+    assert metrics["plane_ce"] > 0.0
     for k in (1, 3, 5):
         for suffix in ("", "_baseline"):
             assert 0.0 <= metrics[f"recall@{k}{suffix}"] <= 1.0

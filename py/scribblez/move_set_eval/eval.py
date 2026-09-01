@@ -180,7 +180,7 @@ def evaluate(
         sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
         exch_sums[f"exch_retention@{k}"] = exch_sums[f"exch_retention@{k}_baseline"] = 0.0
     n_positions = 0
-    plane_bce_sum = 0.0
+    plane_ce_sum = 0.0
     plane_candidates = 0
     spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
@@ -197,10 +197,11 @@ def evaluate(
             _accumulate_loss(loss_sums, out, batch, device, loss_cfg)
         if "target_planes" in batch:
             m = batch["move_pos_id"].shape[0]
-            bce = torch.nn.functional.binary_cross_entropy_with_logits(
-                out["planes"], batch["target_planes"].to(device)
-            )
-            plane_bce_sum += bce.item() * m
+            # Soft softmax-CE per head against the teacher footprint distribution,
+            # matching compute_loss's plane term.
+            log_pred = torch.nn.functional.log_softmax(out["planes"], dim=-1)
+            ce = -(batch["target_planes"].to(device) * log_pred).sum(dim=-1).mean()
+            plane_ce_sum += ce.item() * m
             plane_candidates += m
         pred_eq = win_equity(out["wld"].softmax(dim=1)).cpu().numpy()
         teacher_eq = win_equity(batch["target_wld"]).numpy()
@@ -247,7 +248,7 @@ def evaluate(
     # Plane-readout quality, only when the slice carries plane targets (the
     # full-sweep holdout does not; the stratified fallback holdout does).
     if plane_candidates:
-        metrics["plane_bce"] = plane_bce_sum / plane_candidates
+        metrics["plane_ce"] = plane_ce_sum / plane_candidates
     if loss_cfg is not None:
         n = max(loss_sums.pop("_candidates", 0), 1)
         metrics.update({name: total / n for name, total in loss_sums.items()})

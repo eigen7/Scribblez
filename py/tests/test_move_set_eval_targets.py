@@ -14,8 +14,8 @@ import pytest
 import torch
 from scribblez.move_set_eval.targets import (
     MSET_FLAG_OPEN_LEAVES,
-    PLANE_CELLS,
     PLANE_NAMES,
+    PLANE_WIDTH,
     TARGET_NAMES_V1,
     dequantize_planes,
     read_mset,
@@ -125,21 +125,21 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
             assert np.allclose(wld.sum(axis=1), 1.0, atol=1e-3)
             # The std head is softplus-floored positive.
             assert np.all(pos.targets[:, 4] > 0)
-            # Placement planes: the footprint heads' per-cell occupancy
-            # marginals (mask + softmax + scatter, training/footprint_collapse.h),
-            # absmax-quantized -- the scale is at most 1/255, and dequantizing
-            # lands back in [0, 1].
-            assert pos.planes.shape == (len(pos.moves), len(PLANE_NAMES), PLANE_CELLS)
+            # Placement planes: the teacher's four masked footprint distributions
+            # (mask + softmax, training/footprint_collapse.h masked_placement_
+            # distributions), absmax-quantized -- the scale is at most 1/255, and
+            # dequantizing lands back in [0, 1].
+            assert pos.planes.shape == (len(pos.moves), len(PLANE_NAMES), PLANE_WIDTH)
             assert pos.planes.dtype == np.uint8
             assert pos.plane_scales.shape == (len(pos.moves), len(PLANE_NAMES))
             assert np.all(pos.plane_scales >= 0)
             assert np.all(pos.plane_scales <= 1 / 255 + 1e-6)
             probs = dequantize_planes(pos.planes, pos.plane_scales)
             assert np.all(probs >= 0) and np.all(probs <= 1 + 1e-6)
-            # Absmax quantization sends a plane's max cell to 255 -- unless the
-            # whole plane is zero (scale 0), which the collapse can produce (a win
-            # head at a position the teacher gives that seat no winning footprint
-            # mass), where the max stays 0.
+            # Absmax quantization sends a plane's max class to 255 -- unless the
+            # whole plane is zero (scale 0), which masking can produce (a win head
+            # at a position the teacher gives that seat no winning footprint mass),
+            # where the max stays 0.
             plane_max = pos.planes.max(axis=2)
             assert np.all((plane_max == 255) | (plane_max == 0))
     assert total > 0

@@ -105,7 +105,7 @@ class _Position:
         # scales -- ~1/4 the memory of floats) and dequantized per batch; None
         # on a plane-less (full-sweep) corpus.
         self.plane_scales = plane_scales  # (K, 4) float32 | None
-        self.planes = planes  # (K, 4, 225) uint8 | None
+        self.planes = planes  # (K, 4, PLANE_WIDTH) uint8 | None
         self.num_legal_moves = num_legal_moves  # 0 unless swept (see targets.MsetPosition)
 
 
