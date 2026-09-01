@@ -31,12 +31,14 @@ MSET_VERSION = _CONST["mset"]["version"]
 # Version-1 target floats per candidate, in record order (mover's POV).
 TARGET_NAMES_V1 = tuple(_CONST["mset"]["target_names_v1"])
 
-# A record's placement planes, in plane order: the teacher's four masks at the
-# candidate's post-move state (the placement heads of training_targets.h, also
-# the SimObservation plane order). Stored absmax-quantized: per plane a float
-# scale and PLANE_CELLS bytes, value = byte * scale (scale = plane max / 255).
+# A record's placement planes, in plane order: the teacher's four footprint
+# distributions at the candidate's post-move state (the placement heads of
+# training_targets.h, also the SimObservation plane order) -- a masked softmax
+# over PLANE_WIDTH = kFootprintClasses classes per head. Stored absmax-quantized:
+# per plane a float scale and PLANE_WIDTH bytes, value = byte * scale
+# (scale = plane max / 255).
 PLANE_NAMES = tuple(_CONST["placement_head_names"])
-PLANE_CELLS = _CONST["mset"]["plane_cells"]
+PLANE_WIDTH = _CONST["mset"]["plane_width"]
 
 # TargetFileHeader.flags bits (mirrors the .sobs convention). Full-sweep files
 # -- capped sweeps of every legal candidate, evaluation-only and held out by
@@ -53,13 +55,13 @@ def _record_dtype(record_floats: int, record_planes: int) -> np.dtype:
     if record_planes:
         fields += [
             ("plane_scales", "<f4", (record_planes,)),
-            ("planes", "u1", (record_planes, PLANE_CELLS)),
+            ("planes", "u1", (record_planes, PLANE_WIDTH)),
         ]
     return np.dtype(fields)
 
 
 def dequantize_planes(planes: np.ndarray, plane_scales: np.ndarray) -> np.ndarray:
-    """(..., P, PLANE_CELLS) uint8 planes with their (..., P) scales -> float32
+    """(..., P, PLANE_WIDTH) uint8 planes with their (..., P) scales -> float32
     probabilities."""
     return planes.astype(np.float32) * plane_scales[..., None]
 
@@ -75,7 +77,7 @@ class MsetPosition:
     # Quantized placement planes and their scales (dequantize_planes recovers
     # probabilities); None on a plane-less (full-sweep) file.
     plane_scales: np.ndarray | None  # (K, record_planes) float32
-    planes: np.ndarray | None  # (K, record_planes, PLANE_CELLS) uint8
+    planes: np.ndarray | None  # (K, record_planes, PLANE_WIDTH) uint8
     # Legal moves the position had, recorded for a swept position so that a
     # sweep the generator's cap truncated is visible as num_legal_moves > K.
     # 0 ("not recorded") on every stratified position.

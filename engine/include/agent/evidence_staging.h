@@ -57,10 +57,11 @@ inline constexpr int kNumEvidenceScalars = kNumObservedScalars + kNumPredictedSc
 // candidate's scored index; the WLD logits and plane logits are decoded here
 // (softmax / sigmoid) exactly as evidence.py decodes the first pass.
 struct CachePredictions {
-  const float* move_enc;      // (num_scored, channels), row-major
-  const float* wld_logits;    // (num_scored, 3)
-  const float* score_diff;    // (num_scored, 2) = [mean, std]
-  const float* plane_logits;  // (num_scored, kNumPredictedPlanes, kEvidencePlaneCells)
+  const float* move_enc;    // (num_scored, channels), row-major
+  const float* wld_logits;  // (num_scored, 3)
+  const float* score_diff;  // (num_scored, 2) = [mean, std]
+  // per-cell probabilities already (the footprint head's anchor marginal), not logits:
+  const float* plane_probs;  // (num_scored, kNumPredictedPlanes, kEvidencePlaneCells)
   int channels;
 };
 

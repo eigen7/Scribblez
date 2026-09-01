@@ -70,13 +70,6 @@ void softmax_rows(const float* src, int rows, int width, float* dst) {
   }
 }
 
-// `rows * width` floats, each independently sigmoid'd (the per-cell plane
-// logits).
-void sigmoid_rows(const float* src, int rows, int width, float* dst) {
-  const size_t n = size_t(rows) * width;
-  for (size_t i = 0; i < n; ++i) dst[i] = 1.0f / (1.0f + std::exp(-src[i]));
-}
-
 // The proposal_export_id metadata the exporter stamps into `onnx_path`, or ""
 // if the file carries none -- the fingerprint tying a cache graph to the step
 // graph exported from the same in-memory model.
@@ -189,7 +182,9 @@ const MoveProposalPredictions& MoveProposalRuntime::encode(
   plain_.gain.clear();  // the cache graph emits no gain head
   softmax_rows(cache_wld_.data(), m, WldOutput::kRowElems, plain_.wld.data());
   copy_rows(cache_score_diff_.data(), m, ScoreDiffOutput::kRowElems, plain_.score_diff.data());
-  sigmoid_rows(cache_planes_.data(), m, PlanesOutput::kRowElems, plain_.planes.data());
+  // The graph already emits per-cell probabilities (the footprint head's anchor
+  // marginal), so the planes pass through -- no sigmoid.
+  copy_rows(cache_planes_.data(), m, PlanesOutput::kRowElems, plain_.planes.data());
   return plain_;
 }
 
@@ -233,8 +228,8 @@ const MoveProposalPredictions& MoveProposalRuntime::condition(
                  conditioned_.wld.data() + size_t(start) * WldOutput::kRowElems);
     copy_rows(step_net_.host<ScoreDiffOutput>(), chunk, ScoreDiffOutput::kRowElems,
               conditioned_.score_diff.data() + size_t(start) * ScoreDiffOutput::kRowElems);
-    sigmoid_rows(step_net_.host<PlanesOutput>(), chunk, PlanesOutput::kRowElems,
-                 conditioned_.planes.data() + size_t(start) * PlanesOutput::kRowElems);
+    copy_rows(step_net_.host<PlanesOutput>(), chunk, PlanesOutput::kRowElems,
+              conditioned_.planes.data() + size_t(start) * PlanesOutput::kRowElems);
     copy_rows(step_net_.host<GainOutput>(), chunk, GainOutput::kRowElems,
               conditioned_.gain.data() + size_t(start) * GainOutput::kRowElems);
   }

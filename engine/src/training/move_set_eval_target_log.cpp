@@ -30,8 +30,8 @@ uint32_t target_flags_from_slog(uint16_t slog_flags) {
 }
 
 float quantize_plane(const float* values, uint8_t* out) {
-  Eigen::Map<const Eigen::ArrayXf> plane(values, kPlaneCells);
-  Eigen::Map<Eigen::Array<uint8_t, Eigen::Dynamic, 1>> cells(out, kPlaneCells);
+  Eigen::Map<const Eigen::ArrayXf> plane(values, kPlaneWidth);
+  Eigen::Map<Eigen::Array<uint8_t, Eigen::Dynamic, 1>> cells(out, kPlaneWidth);
   const float max = plane.maxCoeff();
   if (max <= 0.0f) {
     cells.setZero();
@@ -66,27 +66,27 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 uint32_t num_legal_moves) {
   RELEASE_ASSERT(!closed_);
   RELEASE_ASSERT(targets.size() == candidates.size() * record_floats_);
-  RELEASE_ASSERT(planes.size() == candidates.size() * record_planes_ * kPlaneCells);
+  RELEASE_ASSERT(planes.size() == candidates.size() * record_planes_ * kPlaneWidth);
   TargetPositionHeader ph{};
   ph.game_index = game_index;
   ph.turn_index = turn_index;
   ph.num_candidates = candidates.size();
   ph.num_legal_moves = num_legal_moves;
   append_bytes(&buffer_, &ph, sizeof(ph));
-  std::array<uint8_t, kPlaneCells> quantized;
+  std::array<uint8_t, kPlaneWidth> quantized;
   for (size_t c = 0; c < candidates.size(); ++c) {
     append_bytes(&buffer_, &candidates[c], sizeof(Move));
     append_bytes(&buffer_, targets.data() + c * record_floats_, sizeof(float) * record_floats_);
     // Scales first, then the quantized planes, so each stays a contiguous
     // fixed-width block (the reader's accessors and the numpy dtype both
     // address them as such).
-    const float* cand_planes = planes.data() + c * record_planes_ * kPlaneCells;
+    const float* cand_planes = planes.data() + c * record_planes_ * kPlaneWidth;
     const size_t scales_offset = buffer_.size();
     buffer_.resize(buffer_.size() + sizeof(float) * record_planes_);
     for (uint32_t h = 0; h < record_planes_; ++h) {
-      const float scale = quantize_plane(cand_planes + h * kPlaneCells, quantized.data());
+      const float scale = quantize_plane(cand_planes + h * kPlaneWidth, quantized.data());
       std::memcpy(buffer_.data() + scales_offset + h * sizeof(float), &scale, sizeof(float));
-      append_bytes(&buffer_, quantized.data(), kPlaneCells);
+      append_bytes(&buffer_, quantized.data(), kPlaneWidth);
     }
   }
   ++num_positions_;

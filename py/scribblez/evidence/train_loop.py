@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, EvidenceInputs
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.evidence import observed_planes, observed_scalars
-from scribblez.move_set_eval.model import win_equity
+from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
 from scribblez.sim_evidence.sobs import BOARD
 
 # The sim-outcome loss terms every epoch reports; a joint (unfrozen) epoch adds
@@ -143,7 +143,7 @@ def batch_evidence_inputs(
 
     planes = observed_p.new_zeros((int(sel.sum()), NUM_EVIDENCE_PLANES, BOARD, BOARD))
     planes[:, :4] = observed_p[:, :4]
-    planes[:, 4:8] = torch.sigmoid(plain["planes"][sel]).view(-1, 4, BOARD, BOARD).to(dtype)
+    planes[:, 4:8] = footprint_cell_marginal(plain["planes"][sel]).to(dtype)
     planes[:, 8] = observed_p[:, 4]
     predicted_s = torch.cat(
         [torch.softmax(plain["wld"][sel], dim=1), plain["score_diff"][sel] / 100.0], dim=1

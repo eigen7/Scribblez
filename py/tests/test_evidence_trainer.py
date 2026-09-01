@@ -18,6 +18,7 @@ from scribblez.evidence.train_loop import (
     evaluate,
     run_epoch,
 )
+from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.dataset import MsetDataset
@@ -145,7 +146,7 @@ def _fabricated_plain(m: int, seed: int = 0):
     return {
         "wld": torch.randn(m, 3, generator=gen),
         "score_diff": torch.randn(m, 2, generator=gen),
-        "planes": torch.randn(m, 4, 225, generator=gen),
+        "planes": torch.randn(m, 4, NUM_CLASSES, generator=gen),
     }
 
 

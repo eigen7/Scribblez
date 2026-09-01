@@ -98,10 +98,12 @@ from the board, self heads opp-move-invariant; recomputed per row on replay)
 drives illegal footprints to −∞ before the softmax, and the target class is
 always kept first (the `−log(0)` guard). Softmax's conserved mass replaces the
 per-cell BCE's drifting, easy-negative-diluted geometry — the loss-geometry fix
-for the I13/M7 magnitude residuals. The graph emits raw logits (`kIdentity`); every consumer
-masks and softmaxes itself, and the dashboard/`.mset` collapse each head to the
-old per-cell `(15, 15)` marginal (`Σ` footprint probability over covered cells)
-so the distilled student and MC-truth pairing are unchanged.
+for the I13/M7 magnitude residuals. The graph emits raw logits (`kIdentity`);
+every consumer masks and softmaxes itself. The `.mset` teacher target stores the
+masked footprint distribution directly (the student distills it in footprint
+space), and the **dashboard** collapse alone reduces each head to the per-cell
+`(15, 15)` marginal (`Σ` footprint probability over covered cells) for the human
+occupancy view.
 
 ### Tile-supply cross-attention (`use_supply_attention`)
 
@@ -158,16 +160,22 @@ Grouping the queries by position keeps one K/V copy per board, so attention's
 `W_k`/`W_v` projections are amortized across candidates the same way the trunk
 is. The padded `(P, maxK, C)` query grid is the only place padding appears.
 
-### The placement-plane readout (roadmap item 1)
+### The placement-plane readout
 
 The fused per-move vector (attended embedding + position summary, `4C`) is
-projected to one `C`-wide query per plane head and dotted against the 225
-board tokens: cell `(h, n)` of the `(M, 4, 225)` logit output is
-`query_h · board_token_n`. The contraction runs over the same padded
-`(P, maxK)` grid as the cross-attention, so the board tokens are read once
-per position. Head order is `training_targets.h`'s placement targets (the
-FFI-served `PLANE_NAMES`), matching the teacher masks quantized into the
-`.mset` records.
+projected to `SLOTS_PER_CELL` (13) `C`-wide queries per plane head and dotted
+against the 225 board tokens: logit `(h, cell, slot)` is
+`query_(h,slot) · board_token_cell`. Ordered `(head, cell, slot)` these flatten
+to the anchored footprint classes (`class = cell*slots + slot`); a small direct
+head adds the two non-spatial catch-all classes (pass, not-win), giving four
+footprint-categorical distributions `(M, 4, 2927)`. This mirrors the teacher's
+`Conv(C→13)` footprint head in the student's per-move cross-attention form. The
+contraction runs over the same padded `(P, maxK)` grid as the cross-attention, so
+the board tokens are read once per position. Head order is the FFI-served
+`PLANE_NAMES`, matching the teacher distributions quantized into the `.mset`
+records. The evidence path consumes the per-cell **anchor marginal** of this head
+(softmax → drop catch-all → sum over slots), a transitional per-cell view until
+the evidence fusion migrates to footprint space.
 
 ### The move encoder
 
@@ -185,7 +193,7 @@ semantics. Layout owned by
 | `wld` | teacher probabilities (M, 3) | soft cross-entropy | 1 |
 | `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `planes` | teacher masks, dequantized (M, 4, 225) | BCE-with-logits | `lambda_planes` = 1 |
+| `planes` | teacher footprint distributions, dequantized (M, 4, 2927) | soft softmax cross-entropy | `lambda_planes` = 1 |
 
 Like the position-eval model, this recipe carries no activation-magnitude
 restoring forces: BF16 serving ([fp16_safe_serving.md](fp16_safe_serving.md))
@@ -193,7 +201,7 @@ has FP32's exponent range, so nothing opposes the trunk's activation growth.
 
 Plane targets exist only in stratified (training) records; the full-sweep
 evaluation slice is plane-less, so its metrics stay value-based and the
-plane-readout quality (`plane_bce`) is read on the stratified fallback
+plane-readout quality (`plane_ce`) is read on the stratified fallback
 holdout.
 
 Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to

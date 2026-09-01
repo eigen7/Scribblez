@@ -105,19 +105,21 @@ using binlog::GamePositionIndex;
 // item 4: the value-labeled subset always contains the proposer's sims).
 using ForcedCandidates = std::map<GamePositionIndex, std::vector<Move>>;
 
-// Collapsed placement-plane floats per candidate: the teacher's four per-cell
-// occupancy marginals, which the writer quantizes into the record's plane block.
-constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneCells;
+// Placement-plane floats per candidate: the teacher's four footprint
+// distributions (masked softmax over kFootprintClasses per head), which the
+// writer quantizes into the record's plane block.
+constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneWidth;
 
 // Raw placement floats per candidate as the teacher emits them: four heads of
-// kFootprintClasses raw footprint logits, collapsed to kPlaneFloats per
-// candidate before they reach the writer. The collapse output width is coupled
-// to the writer's plane width here so a half-done shape change fails to compile
-// rather than silently corrupting the .mset (plane_index math assumes 15x15).
+// kFootprintClasses raw footprint logits, masked-softmaxed per head into the same
+// kPlaneWidth distribution before they reach the writer -- so the raw and plane
+// widths coincide. Coupled to the writer's plane width here so a half-done shape
+// change fails to compile rather than silently corrupting the .mset.
 constexpr int kRawPlaneFloats = nn::PositionEvaluationSpec::AuxOutputs::total_row_elems;
 static_assert(kPlacementHeads == nn::kNumMaskHeads);
-static_assert(kFootprintSide * kFootprintSide == int(move_set_eval::kPlaneCells));
+static_assert(int(move_set_eval::kPlaneWidth) == kFootprintClasses);
 static_assert(kRawPlaneFloats == nn::kNumMaskHeads * kFootprintClasses);
+static_assert(kPlaneFloats == kRawPlaneFloats);  // mask-softmax preserves the per-head width
 
 // The teacher: the concrete position-eval service, held by type because the
 // mask-labelling overload is constrained to specs with aux outputs.
@@ -138,8 +140,8 @@ struct CandidateSlice {
   std::vector<float> targets;
   std::vector<float> planes;
   // The pre-move state shared by this slice's candidates, set only on a
-  // plane-labelling run: the collapse reconstructs each candidate's post-move
-  // board (pre_enc + candidate) to mask and scatter its footprint logits.
+  // plane-labelling run: the plane worker reconstructs each candidate's post-move
+  // board (pre_enc + candidate) to mask-softmax its footprint logits.
   std::optional<GameStateEncoder> pre_enc;
 
   bool completes_position() const { return first + candidates.size() == position_candidates; }
@@ -236,8 +238,8 @@ void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
     slice.rows.resize(count * size_t(row_floats));
     binlog::encode_candidate_rows(encoder, g, int(w.turn_idx), mover, slice.candidates,
                                   slice.rows.data());
-    // The collapse needs the pre-move state to rebuild each candidate's
-    // post-move board; only a plane-labelling run collapses, so a full-sweep
+    // The plane worker needs the pre-move state to rebuild each candidate's
+    // post-move board; only a plane-labelling run masks planes, so a full-sweep
     // run skips the per-position copy.
     if (label_planes) slice.pre_enc = encoder.enc();
     queue->push(std::move(slice));
@@ -284,48 +286,48 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
   queue->producer_done();
 }
 
-// One candidate's collapse: rebuild its post-move board from the slice's shared
-// pre-move encoder and its move, then collapse its raw footprint logits into the
-// plane block. Independent across candidates, so a batch of them parallelizes.
-struct CollapseJob {
+// One candidate's plane target: rebuild its post-move board from the slice's
+// shared pre-move encoder and its move, then mask-softmax its raw footprint
+// logits into the per-head footprint distribution the .mset stores. Independent
+// across candidates, so a batch of them parallelizes.
+struct PlaneJob {
   const GameStateEncoder* pre_enc;
   const Move* move;
   const float* raw;  // kRawPlaneFloats
   float* out;        // kPlaneFloats
 };
 
-// A collapse worker: drains `jobs` by atomic index. The collapse is ~14x heavier
-// than a row encode, so running it on the single inference thread would cap the
-// tool's throughput far below its encode-limited design rate; spreading a batch's
-// jobs across threads keeps the inference thread from becoming the bottleneck.
-void collapse_worker(const std::vector<CollapseJob>* jobs, const Dictionary* dict,
-                     std::atomic<size_t>* next) {
+// A plane worker: drains `jobs` by atomic index. Masking + softmax needs the
+// candidate's post-move board (its movegen caches), so it is far heavier than a
+// row encode; running it on the single inference thread would cap the tool's
+// throughput below its encode-limited rate, so a batch's jobs spread across
+// threads.
+void plane_worker(const std::vector<PlaneJob>* jobs, const Dictionary* dict,
+                  std::atomic<size_t>* next) {
   for (size_t i = next->fetch_add(1); i < jobs->size(); i = next->fetch_add(1)) {
-    const CollapseJob& j = (*jobs)[i];
+    const PlaneJob& j = (*jobs)[i];
     GameStateEncoder post = *j.pre_enc;
     post.apply_move(*j.move);
-    // The collapse still does its full job here -- mask, softmax, and scatter the
-    // 2927 footprint logits into the four (15,15) per-cell teacher planes the
-    // .mset writer stores. Only AVAILABILITY masking is opted out (null counts ->
-    // board-legality only): this per-cell teacher-target consumer is being retired
-    // (the student stack is migrating to footprints), so it does not fund plumbing
-    // a per-candidate unseen pool that would soon be deleted.
-    collapse_footprint_planes(post.board(), *dict, /*available_counts=*/nullptr, /*flip=*/false,
-                              j.raw, j.out);
+    // The student's distillation target: the teacher's board-legality-masked
+    // footprint softmax per head. AVAILABILITY masking is opted out (null counts
+    // -> board-legality only), matching the retired per-cell collapse's regime, so
+    // no per-candidate unseen pool is plumbed here; the student learns the
+    // availability belief from the teacher's zeros, and serving is unmasked anyway.
+    masked_placement_distributions(post.board(), *dict, /*available_counts=*/nullptr,
+                                   /*flip=*/false, j.raw, j.out);
   }
 }
 
-// Run `jobs` across up to `num_threads` collapse workers (the calling thread is
-// one of them), returning once all planes are written.
-void run_collapse_jobs(const std::vector<CollapseJob>& jobs, const Dictionary& dict,
-                       int num_threads) {
+// Run `jobs` across up to `num_threads` plane workers (the calling thread is
+// one of them), returning once all plane targets are written.
+void run_plane_jobs(const std::vector<PlaneJob>& jobs, const Dictionary& dict, int num_threads) {
   if (jobs.empty()) return;
   std::atomic<size_t> next{0};
   const int n = std::max(1, std::min(num_threads, int(jobs.size())));
   std::vector<std::thread> pool;
   pool.reserve(n - 1);
-  for (int t = 0; t < n - 1; ++t) pool.emplace_back(collapse_worker, &jobs, &dict, &next);
-  collapse_worker(&jobs, &dict, &next);
+  for (int t = 0; t < n - 1; ++t) pool.emplace_back(plane_worker, &jobs, &dict, &next);
+  plane_worker(&jobs, &dict, &next);
   for (std::thread& t : pool) t.join();
 }
 
@@ -333,14 +335,14 @@ void run_collapse_jobs(const std::vector<CollapseJob>& jobs, const Dictionary& d
 // slices, up to the batch limit), evaluates, and scatters the teacher's
 // readouts into each slice's target block (plus its plane block, on a run that
 // labels planes -- a full-sweep run does not, matching its plane-less .mset).
-// The plane collapse is parallelized (run_collapse_jobs) rather than run inline,
+// The plane masking is parallelized (run_plane_jobs) rather than run inline,
 // so it does not serialize behind the GPU on this one thread. One instance drives
 // one file's thread; run() is the thread body, and the completed slices are read
 // from done() after it joins.
 class InferenceLoop {
  public:
   InferenceLoop(TeacherService* service, const Dictionary& dict, int row_floats, int batch_size,
-                bool label_planes, int collapse_threads, util::ProgressMeter* meter);
+                bool label_planes, int plane_threads, util::ProgressMeter* meter);
 
   void run(SliceQueue* queue);
 
@@ -351,11 +353,11 @@ class InferenceLoop {
   void flush();
 
   TeacherService* service_;
-  const Dictionary& dict_;  // for the collapse's per-candidate movegen caches
+  const Dictionary& dict_;  // for the plane worker's per-candidate movegen caches
   int row_floats_;
   int batch_size_;
   bool label_planes_;
-  int collapse_threads_;  // workers the parallel plane collapse fans out over
+  int plane_threads_;  // workers the parallel plane collapse fans out over
   util::ProgressMeter* meter_;
 
   // Staging buffers, sized once for a full batch and reused across flushes.
@@ -370,14 +372,14 @@ class InferenceLoop {
 };
 
 InferenceLoop::InferenceLoop(TeacherService* service, const Dictionary& dict, int row_floats,
-                             int batch_size, bool label_planes, int collapse_threads,
+                             int batch_size, bool label_planes, int plane_threads,
                              util::ProgressMeter* meter)
     : service_(service),
       dict_(dict),
       row_floats_(row_floats),
       batch_size_(batch_size),
       label_planes_(label_planes),
-      collapse_threads_(collapse_threads),
+      plane_threads_(plane_threads),
       meter_(meter),
       inputs_(size_t(batch_size) * row_floats),
       wld_buf_(size_t(batch_size) * nn::WldOutput::kRowElems),
@@ -407,10 +409,10 @@ void InferenceLoop::flush() {
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
-  // Scatter the cheap value readouts inline; gather the heavy plane collapses
+  // Scatter the cheap value readouts inline; gather the heavy plane maskings
   // into jobs (pointing into the still-live pending_ slices and the raw plane
   // buffer) and run them in parallel below.
-  std::vector<CollapseJob> jobs;
+  std::vector<PlaneJob> jobs;
   if (label_planes_) jobs.reserve(pending_rows_);
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
@@ -437,7 +439,7 @@ void InferenceLoop::flush() {
   // Collapse every candidate's raw footprint logits to the per-cell marginals the
   // .mset stores (the post-move board is rebuilt in the frame the row was encoded
   // in, unflipped), parallelized off this thread.
-  run_collapse_jobs(jobs, dict_, collapse_threads_);
+  run_plane_jobs(jobs, dict_, plane_threads_);
   for (CandidateSlice& p : pending_) {
     // Free the encoded rows now that they are consumed; done_ accumulates a
     // whole file's slices and must not hold every encoding.
@@ -521,7 +523,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
                          std::cref(opt), std::cref(work), forced, &next, &queue);
   const int row_floats = input_floats(spec);
   InferenceLoop inference(service, dict, row_floats, batch_size, /*label_planes=*/!opt.full_sweep,
-                          /*collapse_threads=*/opt.threads, meter);
+                          /*plane_threads=*/opt.threads, meter);
   std::thread gpu(&InferenceLoop::run, &inference, &queue);
   for (auto& w : workers) w.join();
   gpu.join();

@@ -17,11 +17,13 @@ carry a `pos_id` into [0, P). Each move:
   * is fused with its position's global summary and projected to the five
     per-move targets: a WLD distribution (3 logits) and the score-diff
     (mean, std), matching the teacher readouts stored in the .mset sidecar;
-  * additionally decodes the teacher's four placement planes for its own
-    post-move state (roadmap item 1): the fused per-move vector is projected
-    to one query per plane head and scored against the 225 board tokens, so a
-    single per-move vector yields four (15, 15) maps without any per-move
-    spatial decoding.
+  * additionally decodes the teacher's four placement distributions for its own
+    post-move state: the fused per-move vector is projected to SLOTS_PER_CELL
+    queries per plane head, scored against the 225 board tokens to give the
+    anchored footprint logits (cell x slot), plus a small direct catch-all head,
+    so a single per-move vector yields four footprint-categorical distributions
+    (distilled by masked softmax-CE against the teacher's masked footprint
+    softmax) without any per-move spatial decoding.
 
 The heads predict what the teacher position evaluation model would output for
 the candidate's post-move state, from the mover's POV -- this model is a
@@ -47,6 +49,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs
+from scribblez.footprint_spatial import ANCHORED, CATCH_ALL, SIDE, SLOTS_PER_CELL
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
 from .moves import move_encoding_dims
@@ -150,11 +153,16 @@ class MoveSetEvalModel(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, 5),  # [wld(3), sd_mean, sd_std]
         )
-        # Placement-plane readout (PLANE_NAMES order): one C-wide query per
-        # plane head from the same fused per-move vector, scored against the
-        # board tokens -- cell (h, n) is query_h . board_token_n.
+        # Placement-plane readout (PLANE_NAMES order): a footprint-categorical
+        # distribution per head. The anchored classes factor as (board cell, slot)
+        # -- SLOTS_PER_CELL orientations/lengths per square (footprint.h) -- so the
+        # readout emits SLOTS_PER_CELL C-wide queries per head from the fused
+        # per-move vector and scores each against the board tokens: logit
+        # (h, cell, slot) = query_(h,slot) . board_token_cell. The two non-spatial
+        # catch-all classes (pass, not-win) come from a small direct head.
         self.num_planes = len(PLANE_NAMES)
-        self.plane_proj = nn.Linear(head_in, self.num_planes * trunk_channels)
+        self.plane_proj = nn.Linear(head_in, self.num_planes * SLOTS_PER_CELL * trunk_channels)
+        self.plane_catch = nn.Linear(head_in, self.num_planes * CATCH_ALL)
 
         self.evidence_fusion = EvidenceFusion(trunk_channels, num_heads=num_heads)
         # The proves-best head: gain >= 0 through a softplus.
@@ -303,16 +311,23 @@ class MoveSetEvalModel(nn.Module):
         sd_mean = out[:, 3:4]
         sd_std = F.softplus(out[:, 4:5]) + 1e-3
 
-        # Plane readout through the same padded grid as the cross-attention,
-        # so the (P, 225, C) board tokens are contracted once per position
-        # rather than gathered per move.
+        # Plane readout through the same padded grid as the cross-attention, so
+        # the (P, 225, C) board tokens are contracted once per position rather than
+        # gathered per move. The SLOTS_PER_CELL queries per head give
+        # (head, slot, cell) logits; ordered (head, cell, slot) they flatten to the
+        # anchored footprint classes (class = cell*slots + slot), then the direct
+        # catch-all logits append the two non-spatial classes.
         c = board.shape[2]
-        plane_q = board.new_zeros(board.shape[0], max_k, self.num_planes * c)
+        p, n = board.shape[0], board.shape[1]
+        hs = self.num_planes * SLOTS_PER_CELL
+        plane_q = board.new_zeros(p, max_k, hs * c)
         plane_q[pos_id, rank] = self.plane_proj(head_in)
-        plane_logits = torch.einsum(
-            "pkhc,pnc->pkhn", plane_q.view(board.shape[0], max_k, self.num_planes, c), board
-        )
-        planes = plane_logits[pos_id, rank]  # (M, num_planes, 225)
+        anchored = torch.einsum(
+            "pkhsc,pnc->pkhns", plane_q.view(p, max_k, self.num_planes, SLOTS_PER_CELL, c), board
+        )  # (P, max_k, num_planes, N, slots)
+        anchored = anchored[pos_id, rank].reshape(-1, self.num_planes, n * SLOTS_PER_CELL)
+        catch = self.plane_catch(head_in).view(-1, self.num_planes, CATCH_ALL)
+        planes = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
 
         return {
             "wld": out[:, :3],
@@ -363,6 +378,23 @@ def win_equity(probs: torch.Tensor) -> torch.Tensor:
     return probs[..., 0] + 0.5 * probs[..., 1]
 
 
+def footprint_cell_marginal(plane_logits: torch.Tensor) -> torch.Tensor:
+    """Per-cell anchor marginal from footprint logits: softmax over the classes,
+    drop the two catch-all classes, and sum the SLOTS_PER_CELL slots at each cell
+    -> (..., num_planes, SIDE, SIDE).
+
+    The transitional per-cell view the evidence fusion consumes while it is still
+    per-cell (the student head is footprint-native but the fusion is migrated
+    separately). It is the anchor marginal (Pr the move is anchored at a cell),
+    not the covered-cell occupancy the retired collapse produced -- a cheap,
+    board-independent per-cell signal that keeps the unchanged fusion running; the
+    fusion moves to footprint space in its own change.
+    """
+    probs = F.softmax(plane_logits, dim=-1)[..., :ANCHORED]
+    per_cell = probs.reshape(*probs.shape[:-1], SIDE * SIDE, SLOTS_PER_CELL).sum(-1)
+    return per_cell.reshape(*per_cell.shape[:-1], SIDE, SIDE)
+
+
 def compute_loss(
     outputs: dict[str, torch.Tensor],
     targets: dict[str, torch.Tensor],
@@ -375,17 +407,19 @@ def compute_loss(
 
     Args:
         outputs: forward() result. "wld" (M,3 logits), "score_diff" (M,2),
-                 "planes" (M, num_planes, 225) logits.
+                 "planes" (M, num_planes, NUM_CLASSES) footprint logits.
         targets: "target_wld" (M,3) teacher probabilities, "target_score_diff"
                  (M,2) teacher [mean, std] in score points, and -- on a
-                 plane-carrying corpus -- "target_planes" (M, num_planes, 225)
-                 teacher probabilities.
+                 plane-carrying corpus -- "target_planes" (M, num_planes,
+                 NUM_CLASSES) teacher footprint distributions.
 
     WLD is soft cross-entropy against the teacher distribution (distillation),
     the score-diff mean/std are Huber regressions in score points, and the
-    planes are per-cell BCE against the teacher's (soft) probabilities. A
-    batch without plane targets contributes a zero plane term (the plane head
-    simply gets no gradient from it).
+    planes are soft softmax cross-entropy against the teacher's footprint
+    distribution -- the student softmaxes over all classes (unmasked; the teacher
+    target's illegal footprints are already zero, so the student learns to
+    suppress them). A batch without plane targets contributes a zero plane term
+    (the plane head simply gets no gradient from it).
     """
     # Soft cross-entropy: -sum(teacher_prob * log_softmax(pred)).
     log_pred = F.log_softmax(outputs["wld"], dim=1)
@@ -400,9 +434,10 @@ def compute_loss(
     loss_sd = loss_sd_mean + loss_sd_std
 
     if "target_planes" in targets:
-        loss_planes = F.binary_cross_entropy_with_logits(
-            outputs["planes"], targets["target_planes"]
-        )
+        # Soft softmax-CE per head over the footprint classes, mean over heads and
+        # moves: -sum_c teacher[c] * log_softmax(pred)[c].
+        log_pred_planes = F.log_softmax(outputs["planes"], dim=-1)
+        loss_planes = -(targets["target_planes"] * log_pred_planes).sum(dim=-1).mean()
     else:
         loss_planes = outputs["wld"].new_zeros(())
 

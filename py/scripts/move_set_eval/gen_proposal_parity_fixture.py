@@ -39,7 +39,7 @@ Files written into --out-dir:
   * cases.txt -- one line per evidence case: "<name> <num_evidence>".
   * case_<name>_indices.bin -- int32 scored indices (empty file for the empty
     case); case_<name>_scalars.bin -- M x 6 f32 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain]; case_<name>_planes.bin -- M x 4 x 225 f32 sigmoid planes.
+    sd_std, gain]; case_<name>_planes.bin -- M x 4 x 225 f32 per-cell marginal.
 
 Random weights are deliberate: this checks numerical fidelity of the inference
 stack, not any trained model, and keeps the fixture hermetic.
@@ -52,7 +52,7 @@ import numpy as np
 import torch
 from scribblez.ffi import encode_moves, get_input_shapes
 from scribblez.move_set_eval.evidence import build_evidence_inputs
-from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_cell_marginal
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
@@ -187,12 +187,13 @@ def forward(model, spatial, scalar, enc, num_moves: int, evidence=None) -> dict[
 
 def decode(out: dict[str, torch.Tensor]) -> tuple[np.ndarray, np.ndarray]:
     """forward() outputs -> (scalars M x 6 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain], planes M x 4 x 225 sigmoid)."""
+    sd_std, gain], planes M x 4 x 225 -- the footprint head's per-cell anchor
+    marginal, what the proposal graphs serve)."""
     wld = torch.softmax(out["wld"], dim=1).numpy()
     sd = out["score_diff"].numpy()
     gain = out["gain"].numpy()
     scalars = np.concatenate([wld, sd, gain[:, None]], axis=1).astype(np.float32)
-    planes = torch.sigmoid(out["planes"]).numpy().astype(np.float32)
+    planes = footprint_cell_marginal(out["planes"]).flatten(2).numpy().astype(np.float32)
     return scalars, planes
 
 

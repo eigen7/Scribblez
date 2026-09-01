@@ -14,6 +14,7 @@ from scribblez.evidence_fusion import (
     NUM_EVIDENCE_SCALARS,
     EvidenceInputs,
 )
+from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval import moves as move_enc
 from test_move_set_eval_train import _FORWARD_KEYS, _MOVE_KEYS, _ragged_batch
 
@@ -223,7 +224,7 @@ def _first_pass(k: int, seed: int = 5):
     return {
         "wld": torch.randn(k, 3, generator=gen),
         "score_diff": torch.randn(k, 2, generator=gen),
-        "planes": torch.randn(k, 4, 225, generator=gen),
+        "planes": torch.randn(k, 4, NUM_CLASSES, generator=gen),
     }
 
 
@@ -244,10 +245,13 @@ def test_builder_assembles_both_halves():
     # Observed planes are counts normalized by the rollout count...
     expected = (np.arange(225) % 41).reshape(15, 15) / 40.0
     np.testing.assert_allclose(ev.obs_planes[0, 0, 0].numpy(), expected, atol=1e-6)
-    # ...the prediction half is the first pass squashed to probabilities...
+    # ...the prediction half is the first pass's footprint logits reduced to the
+    # per-cell anchor marginal...
+    from scribblez.move_set_eval.model import footprint_cell_marginal
+
     np.testing.assert_allclose(
         ev.obs_planes[0, 0, 4:8].numpy(),
-        torch.sigmoid(first_pass["planes"][0]).reshape(4, 15, 15).numpy(),
+        footprint_cell_marginal(first_pass["planes"][0]).numpy(),
         atol=1e-6,
     )
     # ...and the last channel is the candidate's own footprint.

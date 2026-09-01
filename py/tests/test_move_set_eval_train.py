@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 
@@ -313,7 +314,7 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
         model, ds, torch.device("cpu"), positions_per_batch=64, max_candidates_per_batch=256
     )
     assert metrics["positions"] == ds.num_positions
-    assert "plane_bce" not in metrics  # no plane targets on this slice
+    assert "plane_ce" not in metrics  # no plane targets on this slice
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
         assert metrics[f"regret@{k}"] >= 0.0
@@ -356,9 +357,9 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
         assert batch["target_wld"].shape == (m, 3)
         assert batch["target_score_diff"].shape == (m, 2)
         # A stratified corpus carries the teacher's placement planes,
-        # dequantized to per-cell probabilities.
+        # dequantized to per-head footprint distributions.
         assert ds.has_planes
-        assert batch["target_planes"].shape == (m, 4, 225)
+        assert batch["target_planes"].shape == (m, 4, NUM_CLASSES)
         assert batch["target_planes"].dtype == torch.float32
         assert float(batch["target_planes"].min()) >= 0.0
         assert float(batch["target_planes"].max()) <= 1.0
@@ -410,8 +411,8 @@ def test_train_step_and_eval(corpus_dir):
     metrics = evaluate(model, ds, device, positions_per_batch=8)
     assert metrics["positions"] == ds.num_positions
     # This slice carries plane targets, so the plane-readout metric is
-    # reported (and BCE is positive for any non-degenerate model).
-    assert metrics["plane_bce"] > 0.0
+    # reported (and CE is positive for any non-degenerate model).
+    assert metrics["plane_ce"] > 0.0
     for k in (1, 3, 5):
         for suffix in ("", "_baseline"):
             assert 0.0 <= metrics[f"recall@{k}{suffix}"] <= 1.0

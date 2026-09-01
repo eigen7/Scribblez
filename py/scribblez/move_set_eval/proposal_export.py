@@ -48,6 +48,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS
+from scribblez.footprint_spatial import CATCH_ALL, SLOTS_PER_CELL
 from scribblez.onnx_export_util import (
     architecture_signature,
     atomic_output,
@@ -61,7 +62,7 @@ from scribblez.onnx_export_util import (
 )
 from scribblez.spatial_trunk import mean_max_pool
 
-from .model import MoveSetEvalModel
+from .model import MoveSetEvalModel, footprint_cell_marginal
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
 
@@ -129,9 +130,12 @@ class _ScoringHeads(nn.Module):
         # Value head Linear(4C, C) over cat([attended, g]) -> attended/g split.
         self.head_attended, self.head_g = split_concat_linear(model.head[0], c)
         self.head_out = model.head[2]
-        # Plane readout Linear(4C, num_planes*C) -> attended/g split.
+        # Plane readout: the footprint head's Linear(4C, num_planes*slots*C) plane
+        # queries and its Linear(4C, num_planes*catch_all) direct catch-all, each
+        # attended/g split.
         self.num_planes = len(PLANE_NAMES)
         self.plane_attended, self.plane_g = split_concat_linear(model.plane_proj, c)
+        self.plane_catch_attended, self.plane_catch_g = split_concat_linear(model.plane_catch, c)
         # Proves-best head Linear(4C, C) -> attended/g split, then Linear(C, 1).
         self.pb_attended, self.pb_g = split_concat_linear(model.proves_best[0], c)
         self.pb_out = model.proves_best[2]
@@ -147,15 +151,24 @@ class _ScoringHeads(nn.Module):
         self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """board (1, 225, C), g (1, 3C), e (M, C) -> attended (M, C) and the
-        (wld (M, 3), score_diff (M, 2), planes (M, num_planes, 225)) heads."""
+        (wld (M, 3), score_diff (M, 2), planes (M, num_planes, 225)) heads. The
+        plane head builds the full footprint distribution, then reduces it to the
+        per-cell anchor marginal the evidence path consumes (footprint_cell_
+        marginal), so the served planes stay (M, num_planes, 225)."""
         attended = self._cross_attention(e, board[0])
         hidden = F.relu(self.head_attended(attended) + self.head_g(g))
         out = self.head_out(hidden)  # (M, 5)
         wld = out[:, :3]
         score_diff = torch.cat([out[:, 3:4], F.softplus(out[:, 4:5]) + 1e-3], dim=1)
-        plane_q = self.plane_attended(attended) + self.plane_g(g)  # (M, num_planes*C)
-        plane_q = plane_q.view(-1, self.num_planes, self.c)
-        planes = torch.einsum("mhc,nc->mhn", plane_q, board[0])  # (M, num_planes, 225)
+        plane_q = self.plane_attended(attended) + self.plane_g(g)  # (M, num_planes*slots*C)
+        plane_q = plane_q.view(-1, self.num_planes, SLOTS_PER_CELL, self.c)
+        anchored = torch.einsum("mhsc,nc->mhns", plane_q, board[0])  # (M, num_planes, N, slots)
+        anchored = anchored.reshape(-1, self.num_planes, board.shape[1] * SLOTS_PER_CELL)
+        catch = (self.plane_catch_attended(attended) + self.plane_catch_g(g)).view(
+            -1, self.num_planes, CATCH_ALL
+        )
+        footprint_logits = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
+        planes = footprint_cell_marginal(footprint_logits).flatten(2)  # (M, num_planes, 225)
         return attended, wld, score_diff, planes
 
     def gain(self, attended: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
