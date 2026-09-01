@@ -1,11 +1,12 @@
 # Footprint-native placement
 
 The position-eval **teacher** predicts placement as a categorical distribution
-over 2927 **footprint** classes (`engine/include/training/footprint.h`), but every
-consumer below it is still **per-cell** (15×15): the sim observation, the
-move-set-eval **student**'s distillation target, and the evidence path. The bridge
-between them is `collapse_footprint_planes`, which masks-softmaxes each head's 2927
-logits and scatters the probability onto the board cells each footprint covers.
+over 2927 **footprint** classes (`engine/include/training/footprint.h`). The
+move-set-eval **student**'s distillation target is now footprint-native too (BC1,
+below); the consumers still **per-cell** (15×15) are the sim observation and the
+evidence path. The bridge to them is `collapse_footprint_planes`, which
+masks-softmaxes each head's 2927 logits and scatters the probability onto the
+board cells each footprint covers.
 
 That collapse is a temporary compatibility layer. This document is the plan to
 make placement **footprint-categorical end to end**, so the collapse survives only

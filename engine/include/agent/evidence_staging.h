@@ -16,8 +16,8 @@
 //
 // This is the C++ port of py/scribblez/move_set_eval/evidence.py's
 // build_evidence_inputs: the SAME normalization (count planes / rollouts, delta
-// moments in score points, log1p rollouts, softmax'd WLD, sigmoid'd predicted
-// planes) into the SAME padded (max_evidence, ...) layout the step graph's
+// moments in score points, log1p rollouts, softmax'd WLD, the model's already-
+// decoded predicted planes) into the SAME padded (max_evidence, ...) layout the step graph's
 // leading-1 evidence inputs expect. The layout constants below mirror
 // evidence_fusion.py's EVIDENCE_PLANE_NAMES / EVIDENCE_SCALAR_NAMES; a change on
 // either side must be mirrored on the other. No engine test cross-checks this
@@ -54,8 +54,9 @@ inline constexpr int kNumEvidenceScalars = kNumObservedScalars + kNumPredictedSc
 
 // The cache graph's raw per-candidate outputs, one row per SCORED candidate --
 // the evidence-free half of every token. `move_enc` rows are gathered by a
-// candidate's scored index; the WLD logits and plane logits are decoded here
-// (softmax / sigmoid) exactly as evidence.py decodes the first pass.
+// candidate's scored index; the WLD logits are decoded here (softmax), while the
+// plane values arrive already decoded as per-cell probabilities, exactly as
+// evidence.py handles the first pass.
 struct CachePredictions {
   const float* move_enc;    // (num_scored, channels), row-major
   const float* wld_logits;  // (num_scored, 3)

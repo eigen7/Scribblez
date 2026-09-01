@@ -56,8 +56,9 @@ constexpr int kPlaneFloats = scribblez::nn::kNumPlacementPlanes * scribblez::kBo
 
 // How far a TensorRT run may deviate from the PyTorch FP32 reference. Set from
 // the measured noise floor, not loosely: on this fixture the observed worst
-// deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell sigmoid off a
-// 225-token attention -- the jitteriest head), and ~5e-5 (score_diff / gain).
+// deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell softmax-then-
+// per-cell-marginal off a 225-token attention -- the jitteriest head), and
+// ~5e-5 (score_diff / gain).
 // The bounds sit above those with room for cross-GPU / cross-build kernel jitter
 // -- ~6x on the jittery planes head, a wider (~50-100x) round-number margin on
 // the far tighter wld / score_diff / gain -- yet stay orders of magnitude below
@@ -66,7 +67,7 @@ constexpr int kPlaneFloats = scribblez::nn::kNumPlacementPlanes * scribblez::kBo
 // deviations, so retune here if a future model legitimately needs it.
 struct Tolerance {
   float prob;        // the three WLD probabilities
-  float planes;      // the sigmoid placement planes (widest head)
+  float planes;      // the per-cell-marginal placement planes (widest head)
   float score_diff;  // the score-diff mean/std, in points
   float gain;        // the proves-best gain, in points
 };

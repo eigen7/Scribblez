@@ -314,8 +314,8 @@ def payload(
 def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None) -> dict | None:
     """The overlay's plane pair for one simmed candidate (its trajectory slot):
     per placement head the sim count plane normalized by rollouts and the
-    conditioned pass's sigmoid prediction at this prefix (the plain one at
-    prefix 0, where the two passes coincide). None without a candidate."""
+    conditioned pass's predicted per-cell marginal at this prefix (the plain one
+    at prefix 0, where the two passes coincide). None without a candidate."""
     if slot is None or not 0 <= slot < len(analysis.sim_index):
         return None
     observed = analysis.observed_planes()

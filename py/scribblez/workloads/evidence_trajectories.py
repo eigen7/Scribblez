@@ -158,7 +158,7 @@ class EvidenceTrajectoriesParams:
         "distillation loss in the joint step's total (0 = plain distillation only)",
     )
     lambda_planes: float = param(
-        1.0, "unfrozen mode: placement-plane BCE weight in the distillation loss"
+        1.0, "unfrozen mode: placement-plane softmax-CE weight in the distillation loss"
     )
     train_epochs: int = param(
         20,

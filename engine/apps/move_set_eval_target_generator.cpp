@@ -357,7 +357,7 @@ class InferenceLoop {
   int row_floats_;
   int batch_size_;
   bool label_planes_;
-  int plane_threads_;  // workers the parallel plane collapse fans out over
+  int plane_threads_;  // workers the parallel plane masking fans out over
   util::ProgressMeter* meter_;
 
   // Staging buffers, sized once for a full batch and reused across flushes.
@@ -436,9 +436,9 @@ void InferenceLoop::flush() {
       ++cursor;
     }
   }
-  // Collapse every candidate's raw footprint logits to the per-cell marginals the
-  // .mset stores (the post-move board is rebuilt in the frame the row was encoded
-  // in, unflipped), parallelized off this thread.
+  // Mask-softmax every candidate's raw footprint logits into the per-head footprint
+  // distribution the .mset stores (the post-move board is rebuilt in the frame the
+  // row was encoded in, unflipped), parallelized off this thread.
   run_plane_jobs(jobs, dict_, plane_threads_);
   for (CandidateSlice& p : pending_) {
     // Free the encoded rows now that they are consumed; done_ accumulates a

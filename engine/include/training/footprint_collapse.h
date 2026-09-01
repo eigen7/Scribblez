@@ -32,9 +32,11 @@ inline constexpr int kPlacementHeads = 4;
 // pool; see opp_footprint_mask), applied to the two OPP heads so a footprint
 // whose hooks no available tile can satisfy is masked out and its mass
 // renormalizes onto viable footprints. `available_counts == nullptr` disables
-// availability (board legality only) -- what the .mset teacher path passes, since
-// that collapse consumer is being retired and does not fund the extra plumbing.
-// The self heads never take availability (two plies out, post-redraw).
+// availability (board legality only) -- now exercised only by tests; the sole
+// production caller (the dashboard occupancy viz) passes real counts, and the
+// .mset generator no longer collapses at all (it stores the masked footprint
+// distribution directly). The self heads never take availability (two plies out,
+// post-redraw).
 //
 // `board` gets its movegen caches bound from `dict` on demand. `flip` is the
 // frame the logits were produced in (the generator encodes unflipped); the

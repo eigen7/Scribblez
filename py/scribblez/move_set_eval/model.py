@@ -289,7 +289,7 @@ class MoveSetEvalModel(nn.Module):
         plain or evidence-conditioned, the machinery is identical.
 
         Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
-        "planes": (M, num_planes, 225) per-cell logits, PLANE_NAMES order,
+        "planes": (M, num_planes, NUM_CLASSES) footprint logits, PLANE_NAMES order,
         "gain": (M,) the proves-best expected gain, >= 0}.
         """
         # Each move attends into its own position's board tokens. Grouping the

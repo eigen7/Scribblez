@@ -30,8 +30,8 @@ void softmax3(const float* logits, float* out) {
 }
 
 // The four observed rollout-frequency planes (count / rollouts) followed by the
-// four evidence-free predicted planes (sigmoid of the cache's plane logits) and
-// the candidate's footprint -- kNumEvidencePlanes planes of kCells each.
+// four evidence-free predicted planes (the model's per-cell probabilities, copied
+// through) and the candidate's footprint -- kNumEvidencePlanes planes of kCells each.
 void stage_planes(const SimObservation& obs, const Move& move, const float* plane_probs,
                   float* out) {
   const float inv_n = 1.0f / float(std::max<std::uint32_t>(obs.n, 1));
