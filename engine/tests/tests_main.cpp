@@ -28,6 +28,7 @@
 #include "lexicon/leave_values.h"
 #include "sim/sim_runner.h"
 #include "training/evidence_trajectory_select.h"
+#include "training/footprint_mask.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
 #include "training/max_move_per_lane_input_encoder.h"
@@ -84,6 +85,8 @@ static const int kOppPlacementPlane = spatial_block_plane0(SpatialBlockId::kOppP
 static const int kHorizontalCrossCheckPlane0 = spatial_block_plane0(SpatialBlockId::kCrossChecks);
 static const int kVerticalCrossCheckPlane0 =
   kHorizontalCrossCheckPlane0 + kHorizontalCrossCheckPlanes;
+static const int kOppReachPlane = spatial_block_plane0(SpatialBlockId::kOppReach);
+static const int kSelfReachPlane = spatial_block_plane0(SpatialBlockId::kSelfReach);
 static const int kRackCountOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kRackCounts);
 static const int kUnseenPoolOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kUnseenPool);
 static const int kScoreDiffOffset = scalar_block_offset(kBaseLayout, ScalarBlockId::kScoreDiff);
@@ -693,6 +696,53 @@ TEST(Encoder, FlipSymmetry) {
       }
     }
   }
+}
+
+// The two reachability planes carry exactly footprint_reachable_cells over the
+// right pool: the opp plane over the unseen pool (S - M), the self plane over
+// S - O (here the hidden arm, so every unplayed tile). The self pool contains
+// the opp pool plus the mover's own rack, so the self plane covers at least as
+// many squares.
+TEST(Encoder, ReachabilityPlanes) {
+  using namespace scribblez::binlog;
+  Move p0_play = make_play_full(7, 7, /*horizontal=*/true, 0b111, 20,
+                                {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('T'))});
+  Move p1_play =
+    make_play_full(6, 8, /*horizontal=*/false, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
+
+  Dictionary d = medium_dict();
+  GameStateEncoder enc{InputEncodingSpec{&d}};
+  enc.apply_move(p0_play);
+  enc.apply_move(p1_play);
+
+  Rack active_rack = rack_from("QESTUV");
+  std::vector<float> out(kInputFloats, -1.0f);
+  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+
+  // Independently compute the two planes from the same board and pools.
+  Board board = enc.board();
+  board.ensure_movegen_caches(d);
+  uint8_t opp_pool[27], self_pool[27];
+  compute_unseen_pool(opp_pool, board, active_rack);  // S - M
+  Rack empty;
+  compute_unseen_pool(self_pool, board, empty);  // S - (nothing) = S, the hidden-arm S - O
+
+  std::vector<float> opp_expected(225), self_expected(225);
+  footprint_reachable_cells(board, opp_pool, kMaskTileBudget, /*flip=*/false, opp_expected.data());
+  footprint_reachable_cells(board, self_pool, kMaskTileBudget, /*flip=*/false,
+                            self_expected.data());
+
+  float opp_sum = 0.0f, self_sum = 0.0f;
+  for (int i = 0; i < 225; ++i) {
+    ASSERT_EQ(out[kOppReachPlane * 225 + i], opp_expected[i]) << "opp cell " << i;
+    ASSERT_EQ(out[kSelfReachPlane * 225 + i], self_expected[i]) << "self cell " << i;
+    // A reachable cell is exactly 1 and the rest exactly 0 -- no -1.0 sentinel left.
+    ASSERT_TRUE(out[kOppReachPlane * 225 + i] == 0.0f || out[kOppReachPlane * 225 + i] == 1.0f);
+    opp_sum += opp_expected[i];
+    self_sum += self_expected[i];
+  }
+  ASSERT_GE(self_sum, opp_sum);  // S - O superset of S - M -> self reaches at least as much
 }
 
 // Single-tile plays whose only word is perpendicular to the placement axis

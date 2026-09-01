@@ -24,6 +24,17 @@
 //                     constrains nothing, so every letter is legal and all 26
 //                     of its planes are set -- 1 always reads as "L legal
 //                     here", never conditioned on the neighbors.
+//     kOppReach       squares the opponent (who moves next) can reach on this
+//                     board with the tiles that could be theirs (the unseen
+//                     pool, S - M): a precomputed cross-check-times-availability
+//                     feature the conv forms poorly on its own. See
+//                     training/footprint_mask.h (footprint_reachable_cells).
+//     kSelfReach      the same reachability but for the POV player's own next
+//                     turn ASSUMING the opponent passes, over the tiles that
+//                     could be theirs (S - O: every unplayed tile minus any the
+//                     opponent is known to hold). A usually-good backbone for
+//                     the self-placement heads -- our realized move is often one
+//                     that was already legal before the opponent moved.
 //
 //   Scalar blocks (POV-visible information only, normalized to [0, 1] but for
 //   the signed kScoreDiff)
@@ -104,7 +115,14 @@ inline constexpr int kOppLeaveCountFloats = 27;                         // open-
 
 // ---- Block registry ---------------------------------------------------------
 
-enum class SpatialBlockId { kBoard, kSelfPlacement, kOppPlacement, kCrossChecks };
+enum class SpatialBlockId {
+  kBoard,
+  kSelfPlacement,
+  kOppPlacement,
+  kCrossChecks,
+  kOppReach,
+  kSelfReach
+};
 enum class ScalarBlockId { kRackCounts, kUnseenPool, kScoreDiff, kMoveMeta, kOppLeaveCounts };
 
 struct SpatialBlockDef {
@@ -124,6 +142,8 @@ inline constexpr SpatialBlockDef kSpatialBlocks[] = {
   {SpatialBlockId::kSelfPlacement, 1},
   {SpatialBlockId::kOppPlacement, 1},
   {SpatialBlockId::kCrossChecks, kCrossCheckPlanes},
+  {SpatialBlockId::kOppReach, 1},
+  {SpatialBlockId::kSelfReach, 1},
 };
 inline constexpr ScalarBlockDef kScalarBlocks[] = {
   {ScalarBlockId::kRackCounts, kRackCountFloats},
@@ -144,7 +164,7 @@ inline bool scalar_block_included(const ScalarBlockDef& def, const InputEncoding
 // The spatial section has no conditional block, so its widths and offsets are
 // constants of the registry; only the scalar section reads the spec.
 
-inline constexpr int spatial_planes() {  // 85
+inline constexpr int spatial_planes() {  // 87
   int planes = 0;
   for (const SpatialBlockDef& def : kSpatialBlocks) planes += def.planes;
   return planes;
