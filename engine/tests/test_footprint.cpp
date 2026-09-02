@@ -356,8 +356,8 @@ TEST(SelfFootprintMask, CombinedBudgetWidensReach) {
   Board b;
   b.set(7, 7, G(4));
   FootprintMask m;
-  const int far = (7 * 15 + 10) * kSlotsPerCell + 0;  // d=3 from the tile
-  self_footprint_mask(b, 1, 1, /*win_head=*/false, m);      // reach 2 -> out
+  const int far = (7 * 15 + 10) * kSlotsPerCell + 0;    // d=3 from the tile
+  self_footprint_mask(b, 1, 1, /*win_head=*/false, m);  // reach 2 -> out
   EXPECT_FALSE(m[far]);
   self_footprint_mask(b, 2, 1, /*win_head=*/false, m);  // reach 3 -> in
   EXPECT_TRUE(m[far]);

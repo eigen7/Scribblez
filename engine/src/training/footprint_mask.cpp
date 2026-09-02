@@ -25,26 +25,25 @@ bool touches_board(const Board& board, int r, int c) {
   return false;
 }
 
+// A placement must always connect to existing structure; the heads differ only in
+// whose move bridges to it. kThisTurn (opp, moves now): the footprint must itself
+// abut an occupied square -- an exact, sound test on the current board. kNextTurn
+// (self, moves after the opponent): it need only reach the board the opponent will
+// have extended, a two-ply reach the self mask's own cell predicate encodes, so no
+// adjacency gate is applied here.
+enum class Connectivity { kThisTurn, kNextTurn };
+
 // Mark the legal footprint classes given a multi-tile per-cell predicate
-// `cell_ok(horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
-// the tile-count cap `kmax`. Shared by the opp and self masks, which differ only
-// in those predicates and the cap.
-//
-// `require_connected` gates on board connectivity: a footprint is kept only if at
-// least one of its covered cells touches an occupied square. That is exactly the
-// legal-Scrabble rule that a play must abut the existing structure (extend a word,
-// hook, or thread a tile), and it is sound and exact for the opp mask, which acts
-// on the current board. The self mask leaves it off -- it looks two plies out, so
-// it must not require connection to the current board (the opponent's move can add
-// connection points); its `cell_ok`/`lone_ok` carry their own reachability test.
-// The rule is vacuous on an empty board (nothing to abut; the opener covers the
-// centre), so it is disabled there -- matching the self mask's game-start guard
-// and keeping the opener sound.
+// `cell_ok(horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, the
+// tile-count cap `kmax`, and a `connectivity` requirement. Shared by the opp and
+// self masks, which differ only in those.
 template <typename CellOk, typename LoneOk>
-void mark_footprints(const Board& board, int kmax, bool win_head, bool require_connected,
+void mark_footprints(const Board& board, int kmax, bool win_head, Connectivity connectivity,
                      FootprintMask& mask, CellOk cell_ok, LoneOk lone_ok) {
   mask.fill(false);
-  const bool connectivity_active = require_connected && !board.empty_board();
+  // The this-turn adjacency gate. An empty board has nothing to abut (the opener
+  // covers the centre), so it is off there too, keeping the opener sound.
+  const bool adjacency_gate = connectivity == Connectivity::kThisTurn && !board.empty_board();
   for (int cell = 0; cell < kFootprintCells; ++cell) {
     const int anchor_r = cell / kFootprintSide;
     const int anchor_c = cell % kFootprintSide;
@@ -59,7 +58,7 @@ void mark_footprints(const Board& board, int kmax, bool win_head, bool require_c
 
       if (k == 1) {
         if (lone_ok(anchor_r, anchor_c) &&
-            (!connectivity_active || touches_board(board, anchor_r, anchor_c)))
+            (!adjacency_gate || touches_board(board, anchor_r, anchor_c)))
           mask[cls] = true;
         continue;
       }
@@ -68,7 +67,7 @@ void mark_footprints(const Board& board, int kmax, bool win_head, bool require_c
       int r = anchor_r;
       int c = anchor_c;
       bool ok = true;
-      bool connected = !connectivity_active;  // vacuously satisfied when the gate is off
+      bool connected = !adjacency_gate;  // vacuously satisfied when the gate is off
       while (r < kFootprintSide && c < kFootprintSide && count < k) {
         if (board.at(r, c).is_empty()) {
           if (!cell_ok(horizontal, r, c)) {
@@ -178,7 +177,7 @@ void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
   const tile_set_t avail = available_tiles(available_counts);
   mark_footprints(
-    board, kmax, win_head, /*require_connected=*/true, mask,
+    board, kmax, win_head, Connectivity::kThisTurn, mask,
     [&](bool horizontal, int r, int c) {
       return cell_admits_letter(board, avail, horizontal, r, c);
     },
@@ -194,7 +193,7 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
   // the lone-tile test coincides with the multi-tile per-cell one.
   const auto reachable = [&](int r, int c) { return dist[r * kFootprintSide + c] <= reach; };
   mark_footprints(
-    board, kmax, win_head, /*require_connected=*/false, mask,
+    board, kmax, win_head, Connectivity::kNextTurn, mask,
     [&](bool, int r, int c) { return reachable(r, c); }, reachable);
 }
 
