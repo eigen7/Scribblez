@@ -19,6 +19,8 @@ a property of the mask rather than the model -- because that is the k at which a
 sparse encoding is lossless. Against the dense plane's u8 cells, a `(class:u16,
 value:u8)` entry costs 3 bytes, so sparse beats dense below ~975 entries; the
 sweep always extends to the largest support seen so full coverage is on the table.
+Positions come from position_eval.analysis, which reads a set's loose .gcg files
+or its committed part-*.gcgs bundles alike.
 
 Usage:
     ./py/scripts/position_eval/footprint_topk_fidelity.py \
@@ -29,37 +31,16 @@ the plane count tracks the encoder registry rather than a constant here.
 """
 
 import argparse
-import glob
 import sys
 
 import numpy as np
 import onnxruntime as ort
 from scribblez import ffi
 from scribblez import footprint_spatial as fs
-from scribblez.paths import REPO_ROOT
+from scribblez.position_eval import analysis as A
 
 HEADS = tuple(ffi.format_layout()["constants"]["placement_head_names"])
-DEFAULT_GCG_DIR = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large"
-
-
-# A committed set stores its positions as part-NNN.gcgs bundles: concatenated GCG
-# blocks, each opening with this pragma -- the record boundary, per the set's
-# README. Loose pos-*.gcg files are a transient, git-ignored explosion of them.
-GCGS_BOUNDARY = "#character-encoding UTF-8"
-
-
-def position_texts(gcg_dir):
-    """Every position under `gcg_dir` as GCG text: the loose .gcg files when
-    present (the hand-built small set commits those), else the blocks of its
-    part-*.gcgs bundles (the large set commits only those)."""
-    loose = sorted(glob.glob(f"{gcg_dir}/*.gcg"))
-    if loose:
-        return [open(g).read() for g in loose]
-    texts = []
-    for part in sorted(glob.glob(f"{gcg_dir}/part-*.gcgs")):
-        blocks = open(part).read().split(GCGS_BOUNDARY)
-        texts += [GCGS_BOUNDARY + b for b in blocks if b.strip()]
-    return texts
+DEFAULT_GCG_DIR = A.LARGE_DATASET
 
 
 def head_distributions(sess, gcg_text, arm):
@@ -86,7 +67,7 @@ def main():
         help="teacher ONNX: a position_eval export with the placement heads",
     )
     ap.add_argument(
-        "--gcg-dir", default=str(DEFAULT_GCG_DIR), help="a position set: loose .gcg or part-*.gcgs"
+        "--gcg-dir", default=str(DEFAULT_GCG_DIR), help="a position set (loose .gcg or part-*.gcgs)"
     )
     ap.add_argument(
         "--k", type=int, nargs="+", default=[8, 16, 32, 64, 128, 192, 256, 384, 512, 768, 1024]
@@ -95,7 +76,7 @@ def main():
     args = ap.parse_args()
 
     model = args.model
-    gcgs = position_texts(args.gcg_dir)
+    gcgs = [text for _stem, text in A._dataset_items(args.gcg_dir)]
     if not gcgs:
         sys.exit(f"error: no .gcg files or part-*.gcgs bundles under {args.gcg_dir}")
     print(f"model: {model}\npositions: {len(gcgs)} from {args.gcg_dir}\n")
