@@ -15,9 +15,11 @@ the caller supplies (the position-eval model's tile-supply tokens) that every
 attention layer sees alongside the cells. Registers have learnable 2D positions,
 initialised just off the board, so the same rotary machinery covers them.
 
-Export discipline (onnx_export_util.py): attention is written out as plain
-matmul + softmax over per-projection nn.Linears, and RMSNorm elementwise, so
-the legacy tracer emits every weight as a named initializer.
+Export discipline (onnx_export_util.py): the attention projections are
+per-projection nn.Linears and RMSNorm is elementwise, so the legacy tracer
+emits every weight as a named initializer. The fused
+scaled_dot_product_attention between them carries no weights and decomposes
+to plain matmul + softmax in the exported graph.
 
 docs/model_architectures.md diagrams this tower; any change to it belongs in
 the same commit as the corresponding change there.
@@ -130,8 +132,10 @@ class AttentionBlock(nn.Module):
         q = apply_rope(self._heads(self.q_proj(xn)), cos, sin).transpose(1, 2)  # (B, H, S, D)
         k = apply_rope(self._heads(self.k_proj(xn)), cos, sin).transpose(1, 2)
         v = self._heads(self.v_proj(xn)).transpose(1, 2)
-        attn = F.softmax(q @ k.transpose(-2, -1) / math.sqrt(self.head_dim), dim=-1)
-        context = (attn @ v).transpose(1, 2).flatten(2)  # (B, S, C)
+        # Fused attention never materializes the (B, H, S, S) score matrix, which
+        # the explicit softmax(q @ k^T) form keeps for backward at every layer --
+        # ~20 x 400 MB at batch 256 over the 252-token board+register sequence.
+        context = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).flatten(2)  # (B, S, C)
         return self.out_proj(context)
 
 
