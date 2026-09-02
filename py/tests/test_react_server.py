@@ -2,7 +2,6 @@
 server: a stale dashboard holding the port is killed before relaunch)."""
 
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -32,21 +31,24 @@ def test_reclaim_port_kills_listener():
     if not shutil.which("lsof"):
         pytest.skip("lsof unavailable")
 
-    # Pick a free port, then hold it with a subprocess listener.
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
+    # Let the holder itself pick a free port and report it back over stdout,
+    # rather than picking one here and closing it -- a bind-then-close-then-
+    # reopen leaves a window where another process could grab the same port
+    # before the holder rebinds it.
     holder = subprocess.Popen(
         [
             sys.executable,
             "-c",
             "import socket,time;s=socket.socket();"
             "s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);"
-            f"s.bind(('0.0.0.0',{port}));s.listen();time.sleep(30)",
-        ]
+            "s.bind(('0.0.0.0',0));s.listen();"
+            "print(s.getsockname()[1],flush=True);time.sleep(30)",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
     )
     try:
+        port = int(holder.stdout.readline())
         assert _wait_until(
             lambda: holder.pid in react_server._listening_pids(port), _APPEAR_TIMEOUT
         )
