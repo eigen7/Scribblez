@@ -701,6 +701,14 @@ class WorkerManager:
             )
             if probe == "stopped":
                 SshMachine(w.host).remove_container(_container_name(spec, task.tag, w.worker_id))
+            # A future slot may be assigned this same worker_id (a freed id is
+            # the first one _next_worker_id hands out again), and a deleted
+            # tag can be recreated under the same name -- both reproduce this
+            # key. Without this, the new slot would start out narrating the
+            # old container's exit and backoff.
+            key = _key(spec, task.tag, worker_id)
+            self._exits.pop(key, None)
+            self._restarts.pop(key, None)
         elif w.pod_id is not None:  # a never-started cloud slot has no pod to delete
             _, client = self._cloud()
             pod = next((p for p in client.list_pods() if p["id"] == w.pod_id), None)
