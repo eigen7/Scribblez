@@ -54,7 +54,9 @@ from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.position_eval.train_loop import LossConfig, run_epoch
 from scribblez.train_common import timed_print
+from scribblez.transformer_tower import TransformerConfig
 from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.position_eval import TRUNK_TRANSFORMER
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # How often the trainer re-checks the manifests while waiting for its cursor
@@ -167,6 +169,18 @@ def _recalibration_batches(ds, params, gen, device):
     )
     for batch in itertools.islice(batches, BN_RECALIBRATION_BATCHES):
         yield batch["input_spatial"].to(device), batch["input_scalar"].to(device)
+
+
+def _transformer_config(params) -> TransformerConfig | None:
+    """The transformer tower's shape under the transformer trunk arm; None under
+    the conv arm."""
+    if params.trunk != TRUNK_TRANSFORMER:
+        return None
+    return TransformerConfig(
+        mid_channels=params.transformer_mid_channels,
+        num_heads=params.transformer_heads,
+        ffn_channels=params.transformer_ffn_channels,
+    )
 
 
 def train_one_generation(
@@ -346,7 +360,7 @@ def run(ctx: WorkerContext) -> int:
         num_blocks=params.num_blocks,
         trunk_channels=params.trunk_channels,
         use_film=params.use_film,
-        use_supply_attention=params.use_supply_attention,
+        transformer=_transformer_config(params),
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")

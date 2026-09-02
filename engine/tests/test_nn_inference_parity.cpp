@@ -1,15 +1,17 @@
 // Suite 1 hop B: confirm the TensorRT inference path (plus the C++ Eval decode)
 // reproduces the PyTorch reference the dashboard runs on.
 //
-// The fixture is a directory holding model.onnx, inputs.bin (N x kInputFloats
-// float32), and expected.bin (N x 6 float32: win_prob, p_win, p_draw, p_loss,
-// score_diff_mean, score_diff_std, the PyTorch decode), produced by
-// py/scripts/position_eval/gen_parity_fixture.py. This test loads the model
-// through TrtEvalService and evaluates the rows at BF16 -- the precision
-// production inference runs -- and at FP16, holding every field to a
-// precision-appropriate tolerance against the PyTorch FP32 reference. Passing
-// validates the engine build, host/device copies, output binding order, and
-// the softmax/mean decode for each precision request.
+// The fixture root holds one directory per trunk tower (conv/, transformer/ --
+// the two graph shapes the engine may be handed), each with model.onnx,
+// inputs.bin (N x kInputFloats float32), and expected.bin (N x 6 float32:
+// win_prob, p_win, p_draw, p_loss, score_diff_mean, score_diff_std, the PyTorch
+// decode), produced by py/scripts/position_eval/gen_parity_fixture.py. Every
+// case runs once per tower: it loads that tower's model through TrtEvalService
+// and evaluates the rows at BF16 -- the precision production inference runs --
+// and at FP16, holding every field to a precision-appropriate tolerance against
+// the PyTorch FP32 reference. Passing validates the engine build, host/device
+// copies, output binding order, and the softmax/mean decode for each precision
+// request.
 //
 // It does NOT prove that reduced-precision kernels execute: TensorRT may serve
 // a 16-bit request with FP32 tactics, and for a fixture this small it does so
@@ -22,12 +24,12 @@
 //
 // Run it as a one-liner with no arguments:
 //   test_nn_inference_parity
-// It generates a fresh fixture into a temp dir (by invoking the Python
+// It generates fresh fixtures into a temp dir (by invoking the Python
 // generator at the build-time SCRIBBLEZ_PY_DIR), runs the comparison, and
-// cleans up. If the fixture cannot be generated (no torch/onnx) the test is
-// reported as skipped. Pass an explicit directory as the first non-gtest
-// argument to reuse a fixture instead:
-//   test_nn_inference_parity <fixture_dir>
+// cleans up. If the fixtures cannot be generated (no torch/onnx) the test is
+// reported as skipped. Pass an explicit fixture root as the first non-gtest
+// argument to reuse its fixtures instead:
+//   test_nn_inference_parity <fixture_root>
 
 #include "encoding/input_encoder.h"
 #include "nn/trt_eval_service.h"
@@ -70,9 +72,13 @@ constexpr float kFp16ScoreDiffTol = 0.2f;  // bounds the score-diff mean and std
 constexpr float kBf16ProbTol = 5e-3f;
 constexpr float kBf16ScoreDiffTol = 0.8f;
 
-// Fixture directory given on the command line (first non-gtest argument);
-// empty means self-generate one.
-static std::string g_fixture_dir;
+// Fixture root given on the command line (first non-gtest argument); empty
+// means self-generate one.
+static std::string g_fixture_root;
+
+// The trunk towers the generator writes fixtures for, each in its own
+// subdirectory of the root (gen_parity_fixture.py's TRUNK_FIXTURES).
+constexpr const char* kTrunks[] = {"conv", "transformer"};
 
 static std::vector<float> read_floats(const std::string& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -153,9 +159,9 @@ static std::filesystem::path make_scratch_dir() {
 }
 
 // Invoke the Python fixture generator (at build-time SCRIBBLEZ_PY_DIR) to write
-// model.onnx / inputs.bin / expected.bin into `out_dir`. Returns false if the
-// generator is unavailable or fails (e.g. torch/onnx not installed).
-static bool generate_fixture(const std::string& out_dir) {
+// every tower's model.onnx / inputs.bin / expected.bin under `out_dir`. Returns
+// false if the generator is unavailable or fails (e.g. torch/onnx not installed).
+static bool generate_fixtures(const std::string& out_dir) {
   const std::string py_dir = SCRIBBLEZ_PY_DIR;
   const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
                           "\" python3 -m scripts.position_eval.gen_parity_fixture --out-dir \"" +
@@ -164,10 +170,11 @@ static bool generate_fixture(const std::string& out_dir) {
 }
 #endif
 
-// Resolves the fixture directory: the one passed on the command line if any,
-// else a self-generated scratch dir (removed on teardown, and skipping the
-// test when the Python generator is unavailable).
-class NnInferenceParityTest : public ::testing::Test {
+// Parameterised over the trunk tower. Resolves this tower's fixture directory
+// under the root passed on the command line if any, else under a self-generated
+// scratch root (removed on teardown, and skipping the test when the Python
+// generator is unavailable).
+class NnInferenceParityTest : public ::testing::TestWithParam<const char*> {
  protected:
   void SetUp() override;
   void TearDown() override {
@@ -175,13 +182,13 @@ class NnInferenceParityTest : public ::testing::Test {
   }
 
   std::string dir_;
-  std::filesystem::path scratch_;  // non-empty iff this test created the fixture
+  std::filesystem::path scratch_;  // non-empty iff this test created the fixtures
 };
 
 void NnInferenceParityTest::SetUp() {
-  if (!g_fixture_dir.empty()) {
-    dir_ = g_fixture_dir;
-    // A directory handed to us that the FIXTURES_SETUP step left empty means the
+  if (!g_fixture_root.empty()) {
+    dir_ = g_fixture_root + "/" + GetParam();
+    // A root handed to us that the FIXTURES_SETUP step left empty means the
     // generator's torch/onnx were unavailable; skip as a self-generating run
     // would have.
     if (!std::filesystem::exists(dir_ + "/model.onnx")) {
@@ -191,9 +198,9 @@ void NnInferenceParityTest::SetUp() {
   }
 #ifdef SCRIBBLEZ_PY_DIR
   scratch_ = make_scratch_dir();
-  dir_ = scratch_.string();
-  if (!generate_fixture(dir_)) {
-    GTEST_SKIP() << "could not generate fixture; is torch/onnx installed?";
+  dir_ = (scratch_ / GetParam()).string();
+  if (!generate_fixtures(scratch_.string())) {
+    GTEST_SKIP() << "could not generate fixtures; is torch/onnx installed?";
   }
 #else
   GTEST_SKIP() << "built without SCRIBBLEZ_PY_DIR; pass a fixture dir on the command line";
@@ -214,7 +221,7 @@ static int load_fixture(const std::string& dir, std::vector<float>* inputs,
   return n;
 }
 
-TEST_F(NnInferenceParityTest, Bf16MatchesPyTorchReference) {
+TEST_P(NnInferenceParityTest, Bf16MatchesPyTorchReference) {
   std::vector<float> inputs, expected;
   const int n = load_fixture(dir_, &inputs, &expected);
   ASSERT_GT(n, 0);
@@ -223,7 +230,7 @@ TEST_F(NnInferenceParityTest, Bf16MatchesPyTorchReference) {
                   kBf16ScoreDiffTol, inputs, expected, n);
 }
 
-TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
+TEST_P(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
   std::vector<float> inputs, expected;
   const int n = load_fixture(dir_, &inputs, &expected);
   ASSERT_GT(n, 0);
@@ -237,7 +244,7 @@ TEST_F(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
 // memory) instead of one apiece -- and a distinct instance when an
 // engine-determining field differs. Reuses this suite's fixture because create()
 // builds a real engine.
-TEST_F(NnInferenceParityTest, CreateSharesOneServicePerParams) {
+TEST_P(NnInferenceParityTest, CreateSharesOneServicePerParams) {
   scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
   params.onnx_path = dir_ + "/model.onnx";
   params.precision = scribblez::nn::Precision::kBF16;
@@ -255,10 +262,15 @@ TEST_F(NnInferenceParityTest, CreateSharesOneServicePerParams) {
   EXPECT_NE(a.get(), c.get()) << "differing params must not share";
 }
 
+INSTANTIATE_TEST_SUITE_P(Trunks, NnInferenceParityTest, ::testing::ValuesIn(kTrunks),
+                         [](const ::testing::TestParamInfo<const char*>& info) {
+                           return std::string(info.param);
+                         });
+
 // Custom main (instead of gtest_main): InitGoogleTest strips the gtest flags,
-// and the first remaining argument, if any, names a fixture directory to reuse.
+// and the first remaining argument, if any, names a fixture root to reuse.
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
-  if (argc >= 2) g_fixture_dir = argv[1];
+  if (argc >= 2) g_fixture_root = argv[1];
   return RUN_ALL_TESTS();
 }

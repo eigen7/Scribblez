@@ -1,9 +1,11 @@
 """Position evaluation model for Scrabble.
 
 Architecture:
-  - Spatial trunk: (planes, 15, 15) -> conv 3x3 -> 128 channels -> N residual blocks
-  - Scalar injection: (scalars,) -> FC -> 128 -> broadcast-add to spatial features
-  - Pooling: global average pool -> 128-d trunk vector
+  - Spatial trunk: (planes, 15, 15) -> conv 3x3 -> C channels -> N tower blocks
+    (residual conv blocks, or -- given a TransformerConfig -- the transformer
+    tower over the cells plus 27 tile-supply register tokens, supply_registers.py)
+  - Scalar injection: (scalars,) -> FC -> C -> broadcast-add to spatial features
+  - Pooling: mean+max pool -> 2C-d trunk vector
   - Six output heads, each a Head subclass (below) owning its own forward and
     loss; the per-head mechanics live in those class docstrings. In brief, by
     role rather than mechanism:
@@ -25,7 +27,7 @@ family is generated from the FFI-served PLACEMENT_HEAD_NAMES; WLD and score-diff
 are singleton heads in the same registry.
 
 The two model input widths come from the engine session's input-encoding spec
-(87 planes / 936 scalars, plus 27 scalars under the open-leaves arm) and, with
+(87 planes / 136 scalars, plus 27 scalars under the open-leaves arm) and, with
 the six head output shapes, are fixed by the training pipeline and the C++
 inference contract; the trunk between them is free to change.
 
@@ -44,8 +46,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
-from scribblez.position_eval.supply_attention import TileSupplyAttention
+from scribblez.position_eval.supply_registers import TileSupplyRegisters
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.transformer_tower import TransformerConfig
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the
 # absolute residual would otherwise converge to ~0.8*sigma; this rescales the
@@ -279,14 +282,17 @@ class PositionEvalModel(nn.Module):
         board_size: int = 15,
         lexicon_module: nn.Module | None = None,
         use_film: bool = False,
-        use_supply_attention: bool = False,
+        transformer: TransformerConfig | None = None,
     ):
         super().__init__()
         self.board_size = board_size
 
-        # Shared conv trunk: stem + scalar injection + residual tower. An optional
-        # compiled-lexicon tool is fused per-cell inside the trunk (both orientations).
-        # use_film makes the scalar/global-context injection multiplicative (FiLM).
+        # Shared trunk: stem + scalar injection + tower. An optional compiled-lexicon
+        # tool is fused per-cell inside the trunk (both orientations). use_film makes
+        # the scalar/global-context injection multiplicative (FiLM). The transformer
+        # tower carries the tile-supply register tokens, so the placement heads can
+        # gate a square's cross-check letters on whether those tiles are actually
+        # available (see supply_registers.py).
         self.trunk = SpatialTrunk(
             spatial_planes,
             scalar_size,
@@ -294,15 +300,9 @@ class PositionEvalModel(nn.Module):
             num_blocks,
             lexicon_module=lexicon_module,
             use_film=use_film,
-        )
-
-        # Optional tile-supply cross-attention: refines the post-trunk feature map
-        # by letting each square attend to per-letter availability tokens, so the
-        # placement heads can gate a square's cross-check letters on whether those
-        # tiles are actually available (see supply_attention.py). Zero-initialised,
-        # so it is inert at init -- a strict superset of the no-attention model.
-        self.supply_attention = (
-            TileSupplyAttention(trunk_channels, scalar_size) if use_supply_attention else None
+            transformer=transformer,
+            registers=(TileSupplyRegisters(trunk_channels, scalar_size) if transformer else None),
+            board_size=board_size,
         )
 
         # Heads, keyed by output name (see _build_heads and the Heads section).
@@ -344,14 +344,9 @@ class PositionEvalModel(nn.Module):
             and one (B, FOOTPRINT_CLASSES) raw footprint-logit tensor per
             PLACEMENT_HEAD_NAMES entry.
         """
-        # Shared conv trunk (s, the scalar projection, is reused by the value
-        # heads below).
+        # Shared trunk (s, the scalar projection, is reused by the value heads
+        # below).
         x, s = self.trunk(input_spatial, input_scalar)
-
-        # Optional tile-supply cross-attention refines the feature map before the
-        # heads read it, so placement (and value) reflect letter availability.
-        if self.supply_attention is not None:
-            x = self.supply_attention(x, input_spatial, input_scalar)
 
         # Value summary: mean+max board pooling concatenated with the scalar
         # projection, so the heads see global board context and the raw scalars.

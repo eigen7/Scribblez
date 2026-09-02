@@ -228,15 +228,20 @@ def spatial_trunk() -> Diagram:
         left,
         286,
         [
-            title("residual tower  -  N blocks"),
-            sub("block i:  i % 3 == 2  →  GlobalPoolingResBlock"),
-            sub("otherwise  →  ResBlock"),
+            title("tower  -  N blocks"),
+            sub("conv (default):  ResBlock / GlobalPoolingResBlock   (fig. 2)"),
+            sub("transformer:  TransformerTower over the cells as tokens   (fig. 2b)"),
         ],
         "trunk",
     )
     d.edge(plus.bottom, tower.head)
 
-    norm = d.box(left, 396, [title("BatchNorm → ReLU")], "trunk")
+    norm = d.box(
+        left,
+        396,
+        [title("BatchNorm → ReLU"), sub("(transformer tower: RMSNorm → ReLU)")],
+        "trunk",
+    )
     d.edge(tower.bottom, norm.head)
 
     out_x = d.box(left, 466, [title("x"), mono("(B, C, 15, 15)")], "out")
@@ -321,6 +326,97 @@ def tower_blocks() -> Diagram:
     _gpool_block(d, 580, 490, 715, 372)
     d.ax.plot([300, 300], [40, 540], color="#d0d7de", lw=1.0, ls=(0, (4, 4)), zorder=0)
     d.caption("Cp = C // 2,   Cs = C - Cp")
+    return d
+
+
+def transformer_tower() -> Diagram:
+    """Fig 2b: the transformer tower -- one nested-bottleneck block, repeated."""
+    d = Diagram(940, 660)
+    cx, skip_x, pos_x = 330, 96, 730
+
+    d.label(cx, 26, "TransformerTower   -   N NestedBottleneckTransformerBlocks", "title")
+    src = d.box(
+        cx,
+        50,
+        [
+            title("tokens"),
+            mono("(B, 225 + R, C)"),
+            sub("the cells row-major, then R register tokens"),
+        ],
+        "input",
+    )
+
+    down = d.box(cx, 146, [title("RMSNorm → ReLU"), sub("Linear  C → C_mid")], "op")
+    d.edge(src.bottom, down.head)
+
+    pairs = d.box(
+        cx,
+        236,
+        [
+            title("inner_length × TransformerPair   (at C_mid)"),
+            sub("x += AttentionBlock(x):  RMSNorm → q, k, v → 2D RoPE on q, k"),
+            sub("→ softmax(q kᵀ / √d) v → out_proj"),
+            sub("x += SwiGluBlock(x):  RMSNorm → W₂ (silu(W₁ x) · W_g x)"),
+        ],
+        "op",
+    )
+    d.edge(down.bottom, pairs.head)
+
+    up = d.box(
+        cx,
+        352,
+        [title("RMSNorm → ReLU"), sub("Linear  C_mid → C     zero-initialised")],
+        "op",
+    )
+    d.edge(pairs.bottom, up.head)
+
+    plus = d.merge(cx, 448)
+    d.edge(up.bottom, plus.head)
+    d.edge(src.left, (skip_x, src.left[1]), (skip_x, 448), (cx - 11, 448))
+    d.note(skip_x + 8, 300, "skip")
+    d.note(cx + 22, 440, "× N  (each block starts as the identity)")
+
+    final = d.box(cx, 484, [title("RMSNorm")], "trunk")
+    d.edge(plus.bottom, final.head)
+
+    out = d.box(
+        cx,
+        552,
+        [
+            title("tokens"),
+            mono("(B, 225 + R, C)"),
+            sub("cells → (B, C, 15, 15) → ReLU;   registers dropped"),
+        ],
+        "out",
+    )
+    d.edge(final.bottom, out.head)
+
+    positions = d.box(
+        pos_x,
+        146,
+        [
+            title("token positions  (x, y)"),
+            sub("cells:  the grid coordinates"),
+            sub("registers:  learnable, initialised off-board"),
+        ],
+        "input",
+    )
+    rope = d.box(
+        pos_x,
+        258,
+        [
+            title("2D RoPE tables per attention layer"),
+            sub("angle = ω_x · x + ω_y · y"),
+            sub("ω learnable per head and channel pair"),
+        ],
+        "op",
+    )
+    d.edge(positions.bottom, rope.head)
+    d.edge(rope.left, (pairs.right[0], rope.left[1]))
+    d.caption(
+        "C_mid = transformer_mid_channels,  heads = transformer_heads,  "
+        "FFN width = transformer_ffn_channels,  inner_length = 2"
+    )
     return d
 
 
@@ -728,6 +824,7 @@ def evidence_fusion() -> Diagram:
 FIGURES = {
     "arch_spatial_trunk": spatial_trunk,
     "arch_tower_blocks": tower_blocks,
+    "arch_transformer_tower": transformer_tower,
     "arch_position_eval": position_eval,
     "arch_move_encoder": move_encoder,
     "arch_move_set_eval": move_set_eval,

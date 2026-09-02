@@ -30,6 +30,12 @@ from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
 
+# The trunk-tower arms (spatial_trunk.py); strings so this torch-free module can
+# declare the param's choices.
+TRUNK_CONV = "conv"
+TRUNK_TRANSFORMER = "transformer"
+TRUNKS = (TRUNK_CONV, TRUNK_TRANSFORMER)
+
 TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"})
 
 
@@ -111,13 +117,22 @@ class PositionEvalParams:
         "injection sites (scalars emit a per-channel gain alongside the additive bias); "
         "off is the additive-injection baseline",
     )
-    use_supply_attention: bool = param(
-        False,
-        "tile-supply cross-attention after the trunk: each square attends to per-letter "
-        "availability tokens (rack / unseen pool / opp leave) so the placement heads can "
-        "gate a square's cross-checks on whether those tiles are available; requires the "
-        "open-leaves arm (face_up_leaves)",
+    trunk: str = param(
+        TRUNK_CONV,
+        "trunk tower (scribblez/spatial_trunk.py): 'conv' is the residual conv tower; "
+        "'transformer' is the KataGo-style nested-bottleneck transformer tower over the "
+        "cells as tokens plus 27 tile-supply register tokens (rack / unseen pool / opp "
+        "leave), so the placement heads can gate a square's cross-checks on whether "
+        "those tiles are available",
+        choices=TRUNKS,
     )
+    transformer_mid_channels: int = param(
+        192, "transformer trunk: width inside each nested-bottleneck block"
+    )
+    transformer_heads: int = param(
+        6, "transformer trunk: attention heads per layer (head dim = mid channels / heads)"
+    )
+    transformer_ffn_channels: int = param(512, "transformer trunk: SwiGLU FFN hidden width")
     # Loss.
     lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
     lambda_sd: float = param(0.0002, "score-diff loss weight")
@@ -171,6 +186,6 @@ SPEC = WorkloadSpec(
         "random_opening_mean",
         "match_every_generations",
         "optimizer",
-        "use_supply_attention",
+        "trunk",
     ),
 )

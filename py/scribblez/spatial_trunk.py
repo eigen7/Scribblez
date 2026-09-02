@@ -1,12 +1,16 @@
 """Shared spatial trunk for Scribblez models.
 
 Every Scribblez model encodes the board with the same front end: a conv stem,
-an injection of the scalar (non-spatial) features, and a tower of residual
-blocks -- some of them KataGo-style global-pooling blocks that re-broadcast
-board-global context through the tower. The result is a (B, C, 15, 15) feature
-map that each model's task-specific heads (and, for the per-lane model, a lane
-sequence model) build on. This module owns that trunk and its building blocks so
-the post-move and max-move-per-lane models share one implementation.
+an injection of the scalar (non-spatial) features, and a tower over the
+resulting board features. The default tower is a stack of residual conv blocks
+-- some of them KataGo-style global-pooling blocks that re-broadcast
+board-global context through the tower; the alternative is the transformer
+tower of transformer_tower.py, attention over the cells as a token sequence
+(optionally alongside caller-supplied register tokens). Either way the result
+is a (B, C, 15, 15) feature map that each model's task-specific heads (and, for
+the per-lane model, a lane sequence model) build on. This module owns that
+trunk and the conv tower's building blocks so the post-move and
+max-move-per-lane models share one implementation.
 
 docs/model_architectures.md diagrams this trunk; any change to the architecture
 belongs in the same commit as the corresponding change there.
@@ -15,6 +19,8 @@ belongs in the same commit as the corresponding change there.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from scribblez.transformer_tower import TransformerConfig, TransformerTower
 
 # The board's letter planes lead the spatial input (BoardPlanes lays the 26 letter
 # one-hots first), so input_spatial[:, :N_LETTERS] is the per-cell one-hot a lexicon
@@ -107,22 +113,30 @@ def make_block(channels: int, index: int, use_film: bool = False) -> nn.Module:
 
 
 class SpatialTrunk(nn.Module):
-    """Conv stem + scalar injection + residual tower -> (B, C, 15, 15) features.
+    """Conv stem + scalar injection + tower -> (B, C, 15, 15) features.
 
     forward returns (features, scalar_proj): the post-tower feature map and the
     C-dimensional projection of the scalar input. The projection is broadcast-
     added at the stem and also returned so a model's heads can read the scalar
     features directly (the position evaluation heads do).
 
-    use_film upgrades the two scalar/global-context injection sites (the stem
-    injection here and each global-pooling block) from additive to FiLM: alongside
-    the additive term (beta) the scalars emit a per-channel gain (gamma), applied
-    as (1 + gamma) * x + beta. The gamma projections are zero-initialised, so a
-    FiLM trunk starts numerically identical to the additive one and is a strict
-    superset of it -- the multiplicative half is what lets a scalar (e.g. an
-    opponent-leave letter) gate a board feature (e.g. that letter's cross-check
-    plane) rather than only shift it. The returned scalar projection is the beta
-    half, unchanged for the heads.
+    The tower is the residual conv tower (`transformer` None) or, given a
+    TransformerConfig, the transformer tower over the cells as tokens. Under the
+    transformer tower an optional `registers` maps the scalar input to
+    (B, registers.num_tokens, C) register tokens appended to the cell
+    sequence, so every attention layer sees them; the conv tower has no place
+    for them and rejects one.
+
+    use_film upgrades the scalar/global-context injection sites (the stem
+    injection here and, in the conv tower, each global-pooling block) from
+    additive to FiLM: alongside the additive term (beta) the scalars emit a
+    per-channel gain (gamma), applied as (1 + gamma) * x + beta. The gamma
+    projections are zero-initialised, so a FiLM trunk starts numerically
+    identical to the additive one and is a strict superset of it -- the
+    multiplicative half is what lets a scalar (e.g. an opponent-leave letter)
+    gate a board feature (e.g. that letter's cross-check plane) rather than only
+    shift it. The returned scalar projection is the beta half, unchanged for the
+    heads.
     """
 
     def __init__(
@@ -133,9 +147,13 @@ class SpatialTrunk(nn.Module):
         num_blocks: int,
         lexicon_module: nn.Module | None = None,
         use_film: bool = False,
+        transformer: TransformerConfig | None = None,
+        registers: nn.Module | None = None,
+        board_size: int = 15,
     ):
         super().__init__()
         self.use_film = use_film
+        self.num_cells = board_size * board_size
         self.stem = nn.Sequential(
             nn.Conv2d(spatial_planes, trunk_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(trunk_channels),
@@ -158,10 +176,23 @@ class SpatialTrunk(nn.Module):
         # and its per-cell residual is summed into the board feature map after the stem,
         # giving the tower per-cell word-legality signal in both orientations.
         self.lexicon_module = lexicon_module
-        self.blocks = nn.Sequential(
-            *[make_block(trunk_channels, i, use_film=use_film) for i in range(num_blocks)]
-        )
-        self.trunk_bn = nn.BatchNorm2d(trunk_channels)
+        # Exactly one tower is built. The conv tower keeps its `blocks` / `trunk_bn`
+        # names (the parameter names of every conv checkpoint); `tower` is the
+        # transformer tower and doubles as the mode switch.
+        self.registers = registers
+        if transformer is None:
+            if registers is not None:
+                raise ValueError("register tokens need the transformer tower")
+            self.blocks = nn.Sequential(
+                *[make_block(trunk_channels, i, use_film=use_film) for i in range(num_blocks)]
+            )
+            self.trunk_bn = nn.BatchNorm2d(trunk_channels)
+            self.tower = None
+        else:
+            num_registers = registers.num_tokens if registers is not None else 0
+            self.tower = TransformerTower(
+                trunk_channels, num_blocks, transformer, board_size, num_registers
+            )
 
     def _lexicon_residual(self, x: torch.Tensor, letters: torch.Tensor) -> torch.Tensor:
         """Run the per-lane lexicon module over rows and columns and lay its per-cell
@@ -195,6 +226,20 @@ class SpatialTrunk(nn.Module):
             x = x + s[:, :, None, None]  # broadcast-add over spatial dims
         if self.lexicon_module is not None:
             x = x + self._lexicon_residual(x, input_spatial[:, :N_LETTERS])
-        x = self.blocks(x)
-        x = F.relu(self.trunk_bn(x))
+        if self.tower is None:
+            x = F.relu(self.trunk_bn(self.blocks(x)))
+        else:
+            x = self._transformer_tower(x, input_scalar)
         return x, s
+
+    def _transformer_tower(self, x: torch.Tensor, input_scalar: torch.Tensor) -> torch.Tensor:
+        """Run the transformer tower over the (B, C, H, W) stem features as a
+        row-major cell sequence (plus the register tokens, if any), and lay the
+        cells' outputs back onto the board."""
+        b, c, h, w = x.shape
+        tokens = x.flatten(2).transpose(1, 2)  # (B, H*W, C)
+        if self.registers is not None:
+            tokens = torch.cat([tokens, self.registers(input_scalar)], dim=1)
+        tokens = self.tower(tokens)
+        cells = tokens[:, : self.num_cells].transpose(1, 2).reshape(b, c, h, w)
+        return F.relu(cells)
