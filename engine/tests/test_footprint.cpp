@@ -298,49 +298,137 @@ TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
   EXPECT_FALSE(opp_admits(overlap, available_of("XY"), lone));  // only E fits; X/Y satisfy neither
 }
 
-// The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
-// testable without a dictionary.
+// The opp mask requires a placement to CONNECT to the board: a footprint that
+// floats free of every tile is masked even though its cells are individually
+// playable. This is the reported A1-corner bug in miniature -- an isolated empty
+// corner has unconstrained cross-checks, so the per-cell letter test admits it,
+// yet no legal move (after the opener) can reach it. Footprints touching the lone
+// 'A' at (7,7) are kept; ones adrift in the empty expanse are not. Independent of
+// the availability gate, so it also shows under null (board-legality-only) counts.
+TEST(FootprintMask, ConnectivityMasksFloatingPlacements) {
+  Board b;
+  b.set(7, 7, G(0));  // 'A': the sole structure everything must connect to
+  const Dictionary d = Dictionary::build_from_words({"AB"});
+  b.ensure_movegen_caches(d);
+
+  const int corner_lone = (0 * 15 + 0) * kSlotsPerCell + 0;            // lone tile at (0,0)
+  const int floating2 = (0 * 15 + 3) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 in empty row 0
+  const int hook_lone = (7 * 15 + 8) * kSlotsPerCell + 0;              // lone tile right of 'A'
+  const int abutting2 = (7 * 15 + 8) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 abutting 'A'
+
+  // Disconnected placements: floated free of the board -> masked (the fix).
+  EXPECT_FALSE(opp_admits(b, available_of("AB"), corner_lone));
+  EXPECT_FALSE(opp_admits(b, available_of("AB"), floating2));
+  // Connected placements: the covered cell at (7,8) abuts 'A'. The lone tile forms
+  // the across-word "A_" (legal "AB"), so B both connects and hooks; the k=2 covers
+  // (7,8),(7,9) whose vertical cross-checks are free -> both kept.
+  EXPECT_TRUE(opp_admits(b, available_of("B"), hook_lone));
+  EXPECT_TRUE(opp_admits(b, available_of("AB"), abutting2));
+
+  // Connectivity holds independently of availability -- null (pure board legality)
+  // still masks the floating corner and keeps the abutting footprint.
+  FootprintMask m;
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
+  EXPECT_FALSE(m[corner_lone]);
+  EXPECT_FALSE(m[floating2]);
+  EXPECT_TRUE(m[hook_lone]);
+  EXPECT_TRUE(m[abutting2]);
+}
+
+// The self mask is two expansions: the opponent's this-turn reach, then the
+// mover's footprints abutting that extended board. Without a dictionary every
+// cross-check reads as unconstrained, so these run on geometry alone.
 TEST(SelfFootprintMask, ReachabilityFromStructure) {
   Board b;
   b.set(7, 7, G(4));  // a lone tile: the only structure to bridge from
   FootprintMask m;
-  // opp_budget=1, self_budget=1 -> combined reach 2 tiles.
-  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*win=*/false, m);
-  // (7,8) is one empty step from the tile: d=1 <= 2 -> a k=1 footprint is legal.
+  // opp_budget=1: the opponent can put one tile against (7,7). self_budget=1.
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*opp_available_counts=*/nullptr,
+                      /*win_head=*/false, m);
+  // (7,8) abuts the tile itself -> a lone self tile there is legal.
   EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);
-  // (7,10) is three empty steps away: d=3 > 2 -> unreachable.
+  // (7,10): the opponent's one tile reaches at most (7,8), so a lone tile at
+  // (7,10) abuts nothing on any board the opponent can leave -> it floats.
   EXPECT_FALSE(m[(7 * 15 + 10) * kSlotsPerCell + 0]);
   // A far corner is well beyond reach.
   EXPECT_FALSE(m[(0 * 15 + 0) * kSlotsPerCell + 0]);
   EXPECT_TRUE(m[kPassClass]);
 }
 
-TEST(SelfFootprintMask, CombinedBudgetWidensReach) {
+// A larger self budget widens reach only through footprints that still abut the
+// opponent's reach: with the opponent able to fill (7,8), the mover's 2-tile word
+// at (7,9)-(7,10) connects, but a lone tile at (7,10) never does -- the cell is
+// coverable, the floating footprint is not (the self-side twin of the A1 case).
+TEST(SelfFootprintMask, WiderBudgetReachesThroughConnectedFootprints) {
   Board b;
   b.set(7, 7, G(4));
   FootprintMask m;
-  const int far = (7 * 15 + 10) * kSlotsPerCell + 0;  // d=3 from the tile
-  self_footprint_mask(b, 1, 1, /*win_head=*/false, m);      // reach 2 -> out
-  EXPECT_FALSE(m[far]);
-  self_footprint_mask(b, 2, 1, /*win_head=*/false, m);  // reach 3 -> in
-  EXPECT_TRUE(m[far]);
+  const int lone_7_10 = (7 * 15 + 10) * kSlotsPerCell + 0;
+  const int pair_7_9 = (7 * 15 + 9) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2: (7,9),(7,10)
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
+  EXPECT_FALSE(m[lone_7_10]);
+  EXPECT_FALSE(m[pair_7_9]);  // k=2 exceeds self_budget=1
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
+  EXPECT_TRUE(m[pair_7_9]);    // (7,9) abuts the opponent's (7,8) -> the pair connects
+  EXPECT_FALSE(m[lone_7_10]);  // ... but the lone tile at (7,10) still abuts nothing
 }
 
 TEST(SelfFootprintMask, BudgetCapsK) {
   Board b;
   b.set(7, 4, G(4));  // structure so nearby cells are reachable
   FootprintMask m;
-  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, /*win_head=*/false, m);
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
   EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
 }
 
 TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
-  Board b;  // no structure -> game-start guard marks everything reachable
+  Board b;  // no structure -> nothing to abut, so every fitting footprint is kept
   FootprintMask m;
-  self_footprint_mask(b, 7, 7, /*win_head=*/false, m);
+  self_footprint_mask(b, 7, 7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
   EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
+}
+
+// The opponent's stage carries cross-checks and its pool; the mover's does not.
+// 'A' at (6,7): the square below it, (7,7), hooks the down-word "A_" -> only Y.
+TEST(SelfFootprintMask, OppStageGatesReachTheMoverStageDoesNot) {
+  Board b;
+  b.set(6, 7, G(0));
+  const Dictionary d = Dictionary::build_from_words({"AY"});
+  b.ensure_movegen_caches(d);
+  const int lone_7_7 = (7 * 15 + 7) * kSlotsPerCell + 0;  // the hook square itself
+  const int lone_8_7 = (8 * 15 + 7) * kSlotsPerCell + 0;  // two below 'A'
+  FootprintMask m;
+
+  // Y in the opponent's pool: it can fill (7,7), so a mover tile at (8,7) abuts it.
+  const std::array<uint8_t, 27> with_y = available_of("YE");
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, with_y.data(), false, m);
+  EXPECT_TRUE(m[lone_8_7]);
+
+  // No Y: the opponent cannot reach (7,7), so (8,7) abuts nothing -> masked.
+  const std::array<uint8_t, 27> no_y = available_of("EIO");
+  self_footprint_mask(b, 1, 1, no_y.data(), false, m);
+  EXPECT_FALSE(m[lone_8_7]);
+  // Yet the mover's own tile at (7,7) stays legal: it abuts 'A' directly, and the
+  // mover's stage is cross-check-free -- its rack is separate from the pool, so
+  // it may hold the Y the pool lacks.
+  EXPECT_TRUE(m[lone_7_7]);
+}
+
+// A ply's reach is its seed plus every square its legal footprints cover.
+TEST(FootprintPly, ReachIsSeedPlusCoveredSquares) {
+  Board b;
+  b.set(7, 7, G(4));
+  const FootprintPly ply = footprint_ply(b, occupied_squares(b), /*budget=*/7,
+                                         /*use_cross_checks=*/false, nullptr, /*win_head=*/false);
+  EXPECT_TRUE(ply.reach.contains(7, 7));           // the seed
+  EXPECT_TRUE(ply.reach.contains(7, 8));           // a lone tile abuts it
+  EXPECT_TRUE(ply.reach.contains(7, 9));           // via the 2-tile word from (7,8)
+  EXPECT_TRUE(ply.reach.contains(7, 14));          // the row's end, via a 7-tile word
+  EXPECT_FALSE(ply.reach.contains(0, 0));          // the far corner: nothing abuts the seed
+  EXPECT_TRUE(occupied_squares(Board{}).empty());  // the opener has no seed
+  EXPECT_FALSE(occupied_squares(b).empty());
 }
 
 std::string slurp(const std::string& path) {
@@ -355,7 +443,8 @@ std::string slurp(const std::string& path) {
 // each real game; for every played move assert its footprint class is in the opp
 // mask on the pre-move board (one ply ahead -- needs the lexicon for cross-checks)
 // and in the self mask on the board two plies earlier (the self head's context;
-// cross-check-oblivious, so it runs with or without the lexicon).
+// its opponent stage takes the same loosest pool, and without the lexicon every
+// cross-check reads as unconstrained, so it runs either way).
 void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
   Board board;
   if (dict) board.ensure_movegen_caches(*dict);
@@ -376,8 +465,11 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
         EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
       }
       if (two_plies_ago) {
+        uint8_t opp_available_counts[27];
+        compute_unseen_pool(opp_available_counts, *two_plies_ago, Rack{});
         FootprintMask self;
-        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, /*win_head=*/false, self);
+        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, opp_available_counts,
+                            /*win_head=*/false, self);
         EXPECT_TRUE(self[cls]) << "self mask excluded a real move (class " << cls << ")";
       }
     }
@@ -474,11 +566,13 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
 // The collapse threads availability into the OPP heads: a dominant logit on an
 // opp footprint whose only hook is unavailable contributes NO plane mass -- the
 // mask drops it, so its 20-logit probability renormalizes away and (7,7) keeps
-// only the faint uniform share of the other footprints that still cover it (a
-// lone tile, verticals). With the hook letter supplied, the dominant footprint
-// lights (7,7) instead. This is the inference-time "no Y unseen -> the I13 Y-hook
-// carries no belief" behaviour in miniature (the real I13 collapses all the way
-// because every footprint covering it needs the same unavailable hook).
+// only the uniform share of the other footprints that still cover it. With the
+// hook letter supplied, the dominant footprint lights (7,7) (~1.0) instead. This
+// is the inference-time "no Y unseen -> the I13 Y-hook carries no belief"
+// behaviour in miniature. The residual share is not vanishing here: connectivity
+// confines the legal set to footprints abutting the lone 'A', and (7,7) sits
+// against it, so its uniform share is a modest fraction rather than the near-zero
+// of a board-wide legal set -- the point is the loss of the DOMINANT spike.
 TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   Board b;
   b.set(6, 7, G(0));  // 'A' above (7,7): a horizontal hook there needs a "A_" word
@@ -501,8 +595,8 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, but no Y, no blank
   collapse_footprint_planes(b, d, no_y.data(), raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
-  EXPECT_LT(gated, 0.05f);       // the 20-logit footprint no longer reaches (7,7)
-  EXPECT_LT(gated, lit * 0.1f);  // ... a >10x drop vs. when its hook was available
+  EXPECT_LT(gated, 0.5f);        // the dominant 20-logit hook is gone -> only the uniform share
+  EXPECT_LT(gated, lit * 0.5f);  // ... a clear drop vs. the near-1.0 it held with the hook in stock
 }
 
 // masked_placement_distributions returns the same mask + masked-softmax the
@@ -575,11 +669,11 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   const std::array<uint8_t, 27> with_y = available_of("YE");
   EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);    // Y in stock -> the boxed cell is reachable
   EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied square is never covered
-  EXPECT_EQ(reach_at(with_y, 14, 14), 1.0f);  // an unconstrained far corner still reachable
+  EXPECT_EQ(reach_at(with_y, 14, 14), 0.0f);  // the far corner floats free -> unreachable
 
   const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, no Y, no blank
   EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);    // every footprint covering (7,7) needs Y -> gated off
-  EXPECT_EQ(reach_at(no_y, 14, 14), 1.0f);  // ... but the corner, needing no specific letter, stays
+  EXPECT_EQ(reach_at(no_y, 14, 14), 0.0f);  // ... and the disconnected corner stays unreachable
 }
 
 // Reachability on the transposed board is the transpose of reachability on the

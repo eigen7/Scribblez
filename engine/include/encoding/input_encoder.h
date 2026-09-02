@@ -26,9 +26,11 @@
 //                     here", never conditioned on the neighbors.
 //     kOppReach       squares the opponent (who moves next) can reach on this
 //                     board with the tiles that could be theirs (the unseen
-//                     pool, S - M): a precomputed cross-check-times-availability
+//                     pool, S - M): covered by some footprint that abuts the
+//                     board, clears its cross-checks and has a letter in stock
+//                     -- a precomputed connectivity/cross-check/availability
 //                     feature the conv forms poorly on its own. See
-//                     training/footprint_mask.h (footprint_reachable_cells).
+//                     training/footprint_mask.h (footprint_ply).
 //     kSelfReach      the same reachability but for the POV player's own next
 //                     turn ASSUMING the opponent passes, over the tiles that
 //                     could be theirs (S - O: every unplayed tile minus any the

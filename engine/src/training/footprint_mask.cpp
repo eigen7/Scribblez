@@ -4,66 +4,13 @@
 
 #include <algorithm>
 #include <array>
-#include <climits>
 #include <cstdint>
-#include <utility>
-#include <vector>
 
 namespace scribblez {
 
 namespace {
 
-// Mark the legal footprint classes given a multi-tile per-cell predicate
-// `cell_ok(horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
-// the tile-count cap `kmax`. Shared by the opp and self masks, which differ only
-// in those predicates and the cap.
-template <typename CellOk, typename LoneOk>
-void mark_footprints(const Board& board, int kmax, bool win_head, FootprintMask& mask,
-                     CellOk cell_ok, LoneOk lone_ok) {
-  mask.fill(false);
-  for (int cell = 0; cell < kFootprintCells; ++cell) {
-    const int anchor_r = cell / kFootprintSide;
-    const int anchor_c = cell % kFootprintSide;
-    if (!board.at(anchor_r, anchor_c).is_empty()) continue;
-
-    for (int slot = 0; slot < kSlotsPerCell; ++slot) {
-      bool horizontal;
-      int k;
-      footprint_slot_decode(slot, horizontal, k);
-      if (k > kmax) continue;
-      const int cls = cell * kSlotsPerCell + slot;
-
-      if (k == 1) {
-        if (lone_ok(anchor_r, anchor_c)) mask[cls] = true;
-        continue;
-      }
-
-      int count = 0;
-      int r = anchor_r;
-      int c = anchor_c;
-      bool ok = true;
-      while (r < kFootprintSide && c < kFootprintSide && count < k) {
-        if (board.at(r, c).is_empty()) {
-          if (!cell_ok(horizontal, r, c)) {
-            ok = false;
-            break;
-          }
-          ++count;
-        }
-        if (horizontal) {
-          ++c;
-        } else {
-          ++r;
-        }
-      }
-      if (ok && count == k) mask[cls] = true;  // count<k means the edge cut it short
-    }
-  }
-  mask[kPassClass] = true;
-  mask[kExtraClass] = win_head;
-}
-
-// The opponent's tile availability as a bit-set for a fast per-cell test: bit L
+// The mover's tile availability as a bit-set for a fast per-cell test: bit L
 // set iff at least one of tile L is in stock, indexed like the 27-count array
 // (0..25 = A..Z, 26 = blank).
 using tile_set_t = uint32_t;
@@ -103,83 +50,119 @@ bool lone_tile_admits_letter(const Board& board, tile_set_t avail, int r, int c)
   return (allowed & avail) != 0;                    // a jointly-legal letter that is in stock
 }
 
-// Tiles-to-reach distance field: d[Z] = the fewest tiles that must be placed to
-// bridge to empty cell Z from the current structure. Multi-source 4-neighbour
-// BFS with every occupied cell a 0 seed (words can turn at any tile), so it is a
-// cross-check-oblivious lower bound on the true tile cost -- hence a sound
-// over-approximation of reachability. A tile-less board (game start) leaves the
-// field at 0 everywhere so nothing is spuriously masked.
-std::array<int, kFootprintCells> tiles_to_reach(const Board& board) {
-  std::array<int, kFootprintCells> dist;
-  dist.fill(INT_MAX);
-  if (board.num_tiles() == 0) {
-    dist.fill(0);
-    return dist;
+// An empty cell (r,c) is orthogonally adjacent to a seed square.
+bool touches_seed(const SquareSet& seed, int r, int c) {
+  for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
+    const int nr = r + dr;
+    const int nc = c + dc;
+    if (nr < 0 || nr >= kFootprintSide || nc < 0 || nc >= kFootprintSide) continue;
+    if (seed.contains(nr, nc)) return true;
   }
-  std::vector<int> q;
-  for (int i = 0; i < kFootprintCells; ++i) {
-    if (!board.at(i / kFootprintSide, i % kFootprintSide).is_empty()) {
-      dist[i] = 0;
-      q.push_back(i);
-    }
-  }
-  for (size_t head = 0; head < q.size(); ++head) {
-    const int cur = q[head];
-    const int r = cur / kFootprintSide;
-    const int c = cur % kFootprintSide;
-    for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
-      const int nr = r + dr;
-      const int nc = c + dc;
-      if (nr < 0 || nr >= kFootprintSide || nc < 0 || nc >= kFootprintSide) continue;
-      const int ni = nr * kFootprintSide + nc;
-      if (dist[ni] != INT_MAX) continue;           // seeded (occupied) or already reached
-      if (!board.at(nr, nc).is_empty()) continue;  // occupied cells stay 0 seeds
-      dist[ni] = dist[cur] + 1;
-      q.push_back(ni);
-    }
-  }
-  return dist;
+  return false;
 }
 
 }  // namespace
 
-void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
-                        bool win_head, FootprintMask& mask) {
-  const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
-  const tile_set_t avail = available_tiles(available_counts);
-  mark_footprints(
-    board, kmax, win_head, mask,
-    [&](bool horizontal, int r, int c) {
-      return cell_admits_letter(board, avail, horizontal, r, c);
-    },
-    [&](int r, int c) { return lone_tile_admits_letter(board, avail, r, c); });
+SquareSet occupied_squares(const Board& board) {
+  SquareSet s;
+  for (int i = 0; i < kFootprintCells; ++i)
+    if (!board.at(i / kFootprintSide, i % kFootprintSide).is_empty()) s.bits.set(i);
+  return s;
 }
 
-void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool win_head,
-                         FootprintMask& mask) {
-  const std::array<int, kFootprintCells> dist = tiles_to_reach(board);
-  const int reach = opp_budget + self_budget;  // opp bridges, then the mover finishes
-  const int kmax = self_budget < kFootprintMaxK ? self_budget : kFootprintMaxK;
-  // Orientation-free reachability -- the self mask is cross-check-oblivious, so
-  // the lone-tile test coincides with the multi-tile per-cell one.
-  const auto reachable = [&](int r, int c) { return dist[r * kFootprintSide + c] <= reach; };
-  mark_footprints(
-    board, kmax, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); }, reachable);
+FootprintPly footprint_ply(const Board& board, const SquareSet& seed, int budget,
+                           bool use_cross_checks, const uint8_t* available_counts, bool win_head) {
+  FootprintPly out;
+  out.mask.fill(false);
+  out.reach = seed;
+  const int kmax = std::min(budget, kFootprintMaxK);
+  const tile_set_t avail = use_cross_checks ? available_tiles(available_counts) : kAllTiles;
+  const bool adjacency_gate = !seed.empty();  // nothing to abut on the opener's empty board
+  // TODO(perf): most anchors abut nothing and get masked, yet we scan all
+  // kFootprintCells of them; crawling footprints out from the seed would touch
+  // only the connected few (~222 vs 2925 for a centred opener). Mask-build has
+  // not shown up in profiling, so it is deferred.
+  std::array<int, kFootprintMaxK> covered;
+  for (int cell = 0; cell < kFootprintCells; ++cell) {
+    const int anchor_r = cell / kFootprintSide;
+    const int anchor_c = cell % kFootprintSide;
+    if (!board.at(anchor_r, anchor_c).is_empty()) continue;
+
+    for (int slot = 0; slot < kSlotsPerCell; ++slot) {
+      bool horizontal;
+      int k;
+      footprint_slot_decode(slot, horizontal, k);
+      if (k > kmax) continue;
+      const int cls = cell * kSlotsPerCell + slot;
+
+      if (k == 1) {
+        const bool ok =
+          (!use_cross_checks || lone_tile_admits_letter(board, avail, anchor_r, anchor_c)) &&
+          (!adjacency_gate || touches_seed(seed, anchor_r, anchor_c));
+        if (ok) {
+          out.mask[cls] = true;
+          out.reach.bits.set(cell);
+        }
+        continue;
+      }
+
+      int count = 0;
+      int r = anchor_r;
+      int c = anchor_c;
+      bool ok = true;
+      bool connected = !adjacency_gate;  // vacuously satisfied when the gate is off
+      while (r < kFootprintSide && c < kFootprintSide && count < k) {
+        if (board.at(r, c).is_empty()) {
+          if (use_cross_checks && !cell_admits_letter(board, avail, horizontal, r, c)) {
+            ok = false;
+            break;
+          }
+          if (!connected && touches_seed(seed, r, c)) connected = true;
+          covered[count++] = r * kFootprintSide + c;
+        }
+        if (horizontal) {
+          ++c;
+        } else {
+          ++r;
+        }
+      }
+      // count<k means the edge cut it short; !connected means it floats free of
+      // the seed (a disconnected placement).
+      if (ok && count == k && connected) {
+        out.mask[cls] = true;
+        for (int i = 0; i < k; ++i) out.reach.bits.set(covered[i]);
+      }
+    }
+  }
+  out.mask[kPassClass] = true;
+  out.mask[kExtraClass] = win_head;
+  return out;
+}
+
+void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
+                        bool win_head, FootprintMask& mask) {
+  mask = footprint_ply(board, occupied_squares(board), tile_budget, /*use_cross_checks=*/true,
+                       available_counts, win_head)
+           .mask;
+}
+
+void self_footprint_mask(const Board& board, int self_budget, int opp_budget,
+                         const uint8_t* opp_available_counts, bool win_head, FootprintMask& mask) {
+  const FootprintPly opp = footprint_ply(board, occupied_squares(board), opp_budget,
+                                         /*use_cross_checks=*/true, opp_available_counts,
+                                         /*win_head=*/false);
+  mask = footprint_ply(board, opp.reach, self_budget, /*use_cross_checks=*/false, nullptr, win_head)
+           .mask;
 }
 
 void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
                                float* out) {
-  FootprintMask mask;
-  opp_footprint_mask(board, available_counts, tile_budget, /*win_head=*/false, mask);
-  std::fill(out, out + kFootprintCells, 0.0f);
-  // OR every legal footprint's covered cells onto the plane -- a cell is reachable iff some legal
-  // play touches it.
-  std::array<std::pair<int, int>, kFootprintMaxK> cells;
-  for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
-    if (!mask[cls]) continue;
-    const int n = footprint_cells(cls, board, cells);
-    for (int i = 0; i < n; ++i) out[cells[i].first * kFootprintSide + cells[i].second] = 1.0f;
-  }
+  const SquareSet seed = occupied_squares(board);
+  const FootprintPly ply = footprint_ply(board, seed, tile_budget, /*use_cross_checks=*/true,
+                                         available_counts, /*win_head=*/false);
+  // The squares the ply covers: its reach less the seed it started from.
+  const auto covered = ply.reach.bits & ~seed.bits;
+  for (int i = 0; i < kFootprintCells; ++i) out[i] = covered.test(i) ? 1.0f : 0.0f;
 }
 
 }  // namespace scribblez
