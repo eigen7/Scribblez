@@ -416,20 +416,19 @@ TEST(SelfFootprintMask, OppStageGatesReachTheMoverStageDoesNot) {
   EXPECT_TRUE(m[lone_7_7]);
 }
 
-// expand records, per newly reached cell, the fewest tiles of any legal
-// footprint covering it; seed cells keep depth 0 and are never covered.
-TEST(FootprintExpand, ReachRecordsFewestTiles) {
+// A ply's reach is its seed plus every square its legal footprints cover.
+TEST(FootprintPly, ReachIsSeedPlusCoveredSquares) {
   Board b;
   b.set(7, 7, G(4));
-  const Expansion e = expand(b, occupied_reach(b), /*budget=*/7, /*use_cross_checks=*/false,
-                             nullptr, /*win_head=*/false);
-  EXPECT_EQ(e.reach.tiles[7 * 15 + 7], 0);           // the seed
-  EXPECT_EQ(e.reach.tiles[7 * 15 + 8], 1);           // a lone tile abuts it
-  EXPECT_EQ(e.reach.tiles[7 * 15 + 9], 2);           // needs the 2-tile word from (7,8)
-  EXPECT_EQ(e.reach.tiles[7 * 15 + 14], 7);          // the row's end: a 7-tile word
-  EXPECT_EQ(e.reach.tiles[0], Reach::kUnreachable);  // the far corner
-  EXPECT_TRUE(occupied_reach(Board{}).empty());      // the opener has no seed
-  EXPECT_FALSE(occupied_reach(b).empty());
+  const FootprintPly ply = footprint_ply(b, occupied_squares(b), /*budget=*/7,
+                                         /*use_cross_checks=*/false, nullptr, /*win_head=*/false);
+  EXPECT_TRUE(ply.reach.contains(7, 7));           // the seed
+  EXPECT_TRUE(ply.reach.contains(7, 8));           // a lone tile abuts it
+  EXPECT_TRUE(ply.reach.contains(7, 9));           // via the 2-tile word from (7,8)
+  EXPECT_TRUE(ply.reach.contains(7, 14));          // the row's end, via a 7-tile word
+  EXPECT_FALSE(ply.reach.contains(0, 0));          // the far corner: nothing abuts the seed
+  EXPECT_TRUE(occupied_squares(Board{}).empty());  // the opener has no seed
+  EXPECT_FALSE(occupied_squares(b).empty());
 }
 
 std::string slurp(const std::string& path) {

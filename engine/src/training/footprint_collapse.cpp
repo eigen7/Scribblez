@@ -76,14 +76,15 @@ void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells,
 // variant. win_head toggles only kExtraClass (the not-win outcome). Availability
 // (`available_counts`, the opponent's pool) gates the opp heads directly and the
 // self heads through the opponent's stage, whose reach seeds theirs (see
-// footprint_mask.h) -- one opp expansion serves both.
+// footprint_mask.h) -- one opp ply serves both.
 void fill_head_masks(const Board& board, const uint8_t* available_counts,
                      std::array<FootprintMask, kPlacementHeads>& masks) {
-  const Expansion opp = expand(board, occupied_reach(board), kMaskTileBudget,
-                               /*use_cross_checks=*/true, available_counts, /*win_head=*/false);
-  const Expansion self =
-    expand(board, opp.reach, kMaskTileBudget, /*use_cross_checks=*/false, nullptr,
-           /*win_head=*/false);
+  const FootprintPly opp =
+    footprint_ply(board, occupied_squares(board), kMaskTileBudget,
+                  /*use_cross_checks=*/true, available_counts, /*win_head=*/false);
+  const FootprintPly self =
+    footprint_ply(board, opp.reach, kMaskTileBudget, /*use_cross_checks=*/false, nullptr,
+                  /*win_head=*/false);
   masks[0] = opp.mask;
   masks[1] = self.mask;
   masks[2] = masks[0];
