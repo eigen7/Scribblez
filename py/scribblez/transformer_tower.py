@@ -15,6 +15,14 @@ the caller supplies (the position-eval model's tile-supply tokens) that every
 attention layer sees alongside the cells. Registers have learnable 2D positions,
 initialised just off the board, so the same rotary machinery covers them.
 
+Training memory: each (attention, FFN) pair is activation-checkpointed --
+autograd keeps only the pair's input and recomputes its ~dozen internal
+activations during backward. Without it the 20 pairs of the production config
+(10 blocks x inner_length 2, mid 192, 252 tokens) need ~25 GiB at batch 256 in
+fp32; with it, ~5 GiB, for roughly a quarter more step time. Checkpointing is
+skipped outside a training backward (eval, no-grad passes, ONNX tracing), where
+nothing is saved for backward anyway.
+
 Export discipline (onnx_export_util.py): the attention projections are
 per-projection nn.Linears and RMSNorm is elementwise, so the legacy tracer
 emits every weight as a named initializer. The fused
@@ -31,6 +39,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass(frozen=True)
@@ -186,10 +195,19 @@ class NestedBottleneckTransformerBlock(nn.Module):
         self.up = nn.Linear(cfg.mid_channels, channels, bias=False)
         nn.init.zeros_(self.up.weight)
 
+    def _run_pair(
+        self, pair: TransformerPair, out: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor
+    ) -> torch.Tensor:
+        """The pair's forward; under a training backward it is recomputed rather
+        than having its internal activations saved (see the module docstring)."""
+        if self.training and torch.is_grad_enabled():
+            return checkpoint(pair, out, pos_x, pos_y, use_reentrant=False)
+        return pair(out, pos_x, pos_y)
+
     def forward(self, x: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor) -> torch.Tensor:
         out = self.down(F.relu(self.down_norm(x)))
         for pair in self.pairs:
-            out = pair(out, pos_x, pos_y)
+            out = self._run_pair(pair, out, pos_x, pos_y)
         return self.up(F.relu(self.up_norm(out)))
 
 
