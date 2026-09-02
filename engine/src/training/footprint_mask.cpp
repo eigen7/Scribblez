@@ -44,6 +44,12 @@ void mark_footprints(const Board& board, int kmax, bool win_head, Connectivity c
   // The this-turn adjacency gate. An empty board has nothing to abut (the opener
   // covers the centre), so it is off there too, keeping the opener sound.
   const bool adjacency_gate = connectivity == Connectivity::kThisTurn && !board.empty_board();
+  // TODO(perf): under kThisTurn most anchors are disconnected and get masked, yet
+  // we still scan all kFootprintCells of them; crawling footprints out from the
+  // occupied set would touch only the connected few (~222 vs 2925 for a centred
+  // opener). It would not help kNextTurn -- its reachable region is most of a
+  // developed board -- and mask-build has not shown up in profiling, so it is
+  // deferred.
   for (int cell = 0; cell < kFootprintCells; ++cell) {
     const int anchor_r = cell / kFootprintSide;
     const int anchor_c = cell % kFootprintSide;
